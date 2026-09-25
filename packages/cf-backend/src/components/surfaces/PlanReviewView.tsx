@@ -5,14 +5,14 @@ import {
   TrashIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
 import {
-  admitPlanReviewAnnotations,
+  admitReviewAnnotations,
   type PlanReview,
-  type PlanReviewAnnotation,
+  type ReviewAnnotation,
   type PlanReviewResult,
 } from "@kinu.run/core";
 import { Viewer } from "@plannotator/ui/components/Viewer";
 import { AnnotationPanel } from "@plannotator/ui/components/AnnotationPanel";
-import { AnnotationType, type Annotation, type Block, type EditorMode } from "@plannotator/ui/types";
+import type { Annotation, Block, EditorMode } from "@plannotator/ui/types";
 import {
   exportAnnotations, extractFrontmatter, parseMarkdownToBlocks,
 } from "@plannotator/ui/utils/parser";
@@ -20,6 +20,7 @@ import type { Rpc } from "@kinu.run/core";
 import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
+import { annotationType } from "./annotation-type";
 import { copyLabel, useCopy, type CopyStatus } from "@/hooks/use-copy";
 
 const COPY_ICON = {
@@ -28,16 +29,8 @@ const COPY_ICON = {
   failed: WarningCircleIcon,
 } satisfies Record<CopyStatus, typeof CopyIcon>;
 
-function annotationType(value: PlanReviewAnnotation["type"]): AnnotationType {
-  if (value === "DELETION") return AnnotationType.DELETION;
-
-  if (value === "GLOBAL_COMMENT") return AnnotationType.GLOBAL_COMMENT;
-
-  return AnnotationType.COMMENT;
-}
-
-function parsePlanAnnotations(values: readonly PlanReviewAnnotation[]): Annotation[] {
-  const admission = admitPlanReviewAnnotations({ value: values });
+function parsePlanAnnotations(values: readonly ReviewAnnotation[]): Annotation[] {
+  const admission = admitReviewAnnotations({ value: values });
 
   if (!admission.ok) return [];
 

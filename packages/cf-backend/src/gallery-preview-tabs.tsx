@@ -49,8 +49,13 @@ const MACHINE_DIFF = { mode: 'git', files: [{ path: 'src/device.ts', status: 'ad
 
 const EDITED = [
   { path: 'src/app.ts', status: 'changed', added: 1, removed: 0, lines: [{ kind: 'add', text: 'export const ready = true;' }] },
-  { path: 'src/ready.ts', status: 'added', added: 1, removed: 0, lines: [{ kind: 'add', text: 'export const shown = true;' }] },
+  {
+    path: 'src/ready.ts', status: 'added', added: 2, removed: 0,
+    lines: [{ kind: 'add', text: 'export const shown = true;' }, { kind: 'add', text: 'export const hidden = false;' }],
+  },
 ];
+
+const EDITED_AGAIN = [{ ...EDITED[0], lines: [{ kind: 'add', text: 'export const ready = isReady();' }] }, EDITED[1]];
 
 /** Push a server frame through the stubbed `agents/react` socket so `useKinu` parses, gates and de-duplicates it. */
 function notify(reference: JsonValue): void {
@@ -66,10 +71,11 @@ export function PreviewTabsGallery() {
   const [planFocus, setPlanFocus] = useState<string | null>(null);
   const [plan, setPlan] = useState<PlanReview | null>(null);
   const [reload, setReload] = useState(0);
-  const [diff, setDiff] = useState(false);
+  const [edited, setEdited] = useState<typeof EDITED | null>(null);
   const [broken, setBroken] = useState(false);
   const [machine, setMachine] = useState(false);
   const [starting, setStarting] = useState(false);
+  const keptNotes = useRef<JsonValue[]>([]);
   const brokenReads = useRef(0);
   const [failHistory, setFailHistory] = useState(false);
   const [workerPlan, setWorkerPlan] = useState<PlanReview>({ ...ROOT_PLAN, revision: 1, content: "# Worker plan", status: "approved", handoffAccepted: true, createdAt: 10 });
@@ -88,9 +94,20 @@ export function PreviewTabsGallery() {
       return reply({ mode: 'vfs-baseline', files: [], error: 'the change-set read failed' });
     }
     else if (method === 'getExecutorDiff' && args?.[0] === MACHINE.name) return reply(MACHINE_DIFF);
-    else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: diff ? EDITED : [] });
+    else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: edited ?? [] });
+    else if (method === 'getChangeNotes') return reply(keptNotes.current);
+    else if (method === 'saveChangeNotes') {
+      keptNotes.current = v.parse(v.array(JsonValueSchema), args?.[1]);
+
+      return reply({ ok: true, notes: keptNotes.current });
+    }
+    else if (method === 'sendChangeNotes') {
+      keptNotes.current = [];
+
+      return reply({ ok: true, notes: [] });
+    }
     else if (method === 'resetWorkspaceBaseline' || method === 'restoreWorkspaceBaseline') {
-      setDiff(method === 'restoreWorkspaceBaseline');
+      setEdited(method === 'restoreWorkspaceBaseline' ? EDITED : null);
 
       return reply({ ok: true, files: 0, capturedAt: 0 });
     }
@@ -133,7 +150,7 @@ export function PreviewTabsGallery() {
     else if (method === 'markChangelogSeen') return reply({ seenAt: 0 });
 
     throw new Error('Unexpected preview gallery RPC: ' + method);
-  }, [plan, diff, broken, failHistory, workerPlan]);
+  }, [plan, edited, broken, failHistory, workerPlan]);
 
   const workerRpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === 'decidePlanReview') {
@@ -156,8 +173,9 @@ export function PreviewTabsGallery() {
       <button data-new-preview onClick={() => { setSlates([...SLATES, { id: 'report', title: 'Report', bindings: [] }]); setFocus('slate:report'); }}>New preview</button>
       <button data-new-plan onClick={() => { setPlan(ROOT_PLAN); setPlanFocus('plan-dashboard:2'); }}>Submit plan</button>
       <button data-refresh-preview onClick={() => setReload(n => n + 1)}>Refresh source</button>
-      <button data-add-diff onClick={() => setDiff(true)}>Edit file</button>
-      <button data-revert-diff onClick={() => setDiff(false)}>Revert file</button>
+      <button data-add-diff onClick={() => setEdited(EDITED)}>Edit file</button>
+      <button data-edit-again onClick={() => setEdited(EDITED_AGAIN)}>Edit it again</button>
+      <button data-revert-diff onClick={() => setEdited(null)}>Revert file</button>
       <button data-break-diff onClick={() => setBroken(true)}>Break read</button>
       <button data-add-machine onClick={() => setMachine(true)}>Connect a machine</button>
       <button data-sandbox-starting onClick={() => setStarting(on => !on)}>Sandbox starting</button>

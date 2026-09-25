@@ -16,7 +16,9 @@ import {
   ADVISOR_SEVERITY_LABEL,
   describeToolCall, rowText, summarizeToolCall,
 } from "@kinu.run/core";
-import type { AdvisorSeverity, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
+import type { AdvisorSeverity, DiffAnchor, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
+import { changeNotesCard } from "@kinu.run/core";
+import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
@@ -628,7 +630,7 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
 // referential identity and skips re-rendering.
 export const MessageView = memo(function MessageView({
   message, liveTail: tail = null, onFork, onFeedback, feedback, onRevert, takesChip,
-  signalState, steers,
+  signalState, steers, onOpenChangeNote,
 }: {
   message: UIMessage;
   /** Resolved once by the thread owner (`threadLiveTail`), passed to the last row only; null means history. */
@@ -642,6 +644,7 @@ export const MessageView = memo(function MessageView({
   /** A slot rather than an import: TakesChip renders a node transcript, which renders MessageView. */
   takesChip?: ReactNode;
   steers?: readonly PlacedSteer[];
+  onOpenChangeNote?: (source: string, anchor: DiffAnchor | undefined) => void;
 }) {
   const isUser = message.role === "user";
   const isLive = tail !== null;
@@ -665,6 +668,17 @@ export const MessageView = memo(function MessageView({
   if (message.role === "system") {
     return <ProgrammaticTurnCard turn={{ kind: "system_event", event: "system" }}
       text={rowText(message)} state={signalState ?? "shown"} />;
+  }
+
+  const sentNotes = isUser ? changeNotesCard({ metadata: message.metadata }) : null;
+
+  if (sentNotes !== null) {
+    const createdAt = messageCreatedAt(message);
+
+    return (
+      <FeedbackCard card={sentNotes} sentAt={createdAt === undefined ? Date.now() : new Date(createdAt).getTime()} now={Date.now()}
+        {...(onOpenChangeNote !== undefined && { onOpen: (anchor: DiffAnchor | undefined) => onOpenChangeNote(sentNotes.source, anchor) })} />
+    );
   }
 
   if (isUser) {

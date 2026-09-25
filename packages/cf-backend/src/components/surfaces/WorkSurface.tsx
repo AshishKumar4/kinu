@@ -13,7 +13,7 @@ import type { AsyncResource } from "@/hooks/use-async-resource";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import type { ToolInfo, MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
-import { ChangesSurface } from "./ChangesSurface";
+import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -54,6 +54,7 @@ export interface WorkSurfaceProps {
   surface: SurfaceKind;
   previewFocus?: string | null;
   planFocus?: string | null;
+  changesFocus?: ChangesFocus | null;
   planOwner?: string;
   workspacePlanArrival?: WorkspacePlanArrival | null;
   onReviewActor?: (name: string) => void | Promise<void>;
@@ -339,7 +340,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
         </ErrorBoundary>
       </div>
       <div className={surface === "Changes" ? "flex-1 min-h-0" : "hidden"}>
-        <ChangesSurface executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} onOpenFile={openChangedFile} onCount={setChangeCount} />
+        <ChangesSurface executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} focus={props.changesFocus ?? null}
+          onOpenFile={openChangedFile} onCount={setChangeCount} />
       </div>
       <ListingStatus error={props.previewError} starting={props.previewStarting ?? []} onRetry={props.onRefreshPorts} />
       {connecting && <ConnectDeviceDialog onClose={closeConnect} />}

@@ -130,7 +130,7 @@ import {
   inheritedContextFromTranscript,
   type ReleaseToolDeps,
   PlanReviewActions, type PlanDecisionOutcome,
-  type PlanEdit, type PlanReview, type PlanReviewAnnotation,
+  type PlanEdit, type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
   type ParentRpcResult, type ParentExecResult,
@@ -694,7 +694,7 @@ export abstract class ActorAgent extends Agent<Env> {
   async savePlanReviewAnnotations(
     id: string,
     revision: number,
-    annotations: PlanReviewAnnotation[],
+    annotations: ReviewAnnotation[],
   ): Promise<PlanReviewResult> {
     return this.planActions.saveAnnotations(id, revision, { value: annotations });
   }

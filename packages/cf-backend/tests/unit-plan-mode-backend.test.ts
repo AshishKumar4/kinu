@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { ToolSet } from 'ai';
-import { decodeJsonValue, type JsonValue, type PlanReviewAnnotation } from '@kinu.run/core';
+import { decodeJsonValue, type JsonValue, type ReviewAnnotation } from '@kinu.run/core';
 import { orchestratorHarness, chatSessionTurns, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
@@ -156,7 +156,7 @@ describe('Plan mode tool lifecycle', () => {
     const first = await submittedPlan(agent, '# Plan\n\nFirst\nSecond');
     expect(await agent.getActivePlanReview()).toMatchObject({ revision: 1, content: '# Plan\n\nFirst\nSecond', status: 'pending' });
 
-    const annotations: PlanReviewAnnotation[] = [
+    const annotations: ReviewAnnotation[] = [
       {
         id: 'annotation-1', blockId: 'paragraph-1', startOffset: 0, endOffset: 6,
         type: 'COMMENT', text: 'Make this measurable', originalText: 'Second', createdA: 1,

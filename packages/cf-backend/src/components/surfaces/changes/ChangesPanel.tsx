@@ -5,7 +5,7 @@ import {
 import { changeBlocks, changeBody, inReadingOrder, vfsBasename, vfsDirname, type ChangeSet, type FileDiff } from "@kinu.run/core";
 import { ChangeMark, count, Counts, DiffBody, sinceLabel } from "./diff";
 import { FileTree, IconButton, MarkReviewed, Since, SourceMenu, Summary, typing } from "./parts";
-import { SendFeedback, useNotes, type ChangeNote } from "./notes";
+import { NotesFailure, SendFeedback, useNotes } from "./notes";
 
 function NoLines({ file, onOpenInFiles }: { file: FileDiff; onOpenInFiles: (() => void) | null }) {
   const body = changeBody(file);
@@ -99,7 +99,6 @@ export interface PanelProps {
   /** Null where the Files tab cannot open the source's paths: a machine's git checkout. */
   readonly onOpenInFiles: ((path: string) => void) | null;
   readonly onShowNotes?: () => void;
-  readonly onSend?: (notes: readonly ChangeNote[]) => void;
 }
 
 function ListHeader({ sets, set, now, menuOpen, reviewable, onPick, onExpand, onReviewed }: {
@@ -139,10 +138,10 @@ function ListHeader({ sets, set, now, menuOpen, reviewable, onPick, onExpand, on
   );
 }
 
-function NotesBar({ onShowNotes, onSend }: { onShowNotes?: () => void; onSend?: (notes: readonly ChangeNote[]) => void }) {
+function NotesBar({ onShowNotes }: { onShowNotes?: () => void }) {
   const notes = useNotes();
 
-  if (notes === null || notes.notes.length === 0 || onShowNotes === undefined || onSend === undefined) return null;
+  if (notes === null || notes.notes.length === 0 || onShowNotes === undefined) return null;
 
   return (
     <footer className="flex shrink-0 items-center gap-2 border-t p-border px-3 py-2.5" data-notes-bar>
@@ -150,7 +149,8 @@ function NotesBar({ onShowNotes, onSend }: { onShowNotes?: () => void; onSend?: 
         <ChatCircleDotsIcon size={14} className="p-info" />
         {notes.notes.length} {notes.notes.length === 1 ? "note" : "notes"} for the agent
       </button>
-      <SendFeedback onSend={onSend} className="ml-auto" />
+      <NotesFailure />
+      <SendFeedback className="ml-auto" />
     </footer>
   );
 }
@@ -184,7 +184,7 @@ function FileHeader({ files, at, onGo, onExpand }: {
   );
 }
 
-export function ChangesPanel({ sets, source, onSource, now, file: initialFile = null, menuOpen = false, reviewedAt, onReviewed, onUndo = null, onExpand, onOpenInFiles, onShowNotes, onSend }: PanelProps) {
+export function ChangesPanel({ sets, source, onSource, now, file: initialFile = null, menuOpen = false, reviewedAt, onReviewed, onUndo = null, onExpand, onOpenInFiles, onShowNotes }: PanelProps) {
   const [path, setPath] = useState<string | null>(initialFile);
   const set = sets.find((each) => each.source === source) ?? sets[0];
   const files = useMemo(() => inReadingOrder(set?.files ?? []), [set]);
@@ -286,7 +286,7 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
             </div>
           )}
       </div>
-      <NotesBar onShowNotes={onShowNotes} onSend={onSend} />
+      <NotesBar onShowNotes={onShowNotes} />
     </div>
   );
 }

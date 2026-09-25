@@ -1,12 +1,11 @@
 import { AnnotationPanel } from "@plannotator/ui/components/AnnotationPanel";
-import type { FileDiff } from "@kinu.run/core";
-import { orderNotes, panelNote, placeLabel, useNotes, type ChangeNote } from "./notes";
+import { inNoteOrder, type ReviewAnnotation } from "@kinu.run/core";
+import { panelNote, placeLabel, useNotes } from "./notes";
 
-export default function NotesPanel({ open, onClose, files, onReveal }: {
+export default function NotesPanel({ open, onClose, onReveal }: {
   open: boolean;
   onClose: () => void;
-  files: readonly FileDiff[];
-  onReveal: (note: ChangeNote) => void;
+  onReveal: (note: ReviewAnnotation) => void;
 }) {
   const notes = useNotes();
 
@@ -21,7 +20,7 @@ export default function NotesPanel({ open, onClose, files, onReveal }: {
   };
 
   return (
-    <AnnotationPanel isOpen={open} annotations={orderNotes(notes.notes, files.map((file) => file.path)).map(panelNote)} selectedId={notes.selected}
+    <AnnotationPanel isOpen={open} annotations={inNoteOrder(notes.notes).map(panelNote)} selectedId={notes.selected}
       width="19rem" onClose={onClose}
       onSelect={(id) => {
         const note = byId.get(id);
@@ -31,7 +30,7 @@ export default function NotesPanel({ open, onClose, files, onReveal }: {
         if (note !== undefined) onReveal(note);
       }}
       onDelete={notes.remove} onEdit={(id, updates) => notes.edit(id, updates.text ?? "")}
-      placeOf={(annotation) => placeLabel(byId.get(annotation.id)?.anchor)}
+      placeOf={(annotation) => `${placeLabel(byId.get(annotation.id)?.anchor)}${notes.moved.has(annotation.id) ? " · changed since" : ""}`}
       onAddGlobal={hasGlobal ? undefined : addGlobal} globalLabel="Note on all the changes" />
   );
 }

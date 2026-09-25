@@ -170,6 +170,8 @@ import {
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
+  initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
+  type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
   renameExecutorPathOp, deleteExecutorPathOp,
@@ -2617,6 +2619,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       execRaw, sql: this.boundSql, exec: this.ctx.storage.sql, transactionSync: (write) => this.ctx.storage.transactionSync(write),
     });
     initWorkspaceBaselineTable(execRaw);
+    initChangeNotesTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
     // Planes only this root carries (declared in core/conformance/manifest.ts).
@@ -3628,6 +3631,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async restoreWorkspaceBaseline(): Promise<{ ok: true; capturedAt: number } | { ok: false; error: string }> {
     return restoreWorkspaceBaseline(this.rt);
+  }
+
+  @callable()
+  async getChangeNotes(source: string): Promise<ReviewAnnotation[]> {
+    return readChangeNotes(this.rt, source);
+  }
+
+  @callable()
+  async saveChangeNotes(source: string, notes: ReviewAnnotation[]): Promise<ChangeNotesResult> {
+    return saveChangeNotes(this.rt, source, { value: notes });
+  }
+
+  @callable()
+  async sendChangeNotes(set: NotedChanges): Promise<ChangeNotesResult> {
+    return sendChangeNotes(this.rt, { value: set }, (message, consume) => this.chatLoop.admit(message.text, { id: message.id, metadata: message.metadata, consume }));
   }
 
   /** Recent branching-head runs, grouped by root_id with heads, step traces and merged synthesis. */

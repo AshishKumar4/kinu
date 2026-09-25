@@ -86,7 +86,7 @@ import {
   CHARS_PER_TOKEN, DEVICE_TIERS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
-  type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
+  type AdvisorSeverity, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc, ToolInfo } from "@kinu.run/core";
@@ -1367,7 +1367,7 @@ Mapping it in the route hides the defect and leaves the cart already mutated.
 
 - Read the coupon and campaign in one transaction.`;
 
-const GALLERY_PLAN_TITLE_NOTE: PlanReviewAnnotation = {
+const GALLERY_PLAN_TITLE_NOTE: ReviewAnnotation = {
   id: "gallery-plan-title-note",
   blockId: "block-0",
   startOffset: 0,
@@ -1383,7 +1383,7 @@ const GALLERY_PLAN_CONTENT = GALLERY_PLAN_VARIANT === "late-heading"
   ? GALLERY_PLAN_LATE_HEADING
   : GALLERY_PLAN_MARKDOWN;
 
-const GALLERY_PLAN_ANNOTATIONS: readonly PlanReviewAnnotation[] =
+const GALLERY_PLAN_ANNOTATIONS: readonly ReviewAnnotation[] =
   GALLERY_PLAN_VARIANT === "annotated-heading" ? [GALLERY_PLAN_TITLE_NOTE] : [];
 
 const GALLERY_PLAN_STATUS: PlanReview["status"] =

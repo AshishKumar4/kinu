@@ -466,3 +466,68 @@ test('a workspace switch clears the sandbox-starting line of the workspace left 
     } finally { await page.close(); }
   });
 });
+
+test('a note on a changed line stands in for Mark reviewed, leaves the diff when its code moves, and clears once sent', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await openChanges(newPage, origin, false);
+    const text = (selector: string): Promise<string> => page.$eval(selector, (element) => element.textContent ?? '');
+
+    try {
+      await page.click('[data-file-row="src/app.ts"]');
+      await page.click('[data-changes="file"] [data-note-row][data-new="1"] > span:first-child');
+      await page.waitForSelector('button[title="Comment"]');
+      await page.click('button[title="Comment"]');
+      await page.waitForSelector('textarea[placeholder="Add a comment..."]');
+      await page.type('textarea[placeholder="Add a comment..."]', 'Read it from the config instead.');
+      await page.keyboard.down('Control');
+      await page.keyboard.press('Enter');
+      await page.keyboard.up('Control');
+      await page.waitForSelector('[data-notes-bar]');
+
+      // While a note is unsent, Send feedback is the one action: marking reviewed would move the side it quotes.
+      expect(await text('[data-notes-bar]')).toContain('1 note for the agent');
+      expect(await page.$('[data-mark-reviewed]')).toBeNull();
+      expect(await page.$$eval('[data-note-mark]', (marks) => marks.length)).toBeGreaterThan(0);
+
+      // Two lines, pressed then Shift-pressed, quote as the diff reads them, so the note keeps its mark.
+      await page.click('[data-changes] [aria-label="Next file (j)"]');
+      await page.waitForFunction(() => (document.querySelector('[data-changes="file"]')?.textContent ?? '').includes('hidden = false'));
+      await page.click('[data-changes="file"] [data-note-row][data-new="1"] > span:first-child');
+      await page.keyboard.down('Shift');
+      await page.click('[data-changes="file"] [data-note-row][data-new="2"] > span:first-child');
+      await page.keyboard.up('Shift');
+      await page.waitForSelector('button[title="Comment"]');
+      await page.click('button[title="Comment"]');
+      await page.waitForSelector('textarea[placeholder="Add a comment..."]');
+      await page.type('textarea[placeholder="Add a comment..."]', 'Both flags belong in one place.');
+      await page.keyboard.down('Control');
+      await page.keyboard.press('Enter');
+      await page.keyboard.up('Control');
+      await page.waitForFunction(() => (document.querySelector('[data-notes-bar]')?.textContent ?? '').includes('2 notes'));
+      expect(await page.$$eval('[data-changes="file"] [data-note-mark]', (marks) => marks.length)).toBeGreaterThan(0);
+      await page.click('[data-changes] [aria-label="Previous file (k)"]');
+      await page.waitForSelector('[data-changes="file"] [data-note-row][data-new="1"]');
+
+      await page.click('[data-changes="file"] [aria-label="Expand: every file side by side"]');
+      await page.click('[data-annotations-toggle]');
+      await page.waitForFunction(() => (document.querySelector('[data-review-sheet]')?.textContent ?? '').includes('Read it from the config instead.'));
+      expect(await text('[data-review-sheet]')).toContain('app.ts · line 1, newexport const ready = true;');
+      expect(await text('[data-review-sheet]')).toContain('ready.ts · lines 1–2, newexport const shown = true;');
+      expect(await text('[data-review-sheet]')).not.toContain('changed since');
+
+      // The agent rewrites the line: the note's mark leaves the diff, and the list says its code moved.
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.querySelector('[data-review-sheet]') === null);
+      await page.click('[data-edit-again]');
+      await page.waitForFunction(() => (document.querySelector('[data-changes="file"]')?.textContent ?? '').includes('isReady()'));
+      expect(await page.$$('[data-note-mark]')).toHaveLength(0);
+      await page.click('[data-notes-bar] button');
+      await page.waitForFunction(() => (document.querySelector('[data-review-sheet]')?.textContent ?? '').includes('changed since'));
+
+      // Sent, the notes clear and Mark reviewed is back.
+      await page.click('[data-review-sheet] [data-send-feedback]');
+      await page.waitForFunction(() => document.querySelectorAll('[data-send-feedback]').length === 0);
+      await page.waitForSelector('[data-review-sheet] [data-mark-reviewed]');
+    } finally { await page.close(); }
+  });
+});
