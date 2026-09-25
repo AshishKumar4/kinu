@@ -5,6 +5,7 @@
  */
 
 import type { VFS, VfsEntryStat } from '../types/primitives';
+import type { FilesOwner } from '../safety/approval-gate';
 import { renderThrownChain } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { isVfsError, makeVfsError } from './errno';
@@ -15,6 +16,8 @@ export interface VfsMount {
 	readonly files: () => VFS | null;
 	/** Stated verbatim in every refusal; an absent mount is never an empty directory. */
 	readonly absentReason: () => string;
+	/** Whose files it holds; a shell over the table reads it. */
+	readonly filesOwner: FilesOwner;
 }
 
 export const EXECUTOR_MOUNTS = {
@@ -22,7 +25,7 @@ export const EXECUTOR_MOUNTS = {
 	sandbox: '/sandbox',
 } as const satisfies Record<string, string>;
 
-/** Never a machine's mount segment, so `local` and the fixed planes cannot be shadowed by a device name. */
+/** Never a machine's mount segment, so no device name shadows `local` or a fixed plane. */
 export const RESERVED_REFERENCE_ROOTS: readonly string[] = ['vfs', 'sandbox', 'local'];
 
 export const MOUNT_EXECUTORS: Record<string, string> = Object.fromEntries(
@@ -35,10 +38,7 @@ export interface MountableProvider {
 	isAvailable(): boolean;
 }
 
-/**
- * A device mount is gated on presence (executor answering now); a container mount on its binding,
- * letting the first file call pay the cold start.
- */
+/** A device mount is gated on presence (answering now); a container mount on its binding, so a first call boots it. */
 export function standardMounts(provider: (name: string) => MountableProvider | undefined): VfsMount[] {
 	return [
 		{
@@ -49,11 +49,13 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 				return device && device.isAvailable() ? device.files ?? null : null;
 			},
 			absentReason: () => 'no device connected',
+			filesOwner: 'user',
 		},
 		{
 			name: EXECUTOR_MOUNTS.sandbox.slice(1),
 			files: () => provider('sandbox')?.files ?? null,
 			absentReason: () => 'no Sandbox container bound',
+			filesOwner: 'agent',
 		},
 	];
 }
@@ -317,6 +319,8 @@ function siblingPath(path: string, purpose: string, nonce: string): string {
 export interface VfsMountRouting {
 	mountOf(path: string): string | null;
 	mountPoints(): readonly string[];
+	/** The user's mount roots, connected or not. */
+	userRoots(): readonly string[];
 }
 
 export type MountedVfs = VFS & VfsNativeMutations & VfsNativeReads & VfsMountRouting;
@@ -353,6 +357,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 	};
 
 	const mountPoints = (): string[] => [...byName.values()].filter((m) => m.files() !== null).map((m) => m.name);
+	const userRoots = [...byName.values()].filter((m) => m.filesOwner === 'user').map((m) => `/${m.name}`);
 
 	/** `..` may never climb out of a mounted tree's root. */
 	const routeOf = (path: string): { mount: VfsMount; native: string } | { base: string } => {
@@ -428,6 +433,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 	return {
 		mountOf: (path) => mountNamed(path)?.name ?? null,
 		mountPoints,
+		userRoots: () => userRoots,
 		readFile(path, opts) {
 			return delegate(path, (files, native) => files.readFile(native, opts));
 		},

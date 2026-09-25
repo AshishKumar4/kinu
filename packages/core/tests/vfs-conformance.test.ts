@@ -490,6 +490,7 @@ describe('the global workspace namespace', () => {
         name: 'pc',
         files: () => device,
         absentReason: () => 'not used',
+        filesOwner: 'user',
       }]);
 
       expect(await mounted.readdir('/')).toContain('pc');

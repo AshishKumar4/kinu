@@ -8,7 +8,7 @@ import {
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools,
   formatApprovalGrant,
   type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
-  type AgentRuntime, type AgentSignal, type FilesOwner, type Shell,
+  type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT,
 } from '../src/index';
 import { buildPendingActions } from '../src/read-models/pending-actions';
 import { gateProviderExec } from '../src/execution/approval';
@@ -32,6 +32,9 @@ function approvalsDb() {
     db: Database; sql: SqlExecutor; actor: ActorHandle;
   };
 }
+
+/** A workspace shell over the agent's own files, with no mount of the user's. */
+const AGENTS_OWN = { filesOwner: 'agent', userRoots: () => [], home: WORKSPACE_ROOT } as const;
 
 /** Gated on every executor, workspace included: a force-push harms a remote beyond this machine. */
 const GATED = 'git push --force origin main';
@@ -90,7 +93,7 @@ function setup(opts: {
   if (opts.approve) policy.requestApproval = opts.approve;
 
   if (!opts.noQueue) policy.deferrals = queue.channel;
-  const shell = withApprovalGatedShell(rawShell, filesOwner, policy);
+  const shell = withApprovalGatedShell(rawShell, { filesOwner, userRoots: () => [], home: WORKSPACE_ROOT }, policy);
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
   const tools = buildBuiltinTools({ rt: runtime, history: storesFor(runtime).history });
@@ -120,7 +123,7 @@ describe('a gated action nobody is there to approve', () => {
 
     const shell = withApprovalGatedShell({
       exec: async () => ({ stdout: 'executed', stderr: '', exitCode: 0 }),
-    }, 'agent', { mode: () => 'strict', requestApproval: null, deferrals: queue.channel });
+    }, AGENTS_OWN, { mode: () => 'strict', requestApproval: null, deferrals: queue.channel });
 
     try {
       await shell.exec(GATED);
@@ -766,7 +769,7 @@ test('no-execution refusals retain their class before native run and executor te
 
 test('an executed exit-one command remains a command failure even if stdout looks like a refusal', async () => {
   const stdout = JSON.stringify({ reason: 'denied', error: 'ordinary command data' });
-  const shell = withApprovalGatedShell({ exec: async () => ({ stdout, stderr: 'process failure', exitCode: 1 }) }, 'agent');
+  const shell = withApprovalGatedShell({ exec: async () => ({ stdout, stderr: 'process failure', exitCode: 1 }) }, AGENTS_OWN);
   const result = await shell.exec('false');
   const rendered = formatExecResult(result);
   expect(result.exitCode).toBe(1);

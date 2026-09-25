@@ -1483,8 +1483,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           };
 
           const mounted = s.withMountTable(tree({ '/notes.md': 'workspace' }), [
-            { name: 'pc', files: () => tree({ '/home/dev/a.txt': 'from the device' }), absentReason: () => 'no device connected' },
-            { name: 'sandbox', files: () => null, absentReason: () => 'no Sandbox container bound' },
+            { name: 'pc', files: () => tree({ '/home/dev/a.txt': 'from the device' }), absentReason: () => 'no device connected', filesOwner: 'user' },
+            { name: 'sandbox', files: () => null, absentReason: () => 'no Sandbox container bound', filesOwner: 'agent' },
           ]);
 
           let absentReaddir = 'served an absent mount';

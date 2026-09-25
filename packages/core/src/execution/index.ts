@@ -33,7 +33,7 @@ export { DefaultExecutionRouter } from './router';
 
 export { createInlineExecutor, type InlineExecutorDeps } from './inline';
 
-export { withApprovalGatedShell, gateProviderExec, declaredFilesOwner } from './approval';
+export { withApprovalGatedShell, gateProviderExec, declaredFilesOwner, type ShellReach } from './approval';
 
 export {
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,

@@ -20,7 +20,7 @@ import { join, resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
-  WORKSPACE_IDENTITY_DDL,
+  WORKSPACE_IDENTITY_DDL, WORKSPACE_ROOT,
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor,
@@ -381,8 +381,9 @@ export function createCLIRuntime(
   };
 
   // A directory-bound shell runs on the user's machine and may mutate the tree, so it
-  // snapshots first; the in-SQLite shell touches no host file and is the agent's own.
+  // snapshots first; the in-SQLite shell is the agent's own and serves the mount table.
   const filesOwner: FilesOwner = cwd === null ? 'agent' : 'user';
+  const userRoots = () => agentVfs.userRoots();
 
   const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
     withCheckpointedShell(
@@ -390,13 +391,13 @@ export function createCLIRuntime(
       checkpoints,
       cwd,
     ),
-    filesOwner,
+    { filesOwner, userRoots, home: cwd },
     approvalPolicy,
   );
 
   const shell: Shell = facetShell
     ? facetShell(config.facet)
-    : withApprovalGatedShell(workspace.shell, filesOwner, approvalPolicy);
+    : withApprovalGatedShell(workspace.shell, { filesOwner, userRoots, home: WORKSPACE_ROOT }, approvalPolicy);
 
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
 
@@ -451,6 +452,7 @@ export function createCLIRuntime(
     craftStore,
     shell,
     filesOwner,
+    userRoots,
     sql,
     ledger: () => turnFileLedgerProvider?.(),
     // A directory-bound shell declares what this machine's PATH proves.
@@ -652,6 +654,7 @@ async function buildCLIHeadRuntime(
     vfs, memory: parent.memory, craftStore: parent.craftStore, shell, sql,
     // The same machine the parent's shell runs on.
     filesOwner: parent.cwd ? 'user' : 'agent',
+    userRoots: () => agentVfs.userRoots(),
     toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
   };
 

@@ -106,6 +106,9 @@ export interface ExecutorProvider {
   /** Whose files its commands reach (safety/approval-gate.ts). */
   readonly filesOwner: FilesOwner;
 
+  /** The user's mount roots its commands see. */
+  readonly userRoots?: () => readonly string[];
+
   /** Capabilities that can be neither claimed nor ruled out (e.g. GPU on a tunnelled machine). Disjoint from `capabilities`. */
   readonly unmeasuredCapabilities?: ReadonlySet<ExecutorCapability>;
 

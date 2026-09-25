@@ -278,8 +278,8 @@ export interface DeferredApprovalQueueDeps {
   readonly inbox: AgentInbox;
   /** Record a standing grant from an 'always' answer; the host owns storage (actor_config). */
   remember(grants: readonly ApprovalGrant[]): void;
-  /** Whose files the named executor declares, to re-review an 'always'. */
-  filesOwner(executor: string): FilesOwner;
+  /** Whose files the named executor's command reaches, to re-review an 'always'. */
+  filesOwner(executor: string, command: string): FilesOwner;
   /** Durable audit sink for `approval_consumed`. Optional only for tests; production must wire it. */
   audit?(record: ApprovalConsumedRecord): void;
   /** Mint a request id; injected for host id vocabulary and deterministic tests. */
@@ -398,7 +398,7 @@ export class DeferredApprovalQueue {
     if (answer === 'always') {
       // Recomputed, not stored: the rule table is the source of truth.
       this.deps.remember(decided.flatMap(
-        (a) => gatedGrants(reviewCommand(a.command, this.deps.filesOwner(a.executor)), a.executor)));
+        (a) => gatedGrants(reviewCommand(a.command, this.deps.filesOwner(a.executor, a.command)), a.executor)));
     }
 
     this.notify({ kind: 'decided', actions: decided });

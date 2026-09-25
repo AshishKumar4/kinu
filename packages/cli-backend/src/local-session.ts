@@ -674,7 +674,7 @@ export class LocalAgentSession implements BackendHost {
       store: new DeferredApprovalStore(this.rt.storage.sql, this.rt.actor),
       inbox: this.actorSession.orchestrator.inbox,
       remember: (grants) => { this.config.grantShellApproval(grants); },
-      filesOwner: (executor) => declaredFilesOwner(this.rt.executionRouter, executor),
+      filesOwner: (executor, command) => declaredFilesOwner(this.rt.executionRouter, executor, command),
       audit: (record) => {
         this.eventRecorder.emit(this.chat.currentRunId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },

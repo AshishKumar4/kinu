@@ -3,7 +3,10 @@
  * and every other ExecutorProvider's `exec`/`startProcess`, gated on `ExecutionRouter.register()`.
  */
 
-import { gateExec, STRICT_NO_CHANNEL_POLICY, type FilesOwner, type ShellApprovalPolicy } from '../safety/approval-gate';
+import {
+  commandFilesOwner, gateExec, nextShellCwd, STRICT_NO_CHANNEL_POLICY,
+  type FilesOwner, type ShellApprovalPolicy, type ShellCwd,
+} from '../safety/approval-gate';
 import * as v from 'valibot';
 import { answeredRefusal } from './exec-result';
 import type { ExecutionRouter, ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
@@ -25,20 +28,30 @@ function parseShellExecOptions(input: { value: unknown }): string | ShellExecOpt
   return options.success ? options.output : undefined;
 }
 
+/** What a workspace shell's commands reach. */
+export interface ShellReach {
+  readonly filesOwner: FilesOwner;
+  readonly userRoots: () => readonly string[];
+  /** Where a session starts and `cd` returns. */
+  readonly home: string;
+}
+
 /**
  * A refusal is shaped as a command that did not run: exit 1, message on stderr, classification in `refusal`.
  * `refusalCode` reads only that classification; a spent grant is refunded only if the command never started.
  */
 export function withApprovalGatedShell(
   shell: Shell,
-  filesOwner: FilesOwner,
+  reach: ShellReach,
   policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
 ): Shell {
+  let session: ShellCwd = { cwd: reach.home, home: reach.home, mayBeUsers: false };
+
   // 'workspace' only: gateProviderExec skips the workspace `exec` because it is gated here.
   const execute = gateExec<ShellExecResult>(
     (command, ...rest) => shell.exec(command, parseShellExecOptions({ value: rest[0] })),
     (error) => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) }),
-    { name: 'workspace', filesOwner },
+    { name: 'workspace', filesOwner: reach.filesOwner, userRoots: reach.userRoots, session: () => session },
     { policy, refusalCode: (result) => result.refusal?.reason ?? null },
   );
 
@@ -46,14 +59,20 @@ export function withApprovalGatedShell(
     exec: (command, stdinOrOptions) => {
       requireBuild('Workspace shell execution');
 
-      return execute(command, stdinOrOptions);
+      return execute(command, stdinOrOptions).then((result) => {
+        if (result.refusal === undefined) session = nextShellCwd(session, command, result.exitCode, reach.userRoots());
+
+        return result;
+      });
     },
   };
 }
 
-/** Whose files the named executor declares; an unregistered name is the user's, so a re-review keeps every rule. */
-export function declaredFilesOwner(router: ExecutionRouter | undefined, executor: string): FilesOwner {
-  return router?.getProvider(executor)?.filesOwner ?? 'user';
+/** Whose files the named executor's command reaches; an unregistered name is the user's. */
+export function declaredFilesOwner(router: ExecutionRouter | undefined, executor: string, command: string): FilesOwner {
+  const provider = router?.getProvider(executor);
+
+  return provider === undefined ? 'user' : commandFilesOwner(provider, command);
 }
 
 /** Tools taking a raw shell command as first argument; VFS-shaped tools are out of scope. */

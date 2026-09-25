@@ -36,7 +36,7 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { DeviceFileScope, SandboxHandle } from "@kinu.run/core";
-import { withHostedNodeExecution, REAL_CLOCK } from '@kinu.run/core';
+import { withHostedNodeExecution, REAL_CLOCK, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { HostedNodeHome } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
@@ -319,7 +319,13 @@ export function createCFRuntime(
       ownGrants: () => memoryConfig.getShellApprovalGrants(),
     });
 
-  const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), 'agent', approvalPolicy);
+  // The workspace is the agent's own, but its shell serves the mount table below, the user's device and Drive included.
+  const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), {
+    filesOwner: 'agent',
+    userRoots: () => agentFileVfs.userRoots(),
+    home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT,
+  }, approvalPolicy);
+
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
   // the only per-actor entry.
@@ -365,6 +371,7 @@ export function createCFRuntime(
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
       vfs: agentFileVfs, memory, craftStore, shell,
+      userRoots: () => agentFileVfs.userRoots(),
       sql,
       ledger: () => access.acc?.().files,
       budget: () => access.acc?.().context,

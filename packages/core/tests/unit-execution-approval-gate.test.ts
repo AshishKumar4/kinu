@@ -3,12 +3,17 @@
  * (`nimbus.exec`, `sandbox.exec`, `device.exec`). Fails if `ExecutionRouter.register()` stops gating.
  */
 import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { DefaultExecutionRouter } from '../src/execution/router';
-import { declaredFilesOwner, gateProviderExec } from '../src/execution/approval';
+import { declaredFilesOwner, gateProviderExec, withApprovalGatedShell } from '../src/execution/approval';
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
 import type { FilesOwner, ShellApprovalPolicy, ShellApprovalRequest } from '../src/safety/approval-gate';
+import type { VFS } from '../src/types/primitives';
+import { withMountTable } from '../src/vfs/mounts';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { present } from '@kinu.run/test-utils';
+import { createWorkspaceBundle } from './helpers';
 
 const DENY = 'rm -rf /';
 
@@ -269,8 +274,8 @@ describe('the executor reaches the gate', () => {
     const { router } = askingRouter();
     router.register(createSandboxExecutor());
 
-    expect(declaredFilesOwner(router, 'sandbox')).toBe('agent');
-    expect(declaredFilesOwner(router, 'device')).toBe('user');
+    expect(declaredFilesOwner(router, 'sandbox', 'rm -rf build')).toBe('agent');
+    expect(declaredFilesOwner(router, 'device', 'rm -rf build')).toBe('user');
   });
 
   test("an executor holding the user's files is asked, whatever it is named", async () => {
@@ -353,5 +358,86 @@ describe('the executor reaches the gate', () => {
 
     expect(await device.tools.exec.execute('sudo reboot')).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
     expect(asked.map((r) => r.command)).toEqual(['sudo reboot']);
+  });
+});
+
+/** A machine's project at /pc/proj, recording every file the shell removes from it. */
+function deviceProject() {
+  const files = new Map([['/proj/a.txt', 'A'], ['/proj/b.txt', 'B']]);
+  const removed: string[] = [];
+  const isDir = (path: string) => path === '/' || path === '' || path === '/proj';
+
+  const stat = (path: string) => {
+    if (isDir(path)) return { isDir: true, size: 0, mtimeMs: 0 };
+
+    return files.has(path) ? { isDir: false, size: 1, mtimeMs: 0 } : null;
+  };
+
+  const device: VFS = {
+    readFile: async (path) => new TextEncoder().encode(files.get(path) ?? ''),
+    writeFile: async () => undefined,
+    readdir: async (path) => (path === '/proj' ? [...files.keys()].map((file) => file.slice('/proj/'.length)) : ['proj']),
+    stat: async (path) => stat(path),
+    unlink: async (path) => {
+      removed.push(path);
+      files.delete(path);
+    },
+    mkdir: async () => undefined,
+    exists: async (path) => isDir(path) || files.has(path),
+  };
+
+  return { device, removed };
+}
+
+/** The agent's own workspace shell serving a table with the user's machine at /pc, and a user who says no. */
+function workspaceOverDevice() {
+  const db = new Database(':memory:');
+  const workspace = createWorkspaceBundle(db);
+  const { device, removed } = deviceProject();
+  const mounted = withMountTable(workspace.vfs, [{ name: 'pc', files: () => device, absentReason: () => 'no device', filesOwner: 'user' }]);
+  workspace.mountTable(mounted);
+  const asked: string[] = [];
+
+  const shell = withApprovalGatedShell(workspace.shell, { filesOwner: 'agent', userRoots: () => mounted.userRoots(), home: WORKSPACE_ROOT }, {
+    mode: () => 'strict',
+    requestApproval: async (request) => {
+      asked.push(request.command);
+
+      return 'deny';
+    },
+  });
+
+  return { db, shell, asked, removed };
+}
+
+describe('a workspace shell over the user\'s mounts', () => {
+  test('a command naming /pc is put to the user, while the same delete in the agent\'s home is not', async () => {
+    const { db, shell, asked, removed } = workspaceOverDevice();
+
+    try {
+      expect((await shell.exec('rm -rf /pc/proj')).exitCode).not.toBe(0);
+      expect((await shell.exec('mkdir -p scratch/x && rm -rf scratch')).exitCode).toBe(0);
+
+      expect(asked).toEqual(['rm -rf /pc/proj']);
+      expect(removed).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('a session that went into /pc asks before deleting there, and stops asking once it is back home', async () => {
+    const { db, shell, asked, removed } = workspaceOverDevice();
+
+    try {
+      expect((await shell.exec('cd /pc/proj')).exitCode).toBe(0);
+      expect((await shell.exec('rm -rf .')).exitCode).not.toBe(0);
+      expect((await shell.exec('cd ~')).exitCode).toBe(0);
+      expect((await shell.exec('mkdir -p scratch/x && rm -rf scratch')).exitCode).toBe(0);
+
+      expect(asked).toEqual(['rm -rf .']);
+      expect(removed).toEqual([]);
+    } finally {
+      db.close();
+    }
   });
 });

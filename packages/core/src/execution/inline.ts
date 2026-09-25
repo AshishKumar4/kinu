@@ -60,6 +60,7 @@ export interface InlineExecutorDeps {
   shell: ShellExec;
   /** The declaration the host gated `shell` under. */
   filesOwner: FilesOwner;
+  userRoots?: () => readonly string[];
   /** Measured limits of where `shell` really runs; none unless the host measured one. */
   resourceLimits?: ResourceLimits;
   /** Used to look up crafted-tool quality columns for listTools(). */
@@ -470,6 +471,7 @@ declare namespace workspace {
       'javascript', 'typescript', 'shell', 'fs_shared', ...(deps.toolchain ?? []),
     ]),
     filesOwner: deps.filesOwner,
+    userRoots: deps.userRoots ?? (() => []),
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},

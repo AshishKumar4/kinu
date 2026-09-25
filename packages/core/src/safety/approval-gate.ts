@@ -18,6 +18,16 @@ export type FilesOwner = 'agent' | 'user';
 export interface GatedExecutor {
   readonly name: string;
   readonly filesOwner: FilesOwner;
+  /** The user's mount roots its commands see. */
+  readonly userRoots?: () => readonly string[];
+  /** Its shell session, as {@link nextShellCwd} tracks it. */
+  readonly session?: () => ShellCwd;
+}
+
+export interface ShellCwd {
+  readonly home: string;
+  readonly cwd: string;
+  readonly mayBeUsers: boolean;
 }
 
 export interface ApprovalRuleHit {
@@ -357,6 +367,175 @@ function scanCommand(command: string): CommandScan {
   return { invoked, unquoted };
 }
 
+/** null: the shell would expand it. */
+type ShellWord = string | null;
+
+/** `after`: the separator before it, `;` for a newline or parenthesis. */
+interface ShellStep {
+  readonly after: string;
+  readonly words: readonly ShellWord[];
+}
+
+const EXPANDING: ReadonlySet<string> = new Set(['$', '`', '*', '?', '[']);
+
+const STEP_BREAKS: ReadonlySet<string> = new Set([';', '\n', '(', ')']);
+
+/** A subshell's `cd` counts as the session's, which only asks more. */
+function shellSteps(command: string): ShellStep[] {
+  const steps: ShellStep[] = [];
+  let words: ShellWord[] = [];
+  let after = '';
+  let word = '';
+  let started = false;
+  let expands = false;
+  let quote: string | null = null;
+
+  const endWord = () => {
+    if (started) words.push(expands ? null : word);
+    word = '';
+    started = false;
+    expands = false;
+  };
+
+  const endStep = (next: string) => {
+    endWord();
+
+    if (words.length > 0) steps.push({ after, words });
+    words = [];
+    after = next;
+  };
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command.charAt(i);
+
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else if (quote === '"' && (ch === '$' || ch === '`')) { expands = true; word += ch; }
+      else word += ch;
+      continue;
+    }
+
+    const pair = command.slice(i, i + 2);
+
+    if (ch === '"' || ch === "'") { quote = ch; started = true; }
+    else if (ch === '\\') { word += command.charAt(++i); started = true; }
+    else if (ch === ' ' || ch === '\t') endWord();
+    else if (pair === '&&' || pair === '||') { endStep(pair); i++; }
+    else if (STEP_BREAKS.has(ch)) endStep(';');
+    else if (ch === '|' || ch === '&') endStep(ch);
+    else { word += ch; started = true; expands ||= EXPANDING.has(ch); }
+  }
+
+  endStep('');
+
+  return steps;
+}
+
+function normalizedPath(path: string): string {
+  const parts: string[] = [];
+
+  for (const part of path.split('/')) {
+    if (part === '..') parts.pop();
+    else if (part !== '' && part !== '.') parts.push(part);
+  }
+
+  return `/${parts.join('/')}`;
+}
+
+function shellPath(word: ShellWord, cwd: string, home: string): string | null {
+  if (word === null) return null;
+
+  if (word === '~' || word.startsWith('~/')) return normalizedPath(home + word.slice(1));
+
+  if (word.startsWith('~')) return null;
+
+  return normalizedPath(word.startsWith('/') ? word : `${cwd}/${word}`);
+}
+
+function underRoots(path: string, roots: readonly string[]): boolean {
+  return roots.some((root) => path === root || path.startsWith(`${root}/`));
+}
+
+/** null: unknown; `undefined`: not a `cd`. */
+function cdTarget(step: ShellStep, cwd: string, home: string): string | null | undefined {
+  const [verb, ...args] = step.words;
+
+  if (verb === 'popd') return null;
+
+  if (verb !== 'cd' && verb !== 'pushd') return undefined;
+  const target = args.find((arg) => arg === null || arg === '-' || !arg.startsWith('-'));
+
+  if (target === undefined) return verb === 'cd' ? home : null;
+
+  return target === '-' ? null : shellPath(target, cwd, home);
+}
+
+/**
+ * Known when every step ran (`&&`, exit 0) or it ends on the `cd`; else a `cd` that may enter the user's files
+ * marks the session. `cd "$DIR"` moves nothing: an obfuscated path is not caught.
+ */
+export function nextShellCwd(at: ShellCwd, command: string, exitCode: number, userRoots: readonly string[]): ShellCwd {
+  const steps = shellSteps(command);
+  let cwd = at.cwd;
+  let known = true;
+  let mayBeUsers = at.mayBeUsers;
+  let lastCd = -1;
+
+  for (const [index, step] of steps.entries()) {
+    const target = cdTarget(step, cwd, at.home);
+
+    if (target === undefined) continue;
+    lastCd = index;
+
+    if (target === null) {
+      known = false;
+      continue;
+    }
+
+    cwd = target;
+    mayBeUsers ||= underRoots(target, userRoots);
+  }
+
+  if (lastCd === -1) return at;
+  const allRan = steps.every((step, index) => index === 0 || step.after === '&&');
+  const endsOnCd = lastCd === steps.length - 1 && ['', ';', '&&'].includes(steps[lastCd]?.after ?? '');
+
+  if (exitCode === 0 && known && (allRan || endsOnCd)) return { ...at, cwd, mayBeUsers: underRoots(cwd, userRoots) };
+
+  return { ...at, cwd, mayBeUsers };
+}
+
+function namesRoot(command: string, root: string): boolean {
+  const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  return new RegExp(`(?<![\\w.~/-])${escaped}(?![\\w.-])`).test(command);
+}
+
+/** The executor's own, or the user's when the command names one of their roots, reaches under one from its
+ *  session's directory, or that session may already be there. */
+export function commandFilesOwner(executor: GatedExecutor, command: string): FilesOwner {
+  const roots = executor.userRoots?.() ?? [];
+
+  if (executor.filesOwner === 'user' || roots.length === 0) return executor.filesOwner;
+
+  if (roots.some((root) => namesRoot(command, root))) return 'user';
+  const session = executor.session?.();
+
+  if (session === undefined) return 'agent';
+
+  if (session.mayBeUsers || underRoots(session.cwd, roots)) return 'user';
+  let cwd = session.cwd;
+
+  for (const step of shellSteps(command)) {
+    const reached = step.words.map((word) => (word?.startsWith('-') ? null : shellPath(word, cwd, session.home)));
+
+    if (reached.some((path) => path !== null && underRoots(path, roots))) return 'user';
+    cwd = cdTarget(step, cwd, session.home) ?? cwd;
+  }
+
+  return 'agent';
+}
+
 /** Review a command for an executor holding `filesOwner`'s files. No default: no caller silently picks a trust tier. */
 export function reviewCommand(command: string, filesOwner: FilesOwner): ApprovalResult {
   const { invoked, unquoted } = scanCommand(command);
@@ -474,7 +653,7 @@ export function gateExec<R>(
     const cmd = String(command);
 
     const decision = await decideApproval(
-      { command: cmd, executor: executor.name }, reviewCommand(cmd, executor.filesOwner), policy,
+      { command: cmd, executor: executor.name }, reviewCommand(cmd, commandFilesOwner(executor, cmd)), policy,
     );
 
     if (!decision.run) return denyResult(decision.error);
