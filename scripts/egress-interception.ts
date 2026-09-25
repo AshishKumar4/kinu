@@ -79,6 +79,7 @@ import { dirname, join, relative } from 'node:path';
 
 import * as v from 'valibot';
 
+import type { Node } from 'oxc-parser';
 import { parseJsonc } from './jsonc';
 import { readSources } from './sources';
 import { assertMeasured, finding } from './gate-ratchet';
@@ -197,11 +198,18 @@ export function declaredForwarderClasses(sources: ReadonlyMap<string, string>): 
   return [...names].sort();
 }
 
-/** What a forwarder class may never touch: each is a way to run or read something other than one forwarded request. */
-const FORWARDER_FORBIDDEN = /\b(exec|execStream|startProcess|getTcpPort|mountBucket|writeFile|readFile|interceptHttps|outboundHandlers|outboundByHost|setOutboundHandler|setOutboundByHost|allowedHosts)\b|\bctx\.container\b/u;
-
 /** The interpreters a forwarder's CMD may name besides its own tracked script. */
 const FORWARDER_INTERPRETERS: readonly string[] = ['node'];
+
+/** The only Dockerfile instructions a forwarder image may use: none of them runs anything at build or names a
+ *  program other than CMD's. */
+const FORWARDER_INSTRUCTIONS: readonly string[] = ['FROM', 'COPY', 'WORKDIR', 'ENV', 'EXPOSE', 'USER', 'LABEL', 'CMD'];
+
+/** Fields a forwarder may declare; anything else (`entrypoint`, `envVars`, …) is refused. */
+const FORWARDER_FIELDS: readonly string[] = ['defaultPort', 'sleepAfter', 'enableInternet'];
+
+/** The members of `this` a forwarder may touch, and how. */
+const FORWARDER_THIS_MEMBERS: readonly string[] = ['containerFetch', 'startAndWaitForPorts', 'ctx', 'env', 'defaultPort'];
 
 export interface ForwarderInputs {
   readonly owner: string;
@@ -248,14 +256,20 @@ function dockerfileReasons(source: string, dockerfile: string, files: ReadonlyMa
   const reasons: string[] = [];
   const copied = new Set<string>();
   let command: string | undefined;
+  const lines = dockerfile.replaceAll(/\\\r?\n/gu, ' ').split('\n').map((text) => text.trim()).filter((text) => text !== '' && !text.startsWith('#'));
 
-  for (const line of dockerfile.split('\n').map((text) => text.trim()).filter((text) => text !== '' && !text.startsWith('#'))) {
+  for (const line of lines) {
     const [instruction = '', ...rest] = line.split(/\s+/u);
     const verb = instruction.toUpperCase();
 
+    if (!FORWARDER_INSTRUCTIONS.includes(verb)) {
+      reasons.push(`uses \`${verb}\`, outside FROM, COPY, WORKDIR, ENV, EXPOSE, USER, LABEL and CMD`);
+      continue;
+    }
+
     if (verb === 'FROM' && !/@sha256:[0-9a-f]{64}$/u.test(rest[0] ?? '')) reasons.push(`builds FROM ${rest[0] ?? ''}, not a pinned digest`);
 
-    if (verb === 'RUN' || verb === 'ADD') reasons.push(`runs \`${verb}\` at build, so the image holds more than tracked files`);
+    if (verb === 'ENV' && rest.some((word) => word.startsWith('NODE_'))) reasons.push('sets a NODE_ variable, which can load code CMD does not name');
 
     if (verb === 'COPY') {
       if (rest.some((word) => word.startsWith('--'))) reasons.push(`copies with a flag (${line}), not tracked files alone`);
@@ -266,7 +280,10 @@ function dockerfileReasons(source: string, dockerfile: string, files: ReadonlyMa
       }
     }
 
-    if (verb === 'CMD' || verb === 'ENTRYPOINT') command = rest.join(' ');
+    if (verb === 'CMD') {
+      if (command !== undefined) reasons.push('names CMD twice');
+      command = rest.join(' ');
+    }
   }
 
   const words = command === undefined ? null : v.safeParse(v.array(v.string()), tolerate<unknown>(() => JSON.parse(command), 'malformed-input'));
@@ -278,6 +295,100 @@ function dockerfileReasons(source: string, dockerfile: string, files: ReadonlyMa
   }
 
   return reasons;
+}
+
+/** `name` of an Identifier or PrivateIdentifier (as `#name`), else undefined. */
+function nameOf(node: Node | null | undefined): string | undefined {
+  if (node?.type === 'Identifier') return node.name;
+
+  return node?.type === 'PrivateIdentifier' ? `#${node.name}` : undefined;
+}
+
+/** `X.field` for a plain identifier X: the X, else undefined. */
+function memberOn(node: Node | null | undefined, field: string): string | undefined {
+  if (node?.type !== 'MemberExpression' || node.computed || nameOf(node.property) !== field) return undefined;
+
+  return node.object.type === 'Identifier' ? node.object.name : undefined;
+}
+
+/** The object literal's `key: value` pairs, by plain key. */
+function propertiesOf(node: Node | undefined): Map<string, Node> {
+  const out = new Map<string, Node>();
+
+  if (node?.type !== 'ObjectExpression') return out;
+
+  for (const property of node.properties) {
+    if (property.type !== 'Property' || property.computed) continue;
+    const key = nameOf(property.key);
+
+    if (key !== undefined) out.set(key, property.value);
+  }
+
+  return out;
+}
+
+/** The identifier a top-level `if (!pred({ method: X.method, url: X.url })) throw …` refuses on, when `statement` is one. */
+function guardedIdentifier(statement: Node, predicates: ReadonlySet<string>): string | undefined {
+  if (statement.type !== 'IfStatement' || statement.alternate !== null) return undefined;
+  const { test, consequent } = statement;
+
+  if (test.type !== 'UnaryExpression' || test.operator !== '!' || test.argument.type !== 'CallExpression') return undefined;
+  const call = test.argument;
+  const callee = nameOf(call.callee);
+
+  if (callee === undefined || !predicates.has(callee) || call.arguments.length !== 1) return undefined;
+  const fields = propertiesOf(call.arguments[0]);
+  const on = memberOn(fields.get('method'), 'method');
+
+  if (on === undefined || memberOn(fields.get('url'), 'url') !== on || fields.size !== 2) return undefined;
+
+  const throws = consequent.type === 'ThrowStatement'
+    || (consequent.type === 'BlockStatement' && consequent.body[0]?.type === 'ThrowStatement');
+
+  return throws ? on : undefined;
+}
+
+/** Reasons one `this` use is not an allowed one; `method` is the enclosing class method's body statements. */
+function thisUseReasons(use: SyntaxNode, guarded: (callStart: number) => ReadonlySet<string>): string[] {
+  const member = use.parent;
+
+  if (member?.raw.type !== 'MemberExpression' || member.raw.object !== use.raw) return ['lets `this` escape, so something outside the class could drive the container'];
+
+  if (member.raw.computed) return ['reads a computed member of `this`'];
+  const name = nameOf(member.raw.property);
+
+  if (name === undefined) return ['reads an unnamed member of `this`'];
+
+  if (name.startsWith('#')) return [];
+
+  if (!FORWARDER_THIS_MEMBERS.includes(name)) return [`touches \`this.${name}\`, outside containerFetch, startAndWaitForPorts, ctx.id, env and defaultPort`];
+
+  const call = member.parent;
+  const called = call?.raw.type === 'CallExpression' && call.raw.callee === member.raw ? call.raw : undefined;
+
+  if (name === 'ctx') {
+    const outer = member.parent?.raw;
+
+    return outer?.type === 'MemberExpression' && outer.object === member.raw && !outer.computed && nameOf(outer.property) === 'id'
+      ? []
+      : ['reads `this.ctx` beyond its id'];
+  }
+
+  if (name === 'startAndWaitForPorts') return called === undefined ? ['uses startAndWaitForPorts other than by calling it'] : [];
+
+  if (name !== 'containerFetch') return [];
+
+  if (called === undefined) return ['uses containerFetch other than by calling it directly'];
+  const [request] = called.arguments;
+
+  if (request?.type !== 'NewExpression' || nameOf(request.callee) !== 'Request') return ['calls containerFetch with no Request built at the call'];
+  const on = memberOn(propertiesOf(request.arguments[1]).get('method'), 'method');
+
+  if (on === undefined || !guarded(called.start).has(on)) {
+    return ['calls containerFetch on a request no top-level `if (!…EgressAllowed({ method: X.method, url: X.url })) throw` refused before it'];
+  }
+
+  return [];
 }
 
 function classReasons(input: ForwarderInputs): string[] {
@@ -292,33 +403,47 @@ function classReasons(input: ForwarderInputs): string[] {
 
   const reasons: string[] = [];
   let found = false;
+  let fetches = 0;
 
   walk(parsed.root, (node) => {
     if (node.type !== 'ClassDeclaration' || declaredName(node) !== input.owner) return;
     found = true;
-    const text = input.fileText.slice(node.start, node.end);
-    const forbidden = FORWARDER_FORBIDDEN.exec(text);
-
-    if (forbidden !== null) reasons.push(`uses \`${forbidden[0]}\`, which reaches the container other than by one forwarded request`);
-
-    let fetches = 0;
 
     for (const member of classMembers(node)) {
-      const body = input.fileText.slice(member.start, member.end);
-      const first = body.indexOf('containerFetch(');
+      const name = member.raw.type === 'PropertyDefinition' || member.raw.type === 'MethodDefinition' ? nameOf(member.raw.key) ?? '' : '';
 
-      if (first < 0) continue;
-      fetches++;
-      const guard = /if\s*\(\s*!\s*(\w+)\s*\([^]*?\)\s*\)\s*\{?\s*(throw|return)\b/gu;
-      const guarded = [...body.matchAll(guard)].some((match) => predicates.has(match[1] ?? '') && match.index < first);
+      if (member.raw.type === 'PropertyDefinition' && !name.startsWith('#') && !FORWARDER_FIELDS.includes(name)) {
+        reasons.push(`declares \`${name}\`, outside ${FORWARDER_FIELDS.join(', ')}`);
+      }
 
-      if (!guarded) reasons.push(`${declaredName(member) ?? 'a member'} calls containerFetch with no refusing check of a core …EgressAllowed predicate before it`);
+      if (member.raw.type === 'MethodDefinition' && ['start', 'fetch', 'containerFetch', 'startAndWaitForPorts', 'onStart', 'entrypoint', 'envVars'].includes(name)) {
+        reasons.push(`overrides \`${name}\``);
+      }
+
+      if (member.raw.type !== 'MethodDefinition' && member.raw.type !== 'PropertyDefinition') reasons.push(`has a ${member.raw.type} member`);
+
+      const body = member.raw.type === 'MethodDefinition' ? member.raw.value.body?.body ?? [] : [];
+
+      // Guards are the method's own top-level statements; one inside a closure or after the call does not count.
+      const guarded = (callStart: number): ReadonlySet<string> => new Set(body
+        .filter((statement) => statement.end < callStart)
+        .flatMap((statement) => guardedIdentifier(statement, predicates) ?? []));
+
+      walk(member, (inner) => {
+        if (inner.type === 'Super') reasons.push('reaches the base class through `super`');
+
+        if (inner.parent !== member && (inner.type === 'FunctionExpression' || inner.type === 'FunctionDeclaration')) reasons.push('declares a non-arrow function, which rebinds `this`');
+
+        if (inner.type !== 'ThisExpression') return;
+
+        if (nameOf(inner.parent?.raw.type === 'MemberExpression' ? inner.parent.raw.property : null) === 'containerFetch') fetches++;
+        reasons.push(...thisUseReasons(inner, guarded));
+      });
     }
-
-    if (fetches === 0) reasons.push('never calls containerFetch, so the container is reached some other way or not at all');
   });
 
   if (!found) reasons.push(`is not declared in ${input.file}`);
+  else if (fetches === 0) reasons.push('never calls containerFetch, so the container is reached some other way or not at all');
 
   return reasons;
 }

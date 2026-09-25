@@ -50,9 +50,9 @@ describe('the Codex egress route', () => {
     stop.abort(new DOMException('stopped', 'AbortError'));
 
     await expect(call).rejects.toThrow('stopped');
-    expect(await upstreamAborted.promise).toBeInstanceOf(DOMException);
     expect(egress.cancelled).toEqual(egress.forwarded);
     expect(egress.calls.size).toBe(0);
+    expect(await upstreamAborted.promise).toBeInstanceOf(DOMException);
   });
 
   test('a streamed answer is passed through whole, and the call ends with its body', async () => {

