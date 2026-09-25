@@ -9,7 +9,7 @@ import { writeSecretFile } from '@kinu.run/cli-backend';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   addUsage, decodeJsonValue, JsonObjectSchema, JsonValueSchema, pageSchema, projectJsonValue,
-  usageReported, UsageSchema,
+  redactPayload, usageReported, UsageSchema,
   type ExplorationRecord, type JsonObject, type JsonValue, type Page,
   type RecordCellHandle, type RecordCellSummary, type RecordObjectiveHandle,
   type RecordObjectiveSummary, type SeekCursor, type Usage,
@@ -326,48 +326,6 @@ function parseLocal<T>(schema: v.GenericSchema<T>, input: { value: unknown }): T
   return v.parse(schema, decodeJsonValue(input));
 }
 
-/** Applied to every string leaf, not a per-table allowlist: secrets land in free text no schema marks. */
-const SECRET_PATTERNS: RegExp[] = [
-  /\bpt[a-z]_[A-Za-z0-9_-]{16,}\b/g, // Kinu session/access/device tokens
-  /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, // Anthropic
-  /\bsk-[A-Za-z0-9]{20,}\b/g, // OpenAI-shaped
-  /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
-  /\bBearer\s+[A-Za-z0-9._-]{15,}\b/gi,
-];
-
-/** Kept apart from SECRET_PATTERNS so the replacement shape is declared, not sniffed. */
-const SECRET_KEY_VALUE_PATTERNS: RegExp[] = [
-  /("(?:token|secret|password|api[_-]?key|credential|access[_-]?token|refresh[_-]?token)"\s*:\s*")[^"]{4,}(")/gi,
-];
-
-function redactSecrets(text: string): string {
-  let out = text;
-
-  for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, '[REDACTED]');
-
-  for (const pattern of SECRET_KEY_VALUE_PATTERNS) out = out.replace(pattern, '$1[REDACTED]$2');
-
-  return out;
-}
-
-/** Applied once, at the serialization boundary, so no fetch path can forget it. */
-function redactDeep(value: JsonValue): JsonValue {
-  const string = v.safeParse(v.string(), value);
-
-  if (string.success) return redactSecrets(string.output);
-  const array = v.safeParse(v.array(JsonValueSchema), value);
-
-  if (array.success) return array.output.map(redactDeep);
-  const object = v.safeParse(JsonObjectSchema, value);
-
-  if (!object.success) return value;
-  const redacted: JsonObject = {};
-
-  for (const [key, child] of Object.entries(object.output)) redacted[key] = redactDeep(child);
-
-  return redacted;
-}
-
 interface BundleRecord extends JsonObject {
   t: string;
 }
@@ -390,7 +348,7 @@ function fileWriter(path: string): BundleWriter {
 
   return {
     write(record) {
-      buffered.push(`${JSON.stringify(redactDeep(record))}\n`);
+      buffered.push(`${JSON.stringify(redactPayload(record))}\n`);
 
       if (buffered.length >= 200) flush();
     },
@@ -747,7 +705,7 @@ function formatElapsed(ms: number): string {
 }
 
 function printJsonSummary(summary: DebugSummary, outPath: string): void {
-  printJson(redactDeep(decodeJsonValue({ value: { bundle: outPath, ...summary } })));
+  printJson(redactPayload(decodeJsonValue({ value: { bundle: outPath, ...summary } })));
 }
 
 function runStatusTag(run: RunStats): string {

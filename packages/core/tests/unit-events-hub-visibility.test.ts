@@ -118,6 +118,17 @@ describe('redactSecrets — secret-shaped VALUES in free text', () => {
     expect(stored).toEqual({ result: 'token <redacted> accepted', keep: 'visible' });
   });
 
+  test('a device token is masked whatever its first body character', () => {
+    // `pdt_` bodies are base64url, so a hex-only pattern let most of them through.
+    const device = ['pdt', '_', 'Zq', 'x'.repeat(40)].join('');
+
+    expect(redactSecrets(`X-Device: ${device}`)).toBe('X-Device: <redacted>');
+  });
+
+  test('a secret-named JSON pair written as text keeps its name and loses its value', () => {
+    expect(redactSecrets('{"api_key": "verysecretvalue1234"}')).toBe('{"api_key": "<redacted>"}');
+  });
+
   test('a bare string payload is free text too', () => {
     expect(redactPayload(`API key: ${TOKEN}`)).toBe('API key: <redacted>');
   });

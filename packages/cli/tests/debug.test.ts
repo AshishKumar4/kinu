@@ -48,6 +48,13 @@ const AKIA = ['AKIA', 'ABCDEFGHIJKLMNOP'].join('');
 
 const BEARER_SECRET = 'abcdefghijklmnopqrstuvwxyz';
 
+/** Shapes the CLI's own list never caught; assembled so this file stays clean under the scan. */
+const JWT_SECRET = ['eyJ', 'a'.repeat(24), '.eyJ', 'b'.repeat(24), '.sig'].join('');
+
+const GITHUB_SECRET = ['ghp', '_', 'c'.repeat(36)].join('');
+
+const PRIVATE_KEY = ['-----BEGIN ', 'PRIVATE KEY-----'].join('');
+
 /**
  * Two runs (one polls a job it backgrounded), two head-runs, and two MCTS searches whose older
  * root sorts first by created_at, where an unscoped client buildTree() shows the wrong tree.
@@ -75,7 +82,9 @@ function seedInvestigationWorkspace(dbPath: string): void {
   recorder.emit('run-new', { type: 'run_start', agentId: 'w', caused_by: 'chat', userMessage: 'fork with mcts' });
   recorder.emit('run-new', {
     type: 'tool_call_end', name: 'agents', args: { action: 'fork', settle: 'mcts' }, toolCallId: 'tc-1',
-    outcome: { success: true }, result: { background: true, jobId: 'job-1', kind: 'agents', message: 'contains ' + SECRET_TOKEN },
+    outcome: { success: true }, result: { background: true, jobId: 'job-1', kind: 'agents', message: 'contains ' + SECRET_TOKEN,
+      // Every planted shape in free text the bundle carries: a job's input never reaches it.
+      stdout: `{"api_key": "verysecretvalue1234"} ${AKIA} Authorization: Bearer ${BEARER_SECRET} ${JWT_SECRET} ${GITHUB_SECRET} ${PRIVATE_KEY}` },
   });
   recorder.emit('run-new', {
     type: 'tool_call_end', name: 'agent', args: { jobResult: 'job-1' }, toolCallId: 'tc-2',
@@ -188,7 +197,10 @@ describe('kinu debug — redaction', () => {
     expect(raw).not.toContain(AKIA);
     expect(raw).not.toContain(BEARER_SECRET);
     expect(raw).not.toContain('verysecretvalue1234');
-    expect(raw).toContain('[REDACTED]');
+    expect(raw).not.toContain(JWT_SECRET);
+    expect(raw).not.toContain(GITHUB_SECRET);
+    expect(raw).not.toContain(PRIVATE_KEY);
+    expect(raw).toContain('<redacted');
     expect(raw).toContain('job-2');
     expect(raw).toContain('pick a migration-backfill approach');
   });
@@ -233,7 +245,7 @@ describe('kinu debug — local backend', () => {
     const raw = readFileSync(bundle, 'utf8');
     expect(raw).not.toContain(SECRET_TOKEN);
     expect(raw).not.toContain(SECRET_KINU_TOKEN);
-    expect(raw).toContain('[REDACTED]');
+    expect(raw).toContain('<redacted');
 
     const records = raw.trim().split('\n').map((line) => v.parse(
       v.objectWithRest({ t: v.string() }, JsonValueSchema), JSON.parse(line),
@@ -404,7 +416,7 @@ describe('kinu debug — cloud backend', () => {
 
       const raw = readFileSync(bundle, 'utf8');
       expect(raw).not.toContain(SECRET_TOKEN);
-      expect(raw).toContain('[REDACTED]');
+      expect(raw).toContain('<redacted');
     } finally {
       await server.stop(true);
     }

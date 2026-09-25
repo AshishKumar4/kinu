@@ -3,7 +3,7 @@
 import { createHash, createHmac } from 'node:crypto';
 import * as v from 'valibot';
 import { evidenceWindow } from '../../utils/evidence-window';
-import { SECRET_PATTERNS } from '../../safety/secret-patterns';
+import { REDACTION_ONLY_PATTERNS, SECRET_PATTERNS } from '../../safety/secret-patterns';
 import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS,
   type PayloadPolicy, type KinuEvent, type IngressDescriptor, type SubordinateReportHandoff,
@@ -60,16 +60,16 @@ export function redactPayload(value: JsonValue): JsonValue {
   return redacted;
 }
 
-/** Applies `SECRET_PATTERNS` per line (a pattern's `benign` form suppresses it on that line) and
- *  masks with `<redacted>`, the marker `redactErrorText` prints. */
+/** Applies `SECRET_PATTERNS` and `REDACTION_ONLY_PATTERNS` per line (a pattern's `benign` form
+ *  suppresses it on that line) and masks with `<redacted>`, the marker `redactErrorText` prints. */
 export function redactSecrets(text: string): string {
   return text.split('\n').map((line) => {
     let redacted = line;
 
-    for (const pattern of SECRET_PATTERNS) {
+    for (const pattern of [...SECRET_PATTERNS, ...REDACTION_ONLY_PATTERNS]) {
       if (pattern.benign?.test(line)) continue;
 
-      redacted = redacted.replaceAll(pattern.regex, '<redacted>');
+      redacted = redacted.replaceAll(pattern.regex, pattern.mask ?? '<redacted>');
     }
 
     return redacted;
