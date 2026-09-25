@@ -360,11 +360,38 @@ function clampLimit(requested: number | undefined, max: number): number {
   return Math.min(Math.max(Math.floor(requested), 1), max);
 }
 
+/** agents 0.22 reads this key back at start when `ctx.id` has no name. */
+const PERSISTED_NAME_KEY = '__ps_name';
+
 export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
+  private readonly addressedName: string;
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
+    const name = ctx.id.name ?? this.recordedName();
+
+    if (name === undefined) {
+      throw new Error('This workspace object was reached by id before any named start recorded its name; address it by name.');
+    }
+
+    this.addressedName = name;
     sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
+  }
+
+  /** Nimbus enters by `idFromString`, and the platform fixes `ctx.id` for the activation, so it has no name. */
+  private recordedName(): string | undefined {
+    if (!tableExists(this.boundSql, 'workspace_identity')) return undefined;
+    const name = this.sql<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0]?.name;
+
+    if (name !== undefined && this.ctx.storage.kv.get(PERSISTED_NAME_KEY) !== name) {
+      this.ctx.storage.kv.put(PERSISTED_NAME_KEY, name);
+    }
+
+    return name;
+  }
+
+  override get name(): string {
+    return this.addressedName;
   }
 
   protected actorKind(): AgentKind {
@@ -460,10 +487,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Pid, writer incarnation and lease owner are stamped by the supervisor entrypoint, never the
-   * facet. Answers under every name (Nimbus siblings like `nbf:npm-resolve-fanout:<doId>:<n>`),
-   * bypassing the `onStart` lifecycle gate. Not `@callable`: `sealRpcSurface` keeps it off the
-   * public transport, since a browser could otherwise run any op under any pid.
+   * Pid, writer incarnation and lease owner are stamped by the supervisor entrypoint, never the facet. Skips
+   * `onStart`. Not `@callable`: a browser could otherwise run any op under any pid.
    */
   async supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult> {
     return await this.hostedWorkspace().supervisorOp(envelope);
