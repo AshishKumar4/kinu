@@ -134,7 +134,7 @@ function OpenSlatePanel(props: WorkSurfaceProps & { readonly slate: string; read
 
 const LISTING_STRIP = "shrink-0 border-t p-border px-3 py-2";
 
-/** A failed listing, else a starting one, in one strip under the surface. */
+/** A failed listing wins over a starting one. */
 function ListingStatus({ error, starting, onRetry }: { error: string | null; starting: readonly string[]; onRetry: () => void }) {
   if (error) return <LoadFailure what="preview listings" message={error} onRetry={onRetry} className={LISTING_STRIP} />;
 

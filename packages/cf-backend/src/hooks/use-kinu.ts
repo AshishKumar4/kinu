@@ -846,7 +846,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // Refreshed on every surface. Listing ports never provisions a sandbox: getExposedPorts returns []
   // unless the executor is already active.
   const [pinnedPorts, setPinnedPorts] = useState<PinnedPreviewPort[]>([]);
-  // One state: a switch clears the failure and the start together.
+  // One state, so a switch clears both.
   const [previewListing, setPreviewListing] = useState<PreviewListing>(NO_PREVIEW_LISTING);
   const exposedPortsRefreshGeneration = useRef(0);
   /** Held in a ref too: the socket handler's effect must not re-subscribe (its cleanup forgets the
