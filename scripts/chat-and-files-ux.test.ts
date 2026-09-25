@@ -3011,17 +3011,21 @@ test('workspace tabs keep scrolling horizontal and suppress the scrollbar', asyn
     await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[aria-label="Work"]');
 
+    // A strip narrower than its tabs, so the scroll is measured whatever the frame's tab count.
     const strip = await page.$eval('.p-tabstrip', (element) => {
       const style = getComputedStyle(element);
+      element.setAttribute('style', 'max-width: 120px');
       element.scrollLeft = 50;
 
       return {
         names: [...element.querySelectorAll('button[aria-label]')].map((button) => button.getAttribute('aria-label')),
         overflowY: style.overflowY, scrollbarWidth: style.scrollbarWidth, scrollLeft: element.scrollLeft,
+        overflows: element.scrollWidth > element.clientWidth,
       };
     });
 
     expect(strip.names).toContain('Files');
+    expect(strip.overflows).toBe(true);
     expect(['hidden', 'clip']).toContain(strip.overflowY);
     expect(strip.scrollbarWidth).toBe('none');
     expect(strip.scrollLeft).toBeGreaterThan(0);
