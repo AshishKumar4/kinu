@@ -277,7 +277,7 @@ const BroadcastFrameSchema = v.union([
   v.object({ type: v.literal('model_fallback'), message: v.string() }),
 ]);
 
-export interface CloudAgentClientOptions {
+interface CloudAgentClientOptions {
   origin: string;
   token: string;
   agentName: string;

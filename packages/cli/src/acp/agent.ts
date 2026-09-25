@@ -21,9 +21,9 @@ import type { AgentClient, AgentClientEvent } from '../agent-client';
 import { toAgentPrompt } from './prompt';
 import * as v from 'valibot';
 
-export type AcpClientFactory = (opts: { cwd: string }) => Promise<AgentClient>;
+type AcpClientFactory = (opts: { cwd: string }) => Promise<AgentClient>;
 
-export interface AcpAgentDeps {
+interface AcpAgentDeps {
   openClient: AcpClientFactory;
   name: string;
   version: string;

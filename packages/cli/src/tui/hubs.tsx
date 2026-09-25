@@ -107,7 +107,7 @@ export function buildAgentHubEntries(input: {
   });
 }
 
-export interface TuiProfileHubData {
+interface TuiProfileHubData {
   readonly envelope: ProfileCatalogEnvelope;
   readonly activeRoleId: RoleId;
   readonly allowedRoleIds: readonly RoleId[];

@@ -503,7 +503,7 @@ export function parseCustomTheme(json: string, filename: string): TuiThemeDefini
   return freezeTheme(theme);
 }
 
-export interface ThemeContrastPair {
+interface ThemeContrastPair {
   readonly label: string;
   readonly foreground: string;
   readonly background: string;
@@ -625,7 +625,7 @@ function markdownSyntaxForTheme(theme: TuiThemeDefinition): SyntaxStyle {
 }
 
 
-export interface ActiveTuiTheme {
+interface ActiveTuiTheme {
   readonly definition: TuiThemeDefinition;
   readonly colors: TuiThemeColors;
   readonly markdownSyntax: SyntaxStyle;

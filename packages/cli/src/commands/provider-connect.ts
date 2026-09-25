@@ -49,9 +49,9 @@ export type ProviderConnectId =
   | 'openai-compatible'
   | 'opencode';
 
-export type ProviderCredentialKind = 'browser' | 'device-code' | 'api-key' | 'binary';
+type ProviderCredentialKind = 'browser' | 'device-code' | 'api-key' | 'binary';
 
-export interface ProviderAsk {
+interface ProviderAsk {
   readonly label: string;
   readonly fallback?: string;
   /** Never echoed. */
@@ -69,7 +69,7 @@ export type ProviderConnectOutcome =
   | { readonly kind: 'connected'; readonly summary: string; readonly detail?: string }
   | { readonly kind: 'blocked'; readonly reason: string; readonly hint: string };
 
-export interface ProviderDescriptor {
+interface ProviderDescriptor {
   readonly id: ProviderConnectId;
   readonly label: string;
   readonly blurb: string;
@@ -84,7 +84,7 @@ export interface ProviderConnectionState {
   readonly accounts?: readonly string[];
 }
 
-export interface ProviderConnections {
+interface ProviderConnections {
   readonly states: readonly ProviderConnectionState[];
   readonly signedInEmail?: string;
   /** Account credentials no row claims (the models.dev tail connected in the web UI). */
@@ -277,7 +277,7 @@ function currentModel(model: string | undefined, prefix: string): string | undef
   return model.slice(prefix.length + 1);
 }
 
-export type ApiKeyProviderId = keyof typeof API_KEY_PROVIDERS;
+type ApiKeyProviderId = keyof typeof API_KEY_PROVIDERS;
 
 const API_KEY_CONNECTORS: Readonly<Record<ApiKeyProviderId, { readonly label: string; readonly defaultModel: string }>> = {
   openai: { label: 'OpenAI', defaultModel: 'gpt-4o-mini' },

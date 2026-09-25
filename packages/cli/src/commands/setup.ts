@@ -36,7 +36,7 @@ export function connectOptions(opts: {
 
 export async function connectProviderOnConsole(
   id: ProviderConnectId,
-  opts: { readonly origin?: string; readonly model?: string; readonly local?: boolean; readonly account?: string } = {},
+  opts: Parameters<typeof connectProvider>[2] = {},
 ): Promise<ProviderConnectOutcome> {
   const descriptor = PROVIDER_CONNECTORS.find((candidate) => candidate.id === id);
 

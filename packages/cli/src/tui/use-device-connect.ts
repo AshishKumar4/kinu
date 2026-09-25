@@ -20,7 +20,7 @@ export type DeviceConnectPromptState =
 
 const RESULT_LINGER_MS = 2_500;
 
-export interface DeviceConnectPrompt {
+interface DeviceConnectPrompt {
   state: DeviceConnectPromptState | null;
   /** At most once per invocation; resolves immediately when there is nothing to ask. */
   offerIfUnconnected: () => Promise<void>;

@@ -43,7 +43,7 @@ const WriteCallSchema = v.object({
 });
 
 /** `hunks === null` renders "diff unavailable". */
-export interface FileEditDiffView {
+interface FileEditDiffView {
   readonly path: string;
   readonly status: FileStatus;
   readonly hunks: readonly (readonly DiffLine[])[] | null;

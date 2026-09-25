@@ -49,11 +49,11 @@ import {
 } from './tui-shell';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-export type HomeTuiAction =
+type HomeTuiAction =
   | { type: 'open-agent'; name: string }
   | { type: 'exit' };
 
-export interface HomeTuiOptions {
+interface HomeTuiOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
@@ -734,12 +734,10 @@ function createDefaultOnboarding(
       await loadActiveProfile();
     },
     selectTheme(selection) {
-      const current = preferences.read();
-      preferences.write({ ...current, theme: selection });
+      preferences.write({ ...preferences.read(), theme: selection });
     },
     selectKeymap(presetId) {
-      const current = preferences.read();
-      preferences.write({ ...current, keymapPreset: presetId });
+      preferences.write({ ...preferences.read(), keymapPreset: presetId });
     },
     async createWorkspace(input) {
       const current = preferences.read();
