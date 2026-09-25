@@ -21,8 +21,11 @@
  * Screenshots land in ~/kinu-logs/drive-ux/ (outside the worktree).
  */
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+import { packZip } from '@kinu.run/core';
+import { scratchDir } from '@kinu.run/test-utils';
 import type { Page } from 'puppeteer';
 
 import { contrast, rgba, withGallery, type Gallery } from './gallery-harness';
@@ -119,6 +122,9 @@ async function tabTo(page: Page, label: string): Promise<{ disabled: string | nu
 }
 
 /** Resolves once a frame has been drawn after everything before it. */
+/** Upload tiles still drawn, as state and name. */
+const transfers = (page: Page) => page.$$eval('[data-drive-transfer]', (tiles) => tiles.map((tile) => `${tile.getAttribute('data-drive-transfer') ?? ''} ${tile.querySelector('[data-drive-tile-name]')?.textContent?.trim() ?? ''}`));
+
 async function drawn(page: Page): Promise<void> {
   await page.evaluate(() => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); }));
 }
@@ -267,7 +273,7 @@ describe('the Drive', () => {
     });
   });
 
-  test('an upload is a tile in its folder until its file is listed; Cancel stops it, and a refusal stays with its reason', async () => {
+  test('an upload is a tile in its folder until it lands; Cancel stops it, and a refusal stays with its reason', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
 
@@ -324,6 +330,56 @@ describe('the Drive', () => {
         await page.click('[data-drive-transfer="failed"] [data-drive-dismiss-upload]');
         await drawn(page);
         expect(await page.$('[data-drive-transfer]')).toBeNull();
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('a folder and a .zip upload each leave their tile once done; a cancelled one leaves nothing', async () => {
+    const scratch = scratchDir('drive-ux-uploads');
+    const picked = join(scratch, 'photos');
+    mkdirSync(picked);
+    writeFileSync(join(picked, 'one.txt'), 'one');
+    const archive = join(scratch, 'bundle.zip');
+    const later = join(scratch, 'later.zip');
+
+    for (const zip of [archive, later]) writeFileSync(zip, packZip([{ path: 'inner.txt', bytes: new TextEncoder().encode('inner') }]));
+
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'drive&path=/projects/ops', 'dark', 'desktop');
+
+      try {
+        const folderInput = await page.$('input[data-drive-folder-input]');
+        const zipInput = await page.$('input[data-drive-zip-input]');
+
+        if (folderInput === null || zipInput === null) throw new Error('no folder or zip input');
+
+        await folderInput.uploadFile(picked);
+        await waitForEntry(page, 'photos');
+        await drawn(page);
+        expect(await transfers(page)).toEqual([]);
+
+        await zipInput.uploadFile(archive);
+        await waitForEntry(page, 'bundle');
+        await drawn(page);
+        expect(await transfers(page)).toEqual([]);
+
+        // Held until aborted: Cancel takes the tile, and the folder never lands.
+        await page.evaluate(() => {
+          const real = window.fetch;
+
+          window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => (init?.method === 'PUT'
+            ? new Promise<Response>((_, reject) => { init.signal?.addEventListener('abort', () => reject(init.signal?.reason)); })
+            : real(input, init)), { preconnect: real.preconnect });
+        });
+        await zipInput.uploadFile(later);
+        await page.waitForSelector('[data-drive-transfer="uploading"]');
+        await menuOf(page, '[data-drive-transfer="uploading"]');
+        await page.click('[data-drive-transfer="uploading"] [data-drive-cancel-upload]');
+        await drawn(page);
+        expect(await transfers(page)).toEqual([]);
+        expect(await page.$('[data-drive-entry="later"]')).toBeNull();
       } finally {
         await page.close();
       }
