@@ -450,7 +450,9 @@ test('a workspace switch clears the sandbox-starting line of the workspace left 
       await page.setViewport({ width: 1280, height: 860 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-composer-root]');
-      // The next live refresh answers the sandbox's listing as starting.
+      // The sandbox lists a port the page pins, then its next listing answers as starting: the pin stays, the line shows.
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForSelector('[aria-label="Arrived app"]');
       await page.evaluate(() => { document.documentElement.dataset.sandboxStarting = '1'; });
       await page.waitForSelector('[data-preview-starting]');
       // The next workspace's listing never lands, so only the switch itself can clear the line.
@@ -458,7 +460,9 @@ test('a workspace switch clears the sandbox-starting line of the workspace left 
         document.documentElement.dataset.listingHeld = '1';
         await window.galleryNavigate?.('/workspace/billing-cleanup');
       });
-      await page.waitForFunction(() => document.querySelector('[data-preview-starting]') === null);
+      // The switch's reset drops the pin and the line in one render, so once the pin has gone the line must be gone.
+      await page.waitForFunction(() => document.querySelector('[aria-label="Arrived app"]') === null);
+      expect(await page.$('[data-preview-starting]')).toBeNull();
     } finally { await page.close(); }
   });
 });
