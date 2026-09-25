@@ -298,6 +298,40 @@ describe('the Drive', () => {
     });
   });
 
+  test('a sheet\'s tile draws its first rows as cells, and a code file\'s its lines numbered', async () => {
+    await withGallery(async (gallery) => {
+      // A cover is drawn once its file is read, when the tile holds the file's first words however it draws them.
+      const read = async (query: string, entry: string, words: string): Promise<Page> => {
+        const page = await freshPage(gallery, query, 'dark', 'desktop');
+
+        await page.waitForFunction((tile: string, first: string) => document.querySelector(`[data-drive-entry="${tile}"]`)?.textContent?.includes(first) === true, {}, entry, words);
+        await drawn(page);
+
+        return page;
+      };
+
+      const sheet = await read('drive&path=/data', 'customers.csv', 'plan');
+
+      try {
+        expect(await sheet.$$eval('[data-drive-entry="customers.csv"] [data-drive-sheet-row]', (rows) => rows.slice(0, 2).map((row) => [...row.children].map((cell) => cell.textContent))))
+          .toEqual([['id', 'name', 'plan', 'seats'], ['1', 'Lovelace, Ada', 'Team', '2']]);
+      } finally {
+        await sheet.close();
+      }
+
+      const code = await read('drive&path=/projects/ops/deploy/scripts', 'run.sh', '#!/bin/sh');
+
+      try {
+        const lines = await code.$$eval('[data-drive-entry="run.sh"] [data-drive-code-line]', (rows) => rows.map((row) => [row.children[0]?.textContent, row.children[1]?.textContent]));
+
+        expect(lines.slice(0, 3)).toEqual([['1', '#!/bin/sh'], ['2', '# Ship the current branch to production.'], ['3', 'set -eu']]);
+        expect(lines.map(([number]) => number)).toEqual(lines.map((_, index) => String(index + 1)));
+      } finally {
+        await code.close();
+      }
+    });
+  });
+
   test('marks a skill folder from its menu, shows the built-in skills beside it, and refuses a pasted file with no front matter', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'drive&path=/projects/ops', 'light', 'desktop');

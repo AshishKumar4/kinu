@@ -16,15 +16,27 @@ const DrivePage = lazy(() => import("@/pages/DrivePage"));
 
 const SKILL = (name: string, description: string): string => `---\nname: ${name}\ndescription: ${description}\n---\n# ${name}\n\nSteps.\n`;
 
+const PEOPLE = ["Lovelace, Ada", "Hopper, Grace", "Turing, Alan", "Johnson, Katherine", "Dijkstra, Edsger", "Liskov, Barbara"];
+
+const CUSTOMERS = ["id,name,plan,seats", ...Array.from({ length: 180 }, (_, index) =>
+  `${String(index + 1)},"${PEOPLE[index % PEOPLE.length] ?? ""}",${["Team", "Pro", "Free"][index % 3] ?? ""},${String(2 + (index * 7) % 38)}`)].join("\n");
+
+const DEPLOY_SCRIPT = [
+  "#!/bin/sh", "# Ship the current branch to production.", "set -eu", "",
+  "branch=$(git rev-parse --abbrev-ref HEAD)", "echo \"Shipping $branch\"", "",
+  "bun install --frozen-lockfile", "bun run build", "bun run test", "",
+  "wrangler deploy --env production", "echo \"Shipped $branch\"", "",
+].join("\n");
+
 async function seededDrive(): Promise<MossaicVfs> {
   const drive = mossaicVfs(fakeMossaic().tenant("gallery-owner"));
   const write = (path: string, text: string) => drive.writeFile(path, text);
 
   await write("/README.md", "# Drive\n\nShared across every workspace.\n");
-  await write("/data/customers.csv", "id,name\n1,Ada\n2,Grace\n".repeat(400));
+  await write("/data/customers.csv", CUSTOMERS);
   await write("/data/notes.txt", "call back on Tuesday");
   await write("/projects/ops/deploy/SKILL.md", SKILL("deploy", "Ship the current branch to production"));
-  await write("/projects/ops/deploy/scripts/run.sh", "#!/bin/sh\necho ship\n");
+  await write("/projects/ops/deploy/scripts/run.sh", DEPLOY_SCRIPT);
   await write("/projects/ops/runbook.md", "# Runbook\n");
   await write("/notes/todo.md", "- write the skill\n");
   await write("/skills/review/SKILL.md", SKILL("review", "Review a pull request the way this team does"));

@@ -95,6 +95,8 @@ const TEXT = /\.(?:md|markdown|txt|csv|tsv|json|ya?ml|toml|ts|tsx|js|jsx|py|sh|c
 
 const PROSE = /\.(?:md|markdown|txt)$/iu;
 
+const SHEET = /\.(?:csv|tsv)$/iu;
+
 /** A SKILL.md is drawn as its name over its description and steps; any other file as its first lines. */
 function coverLines(text: string, skill: boolean): [string | null, string[]] {
   const parsed = skill ? parseSkillFile(text) : null;
@@ -105,14 +107,71 @@ function coverLines(text: string, skill: boolean): [string | null, string[]] {
   return [parsed.skill.name, [parsed.skill.description, "", ...steps].slice(0, 12)];
 }
 
+function sheetRows(text: string, name: string): string[][] {
+  const separator = /\.tsv$/iu.test(name) ? "\t" : ",";
+
+  return text.split("\n").filter((line) => line.trim() !== "").slice(0, 9).map((line) => {
+    const cells: string[] = [];
+    let cell = "";
+    let quoted = false;
+
+    for (const char of line) {
+      if (char === '"') quoted = !quoted;
+      else if (char === separator && !quoted) {
+        cells.push(cell);
+        cell = "";
+      } else cell += char;
+    }
+
+    return [...cells, cell];
+  });
+}
+
+const NUMERIC = /^-?[\d.,$%]+$/u;
+
+function SheetCover({ rows }: { rows: readonly (readonly string[])[] }) {
+  const columns = Math.min(4, rows[0]?.length ?? 1);
+  const right = Array.from({ length: columns }, (_, column) => rows.slice(1).every((row) => NUMERIC.test(row[column]?.trim() ?? "")));
+  const grid = { gridTemplateColumns: `repeat(${String(columns)}, minmax(0, 1fr))` };
+
+  return (
+    <span className="absolute inset-0 overflow-hidden p-surface text-[8.5px] leading-[1.45]">
+      {rows.map((row, index) => (
+        <span key={index} data-drive-sheet-row style={grid}
+          className={`grid gap-2 px-4 ${index === 0 ? "p-recessed py-2 font-semibold p-text-2" : "border-t p-border py-[5px] font-mono p-text-3"}`}>
+          {row.slice(0, columns).map((cell, column) => <span key={column} className={`truncate ${right[column] === true ? "text-right" : ""}`}>{cell}</span>)}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function CodeCover({ lines }: { lines: readonly string[] }) {
+  return (
+    <span className="absolute inset-0 overflow-hidden p-recessed px-3 pt-3 font-mono text-[8.5px] leading-[1.6]">
+      {lines.map((line, index) => (
+        <span key={index} data-drive-code-line className="flex gap-2.5">
+          <span className="min-w-3 shrink-0 text-right tabular-nums p-text-4">{index + 1}</span>
+          <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre p-text-3">{line === "" ? "\u00a0" : line}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function TextPage({ text, name }: { text: string | null; name: string }) {
+  const rows = text !== null && SHEET.test(name) ? sheetRows(text, name) : [];
+
+  if (rows.length > 0) return <SheetCover rows={rows} />;
   const [heading, lines] = text === null ? [null, []] : coverLines(text, name === "SKILL.md");
 
   if (lines.length === 0) return <FileCover name={name} />;
 
+  if (heading === null && !PROSE.test(name)) return <CodeCover lines={lines} />;
+
   return (
     <span className="absolute inset-0 overflow-hidden p-recessed px-[14%] pt-[5%]">
-      <span className={`block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 text-[8.5px] leading-[1.45] p-text-3 ${PROSE.test(name) ? "" : "font-mono"}`}>
+      <span className="block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 text-[8.5px] leading-[1.45] p-text-3">
         {heading !== null && <span className="mb-1 block truncate text-[11px] font-semibold p-text">{heading}</span>}
         {lines.map((line, index) => <span key={index} className="block truncate">{line === "" ? "\u00a0" : line}</span>)}
       </span>
