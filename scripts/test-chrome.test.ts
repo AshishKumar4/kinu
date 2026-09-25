@@ -6,13 +6,14 @@
  * ladder's deadline.
  */
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { BROWSER_PROFILE_PARENT, scratchDir } from '../packages/test-utils/src/scratch';
 import { argsOf, testBrowserProfile } from './preflight';
 import { currentOwner, OWNER_RECORD, procFile, reapAbandonedRoots } from './process-owner';
-import { trackedFiles } from './sources';
+import { isParseable, readMatching } from './sources';
+import { memberCalleeName, parse, walk, type Parsed } from './syntax';
 import { launchTestChrome } from './test-chrome';
 
 const HELD = join(import.meta.dir, 'fixtures', 'test-chrome', 'held.ts');
@@ -109,15 +110,62 @@ test('a launch reaps the profile a dead launcher left in RAM, and keeps a live o
   expect(existsSync(live)).toBe(true);
 });
 
-test('every Chrome this repository starts on this box starts through the launcher', () => {
-  const launchers = trackedFiles()
-    .filter((file) => /\.[cm]?tsx?$/u.test(file) && existsSync(file))
-    .filter((file) => {
-      const text = readFileSync(file, 'utf8');
+/**
+ * The bindings a file's value imports of puppeteer bring in (default, namespace or a named `launch`), read from its
+ * syntax tree: a type-only import launches nothing, and text that spells an import (a fixture string, a comment) is
+ * none.
+ */
+function puppeteerBindings(parsed: Parsed): Set<string> {
+  const bindings = new Set<string>();
 
-      return /from\s+['"]puppeteer['"]/u.test(text) && /\.launch\(/u.test(text);
-    });
+  for (const statement of parsed.root.children) {
+    const { raw } = statement;
+
+    if (raw.type !== 'ImportDeclaration' || raw.importKind === 'type' || raw.source.value !== 'puppeteer') continue;
+
+    for (const specifier of raw.specifiers) {
+      if (specifier.type === 'ImportSpecifier' && specifier.importKind === 'type') continue;
+      bindings.add(specifier.local.name);
+    }
+  }
+
+  return bindings;
+}
+
+/** Whether the file calls `launch` on a binding its puppeteer import made, or calls an imported `launch` itself. */
+function launchesChrome(file: string, text: string): boolean {
+  const parsed = parse(file, text);
+  const bindings = puppeteerBindings(parsed);
+  let launches = false;
+
+  if (bindings.size === 0) return false;
+  walk(parsed.root, (node) => {
+    const { raw } = node;
+
+    if (raw.type !== 'CallExpression') return;
+    const { callee } = raw;
+
+    const onImport = callee.type === 'MemberExpression' && callee.object.type === 'Identifier'
+      && bindings.has(callee.object.name) && memberCalleeName(node) === 'launch';
+
+    const imported = callee.type === 'Identifier' && callee.name === 'launch' && bindings.has('launch');
+
+    if (onImport || imported) launches = true;
+  });
+
+  return launches;
+}
+
+test('the launch check reads syntax: a real launch counts, a fixture spelling one does not', () => {
+  expect(launchesChrome('a.ts', "import puppeteer from 'puppeteer';\nawait puppeteer.launch({});\n")).toBeTrue();
+  expect(launchesChrome('b.ts', "import * as p from 'puppeteer';\nawait p.launch();\n")).toBeTrue();
+  expect(launchesChrome('c.ts', "import type { Browser } from 'puppeteer';\nconst b = {} as Browser;\nawait b.launch();\n")).toBeFalse();
+  expect(launchesChrome('d.ts', "const fixture = \"import driver from 'puppeteer'; driver.launch()\";\n")).toBeFalse();
+  expect(launchesChrome('e.ts', "import puppeteer from '@cloudflare/puppeteer';\nawait puppeteer.launch(env.BROWSER);\n")).toBeFalse();
+});
+
+test('every Chrome this repository starts on this box starts through the launcher', () => {
+  const launchers = [...readMatching(isParseable)].filter(([file, text]) => launchesChrome(file, text)).map(([file]) => file);
 
   expect(launchers).toEqual(['scripts/test-chrome.ts']);
 });
-

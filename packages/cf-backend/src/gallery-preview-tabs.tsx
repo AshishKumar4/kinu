@@ -78,7 +78,6 @@ export function PreviewTabsGallery() {
   const [starting, setStarting] = useState(false);
   const [narrow, setNarrow] = useState(false);
   const keptNotes = useRef<JsonValue[]>([]);
-  const brokenReads = useRef(0);
   const [failHistory, setFailHistory] = useState(false);
   const [workerPlan, setWorkerPlan] = useState<PlanReview>({ ...ROOT_PLAN, revision: 1, content: "# Worker plan", status: "approved", handoffAccepted: true, createdAt: 10 });
   const [owner, setOwner] = useState("main");
@@ -89,12 +88,7 @@ export function PreviewTabsGallery() {
     const reply = (value: ReplyValue): Promise<T> => new Response(JSON.stringify(value)).json<T>();
 
     if (method === 'previewSlate') return reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
-    else if (method === 'getExecutorDiff' && broken) {
-      brokenReads.current += 1;
-      document.querySelector('[data-break-diff]')?.setAttribute('data-reads', String(brokenReads.current));
-
-      return reply({ mode: 'vfs-baseline', files: [], error: 'the change-set read failed' });
-    }
+    else if (method === 'getExecutorDiff' && broken) return reply({ mode: 'vfs-baseline', files: [], error: 'the change-set read failed' });
     else if (method === 'getExecutorDiff' && args?.[0] === MACHINE.name) return reply(MACHINE_DIFF);
     else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: edited ?? [] });
     else if (method === 'getChangeNotes') return reply(keptNotes.current);
