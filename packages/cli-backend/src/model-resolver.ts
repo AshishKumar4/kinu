@@ -63,7 +63,7 @@ const proxiedCredentialsSchema = v.object({
   })), []),
 });
 
-export interface LocalOpenAICompatCredential {
+interface LocalOpenAICompatCredential {
   baseURL: string;
   apiKey?: string;
   headers?: Record<string, string>;
@@ -101,28 +101,25 @@ export {
   CLOUD_PROXY_PROVIDER_IDS, cloudProxyBaseURL, type CloudProxyProviderId,
 } from '@kinu.run/core';
 
-/** Memoized per session + fetch: `getModelsDevCatalog` caches on fetch identity,
- *  so a fresh closure per resolver would re-download the catalog. */
-const proxyFetchCache = new Map<string, { base: typeof fetch | undefined; proxy: typeof fetch }>();
+type PerCloudSession<T> = Map<string, { base: typeof fetch | undefined; value: T }>;
 
-function proxyFetchFor(cloud: LocalCloudSession, base: typeof fetch | undefined): typeof fetch {
-  // Not keyed on sessionAffinity: that header pins a Workers AI replica, is not
-  // sent to third parties, and keying on it would re-download the catalog per agent.
+/**
+ * One value per session + base fetch. Not keyed on sessionAffinity: that header pins a Workers AI
+ * replica, is not sent to third parties, and keying on it would re-download the catalog per agent.
+ */
+function perCloudSession<T>(cache: PerCloudSession<T>, cloud: LocalCloudSession, base: typeof fetch | undefined, make: () => T): T {
   const cacheKey = `${cloud.origin} ${cloud.token}`;
-  const cached = proxyFetchCache.get(cacheKey);
+  const cached = cache.get(cacheKey);
 
-  if (cached && cached.base === base) return cached.proxy;
+  if (cached && cached.base === base) return cached.value;
+  const value = make();
+  cache.set(cacheKey, { base, value });
 
-  const proxy = createProviderProxyFetch({
-    forwardURL: providerProxyForwardURL(cloud.origin),
-    authorization: `Bearer ${cloud.token}`,
-    fetch: base,
-  });
-
-  proxyFetchCache.set(cacheKey, { base, proxy });
-
-  return proxy;
+  return value;
 }
+
+/** `getModelsDevCatalog` caches on fetch identity, so a fresh closure per resolver would re-download the catalog. */
+const proxyFetches: PerCloudSession<typeof fetch> = new Map();
 
 export interface LocalModelResolver {
   normalizeSpecSync(specOrNull?: string | null): string;
@@ -307,13 +304,17 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   // Web-UI-connected providers resolve through the worker's proxy. A local
   // credential always wins: offline use and explicit override.
-  const proxied = cloud ? proxyCredentialSourceFor(cloud, opts.fetch) : null;
+  const proxied = cloud ? perCloudSession(proxyCredentialSources, cloud, opts.fetch, () => createProxyCredentialSource(cloud, opts.fetch)) : null;
   registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 
   const depsFor = (accountFor?: (providerId: string) => string | undefined): ProviderDeps => ({
     env: {},
     sessionAffinity: opts.sessionAffinity,
-    fetch: cloud ? proxyFetchFor(cloud, opts.fetch) : opts.fetch,
+    fetch: cloud
+      ? perCloudSession(proxyFetches, cloud, opts.fetch, () => createProviderProxyFetch({
+        forwardURL: providerProxyForwardURL(cloud.origin), authorization: `Bearer ${cloud.token}`, fetch: opts.fetch,
+      }))
+      : opts.fetch,
     async getAuth(key, authOpts) {
       const local = await authStore.get(key, authOpts);
 
@@ -558,18 +559,7 @@ interface ProxyCredentialSource {
 }
 
 /** Shared across resolvers so a picker listing also warms the spec normalizer. */
-const proxyCredentialSources = new Map<string, { base: typeof fetch | undefined; source: ProxyCredentialSource }>();
-
-function proxyCredentialSourceFor(cloud: LocalCloudSession, base: typeof fetch | undefined): ProxyCredentialSource {
-  const cacheKey = `${cloud.origin} ${cloud.token}`;
-  const cached = proxyCredentialSources.get(cacheKey);
-
-  if (cached && cached.base === base) return cached.source;
-  const source = createProxyCredentialSource(cloud, base);
-  proxyCredentialSources.set(cacheKey, { base, source });
-
-  return source;
-}
+const proxyCredentialSources: PerCloudSession<ProxyCredentialSource> = new Map();
 
 function createProxyCredentialSource(
   cloud: LocalCloudSession,

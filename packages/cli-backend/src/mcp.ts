@@ -25,7 +25,7 @@ export interface McpServerConfig {
   timeoutMs?: number;
 }
 
-export interface McpConnection {
+interface McpConnection {
   /** Every discovered tool, unadmitted; the session admits them via core's
    *  `admitMcpDescriptors`. `serverId` is the config key, unique per agent. */
   readonly descriptors: SerializableToolDescriptor[];
@@ -36,7 +36,7 @@ export interface McpConnection {
   close(): Promise<void>;
 }
 
-export interface McpConnectionDiagnostic {
+interface McpConnectionDiagnostic {
   server: string;
   status: 'connected' | 'failed';
   toolCount: number;

@@ -73,11 +73,9 @@ export interface OpenCodeProviderOptions {
   probe?: () => Promise<OpenCodeAvailability>;
 }
 
-export interface OpenCodeAvailability {
+interface OpenCodeAvailability {
   binary: boolean;
   authenticated: boolean;
-  models?: OpenCodeModelInfo[];
-  defaultModel?: string;
 }
 
 export interface OpenCodeSpawn {
@@ -92,7 +90,7 @@ export interface SpawnedOpenCode {
   exit: Promise<number | null>;
 }
 
-export interface OpenCodeModelInfo {
+interface OpenCodeModelInfo {
   /** Full model id as opencode reports it, e.g. "openai/gpt-5.6-sol". */
   id: string;
   provider: string;
@@ -190,11 +188,11 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
     return value.replaceAll(`{env:${cred.key}}`, cred.token);
   }
 
-  async function loadConfig(force = false): Promise<ResolvedConfig> {
+  async function loadConfig(): Promise<ResolvedConfig> {
     const cred = readCredential();
     const signature = `${cred.origin}:${cred.token}`;
 
-    if (!force && configCache && configCache.signature === signature && Date.now() - configCache.loadedAt < CONFIG_TTL_MS) {
+    if (configCache && configCache.signature === signature && Date.now() - configCache.loadedAt < CONFIG_TTL_MS) {
       return configCache.config;
     }
 
@@ -237,14 +235,12 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
     }
 
     const models = await discoverModels(spawnFn);
-
-    if (models.length === 0) throw new Error('opencode reports no available models');
-    modelMetadata = new Map(models.map((model) => [model.id, model]));
-
-    const configuredDefault = config.model ?? '';
     const firstModel = models[0];
 
     if (!firstModel) throw new Error('opencode reports no available models');
+    modelMetadata = new Map(models.map((model) => [model.id, model]));
+
+    const configuredDefault = config.model ?? '';
 
     const defaultModel = models.some((model) => model.id === configuredDefault)
       ? configuredDefault
@@ -298,7 +294,7 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
       const reasoning = metadata ? metadata.reasoning === true : isOpenAIReasoningFamily(modelId);
       const useResponsesAPI = reasoning || metadata?.apiNpm === '@ai-sdk/openai';
 
-      return createOpenCodeModel({ modelId, resolveConfig: () => loadConfig(), invalidateCache, fetchImpl, useResponsesAPI, reasoning });
+      return createOpenCodeModel({ modelId, resolveConfig: loadConfig, invalidateCache, fetchImpl, useResponsesAPI, reasoning });
     },
   };
 }

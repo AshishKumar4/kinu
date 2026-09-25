@@ -142,7 +142,7 @@ export interface LocalAgentHostOptions {
 }
 
 /** What one {@link LocalAgentHost.tick} did; `ran` distinguishes a deferred pass from an idle one. */
-export interface LocalTickResult {
+interface LocalTickResult {
   readonly ran: boolean;
   /** Soonest re-drive moment, or null; read from the durable schedule even when deferred. */
   readonly nextAt: number | null;
@@ -213,7 +213,7 @@ interface ChildReportRelay {
   handoff?: SubordinateReportHandoff;
 }
 
-export type AgentEventListener = (agent: string, event: SessionEvent) => void;
+type AgentEventListener = (agent: string, event: SessionEvent) => void;
 
 export class LocalAgentHost {
   private readonly entries = new Map<string, HostEntry>();
@@ -308,20 +308,14 @@ export class LocalAgentHost {
   }
 
   async actors(address: string): Promise<readonly WorkspaceActor[]> {
-    const entry = await this.resolveEntry(address);
-
-    return entry.tree.host.list().map((reference) => entry.tree.host.describe(reference.actorId))
-      .filter((record): record is WorkspaceActor => record !== null);
+    return describeActors(await this.resolveEntry(address));
   }
 
   /** The workspace-wide work read `listWorkspaceWork` exposes over RPC. */
   async workspaceWork(address: string): Promise<WorkspaceWork> {
     const entry = await this.resolveEntry(address);
 
-    const actors = entry.tree.host.list().map((reference) => entry.tree.host.describe(reference.actorId))
-      .filter((record): record is WorkspaceActor => record !== null);
-
-    return readWorkspaceWork(entry.ws.rt.storage.sql, entry.ws.rt.actor, actors);
+    return readWorkspaceWork(entry.ws.rt.storage.sql, entry.ws.rt.actor, describeActors(entry));
   }
 
   async close(): Promise<void> {
@@ -396,18 +390,8 @@ export class LocalAgentHost {
       return child;
     }
 
-    return await this.openTopLevelEntry(address);
-  }
-
-  private async openTopLevelEntry(name: string): Promise<HostEntry> {
-    const pending = this.opening.get(name);
-
-    if (pending) return await pending;
-    const existing = this.entries.get(name);
-
-    if (existing) return existing;
-    const opening = this.createTopLevel(name);
-    this.opening.set(name, opening);
+    const opening = this.createTopLevel(address);
+    this.opening.set(address, opening);
 
     try {
       const entry = await opening;
@@ -415,7 +399,7 @@ export class LocalAgentHost {
 
       return entry;
     } finally {
-      if (this.opening.get(name) === opening) this.opening.delete(name);
+      if (this.opening.get(address) === opening) this.opening.delete(address);
     }
   }
 
@@ -1461,6 +1445,11 @@ export class LocalAgentHost {
       }
     });
   }
+}
+
+function describeActors(entry: HostEntry): WorkspaceActor[] {
+  return entry.tree.host.list().map((reference) => entry.tree.host.describe(reference.actorId))
+    .filter((record): record is WorkspaceActor => record !== null);
 }
 
 /** A subordinate's ref: its own name over its root's pair, so it cannot bind or address outside its tree. */

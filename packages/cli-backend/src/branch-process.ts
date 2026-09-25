@@ -29,7 +29,7 @@ interface PendingCall {
   readonly reject: (reason: Error) => void;
 }
 
-export interface BranchSpawnerConfig {
+interface BranchSpawnerConfig {
   readonly parent: ActorHandle;
   /** The parent's default endpoint for bare ids, or null. */
   llm: LLMProviderConfig | null;
@@ -37,7 +37,7 @@ export interface BranchSpawnerConfig {
   oauthConfigPath?: string;
 }
 
-export interface BranchSpawner {
+interface BranchSpawner {
   spawn: SpawnBranch;
   abort: AbortBranch;
 }
