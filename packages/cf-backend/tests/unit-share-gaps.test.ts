@@ -18,6 +18,7 @@ import { serveFamily } from './helpers/api';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
 import { present } from '@kinu.run/test-utils';
+import { KinuError } from '@kinu.run/core/obs';
 
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(result.reason + ': ' + result.error);
@@ -341,4 +342,26 @@ test("the owner's Drive lists its slates and shares from the tiles its workspace
 
   expect(after.mine.map((row) => row.kind)).toEqual(['blueprint']);
   expect(after.slates[0]?.visibility).toBeUndefined();
+});
+
+test('a share whose card cannot reach the tile answers the failure, and a revoke during the backoff that leaves still moves it', async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const userDO = world.ownerUser.userDO;
+  const push = userDO.putWorkspaceOverview.bind(userDO);
+  const share = (visibility: 'users' | 'public') => sharedRequest(world.env, owner, post('/api/shared/live', { workspace: 'issues-owner', slate: 'issues', visibility }));
+  const listed = async () => (await jsonBody(present(await sharedRequest(world.env, owner, new Request('https://app.test/api/shared')), 'the library'), SharedLibrarySchema)).mine;
+
+  const first = await jsonBody(present(await share('public'), 'the first share'), v.object({ share: v.object({ id: v.string() }) }));
+
+  expect((await listed()).map((row) => row.id)).toEqual([first.share.id]);
+
+  // The second share's push fails: its route says so, and the failure leaves a backoff pending.
+  Object.assign(userDO, { putWorkspaceOverview: async () => { throw new KinuError('unavailable', 'the roster is unavailable'); } });
+  expect((await share('users'))?.status).not.toBe(201);
+  Object.assign(userDO, { putWorkspaceOverview: push });
+
+  expect((await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: first.share.id })))?.status).toBe(200);
+  expect((await listed()).map((row) => [row.kind, row.visibility])).toEqual([['live', 'users']]);
 });

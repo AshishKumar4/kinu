@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO, daemon } from './helpers/device-harness';
 import { USER_DO_RPC_SURFACE, type UserDoRpcMethod } from '../src/rpc-surface';
+import type { RosterPage } from '../src/user/roster';
 import type { UserDO } from '../src/user/user-do';
 import { sha256Hex } from '@kinu.run/core';
 import { BUILTIN_PROFILE_CATALOG, decodeJsonValue } from '@kinu.run/core';
@@ -111,7 +112,6 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'workspaces.read', name: 'listWorkspaces', run: (u, c) => u.listWorkspaces(c) },
   { capability: 'workspaces.read', name: 'listActiveWorkspaces', run: (u, c) => u.listActiveWorkspaces(c) },
   { capability: 'workspaces.read', name: 'hasWorkspace', run: (u, c) => u.hasWorkspace(c, OTHER_WORKSPACE) },
-  { capability: 'workspaces.read', name: 'libraryTiles', run: (u, c) => u.libraryTiles(c) },
 
   { capability: 'workspaces.write', name: 'registerWorkspace', run: (u, c) => u.registerWorkspace(c, 'spawned') },
   { capability: 'workspaces.write', name: 'reserveWorkspace', run: (u, c) => u.reserveWorkspace(c, 'reserved') },
@@ -279,6 +279,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'shares', name: 'sharesReceived_list', run: (u, c) => u.sharesReceived_list(c) },
   { capability: 'shares', name: 'sharesReceived_forget', run: (u, c) => u.sharesReceived_forget(c, USER_ID) },
 
+  { capability: 'drive', name: 'libraryTiles', run: (u, c) => u.libraryTiles(c) },
   { capability: 'drive', name: 'drive_list', run: (u, c) => u.drive_list(c, '/') },
   { capability: 'drive', name: 'drive_mkdir', run: (u, c) => u.drive_mkdir(c, '/x') },
   { capability: 'drive', name: 'drive_rename', run: (u, c) => u.drive_rename(c, '/x', '/y') },
@@ -395,6 +396,25 @@ describe('a registered workspace reaches the whole surface', () => {
     const names = (await harness.userDO.listWorkspaces(await testOwner())).entries;
     expect(names.find((w) => w.name === WORKSPACE)?.displayName).toBe('Renamed by itself');
     expect(names.find((w) => w.name === OTHER_WORKSPACE)?.displayName).toBe('Workspace B');
+    harness.close();
+  });
+
+  test("a workspace reads its siblings' tiles without whom they share with", async () => {
+    const harness = await setupWorkspaces();
+
+    const shared = {
+      kind: 'live' as const, share: 'share-1', slate: 'board', title: 'Board', description: '', createdAt: 1, bindings: 0,
+      users: ['pat@example.test'], visibility: 'users' as const, fork: true,
+    };
+
+    await harness.userDO.putWorkspaceOverview({ workspaceToken: harness.otherToken }, OTHER_WORKSPACE, {
+      activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latestRun: null, slates: [], shares: [shared],
+    });
+
+    const sharesOf = (page: RosterPage) => page.entries.find((entry) => entry.name === OTHER_WORKSPACE)?.overview?.shares;
+
+    expect(sharesOf(await harness.userDO.listWorkspaces({ workspaceToken: harness.token }))).toEqual([]);
+    expect(sharesOf(await harness.userDO.listWorkspaces(await testOwner()))).toEqual([shared]);
     harness.close();
   });
 

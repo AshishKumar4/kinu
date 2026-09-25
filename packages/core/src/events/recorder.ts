@@ -465,7 +465,7 @@ export class RunEventRecorder {
     return events.filter((event) => event.phase === 'start' && !ended.has(event.operationId));
   }
 
-  /** The latest run's end (null if unsealed, never success) and the person's newest words. Excludes WORKSPACE_RUN_ID. */
+  /** The latest run's end (null if unsealed). Not WORKSPACE_RUN_ID. */
   latestRunHeader(): { status: string | null; userMessage: string | null } | null {
     this.actor.assertCurrent();
 
@@ -484,9 +484,27 @@ export class RunEventRecorder {
       ORDER BY event_index DESC LIMIT 1`;
 
     const sealed = end === undefined ? null : parseStoredRunEvent(end.payload);
+
+    return { status: sealed?.type === 'run_end' ? sealed.reason ?? null : null, userMessage: this.operatorWords() };
+  }
+
+  /** Older storage: scanned once, kept ('' for none). */
+  private operatorWords(window = 50): string | null {
     const [asked] = this.sql<{ text: string }>`SELECT text FROM operator_requests WHERE actor_id = ${this.actorId}`;
 
-    return { status: sealed?.type === 'run_end' ? sealed.reason ?? null : null, userMessage: asked?.text ?? null };
+    if (asked !== undefined) return asked.text === '' ? null : asked.text;
+
+    const starts = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events WHERE actor_id = ${this.actorId} AND type = ${'run_start'}
+      ORDER BY ts DESC, rowid DESC LIMIT ${window}`;
+
+    const found = starts.map((row) => parseStoredRunEvent(row.payload)).find((start) => start.type === 'run_start'
+      && start.turn !== undefined && turnAuthor({ id: start.turn.turnId, metadata: start.turn.metadata }) === 'operator');
+
+    const text = found?.type === 'run_start' ? found.userMessage ?? '' : '';
+    void this.sql`INSERT INTO operator_requests (actor_id, text) VALUES (${this.actorId}, ${text})`;
+
+    return text === '' ? null : text;
   }
 
   /** Auto-GEPA's durable denominator. Rows without `workMode` count nothing; a turn in the same

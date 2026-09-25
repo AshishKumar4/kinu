@@ -4111,7 +4111,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.armDurableWake();
       },
       sharesChanged: async () => {
-        this.overviewChanged();
+        this.overviewChanged(true);
         await this.overviewSettled();
       },
     });
@@ -4510,7 +4510,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private pushedOverview: string | null = null;
   private overviewDirty = false;
   private overviewPushing = false;
-  private readonly overviewSettlers: Array<() => void> = [];
+  private readonly overviewSettlers: Array<(failure: KinuError | null) => void> = [];
   /** Changes meanwhile ride its push. */
   private overviewRetry: { readonly at: number; readonly attempts: number } | null = null;
 
@@ -4518,19 +4518,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.overviewChanged();
   }
 
-  protected override overviewChanged(): void {
+  protected override overviewChanged(force = false): void {
     this.overviewDirty = true;
 
     if (this.overviewPushing || this.getOwnerUserId() === null) return;
 
     const retry = this.overviewRetry;
 
-    if (retry !== null && Date.now() < retry.at) return;
+    if (!force && retry !== null && Date.now() < retry.at) return;
     this.overviewPushing = true;
 
     // In flight, it owes the wake a failure would arm.
     if (retry !== null) this.overviewRetry = { at: Date.now() + recoveryBackoffMs(retry.attempts + 1), attempts: retry.attempts };
     this.detachOwned(async () => {
+      let failed: KinuError | null = null;
+
       try {
         while (this.overviewDirty) {
           this.overviewDirty = false;
@@ -4557,6 +4559,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const attempts = (this.overviewRetry?.attempts ?? 0) + 1;
         // A refusal meets the next push.
         const retrying = failure.code === 'unavailable' || failure.code === 'timeout';
+        failed = failure;
         this.overviewRetry = retrying ? { at: Date.now() + recoveryBackoffMs(attempts), attempts } : null;
         diagnostics.failure('workspace.overview_push_failed', failure, { workspace: this.name, attempts, retrying });
 
@@ -4564,15 +4567,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       } finally {
         this.overviewPushing = false;
 
-        for (const settle of this.overviewSettlers.splice(0)) settle();
+        for (const settle of this.overviewSettlers.splice(0)) settle(failed);
       }
     });
   }
 
-  /** So a share's route answers after its card moved. */
+  /** A share's route answers once its card moved, or with why not. */
   private async overviewSettled(): Promise<void> {
     if (!this.overviewPushing) return;
-    await new Promise<void>((resolve) => { this.overviewSettlers.push(resolve); });
+    const failure = await new Promise<KinuError | null>((resolve) => { this.overviewSettlers.push(resolve); });
+
+    if (failure !== null) throw failure;
   }
 
   @callable() async executeInExecutor(executorId: string, command: string, device?: string) {

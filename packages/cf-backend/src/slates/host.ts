@@ -392,8 +392,12 @@ export class SlateHost {
     return this.changedShares(await this.blueprintAnswer('sharing slate ' + share, () => this.live.addUsers(share, users)));
   }
 
-  private async changedShares<Answer extends { readonly ok: boolean }>(answer: Answer): Promise<Answer> {
-    if (answer.ok) await this.deps.sharesChanged?.();
+  private async changedShares<Answer extends { readonly ok: boolean }>(answer: Answer): Promise<Answer | { ok: false } & Refusal> {
+    try {
+      if (answer.ok) await this.deps.sharesChanged?.();
+    } catch (cause) {
+      return { ok: false, ...refusalOf(toKinuError({ doing: "moving the share's card on the workspace's tile", cause, otherwise: 'unavailable' })) };
+    }
 
     return answer;
   }

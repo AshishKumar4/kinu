@@ -211,7 +211,7 @@ export interface PictureCapture {
   readonly workspace: string;
   readonly bucket: PictureBucket;
   url(port: number, token: string): Promise<string | null>;
-  /** Broken ones included. */
+  /** With broken ones. */
   slates(): Promise<ReadonlySet<string>>;
   camera(): Promise<Camera>;
 }
