@@ -1630,6 +1630,12 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult(null).json<T>();
   }
 
+  if (method === "getExposedPorts" && document.documentElement.dataset.listingHeld === "1") return new Promise<T>(() => {});
+
+  if (method === "getExposedPorts" && document.documentElement.dataset.sandboxStarting === "1" && args?.[0] === "sandbox") {
+    return rpcResult({ ports: [], pending: "the sandbox's container is still restoring" }).json<T>();
+  }
+
   // Arrives after first paint: once the gate sets the dataset flag, the next live refresh lists a new port.
   if (method === "getExposedPorts" && document.documentElement.dataset.previewArrived === "1" && args?.[0] === "sandbox") {
     return rpcResult({ ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] }).json<T>();
@@ -6028,6 +6034,16 @@ function previewTabsFrame(): MountedFrame {
   return { entries: ["/"], node: <PreviewTabsGallery /> };
 }
 
+function GalleryNavigator() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    Object.assign(window, { galleryNavigate: async (path: string) => { await navigate(path); } });
+  }, [navigate]);
+
+  return null;
+}
+
 /** Both app routes as App.tsx keys them, so creating an agent can navigate. */
 function workspacePageFrame(): MountedFrame {
   serveGalleryRpc(workspacePageRpc);
@@ -6038,10 +6054,13 @@ function workspacePageFrame(): MountedFrame {
   return {
     entries: [`/workspace/${WORKSPACE_PAGE_NAME}`],
     node: (
-      <Routes>
-        <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
-        <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
-      </Routes>
+      <>
+        <GalleryNavigator />
+        <Routes>
+          <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
+          <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
+        </Routes>
+      </>
     ),
   };
 }

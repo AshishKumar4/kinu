@@ -434,3 +434,31 @@ test('after Mark reviewed, the source menu still reaches a machine\'s changes', 
     } finally { await page.close(); }
   });
 });
+
+declare global {
+  interface Window {
+    /** The workspace frame's router (`GalleryNavigator` in gallery.tsx). */
+    galleryNavigate?: (path: string) => Promise<void>;
+  }
+}
+
+test('a workspace switch clears the sandbox-starting line of the workspace left behind', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    try {
+      await page.setViewport({ width: 1280, height: 860 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-composer-root]');
+      // The next live refresh answers the sandbox's listing as starting.
+      await page.evaluate(() => { document.documentElement.dataset.sandboxStarting = '1'; });
+      await page.waitForSelector('[data-preview-starting]');
+      // The next workspace's listing never lands, so only the switch itself can clear the line.
+      await page.evaluate(async () => {
+        document.documentElement.dataset.listingHeld = '1';
+        await window.galleryNavigate?.('/workspace/billing-cleanup');
+      });
+      await page.waitForFunction(() => document.querySelector('[data-preview-starting]') === null);
+    } finally { await page.close(); }
+  });
+});
