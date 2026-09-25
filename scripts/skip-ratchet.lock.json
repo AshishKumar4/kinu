@@ -12,6 +12,14 @@
     "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: bootstrap, a model-authored modification, then rollback across real versions. Same preload strip and the same missing live arm as the MCTS entry above."
   },
   {
+    "key": "tests/live/continuation.test.ts › a real fold keeps the task › the live continuation of a folded episode recalls every fact the full one does",
+    "reason": "needs a live model: GATE-6's continuation probe runs in the live tier (bun run test:live), which sets KINU_EVAL_LIVE=1 and fails at load without KINU_ORIGIN + KINU_TOKEN or an AI Gateway pair."
+  },
+  {
+    "key": "tests/live/continuation.test.ts › one same-provider conversation survives every transition › prune, edit, reset, model change and compaction each keep completed calls paired, and the provider answers",
+    "reason": "needs a live model: GATE-6's continuation probe runs in the live tier (bun run test:live), which sets KINU_EVAL_LIVE=1 and fails at load without KINU_ORIGIN + KINU_TOKEN or an AI Gateway pair."
+  },
+  {
     "key": "tests/live/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › scorecard and evolution summary",
     "reason": "needs a live model: reports the 8-problem scorecard the preceding test produces. Runs in the live tier with KINU_ORIGIN + KINU_TOKEN."
   },

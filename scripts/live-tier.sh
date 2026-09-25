@@ -39,9 +39,10 @@
 # directly (AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH, or KINU_BASE_URL + KINU_AUTH);
 # it fronts a model and no deployment, so it creates nothing.
 #
-# With no credential anywhere this script still runs and still passes: every
-# live test skips, the ratchet proves the skips are the declared ones, and the
-# spend report says zero.
+# With no credential anywhere this script fails at tests/live/continuation.test.ts,
+# the continuation guarantee (GATE-6), which refuses to go green without a model
+# and names the variables to set. Outside this script every live test skips, and
+# the ratchet proves the skips are the declared ones.
 #
 # --backend local|cloud names where the agent under test lives. `local` (the
 # default) is the in-process cli-backend runtime. `cloud` runs the one suite with
