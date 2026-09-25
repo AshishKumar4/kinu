@@ -24,7 +24,7 @@ import {
 import { createRecordingLogger, setDiagnosticsSink, type RecordedLog } from '../src/obs/index';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { receivePeerMessage } from '../src/events/ingress/peer';
-import { TurnFileLedger } from '../src/tools/file-ledger';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { makeSqlExec } from './helpers';
 
 type ToolResult = object | string | number | boolean | null | undefined;

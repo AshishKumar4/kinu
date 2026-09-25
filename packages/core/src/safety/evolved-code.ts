@@ -20,7 +20,7 @@ export function parseEvolvedCode(source: string): acorn.Program | null {
   return null;
 }
 
-/** A child of an acorn node that is itself a node: every acorn node carries a type and its span. */
+/** Every acorn node carries a type and its span. */
 const AcornNodeSchema = v.custom<acorn.AnyNode>((input) => v.is(v.looseObject({ type: v.string(), start: v.number(), end: v.number() }), input));
 
 export interface PlacedNode {

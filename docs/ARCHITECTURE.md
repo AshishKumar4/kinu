@@ -353,7 +353,7 @@ Five ingress paths publish into the log:
 | Email | `packages/core/src/events/ingress/email.ts` (plus `server.ts` `email()`) | `ingress: 'email_inbound'` |
 | Webhook | `packages/core/src/events/ingress/webhook.ts` (plus `packages/cf-backend/src/events/routes.ts`, `packages/core/src/events/webhook-route.ts`) | signed route capability in the URL, then per-trigger HMAC, Bearer, or mTLS |
 | Peer | `packages/core/src/events/ingress/peer.ts` (`outbox_peer` to `PeerHub`) | `ingress: 'peer_async'` (cross-workspace) |
-| Subordinate | `packages/core/src/events/ingress/subordinate.ts` (plus `subordinates/support.ts` admission) | `ingress: 'subordinate'` (variants `subordinate_task`, `subordinate_report`) |
+| Subordinate | `packages/core/src/subordinates/ingress.ts` (plus `subordinates/support.ts` admission) | `ingress: 'subordinate'` (variants `subordinate_task`, `subordinate_report`) |
 | Timer | `packages/core/src/events/ingress/triggers.ts`, driven by each backend's clock | `ingress: 'timer_alarm'` (cron or one-shot) |
 
 The webhook rail is the only public one, and it has two checks. The delivery URL
@@ -577,7 +577,7 @@ Two policies apply to every provider:
 Reasoning effort is set by the user. `/effort` in chat or
 `kinu effort <name> [level]` stores `reasoning_effort` in the workspace
 `agent_config`; a workspace without its own runs the profile's default tier.
-`packages/core/src/strategy/effort.ts` maps the level onto each family's native
+`packages/core/src/providers/effort.ts` maps the level onto each family's native
 option: `reasoningEffort` for Workers AI, OpenAI-shaped providers, and
 OpenRouter, and `effort` for Anthropic (levels Anthropic does not take are not
 sent). Internal stages take theirs from `REASONING_EFFORT_FOR_STAGE`, sized to

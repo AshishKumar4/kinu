@@ -14,7 +14,7 @@ import type {
 import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch, RequestShellApproval } from './types/agent-runtime';
 import type { ExecutionRouter } from './execution/types';
 import type { FileCheckpoints } from './checkpoints/types';
-import type { TurnFileLedger } from './tools/file-ledger';
+import type { TurnFileLedger } from './vfs/file-ledger';
 import { createScaffoldSurface } from './scaffold/surface';
 import type { ActorHandle } from './identity/actor-handle';
 import { createRoutedModelLane, type ModelLaneComponents } from './profiles/model-lane';

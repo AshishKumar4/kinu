@@ -127,7 +127,7 @@ Contributed tools pass two filters on cloud. `extensionTools` in
   `tool-result` event and the durable turn record. It stays unbounded because
   turn steering hashes it as call identity, and a head slice could merge
   distinct results. Bound your own render with `evidenceWindow`
-  (`core/src/prompts/evidence-window.ts`): text within a positive character
+  (`core/src/utils/evidence-window.ts`): text within a positive character
   budget passes unchanged, and longer text keeps both ends and names the
   omitted middle.
 - Only the mutable scaffold replaces inference. It does so through

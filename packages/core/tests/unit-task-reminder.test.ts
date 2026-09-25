@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../src/tasks/reminder';
-import type { AgentTaskTree } from '../src/tasks/store';
-import type { ActiveRoster } from '../src/prompting/volatile-context';
+import type { AgentTaskTree } from '../src/tools/task-store';
+import type { ActiveRoster } from '../src/types/dynamic-context';
 import { present } from '@kinu.run/test-utils';
 
 function tree(over: Partial<AgentTaskTree> & { title: string }): AgentTaskTree {

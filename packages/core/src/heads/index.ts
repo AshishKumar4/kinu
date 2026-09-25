@@ -25,7 +25,6 @@ export {
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
   HEAD_BUILTIN_TOOLS,
-  keepBuiltins,
   headStatusUnsettled,
   storedHeadReportStatus,
 } from './types';

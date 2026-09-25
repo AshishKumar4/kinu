@@ -12,24 +12,23 @@ import type { SessionHistory } from '../session/history';
 import type { ExecutorProviderSurface } from '../execution/types';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
-  memoryActionsFor, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS, unknownActionError, type WebToolAction,
+  memoryActionsFor, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS, unknownActionError, keepBuiltins, type WebToolAction,
 } from './registry';
-import type { ProfileCatalogEnvelope } from '../types/profile';
-import { TaskListStore, TASK_STATUSES } from '../tasks/store';
+import { TaskListStore, TASK_STATUSES } from './task-store';
 import { clampToolResult, withClampedToolResult, type ClampToolResultOptions } from './clamp';
 import { withCheckedInput, withCheckedInputs } from './tool-schema';
 import { codemodeInputSchema } from './sandbox-contract';
 import { connectedDevices } from '../execution/device-status';
 import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { referenceRoots } from '../vfs/references';
-import { dispatchReport, reportHandoffProperties, type ReportToolInput } from '../delegation/report-tool';
+import { dispatchReport, reportHandoffProperties, type ReportToolInput } from './report-tool';
 import {
   SUBORDINATE_REPORT_STATUSES,
   type SubordinateReportHandoff, type SubordinateReportStatus,
 } from '../events/hub/types';
 import { createFileToolSteer } from './shell-file-steer';
 import { createFileTool } from './file-tool';
-import { TurnFileLedger } from './file-ledger';
+import { TurnFileLedger } from '../vfs/file-ledger';
 import { TurnContextBudget } from '../context-budget';
 import { isMcpToolKey } from './mcp-naming';
 import { selectInjectableCraftedTools, type CraftedToolExecute, type CraftedToolExecuteFn } from './crafted-executor';
@@ -38,13 +37,12 @@ import { DEFAULT_CONFIG } from '../config';
 import { commandResult, CommandResultSchema, type CommandResult } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool';
-import { createTasksDispatcher, type TasksToolInput } from './tasks-tool';
+import { createTasksDispatcher, type RoleSwitch, type TasksToolInput } from './tasks-tool';
 import { type WebSearchProvider, type WebSearchResponse } from '../web/index';
 import type { PlanEdit, SubmitPlanToolDeps } from '../types/plans';
 import type { JsonValue } from '../utils/json';
 import { diagnostics, KinuError, toKinuError, type Logger } from '../obs/index';
 // heads/types.ts holds no runtime import, so this edge cannot close a ring.
-import { keepBuiltins } from '../heads/types';
 import { toolsInWorkMode, permitInPlan, requireBuild } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 
@@ -102,7 +100,7 @@ export interface BuiltinToolDeps {
   /** Test seam; defaults to one JSON line per event on `console`. */
   logger?: Logger;
   /** Absent: role switches (tasks action=mode) refuse. */
-  roleAuthority?: () => ProfileCatalogEnvelope | null;
+  roleSwitch?: RoleSwitch;
 }
 
 export interface ReportToolDeps {
@@ -419,7 +417,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   }));
 
   const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
-  const runTasksAction = createTasksDispatcher(taskList, rt.actor.config, deps.roleAuthority);
+  const runTasksAction = createTasksDispatcher(taskList, rt.actor.config, deps.roleSwitch);
   tools.tasks = permitInPlan(tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.tasks,
     inputSchema: jsonSchema<TasksToolInput>({

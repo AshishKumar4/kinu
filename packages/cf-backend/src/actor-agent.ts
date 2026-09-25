@@ -163,7 +163,7 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
-  createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
+  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
@@ -3771,7 +3771,7 @@ export abstract class ActorAgent extends Agent<Env> {
         escalations: this.acc.escalations,
         // Owner resolution stays lazy per action, so the cached toolset stays valid across claimOwner.
         agents: this.getAgentsToolDeps(mode),
-        roleAuthority: () => this.operationProfile()?.inputs?.envelope ?? null,
+        roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null),
         // memory.search uses hybrid retrieval when available; otherwise FTS5-only.
         vectorStore: this.rt.vectorStore,
         facts: this.facts,

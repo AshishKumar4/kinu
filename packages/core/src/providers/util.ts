@@ -5,7 +5,7 @@ import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './t
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { withCallAccount } from './quota';
-import { evidenceWindow } from '../prompts/evidence-window';
+import { evidenceWindow } from '../utils/evidence-window';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
 import {

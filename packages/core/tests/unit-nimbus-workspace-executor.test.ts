@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createTestRuntime, createWorkspaceBundle } from './helpers';
+import { createNimbusWorkspaceExecutor } from '../src/tools/inline-executor';
 import {
-  createNimbusWorkspaceExecutor,
   nimbusSessionFiles,
   nimbusSessionShell,
   type NimbusSandboxHandle,

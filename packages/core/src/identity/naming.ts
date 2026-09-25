@@ -1,4 +1,4 @@
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import * as v from 'valibot';
 import { isPlaceholderMission } from './soul';
 import { tolerate } from '../obs/index';

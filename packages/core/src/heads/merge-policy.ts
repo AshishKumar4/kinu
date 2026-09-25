@@ -5,8 +5,8 @@
  */
 
 import type { LanguageModel } from 'ai';
-import type { ProviderOptions } from '../strategy/effort';
-import { generateJson } from '../prompts/structured';
+import type { ProviderOptions } from '../providers/effort';
+import { generateJson } from '../providers/structured';
 import { resolveModelRoute, type ModelRouteResolution } from '../profiles/model-route';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import type { ModelCallSink, ModelOperationSink } from '../events/model-call';

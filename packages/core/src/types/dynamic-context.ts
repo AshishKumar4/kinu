@@ -10,3 +10,9 @@ export interface MissingCapability {
   readonly source: string;
   readonly reason: string;
 }
+
+/** `total` counts past the page, so the renderer states elision. */
+export interface ActiveRoster<T> {
+  readonly items: readonly T[];
+  readonly total: number;
+}

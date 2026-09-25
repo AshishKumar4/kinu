@@ -19,7 +19,7 @@ import type { DeviceTransport } from '../execution/device-tunnel-executor';
 import type { FileCheckpoints } from '../checkpoints/types';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate';
 import type { WorkMode } from './turn';
-import type { TurnFileLedger } from '../tools/file-ledger';
+import type { TurnFileLedger } from '../vfs/file-ledger';
 import type { ActorHandle } from '../identity/actor-handle';
 
 /** Live channel for 'gate'-tier shell approvals (ACP `session/request_permission`). */

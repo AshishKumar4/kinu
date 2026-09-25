@@ -16,43 +16,7 @@
 import type { AssistantModelMessage, ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
 import { renderThrownChain } from '../obs/index';
 import { StableCopies } from './stable-copies';
-
-/**
- * `modelOutputLimit` is the catalog maximum only (no caller sets an output cap),
- * a share of `contextWindow`. `null` means unreported, which reserves nothing.
- */
-export interface ModelWindow {
-  readonly contextWindow: number;
-  readonly modelOutputLimit: number | null;
-}
-
-/** `windowMeasured: false` marks a static-table stand-in. Budgets may spend it;
- * the refusal in orchestrator/turn-context.ts may not. */
-export interface ResolvedModelWindow extends ModelWindow {
-  readonly windowMeasured: boolean;
-}
-
-/**
- * Tokens held back for the answer: its reported maximum, bounded by half the
- * window (a published maximum can equal the whole window and admit no input).
- * An unreported maximum reserves nothing; the provider bounds the answer anyway.
- */
-export function outputReserveTokens(limits: ModelWindow): number {
-  if (limits.modelOutputLimit === null) return 0;
-  const window = Math.max(0, Math.floor(limits.contextWindow));
-  const answer = Math.max(0, Math.floor(limits.modelOutputLimit));
-
-  return Math.min(answer, Math.floor(window / 2));
-}
-
-/**
- * Tokens one step's request may occupy: the one allocation every request-bound
- * producer divides. Exported so MCP catalog admission (`tools/mcp-surface.ts`)
- * subtracts from it instead of taking a second share.
- */
-export function stepContextLimit(limits: ModelWindow): number {
-  return Math.max(0, Math.floor(limits.contextWindow)) - outputReserveTokens(limits);
-}
+import { stepContextLimit, type ModelWindow } from '../context-window';
 
 /** A quarter of the allocation per pass (a fixed count is a no-op on 1M and clears 32k); never zero. */
 function stepPruneBatchTokens(limits: ModelWindow): number {

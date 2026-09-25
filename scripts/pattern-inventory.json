@@ -260,7 +260,7 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/core/src/delegation/report-tool.ts",
+      "file": "packages/core/src/tools/report-tool.ts",
       "kind": "hand-parser",
       "owner": "parseHandoff",
       "sourceSha256": "b130de84adc4e447bc1da97d90e65d2639c5cde032394a304825a3a6e4f04500",
@@ -337,7 +337,7 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/core/src/prompts/structured.ts",
+      "file": "packages/core/src/providers/structured.ts",
       "kind": "hand-parser",
       "owner": "extractBalancedJson",
       "sourceSha256": "4cf0e02736d26c5eaa962107ae1438d4bb795a4f07be3a933431f53de557f207",

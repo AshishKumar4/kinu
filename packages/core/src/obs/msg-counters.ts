@@ -8,7 +8,7 @@
  * received totals live in different processes and do not subtract.
  */
 
-import { diagnostics } from '../obs/index';
+import { diagnostics } from './index';
 import { nowMs } from '../utils/date';
 
 /** `peer` crosses a workspace boundary; `subordinate` stays inside one workspace. */

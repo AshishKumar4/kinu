@@ -55,7 +55,7 @@ import { createMemoryVfs, createTestActors, type MemoryVfs } from '@kinu.run/tes
 import {
   makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor, createTestWorkspace,
 } from './helpers';
-import { dispatchReport } from '../src/delegation/report-tool';
+import { dispatchReport } from '../src/tools/report-tool';
 
 const NOW = 1_700_000_000_000;
 

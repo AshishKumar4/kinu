@@ -49,7 +49,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   const db = new Database(scratchPath('scaffold-turn', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
-  // What `kinu create` provisions (identity/create.ts), minus the shadow-rollout ledger,
+  // What `kinu create` provisions (workspace-birth.ts), minus the shadow-rollout ledger,
   // which LocalAgentSession must provision itself.
   initScaffoldTables(rt.storage.execRaw);
   initAgentConfigTable(rt.storage.execRaw);

@@ -5,7 +5,7 @@ import type { LanguageModelV3ToolResultOutput } from '@ai-sdk/provider';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { runChat, type ChatEvent } from '../src/chat';
 import { KinuError } from '../src/obs/error';
-import { FileRefusalError } from '../src/tools/file-edit';
+import { FileRefusalError } from '../src/types/file-edits';
 import { McpToolError } from '../src/tools/mcp-error';
 import type { JsonValue } from '../src/utils/json';
 

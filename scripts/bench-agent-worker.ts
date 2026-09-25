@@ -18,7 +18,7 @@ import {
   initSearchTables, initScaffoldTables,
 } from '../packages/core/src/index';
 import { initCraftedToolsTables } from '../packages/agent-utils/src/stores/index';
-import { createWorkspace } from '../packages/core/src/identity/index';
+import { createWorkspace } from '../packages/core/src/workspace-birth';
 import { openWorkspaceCLI, LocalAgentSession } from '../packages/cli-backend/src/index';
 import { makeSql } from '../packages/cli-backend/src/runtime';
 import type { SessionEvent } from '../packages/cli-backend/src/index';

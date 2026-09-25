@@ -44,7 +44,7 @@ const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(['globalThis', 'self', 'wind
 const mentions = (protectedNames: readonly string[]) => (facts: ArtifactFacts): boolean =>
   protectedNames.some((name) => facts.names.has(name) || facts.words.has(name));
 
-/** A path at the live scaffold (`scaffold/agent.js`) or one of its version files (`agent.js.v3`). */
+/** `scaffold/agent.js` or a version file (`agent.js.v3`). */
 function namesScaffoldFile(path: string): boolean {
   const segments = path.split('/');
 

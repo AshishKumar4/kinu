@@ -8,7 +8,7 @@
 import type { VFS } from '../types/primitives';
 import type { ExecutorProvider } from '../execution/types';
 import { admissionBytes } from '../llm';
-import { stepContextLimit, type ModelWindow } from './step-prune';
+import { stepContextLimit, type ModelWindow } from '../context-window';
 import type {
   InstructionTrustResolver, VerifiedInstructionTrust,
 } from '../types/instruction-trust';

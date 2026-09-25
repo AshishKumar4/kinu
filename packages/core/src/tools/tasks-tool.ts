@@ -7,19 +7,14 @@ import {
   TASK_STATUSES,
   type TaskAddRejection,
   type TaskStatus,
-} from '../tasks/store';
+} from './task-store';
 import type { AgentConfigStore } from '../config/store';
 import * as v from 'valibot';
 import {
   TASKS_TOOL_ACTIONS, unknownActionError,
   type TasksToolAction,
 } from './registry';
-import {
-  BUILTIN_ROLE_DEFINITIONS,
-  isValidRoleId,
-  type ProfileCatalogEnvelope,
-} from '../profiles/catalog';
-import { changeActiveRole, roleChangeOutcomeText } from '../profiles/role-change';
+import { isValidRoleId, type RoleId } from '../types/profile';
 import { KinuError } from '../obs/index';
 
 const TaskStatusSchema = v.picklist(TASK_STATUSES);
@@ -133,12 +128,21 @@ function updateTask(taskList: TaskListStore, args: TasksToolInput, now: number):
   return result;
 }
 
+export type RoleSwitchOutcome =
+  | { readonly kind: 'applied' }
+  | { readonly kind: 'no-authority' }
+  | { readonly kind: 'denied'; readonly text: string }
+  | { readonly kind: 'unknown-role'; readonly text: string; readonly known: readonly string[] };
+
+/** Bound by the harness (`agentRoleSwitch`). */
+export type RoleSwitch = (input: { config: AgentConfigStore; to: RoleId }) => RoleSwitchOutcome;
+
 /** Build a tasks dispatcher. Stores are injected: codemode must share the caller's exact
- *  TaskListStore. Without `roleAuthority`, role switching refuses. */
+ *  TaskListStore. Without `roleSwitch`, role switching refuses. */
 export function createTasksDispatcher(
   taskList: TaskListStore,
   config: AgentConfigStore,
-  roleAuthority?: () => ProfileCatalogEnvelope | null,
+  roleSwitch?: RoleSwitch,
 ): (input: TasksToolInput) => TasksToolResult {
   return (args: TasksToolInput) => {
     const now = Date.now();
@@ -192,27 +196,22 @@ export function createTasksDispatcher(
           return { role: config.getRoleSelection() };
         }
 
-        const envelope = roleAuthority?.();
-
         if (!isValidRoleId(args.role)) {
           throw new KinuError('bad_input', 'tasks.mode requires `role` — a kebab-case role id like task or researcher');
         }
 
-        if (!envelope) {
-          throw new KinuError('unsupported', 'tasks.mode cannot switch roles: this agent has no profile authority to validate against');
+        const outcome = roleSwitch?.({ config, to: args.role }) ?? { kind: 'no-authority' };
+
+        switch (outcome.kind) {
+          case 'no-authority':
+            throw new KinuError('unsupported', 'tasks.mode cannot switch roles: this agent has no profile authority to validate against');
+          case 'denied':
+            throw new KinuError('denied', outcome.text);
+          case 'unknown-role':
+            throw new KinuError('bad_input', outcome.text + ' Known roles: ' + outcome.known.join(', ') + '.');
+          case 'applied':
+            return { role: args.role };
         }
-
-        const outcome = changeActiveRole({ envelope, config, to: args.role, actor: 'agent' });
-
-        if (outcome.kind === 'refused') {
-          const text = roleChangeOutcomeText(args.role, outcome, config.getRoleSelection());
-
-          if (outcome.reason !== 'unknown-role') throw new KinuError('denied', text);
-          const known = Object.keys({ ...BUILTIN_ROLE_DEFINITIONS, ...envelope.catalog.roles }).sort();
-          throw new KinuError('bad_input', text + ' Known roles: ' + known.join(', ') + '.');
-        }
-
-        return { role: args.role };
       }
     }
   };

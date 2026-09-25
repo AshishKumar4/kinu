@@ -1,3 +1,4 @@
+import type { ToolSet } from 'ai';
 import { REFUSAL_TYPE } from '../types/tool-outcome';
 
 /** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts, UI, and MCTS scoring. */
@@ -170,6 +171,19 @@ export function narrowToolSurface(
   };
 }
 
+/** One filter over a named set, so a builtin added upstream never silently appears on a confined surface. */
+export function keepBuiltins(builtin: ToolSet, names: readonly string[]): ToolSet {
+  const kept: ToolSet = {};
+
+  for (const name of names) {
+    const entry = builtin[name];
+
+    if (entry) kept[name] = entry;
+  }
+
+  return kept;
+}
+
 export interface BuiltinToolSpec {
   name: BuiltinToolName;
   /** One line: the first line of the schema description, and the Tools tab headline. */
@@ -253,7 +267,7 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
 }
 
 // Release: record_* actions only without an execution engine, engine actions only with one.
-// Codemode-only (tools/release-codemode.ts).
+// Codemode-only (release/codemode.ts).
 
 const RELEASE_LEDGER_ACTIONS = [
   'board', 'bind_source', 'create', 'update', 'transition', 'request_approval',

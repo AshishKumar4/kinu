@@ -1,6 +1,7 @@
 // Role changes land at the next turn boundary; policy per agent: allow, approval (agent widening refused), locked.
+import { DEFAULT_ROLE_ID, isValidRoleId } from '../types/profile';
 import {
-  DEFAULT_ROLE_ID, effectiveRoleCatalog, isValidRoleId, validateProfileCatalogEnvelope,
+  effectiveRoleCatalog, validateProfileCatalogEnvelope,
   type ProfileCatalogEnvelope, type RoleDefinition, type RoleId,
 } from './catalog';
 import {

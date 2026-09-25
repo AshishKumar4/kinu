@@ -15,9 +15,10 @@ import { memoryIndexPath } from '../memory/note';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, FILE_TOOL_ACTIONS, unknownActionError, type FileToolAction,
 } from './registry';
-import { applyFileEdits, formatFileSlice, FILE_REFUSAL_REASONS, FileRefusalError, type FileEdit } from './file-edit';
+import { applyFileEdits, formatFileSlice, FILE_REFUSAL_REASONS, type FileEdit } from './file-edit';
+import { FileRefusalError } from '../types/file-edits';
 import { readFileHead, readFileText, scanFileWindow, type ScannedFile } from './file-scan';
-import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger';
+import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from '../vfs/file-ledger';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS, clampSerializedToolResult } from './clamp';
 import type { JsonValue } from '../utils/json';
 import { KinuError, renderThrownChain } from '../obs/index';

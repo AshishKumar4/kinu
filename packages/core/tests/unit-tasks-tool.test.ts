@@ -3,7 +3,7 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
-  buildBuiltinTools, initAllTables, initTaskListTable, BUILTIN_TOOL_SPECS,
+  agentRoleSwitch, buildBuiltinTools, initAllTables, initTaskListTable, BUILTIN_TOOL_SPECS,
   createTasksCodemodeProvider, TaskListStore, initAgentConfigTable,
   buildSystemPromptSync,
   BUILTIN_PROFILE_CATALOG, BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel, profileCatalogDigest,
@@ -45,7 +45,7 @@ const PROFILE_ENVELOPE: ProfileCatalogEnvelope = {
 };
 
 function nativeTasks(rt: AgentRuntime): Exec {
-  const entry = buildBuiltinTools({ rt, roleAuthority: () => PROFILE_ENVELOPE, history: storesFor(rt).history }).tasks;
+  const entry = buildBuiltinTools({ rt, roleSwitch: agentRoleSwitch(() => PROFILE_ENVELOPE), history: storesFor(rt).history }).tasks;
 
   if (!entry) throw new Error('Expected tasks tool to be registered');
 

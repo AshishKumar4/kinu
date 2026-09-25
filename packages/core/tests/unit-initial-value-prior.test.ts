@@ -11,7 +11,7 @@ import { recordNode, type SessionWriter } from '../src/mcts/record-node';
 import { backpropagate } from '../src/mcts/backpropagation';
 import { converge } from '../src/mcts/convergence';
 import { initSearchTables } from '../src/mcts/schemas';
-import { initActorTables } from '../src/identity/schema';
+import { initActorTables } from '../src/state/workspace-schema';
 import type { SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 

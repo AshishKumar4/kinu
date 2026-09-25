@@ -14,7 +14,7 @@ import {
   createFactsStore, findPromptSectionTarget, recordTurnOutcome,
   type FactsStore, type ScaffoldControl,
 } from '../src/index';
-import { initAllTables } from '../src/identity/schema';
+import { initAllTables } from '../src/state/workspace-schema';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
 import type { SessionHistory } from '../src/session/history';
@@ -42,7 +42,7 @@ import {
   createRefinementStore, evolutionDebt, initRefinementTables, refinementStagingPath,
   type RefinementDeps, type RefinementEdit, type RefinementProposal, type RefinementRoute,
 } from '../src/evolution/refinement';
-import { extractJsonObject } from '../src/prompts/structured';
+import { extractJsonObject } from '../src/providers/structured';
 import { renderIssues } from '../src/utils/json';
 
 /** Module-private threshold; the `summary` assertion below keeps this literal in sync. */

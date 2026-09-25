@@ -37,7 +37,7 @@ import {
   type LLMProviderConfig, type MergeResult, type WebSearchProvider,
 } from '../packages/core/src/index';
 import { initCraftedToolsTables } from '../packages/agent-utils/src/stores/index';
-import { createWorkspace } from '../packages/core/src/identity/index';
+import { createWorkspace } from '../packages/core/src/workspace-birth';
 import { createCLIHeadRuntime } from '../packages/cli-backend/src/head-runtime';
 import { LocalAgentSession } from '../packages/cli-backend/src/local-session';
 import { createCLIRuntime, makeSql } from '../packages/cli-backend/src/runtime';

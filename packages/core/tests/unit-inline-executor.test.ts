@@ -3,11 +3,11 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
-import { createInlineExecutor, type InlineExecutorDeps } from '../src/execution/inline';
+import { createInlineExecutor, type InlineExecutorDeps } from '../src/tools/inline-executor';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
-import { TurnFileLedger } from '../src/tools/file-ledger';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import { toolExecute } from '@kinu.run/test-utils';
 import type { JsonValue } from '../src/utils/json';

@@ -4,7 +4,7 @@
 import * as v from 'valibot';
 
 import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
-import { REASONING_EFFORTS, type ReasoningEffort } from '../strategy/effort';
+import { REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
 import type { WorkMode } from '../types/turn';
 import { TierIdSchema,
   ProfileAuthoritySchema, formatProfileValidationIssues,

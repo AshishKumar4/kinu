@@ -13,7 +13,7 @@ import {
   LEGACY_WORKSPACE_ROOT, TurnContextBudget, WORKSPACE_ROOT, createFileDispatcher, nimbusSessionFiles, settleWorkspaceRoot,
 } from '@kinu.run/core';
 import { workspaceBoxFiles } from '@kinu.run/core/workspace';
-import { TurnFileLedger } from '../../core/src/tools/file-ledger';
+import { TurnFileLedger } from '../../core/src/vfs/file-ledger';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 // `agents` reaches `cloudflare:email`: mock first, then the harness.

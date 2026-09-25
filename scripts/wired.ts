@@ -1561,7 +1561,7 @@ export function measureFields(
    *     builds one of these.
    *   - 1 hidden, in the other direction: this tree declares TWO production
    *     `createWorkspace` functions (`vfs/nimbus-workspace.ts` over
-   *     `WorkspaceOptions`, `identity/create.ts` over something else), and
+   *     `WorkspaceOptions`, `workspace-birth.ts` over something else), and
    *     `cf-backend/src/workspace-host.ts` imports the first and supplies
    *     `fabric` to it. Refusing an ambiguous NAME loses that supply;
    *     resolving the IMPORT keeps it, because the importing file has already

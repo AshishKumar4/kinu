@@ -17,7 +17,7 @@ import {
   type ScaffoldControl,
 } from '../src/index';
 import { getPendingPromptSection, initPromptSectionTables } from '../src/prompting/section-store';
-import { initAllTables } from '../src/identity/schema';
+import { initAllTables } from '../src/state/workspace-schema';
 import { initTurnOutcomeTables } from '../src/evolution/outcomes';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
 import type { AgentRuntime } from '../src/types/agent-runtime';

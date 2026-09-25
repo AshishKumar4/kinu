@@ -3,7 +3,7 @@
 import { generateText, type LanguageModel } from 'ai';
 import { beginModelOperation, type ModelOperationSink } from '../events/model-call';
 import type { BranchExploration, BranchReflection } from '../types/agent-runtime';
-import type { ProviderOptions } from '../strategy/effort';
+import type { ProviderOptions } from '../providers/effort';
 import { normalizeUsage } from '../usage';
 import { explorePrompt, reflectionPrompt, type ExplorePromptInput } from './explore-prompt';
 

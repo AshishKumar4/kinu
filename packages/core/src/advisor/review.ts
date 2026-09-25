@@ -9,22 +9,18 @@ import type { AgentSignal, SendOutcome } from '../types/signals';
 import type { CompletedTurn, ToolCallRecord } from '../evolution/types';
 import { CompletedTurnSchema } from '../evolution/session-window';
 import { codemodeProgramOf, codemodeReaches } from '../tools/codemode-reach';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
+import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { classifyErrorCode, diagnostics, tolerate, toKinuError, type ErrorCode } from '../obs/index';
 import { abortableSleep } from '../providers/pacing';
 import { stableStringify } from '../safety/argument-digest';
 import { isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
-import { ADVISOR_SEVERITIES, type AdvisorSeverity } from '../types/advisor';
+import { ADVISOR_SEVERITIES, isAdvisorSeverity, type AdvisorSeverity } from '../types/advisor';
 
 export {
   ADVISOR_SEVERITIES, DEFAULT_ADVISOR_MIN_SEVERITY, type AdvisorSeverity,
 } from '../types/advisor';
-
-export function isAdvisorSeverity<Value>(value: Value): value is Value & AdvisorSeverity {
-  return ADVISOR_SEVERITIES.some((severity) => severity === value);
-}
 
 export const ADVISOR_SEVERITY_LABEL = {
   nit: 'Nit',

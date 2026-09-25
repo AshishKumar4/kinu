@@ -9,7 +9,8 @@ import type { VFS, VfsRevision } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { isVfsError, makeVfsError } from '../vfs/errno';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
-import { BOM, FileRefusalError, type SliceWindow } from './file-edit';
+import { BOM, type SliceWindow } from './file-edit';
+import { FileRefusalError } from '../types/file-edits';
 
 /** Bytes per ranged read (the scan's resident ceiling); intentionally smaller than `FILE_CHUNK_BYTES`. */
 const SCAN_CHUNK_BYTES = 64 * 1024;

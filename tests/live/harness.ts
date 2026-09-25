@@ -42,7 +42,7 @@ import { liveModelCallSink } from '@kinu.run/test-utils';
  * product in three ways that each corrupt a score silently:
  *
  *   - `buildBuiltinTools` by construction cannot hold `agents`
- *     (tools/actor-tools.ts: the delegation tool's implementation IS the search
+ *     (delegation/actor-tools.ts: the delegation tool's implementation IS the search
  *     engine, so the factory that emits a node's own surface cannot register
  *     it). The product's actor root is `buildActorTools`. Ask "did the model
  *     delegate?" of a model that has no delegation tool and the zero is

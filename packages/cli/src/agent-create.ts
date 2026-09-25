@@ -16,7 +16,7 @@ import {
 } from '@kinu.run/core';
 import { ensureDefaultTier, loadActiveProfile } from './default-model';
 import { readDefaultTier } from './profiles';
-import { createWorkspace } from '@kinu.run/core/identity';
+import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import {

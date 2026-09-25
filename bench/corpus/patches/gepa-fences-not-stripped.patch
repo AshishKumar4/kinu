@@ -1,6 +1,6 @@
-diff --git a/packages/core/src/prompts/structured.ts b/packages/core/src/prompts/structured.ts
---- a/packages/core/src/prompts/structured.ts
-+++ b/packages/core/src/prompts/structured.ts
+diff --git a/packages/core/src/providers/structured.ts b/packages/core/src/providers/structured.ts
+--- a/packages/core/src/providers/structured.ts
++++ b/packages/core/src/providers/structured.ts
 @@ -19,7 +19,7 @@
 
  /** Return the first fenced payload, or the trimmed response when there is no fence. */

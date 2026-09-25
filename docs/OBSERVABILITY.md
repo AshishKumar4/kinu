@@ -140,7 +140,7 @@ a round trip (`Tracer.span` in `obs/tracer.ts`).
    `{ reason: ErrorCode, error: string }`. Displays and steering hashes keep a
    head slice of tool output, so the short discriminator goes before the prose.
    `refusalOf(error)` (`obs/error.ts`) produces it. Examples: `failure()` in
-   `tools/file-tool.ts`, the argument checks in `execution/inline.ts`, the
+   `tools/file-tool.ts`, the argument checks in `tools/inline-executor.ts`, the
    refused member in `strategy/merge-back.ts`.
 3. An empty read differs from a failed read. Returning `[]` for both "absent"
    and a failed query once lost chat history. A narrow read must refuse.
