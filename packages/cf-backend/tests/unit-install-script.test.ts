@@ -71,7 +71,8 @@ function bunStub(version: string, logPath: string): string {
     `if [ "$1" = "--version" ]; then printf '%s\\n' '${version}'; exit 0; fi`,
     // The launcher's release-signature check runs for real on this suite's own Bun.
     `if [ "$1" = "-e" ]; then exec "${process.execPath}" "$@"; fi`,
-    'if [ "$1" = "run" ]; then printf \'  setup   connect your account\\n\'; exit 0; fi',
+    // The launcher passes its own flags before `run`.
+    'for arg in "$@"; do if [ "$arg" = "run" ]; then printf \'  setup   connect your account\\n\'; exit 0; fi; done',
     'exit 0',
     '',
   ].join('\n');
@@ -516,7 +517,6 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(launcher.split('command -v bun').length - 1).toBe(shared.split('command -v bun').length - 1);
     expect(install).not.toContain('command -v bun');
     expect(install).not.toContain('bun.sh/install');
-    expect(launcher).toContain('exec "$KINU_BUN" run "$CLI_DIR/cli.js" "$@"');
   });
 
   /**

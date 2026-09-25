@@ -2,7 +2,7 @@
  * Pins the launcher's `cli/current`/`cli/prev` swap by running it as bash;
  * each home carries the running Bun at `runtime/bin/bun`, and no origin is contacted.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { scratchDir } from '@kinu.run/test-utils';
@@ -44,8 +44,13 @@ function cliTree(home: string, name: string, stamp: string, broken = false): str
 }
 
 async function launch(home: string, launcher: string, ...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return launchIn(home, home, launcher, ...args);
+}
+
+async function launchIn(cwd: string, home: string, launcher: string, ...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = Bun.spawn({
     cmd: ['bash', launcher, ...args],
+    cwd,
     env: { HOME: home, KINU_HOME: home, PATH: '/usr/bin:/bin', KINU_ORIGIN: 'http://127.0.0.1:9' },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -136,5 +141,21 @@ describe('the launcher launch check', () => {
 
     const run = await launch(home, launcher, 'update', '--force');
     expect(run).toEqual({ stdout: 'ran 2.0.0+new update --force', stderr: '', exitCode: 0 });
+  });
+
+  test('the CLI runs in the directory it was typed in, and that project\'s bunfig and .env stay out of it', async () => {
+    // It ran in the install tree, so a session saw the install as its project: its shell, files and AGENTS.md.
+    const { home, launcher } = await launcherHome();
+    const tree = cliTree(home, 'current', '2.0.0+new');
+    writeFileSync(join(tree, 'cli.js'), 'console.log(JSON.stringify({ cwd: process.cwd(), leak: process.env.KINU_PROJECT_LEAK ?? null }));\n');
+    const project = scratchDir('launcher-project');
+    writeFileSync(join(project, 'preload.ts'), 'console.log("project preload ran");\n');
+    writeFileSync(join(project, 'bunfig.toml'), 'preload = ["./preload.ts"]\n');
+    writeFileSync(join(project, '.env'), 'KINU_PROJECT_LEAK=1\n');
+
+    const run = await launchIn(project, home, launcher, 'chat');
+
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toBe(JSON.stringify({ cwd: realpathSync(project), leak: null }));
   });
 });

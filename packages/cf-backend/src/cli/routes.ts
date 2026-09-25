@@ -1171,8 +1171,9 @@ if [ "\${KINU_REFRESH_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
-cd "$CLI_DIR"
-exec "$KINU_BUN" run "$CLI_DIR/cli.js" "$@"
+# In the caller's directory, which is the session's project. Bun would read that project's bunfig.toml and .env
+# into the CLI; --config and --no-env-file keep them out.
+exec "$KINU_BUN" --config=/dev/null --no-env-file run "$CLI_DIR/cli.js" "$@"
 `;
 
   return new Response(head ? null : script, {
