@@ -1328,7 +1328,6 @@ export {
   recordModelOperations,
   RunEventRecorder,
   boundRunEventQuery,
-  RUN_EVENT_LIMIT_DEFAULT,
   RUN_EVENT_LIMIT_MAX,
   summarizeSteps,
   CACHE_HIT_EMA_ALPHA,
@@ -1358,6 +1357,7 @@ export {
   type RunEventListener,
   type RunEventQuery,
   type BoundedRunEventQuery,
+  type StoredRunEvent,
 } from './events/index';
 
 // Durable retry outbox; spec: `events/outbox.ts`.
@@ -1932,7 +1932,7 @@ export { boundedInt } from './utils/bounds';
 // The retry curve of every durable recovery lane; backends import it, never copy it.
 export { recoveryBackoffMs } from './utils/recovery-backoff';
 
-export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs';
+export { getRunEvents, getRunEventText, getRunSummaries, listRuns } from './read-models/runs';
 
 export type { RunListEntry, RunSummary } from './read-models/runs';
 

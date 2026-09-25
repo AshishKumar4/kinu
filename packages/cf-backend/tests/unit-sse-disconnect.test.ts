@@ -2,7 +2,7 @@
 // or cancels.
 import type { RunEventsTarget } from '../src/run-events-routes';
 import { serveFamily } from './helpers/api';
-import type { RunEvent } from '@kinu.run/core';
+import type { StoredRunEvent } from '@kinu.run/core';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { AwaitedList, handClock } from '@kinu.run/test-utils';
@@ -11,12 +11,19 @@ mockAgentsSdk();
 
 const { runEventsRoutes } = await import('../src/run-events-routes');
 
-function sseStream(answer: (read: number) => RunEvent[] = () => []) {
+/** The run's end as the ledger stores it. */
+const RUN_END: StoredRunEvent = {
+  eventIndex: 3,
+  type: 'run_end',
+  payload: JSON.stringify({ eventIndex: 3, runId: 'run-1', type: 'run_end', timestamp: new Date(0).toISOString() }),
+};
+
+function sseStream(answer: (read: number) => StoredRunEvent[] = () => []) {
   const polled = new AwaitedList<number>();
 
   const stub: RunEventsTarget = {
     listRuns: () => { throw new Error('OrchestratorAgent.listRuns: not reachable in this test'); },
-    async getRunEvents() {
+    async getRunEventText() {
       polled.push(polled.items.length + 1);
 
       return answer(polled.items.length);
@@ -34,9 +41,7 @@ describe('run-events SSE client disconnect', () => {
   test('aborting the request stops the DO poll loop', async () => {
     // The fourth read answers run_end, so a missed abort ends the stream visibly instead of
     // hanging.
-    const { resolveAgent, pollCount, polled } = sseStream((read) => read < 4 ? [] : [{
-      eventIndex: 3, runId: 'run-1', type: 'run_end', timestamp: new Date(0).toISOString(),
-    }]);
+    const { resolveAgent, pollCount, polled } = sseStream((read) => read < 4 ? [] : [RUN_END]);
 
     const aborter = new AbortController();
     const clock = handClock();
@@ -107,9 +112,7 @@ describe('run-events SSE client disconnect', () => {
   test('a run that already ended closes after the replay instead of polling dead reads', async () => {
     // A run_end in the initial replay bypasses the poll loop's check: without the close below the
     // stream keeps polling until the timeout.
-    const { resolveAgent, pollCount } = sseStream(() => [{
-      eventIndex: 3, runId: 'run-1', type: 'run_end', timestamp: new Date(0).toISOString(),
-    }]);
+    const { resolveAgent, pollCount } = sseStream(() => [RUN_END]);
 
     // A stream that polled instead of closing never reaches `done`: the hang is the failure.
     const res = await serveFamily(runEventsRoutes(handClock(), () => resolveAgent), { workspace: { name: 'jarvis' } })(new Request(

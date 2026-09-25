@@ -4,7 +4,7 @@
  */
 
 import { boundRunEventQuery } from '../events/recorder';
-import type { RunEventQuery, RunEventRecorder, RunListEntry } from '../events/recorder';
+import type { RunEventQuery, RunEventRecorder, RunListEntry, StoredRunEvent } from '../events/recorder';
 import type { RunEvent } from '../events/types';
 import { boundedInt } from '../utils/bounds';
 import { addUsage, usageReported, type Usage } from '../usage';
@@ -38,6 +38,10 @@ export interface RunSummary extends Pick<RunListEntry, 'runId' | 'eventCount'> {
  */
 export function getRunEvents(events: RunEventRecorder, runId: string, opts: RunEventQuery = {}): RunEvent[] {
   return events.read(runId, boundRunEventQuery(opts));
+}
+
+export function getRunEventText(events: RunEventRecorder, runId: string, opts: RunEventQuery = {}): StoredRunEvent[] {
+  return events.readText(runId, boundRunEventQuery(opts));
 }
 
 /** A page of recent runs, newest first. */

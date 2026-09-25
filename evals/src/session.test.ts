@@ -249,6 +249,34 @@ test('a turn survives a dropped socket: the redial resumes its stream and the an
   } finally { await session.teardown(); await server.stop(true); }
 });
 
+/** The run that absorbs a spliced send: it starts before the send lands and ends after. */
+const ABSORBING_START: RunEvent = {
+  type: 'run_start', runId: 'absorbing', eventIndex: 0,
+  timestamp: '2000-01-01T00:00:00.000Z', agentId: 'root',
+};
+
+const ABSORBING_END: RunEvent = {
+  type: 'run_end', runId: 'absorbing', eventIndex: 2,
+  timestamp: '9999-01-01T00:00:00.000Z', reason: 'completed',
+};
+
+/** The absorbing run's stream from `cursor`: from its start, one step and the stream ends; from that step, the run's end. */
+function absorbingRunStream(cursor: string): Response {
+  const event: RunEvent = cursor === '0'
+    ? { type: 'step_finish', runId: 'absorbing', eventIndex: 1, timestamp: ABSORBING_START.timestamp, stepIndex: 1 }
+    : ABSORBING_END;
+
+  return new Response(`event: message\ndata: ${JSON.stringify(event)}\n\n`, {
+    headers: { 'content-type': 'text/event-stream' },
+  });
+}
+
+/** A socket that answers every send as landed inside the running turn. */
+const EVERY_SEND_MID_TURN = { message(socket: { send(data: string): void }, message: string | Buffer) {
+  const frame = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString()));
+  socket.send(chatTerminalFrame({ requestId: frame.id, landed: 'mid-turn' }));
+} };
+
 /** The run-event cursors a spliced send reads under each absorbing-run state:
  *  a running run is read twice, a refused one once, the rest never. */
 function cursorsRead(state: string): string[] {
@@ -262,16 +290,6 @@ function cursorsRead(state: string): string[] {
 test.each(['running', 'closed', 'missing', 'refused'])('a spliced send follows its absorbing run: %s', async (state) => {
   let reads = 0;
   const cursors: string[] = [];
-
-  const start: RunEvent = {
-    type: 'run_start', runId: 'absorbing', eventIndex: 0,
-    timestamp: '2000-01-01T00:00:00.000Z', agentId: 'root',
-  };
-
-  const end: RunEvent = {
-    type: 'run_end', runId: 'absorbing', eventIndex: 2,
-    timestamp: '9999-01-01T00:00:00.000Z', reason: 'completed',
-  };
 
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
     fetch(request, upgrading) {
@@ -288,29 +306,18 @@ test.each(['running', 'closed', 'missing', 'refused'])('a spliced send follows i
         return Response.json({ status: 'end', items: state === 'missing' ? [] : [{ runId: 'absorbing' }] });
       }
 
-      if (path.endsWith('/events')) return Response.json(state === 'closed' ? [start, end] : [start]);
+      if (path.endsWith('/events')) return Response.json(state === 'closed' ? [ABSORBING_START, ABSORBING_END] : [ABSORBING_START]);
 
       if (path.endsWith('/stream')) {
         const cursor = request.headers.get('Last-Event-ID') ?? '';
         cursors.push(cursor);
 
-        if (state === 'refused') return new Response('Stream unavailable', { status: 503 });
-
-        const event: RunEvent = cursor === '0'
-          ? { type: 'step_finish', runId: 'absorbing', eventIndex: 1, timestamp: start.timestamp, stepIndex: 1 }
-          : end;
-
-        return new Response(`event: message\ndata: ${JSON.stringify(event)}\n\n`, {
-          headers: { 'content-type': 'text/event-stream' },
-        });
+        return state === 'refused' ? new Response('Stream unavailable', { status: 503 }) : absorbingRunStream(cursor);
       }
 
       return new Response('Not found', { status: 404 });
     },
-    websocket: { message(socket, message) {
-      const frame = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString()));
-      socket.send(chatTerminalFrame({ requestId: frame.id, landed: 'mid-turn' }));
-    } },
+    websocket: EVERY_SEND_MID_TURN,
   });
 
   const session = new KinuPublicSession({
@@ -326,6 +333,50 @@ test.each(['running', 'closed', 'missing', 'refused'])('a spliced send follows i
     else expect(await sent).toEqual({ landed: 'mid-turn', absorbedBy: state === 'missing' ? null : 'absorbing' });
     expect(reads).toBe(1);
     expect(cursors).toEqual(cursorsRead(state));
+  } finally {
+    await session.teardown();
+    await server.stop(true);
+  }
+});
+
+test('sends one run absorbed share one follower of that run', async () => {
+  const cursors: string[] = [];
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+    fetch(request, upgrading) {
+      if (request.method === 'DELETE') return Response.json({ ok: true });
+
+      if (upgrading.upgrade(request)) return;
+      const path = new URL(request.url).pathname;
+
+      if (path.endsWith('/runs')) return Response.json({ status: 'end', items: [{ runId: 'absorbing' }] });
+
+      if (path.endsWith('/events')) return Response.json([ABSORBING_START]);
+
+      if (path.endsWith('/stream')) {
+        const cursor = request.headers.get('Last-Event-ID') ?? '';
+        cursors.push(cursor);
+
+        return absorbingRunStream(cursor);
+      }
+
+      return new Response('Not found', { status: 404 });
+    },
+    websocket: EVERY_SEND_MID_TURN,
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'spliced sends',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+    const sent = await Promise.all(Array.from({ length: 5 }, (_, i) => session.prompt(`Also do part ${String(i)}.`)));
+
+    expect(sent).toEqual(Array.from({ length: 5 }, () => ({ landed: 'mid-turn', absorbedBy: 'absorbing' })));
+    // One follower: its first stream ends short of the run's end, and it reopens once from the event it saw.
+    expect(cursors).toEqual(['0', '1']);
   } finally {
     await session.teardown();
     await server.stop(true);

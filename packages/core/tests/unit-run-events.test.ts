@@ -3,7 +3,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   boundRunEventQuery, getRunEvents, initRunEventTables, RunEventRecorder,
-  RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX,
+  RUN_EVENT_LIMIT_MAX,
   USAGE_FIELDS, WORKSPACE_RUN_ID,
   type HeadFileChange, type RunEvent, type Usage,
 } from '../src/index';
@@ -11,6 +11,9 @@ import { present, testActorHandle } from '@kinu.run/test-utils';
 import { isBackgroundHandle } from '../src/jobs/threshold';
 import { makeSql, makeExecRaw } from './helpers';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/log';
+
+/** The page a read gets when it states no limit. */
+const RUN_EVENT_LIMIT_DEFAULT = 200;
 
 function setup() {
   const db = new Database(':memory:');

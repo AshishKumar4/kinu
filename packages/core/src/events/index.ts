@@ -27,12 +27,12 @@ export {
   recordModelOperations,
   RunEventRecorder,
   boundRunEventQuery,
-  RUN_EVENT_LIMIT_DEFAULT,
   RUN_EVENT_LIMIT_MAX,
   type DeferredRunEvent,
   type RunEventListener,
   type RunEventQuery,
   type BoundedRunEventQuery,
+  type StoredRunEvent,
 } from './recorder';
 
 export {
