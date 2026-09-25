@@ -16,9 +16,10 @@
  * Medians are printed as one JSON document. A deployed run creates its workspaces
  * under the eval prefix and deletes them in a `finally`.
  */
-import puppeteer, { type Page } from 'puppeteer';
+import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 import { withDevServer } from './live-app-harness';
+import { launchTestChrome } from './test-chrome';
 import { registerScriptedModel, SCRIPTED_MODEL_SPEC, startScriptedModel, type ScriptedAnswer, type ScriptedRequest } from './scripted-model';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { HEADER_WEBSOCKET, webHeaders, type PublicWebIdentity } from '../evals/src/session';
@@ -369,7 +370,8 @@ async function measure(origin: string, identity: PublicWebIdentity, made: readon
     socketRows[`${String(workspace.turns)} turns`] = medians(rows);
   }
 
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+  const chrome = await launchTestChrome();
+  const { browser } = chrome;
   const pageRows: Record<string, Row> = {};
 
   try {
@@ -406,7 +408,7 @@ async function measure(origin: string, identity: PublicWebIdentity, made: readon
     pageRows[`switch → ${String(small.turns)} turns`] = medians(toSmall);
     pageRows[`switch back → ${String(large.turns)} turns`] = medians(backToLarge);
   } finally {
-    await browser.close();
+    await chrome.close();
   }
 
   process.stdout.write(`${JSON.stringify({ target: origin, reps: REPS, seeded: made.map(({ turns, seedMs }) => ({ turns, seedMs })), socket: socketRows, page: pageRows }, null, 2)}\n`);
