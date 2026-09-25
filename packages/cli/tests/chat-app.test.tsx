@@ -287,7 +287,7 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the model row', () => screen.frame().includes('openai/gpt-5.5'));
     screen.mockInput.pressKey('t', { ctrl: true });
-    await screen.waitFor('the test result', () => screen.frame().includes('Allowance spent'));
+    await screen.waitFor('the test result', () => screen.frame().includes('allowance is spent'));
 
     expect(tested).toEqual(['openai/gpt-5.5']);
     expect(screen.frame()).toContain('Select model');

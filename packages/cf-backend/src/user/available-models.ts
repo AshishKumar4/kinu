@@ -16,6 +16,7 @@ export interface ModelMenuEntry {
   spec: string;
   label: string;
   provider: string;
+  providerLabel?: string;
   capabilities?: string[];
   contextWindow?: number;
   /** The settings control renders exactly these after "model default". */
@@ -52,6 +53,7 @@ export async function listAvailableModels<Id>(
     spec: `${model.provider}/${model.id}`,
     label: model.label ?? model.id,
     provider: model.provider,
+    providerLabel: registry.get(model.provider)?.label,
     capabilities: model.capabilities ? [...model.capabilities] : undefined,
     contextWindow: model.contextWindow,
     reasoningEfforts: model.reasoningEfforts,

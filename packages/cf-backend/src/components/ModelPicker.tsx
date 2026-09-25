@@ -1,9 +1,10 @@
 /** The one model picker for every surface; groups follow server order (connected-provider preference). */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Combobox, Select } from "@cloudflare/kumo";
-import { ArrowsClockwiseIcon, BrainIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { ArrowsClockwiseIcon, BrainIcon, EyeIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import {
-  formatContextWindow, formatModelSpec, isReasoningEffort, modelTestText, offeredReasoningEfforts, parseModelSpec, specWithoutAccount,
+  formatContextWindow, formatModelSpec, isReasoningEffort, modelTestText, offeredReasoningEfforts, parseModelSpec, providerName,
+  specWithoutAccount,
   type ReasoningEffort,
 } from "@kinu.run/core";
 import {
@@ -170,7 +171,7 @@ export function ModelPicker({
           {(group: { value: string; items: ModelMenuEntry[] }) => (
             <Combobox.Group key={group.value} items={group.items}>
               <Combobox.GroupLabel>
-                <ProviderLabel provider={group.value} />
+                <ProviderLabel provider={group.value} label={group.items[0]?.providerLabel} />
               </Combobox.GroupLabel>
               <Combobox.Collection>
                 {(model: ModelMenuEntry) => (
@@ -180,7 +181,7 @@ export function ModelPicker({
             </Combobox.Group>
           )}
         </Combobox.List>
-        <ProviderFailureNotice failures={failures} />
+        <ProviderFailureNotice failures={failures} models={models} />
         {clearable && value !== '' && (
           <button type="button" className="mx-1.5 mt-1 rounded px-2 py-1.5 text-left p-t-control p-text-2 hover:bg-[var(--c-elevated)]"
             onClick={() => onChange("")}>
@@ -252,10 +253,10 @@ export function ConnectedModelPicker({
         type="button"
         onClick={fetchModels}
         className="inline-flex min-w-0 items-center gap-1 rounded-md border p-border px-2 py-1 p-t-control p-text-3 hover:p-text-2"
-        title={`The model list could not load: ${menu.error}. Click to retry.`}
+        title={menu.error}
       >
         <ArrowsClockwiseIcon size={11} className="shrink-0" />
-        <span className="truncate">model list could not load: {menu.error}</span>
+        <span className="truncate">Couldn't load the model list. Retry</span>
       </button>
     );
   }
@@ -308,16 +309,19 @@ export function ConnectedModelPicker({
   );
 }
 
-function ProviderFailureNotice({ failures }: { failures?: ProviderFailure[] }) {
+/** One plain line per failed provider; the provider's own words are the tooltip. */
+function ProviderFailureNotice({ failures, models }: { failures?: ProviderFailure[]; models: readonly ModelMenuEntry[] }) {
   if (!failures?.length) return null;
 
   return (
     <div className="border-t p-border px-2 py-1.5">
       {failures.map((failure) => (
-        <p key={failure.provider} className="p-warning flex items-start gap-1.5 p-t-status">
+        <p key={failure.provider} className="p-warning flex items-start gap-1.5 p-t-status" title={failure.reason}>
           <WarningCircleIcon size={12} className="mt-0.5 shrink-0" />
           <span className="min-w-0">
-            <span className="font-medium">{failure.label ?? failure.provider}</span> unavailable: {failure.reason}
+            {models.some((model) => model.provider === failure.provider)
+              ? `${providerName(failure.provider)}'s model list couldn't load. Showing the built-in list.`
+              : `${providerName(failure.provider)} is unavailable right now.`}
           </span>
         </p>
       ))}
@@ -332,16 +336,14 @@ function failureTitle(failures: ProviderFailure[]): string {
 function ProviderIcon({ provider }: { provider: string }) {
   const brand = providerBrand(provider);
 
-  return brand === undefined
-    ? <span aria-hidden="true" className="inline-block size-[13px] shrink-0 rounded-sm border p-border" />
-    : <BrandMark brand={brand} size={13} bare />;
+  return brand === undefined ? null : <BrandMark brand={brand} size={13} bare />;
 }
 
-function ProviderLabel({ provider }: { provider: string }) {
+function ProviderLabel({ provider, label }: { provider: string; label: string | undefined }) {
   return (
     <span className="flex items-center gap-1.5">
       <ProviderIcon provider={provider} />
-      {provider}
+      {label ?? providerName(provider)}
     </span>
   );
 }
@@ -349,7 +351,7 @@ function ProviderLabel({ provider }: { provider: string }) {
 type TestState = { running: AbortController } | { result: ModelTestResult } | { error: string } | null;
 
 /** The pointer and click stop at the button, so testing never picks the model. */
-function useModelTest(spec: string, test: ModelPickerProps["test"]) {
+function useModelTest(spec: string, provider: string, test: ModelPickerProps["test"]) {
   const [state, setState] = useState<TestState>(null);
 
   if (test === undefined) return { button: null, status: null };
@@ -371,10 +373,13 @@ function useModelTest(spec: string, test: ModelPickerProps["test"]) {
     );
   };
 
-  let shown: { readonly ok: boolean; readonly text: string } | null = null;
+  let shown: { readonly ok: boolean; readonly text: string; readonly detail: string | undefined } | null = null;
 
-  if (state !== null && "result" in state) shown = { ok: state.result.ok, text: modelTestText(state.result) };
-  else if (state !== null && "error" in state) shown = { ok: false, text: `Test could not run: ${state.error}` };
+  if (state !== null && "result" in state) {
+    shown = { ok: state.result.ok, text: modelTestText(state.result, { provider, from: "this server" }), detail: state.result.ok ? undefined : state.result.message };
+  } else if (state !== null && "error" in state) {
+    shown = { ok: false, text: "The test couldn't run.", detail: state.error };
+  }
 
   const button = (
     <button type="button"
@@ -388,7 +393,7 @@ function useModelTest(spec: string, test: ModelPickerProps["test"]) {
   );
 
   const status = shown === null ? null
-    : <span role="status" className={`block p-t-status ${shown.ok ? "p-success" : "p-warning"}`}>{shown.text}</span>;
+    : <span role="status" title={shown.detail} className={`block p-t-status ${shown.ok ? "p-success" : "p-warning"}`}>{shown.text}</span>;
 
   return { button, status };
 }
@@ -399,17 +404,22 @@ function ModelPickerItem({ model, unavailable, test }: {
   test: ModelPickerProps["test"];
 }) {
   const context = formatContextWindow(model.contextWindow);
-  const { button, status } = useModelTest(model.spec, test);
+  const { button, status } = useModelTest(model.spec, model.provider, test);
 
   return (
     <Combobox.Item value={model}>
-      <span className="flex w-full min-w-0 items-center gap-2" title={unavailable}>
+      <span className="flex w-full min-w-0 items-center gap-2">
         <span className={`min-w-0 flex-1 truncate ${unavailable === undefined ? "" : "p-text-3"}`}>{model.label}</span>
         <span className="flex shrink-0 items-center gap-1">
           {unavailable !== undefined && (
-            <span className="inline-flex items-center gap-0.5 p-t-status p-warning"><WarningCircleIcon size={11} />unavailable</span>
+            <span className="inline-flex items-center gap-0.5 p-t-status p-warning" title={unavailable}><WarningCircleIcon size={11} />unavailable</span>
           )}
-          <span className="hidden gap-1 sm:flex">{badgeCapabilities(model).map((cap) => <Badge key={cap} variant="secondary">{cap}</Badge>)}</span>
+          {badgeCapabilities(model).map((cap) => {
+            const Icon = cap === "vision" ? EyeIcon : BrainIcon;
+            const words = cap === "vision" ? "Reads images" : "Reasons before answering";
+
+            return <Icon key={cap} size={13} className="p-text-3" aria-label={words}><title>{words}</title></Icon>;
+          })}
           {context && <Badge variant="secondary">{context}</Badge>}
           {button}
         </span>

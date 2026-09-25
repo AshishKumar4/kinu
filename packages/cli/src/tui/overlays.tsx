@@ -489,9 +489,9 @@ function ModelListOverlay({ models, failures, currentSpec, terminal, loading, er
           testing.current = controller;
           setTested({ label: model.label, text: 'testing…', ok: true });
           test(model.spec, controller.signal).then(
-            (result) => { if (!controller.signal.aborted) setTested({ label: model.label, text: modelTestText(result), ok: result.ok }); },
+            (result) => { if (!controller.signal.aborted) setTested({ label: model.label, text: modelTestText(result, { provider: model.provider, from: 'here' }), ok: result.ok }); },
             (...rejection: [unknown]) => {
-              if (!controller.signal.aborted) setTested({ label: model.label, text: `test could not run: ${renderThrownChain({ cause: rejection[0] })}`, ok: false });
+              if (!controller.signal.aborted) setTested({ label: model.label, text: `the test couldn't run: ${renderThrownChain({ cause: rejection[0] })}`, ok: false });
             },
           );
 

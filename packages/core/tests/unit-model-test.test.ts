@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { asFetchFunction, testModel, withRateLimitRetry, ProviderPacer } from '../src/index';
+import { asFetchFunction, modelTestText, testModel, withRateLimitRetry, ProviderPacer } from '../src/index';
 
 const SSE = { 'content-type': 'text/event-stream' };
 
@@ -64,5 +64,7 @@ describe('testModel', () => {
     });
 
     expect(result.ok ? '' : result.message).toMatch(/rate-limited until \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/);
+    expect(result.ok ? 0 : result.until ?? 0).toBeGreaterThan(Date.now() + 8 * 86_400_000);
+    expect(modelTestText(result, { provider: 'opencode-go', from: 'here' })).toMatch(/^OpenCode Go allowance is spent until \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\.$/u);
   });
 });

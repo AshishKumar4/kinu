@@ -56,6 +56,7 @@ export interface ModelMenuEntry {
   spec: string;
   label: string;
   provider: string;
+  providerLabel?: string;
   capabilities?: string[];
   contextWindow?: number;
   /** Absent when the catalog could not say; empty when the model takes none. */
@@ -101,7 +102,7 @@ const CredentialSummarySchema = v.object({
 });
 
 const ModelMenuEntrySchema = v.object({
-  spec: v.string(), label: v.string(), provider: v.string(),
+  spec: v.string(), label: v.string(), provider: v.string(), providerLabel: v.optional(v.string()),
   capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
   reasoningEfforts: v.optional(v.array(v.picklist(REASONING_EFFORTS))),
 });

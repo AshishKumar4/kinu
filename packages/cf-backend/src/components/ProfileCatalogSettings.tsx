@@ -292,7 +292,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                       value={assignment?.model ?? ''}
                       onChange={(model) => setTier(tierId, model)}
                       clearable={tierId !== 'default'}
-                      placeholder={tierId === 'default' ? resolved.model : `Use default (${defaultLabel})`}
+                      placeholder={tierId === 'default' ? resolved.model : `Use default: ${defaultLabel}`}
                       label={`${tierId} model`}
                       size="sm"
                     />

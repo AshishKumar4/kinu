@@ -55,7 +55,7 @@ export type BrandName = keyof typeof BRANDS;
 
 /** `workers-ai` is Cloudflare's, `claude` Anthropic's, `codex` OpenAI's. Undefined when no mark is held. */
 export function providerBrand(provider: string): BrandName | undefined {
-  switch (provider) {
+  switch (provider.toLowerCase().replaceAll(' ', '-')) {
     case "anthropic":
     case "claude": return "anthropic";
     case "openai":
