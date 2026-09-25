@@ -1,5 +1,5 @@
-/** Two bounded storage cells reusing the decisive bench's Worker, lifecycle, C3 writer and meter.
- *  Not a strategy ranking and not a substitute for the full G1–G10 admission matrix. */
+/** Two bounded storage cells on the shared devbox fixture's Worker, lifecycle, C3 writer and meter.
+ *  Not a strategy ranking. */
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -7,11 +7,13 @@ import {
   cleanupObservationProbes, createFixtureResources, deployFixture, describeIncidentReasons, destroyBox,
   drainBucketResidue, execInBox, measureLiveC3, orphanTeardownExecutor, r2ResiduePlane, readBlockAttachMetrics, readIncidentReasons,
   readRestoreProbe, sourceRevision, startupOperation, teardownLiveArms, writeFileInBox,
-  type Fixture, type IncidentReasonRow, type SourceRevision, type StartupCompletion, type StartupObservation, type StateReply,
-} from './bench-devbox-strategies';
+  type Fixture, type IncidentReasonRow, type SourceRevision,
+} from './bench-devbox-fixture';
 import { evaluateLiveC3, type BlockAttachMetrics, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
 import type { RestorePhaseStamps } from '../packages/devbox/src/durability/contracts';
-import type { StartupState } from '../packages/devbox/bench/observation-schema';
+import type {
+  StartupCompletion, StartupObservation, StartupState, StateReply,
+} from '../packages/devbox/bench/observation-schema';
 import { containerAppIds, delay, deleteContainerApps, publishTeardown, runTeardownOnce, runWrangler } from './fixtures/r2-bench/deploy-substrate';
 import { createManifest, recoverAbandonedRuns, replayTeardown, writeManifest, type DeleteOutcome } from './fixtures/storage-matrix/cleanup';
 
@@ -19,7 +21,7 @@ const REPO = new URL('..', import.meta.url).pathname;
 
 const LARGE_BYTES = 2 * 1024 * 1024 * 1024;
 
-export { CELL_STARTUP_MS } from './bench-devbox-strategies';
+export { CELL_STARTUP_MS } from './bench-devbox-fixture';
 
 export function chunkedPublicationErrors(chain: StartupState['chain']): string[] {
   if (chain?.deltaFormat === 'chunked') return [];

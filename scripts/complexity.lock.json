@@ -10,10 +10,6 @@
       "complexity": 87
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#measureArm",
-      "complexity": 76
-    },
-    {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
       "complexity": 60
     },
@@ -22,12 +18,8 @@
       "complexity": 58
     },
     {
-      "key": "scripts/fixtures/r2-bench/report.ts#renderMarkdown",
-      "complexity": 51
-    },
-    {
       "key": "packages/devbox/bench/worker.ts#fetch",
-      "complexity": 49
+      "complexity": 48
     },
     {
       "key": "lean/check-traceability.mjs#tsScan",
@@ -74,10 +66,6 @@
       "complexity": 41
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#render",
-      "complexity": 41
-    },
-    {
       "key": "scripts/bench-pilot.ts#validatePilotReport",
       "complexity": 41
     },
@@ -95,10 +83,6 @@
     },
     {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
-      "complexity": 40
-    },
-    {
-      "key": "scripts/bench-devbox-strategies.ts#frozenControlStatus",
       "complexity": 40
     },
     {
@@ -150,19 +134,11 @@
       "complexity": 36
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#executeDecisiveSegment",
-      "complexity": 36
-    },
-    {
       "key": "packages/cli/src/cc-transcript.ts#mineSession",
       "complexity": 35
     },
     {
       "key": "packages/core/src/release/engine.ts#ReleaseEngine.rollback",
-      "complexity": 35
-    },
-    {
-      "key": "scripts/bench-devbox-strategies.ts#devboxRequirements",
       "complexity": 35
     },
     {
@@ -187,14 +163,6 @@
     },
     {
       "key": "packages/devbox/tests/support/delta-shell.ts#DeltaShell.line",
-      "complexity": 34
-    },
-    {
-      "key": "scripts/bench-devbox-strategies.ts#judgeChainCut",
-      "complexity": 34
-    },
-    {
-      "key": "scripts/bench-devbox-strategies.ts#readChainCutCell",
       "complexity": 34
     },
     {
@@ -243,10 +211,6 @@
     },
     {
       "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>attachChainOnce",
-      "complexity": 32
-    },
-    {
-      "key": "scripts/bench-devbox-strategies.ts#observeChunkedAbsorption",
       "complexity": 32
     },
     {

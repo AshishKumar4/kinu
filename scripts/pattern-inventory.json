@@ -946,39 +946,32 @@
       "decision": "lexical"
     },
     {
-      "file": "scripts/bench-devbox-strategies.ts",
+      "file": "scripts/bench-devbox-fixture.ts",
       "kind": "regex-literal",
       "owner": "key",
       "sourceSha256": "a078070c2846ca6a074cdc837b32604244069de11122f3ce50889a7f0ac6caa4",
       "decision": "xml"
     },
     {
-      "file": "scripts/bench-devbox-strategies.ts",
+      "file": "scripts/bench-devbox-fixture.ts",
       "kind": "regex-literal",
       "owner": "listObjects",
       "sourceSha256": "12e964e6ebff3855800b1692251f8c0e3a31f861323f572dd93fa0293460823a",
       "decision": "xml"
     },
     {
-      "file": "scripts/bench-devbox-strategies.ts",
+      "file": "scripts/bench-devbox-fixture.ts",
       "kind": "regex-literal",
       "owner": "key",
       "sourceSha256": "a078070c2846ca6a074cdc837b32604244069de11122f3ce50889a7f0ac6caa4",
       "decision": "xml"
     },
     {
-      "file": "scripts/bench-devbox-strategies.ts",
+      "file": "scripts/bench-devbox-fixture.ts",
       "kind": "regex-literal",
       "owner": "uploadId",
       "sourceSha256": "a7c1d5f3b2c0f43f0cbb30a8e3d50a69942620acfbb9c09fc25e9d7665deea0b",
       "decision": "xml"
-    },
-    {
-      "file": "scripts/bench-devbox-strategies.ts",
-      "kind": "hand-parser",
-      "owner": "parseOptions",
-      "sourceSha256": "3618796bea5caf0fc14a4a59277e1d99fabeefb28ab89924b109b67952eb66a7",
-      "decision": "cli"
     },
     {
       "file": "scripts/bench.test.ts",

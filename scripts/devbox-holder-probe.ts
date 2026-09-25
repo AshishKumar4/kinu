@@ -33,7 +33,7 @@ import * as v from 'valibot';
 import {
   BENCH_ACCOUNT_ID, createFixtureResources, drainBucketResidue, r2ResiduePlane,
   deployFixture, startupOperation, stopOperation, teardownLiveArms, type Fixture,
-} from './bench-devbox-strategies';
+} from './bench-devbox-fixture';
 import {
   WRANGLER_FAILED, describeThrown, publishTeardown, runTeardownOnce, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';

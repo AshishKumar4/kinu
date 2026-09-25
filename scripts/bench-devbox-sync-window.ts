@@ -26,7 +26,7 @@ import {
   BENCH_ACCOUNT_ID, admittedAttachKinds, armLanes, boxState, createFixtureResources, deployFixture, execInBox,
   orphanTeardownExecutor, r2CleanupKeyRefusal, r2ResiduePlane, sourceRevision, startupOperation, teardownLanes,
   type Fixture, type LaneTeardown,
-} from './bench-devbox-strategies';
+} from './bench-devbox-fixture';
 import { delay, describeThrown, publishTeardown, runTeardownOnce, runWrangler } from './fixtures/r2-bench/deploy-substrate';
 import { recoverAbandonedRuns } from './fixtures/storage-matrix/cleanup';
 

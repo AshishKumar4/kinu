@@ -382,15 +382,15 @@ research record named above.
 
 ## Other instruments in the same family
 
-`bun scripts/bench-devbox-strategies.ts` drives the real devbox lifecycle
-(attach, checkpoint, stop, wake) through `packages/devbox/bench`. It now
-measures one strategy, `snapshot-chain`, the only `DevboxStrategyName` left;
-the other arms in the verdicts below were removed on 2026-09-09 (`46c320bc1`).
-It keeps five rules from the retired R2 layout benchmark, each learned from a
-failed run: prove the lifecycle first per arm, and refuse to rank an arm whose proof
-fails; one box per arm; `/ops/flush` at every phase boundary; wake numbers
-come only from deployed runs; minute-scale work runs as a polled process, not a
-blocking exec.
+The devbox storage strategy comparison (`scripts/bench-devbox-strategies.ts`)
+was removed on 2026-09-25 when the strategy search closed (D27 in
+`docs/DEVBOX-DECISIONS.md` names the files and the commit to restore them
+from). The live drivers that remain (`bench-devbox-standalone.ts`,
+`bench-devbox-sync-window.ts`, `bench-devbox-block-attach.ts`,
+`devbox-e2e.ts`) share the deployed fixture in `scripts/bench-devbox-fixture.ts`
+and keep the rules the comparison learned from failed runs: one box per arm,
+`/ops/flush` at every phase boundary, wake numbers only from deployed runs, and
+minute-scale work as a polled operation, not a blocking exec.
 
 ## Measured verdicts
 

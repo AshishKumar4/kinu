@@ -1,7 +1,7 @@
 // A box in its boot window refuses every operation route with the reply `isRearmableStartupRefusal`
 // reads; `execInBox` and `writeFileInBox` must both ask again through `askWhileStarting`.
 import { afterAll, describe, expect, test } from 'bun:test';
-import { askWhileStarting, execInBox, writeFileInBox, type Fixture } from './bench-devbox-strategies';
+import { askWhileStarting, execInBox, writeFileInBox, type Fixture } from './bench-devbox-fixture';
 
 const ASK_AGAIN = 'this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.';
 

@@ -1500,22 +1500,21 @@ export const LADDER: readonly Gate[] = [
     // than absorbed by that glob because its name is a contract: a real container
     // measurement that remains only in stdout is not evidence.
     //
-    // The seven rig self-tests after it are explicit for the same reason, and they
+    // The four rig self-tests after it are explicit for the same reason, and they
     // are on THIS row because each one guards a `scripts/bench-*.ts` rig or the
-    // fixtures it runs on — bench-devbox-strategies, bench-payload-transports,
+    // fixtures it runs on — the shared devbox fixture, bench-payload-transports,
     // and the r2-bench deploy substrate. Not one of their names starts with
     // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
     // tier: 89 tests that ran in no pipeline.
-    run: 'bun test --timeout=0 scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
+    run: 'bun test --timeout=0 scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts',
     label: 'Benchmark harness guarantees',
     tier: 'ci',
-    // 5.42s: 420 tests over 21 files, median of 5.53 / 5.42 / 4.89 on the
-    // 24-thread box, measured 2026-08-27 when the eight rig suites joined — 89 of
-    // those tests for 0.07s of that cost, which is what a suite running nowhere
-    // was worth avoiding. That is the corpus-absent basis every fresh clone sees;
-    // a checkout with terminal-bench-2.1 on disk also pays the sampler over the
-    // real corpus in bench-external.test.ts.
-    seconds: 5.42,
+    // 7.00s: 221 tests over 15 files, median of 7.00 / 7.71 / 6.86 on the
+    // 24-thread box at load 7-10, measured 2026-09-25 after the storage
+    // strategy-comparison suites left. That is the corpus-absent basis every
+    // fresh clone sees; a checkout with terminal-bench-2.1 on disk also pays the
+    // sampler over the real corpus in bench-external.test.ts.
+    seconds: 7.0,
     catches: 'the bench harness guarantees — sandbox isolation, the seal, '
       + 'anti-self-scoring, budget enforcement, corpus well-formedness, and the '
       + 'durability probe retaining complete or failed JSON evidence without '
@@ -1523,10 +1522,7 @@ export const LADDER: readonly Gate[] = [
       + 'commit tier proven able to FAIL, which the committed assertion over a '
       + 'healthy corpus cannot do by itself: a patch whose anchor moved, and a '
       + 'patch file no tasks.jsonl line names, each driven from a fixture. And now '
-      + 'the three experiment rigs\' own admission and teardown logic: a storage '
-      + 'cell ranked without its red-check evidence or scored without the '
-      + 'Latin-square order and the '
-      + 'CV/budget censoring the protocol requires, a pilot counted as ranking, a '
+      + 'the experiment rigs\' own teardown and judgment logic: a '
       + 'payload arm judged on an image or an operation it never started, and a '
       + 'Wrangler failure read as proof that an ephemeral worker is gone. No '
       + 'model, no credentials.',

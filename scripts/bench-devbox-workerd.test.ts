@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { fixtureConfigForArms, resourceNames } from './bench-devbox-strategies';
+import { fixtureConfigForArms, resourceNames } from './bench-devbox-fixture';
 
 const ROOT = dirname(import.meta.dir);
 
