@@ -2392,6 +2392,7 @@ export {
   isAgentRpcMethod,
   requiredRpcAccess,
   rpcAccessScope,
+  rpcMovesOverview,
   type AgentRpcAccess,
   type AgentRpcMethod,
   type HostedWindowActor,

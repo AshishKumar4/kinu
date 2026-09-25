@@ -36,7 +36,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { hostedWindowMay, requiredRpcAccess } from "@kinu.run/core";
+import { hostedWindowMay, requiredRpcAccess, rpcMovesOverview } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -1065,7 +1065,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
       await dispatchMessage(connection, message);
 
-      if (rpc !== null && requiredRpcAccess(rpc.method) !== 'workspace.read') this.overviewChanged();
+      if (rpc !== null && rpcMovesOverview(rpc.method)) this.overviewChanged();
     };
 
     const baseOnConnect = this.onConnect.bind(this);

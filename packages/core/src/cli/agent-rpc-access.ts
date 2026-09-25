@@ -172,6 +172,10 @@ export function requiredRpcAccess(method: string): AgentRpcAccess | null {
     : null;
 }
 
+export function rpcMovesOverview(method: string): boolean {
+  return requiredRpcAccess(method) !== 'workspace.read';
+}
+
 export function rpcAccessScope(access: AgentRpcAccess | null): AccessTokenScope | null {
   return v.is(v.picklist(ACCESS_TOKEN_SCOPES), access) ? access : null;
 }
