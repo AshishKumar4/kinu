@@ -1,4 +1,4 @@
-/** The owner's roster, read in pages from the owner's own object and kept current by one socket per tab. */
+/** The owner's roster: pages read from the owner's object, kept current by one socket per tab. */
 import * as v from "valibot";
 import {
   createContext,
@@ -13,7 +13,7 @@ import {
 
 import { rosterBucket, rosterMatches } from "@kinu.run/core";
 import {
-  listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE,
+  listWorkspaces, RosterFrameSchema, ROSTER_SOCKET_ROUTE, UserApiError,
   type RosterCounts, type RosterEntry, type RosterFilterBucket, type RosterFrame, type RosterPage, type WorkspaceEntry,
 } from "@/lib/user-api";
 import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
@@ -36,7 +36,6 @@ export interface RosterPages {
   readonly total: number;
   readonly counts: RosterCounts;
   readonly hasMore: boolean;
-  /** No answer for this filter has landed yet. */
   readonly loading: boolean;
   readonly error: string | null;
   readonly loadMore: () => void;
@@ -200,13 +199,31 @@ function useRosterPages(filter: RosterFilter | null, subscribe: WorkspaceRosterV
   return { pages, reload, edit, pending: reading > 0 };
 }
 
-function rosterSocketUrl(): string {
-  return `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${ROSTER_SOCKET_ROUTE}`;
+export interface RosterSocket extends EventTarget {
+  close(): void;
+}
+
+/** Null: reads only. */
+export type RosterLive = (() => RosterSocket) | null;
+
+function openRosterSocket(): RosterSocket {
+  return new WebSocket(`${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${ROSTER_SOCKET_ROUTE}`);
+}
+
+/** A refused upgrade closes like any failure; only a read tells a refused session. */
+async function sessionRefused(): Promise<boolean> {
+  try {
+    await listWorkspaces({ limit: 1 });
+
+    return false;
+  } catch (cause) {
+    return cause instanceof UserApiError && cause.status === 401;
+  }
 }
 
 const ALL: RosterFilter = {};
 
-export function WorkspaceRosterProvider({ children }: { readonly children: ReactNode }) {
+export function WorkspaceRosterProvider({ children, live = openRosterSocket }: { readonly children: ReactNode; readonly live?: RosterLive }) {
   const listeners = useRef(new Set<FrameListener>());
   const [epoch, setEpoch] = useState(0);
 
@@ -220,13 +237,24 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
 
   // A socket that cannot open still owes the page its first read.
   useEffect(() => {
+    if (live === null) {
+      setEpoch(1);
+
+      return undefined;
+    }
+
     let stopped = false;
     let attempts = 0;
     let timer: number | undefined;
-    let socket: WebSocket | null = null;
+    let socket: RosterSocket | null = null;
+
+    const reconnect = (): void => {
+      timer = window.setTimeout(connect, Math.min(30_000, 1_000 * 2 ** attempts));
+      attempts += 1;
+    };
 
     const connect = (): void => {
-      const opened = new WebSocket(rosterSocketUrl());
+      const opened = live();
       let open = false;
       socket = opened;
 
@@ -236,8 +264,9 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
         setEpoch((current) => current + 1);
       });
 
-      opened.addEventListener("message", (event: MessageEvent) => {
-        const text = v.is(v.string(), event.data) ? event.data : "";
+      opened.addEventListener("message", (event: Event) => {
+        const data: unknown = event instanceof MessageEvent ? event.data : null;
+        const text = v.is(v.string(), data) ? data : "";
         const frame = v.safeParse(RosterFrameSchema, tolerate(() => JSON.parse(text), "malformed-input"));
 
         if (!frame.success) return;
@@ -248,9 +277,14 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
       opened.addEventListener("close", () => {
         if (stopped || socket !== opened) return;
 
-        if (!open) setEpoch((current) => Math.max(current, 1));
-        timer = window.setTimeout(connect, Math.min(30_000, 1_000 * 2 ** attempts));
-        attempts += 1;
+        if (open) {
+          reconnect();
+
+          return;
+        }
+
+        setEpoch((current) => Math.max(current, 1));
+        sessionRefused().then((refused) => { if (!refused && !stopped) reconnect(); }, reconnect);
       });
     };
 
@@ -261,7 +295,7 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
       window.clearTimeout(timer);
       socket?.close();
     };
-  }, []);
+  }, [live]);
 
   const upsert = useCallback((entry: WorkspaceEntry): void => {
     const added: RosterEntry = { ...entry, overview: null, decisions: 0 };

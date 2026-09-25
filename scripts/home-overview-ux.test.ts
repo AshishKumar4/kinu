@@ -26,6 +26,8 @@ declare global {
   interface Window {
     /** Every path the gallery page fetched, in order (`galleryFetch` in gallery.tsx). */
     galleryRequests?: string[];
+    /** Every roster socket the gallery page opened. */
+    galleryRosterSockets?: unknown[];
   }
 }
 
@@ -182,6 +184,33 @@ describe('the home workspace cards', () => {
       } finally {
         await page.close();
       }
+    });
+  });
+
+  test('a roster socket the session refused is not retried, and one refused otherwise is', async () => {
+    await withGallery(async (gallery) => {
+      // Sockets opened over three virtual minutes of backoff, run at once; StrictMode mounts twice before them.
+      const reconnects = async (query: string): Promise<number> => {
+        const page = await gallery.newPage();
+
+        try {
+          await page.goto(`${gallery.origin}/gallery.html?frame=home&rosterSocket=refused${query}`, { waitUntil: 'networkidle0' });
+          // The page's own read and the probe after the first socket closed.
+          await page.waitForFunction(() => (window.galleryRequests ?? []).filter((path) => path === '/api/user/workspaces').length >= 2);
+          const opened = await page.evaluate(() => window.galleryRosterSockets?.length ?? 0);
+          const cdp = await page.createCDPSession();
+          const spent = new Promise<void>((resolve) => { cdp.once('Emulation.virtualTimeBudgetExpired', () => resolve()); });
+          await cdp.send('Emulation.setVirtualTimePolicy', { policy: 'advance', budget: 180_000 });
+          await spent;
+
+          return await page.evaluate(() => window.galleryRosterSockets?.length ?? 0) - opened;
+        } finally {
+          await page.close();
+        }
+      };
+
+      expect(await reconnects('&session=expired')).toBe(0);
+      expect(await reconnects('')).toBeGreaterThan(0);
     });
   });
 

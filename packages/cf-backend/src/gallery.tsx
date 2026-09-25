@@ -255,7 +255,6 @@ const mcpSecrets = (() => {
   return new Set(listed.filter((entry) => entry.length > 0));
 })();
 
-/** The grants rows, one per state; null for every other path. */
 function pluginsFixture(path: string): Response | null {
   if (path === "/api/user/devices/consents") {
     return fixtureJson(frame === "devices"
@@ -628,7 +627,6 @@ function galleryRosterCounts(): RosterCounts {
   return counts;
 }
 
-/** One page, in fixture order. */
 function rosterAnswer(search: URLSearchParams): RosterPage {
   const bucket = search.get("bucket");
   const q = search.get("q") ?? "";
@@ -641,13 +639,31 @@ function rosterAnswer(search: URLSearchParams): RosterPage {
 
 const rosterSockets = new Set<EventTarget>();
 
+/** `&rosterSocket=refused` closes each socket unopened; `&session=expired` makes each roster read a 401. */
+const galleryQuery = new URLSearchParams(location.search);
+
+const ROSTER_SOCKET_REFUSED = galleryQuery.get("rosterSocket") === "refused";
+
+const SESSION_EXPIRED = galleryQuery.get("session") === "expired";
+
+const galleryRosterSockets: GalleryRosterSocket[] = [];
+
+Object.assign(window, { galleryRosterSockets });
+
 class GalleryRosterSocket extends EventTarget {
   readyState: number = WebSocket.CONNECTING;
 
   constructor() {
     super();
+    galleryRosterSockets.push(this);
     rosterSockets.add(this);
     queueMicrotask(() => {
+      if (ROSTER_SOCKET_REFUSED) {
+        this.close();
+
+        return;
+      }
+
       this.readyState = WebSocket.OPEN;
       this.dispatchEvent(new Event("open"));
     });
@@ -729,6 +745,8 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   if (roster.pathname === "/api/user/workspaces" && method === "GET") {
     // Cloned per call: a `Response` body reads once and the provider has several reads in flight here.
     if (frame === "rosterauthority") return rosterAuthorityHold.promise.then((held) => held.clone());
+
+    if (SESSION_EXPIRED) return Promise.resolve(fixtureJson({ error: "Sign in again." }, 401));
 
     return Promise.resolve(fixtureJson(rosterAnswer(roster.searchParams)));
   }
@@ -4351,7 +4369,6 @@ function ApprovalsFrame() {
 
 const PARKED_ONLY: PendingAction[] = PENDING_ACTIONS.filter((a) => a.kind === "deferred_action");
 
-/** Shared by both absence frames. */
 const settledEmptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
@@ -4360,7 +4377,6 @@ const settledEmptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promi
   return stubRpc<T>(method, args);
 };
 
-/** A fresh workspace's column. */
 function WorkEmptyFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">

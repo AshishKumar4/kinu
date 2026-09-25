@@ -15,7 +15,7 @@ window.fetch = Object.assign(
     const parsedRequest = v.safeParse(v.instance(Request), input);
     const url = requestUrl(input);
 
-    const path = url.startsWith('/') ? url : new URL(url, window.location.origin).pathname;
+    const path = new URL(url, window.location.origin).pathname;
     const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : 'GET')).toUpperCase();
 
     if (method === 'GET' && path === '/api/user/profile') {

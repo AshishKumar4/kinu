@@ -181,6 +181,12 @@ type RequestBody =
   | McpServerInput
   | { catalog: ProfileCatalog; expectedVersion: number };
 
+export class UserApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
 async function api<Schema extends v.GenericSchema>(
   schema: Schema, method: string, path: string, body?: RequestBody,
 ): Promise<v.InferOutput<Schema>> {
@@ -192,7 +198,7 @@ async function api<Schema extends v.GenericSchema>(
     signal: method === 'GET' ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined,
   });
 
-  if (!res.ok) throw new Error(`${method} /api/user${path} → ${res.status} ${await errorDetail(res)}`);
+  if (!res.ok) throw new UserApiError(`${method} /api/user${path} → ${res.status} ${await errorDetail(res)}`, res.status);
 
   return v.parse(schema, await res.json());
 }
