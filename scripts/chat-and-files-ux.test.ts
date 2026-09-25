@@ -3004,35 +3004,41 @@ test('the panel strip is one continuous rule with the underline on it', async ()
   });
 });
 
-test('workspace tabs keep scrolling horizontal and suppress the scrollbar', async () => {
+test('workspace tabs past the edge stay reachable by scrolling the strip sideways', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
     await page.setViewport({ width: 390, height: 844 });
     await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[aria-label="Work"]');
 
-    // The tabs' own container, capped narrower than its tabs so it must scroll whatever the frame's tab count.
-    const strip = await page.$eval('[aria-label="Work"]', (tab) => {
+    // The tabs' own container, capped narrower than its tabs so the last one starts out of view.
+    const reach = await page.$eval('[aria-label="Work"]', (tab) => {
       const row = tab.parentElement;
 
       if (row === null) throw new Error('the Work tab has no container');
       row.setAttribute('style', 'max-width: 120px');
-      row.scrollLeft = 50;
+      const tabs = [...row.querySelectorAll<HTMLElement>('button[aria-label]')];
+      const last = tabs.at(-1);
 
-      return {
-        names: [...row.querySelectorAll('button[aria-label]')].map((button) => button.getAttribute('aria-label')),
-        overflows: row.scrollWidth > row.clientWidth,
-        scrollLeft: row.scrollLeft,
-        scrollbar: getComputedStyle(row).scrollbarWidth,
+      if (last === undefined) throw new Error('the strip has no tabs');
+
+      const inView = (): boolean => {
+        const box = last.getBoundingClientRect();
+        const frame = row.getBoundingClientRect();
+
+        return box.left >= frame.left && box.right <= frame.right;
       };
+
+      const before = inView();
+      const heightBefore = row.getBoundingClientRect().height;
+      last.focus();
+
+      return { before, after: inView(), grew: row.getBoundingClientRect().height !== heightBefore };
     });
 
-    expect(strip.names).toContain('Files');
-    expect(strip.overflows).toBe(true);
-    expect(strip.scrollLeft).toBeGreaterThan(0);
-    // Headless Chrome runs with --hide-scrollbars, so no layout measure can see a scrollbar; the computed
-    // value is the one observable, and a global `scrollbar-width` rule once beat it (index.css).
-    expect(strip.scrollbar).toBe('none');
+    expect(reach.before).toBe(false);
+    expect(reach.after).toBe(true);
+    expect(reach.grew).toBe(false);
     await page.close();
   });
 });
