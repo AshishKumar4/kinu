@@ -148,14 +148,14 @@ function patternNames(pattern: acorn.AnyNode | null | undefined): string[] {
   return [];
 }
 
-const isFunctionNode = (node: acorn.AnyNode): boolean =>
-  node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression';
+const ownsVars = (node: acorn.AnyNode): boolean => node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression'
+  || node.type === 'ArrowFunctionExpression' || node.type === 'StaticBlock' || node.type === 'PropertyDefinition';
 
 function* nodesWithin(root: acorn.AnyNode): Generator<acorn.AnyNode> {
   for (const { node } of childrenOf(root)) {
     yield node;
 
-    if (!isFunctionNode(node)) yield* nodesWithin(node);
+    if (!ownsVars(node)) yield* nodesWithin(node);
   }
 }
 
@@ -191,7 +191,10 @@ function scopeBindings(scope: acorn.AnyNode): Set<string> {
 
     if (scope.body.type === 'BlockStatement') statements(scope.body.body);
     hoisted(scope.body);
-  } else if (scope.type === 'BlockStatement' || scope.type === 'StaticBlock') {
+  } else if (scope.type === 'StaticBlock') {
+    statements(scope.body);
+    hoisted(scope);
+  } else if (scope.type === 'BlockStatement') {
     statements(scope.body);
   } else if (scope.type === 'CatchClause') {
     bind(patternNames(scope.param));

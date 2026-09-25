@@ -109,6 +109,8 @@ describe('checkMisevolution — judged on the syntax tree, not the spelling', ()
   test.each([
     ['a parameter', 'const f = (self) => self; return self[args.key]'],
     ['a catch variable', 'try { run(); } catch (globalThis) { void globalThis; } return globalThis[args.key]'],
+    ['a var in a class static block', 'class A { static { var self = 1; } } const g = self; return g[args.key]'],
+    ['a var in a class field initializer', 'class B { f = () => { var self = 1; return self; }; } const g = self; return g[args.key]'],
   ])('a global object shadowed only by %s elsewhere is still the global where it is read', (_binding, body) => {
     const code = `async (args) => { const run = () => {}; ${body}; }`;
 
