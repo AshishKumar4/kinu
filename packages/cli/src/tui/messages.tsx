@@ -5,7 +5,7 @@ import { useCallback, useRef } from 'react';
 import { TUI_MARKS } from '@kinu.run/core';
 
 import type { AgentClientStatus } from '../agent-client';
-import { clipText } from '@kinu.run/core';
+import { clipText, terminalText } from '@kinu.run/core';
 import { EXPANDED_RESULT_LINES, FileDiffCard, fileEditDiffView } from './diff-card';
 import { StatusView } from './help-view';
 import { useTuiTheme, type TuiThemeColors } from './theme';
@@ -225,7 +225,7 @@ function ToolActivityCard({ rows, callPreviewWidth, resultPreviewWidth, expanded
 
 function ToolCallRow({ toolName, args, previewWidth }: { toolName: string; args?: string; previewWidth: number }) {
   const { well } = useTuiTheme().colors;
-  const preview = args ? clipText(args.replace(/\s+/g, ' '), previewWidth) : '';
+  const preview = args ? clipText(terminalText(args).replace(/\s+/g, ' '), previewWidth) : '';
 
   return (
     <text>
@@ -250,7 +250,8 @@ function ToolResultRow({ message, call, previewWidth, expanded }: {
     return <FileDiffCard view={diff} expanded={expanded} previewWidth={previewWidth} lineCap={EXPANDED_RESULT_LINES} />;
   }
 
-  const { content, success } = message;
+  const { success } = message;
+  const content = terminalText(message.content);
   const lines = expanded ? content.split('\n').slice(0, EXPANDED_RESULT_LINES) : [clipText(content.replace(/\s+/g, ' '), previewWidth)];
 
   return (
@@ -396,15 +397,18 @@ export function MessageList({ messages, toolDetailsExpanded = false }: {
 
         if (message.status) return <StatusView key={message.id} status={message.status} />;
 
+        // Text a model, a tool or a pasted terminal wrote reaches the terminal only as text, never as its commands.
+        const content = terminalText(message.content);
+
         switch (message.role) {
           case 'user':
-            return <UserMessage key={message.id} content={message.content} attachments={message.attachments} steered={message.steered} branched={message.branched} />;
+            return <UserMessage key={message.id} content={content} attachments={message.attachments} steered={message.steered} branched={message.branched} />;
           case 'assistant':
-            return <AssistantMessage key={message.id} content={message.content} live={message.live} />;
+            return <AssistantMessage key={message.id} content={content} live={message.live} />;
           case 'evolution':
-            return <EvolutionMessage key={message.id} content={message.content} />;
+            return <EvolutionMessage key={message.id} content={content} />;
           case 'system':
-            return <SystemMessage key={message.id} content={message.content} />;
+            return <SystemMessage key={message.id} content={content} />;
           case 'tool_call':
           case 'tool_result':
             return null;

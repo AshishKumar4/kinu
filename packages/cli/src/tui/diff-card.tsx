@@ -10,7 +10,7 @@ import {
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 
-import { clipText } from '@kinu.run/core';
+import { clipText, terminalText } from '@kinu.run/core';
 import { useTuiTheme } from './theme';
 
 /** The expanded tool-result line budget, shared with the card. */
@@ -225,7 +225,7 @@ export function FileDiffCard({ view, expanded, previewWidth, lineCap = EXPANDED_
     <box flexDirection="column" style={{ paddingLeft: 2 }}>
       <text>
         <span fg={well.muted}>{`${TUI_MARKS.toolResult} `}</span>
-        <span fg={well.ink}>{view.path}</span>
+        <span fg={well.ink}>{terminalText(view.path)}</span>
         {view.counts === null || view.counts.added === 0 ? null : <span fg={well.success}>{` +${String(view.counts.added)}`}</span>}
         {view.counts === null || view.counts.removed === 0 ? null : <span fg={well.danger}>{` −${String(view.counts.removed)}`}</span>}
         {view.label === undefined ? null : <span fg={well.muted}>{` · ${view.label}`}</span>}
@@ -239,7 +239,7 @@ export function FileDiffCard({ view, expanded, previewWidth, lineCap = EXPANDED_
       ) : (
         <text key={`line-${String(index)}`}>
           <span fg={inkFor[row.kind]}>{`  ${DIFF_PREFIX[row.kind]} `}</span>
-          <span fg={inkFor[row.kind]}>{clipText(row.text, previewWidth)}</span>
+          <span fg={inkFor[row.kind]}>{clipText(terminalText(row.text), previewWidth)}</span>
         </text>
       ))}
       {trailer === null ? null : <text><span fg={well.muted}>{`  ${trailer}`}</span></text>}
