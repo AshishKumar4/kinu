@@ -131,6 +131,10 @@ async function sanitizePart(part: UserPart, policy: AttachmentPolicy): Promise<T
 }
 
 async function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Promise<TextPart | null> {
+  if (part.mediaType !== undefined && !RASTER_IMAGES.has(part.mediaType)) {
+    return sanitizeFilePart({ type: 'file', data: part.image, mediaType: part.mediaType }, policy);
+  }
+
   if (policy.accepts.has('image')) return null;
 
   return replaceMedia(part.image, part.mediaType ?? 'image', undefined, policy);
@@ -191,9 +195,12 @@ function estimatePayloadBytes(data: FilePart['data']): number | null {
   return Math.floor(((comma === -1 ? data.length : data.length - comma - 1) * 3) / 4);
 }
 
+/** What the catalogs' `image` input modality carries. An SVG is markup no model takes as a picture; it goes as text. */
+const RASTER_IMAGES: ReadonlySet<string> = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+
 /** Null means no transport accepts it; text is handled by {@link inlineOrStoreText}. */
 function mediaModalityFor(mediaType: string): MediaModality | null {
-  if (mediaType.startsWith('image/')) return 'image';
+  if (RASTER_IMAGES.has(mediaType)) return 'image';
 
   if (mediaType === 'application/pdf') return 'pdf';
 
@@ -205,7 +212,7 @@ function mediaModalityFor(mediaType: string): MediaModality | null {
 }
 
 function isTextMediaType(mediaType: string): boolean {
-  return mediaType.startsWith('text/');
+  return mediaType.startsWith('text/') || mediaType === 'image/svg+xml';
 }
 
 async function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Promise<TextPart> {
