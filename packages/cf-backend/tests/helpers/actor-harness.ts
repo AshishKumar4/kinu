@@ -1241,8 +1241,10 @@ export interface RecordedUserPlaneCalls {
   turnCancels?: string[];
   /** Set to record the roster tiles the object pushes, in order; unset, a push lands nowhere. */
   overviews?: WorkspaceOverview[];
-  /** How many pushes the owner's object refuses before it takes one. */
-  refuseOverviews?: number;
+  /** What the owner's object throws at each push, in order, before it takes one. */
+  refuseOverviews?: Error[];
+  /** Set to hold every push until it settles. */
+  holdOverviews?: Promise<void>;
 }
 
 /** A real user plane: `userDO` is bound at `env.UserDO`; `workspace` is the DO name
@@ -1344,11 +1346,10 @@ export function makeEnv(
           // A job holding no device commands: what the hub answers when nothing needs stopping.
           cancelDeviceRequestsForBackgroundJob: async (): Promise<[]> => [],
           putWorkspaceOverview: async (_caller: UserCaller, _workspace: string, overview: WorkspaceOverview): Promise<void> => {
-            if (userPlane !== undefined && (userPlane.refuseOverviews ?? 0) > 0) {
-              userPlane.refuseOverviews = (userPlane.refuseOverviews ?? 0) - 1;
-              throw new Error('the owner object is unavailable');
-            }
+            await userPlane?.holdOverviews;
+            const refusal = userPlane?.refuseOverviews?.shift();
 
+            if (refusal !== undefined) throw refusal;
             userPlane?.overviews?.push(overview);
           },
           ...(userPlane?.turnCancels !== undefined && {

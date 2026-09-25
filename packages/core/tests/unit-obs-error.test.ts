@@ -89,6 +89,15 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
     if (code !== null) expect(CODE_WORK_DID_NOT_START[code]).toBe(false);
   });
 
+  test('a refusal a Durable Object threw keeps its class across its RPC, which names it only in the message', () => {
+    const remote = (message: string): Error => Object.assign(new Error(message), { remote: true });
+
+    expect(classifyErrorCode({ cause: remote('CapabilityDeniedError: Unrecognized workspace capability token.') })).toBe('denied');
+    expect(classifyErrorCode({ cause: remote('ValiError: Invalid type: Expected string') })).toBe('bad_input');
+    // Words alone, in an error no RPC carried, say nothing.
+    expect(classifyErrorCode({ cause: new Error('CapabilityDeniedError: forged') })).toBeNull();
+  });
+
   test('a malformed URL is `bad_input`, like malformed JSON', () => {
     const badUrl = raisedBy(() => { new URL('notaurl'); });
     expect(classifyErrorCode({ cause: badUrl })).toBe('bad_input');
