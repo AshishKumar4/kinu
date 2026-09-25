@@ -18,7 +18,7 @@ import {
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
-import { MessageType, parseProtocolMessage } from "agents/chat";
+import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
 import {
   ActorChatRooms, ChatWireTransport, type ChatWire,
 } from './chat-transport';
@@ -1093,8 +1093,15 @@ export abstract class ActorAgent extends Agent<Env> {
 
       const terminal = await this.terminalFor(connection);
 
-      if (terminal) await terminal.attachTerminal(connection);
-      else await this.chatRoomFor(connection)?.onConnect(connection);
+      if (terminal) {
+        await terminal.attachTerminal(connection);
+
+        return;
+      }
+
+      // Claim frames reach only tabs connected at a change: a root tab away at the settle hears the claim here (#30).
+      if (actorFromConnectionTags(connection.tags) === null) sendIfOpen(connection, this.turnClaimFrame());
+      await this.chatRoomFor(connection)?.onConnect(connection);
     };
 
     this.onClose = async (connection, code, reason, wasClean) => {
@@ -1874,6 +1881,9 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Fires after each committed change to the root actor's turn claims. */
   protected abstract turnClaimChanged(): void;
+
+  /** The root actor's turn claim as it stands, as the frame its tabs hear on connecting and on each change. */
+  protected abstract turnClaimFrame(): string;
 
   protected abstract overviewChanged(): void;
 

@@ -1195,11 +1195,12 @@ async function measureOpenedMidTurn(
   }
 }
 
-/** Every socket the page opens, and how many replays have completed on them. */
+/** Every socket the page opens, how many replays have completed on them, and what the server answered on them. */
 const RECORD_SOCKETS = `(() => {
   window.__sockets = [];
   window.__replaysComplete = 0;
   window.__transcripts = 0;
+  window.__resumeAnswers = 0;
   window.__asleep = false;
   const Socket = window.WebSocket;
   window.WebSocket = class extends Socket {
@@ -1210,7 +1211,13 @@ const RECORD_SOCKETS = `(() => {
       this.addEventListener('message', (event) => {
         if (typeof event.data !== 'string') return;
         if (event.data.includes('"replayComplete":true')) window.__replaysComplete += 1;
-        if (event.data.includes('"type":"cf_agent_chat_messages"')) window.__transcripts += 1;
+        if (event.data.includes('"type":"cf_agent_chat_messages"')) {
+          window.__transcripts += 1;
+          window.__releaseProbe?.();
+        }
+        // The chat hook's stream probe answered: a stream resuming, or none in the reply carrying the probe's id.
+        if (event.data.includes('"type":"cf_agent_stream_resuming"')
+          || (event.data.includes('"type":"cf_agent_stream_resume_none"') && event.data.includes('"probeId"'))) window.__resumeAnswers += 1;
       });
     }
   };
@@ -1332,6 +1339,26 @@ async function measureObservedReconnect(newPage: LiveApp['newPage'], origin: str
 /** The reconnect turn has answered and closed. */
 const TURN_ANSWERED = `(${ANSWER_BLOCKS}).at(-1) === 'P:Done.' && !(${STOP_OFFERED})`;
 
+/** What a page's sockets have heard, counted before it sleeps so the answers to its waking are told apart. */
+const HEARD = '[window.__transcripts, window.__resumeAnswers]';
+
+const HeardSchema = v.tuple([v.number(), v.number()]);
+
+/**
+ * Wakes a page and reads it once the server has answered its new socket: the transcript, which the turn's claim
+ * precedes, and the chat hook's stream probe. Read at once, so a page still offering Stop then fails, never waited out.
+ */
+async function wakeAndRead(page: Page, heard: v.InferOutput<typeof HeardSchema>, shot: string): Promise<Omit<SleptVerdict, 'truth'>> {
+  await page.bringToFront();
+  await page.evaluate('window.__asleep = false');
+  await until(page, 'the transcript after the page woke', `window.__transcripts > ${String(heard[0])}`);
+  await until(page, "the stream probe's answer after the page woke", `window.__resumeAnswers > ${String(heard[1])}`);
+  await painted(page);
+  await shoot(page, shot);
+
+  return { after: await answerOf(page), stopAfter: v.parse(v.boolean(), await page.evaluate(STOP_OFFERED)) };
+}
+
 /** Row 12 (#30): a page asleep while its turn ends shows the finished answer once it wakes, as a page that stayed
  *  awake shows it, and offers no Stop. */
 async function measureSlept(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<SleptVerdict> {
@@ -1346,7 +1373,7 @@ async function measureSlept(newPage: LiveApp['newPage'], origin: string, held: H
     await sleeper.bringToFront();
     await sendInChat(sleeper, SLEPT_TURN_ASK);
     await answerMidTurn(sleeper);
-    const transcripts = v.parse(v.number(), await sleeper.evaluate('window.__transcripts'));
+    const heard = v.parse(HeardSchema, await sleeper.evaluate(HEARD));
 
     await sleeper.evaluate('window.__asleep = true');
 
@@ -1357,16 +1384,8 @@ async function measureSlept(newPage: LiveApp['newPage'], origin: string, held: H
     await until(awake, 'the turn to end on the page that stayed awake', TURN_ANSWERED);
     await painted(awake);
     const truth = await answerOf(awake);
-    const asked = v.parse(v.number(), await sleeper.evaluate('window.__presenceAsks'));
 
-    await sleeper.bringToFront();
-    await sleeper.evaluate('window.__asleep = false');
-    await until(sleeper, 'the transcript after the page woke', `window.__transcripts > ${String(transcripts)}`);
-    await until(sleeper, "the page's next presence read after it woke", `window.__presenceAsks > ${String(asked)}`);
-    await painted(sleeper);
-    await shoot(sleeper, 'reconnect-slept');
-
-    return { truth, after: await answerOf(sleeper), stopAfter: v.parse(v.boolean(), await sleeper.evaluate(STOP_OFFERED)) };
+    return { truth, ...await wakeAndRead(sleeper, heard, 'reconnect-slept') };
   } finally {
     held.release();
     await awake.close();
@@ -1374,8 +1393,35 @@ async function measureSlept(newPage: LiveApp['newPage'], origin: string, held: H
   }
 }
 
+/**
+ * Holds a woken page's chat-hook probe (the stream resume request carrying a probe id) until a probeless resume
+ * request has gone out or the socket's transcript has come in. So a probeless request's answer lands first, the order
+ * a remount of the hook's listeners gives: that answer spent the probe's wait and left the watched stream's Stop
+ * standing after the turn (#30). A page with one resume path, the hook's, sends no probeless request.
+ */
+const PROBE_ANSWERED_LAST = `(() => {
+  const send = WebSocket.prototype.send;
+  let held = null;
+  window.__releaseProbe = () => {
+    if (held === null) return;
+    const [socket, data] = held;
+    held = null;
+    send.call(socket, data);
+  };
+  WebSocket.prototype.send = function (data) {
+    if (typeof data !== 'string' || !data.includes('"type":"cf_agent_stream_resume_request"')) return send.call(this, data);
+    if (data.includes('"probeId"')) {
+      held = [this, data];
+      return;
+    }
+    send.call(this, data);
+    window.__releaseProbe();
+  };
+})()`;
+
 /** Row 14 (#30): a page that only watched a turn, asleep from part-way through its final text until the turn ended,
- *  wakes to the finished answer: the copy it was building had as many parts as the answer, and must not win. */
+ *  wakes to the finished answer: the copy it was building had as many parts as the answer, and must not win. Its
+ *  hook's probe is answered last ({@link PROBE_ANSWERED_LAST}). */
 async function measureWatchedSlept(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<SleptVerdict> {
   const workspace = await createWorkspace(
     origin, { name: `live-row-watched-slept-${RUN_ID}`, purpose: 'watched slept probe', model: SCRIPTED_MODEL_SPEC });
@@ -1388,7 +1434,7 @@ async function measureWatchedSlept(newPage: LiveApp['newPage'], origin: string, 
     // A hidden tab never paints, so the page being read is the one in front.
     await watcher.bringToFront();
     await until(watcher, "the final text's first word on the watching page", `(${ANSWER_BLOCKS}).at(-1) === 'P:Do'`);
-    const transcripts = v.parse(v.number(), await watcher.evaluate('window.__transcripts'));
+    const heard = v.parse(HeardSchema, await watcher.evaluate(HEARD));
 
     await watcher.evaluate('window.__asleep = true');
 
@@ -1399,16 +1445,10 @@ async function measureWatchedSlept(newPage: LiveApp['newPage'], origin: string, 
     await until(sender, 'the turn to end on the sending page', TURN_ANSWERED);
     await painted(sender);
     const truth = await answerOf(sender);
-    const asked = v.parse(v.number(), await watcher.evaluate('window.__presenceAsks'));
 
-    await watcher.bringToFront();
-    await watcher.evaluate('window.__asleep = false');
-    await until(watcher, 'the transcript after the page woke', `window.__transcripts > ${String(transcripts)}`);
-    await until(watcher, "the page's next presence read after it woke", `window.__presenceAsks > ${String(asked)}`);
-    await painted(watcher);
-    await shoot(watcher, 'reconnect-watched-slept');
+    await watcher.evaluate(PROBE_ANSWERED_LAST);
 
-    return { truth, after: await answerOf(watcher), stopAfter: v.parse(v.boolean(), await watcher.evaluate(STOP_OFFERED)) };
+    return { truth, ...await wakeAndRead(watcher, heard, 'reconnect-watched-slept') };
   } finally {
     held.release();
     await sender.close();

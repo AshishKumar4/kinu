@@ -183,9 +183,11 @@ describe('a chat request through the production gate', () => {
     await agent.onConnect(second.wire, { request: new Request('https://agent/connect') });
     const frames = second.sent.map((raw) => v.parse(v.looseObject({ type: v.string(), messages: v.optional(v.array(v.object({ id: v.string() }))) }), JSON.parse(raw)));
 
-    // Resuming first, then the current transcript including the live turn's row.
-    expect(frames[0]?.type).toBe('cf_agent_stream_resuming');
-    const seed = frames.find((sentFrame) => sentFrame.type === 'cf_agent_chat_messages');
+    // Told what is resuming before the current transcript, which includes the live turn's row.
+    const resumingAt = frames.findIndex((sentFrame) => sentFrame.type === 'cf_agent_stream_resuming');
+    const seedAt = frames.findIndex((sentFrame) => sentFrame.type === 'cf_agent_chat_messages');
+    expect(resumingAt !== -1 && resumingAt < seedAt).toBe(true);
+    const seed = frames[seedAt];
     expect(seed?.messages?.map((m) => m.id)).toContain(liveRow);
 
     // A resuming socket that closes releases the resume the handshake held.
