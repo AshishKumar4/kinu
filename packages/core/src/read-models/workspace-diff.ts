@@ -4,7 +4,7 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { RawSqlExec, VFS, VfsEntryStat } from '../types/primitives';
+import type { RawSqlExec, VFS, VfsEntryStat, VfsLinkStat } from '../types/primitives';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus, type Omitted } from '../vfs/diff';
 import { nanoid } from '../utils/nanoid';
@@ -105,17 +105,22 @@ interface ManifestEntry {
   readonly hash: string | null;
 }
 
-/** Every regular file the change-set reviews, breadth-first so root files come first, by stat alone. */
+/**
+ * Every regular file the change-set reviews, breadth-first so root files come first, by stat alone. The walk runs
+ * while turns write, so an entry can vanish between its directory's listing and its own read: it is absent, as a
+ * snapshot of a file that is gone does not contain it.
+ */
 async function walkWorkspaceFiles(
   rt: WorkspaceBaselineRuntime,
   visit: (path: string, stat: VfsEntryStat) => void | Promise<void>,
 ): Promise<void> {
   const routed: VFS & Partial<Pick<VfsMountRouting, 'mountOf'>> = rt.storage.vfs;
-  const directories = ['', PLANE_ROOT];
+  const roots = ['', PLANE_ROOT];
+  const directories = [...roots];
 
   for (let next = 0; next < directories.length; next++) {
     const dir = directories[next];
-    const names = await namesIn(rt, dir);
+    const names = await namesIn(rt, dir, next >= roots.length);
     const children: string[] = [];
 
     for (const name of names ?? []) {
@@ -127,9 +132,7 @@ async function walkWorkspaceFiles(
       if (UNREVIEWED_PATHS.has(full) || (routed.mountOf?.(full) ?? null) !== null) continue;
       const st = await statOf(rt, full);
 
-      if (st === undefined) continue;
-
-      if (st === null) throw new Error(`Workspace changed while snapshotting ${JSON.stringify(full)}`);
+      if (st === undefined || st === null || ('isSymlink' in st && st.isSymlink)) continue;
 
       if (st.isDir) {
         children.push(full);
@@ -143,17 +146,31 @@ async function walkWorkspaceFiles(
   }
 }
 
-async function namesIn(rt: WorkspaceBaselineRuntime, dir: string): Promise<string[] | undefined> {
+/** A read of an entry the walk listed: undefined when this actor may not read it, or it is gone since the listing. */
+async function whileThere<T>(read: () => Promise<T>): Promise<T | undefined> {
+  return tolerateAsync(() => tolerateAsync(read, 'enoent'), 'eacces');
+}
+
+/** A root's names, or a listed directory's, which is gone (undefined) when it vanished since its parent's listing. */
+async function namesIn(rt: WorkspaceBaselineRuntime, dir: string, listed: boolean): Promise<string[] | undefined> {
+  const read = () => rt.storage.vfs.readdir(dir);
+
   try {
-    return (await tolerateAsync(() => rt.storage.vfs.readdir(dir), 'eacces'))?.sort();
+    return (await (listed ? whileThere(read) : tolerateAsync(read, 'eacces')))?.sort();
   } catch (error) {
     throw new Error(`Workspace snapshot could not read directory ${JSON.stringify(dir || '.')}`, { cause: error });
   }
 }
 
-async function statOf(rt: WorkspaceBaselineRuntime, path: string): Promise<VfsEntryStat | null | undefined> {
+/**
+ * The entry itself, a symbolic link not followed: a link's target is files seen twice, or hidden ones, or its own
+ * folder again. Null when the entry is gone since its directory was listed.
+ */
+async function statOf(rt: WorkspaceBaselineRuntime, path: string): Promise<VfsLinkStat | VfsEntryStat | null | undefined> {
+  const { vfs } = rt.storage;
+
   try {
-    return await tolerateAsync(() => rt.storage.vfs.stat(path), 'eacces');
+    return await tolerateAsync(() => (vfs.lstat === undefined ? vfs.stat(path) : vfs.lstat(path)), 'eacces');
   } catch (error) {
     throw new Error(`Workspace snapshot could not stat ${JSON.stringify(path)}`, { cause: error });
   }
@@ -169,7 +186,7 @@ async function contentsOf(rt: WorkspaceBaselineRuntime, path: string): Promise<C
   let content: string | Uint8Array | undefined;
 
   try {
-    content = await tolerateAsync(() => rt.storage.vfs.readFile(path), 'eacces');
+    content = await whileThere(() => rt.storage.vfs.readFile(path));
   } catch (error) {
     throw new Error(`Workspace snapshot could not read ${JSON.stringify(path)}`, { cause: error });
   }

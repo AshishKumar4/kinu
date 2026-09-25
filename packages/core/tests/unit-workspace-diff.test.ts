@@ -2,7 +2,7 @@ import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { fakeMossaic, git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
-import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { createWorkspace } from '../src/workspace-birth';
@@ -14,13 +14,14 @@ import {
   restoreWorkspaceBaseline,
 } from '../src/read-models/workspace-diff';
 import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types';
-import type { SqlValue } from '../src/types/primitives';
+import type { SqlValue, VfsEntryStat } from '../src/types/primitives';
 import { MAX_LINES_PER_FILE } from '../src/vfs/diff';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { createTestRuntime } from './helpers';
 import { commandResult, type CommandResult } from '../src/execution/exec-result';
 import { agentCred, provisionAgentHome, subordinateAgentName } from '../src/vfs/agent-home';
 import { withMountTable } from '../src/vfs/mounts';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { sharedDriveMount } from '../src/vfs/shared-drive';
 
@@ -316,6 +317,28 @@ describe('workspace diff lifecycle', () => {
     ]);
   });
 
+  test('a symbolic link is never followed: not into hidden files, a hire\'s home or back into its own folder', async () => {
+    const { rt, workspace } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    const identity = { uid: 2001, gid: 2001 };
+    const home = provisionAgentHome((await workspace.privileged()).root, subordinateAgentName('builder'), identity);
+    const session = await workspace.session();
+    const builder = session.vfs.as(agentCred(identity));
+    const user = session.vfs.as(CRED_SESSION_USER);
+    await resetWorkspaceBaseline(rt);
+
+    await rt.storage.vfs.mkdir('.config', { recursive: true });
+    await rt.storage.vfs.writeFile('.config/secret.txt', 'TOKEN=1\n');
+    builder.mkdir(`${home}/node_modules/pkg`, { recursive: true });
+    builder.writeFile(`${home}/node_modules/pkg/index.js`, 'installed\n');
+    user.symlink(`${WORKSPACE_ROOT}/.config`, `${WORKSPACE_ROOT}/cfg`);
+    user.symlink(`${home}/node_modules`, `${WORKSPACE_ROOT}/deps`);
+    user.symlink(WORKSPACE_ROOT, `${WORKSPACE_ROOT}/loop`);
+    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added notes.md']);
+  });
+
   test('hidden files a baseline recorded before they were left out are not listed as removed', async () => {
     const { rt, db } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
@@ -517,6 +540,28 @@ describe('workspace diff lifecycle', () => {
     };
 
     await expect(getWorkspaceDiff(rt)).rejects.toThrow('could not read directory');
+  });
+
+  test('an entry gone between its directory\'s listing and its own read is absent from the diff and from a review', async () => {
+    const { rt, db } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('kept.txt', 'kept');
+    const file: VfsEntryStat = { size: 4, mtimeMs: Date.now(), isDir: false };
+    // A turn deletes each while the walk runs: listed, then gone at the stat, at the read, or at the directory's
+    // own listing.
+    const gone = new Map<string, VfsEntryStat | null>([['deleted.txt', null], ['renamed.txt', file], ['removed', { ...file, isDir: true }]]);
+    const readdir = rt.storage.vfs.readdir.bind(rt.storage.vfs);
+    const stat = rt.storage.vfs.stat.bind(rt.storage.vfs);
+    rt.storage.vfs.readdir = async (path) => (path === '' ? [...await readdir(path), ...gone.keys()] : readdir(path));
+    rt.storage.vfs.stat = async (path) => (gone.has(path) ? gone.get(path) ?? null : stat(path));
+
+    expect((await getWorkspaceDiff(rt)).files.map((diff) => `${diff.status} ${diff.path}`)).toEqual(['added kept.txt']);
+    await resetWorkspaceBaseline(rt);
+    const reviewed = db.query<{ path: string }, []>("SELECT path FROM vfs_baseline_manifest WHERE active = 1").all().map((row) => row.path);
+
+    expect(reviewed).toContain('kept.txt');
+    expect(reviewed.filter((path) => gone.has(path))).toEqual([]);
   });
 
   test('a file read failure cannot advance or partially replace the active baseline', async () => {

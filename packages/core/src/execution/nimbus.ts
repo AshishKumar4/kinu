@@ -2,7 +2,7 @@
 
 import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
-import type { Shell, VFS } from '../types/primitives';
+import type { Shell, VFS, VfsLinkStat } from '../types/primitives';
 import type { MountedVfs, VfsNativeReads } from '../vfs/mounts';
 import { atVfsPath, makeVfsError } from '../vfs/errno';
 import { workspacePath } from '../vfs/workspace-path';
@@ -662,6 +662,7 @@ function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, n
 }
 
 export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VFS & {
+  lstat(path: string): Promise<VfsLinkStat | null>;
   removeRecursive(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
 } & Pick<VfsNativeReads, 'readRange'> {
@@ -708,6 +709,24 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       const absolute = workspacePath(path);
 
       return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((e) => e.name);
+    },
+    async lstat(path) {
+      const absolute = workspacePath(path);
+
+      if (files.lstat) {
+        const st = await files.lstat(absolute);
+
+        return st && { size: st.size, mtimeMs: st.mtime, isDir: st.type === 'directory', isSymlink: st.type === 'symlink' };
+      }
+
+      // `stat` without -L describes a link itself.
+      const r = await box.exec(`stat -c '%s %Y %F' ${shellQuote(absolute)}`, asCred(cred));
+
+      if (!r.success || r.exitCode !== 0) return null;
+      const [size, seconds, ...kind] = r.stdout.trim().split(/\s+/);
+      const type = kind.join(' ');
+
+      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, isDir: type === 'directory', isSymlink: type === 'symbolic link' };
     },
     async stat(path) {
       if (files.stat) {
