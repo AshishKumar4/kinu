@@ -1567,6 +1567,8 @@ export {
   refusedHostname,
 } from './safety/egress-destination';
 
+export { revealMisrepresenting } from './safety/untrusted-text';
+
 // Utils
 export { fnv1a64, Fnv1a64 } from './utils/fnv1a';
 
