@@ -15,6 +15,7 @@ import {
   type ClientErrorReport,
 } from "./client-error-contract";
 import type { ReportedRoute } from './app-routes';
+import { KinuError } from '../obs/index';
 
 export interface PageIdentity {
   /** The build this page loaded (not the live one), or null when unidentified. */
@@ -82,10 +83,12 @@ export async function reportChatStreamFailure(
   await send(fitChatStreamFailureReport(page.release === null ? report : { ...report, release: page.release }));
 }
 
-/** Never rejects on the network; `keepalive` outlives a reload. */
+/** Never rejects on the network; `keepalive` outlives a reload. A refused report rejects. */
 async function send(report: ClientErrorReport | ChatStreamFailureReport): Promise<void> {
+  let answer: Response;
+
   try {
-    await fetch(CLIENT_ERROR_ENDPOINT, {
+    answer = await fetch(CLIENT_ERROR_ENDPOINT, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(report),
@@ -93,5 +96,9 @@ async function send(report: ClientErrorReport | ChatStreamFailureReport): Promis
     });
   } catch (cause) {
     if (!isTolerableSendFailure({ cause })) throw cause;
+
+    return;
   }
+
+  if (!answer.ok) throw new KinuError('io', `the error report was refused: ${String(answer.status)} ${(await answer.text()).slice(0, 160)}`);
 }

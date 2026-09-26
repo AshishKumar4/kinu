@@ -2188,7 +2188,7 @@ export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './h
 
 export { serveApp } from './http/app-shell';
 
-export { ingressAdmitted, ingressDenied, peerIp } from './http/ingress-budget';
+export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressAdmission } from './http/ingress-budget';
 
 export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
