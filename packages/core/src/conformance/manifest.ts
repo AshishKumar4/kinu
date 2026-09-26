@@ -290,6 +290,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: WIRED,
     },
+    evolution_helpers: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: WIRED,
+    },
     // On cf these fields are columns on the child's `workspace_actors` row.
     subordinate_identity: {
       'cf-orchestrator': { absent: "a hosted actor's identity is its `workspace_actors` row, which the directory owns" },

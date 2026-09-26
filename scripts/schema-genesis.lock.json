@@ -521,6 +521,17 @@
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "evolution_helpers@packages/core/src/identity/evolution-helpers.ts": [
+    "actor_id TEXT NOT NULL",
+    "name TEXT NOT NULL",
+    "lane TEXT NOT NULL CHECK (lane IN ('refinement'))",
+    "lane_request_id TEXT NOT NULL",
+    "task_event_id TEXT",
+    "answer_status TEXT CHECK (answer_status IN ('completed','blocked'))",
+    "answer TEXT",
+    "created_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, name)"
+  ],
   "executor_output@packages/core/src/identity/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL DEFAULT (lower(hex(randomblob(9))))",

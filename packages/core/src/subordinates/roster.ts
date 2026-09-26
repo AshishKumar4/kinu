@@ -16,12 +16,16 @@ import { ActorReferenceSchema, sameActorReference, type ActorReference } from '.
 import { SubordinateBirthSchema } from './birth';
 import { parseJsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
+import { EvolutionHelperStore, initEvolutionHelperTable } from '../identity/evolution-helpers';
 
 const ROSTER_COLUMNS =
   'actor_id, name, created_by, status, current_task, created_at, dismissed_at, lifetime, task_event_id, actor_reference, birth_request, delete_requested';
 
+/** The stored CHECK predates `evolution`, so it is read from the helper table. */
 const ROSTER_PROJECTION =
-  'name, created_by AS createdBy, status, current_task AS currentTask, '
+  'name, CASE WHEN EXISTS (SELECT 1 FROM evolution_helpers h WHERE h.actor_id = actor_subordinates.actor_id '
+  + "AND h.name = actor_subordinates.name) THEN 'evolution' ELSE created_by END AS createdBy, "
+  + 'status, current_task AS currentTask, '
   + 'created_at AS createdAt, dismissed_at AS dismissedAt, '
   + 'lifetime, task_event_id AS taskEventId, actor_reference AS actorReference, birth_request AS birth, delete_requested AS deleteRequested';
 
@@ -37,16 +41,12 @@ const ROSTER_RESTORE_CONFLICT = `
          task_event_id = excluded.task_event_id,
          actor_reference = excluded.actor_reference, birth_request = excluded.birth_request, delete_requested = excluded.delete_requested`;
 
-/** Roster columns nothing else can derive: `lifetime` (whether an answer releases the row)
- *  and `task_event_id` (the EventLog id the report cites, as in `SubordinateHandoff.eventId`). */
-
-/** Lifecycle and task facts only; title and role live in the child's actor_config. */
 export const SubordinateRosterEntrySchema = v.object({
   name: v.string(),
   actorReference: v.nullable(ActorReferenceSchema),
   birth: v.nullable(SubordinateBirthSchema),
   deleteRequested: v.boolean(),
-  createdBy: v.picklist(['orchestrator', 'user']),
+  createdBy: v.picklist(['orchestrator', 'user', 'evolution']),
   status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
   currentTask: v.nullable(v.string()),
   createdAt: v.number(),
@@ -87,9 +87,12 @@ function reportedRosterStatus(status: SubordinateReportStatus, currentTask: stri
 export class SubordinateRosterStore {
   private readonly actorId: string;
 
+  readonly helpers: EvolutionHelperStore;
+
   /** Scoped to one parent actor: subordinate names are unique only per parent. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
+    this.helpers = new EvolutionHelperStore(sql, actor);
   }
 
   ensureSchema(): void {
@@ -110,6 +113,7 @@ export class SubordinateRosterStore {
     )`);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_actor_subordinates_order
       ON actor_subordinates(actor_id, created_at, name)`);
+    initEvolutionHelperTable(this.sql);
   }
 
   /** `onConflict` is empty for a first insert and the upsert clause for a compensating restore. */
@@ -119,7 +123,7 @@ export class SubordinateRosterStore {
       `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${onConflict}`,
       this.actorId,
       entry.name,
-      entry.createdBy,
+      entry.createdBy === 'evolution' ? 'orchestrator' : entry.createdBy,
       entry.status,
       entry.currentTask,
       entry.createdAt,
@@ -203,6 +207,7 @@ export class SubordinateRosterStore {
     this.sql.exec(`DELETE FROM actor_subordinates WHERE actor_id = ? AND name = ?
       AND json_extract(actor_reference, '$.actorId') = ? AND json_extract(actor_reference, '$.workspaceId') = ?
       AND json_extract(actor_reference, '$.parentActorId') IS ?`, this.actorId, name, reference.actorId, reference.workspaceId, reference.parentActorId);
+    this.helpers.remove(name);
   }
 
   cancelBirth(name: string, creationId: string): void {
@@ -222,6 +227,7 @@ export class SubordinateRosterStore {
   remove(name: string): void {
     this.actor.assertCurrent();
     this.sql.exec(`DELETE FROM actor_subordinates WHERE actor_id = ? AND name = ?`, this.actorId, name);
+    this.helpers.remove(name);
   }
 
   get(name: string): SubordinateRosterEntry | null {

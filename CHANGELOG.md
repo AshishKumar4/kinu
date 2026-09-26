@@ -713,6 +713,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Self-evolution stays out of your conversation.** The helper that reviews recent turns for prompt and skill edits answered the main agent when its host restarted mid-review: the main agent woke in Plan mode, read the proposed edits as a task, and could file them as a plan for you to approve. Its answer now goes back to the review that asked for it, even across a restart, and is never shown to the main agent. A turn the harness started (an event, a helper's report) can no longer submit a plan, so a plan only comes from a turn you wrote or its own feedback. Helpers started by self-evolution are listed as `createdBy: 'evolution'`.
 - **A refusal from your account or workspace keeps its reason.** Creating a workspace whose name is still being deleted, and the other refusals the account and workspace objects raise, answer 400 with what was wrong again, instead of a generic 500.
 - **A command you approve reads as the command that runs.** Shell approvals, parked commands and device-consent cards in the web, the control plane and the TUI show bidi overrides and zero-width characters as a visible �, so no hidden character can make the text read as something else.
 - **An MCP server's tool description can no longer pass for something else.** Bidi overrides, zero-width characters and controls show as a visible �, and HTML tags, headings, rules and strikethrough in the server's text stay plain text, before the description reaches the model or your screen.

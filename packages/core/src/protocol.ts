@@ -80,7 +80,7 @@ export interface SubordinateRosterEntry {
 	displayName: string;
 	role: string;
 	nameOrigin?: "user" | "auto";
-	createdBy: "orchestrator" | "user";
+	createdBy: "orchestrator" | "user" | "evolution";
 	status: SubordinateStatus;
 	currentTask: string | null;
 	createdAt: number;

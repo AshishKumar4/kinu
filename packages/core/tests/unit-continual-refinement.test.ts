@@ -54,9 +54,15 @@ import {
 import {
   decideRefinementRoute, showRefinementRoute,
 } from '../src/evolution/refinement-skill';
-import { createTestSql, present, unobservedSpend } from '@kinu.run/test-utils';
-import { createTestRuntime } from './helpers';
+import { createMemoryVfs, createTestSql, present, unobservedSpend } from '@kinu.run/test-utils';
 import { RunEventRecorder } from '../src/events/recorder';
+import { Database } from 'bun:sqlite';
+import {
+  EventLog, SubordinateRosterStore, WorkspaceActorDirectory, createTemporaryAgentPort, initEventsHubTables,
+  receiveSubordinateEvent, type SubordinateHandoff, type SubordinateRuntime,
+} from '../src/index';
+import { buildDrainBatch } from '../src/events/hub/drain';
+import { createTestActor, createTestRuntime, makeExecRaw, makeSql, makeSqlExec } from './helpers';
 
 const EVAL_SIZE = 8;
 
@@ -145,6 +151,7 @@ function scriptedRefiner(answer: string | ((request: TemporaryRunRequest) => str
         return outcome;
       },
       settle: () => false,
+      reclaim: () => null,
     },
   };
 }
@@ -182,6 +189,7 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
         return outcome;
       },
       settle: () => false,
+      reclaim: () => null,
     },
   };
 }
@@ -537,6 +545,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
       refiner: {
         run: async () => ({ reason: 'unavailable', error: 'no roster substrate here' }),
         settle: () => false,
+        reclaim: () => null,
       },
     };
 
@@ -1067,6 +1076,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
         };
       },
       settle: () => false,
+      reclaim: () => null,
     };
 
     const deps = fx.deps(port);
@@ -1117,6 +1127,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
         };
       },
       settle: () => false,
+      reclaim: () => null,
     };
 
     const deps = fx.deps(port);
@@ -1311,6 +1322,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
         };
       },
       settle: () => false,
+      reclaim: () => null,
     };
 
     const deps = fx.deps(port);
@@ -2189,5 +2201,103 @@ describe('promotion never half-lands — the read-back is what allows the unlink
 
     expect(card?.items?.[0]?.evidence.length).toBeLessThan(long.length);
     expect(card?.items?.[0]?.evidence).toContain('chars');
+  });
+});
+
+/** One workspace database for the roster and the root's rail, as both hosts keep them. */
+function refinerRail() {
+  const db = new Database(':memory:');
+  const exec = makeSqlExec(db);
+  initEventsHubTables(exec);
+  createTestActor(makeSql(db), makeExecRaw(db), 'refiner-workspace', 'main');
+  const directory = new WorkspaceActorDirectory(makeSql(db), { workspaceId: 'refiner-workspace', ownerUserId: '' });
+  const root = directory.main();
+  const roster = new SubordinateRosterStore(exec, root);
+  roster.ensureSchema();
+  const log = new EventLog(exec, root);
+  const handoff: SubordinateHandoff = { eventId: 'evt-refine', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
+
+  const runtime: SubordinateRuntime = {
+    spawn: async (input) => directory.apply(root, [], { action: 'register', name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime }).reference,
+    cancelBirth: async () => { throw new Error('no birth is cancelled here'); },
+    assign: async () => handoff,
+    status: async () => ({ lastActivity: null, recentSteps: [] }),
+    message: async () => handoff,
+    dismiss: async () => undefined,
+    rename: async () => undefined,
+  };
+
+  /** A fresh port is a fresh activation: the previous one's in-memory waiter is gone. */
+  const port = () => createTemporaryAgentPort({ roster, runtime, createName: (role) => `${role}-a1b2c3`, now: () => SEED_EPOCH });
+
+  return {
+    roster,
+    log,
+    port,
+    helper: 'ask-refiner-a1b2c3',
+    reports: () => log.pending().filter((event) => event.variant === 'subordinate_report'),
+    deliver: (temporary: TemporaryAgentPort, content: string) => receiveSubordinateEvent({
+      log, roster, vfs: createMemoryVfs().vfs, transaction: (body) => body(),
+      announce: () => undefined, onAdmitted: () => undefined, temporary,
+    }, {
+      fromSubordinate: 'ask-refiner-a1b2c3', status: 'completed', content, origin: 'turn_end',
+      sequenceId: 'refiner:turn-1', mode: 'plan',
+    }, SEED_EPOCH),
+  };
+}
+
+describe('a refiner answer that outlives its waiter returns to the lane, never to the root', () => {
+  test('after an eviction the answer is stored, the row released, and the next pass routes it', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const rail = refinerRail();
+    const evicted = rail.port();
+
+    // The activation dies once the refiner is assigned: its pass unwinds, and the run it started
+    // (with its waiter) is held by nothing that survives.
+    const lost: Promise<unknown>[] = [];
+
+    const dying: TemporaryAgentPort = {
+      ...evicted,
+      run: async (request) => {
+        lost.push(evicted.run(request));
+
+        for (let attempt = 0; attempt < 50 && !rail.roster.get(rail.helper)?.taskEventId; attempt++) await Promise.resolve();
+        throw new Error('the activation was evicted');
+      },
+    };
+
+    const opened = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
+    await expect(advanceRefinementLane(fx.deps(dying))).rejects.toThrow('the activation was evicted');
+    expect(rail.roster.get(rail.helper)?.createdBy).toBe('evolution');
+
+    let asks = 0;
+    const resumed = rail.port();
+
+    const counted: TemporaryAgentPort = {
+      ...resumed,
+      run: (request) => {
+        asks += 1;
+
+        return resumed.run(request);
+      },
+    };
+
+    // The helper is still working: the next pass waits for it instead of asking a second refiner.
+    expect((await advanceRefinementLane(fx.deps(counted))).step).toBe('idle');
+    expect(asks).toBe(0);
+
+    // The child's turn, resumed on the new activation, reports through the real ingress.
+    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
+    expect(rail.reports()).toEqual([]);
+    expect(buildDrainBatch(rail.log.pending())).toBeNull();
+    expect(rail.roster.get(rail.helper)?.status).toBe('dismissed');
+
+    const step = await advanceRefinementLane(fx.deps(counted));
+    expect(step.step).toBe('planned');
+    expect(asks).toBe(0);
+    expect(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)?.stage).toBe('applied');
+    expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
+    expect(rail.reports()).toEqual([]);
   });
 });
