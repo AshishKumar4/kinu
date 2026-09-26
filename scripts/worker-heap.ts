@@ -34,6 +34,13 @@ export const GATE = 'worker-heap';
 /** 48.9 MB measured (header), plus room for the product to grow before this row asks why. */
 export const HEAP_AFTER_SETUP_BOUND_BYTES = 56_000_000;
 
+/** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step, 7.3 MB once the Workers AI
+ *  fetch read the request text in place of a Request copy and a validating parse of the whole tree. */
+export const STEP_LIVE_BOUND_BYTES = 8_000_000;
+
+/** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request. */
+export const IDLE_RETAINED_BOUND_BYTES = 14_500_000;
+
 const WranglerSchema = v.object({
   compatibility_date: v.string(),
   compatibility_flags: v.array(v.string()),
@@ -44,8 +51,6 @@ const WranglerSchema = v.object({
 });
 
 const TargetsSchema = v.array(v.object({ id: v.string(), webSocketDebuggerUrl: v.string() }));
-
-const HeapUsageSchema = v.object({ id: v.number(), result: v.object({ usedSize: v.number() }) });
 
 const ManifestSchema = v.record(v.string(), v.object({ file: v.string(), assets: v.optional(v.array(v.string())) }));
 
@@ -122,47 +127,112 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-/** V8's used heap of the product isolate, uncollected, as `Runtime.getHeapUsage` reports it. */
-async function usedHeap(port: number): Promise<number> {
+const InspectorReplySchema = v.object({ id: v.number() });
+
+const HeapUsageReplySchema = v.object({ result: v.object({ usedSize: v.number() }) });
+
+const SnapshotChunkSchema = v.object({ method: v.literal('HeapProfiler.addHeapSnapshotChunk'), params: v.object({ chunk: v.string() }) });
+
+const SnapshotSchema = v.object({
+  snapshot: v.object({ meta: v.object({ node_fields: v.array(v.string()) }) }),
+  nodes: v.array(v.number()),
+});
+
+/** One inspector session on the product isolate. */
+async function inspect(port: number): Promise<{
+  readonly usedHeap: () => Promise<number>;
+  readonly liveHeap: () => Promise<number>;
+  readonly close: () => void;
+}> {
   const targets = v.parse(TargetsSchema, await (await fetch(`http://127.0.0.1:${String(port)}/json`)).json());
   const product = targets.find((target) => target.id === 'core:user:kinu');
 
   if (product === undefined) throw new Error(`worker-heap: no inspector target for the product among ${targets.map((t) => t.id).join(', ')}`);
   const socket = new WebSocket(product.webSocketDebuggerUrl);
-  const answer = Promise.withResolvers<number>();
+  const opened = Promise.withResolvers<void>();
+  const replies = new Map<number, (raw: string) => void>();
+  let chunks: string[] = [];
+  let next = 0;
 
+  socket.addEventListener('open', () => { opened.resolve(); });
+  socket.addEventListener('error', () => { opened.reject(new Error('worker-heap: the inspector socket failed')); });
   socket.addEventListener('message', (event) => {
-    const parsed = v.safeParse(HeapUsageSchema, JSON.parse(String(event.data)));
+    const raw = String(event.data);
+    const message: unknown = JSON.parse(raw);
+    const chunk = v.safeParse(SnapshotChunkSchema, message);
 
-    if (parsed.success && parsed.output.id === 1) answer.resolve(parsed.output.result.usedSize);
+    if (chunk.success) {
+      chunks.push(chunk.output.params.chunk);
+
+      return;
+    }
+
+    const reply = v.safeParse(InspectorReplySchema, message);
+
+    if (reply.success) replies.get(reply.output.id)?.(raw);
   });
-  socket.addEventListener('error', () => { answer.reject(new Error('worker-heap: the inspector socket failed')); });
-  socket.addEventListener('open', () => { socket.send(JSON.stringify({ id: 1, method: 'Runtime.getHeapUsage' })); });
+  await opened.promise;
 
-  try {
-    return await answer.promise;
-  } finally {
-    socket.close();
-  }
+  /** The raw reply, which each caller parses for the field it asked for. */
+  const send = (method: string): Promise<string> => {
+    next += 1;
+    const answer = Promise.withResolvers<string>();
+    replies.set(next, answer.resolve);
+    socket.send(JSON.stringify({ id: next, method }));
+
+    return answer.promise;
+  };
+
+  return {
+    // Uncollected: what the isolate holds at this instant, garbage included.
+    usedHeap: async () => v.parse(HeapUsageReplySchema, JSON.parse(await send('Runtime.getHeapUsage'))).result.usedSize,
+    // A snapshot collects first, so its node sizes add up to what is live.
+    liveHeap: async () => {
+      chunks = [];
+      await send('HeapProfiler.takeHeapSnapshot');
+      const snapshot = v.parse(SnapshotSchema, JSON.parse(chunks.join('')));
+      chunks = [];
+      const fields = snapshot.snapshot.meta.node_fields;
+      const size = fields.indexOf('self_size');
+      let live = 0;
+
+      for (let at = size; at < snapshot.nodes.length; at += fields.length) live += snapshot.nodes[at] ?? 0;
+
+      return live;
+    },
+    close: () => { socket.close(); },
+  };
 }
 
-export async function measure(): Promise<number> {
+/** The step the heap bounds are about: TURNS turns of ANSWER_BYTES each, then one more parked on the model. */
+export const STEP = { turns: 12, answerBytes: 200_000 } as const;
+
+export interface HeapMeasurement {
+  /** Used heap after one workspace's claim and setup. */
+  readonly afterSetup: number;
+  /** What a step parked on the model holds live beyond the idle workspace before it, at {@link STEP}. */
+  readonly stepLive: number;
+  /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup. */
+  readonly idleRetained: number;
+}
+
+export async function measure(): Promise<HeapMeasurement> {
   const wrangler = v.parse(WranglerSchema, JSON.parse(readFileSync(join(DIST, 'wrangler.json'), 'utf8')));
   const key = btoa('worker-heap-credential-key-32byt');
   const port = await freePort();
-  const compat = { compatibilityDate: wrangler.compatibility_date, compatibilityFlags: wrangler.compatibility_flags };
+  const compat = { compatibilityDate: wrangler.compatibility_date, compatibilityFlags: [...wrangler.compatibility_flags, 'enable_abortsignal_rpc'] };
 
   const mf = new Miniflare(convertV4MiniflareOptions({
     inspectorPort: port,
     workers: [{
       name: 'kinu', ...compat, modulesRoot: DIST, modules: productModules(), workerLoaders: { LOADER: {} },
       bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key },
-      serviceBindings: { AI: { name: 'driver', entrypoint: 'RefusingAI' } },
+      serviceBindings: { AI: { name: 'driver', entrypoint: 'ScriptedAI' } },
       r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),
       kvNamespaces: wrangler.kv_namespaces.map((namespace) => namespace.binding),
       durableObjects: Object.fromEntries(wrangler.durable_objects.bindings.map((binding) =>
         [binding.name, { className: binding.class_name, useSQLite: true }])),
-      outboundService: (request) => { throw new Error(`worker-heap: setup reached the network at ${request.url}`); },
+      outboundService: (request) => { throw new Error(`worker-heap: the product reached the network at ${request.url}`); },
     }, {
       name: 'driver', ...compat,
       modules: [{ type: 'ESModule', path: join(DIST, 'worker-heap-driver.js'), contents: await driverModule() }],
@@ -176,14 +246,55 @@ export async function measure(): Promise<number> {
   }));
 
   try {
-    const response = await (await mf.getWorker('driver')).fetch('http://driver.invalid/?workspace=heap');
+    const driver = await mf.getWorker('driver');
 
-    if (response.status !== 204) throw new Error(`worker-heap: setup answered ${String(response.status)}: ${await response.text()}`);
+    const ask = async (path: string): Promise<string> => {
+      const response = await driver.fetch(`http://driver.invalid${path}`);
+      const body = await response.text();
 
-    return await usedHeap(port);
+      if (!response.ok) throw new Error(`worker-heap: ${path} answered ${String(response.status)}: ${body}`);
+
+      return body;
+    };
+
+    await ask('/?workspace=heap');
+    const inspector = await inspect(port);
+
+    try {
+      const afterSetup = await inspector.usedHeap();
+      const setUp = await inspector.liveHeap();
+      await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
+
+      for (let turn = 0; turn < STEP.turns; turn++) await ask(`/turn?workspace=heap&text=turn-${String(turn)}`);
+      const idle = await inspector.liveHeap();
+      await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`);
+      const parked = ask('/turn?workspace=heap&text=parked');
+      const waiting = v.object({ parked: v.number() });
+
+      // Each poll is a request to the driver, which answers only once the product's model call is parked.
+      while (v.parse(waiting, JSON.parse(await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`))).parked === 0) {
+        await Bun.sleep(20);
+      }
+
+      const during = await inspector.liveHeap();
+      await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
+      await parked;
+
+      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp };
+    } finally {
+      inspector.close();
+    }
   } finally {
     await mf.dispose();
   }
+}
+
+function mb(bytes: number): string {
+  return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+function transcript(): string {
+  return `${String(STEP.turns)} prior answers of ${mb(STEP.answerBytes)}`;
 }
 
 /** UTF-8 spends one byte per character only when every character is ASCII. */
@@ -203,15 +314,23 @@ async function main(args: readonly string[]): Promise<number> {
 
   // One character above U+00FF stores a whole module's retained source two bytes per character.
   const wide = graph.filter((module) => module.endsWith('.js') && isWide(readFileSync(join(DIST, module), 'utf8')));
-  const used = await measure();
+  const measured = await measure();
   const findings: string[] = [];
 
   if (wide.length > 0) findings.push(`${wide.join(', ')} carry characters outside ASCII, which V8 keeps two bytes each`);
 
   if (wasm.length > 0) findings.push(`index.js instantiates ${wasm.join(', ')} at load: a static import reaches it`);
 
-  if (used > HEAP_AFTER_SETUP_BOUND_BYTES) {
-    findings.push(`used heap after setup ${(used / 1e6).toFixed(1)} MB exceeds ${(HEAP_AFTER_SETUP_BOUND_BYTES / 1e6).toFixed(1)} MB`);
+  if (measured.afterSetup > HEAP_AFTER_SETUP_BOUND_BYTES) {
+    findings.push(`used heap after setup ${mb(measured.afterSetup)} exceeds ${mb(HEAP_AFTER_SETUP_BOUND_BYTES)}`);
+  }
+
+  if (measured.stepLive > STEP_LIVE_BOUND_BYTES) {
+    findings.push(`a parked step holds ${mb(measured.stepLive)} live at ${transcript()}, over ${mb(STEP_LIVE_BOUND_BYTES)}`);
+  }
+
+  if (measured.idleRetained > IDLE_RETAINED_BOUND_BYTES) {
+    findings.push(`the idle workspace holds ${mb(measured.idleRetained)} after ${transcript()}, over ${mb(IDLE_RETAINED_BOUND_BYTES)}`);
   }
 
   if (findings.length > 0) {
@@ -222,8 +341,9 @@ async function main(args: readonly string[]): Promise<number> {
     return 1;
   }
 
-  console.log(`${GATE}: ok — ${(used / 1e6).toFixed(1)} MB used after setup (bound ${(HEAP_AFTER_SETUP_BOUND_BYTES / 1e6).toFixed(1)} MB), no wasm on the static graph, every module ASCII`);
-  console.log('  blind: heap a turn or a large history adds, and memory outside V8 (compiled wasm, SQLite pages)');
+  console.log(`${GATE}: ok — ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
+    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them; no wasm on the static graph, every module ASCII`);
+  console.log('  blind: copies made and dropped within a step (garbage between collections), transcripts shaped unlike this one, and memory outside V8 (compiled wasm, SQLite pages)');
 
   return 0;
 }

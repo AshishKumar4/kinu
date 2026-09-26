@@ -9,6 +9,7 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   claimOwner(owner: string): Promise<{ capabilityHash: string }>;
   setSoul(markdown: string): Promise<void>;
   setModel(model: string): Promise<void>;
+  runTaskFromMcp(text: string): Promise<void>;
 }
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
@@ -38,19 +39,53 @@ export class HeapDriver extends DurableObject<DriverEnv> {
     await agent.setSoul('# Heap\n\nAnswer.');
     await agent.setModel('workers-ai/@cf/zai-org/glm-5.3');
   }
+
+  /** One root turn through the product's MCP entry, as a caller outside the page runs one. */
+  async turn(workspace: string, text: string): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).runTaskFromMcp(text);
+  }
 }
 
-/** The product's `AI` binding: setup makes no model call, so every call is a failure worth seeing. */
-export class RefusingAI extends WorkerEntrypoint {
-  run(model: string): never {
-    throw new Error(`worker-heap: setup called the model ${model}`);
+/** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0 };
+
+/** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
+export class ScriptedAI extends WorkerEntrypoint {
+  async run(_model: string, inputs: { readonly stream?: boolean }): Promise<Response> {
+    model.calls += 1;
+
+    if (inputs.stream !== true) return Response.json({ response: '{"upserts":[],"decay":[]}' });
+    model.parked += 1;
+
+    // A timer is I/O to the runtime; a bare pending promise would be cancelled as a hung request.
+    while (model.holding) await scheduler.wait(20);
+    model.parked -= 1;
+
+    const text = 'word '.repeat(Math.ceil(model.answerBytes / 5)).slice(0, model.answerBytes);
+    const frames = [];
+
+    for (let at = 0; at < text.length; at += 4096) frames.push(`data: ${JSON.stringify({ response: text.slice(at, at + 4096) })}\n\n`);
+    frames.push(`data: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`, 'data: [DONE]\n\n');
+
+    return new Response(frames.join(''), { headers: { 'content-type': 'text/event-stream' } });
   }
 }
 
 export default {
   async fetch(request: Request, env: DriverEnv & { readonly HEAP_DRIVER: DurableObjectNamespace<HeapDriver> }): Promise<Response> {
-    const workspace = new URL(request.url).searchParams.get('workspace') ?? 'heap';
-    await env.HEAP_DRIVER.get(env.HEAP_DRIVER.idFromName(workspace)).setUp(workspace);
+    const url = new URL(request.url);
+    const workspace = url.searchParams.get('workspace') ?? 'heap';
+    const driver = env.HEAP_DRIVER.get(env.HEAP_DRIVER.idFromName(workspace));
+
+    if (url.pathname === '/model') {
+      model.answerBytes = Number(url.searchParams.get('answerBytes') ?? model.answerBytes);
+      model.holding = url.searchParams.get('holding') === '1';
+
+      return Response.json({ parked: model.parked, calls: model.calls });
+    }
+
+    if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
+    else await driver.setUp(workspace);
 
     return new Response(null, { status: 204 });
   },
