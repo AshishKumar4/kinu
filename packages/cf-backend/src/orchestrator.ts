@@ -2760,6 +2760,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly activationStartedAt = Date.now();
 
   /**
+   * Whether the workspace container is in use, asked by its box before it may rest: a live turn of
+   * any actor here, or a job this activation's runner drives, re-drives included. Work the root owes
+   * itself (sends, claims, fibers to re-drive) is its own wake's business; a process an earlier
+   * activation left running is the box's own check.
+   */
+  override async sandboxInUse(): Promise<boolean> {
+    if (this._inFlight || this.jobRunner.inFlight > 0) return true;
+    const host = this.actorHost();
+
+    return host.list().some((reference) => host.hosted(reference)?.session.inFlight === true);
+  }
+
+  /**
    * In-memory on purpose: fork-journal recovery runs once per isolate; a second pass could retire
    * a root the resume gate already claimed and re-drove in this activation.
    */

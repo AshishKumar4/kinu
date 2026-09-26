@@ -115,6 +115,8 @@ const ATTACH_RECOVERY_KEY = 'devbox:attach-recovery';
 
 const LAST_TICK_KEY = 'devbox:last-tick';
 
+const UNREADABLE_PROCESS_BEATS_KEY = 'devbox:unreadable-process-beats';
+
 const BOOT_ID_KEY = 'devbox:boot-id';
 
 /** Persisted so a mid-restore object reset is survivable; a stored `restoring` phase needs recovery.
@@ -1623,7 +1625,16 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   async #releaseWorkdirHolders(): Promise<void> {
     if (this.ctx.container?.running !== true) return;
 
-    for (const live of await this.listProcesses()) {
+    let listed: Awaited<ReturnType<typeof this.listProcesses>> = [];
+
+    try {
+      listed = await this.listProcesses();
+    } catch (error) {
+      // As a failed kill: the pid scan below still finds them.
+      await this.#record('quiesce', `the stop could not list processes; releasing holders by pid: ${describe({ cause: error })}`);
+    }
+
+    for (const live of listed) {
       if (!isProcessLive(live.status)) continue;
 
       try {
@@ -2126,18 +2137,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         || this.#startup !== undefined
         || this.#gateRestore !== undefined;
 
-      if (!backgroundWork) {
-        // An unreachable host means POSSIBLY busy, so hold. Never stop on a guess.
-        backgroundWork = true;
+      let note: string | undefined;
 
-        try {
-          backgroundWork = await this.hasBackgroundWork();
-        } catch (error) {
-          console.error(
-            `[devbox] background-work check failed, holding: ${describe({ cause: error })}`,
-          );
-        }
-      }
+      if (!backgroundWork) ({ running: backgroundWork, note } = await this.#commandRunning());
+
+      if (!backgroundWork) backgroundWork = await this.#hostBackgroundWork(now);
 
       const decision = quiesceStep({
         now,
@@ -2162,6 +2166,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         // A quiesce deliberately arms nothing: see `quiesce`.
         armedNext: decision.action !== 'quiesce',
         decision: decision.action,
+        ...(note !== undefined && { note }),
       });
 
       if (decision.action !== 'quiesce') return beat;
@@ -2170,6 +2175,55 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // heartbeat retries the whole decision with fresh evidence.
       return (await this.quiesce()).kind === 'failed' ? beat : null;
     });
+  }
+
+  /** See D35. */
+  async #commandRunning(): Promise<{ readonly running: boolean; readonly note?: string }> {
+    let running: boolean;
+
+    try {
+      const supervised = new Set((await this.#procSpecs()).map((spec) => spec.processId));
+      running = (await this.listProcesses()).some((live) => isProcessLive(live.status) && !supervised.has(live.id));
+    } catch (error) {
+      const beats = (await this.ctx.storage.get<number>(UNREADABLE_PROCESS_BEATS_KEY) ?? 0) + 1;
+      await this.ctx.storage.put(UNREADABLE_PROCESS_BEATS_KEY, beats);
+      const reason = describe({ cause: error });
+      const cap = Math.ceil(this.policy.quietConfirmMs / (this.policy.heartbeatSeconds * 1000));
+
+      if (beats === 1) await this.#record('quiesce', `process list unreadable; holding up to ${String(cap)} beats: ${reason}`);
+
+      if (beats < cap) return { running: true };
+      const note = `process list unreadable for ${String(beats)} beats; the idle gate decides: ${reason}`;
+
+      if (beats === cap) await this.#record('quiesce', note);
+
+      return { running: false, note };
+    }
+
+    await this.ctx.storage.delete(UNREADABLE_PROCESS_BEATS_KEY);
+
+    return { running };
+  }
+
+  /** Reused for a quiet-confirm window: each ask wakes the workspace. */
+  #hostAnswer: { readonly at: number; readonly busy: boolean } | undefined;
+
+  async #hostBackgroundWork(now: number): Promise<boolean> {
+    const held = this.#hostAnswer;
+
+    if (held !== undefined && now - held.at < this.policy.quietConfirmMs) return held.busy;
+    // An unreachable host means POSSIBLY busy, so hold. Never stop on a guess.
+    let busy = true;
+
+    try {
+      busy = await this.hasBackgroundWork();
+    } catch (error) {
+      console.error(`[devbox] background-work check failed, holding: ${describe({ cause: error })}`);
+    }
+
+    this.#hostAnswer = { at: now, busy };
+
+    return busy;
   }
 
   /** SDK activity expiry: checkpoint first, since the disk is readable only until the base stop.
