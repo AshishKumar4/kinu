@@ -1,5 +1,6 @@
 /** Click-outside and Esc dismiss unless `busy`: tearing down mid-write leaves the result unreported. */
 import { useCallback, useEffect, type ReactNode } from "react";
+import { composing } from "@/components/ui/form";
 
 export interface ModalProps {
   title: string;
@@ -16,7 +17,7 @@ export function Modal({ title, onClose, icon, children, footer, maxWidthClass = 
   const dismiss = useCallback(() => { if (!busy) onClose(); }, [busy, onClose]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !composing(e)) dismiss(); };
 
     document.addEventListener("keydown", onKey);
 

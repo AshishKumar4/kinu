@@ -11,6 +11,7 @@ import {
 } from "@/hooks/use-create-workspace";
 import { RECENT_WORKSPACES, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
+import { composing } from "@/components/ui/form";
 
 export default function HomePage() {
   const [mission, setMission] = useState("");
@@ -49,7 +50,7 @@ export default function HomePage() {
               value={mission}
               onChange={(event) => setMission(event.currentTarget.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !composing(event.nativeEvent)) {
                   event.preventDefault();
                   submit();
                 }

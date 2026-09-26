@@ -386,6 +386,35 @@ describe('the Drive', () => {
     });
   });
 
+  test("an IME's own Escape in a dialog's field leaves the dialog open; a plain Escape closes it", async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
+
+      try {
+        await pressNew(page, 'data-drive-new-folder');
+        await page.waitForSelector('[role="dialog"] input');
+
+        const escape = (mark: 'composing' | 'webkit' | 'plain') => page.$eval('[role="dialog"] input', (input, m) => {
+          input.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Escape', bubbles: true, cancelable: true, isComposing: m === 'composing', keyCode: m === 'webkit' ? 229 : 27,
+          }));
+        }, mark);
+
+        for (const mark of ['composing', 'webkit'] as const) {
+          await escape(mark);
+          await drawn(page);
+          expect(await page.$('[role="dialog"]')).not.toBeNull();
+        }
+
+        await escape('plain');
+        await drawn(page);
+        expect(await page.$('[role="dialog"]')).toBeNull();
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('a sheet\'s tile draws its first rows as cells, a code file\'s its lines numbered, and Markdown\'s its page', async () => {
     await withGallery(async (gallery) => {
       // A cover is drawn once its file is read, when the tile holds the file's first words however it draws them.

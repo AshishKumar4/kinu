@@ -29,7 +29,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog, type ModelMenu } from '../lib/user-api';
 import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
 import { BrandMark, providerBrand } from './ui/BrandMark';
-import { Card, Choice, Field, inputCls, tabCls } from './ui/form';
+import { Card, Choice, Field, composing, inputCls, tabCls } from './ui/form';
 import { FilledButton } from './ui/FilledButton';
 
 const EMPTY_MENU: ModelMenu = { models: [], failures: [] };
@@ -327,7 +327,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                 value={newTierId}
                 aria-label="New tier id"
                 onChange={(event) => setNewTierId(event.target.value)}
-                onKeyDown={(event) => { if (event.key === 'Enter') addTier(); }}
+                onKeyDown={(event) => { if (event.key === 'Enter' && !composing(event.nativeEvent)) addTier(); }}
               />
               <Button size="sm" variant="secondary" disabled={!newTierId.trim()} onClick={addTier}>Add</Button>
             </Field>
@@ -383,6 +383,8 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                     autoFocus
                     onChange={(event) => setNewRoleId(event.target.value)}
                     onKeyDown={(event) => {
+                      if (composing(event.nativeEvent)) return;
+
                       if (event.key === 'Enter') addRole();
 
                       if (event.key === 'Escape') { setAddingRole(false); setNewRoleId(''); }
