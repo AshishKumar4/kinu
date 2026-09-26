@@ -2548,6 +2548,7 @@ export {
 export {
   type ProbeOutcome,
   type ProbeDeps,
+  declaredSignInProviders,
   runSyntheticProbes,
 } from './http/synthetic-probes';
 

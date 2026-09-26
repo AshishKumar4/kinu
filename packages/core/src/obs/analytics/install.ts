@@ -176,7 +176,7 @@ const INSTALLED = new WeakSet<AnalyticsEnv>();
  * Install the composite sink once per isolate (idempotent) and open a write window. The platform
  * cap is per invocation, so non-entry seams call `openAnalyticsWindow` themselves.
  */
-export function installAnalyticsDiagnostics(env: AnalyticsEnv): () => void {
+export function installAnalyticsDiagnostics(env: AnalyticsEnv, owner?: { readonly workspace: string }): () => void {
   const plane = analyticsPlane(env);
   plane.window.open();
 
@@ -193,6 +193,7 @@ export function installAnalyticsDiagnostics(env: AnalyticsEnv): () => void {
     agentMetrics: env.AGENT_METRICS !== undefined,
     feedbackMarkers: env.FEEDBACK_MARKERS !== undefined,
     controlPlaneOps: env.CONTROL_PLANE_OPS !== undefined,
+    ...(owner !== undefined && owner.workspace !== '' && { workspace: owner.workspace }),
   });
 
   return () => {
