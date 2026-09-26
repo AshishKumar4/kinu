@@ -725,43 +725,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  /** Timed enqueue-to-settle as the object experiences it; the transcript-cost gate compares them. */
-  async longTurn(priorTurns: number, deltas: number, priorDeltas = 20): Promise<{ priorMs: number; longMs: number; calls: number }> {
-    const workspace = `long-${priorTurns}-${deltas}-${priorDeltas}`;
-    const target: QueueTarget = await this.queueTarget(workspace);
-    const caller = await ownerCaller(this.env);
-    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('long-owner'));
-    await userDO.registerWorkspace(caller, workspace, 'Long');
-    const claim = await target.claimOwner('long-owner');
-    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
-    await userDO.setCredential(caller, 'openai-compat.default', {
-      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
-    });
-    await target.setModel('openai-compat/probe-long');
-    await this.httpReset();
-    const recording = createRecordingLogger();
-    setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
-
-    const t0 = Date.now();
-
-    for (let i = 0; i < priorTurns; i += 1) {
-      const queued = await target.runTaskFromMcp(`long:${priorDeltas}`);
-
-      if (queued.status !== 'queued') throw new Error(`long bench: prior turn ${JSON.stringify(queued)}`);
-      await awaitSleepTimeSettled(recording, i + 1);
-    }
-
-    const priorMs = Date.now() - t0;
-    const t1 = Date.now();
-    const queued = await target.runTaskFromMcp(`long:${deltas}`);
-
-    if (queued.status !== 'queued') throw new Error(`long bench: long turn ${JSON.stringify(queued)}`);
-    await awaitSleepTimeSettled(recording, priorTurns + 1);
-    const longMs = Date.now() - t1;
-
-    return { priorMs, longMs, calls: (await this.httpCalls()).length };
-  }
-
   /** Only this worker's outbound handler routes to the control host, so no new Worker or binding. */
   async httpCalls(): Promise<HttpCall[]> {
     return (await this.probeLog()).calls;

@@ -372,9 +372,10 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
    * requests through {@link PIPELINE} with its dynamic ledger, writes each step's response through a
    * `SessionStream`, settles it, reads the turn's output back, and the claim settles. The model, the
    * tools and the program are not run: the first step is a file call and its result, the second the
-   * answer. Returns the bytes of the two requests.
+   * answer, streamed as `deltas` text deltas the way the model's stream arrives. Returns the bytes of the two requests.
    */
-  private async turn(actor: ActorHandle, stores: AgentStores, dynamic: DynamicContextLedger, turn: number): Promise<number> {
+  private async turn(actor: ActorHandle, stores: AgentStores, dynamic: DynamicContextLedger, scripted: { readonly turn: number; readonly deltas: number }): Promise<number> {
+    const { turn, deltas } = scripted;
     const turnId = `turn-${String(turn)}`;
     const assertOwner = (): void => { actor.assertCurrent(); };
 
@@ -408,7 +409,8 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
     const call = toolCall(turn);
     const result = toolResult(turn);
-    const answer: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: `answer ${String(turn)}` }] };
+    const words = Array.from({ length: deltas }, (_, index) => `w${String(index)} `);
+    const answer: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: words.join('') }] };
 
     // ActorSession's lastStep at turn open.
     history.requests.lastStep();
@@ -418,6 +420,10 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
     const second = await composePrepareStep(pipeline, { stepNumber: 1, messages: [], steps: [] });
 
+    await stream.nativePart({ type: 'text-start', id: 'answer' });
+
+    for (const word of words) await stream.nativePart({ type: 'text-delta', id: 'answer', text: word });
+    await stream.nativePart({ type: 'text-end', id: 'answer' });
     await stream.nativeStep([call, result, answer]);
     await stream.settle();
     await history.materialize();
@@ -433,9 +439,23 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     const stores = this.stores(actor);
     const dynamic = new DynamicContextLedger();
 
-    for (let turn = 0; turn < history; turn += 1) await this.turn(actor, stores, dynamic, turn);
+    for (let turn = 0; turn < history; turn += 1) await this.turn(actor, stores, dynamic, { turn, deltas: 1 });
 
-    return await this.meter.measure(async () => await this.turn(actor, stores, dynamic, history));
+    return await this.meter.measure(async () => await this.turn(actor, stores, dynamic, { turn: history, deltas: 1 }));
+  }
+
+  /** Subject: a 500-delta turn after twenty answers of `deltas` deltas each (D23's cost, counted, not timed). */
+  async turnAfterLongAnswers(deltas: number): Promise<OperationCost> {
+    const actor = this.main();
+    const stores = this.stores(actor);
+    const dynamic = new DynamicContextLedger();
+
+    for (let turn = 0; turn < 20; turn += 1) await this.turn(actor, stores, dynamic, { turn, deltas });
+
+    // Stores built afresh, as after an eviction: past answers are read from their rows, not from memory.
+    const woken = this.stores(actor);
+
+    return await this.meter.measure(async () => await this.turn(actor, woken, dynamic, { turn: 20, deltas: 500 }));
   }
 
   /** Subject: one Diffs read of a workspace of `files` files with one edited since its baseline. */

@@ -48,6 +48,15 @@ const SUBJECTS: readonly Subject[] = [{
     + 'before it: a context keeps the head it last read or wrote. Only the request bytes grow with the '
     + 'history, since each request carries it',
 }, {
+  // Replaces transcript-cost's wall-clock ratio (2026-09-26): the deploy's 6.8x there was machine load, not growth.
+  name: 'session store, a long turn after twenty long answers',
+  unit: 'deltas in each earlier answer',
+  sizes: [20, 2_000],
+  run: async (probe, size) => await probe.turnAfterLongAnswers(size),
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
+  why: 'an answer is sealed into its message once; a later turn reads that message, never the deltas it was '
+    + 'streamed as (D23: re-joining every delta row of past answers made a 500-delta turn 6x slower)',
+}, {
   name: 'workspace Diffs, one read',
   unit: 'files in the workspace',
   sizes: [10, 1_000, 10_000],

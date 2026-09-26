@@ -96,7 +96,6 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   parityComplete(prepared: ParityPrepared): Promise<ParityCompleted>;
   backgroundWakeConversation(where: WakeHoldPlacement): Promise<WakeDriveResult>;
   rawChat(): Promise<RawChatProbeResult>;
-  longTurn(priorTurns: number, deltas: number, priorDeltas?: number): Promise<{ priorMs: number; longMs: number; calls: number }>;
 }
 
 interface CodexEgressProbeRpc extends Rpc.DurableObjectBranded, HostileCalls {
