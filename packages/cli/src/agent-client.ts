@@ -62,6 +62,7 @@ export interface AgentTurnResult {
 export type AgentClientEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string }
   | { type: 'text-delta'; delta: string }
+  | { type: 'reasoning-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: JsonObject }
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
   | { type: 'step-finish'; stepIndex: number }
@@ -265,6 +266,8 @@ export interface LocalSessionControls {
   readInstructionApproval(path: string): Promise<InstructionSourceView | null>;
   approveInstruction(path: string, digest: string): Promise<AdmittedInstructionDecision>;
   revokeInstruction(path: string): Promise<AdmittedInstructionDecision>;
+  clearConversation(): Promise<void>;
+  compactNow(): void;
 }
 
 /** The owner's half of Plan mode; both backends serve core's `PlanReviewStore`. */

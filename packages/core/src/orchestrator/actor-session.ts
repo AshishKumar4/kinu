@@ -140,6 +140,8 @@ function newTurnTally(): TurnTally {
 
 export const REVERT_NEEDS_IDLE = 'Stop the turn that is running before you revert the conversation.';
 
+export const CLEAR_NEEDS_IDLE = 'Stop the turn that is running before you start a new conversation.';
+
 /** An actor's mutable execution state, apart from its host, which keeps admission, queueing and settlement and
  *  may share immutable catalogs, never this context, orchestrator or abort. */
 export class ActorSession {
@@ -302,6 +304,15 @@ export class ActorSession {
   async revertConversation(sessionId: string, entryId: string, assertIdle: () => void): Promise<void> {
     this.canonical.revertTo(sessionId, entryId, () => {
       if (this.inFlight) throw new KinuError('denied', REVERT_NEEDS_IDLE);
+      assertIdle();
+    });
+    this.dynamic.unload();
+    await this.restoreWorkingHistory();
+  }
+
+  async clearConversation(sessionId: string, assertIdle: () => void): Promise<void> {
+    this.canonical.clearConversation(sessionId, () => {
+      if (this.inFlight) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
       assertIdle();
     });
     this.dynamic.unload();
@@ -646,6 +657,7 @@ export class ActorSession {
       // Reasoning is never the turn's answer.
       case 'reasoning-delta':
       case 'model-fallback':
+      case 'context-admitted':
         break;
 
       case 'step-finish':

@@ -522,6 +522,8 @@ function renderRunEvent(event: AgentClientEvent): void {
     case 'text-delta':
       process.stdout.write(event.delta);
       break;
+    case 'reasoning-delta':
+      break;
     case 'tool-call':
       printToolCall(event.toolName, event.args);
       break;
@@ -572,6 +574,8 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
 
     case 'text-delta':
       return [{ type: 'message_delta', role: 'assistant', delta: event.delta }];
+    case 'reasoning-delta':
+      return [];
     case 'tool-call':
       return [{ type: 'tool_call', toolName: event.toolName, toolCallId: event.toolCallId, args: event.args }];
     case 'tool-result':

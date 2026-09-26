@@ -276,10 +276,17 @@ describe('/undo command surface', () => {
 
     const commands = commandsForClient(capabilities).map((command) => command.name);
 
-    expect(commands).not.toContain('/resume');
+    // A workspace holds one conversation: nothing lists or switches conversations inside it. /resume (as omp names
+    // it) opens another workspace, whose conversation is its own.
     expect(commands).not.toContain('/sessions');
     expect(commands).toContain('/role');
     expect(commands).toContain('/settings');
+  });
+
+  test('/resume opens the workspace picker, never a list of conversations inside this workspace', async () => {
+    const outcome = await executeSlashCommand(slashClient(null), '/resume');
+
+    expect(outcome).toMatchObject({ kind: 'text', workspaces: true });
   });
 
   test('command filtering ranks exact, prefix, then stable fuzzy matches', () => {
