@@ -555,6 +555,16 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     expect(rt.actor.actorId).not.toBe(parent.actor.actorId);
   });
 
+  test("a parent file error reaches the head with the errno the parent's VFS threw", async () => {
+    const parent = makeParent();
+    await parent.storage.vfs.mkdir('notes', { recursive: true });
+    const rt = await createHeadRuntime(parent, 'errno');
+    const parentExec = present(routerOf(rt).getProvider('parent'), 'the parent executor');
+
+    // The DO producer and this in-process one answer the same wire through `answerParentRpc`.
+    await expect(parentExec.tools.readFile.execute('notes')).rejects.toMatchObject({ code: 'EISDIR' });
+  });
+
   test('a head of a parent bound to a directory runs its shell there: the machine is the workspace', async () => {
     const dir = scratchDir('head-runtime-cwd');
     writeFileSync(join(dir, 'note.txt'), 'real file content');
