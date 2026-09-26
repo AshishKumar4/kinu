@@ -78,7 +78,7 @@ test('a launcher killed outright takes its browser with it, and the profile it l
 
   expect(runningFrom(profile)).toEqual([]);
   expect(existsSync(dirname(profile))).toBe(true);
-  expect(reapAbandonedRoots(BROWSER_PROFILE_PARENT, '')).toContain(dirname(profile));
+  expect(reapAbandonedRoots(BROWSER_PROFILE_PARENT, '').reaped).toContain(dirname(profile));
   expect(existsSync(dirname(profile))).toBe(false);
 });
 

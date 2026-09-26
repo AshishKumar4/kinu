@@ -11,7 +11,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { auditScratchOwnership, readScannableSources } from './scratch-ownership';
 import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX, scratchDir } from '@kinu.run/test-utils';
@@ -222,7 +222,7 @@ describe('the scratch reaper judges a root by its owner, never by its age', () =
   test('a live suite older than 30 minutes keeps its root while another run starts', () => {
     const live = root('live', self);
 
-    expect(reapAbandonedRoots(parent, join(parent, 'kinu-scratch-another-run'))).toEqual([]);
+    expect(reapAbandonedRoots(parent, join(parent, 'kinu-scratch-another-run')).reaped).toEqual([]);
     expect(existsSync(live)).toBe(true);
   });
 
@@ -233,8 +233,30 @@ describe('the scratch reaper judges a root by its owner, never by its age', () =
     const rebooted = root('rebooted', { ...self, bootId: 'an-earlier-boot' });
     const unrecorded = root('unrecorded');
 
-    expect(reapAbandonedRoots(parent, join(parent, 'kinu-scratch-another-run')).sort()).toEqual([gone, rebooted, reused].sort());
+    expect([...reapAbandonedRoots(parent, join(parent, 'kinu-scratch-another-run')).reaped].sort()).toEqual([gone, rebooted, reused].sort());
     // No record says nothing about its owner, so it is left to `preflight --reclaim`, not guessed at.
     expect(existsSync(unrecorded)).toBe(true);
+  });
+
+  test('a root holding files this user cannot remove is reported and left, and the sweep goes on', () => {
+    // On 2026-09-25 a killed block-conformance probe left its container's root-owned output in a scratch root, the
+    // next suite's sweep threw EACCES on it, and every later suite failed before collecting a test.
+    const ended = { ...self, pid: Bun.spawnSync(['true']).pid, startTicks: 1 };
+    const locked = root('locked', ended);
+    const sealed = join(locked, 'written-as-root');
+    mkdirSync(sealed);
+    writeFileSync(join(sealed, 'manifest.json'), '{}');
+    chmodSync(sealed, 0o555);
+    const next = root('next', ended);
+
+    try {
+      const swept = reapAbandonedRoots(parent, join(parent, 'kinu-scratch-another-run'));
+
+      expect(swept.unremovable).toEqual([locked]);
+      expect(swept.reaped).toContain(next);
+      expect(existsSync(join(sealed, 'manifest.json'))).toBe(true);
+    } finally {
+      chmodSync(sealed, 0o755);
+    }
   });
 });

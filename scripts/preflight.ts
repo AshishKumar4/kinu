@@ -507,7 +507,7 @@ if (import.meta.main) {
     const { removed, kept } = reclaim(env.temp, 2 * 60 * 60 * 1000);
     const browsers = endOrphanTestBrowsers();
     // A profile's owner record names its launcher, so one whose launcher has ended is abandoned whatever its age.
-    const profiles = reapAbandonedRoots(BROWSER_PROFILE_PARENT, '').length;
+    const profiles = reapAbandonedRoots(BROWSER_PROFILE_PARENT, '').reaped.length;
     const after = observe();
     console.log(
       `preflight: reclaimed ${String(removed)} scratch entries (kept ${String(kept)} younger `
