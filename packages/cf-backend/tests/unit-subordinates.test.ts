@@ -12,7 +12,6 @@ import {
 } from '@kinu.run/core';
 import type { SubordinateRosterEntry } from '@kinu.run/core/protocol';
 import { present } from '@kinu.run/test-utils';
-import { ActorAgent } from '../src/actor-agent';
 import { SubordinateTabs } from '../src/components/SubordinateTabs';
 import { KeptTranscript } from '../src/components/KeptTranscript';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -23,6 +22,9 @@ import { socketConnection } from './helpers/bindings';
 import { answeringGateway, offeredTools } from './helpers/platform-gateway';
 
 mockAgentsSdk();
+
+// After the mock: a static import would bind the class to the real `agents` Agent.
+const { ActorAgent } = await import('../src/actor-agent');
 
 describe('subordinate wiring', () => {
   /** The temporary rung's CF wiring; behaviour is core's (core/tests/unit-temporary-agents.test.ts). */

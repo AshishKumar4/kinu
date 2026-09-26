@@ -48,7 +48,7 @@ import {
   type SleepTimeUpdate,
   type EgressSecretBinding,
 } from '@kinu.run/core';
-import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
+import { HARNESS_AGENT, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
 import { GATEWAY_MODEL, platformGatewayEnv, type StubbedAiBinding } from './platform-gateway';
@@ -1444,6 +1444,11 @@ function instantiate<T extends WorkspaceHostTarget>(
 
   if (world !== undefined) activationWorlds.set(ctx, world);
   const agent = new Actor(ctx, builtEnv);
+
+  if (!(HARNESS_AGENT in agent)) {
+    throw new Error(`${Actor.name} is built on the real \`agents\` Agent: a static import of ../src ran before mockAgentsSdk(); import it after the mock`);
+  }
+
   // A facet's supervisor binding reaches this object by its id, over the stub the namespace hands out.
   serveObject(ctx.id.toString(), stubOf(agent, world?.rpcServed));
 
