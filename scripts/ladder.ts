@@ -45,6 +45,7 @@ import {
 } from './ladder-cache';
 import type { GateCacheRequest, Plan } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
+import { driftFinding, installDrift } from './install-parity';
 import { deriveClosure, repoAt } from './ladder-closure';
 import type { Inputs, Repo } from './ladder-closure';
 import {
@@ -1094,7 +1095,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts',
+    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts',
     label: 'Gate ladder wiring and cache soundness',
     tier: 'push',
     // Measured 2026-09-16 on the 24-thread workstation (load 8.1): 1.25/1.20 s
@@ -1107,7 +1108,9 @@ export const LADDER: readonly Gate[] = [
       + 'rather than shrink), and a store that never hits across a touched closure file, a red '
       + 'result, a tool version change, a live row or a closure that moved mid-run. And the '
       + 'cost table\'s one wait: a row is measured beside this checkout\'s own suites never, '
-      + 'beside another checkout\'s always, as load.',
+      + 'beside another checkout\'s always, as load. And the tree the cache stands `bun.lock` in for: an installed '
+      + 'package the lock does not place, at a version it does not name, or missing under its parent, refuses the '
+      + 'whole run.',
     blind: 'whether any individual gate can actually fail. That is each gate\'s own '
       + 'self-test, and the seeded tier nobody has paid for yet. For the cache: a `reads` or '
       + '`env` declaration is a claim these suites cannot check against a live gate; '
@@ -3503,6 +3506,16 @@ if (import.meta.main) {
     ['gates in this tier', gates.length],
     ['gates in the deploy plan', deployOrder().length],
   ]);
+
+  // THE INSTALLED TREE. Every row runs on `node_modules` and the cache below stands `bun.lock` in for it, so a tree
+  // that drifted from the lock makes every verdict here, fresh or recorded, one about packages the lock does not
+  // name. The deploy runs each gate through this path, its preflight first, so it stops there.
+  const drifted = installDrift(root);
+
+  if (drifted.length > 0) {
+    console.error(driftFinding(drifted));
+    process.exit(1);
+  }
 
   // A ladder is a description; something has to make it true. This repo has
   // shipped seven gates that existed and were not wired, so the ladder states

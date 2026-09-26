@@ -817,17 +817,6 @@
       "loadAtStart": 12.41,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts": {
-      "wallSeconds": 10.66,
-      "cpuSeconds": 28.23,
-      "peakRssMb": 2681.67,
-      "peakRunnable": 24,
-      "peakCpuThreads": 8.93,
-      "meanThreads": 2.65,
-      "samples": 71,
-      "loadAtStart": 15.97,
-      "exit": 0
-    },
     "bun run test:workerd:cf-complexity": {
       "wallSeconds": 58.81,
       "cpuSeconds": 82.81,
@@ -937,6 +926,17 @@
       "samples": 8,
       "loadAtStart": 12.21,
       "exit": 0
+    },
+    "bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts": {
+      "wallSeconds": 14.72,
+      "cpuSeconds": 36.55,
+      "peakRssMb": 3038.44,
+      "peakRunnable": 23,
+      "peakCpuThreads": 9.62,
+      "meanThreads": 2.48,
+      "samples": 95,
+      "loadAtStart": 10.53,
+      "exit": 1
     }
   }
 }
