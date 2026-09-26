@@ -29,6 +29,10 @@ export function stampTurnAuthor(metadata?: JsonObject): JsonObject {
   return { ...metadata, [TURN_AUTHOR_METADATA_KEY]: declared ?? 'harness' };
 }
 
+export function authoredTurnMetadata(item: { readonly kind: 'user' | 'programmatic'; readonly metadata?: JsonObject }): JsonObject {
+  return item.kind === 'user' ? { ...item.metadata, [TURN_AUTHOR_METADATA_KEY]: 'operator' } : stampTurnAuthor(item.metadata);
+}
+
 /**
  * Author from written markers only, never prose. Id fallback exists because fork copies keep keys, not metadata;
  * it resolves to `harness`, the safe direction.

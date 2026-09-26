@@ -6,6 +6,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   admitReviewAnnotations,
+  planReviewAwaitingDecision,
   type PlanReview,
   type ReviewAnnotation,
   type PlanReviewResult,
@@ -114,6 +115,7 @@ const STATUS_LABEL = {
   changes_requested: "Revision requested",
   approved: "Approved",
   superseded: "Superseded",
+  dismissed: "Dismissed",
 } satisfies Record<PlanReview["status"], string>;
 
 const STATUS_TONE = {
@@ -121,15 +123,19 @@ const STATUS_TONE = {
   changes_requested: "p-badge-warning",
   approved: "p-badge-success",
   superseded: "p-badge-neutral",
+  dismissed: "p-badge-neutral",
 } satisfies Record<PlanReview["status"], string>;
 
 /** States are ordered: read-only history, open revision, unpicked decision, then plan status. */
 function footerNote(
-  { readOnly, editable, handoffPending, approved }: {
-    readOnly: boolean; editable: boolean; handoffPending: boolean; approved: boolean;
+  { readOnly, editable, handoffPending, status }: {
+    readOnly: boolean; editable: boolean; handoffPending: boolean; status: PlanReview["status"];
   },
 ): string {
   if (readOnly) return "Read-only plan history.";
+
+  if (status === "dismissed") return "Dismissed. The conversation is no longer held in Plan.";
+  const approved = status === "approved";
 
   if (editable) return "Approve this revision, or annotate the text that needs work.";
 
@@ -148,6 +154,40 @@ export interface PlanReviewViewProps {
   plan: PlanReview | null;
   rpc: Rpc;
   readOnly?: boolean;
+}
+
+function DismissPlan({ plan, rpc, readOnly, deciding, saving, onError }: {
+  plan: PlanReview;
+  rpc: PlanReviewViewProps["rpc"];
+  readOnly: boolean;
+  deciding: string | null;
+  saving: boolean;
+  onError: (message: string | null) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  if (readOnly || !planReviewAwaitingDecision(plan)) return null;
+
+  const dismiss = async () => {
+    setBusy(true);
+    onError(null);
+
+    try {
+      const result = await rpc<PlanReviewResult>("dismissPlanReview", [plan.id, plan.revision]);
+
+      if (!result.ok) onError(result.error);
+    } catch (cause) {
+      onError(renderThrownChain({ cause }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Button type="button" size="sm" variant="ghost" onClick={dismiss} disabled={deciding !== null || saving || busy}>
+      {busy ? <Loader size="sm" /> : "Dismiss"}
+    </Button>
+  );
 }
 
 export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanReviewViewProps) {
@@ -487,9 +527,10 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
             <p role="alert" className="p-notice-danger p-meta px-3 py-2 sm:mr-auto">{error}</p>
           ) : (
             <p className="p-meta p-text-3 sm:mr-auto">
-              {footerNote({ readOnly, editable, handoffPending, approved: plan.status === "approved" })}
+              {footerNote({ readOnly, editable, handoffPending, status: plan.status })}
             </p>
           )}
+          <DismissPlan plan={plan} rpc={rpc} readOnly={readOnly} deciding={decisionBusy} saving={saving} onError={setError} />
           {editable && (
             <div data-plan-decisions className="grid grid-cols-2 gap-2 sm:flex">
               <Button

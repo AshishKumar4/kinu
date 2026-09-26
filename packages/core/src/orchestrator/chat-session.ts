@@ -29,7 +29,7 @@ import type { TierId } from '../types/profile';
 import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
-import { PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
+import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
 import { REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
@@ -526,7 +526,7 @@ export class ChatSession {
     const metadata: JsonObject = {
       ...card?.metadata,
       ...(opts.tier !== undefined && { profile_tier: opts.tier }),
-      kinuMode: mode,
+      ...(opts.mode !== undefined && { kinuMode: opts.mode }),
     };
 
     // The pending_steers insert runs before the pump can begin the turn.
@@ -764,7 +764,7 @@ export class ChatSession {
     const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
 
     const opening = await this.transcript.prepareUser({ id: this.turnId, turnId: this.turnId, runId: this.runId, message: inputReference,
-      metadata: item.kind === 'user' ? { ...item.metadata, [TURN_AUTHOR_METADATA_KEY]: 'operator' } : stampTurnAuthor(item.metadata) });
+      metadata: authoredTurnMetadata(item) });
 
     this.openingRow = item.kind === 'programmatic' ? opening : null;
 

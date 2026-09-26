@@ -5,6 +5,7 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { nanoid } from '../utils/nanoid';
 import { JsonArraySchema, isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
+import { turnAuthor } from '../utils/ui-message';
 import { renderThrownChain } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
@@ -30,7 +31,7 @@ export const MAX_PLAN_ANNOTATIONS_BYTES = 256 * 1024;
 const MAX_PLAN_REVIEW_ROW_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
 
 const PlanReviewStatusSchema = v.picklist([
-  'pending', 'changes_requested', 'approved', 'superseded',
+  'pending', 'changes_requested', 'approved', 'superseded', 'dismissed',
 ]);
 
 export const PlanReviewSchema = v.object({
@@ -59,13 +60,13 @@ export function planReviewAwaitingDecision(
     || (review?.status === 'approved' && !review.handoffAccepted);
 }
 
-/** A build turn is held in Plan while a submitted plan awaits decision; the `plan_approved` handoff turn passes. */
+/** Holds only the owner's unchosen-mode messages to the plan's own actor. */
 export function workModeUnderReview(
   requested: WorkMode,
-  metadata: { readonly kinuEvent?: unknown } | undefined,
+  metadata: JsonObject | undefined,
   active: Pick<PlanReview, 'status' | 'handoffAccepted'> | null,
 ): WorkMode {
-  if (requested !== 'build' || metadata?.kinuEvent === 'plan_approved') return requested;
+  if (requested !== 'build' || metadata?.kinuMode === 'build' || turnAuthor({ metadata }) !== 'operator') return requested;
 
   return planReviewAwaitingDecision(active) ? 'plan' : requested;
 }
@@ -649,6 +650,27 @@ export class PlanReviewStore {
     return this.written(id, revision);
   }
 
+  /** The owner's exit; no handoff follows. */
+  dismiss(id: string, revision: number): PlanReviewResult {
+    const current = this.get(id, revision);
+
+    if (!current) return { ok: false, error: `stale or unknown plan revision ${id}/${revision}`, plan: null };
+
+    if (current.status === 'dismissed') return { ok: true, plan: current };
+    const latest = this.getActive(current.sessionId);
+
+    if (!latest || latest.id !== id || latest.revision !== revision) {
+      return { ok: false, error: `stale plan revision ${id}/${revision}`, plan: latest };
+    }
+
+    if (!planReviewAwaitingDecision(current)) return { ok: false, error: `plan revision is already ${current.status}`, plan: current };
+    const now = this.now();
+    void this.sql`UPDATE plan_reviews SET status='dismissed', updated_at=${now}, decided_at=${now}
+      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status=${current.status}`;
+
+    return this.written(id, revision);
+  }
+
   markHandoffAccepted(id: string, revision: number): PlanReviewResult {
     const current = this.get(id, revision);
 
@@ -721,6 +743,10 @@ export class PlanReviewActions {
 
   decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): PlanReviewResult {
     return this.announced(this.store.decide(id, revision, decision, feedback));
+  }
+
+  dismiss(id: string, revision: number): PlanReviewResult {
+    return this.announced(this.store.dismiss(id, revision));
   }
 
   markHandoffAccepted(id: string, revision: number): PlanReviewResult {

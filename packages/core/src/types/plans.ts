@@ -11,7 +11,7 @@ export const PlanEditSchema = z.object({
 
 export type PlanEdit = z.infer<typeof PlanEditSchema>;
 
-export type PlanReviewStatus = 'pending' | 'changes_requested' | 'approved' | 'superseded';
+export type PlanReviewStatus = 'pending' | 'changes_requested' | 'approved' | 'superseded' | 'dismissed';
 
 export type PlanReviewDecision = 'request_changes' | 'approve';
 

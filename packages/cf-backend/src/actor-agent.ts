@@ -72,7 +72,7 @@ import {
   activePromptSectionOverrides,
   currentDateForPrompt,
   turnReasonForMetadata,
-  workModeForTurnMetadata,
+  workModeForTurnMetadata, authoredTurnMetadata,
   renderUnverifiedInstructions,
   observeSystemPromptHash, steerSkillsBlock,
   type DynamicContext, type DynamicApproval, type MissingCapability,
@@ -701,6 +701,11 @@ export abstract class ActorAgent extends Agent<Env> {
     annotations: ReviewAnnotation[],
   ): Promise<PlanReviewResult> {
     return this.planActions.saveAnnotations(id, revision, { value: annotations });
+  }
+
+  @callable()
+  async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
+    return this.planActions.dismiss(id, revision);
   }
 
   @callable()
@@ -4403,8 +4408,12 @@ export abstract class ActorAgent extends Agent<Env> {
     return turnReasonForMetadata(this.turnDrivingMetadata());
   }
 
+  /** Author-stamped, so the plan hold tells the owner's turn from the harness's. */
   private turnDrivingMetadata(): JsonObject | undefined {
-    return this.turnUserMetadata();
+    const metadata = this.turnUserMetadata();
+    const item = this._chatLoop?.turnInFlight() === true ? this._turnItem : null;
+
+    return item === null ? metadata : authoredTurnMetadata({ kind: item.kind, metadata });
   }
 
   /** Active turn metadata only. Idle operations await canonical metadata in

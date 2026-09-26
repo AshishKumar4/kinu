@@ -200,6 +200,25 @@ describe('Plan mode tool lifecycle', () => {
     expect([...new Set(states)]).toEqual(['1:pending', '1:changes_requested', '2:pending', '2:approved']);
   });
 
+  test('a pending plan holds neither the owner\'s Auto message nor an event drain, and a dismiss lifts it', async () => {
+    const harness = orchestratorHarness();
+    const agent = harness.agent;
+    const turns = chatSessionTurns(agent);
+    const plan = await submittedPlan(agent, '# Prompt edits\n\nTighten the refiner section');
+
+    // An event drain carries no mode of its own and is the harness's turn, not the owner's.
+    agent.harnessDrivingUserMessage('[subordinate_report] refiner answered', { missionLabels: ['evolution'] });
+    const drained = await turns.prepare({ messages: [{ role: 'user', content: '[subordinate_report] refiner answered' }] });
+    expect(drained.tools.submit_plan).toBeUndefined();
+    await turns.settle({ messageId: 'a-drain', text: 'noted' });
+
+    expect((await toolsIn(agent, 'build', 'a-auto')).submit_plan).toBeUndefined();
+    expect(await agent.getActivePlanReview()).toMatchObject({ id: plan.id, status: 'pending' });
+
+    expect(await agent.dismissPlanReview(plan.id, plan.revision)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+    expect(planStatus(harness, plan.id, plan.revision)).toBe('dismissed');
+  });
+
   test('recovers when acceptance outlives the RPC: the retried decision admits no second turn', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;

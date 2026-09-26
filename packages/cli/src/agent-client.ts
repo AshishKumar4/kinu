@@ -273,6 +273,8 @@ export interface PlanReviewSurface {
   saveAnnotations(id: string, revision: number, annotations: ReviewAnnotation[]): Promise<PlanReviewResult>;
   /** Approving queues the implementation turn, which streams through `subscribe`. */
   decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanReviewResult>;
+  /** Lifts the plan's hold on the conversation; no turn follows. */
+  dismiss(id: string, revision: number): Promise<PlanReviewResult>;
 }
 
 export interface AgentClient {

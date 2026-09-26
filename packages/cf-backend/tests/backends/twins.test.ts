@@ -35,6 +35,7 @@ const TWINS = {
   getEvolutionChangelog: SHARED, revertChangelogEntry: SHARED, markChangelogSeen: SHARED,
   latestAlternateTakes: SHARED, pickAlternateTake: SHARED,
   getActivePlanReview: SHARED, savePlanReviewAnnotations: SHARED, decidePlanReview: SHARED,
+  dismissPlanReview: SHARED,
   requestRefinement: SHARED, listRefinements: SHARED, showRefinement: SHARED, decideRefinement: SHARED,
   send: SHARED, revertConversation: SHARED,
   checkpointStatus: SHARED, listFileCheckpoints: SHARED, planFileRestore: SHARED, restoreFileCheckpoint: SHARED,

@@ -273,6 +273,7 @@ export class LocalAgentClient implements AgentClient {
       active: () => this.session.getActivePlanReview(),
       saveAnnotations: (id, revision, annotations) => this.session.savePlanReviewAnnotations(id, revision, annotations),
       decide: (id, revision, decision, feedback) => this.session.decidePlanReview(id, revision, decision, feedback),
+      dismiss: (id, revision) => this.session.dismissPlanReview(id, revision),
     };
   }
 

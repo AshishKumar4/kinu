@@ -12,6 +12,7 @@ import {
   formatPlanWithLineNumbers,
   initPlanReviewTable,
   planReviewAwaitingDecision,
+  workModeUnderReview,
   validatePlanEdits,
   buildBuiltinTools,
   type JsonValue,
@@ -214,6 +215,50 @@ describe('durable plan review lifecycle', () => {
 
     const next = store.submit('default', [{ start: 1, content: '# Two' }]);
     expect(next).toMatchObject({ ok: true, plan: { id: 'plan-2', revision: 1, content: '# Two' } });
+  });
+
+  test('the owner dismisses an undecided plan: the lock lifts and the next plan starts fresh', () => {
+    const { store } = setup();
+    store.submit('default', [{ start: 1, content: '# One' }]);
+
+    const dismissed = store.dismiss('plan-1', 1);
+    expect(dismissed).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+    expect(planReviewAwaitingDecision(store.getActive('default'))).toBe(false);
+    expect(store.dismiss('plan-1', 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+    expect(store.decide('plan-1', 1, 'approve')).toMatchObject({ ok: false, error: expect.stringContaining('dismissed') });
+
+    expect(store.submit('default', [{ start: 1, content: '# Two' }]))
+      .toMatchObject({ ok: true, plan: { id: 'plan-2', revision: 1, status: 'pending' } });
+  });
+
+  test('a plan whose handoff already ran cannot be dismissed', () => {
+    const { store } = setup();
+    store.submit('default', [{ start: 1, content: '# One' }]);
+    store.decide('plan-1', 1, 'approve');
+    store.markHandoffAccepted('plan-1', 1);
+
+    expect(store.dismiss('plan-1', 1)).toMatchObject({ ok: false, plan: { status: 'approved' } });
+  });
+});
+
+describe('the plan lock holds only its own thread', () => {
+  const pending = { status: 'pending', handoffAccepted: false } as const;
+
+  test('an operator message with no explicit mode is held in Plan', () => {
+    expect(workModeUnderReview('build', { kinuAuthor: 'operator' }, pending)).toBe('plan');
+  });
+
+  test('an operator message sent in Auto runs as build', () => {
+    expect(workModeUnderReview('build', { kinuAuthor: 'operator', kinuMode: 'build' }, pending)).toBe('build');
+  });
+
+  test('a harness turn (event drain, job, handoff) is outside the thread and keeps its mode', () => {
+    expect(workModeUnderReview('build', { kinuAuthor: 'harness' }, pending)).toBe('build');
+    expect(workModeUnderReview('build', { kinuAuthor: 'harness', kinuEvent: 'background_job', kinuMode: 'build' }, pending)).toBe('build');
+  });
+
+  test('a dismissed plan holds nothing', () => {
+    expect(workModeUnderReview('build', { kinuAuthor: 'operator' }, { status: 'dismissed', handoffAccepted: false })).toBe('build');
   });
 });
 

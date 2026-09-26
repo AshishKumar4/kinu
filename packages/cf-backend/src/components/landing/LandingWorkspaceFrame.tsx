@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { flushSync } from 'react-dom';
 import { MemoryRouter } from 'react-router-dom';
 import type { UIMessage } from 'ai';
-import { planReviewAwaitingDecision, threadLiveTail, type PlanReview } from '@kinu.run/core';
+import { threadLiveTail, type PlanReview } from '@kinu.run/core';
 
 import { Composer, type ChatMode } from '@/components/Composer';
 import { ChatLiveTail, MessageView } from '@/components/MessageView';
@@ -17,6 +17,7 @@ import { InspectorToggle, WorkbenchPanels } from '@/components/WorkbenchPanels';
 import { SLATE_PREFIX, type SurfaceKind } from '@kinu.run/core';
 import { SupervisePage } from '@/pages/SupervisePage';
 import { AccountProvider } from '@/hooks/use-account';
+import { usePlanApprovedMode } from '@/hooks/use-conversation-ui-state';
 import { WorkspaceRosterProvider } from '@/hooks/use-workspace-roster';
 import type { ForkNode } from '@kinu.run/core';
 
@@ -133,12 +134,8 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   const [, setWorkVersion] = useState(0);
   const work = useMemo(() => checkoutWorkFixture(() => setWorkVersion((version) => version + 1)), []);
   const rpc = kind === 'plan' ? decidePlan : work.rpc;
-  const planLocked = planReviewAwaitingDecision(plan);
   const [mode, setMode] = useState<ChatMode>(frame.mode);
-  useEffect(() => {
-    if (planLocked) setMode('plan');
-    else if (plan?.status === 'approved') setMode('build');
-  }, [planLocked, plan?.status]);
+  usePlanApprovedMode(plan, setMode);
   useEffect(() => {
     if (isMovie) setSurface(discrete.surface);
   }, [isMovie, discrete.surface]);
@@ -517,7 +514,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
                       placeholder="Send a message..."
                       disabled={false}
                       liveness={{ kind: 'idle' }}
-                      mode={{ value: mode, onChange: setMode, locked: planLocked }}
+                      mode={{ value: mode, onChange: setMode }}
                       attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
                       modelPicker={<ModelPicker models={LANDING_MODELS} value={model} onChange={setModel} size="xs" />}
                     />
