@@ -927,15 +927,15 @@
       "loadAtStart": 13.32,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/wake-loops.test.ts": {
-      "wallSeconds": 1.39,
-      "cpuSeconds": 0.1,
-      "peakRssMb": 35.53,
-      "peakRunnable": 0,
-      "peakCpuThreads": 0.23,
-      "meanThreads": 0.07,
+    "bun scripts/gen-cli-docs.ts --check": {
+      "wallSeconds": 0.52,
+      "cpuSeconds": 0.54,
+      "peakRssMb": 82.43,
+      "peakRunnable": 2,
+      "peakCpuThreads": 1,
+      "meanThreads": 1.05,
       "samples": 8,
-      "loadAtStart": 17.33,
+      "loadAtStart": 12.21,
       "exit": 0
     }
   }

@@ -110,34 +110,31 @@ export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void
   return mapped;
 }
 
-function modeTitle(mode: ChatMode, locked: boolean): string {
-  if (mode !== "build") return "Plan. Review a plan before anything changes.";
-
-  if (locked) return "Approve the active plan before starting an Auto turn.";
-
-  return "Auto. The agent makes the change and shows what it ran.";
-}
+const MODE_TITLE = {
+  build: "Auto. The agent makes the change and shows what it ran.",
+  plan: "Plan. Review a plan before anything changes.",
+} satisfies Record<ChatMode, string>;
 
 /**
  * Plan is a trust boundary (`submit_plan` exists only on Plan turns), so it is a two-item segment,
  * not an ambiguous toggle. The wire value for Auto stays `build`.
  */
-function ModeSegment({ value, onChange, locked, disabled }: {
-  value: ChatMode; onChange: (mode: ChatMode) => void; locked: boolean; disabled: boolean;
+function ModeSegment({ value, onChange, disabled }: {
+  value: ChatMode; onChange: (mode: ChatMode) => void; disabled: boolean;
 }) {
   return (
     <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="Turn mode">
       {CHAT_MODES.map((mode) => {
         const build = mode === "build";
         const selected = value === mode;
-        const title = modeTitle(mode, locked);
+        const title = MODE_TITLE[mode];
 
         return (
           <button
             key={mode}
             type="button"
             onClick={() => onChange(mode)}
-            disabled={disabled || (locked && mode === "build")}
+            disabled={disabled}
             aria-pressed={selected}
             title={title}
             className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
@@ -204,7 +201,7 @@ export interface ComposerProps {
   /** Offered only for a stranded turn. Resolves the failure reason, or null once settled; rejects on RPC failure. */
   onRecover?: () => Promise<string | null>;
   notices?: readonly ComposerNotice[];
-  mode?: { value: ChatMode; onChange: (mode: ChatMode) => void; locked: boolean };
+  mode?: { value: ChatMode; onChange: (mode: ChatMode) => void };
   attachments?: {
     parts: readonly FileUIPart[];
     onAdd: (files: FileList | null | undefined) => void;
@@ -336,8 +333,7 @@ export function Composer({
           )}
 
           {mode && (
-            <ModeSegment value={mode.value} onChange={mode.onChange} locked={mode.locked}
-              disabled={disabled || streaming} />
+            <ModeSegment value={mode.value} onChange={mode.onChange} disabled={disabled || streaming} />
           )}
 
           {modelPicker && (

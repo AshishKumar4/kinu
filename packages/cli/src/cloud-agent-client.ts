@@ -367,6 +367,7 @@ export class CloudAgentClient implements AgentClient {
         CloudPlanReviewResultSchema,
         await this.callRpc('decidePlanReview', [id, revision, decision, feedback ?? null]),
       ),
+      dismiss: async (id, revision) => v.parse(CloudPlanReviewResultSchema, await this.callRpc('dismissPlanReview', [id, revision])),
     };
   }
 

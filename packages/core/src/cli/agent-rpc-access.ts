@@ -87,6 +87,7 @@ export const AGENT_RPC_ACCESS = {
   createSubordinateAgent: 'interactive',
   renameSubordinateAgent: 'interactive',
   decidePlanReview: 'interactive',
+  dismissPlanReview: 'interactive',
   listDeferredApprovals: 'interactive',
   savePlanReviewAnnotations: 'interactive',
   dismissBackgroundJob: 'interactive',

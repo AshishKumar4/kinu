@@ -3,7 +3,7 @@
  * stay separate per agent (never one shared state), and reset on reload.
  */
 import { useCallback, useEffect, useState } from "react";
-import { planReviewAwaitingDecision, type PlanReview } from "@kinu.run/core";
+import type { PlanReview } from "@kinu.run/core";
 import type { ChatMode } from "@/components/Composer";
 
 /** At the live edge, save 'pinned' rather than an offset so new messages do not strand the reader. */
@@ -81,23 +81,13 @@ export function useConversationUiState(key: string): ConversationUiState {
   };
 }
 
-export interface PlanGatedMode {
-  readonly mode: ChatMode;
-  readonly locked: boolean;
-}
-
-/** A plan awaiting a decision locks the composer to Plan mode until it leaves that state. */
-export function usePlanGatedMode(
+/** An approved plan turns the composer to Auto; a pending one leaves the owner's mode. */
+export function usePlanApprovedMode(
   plan: PlanReview | null,
-  ui: Pick<ConversationUiState, "mode" | "setMode">,
-): PlanGatedMode {
-  const locked = planReviewAwaitingDecision(plan);
+  setMode: ConversationUiState["setMode"],
+): void {
   const approved = plan?.status === "approved";
-  const setMode = ui.setMode;
   useEffect(() => {
-    if (locked) setMode("plan");
-    else if (approved) setMode("build");
-  }, [locked, approved, setMode]);
-
-  return { mode: locked ? "plan" : ui.mode, locked };
+    if (approved) setMode("build");
+  }, [approved, setMode]);
 }

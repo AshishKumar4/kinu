@@ -168,7 +168,9 @@ async function closeWorkspace(session: KinuPublicSession, task: EvalTask, errors
   try {
     await session.teardown();
   } catch (error) {
-    errors.push({ name: 'EvalCleanupError', message: renderThrownChain({ cause: error }) });
+    const message = renderThrownChain({ cause: error });
+
+    errors.push({ name: message.includes(INFRA_FAILURE_MARKER) ? 'InfraError' : 'EvalCleanupError', message });
   }
 
   return { events, costUsd, workspace };
@@ -193,7 +195,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       let turnStartedAt = Date.now();
 
       try {
-        productSha = await deployedBuild(target);
+        productSha = (await deployedBuild(target)).sha;
         session = await openWorkspace(target, { subject: `${task.id}-${String(input.trial)}`, mission: task.mission, model: input.model });
         const arm: EvalArm | undefined = ARMS.find((declared) => declared.id === input.arm);
 
@@ -229,7 +231,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         : await closeWorkspace(session, task, errors);
 
       try {
-        const after = await deployedBuild(target);
+        const after = (await deployedBuild(target)).sha;
 
         if (after !== productSha) {
           errors.push({ name: 'EvalBuildChanged', message: `the deployment served ${productSha.slice(0, 12)} then ${after.slice(0, 12)} during the trial` });

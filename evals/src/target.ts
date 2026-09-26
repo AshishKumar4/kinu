@@ -34,16 +34,27 @@ export function resolveEvalTarget(env: Env): EvalTarget {
   return { origin: verdict.origin, identity: web.identity };
 }
 
-const HealthSchema = v.object({ build: v.object({ sha: v.pipe(v.string(), v.regex(/^[0-9a-f]{7,40}$/)) }) });
+const HealthSchema = v.object({
+  build: v.object({ sha: v.pipe(v.string(), v.regex(/^[0-9a-f]{7,40}$/)) }),
+  versionId: v.nullable(v.string()),
+});
 
-/** The build the deployment serves now: the product a trial measures. */
-export function deployedBuild(target: EvalTarget): Promise<string> {
+/** What the deployment serves now, the product a trial measures: the build's sha, and the Worker version that runs
+ *  it. A version changes with every deploy, config and secrets included, so a redeploy of one build is a new one;
+ *  a loopback dev server has none. */
+export interface Served {
+  readonly sha: string;
+  readonly versionId: string | null;
+}
+
+export function deployedBuild(target: EvalTarget): Promise<Served> {
   return infraBoundary(`GET ${target.origin}/api/health`, async () => {
     const response = await fetch(`${target.origin}/api/health`);
 
     if (!response.ok) throw new DeploymentAnswer(`/api/health answered ${String(response.status)}`, response.status);
+    const health = v.parse(HealthSchema, await response.json());
 
-    return v.parse(HealthSchema, await response.json()).build.sha;
+    return { sha: health.build.sha, versionId: health.versionId };
   });
 }
 

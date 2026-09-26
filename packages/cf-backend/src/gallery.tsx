@@ -2764,7 +2764,7 @@ function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[]
         placeholder="Send a message..."
         disabled={false}
         liveness={IDLE_TURN}
-        mode={{ value: mode, onChange: setMode, locked: false }}
+        mode={{ value: mode, onChange: setMode }}
         attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
         modelPicker={<ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs" />}
         notices={notices}
@@ -3577,7 +3577,7 @@ function AgentChatsPane({ conversation, transcript, onSend }: {
           disabled={false}
           liveness={IDLE_TURN}
           onStop={() => {}}
-          mode={{ value: ui.mode, onChange: ui.setMode, locked: false }}
+          mode={{ value: ui.mode, onChange: ui.setMode }}
         />
       </div>
     </div>

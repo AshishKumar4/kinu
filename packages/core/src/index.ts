@@ -1383,8 +1383,9 @@ export {
   formatPlanWithLineNumbers,
   initPlanReviewTable,
   listPendingPlanReviews,
-  planReviewAwaitingDecision,
   workModeUnderReview,
+  planHandoffStillOwed,
+  planDismissable,
   planTitle,
   validatePlanEdits,
   type PlanDecisionOutcome,
@@ -2014,7 +2015,7 @@ export type { Page, PageRequest, SeekCursor } from './session/page';
 
 export {
   mergeTranscript, restoredRows, rowText, transcriptRole,
-  PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, turnAuthor,
+  PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 
 export type { TurnAuthor } from './utils/ui-message';

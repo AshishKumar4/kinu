@@ -7,10 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { EVAL_WORKSPACE_PREFIX } from '@kinu.run/test-utils';
-import { WORKSPACE_BEAT_MS, type RosterRow } from './session';
-
-/** Ten missed beats: long past any live run's last mark, and past any skew between two machines' clocks. */
-export const WORKSPACE_LEASE_MS = 10 * WORKSPACE_BEAT_MS;
+import { WORKSPACE_LEASE_MS, type RosterRow } from './session';
 
 const HeldSchema = v.record(v.string(), v.record(v.string(), v.pipe(v.string(), v.minLength(1))));
 

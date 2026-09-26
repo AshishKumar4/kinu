@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { baselineOf, joinReports, restamp, taskKey, type TaskKey } from './gate';
 
 const KEY: TaskKey = {
-  build: 'f41eb85615', origin: 'https://kinu.run', definitions: 'tree-1', task: 'order-book.eval.ts',
+  build: 'f41eb85615', version: '77b6f49c-8934-457c-a0e3-98868f1196f1', origin: 'https://kinu.run', definitions: 'tree-1',
+  task: 'order-book.eval.ts',
   models: ['opencode-go/muse-spark-1.3-contributor'], arms: ['product'], trials: 5,
 };
 
@@ -16,9 +17,10 @@ function report(task: string, stamp = { productSha: 'old-build', evalCommit: 'ol
 
 describe('a task\'s stored result', () => {
   // A stored result is reused only while nothing it measured has changed: each of these is a thing it measured.
-  test('is reused under the same key, and under no key that differs in the build, the definitions, the task or the matrix', () => {
+  test('is reused under the same key, and under no key that differs in the build, its version, the definitions, the task or the matrix', () => {
     const variants: readonly Partial<TaskKey>[] = [
-      {}, { build: '7db1093f39' }, { origin: 'https://staging.kinu.run' }, { definitions: 'tree-2' }, { task: 'budget-board.eval.ts' },
+      {}, { build: '7db1093f39' }, { version: '1a8e2b7c-0d44-4f1e-9c3a-5b6d7e8f9a0b' }, { version: null },
+      { origin: 'https://staging.kinu.run' }, { definitions: 'tree-2' }, { task: 'budget-board.eval.ts' },
       { models: ['workers-ai/@cf/zai-org/glm-5.3'] }, { arms: ['product', 'lean'] }, { trials: 10 },
     ];
 

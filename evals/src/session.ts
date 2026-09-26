@@ -834,6 +834,21 @@ export type RosterRow = v.InferOutput<typeof RosterRowSchema>;
  */
 export const WORKSPACE_BEAT_MS = 60_000;
 
+/** Ten missed beats: long past any live run's last mark, and past any skew between two machines' clocks. */
+export const WORKSPACE_LEASE_MS = 10 * WORKSPACE_BEAT_MS;
+
+/**
+ * Why a trial's own workspace answering 404 measured nothing of the build, or undefined when it may have: its last
+ * mark is at least a lease old, so another run's sweep may have deleted it. A machine that sleeps past the lease
+ * stops beating, and the trial wakes to a workspace that is gone.
+ */
+export function sweptAway(answer: DeploymentAnswer, lastMarked: number, now: number): string | undefined {
+  if (answer.status !== 404 || now - lastMarked < WORKSPACE_LEASE_MS) return undefined;
+
+  return `the workspace was swept: its last mark is ${String(Math.floor((now - lastMarked) / 60_000))} min old, past the `
+    + `${String(WORKSPACE_LEASE_MS / 60_000)} min lease after which a run's sweep deletes it, so this 404 measured nothing of the build`;
+}
+
 /** Every workspace on the identity's account, page by page, as the sidebar's roster lists them. */
 export async function listWorkspaces(origin: string, identity: PublicWebIdentity): Promise<RosterRow[]> {
   const rows: RosterRow[] = [];
@@ -862,24 +877,34 @@ export async function deleteWorkspace(origin: string, identity: PublicWebIdentit
   });
 }
 
-/** One beat: the roster's mark on `name` moves to now. A beat that fails is said, and the lease rides out the next nine. */
-async function markLive(origin: string, identity: PublicWebIdentity, name: string): Promise<void> {
+/** One beat: the roster's mark on `name` moves to now, and whether the deployment took it. A workspace the roster no
+ *  longer holds refuses the mark with 404. A beat that fails is said, and the lease rides out the next nine. */
+async function markLive(origin: string, identity: PublicWebIdentity, name: string): Promise<boolean> {
   try {
     const response = await fetch(`${origin}/api/user/workspaces/${encodeURIComponent(name)}/touch`, { method: 'POST', headers: webHeaders(identity) });
 
     await readJson(response, `mark the workspace ${name} live`);
+
+    return true;
   } catch (error) {
     console.warn(`[evals] ${name} missed a beat: ${renderThrownChain({ cause: error })}`);
+
+    return false;
   }
 }
 
-/** Mark `name` live every {@link WORKSPACE_BEAT_MS} until the returned stop is called; its create is the first mark. */
-export function beatWorkspace(origin: string, identity: PublicWebIdentity, name: string): () => void {
-  const timer = setInterval(async () => { await markLive(origin, identity, name); }, WORKSPACE_BEAT_MS);
+/** Runs `beat` every {@link WORKSPACE_BEAT_MS} until the returned stop is called. */
+function everyBeat(beat: () => Promise<boolean>): () => void {
+  const timer = setInterval(async () => { await beat(); }, WORKSPACE_BEAT_MS);
 
   timer.unref();
 
   return () => { clearInterval(timer); };
+}
+
+/** Mark `name` live every {@link WORKSPACE_BEAT_MS} until the returned stop is called; its create is the first mark. */
+export function beatWorkspace(origin: string, identity: PublicWebIdentity, name: string): () => void {
+  return everyBeat(() => markLive(origin, identity, name));
 }
 
 export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
@@ -1044,6 +1069,10 @@ export class KinuPublicSession {
   /** Stops the beat that keeps this workspace out of every eval sweep; none until {@link beat}. */
   private stopBeat: () => void = () => undefined;
 
+  /** When the deployment last took this workspace's mark: its create, then each beat that landed. A machine that
+   *  sleeps stops beating, and a sweep deletes a workspace whose mark is older than the lease (`sweep.ts`). */
+  lastMarked = Date.now();
+
   constructor(
     private readonly input: PublicSessionInput,
     /** The name the deployment gave this workspace, which is not always the one
@@ -1051,14 +1080,38 @@ export class KinuPublicSession {
     readonly workspace: string,
   ) {}
 
-  /** Mark this workspace live on the deployment until teardown (`beatWorkspace`). */
+  /** Mark this workspace live on the deployment until teardown, one {@link markLive} a beat. */
   beat(): void {
-    this.stopBeat = beatWorkspace(this.input.origin, this.input.identity, this.workspace);
+    this.lastMarked = Date.now();
+    this.stopBeat = everyBeat(() => this.markLive());
+  }
+
+  /** One beat: whether the deployment took this workspace's mark, which moves {@link lastMarked} only when it did. */
+  async markLive(): Promise<boolean> {
+    const took = await markLive(this.input.origin, this.input.identity, this.workspace);
+
+    if (took) this.lastMarked = Date.now();
+
+    return took;
   }
 
   get describe(): string {
     return `public session · ${this.input.origin} · workspace ${this.workspace} `
       + `· model ${this.input.llm.model}`;
+  }
+
+  /** `infraBoundary` for this workspace's own requests, which reads one more failure as not the build's: a 404 once
+   *  the workspace's last mark is a lease old ({@link sweptAway}). */
+  private async boundary<T>(boundary: string, op: () => Promise<T>): Promise<T> {
+    try {
+      return await infraBoundary(boundary, op);
+    } catch (error) {
+      const swept = error instanceof DeploymentAnswer ? sweptAway(error, this.lastMarked, Date.now()) : undefined;
+
+      if (swept === undefined) throw error;
+
+      throw new Error(`${INFRA_FAILURE_MARKER} — ${boundary}: ${swept}`, { cause: error });
+    }
   }
 
   /**
@@ -1102,7 +1155,7 @@ export class KinuPublicSession {
 
       this.survive(reason).catch(this.unrecoverable);
     });
-    await infraBoundary(`ws ${url.host}${url.pathname}`, () => new Promise<void>((resolve, reject) => {
+    await this.boundary(`ws ${url.host}${url.pathname}`, () => new Promise<void>((resolve, reject) => {
       socket.addEventListener('open', () => resolve(), { once: true });
       socket.addEventListener('error', () => {
         reject(new Error(`could not open the public chat socket to ${url.host}${url.pathname}`));
@@ -1144,7 +1197,7 @@ export class KinuPublicSession {
    * write lands the case's real mission before its first prompt.
    */
   async setSoul(markdown: string): Promise<void> {
-    await infraBoundary(`setSoul on ${this.input.origin}/${this.workspace}`, () =>
+    await this.boundary(`setSoul on ${this.input.origin}/${this.workspace}`, () =>
       this.rpc('setSoul', [markdown]));
   }
 
@@ -1211,7 +1264,7 @@ export class KinuPublicSession {
    *  `mid-turn` resolves when the run it spliced into closes — the same
    *  denominator rule, one run further up. */
   prompt(text: string): Promise<PublicSendResult> {
-    return infraBoundary(`turn on ${this.input.origin}/${this.workspace}`, () =>
+    return this.boundary(`turn on ${this.input.origin}/${this.workspace}`, () =>
       this.submit(text).settled);
   }
 
@@ -1231,7 +1284,7 @@ export class KinuPublicSession {
     const steerId = this.mintId('steer');
     const landing = new Promise<'mid-turn' | 'turn'>((resolve, reject) => { this.steerLandings.set(steerId, { resolve, reject }); });
 
-    return infraBoundary(`send on ${this.input.origin}/${this.workspace}`, async () => {
+    return this.boundary(`send on ${this.input.origin}/${this.workspace}`, async () => {
       try {
         await this.rpc('send', [text, steerId, [], 'build']);
       } catch (cause) {
@@ -1258,7 +1311,7 @@ export class KinuPublicSession {
   async execute(executor: string, command: string, device?: string): Promise<PublicExecutorResult> {
     const args: JsonValue[] = device === undefined ? [executor, command] : [executor, command, device];
 
-    const result = await infraBoundary(
+    const result = await this.boundary(
       `executeInExecutor(${executor}) on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('executeInExecutor', args),
     );
@@ -1274,7 +1327,7 @@ export class KinuPublicSession {
    *  call's result must answer the card rather than out-wait it.
    */
   async pendingConsents(): Promise<readonly Pick<PendingDeviceConsent, 'consentId' | 'deviceId'>[]> {
-    const rows = await infraBoundary(
+    const rows = await this.boundary(
       `listPendingConsents on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('listPendingConsents', []),
     );
@@ -1291,7 +1344,7 @@ export class KinuPublicSession {
   async resolveConsent(
     consentId: string, decision: 'once' | 'always' | 'deny',
   ): Promise<{ ok: boolean }> {
-    const answer = await infraBoundary(
+    const answer = await this.boundary(
       `resolveDeviceConsent on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('resolveDeviceConsent', [consentId, decision]),
     );
@@ -1308,7 +1361,7 @@ export class KinuPublicSession {
    * clearing checkable over the wire instead of only in the component.
    */
   async parkedCommands(): Promise<readonly PublicDeferredApproval[]> {
-    const rows = await infraBoundary(
+    const rows = await this.boundary(
       `listDeferredApprovals on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('listDeferredApprovals', []),
     );
@@ -1329,7 +1382,7 @@ export class KinuPublicSession {
   async decideParkedCommands(
     ids: readonly string[], decision: 'approved' | 'denied' | 'always',
   ): Promise<readonly string[]> {
-    const answer = await infraBoundary(
+    const answer = await this.boundary(
       `decideDeferredApprovals on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('decideDeferredApprovals', [[...ids], decision]),
     );
@@ -1347,7 +1400,7 @@ export class KinuPublicSession {
    *   events of the prompt that issued them.
    */
   async backgroundJobs(): Promise<readonly PublicBackgroundJob[]> {
-    const answer = await infraBoundary(
+    const answer = await this.boundary(
       `listBackgroundJobs on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('listBackgroundJobs', [50]),
     );
@@ -1359,7 +1412,7 @@ export class KinuPublicSession {
    *  lists them. The built-in half of `getToolDescriptions` is dropped at the
    *  boundary: a crafted-tool case asks about the crafted set. */
   async craftedTools(): Promise<readonly PublicCraftedTool[]> {
-    const answer = await infraBoundary(
+    const answer = await this.boundary(
       `getToolDescriptions on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getToolDescriptions', []),
     );
@@ -1369,7 +1422,7 @@ export class KinuPublicSession {
 
   /** The agent-written tabs, including project loading failures. */
   async listSlates(): Promise<PublicSlateListing> {
-    const answer = await infraBoundary(
+    const answer = await this.boundary(
       'listSlates on ' + this.input.origin + '/' + this.workspace,
       () => this.rpc('listSlates', []),
     );
@@ -1379,7 +1432,7 @@ export class KinuPublicSession {
 
   /** One slate operation through the socket RPC the slate tab drives. */
   async slateOp(operation: JsonValue): Promise<JsonValue> {
-    return infraBoundary(
+    return this.boundary(
       'slate on ' + this.input.origin + '/' + this.workspace,
       () => this.rpc('slate', [operation]),
     );
@@ -1388,7 +1441,7 @@ export class KinuPublicSession {
 
   /** Read existing preview endpoints without starting the app under test. */
   async exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]> {
-    const answer = await infraBoundary(
+    const answer = await this.boundary(
       'getExposedPorts(' + executor + ') on ' + this.input.origin + '/' + this.workspace,
       () => this.rpc('getExposedPorts', [executor]),
     );
@@ -1407,7 +1460,7 @@ export class KinuPublicSession {
    * still employed.
    */
   async subordinates(): Promise<readonly PublicSubordinate[]> {
-    const rows = await infraBoundary(
+    const rows = await this.boundary(
       `listSubordinates on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('listSubordinates', []),
     );
@@ -1419,7 +1472,7 @@ export class KinuPublicSession {
    *  `allowMissing`, a folder that does not exist lists nothing; any other
    *  refusal is the build's answer. */
   async listFiles(dir: string, options: { allowMissing?: boolean } = {}): Promise<readonly PublicDirEntry[]> {
-    const listing = v.parse(DirectorySchema, await infraBoundary(
+    const listing = v.parse(DirectorySchema, await this.boundary(
       `getExecutorFiles ${dir} on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getExecutorFiles', [WORKSPACE_EXECUTOR, dir]),
     ));
@@ -1499,7 +1552,7 @@ export class KinuPublicSession {
    * storage is a fresh activation; what it re-drives is what the ledger shows.
    */
   async abortActivation(): Promise<void> {
-    await infraBoundary(`POST ${this.input.origin}/api/workspaces/${this.workspace}/eval/abort`, async () => {
+    await this.boundary(`POST ${this.input.origin}/api/workspaces/${this.workspace}/eval/abort`, async () => {
       const response = await fetch(
         `${this.input.origin}/api/workspaces/${encodeURIComponent(this.workspace)}/eval/abort`,
         { method: 'POST', headers: webHeaders(this.input.identity) },
@@ -1515,7 +1568,7 @@ export class KinuPublicSession {
    *  what a first-run case asserts: that it answered, that it counts the turns
    *  the transcript holds, and that it names the model the next turn runs. */
   async snapshot(): Promise<PublicWorkspaceSnapshot> {
-    const answer = await infraBoundary(
+    const answer = await this.boundary(
       `getWorkspaceSnapshot on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getWorkspaceSnapshot', []),
     );
@@ -1524,7 +1577,7 @@ export class KinuPublicSession {
   }
 
   async history(): Promise<readonly PublicMessage[]> {
-    const rows = await infraBoundary(
+    const rows = await this.boundary(
       `GET ${this.input.origin}/agents/.../get-messages`,
       async () => {
         const response = await fetch(
@@ -1600,7 +1653,7 @@ export class KinuPublicSession {
    * it is, and what the error says, is the finding.
    */
   async viewFile(executor: string, path: string): Promise<PublicViewedFile> {
-    const answer = await infraBoundary(
+    const answer = await this.boundary(
       `readExecutorFile(${executor}) on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('readExecutorFile', [executor, path]),
     );
@@ -1619,14 +1672,14 @@ export class KinuPublicSession {
 
   /** Raw public Activity evidence, including prompt-prefix telemetry. */
   activity(): Promise<JsonValue> {
-    return infraBoundary(`getActivitySnapshot on ${this.input.origin}/${this.workspace}`,
+    return this.boundary(`getActivitySnapshot on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getActivitySnapshot', []));
   }
 
   /** One file off the workspace plane, through the route the web file manager
    *  reads. */
   readFile(path: string, options: { allowMissing?: boolean } = {}): Promise<string> {
-    return infraBoundary(`GET files ${path}`, async () => {
+    return this.boundary(`GET files ${path}`, async () => {
       const response = await fetch(this.filesUrl(path), { headers: webHeaders(this.input.identity) });
       const text = await response.text();
 
@@ -1644,7 +1697,7 @@ export class KinuPublicSession {
   /** One file's bytes off the same route: what a trial leaves behind is kept
    *  as the workspace held it, text or not. */
   readBytes(path: string): Promise<Uint8Array> {
-    return infraBoundary(`GET files ${path}`, async () => {
+    return this.boundary(`GET files ${path}`, async () => {
       const response = await fetch(this.filesUrl(path), { headers: webHeaders(this.input.identity) });
 
       if (!response.ok) {
@@ -1659,7 +1712,7 @@ export class KinuPublicSession {
   /** Seed one file through the same route, so a case's inputs arrive on the
    *  plane the agent's own tools read. */
   writeFile(path: string, content: string): Promise<void> {
-    return infraBoundary(`PUT files ${path}`, async () => {
+    return this.boundary(`PUT files ${path}`, async () => {
       const response = await fetch(this.filesUrl(path), {
         method: 'PUT',
         headers: { ...webHeaders(this.input.identity), 'content-type': 'application/octet-stream' },
@@ -1722,7 +1775,7 @@ export class KinuPublicSession {
   }
 
   private getJson<T>(path: string, schema: v.GenericSchema<T>, doing: string): Promise<T> {
-    return infraBoundary(`GET ${this.input.origin}${path.split('?')[0] ?? path}`, async () => {
+    return this.boundary(`GET ${this.input.origin}${path.split('?')[0] ?? path}`, async () => {
       const response = await fetch(`${this.input.origin}${path}`, {
         headers: webHeaders(this.input.identity),
       });

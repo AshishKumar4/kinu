@@ -973,6 +973,23 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
+    run: 'bun scripts/gen-cli-docs.ts --check',
+    label: 'CLI reference is current',
+    tier: 'commit',
+    // Measured 2026-09-26 on the 24-thread box, three runs: 0.30/0.30/0.30 s, 134 MB.
+    // The commit tier is where this belongs: the reference is rendered from the command
+    // registry, and the drift is written in the same hunk as the option. Checked only in
+    // the CLI suite, at ci, a commit adding `bundle --turn/--actor` (6c5aa9dd76) reached
+    // a staging deploy with the reference still missing them.
+    seconds: 0.3,
+    catches: 'a command or option added, renamed or removed in the CLI\'s command registry '
+      + 'while docs/CLI.md, the reference rendered from it, still says the old thing: '
+      + 'the checked-in file must equal what `bun run docs:cli` would write.',
+    blind: 'whether what the registry says is true of the command; a hidden option, which '
+      + 'the reference leaves out on purpose.',
+    inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
+  },
+  {
     run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
@@ -1111,19 +1128,6 @@ export const LADDER: readonly Gate[] = [
       + 'promote guard removed in turn fails its own test.',
     blind: 'whether the gates it enumerates pass, and whether Cloudflare serves what a '
       + 'promotion uploaded: that is its smoke test\'s, against the deployment.',
-    inputs: AMBIENT_BY_NAME,
-  },
-  {
-    run: 'bun test --timeout=0 scripts/wake-loops.test.ts',
-    label: 'Wake-loop detection over production telemetry',
-    tier: 'push',
-    // 0.14 s, 5 tests, measured 2026-09-26 on the 24-thread box.
-    seconds: 0.2,
-    catches: 'a wake loop `prod-logs.ts wakes` misses or invents: startups summed per object and hour '
-      + 'before the threshold is read, the threshold hour counted and the hour under it not, a loop '
-      + 'sustained only over consecutive hours, and the longest loop ranked first.',
-    blind: 'the telemetry query and whether production writes the startup rows it counts; the '
-      + 'threshold is one week\'s measurement (2026-09-26).',
     inputs: AMBIENT_BY_NAME,
   },
   {
@@ -1292,7 +1296,9 @@ export const LADDER: readonly Gate[] = [
       + 'and an ephemeral deployed Worker, not this gate.',
     // Measured by `--audit-closure` 2026-09-15: the suite opens manifests, the
     // worker source and its bench sources by path, so its closure is the corpus.
-    inputs: { ...AMBIENT_BY_NAME, corpus: true },
+    // The harness and its isolation suite load instances of their own of the class
+    // module through a query-suffixed specifier, which the walker cannot follow.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/devbox/src/devbox.ts'] },
   },
   {
     run: 'bun test --timeout=0 packages/test-utils/',

@@ -521,7 +521,7 @@ function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly 
       </div>
       <div className="border-t p-border p-sidebar">
         <Composer value={value} onValueChange={setValue} onSend={() => setValue("")} onStop={() => {}} placeholder="Send a message..."
-          disabled={false} liveness={IDLE} mode={{ value: mode, onChange: setMode, locked: false }}
+          disabled={false} liveness={IDLE} mode={{ value: mode, onChange: setMode }}
           attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
           modelPicker={<ModelPicker models={[{ spec: "anthropic/claude-opus-4", label: "Claude Opus 4", provider: "Anthropic" }]} value={model} onChange={setModel} size="xs" />}
           notices={[]} />

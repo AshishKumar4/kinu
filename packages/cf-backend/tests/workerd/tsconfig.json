@@ -26,6 +26,7 @@
     "./account-reset-probe.ts",
     "./store-reset-probe.ts",
     "./addressed-name-probe.ts",
+    "./attribution-probe.ts",
     "./deploy-run-probe.ts",
     "./slate-actor-probe.ts",
     "./slate-share-probe.ts",

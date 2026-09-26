@@ -72,7 +72,7 @@ import {
   activePromptSectionOverrides,
   currentDateForPrompt,
   turnReasonForMetadata,
-  workModeForTurnMetadata,
+  workModeForTurnMetadata, authoredTurnMetadata,
   renderUnverifiedInstructions,
   observeSystemPromptHash, steerSkillsBlock,
   type DynamicContext, type DynamicApproval, type MissingCapability,
@@ -127,7 +127,7 @@ import {
   resolveTurnSkills, filterToolNamesBySkills,
   type ActiveSkillSet,
   inheritedContextFromTranscript,
-  PlanReviewActions, type PlanDecisionOutcome,
+  PlanReviewActions, planHandoffStillOwed, type PlanDecisionOutcome,
   type PlanEdit, type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
@@ -219,7 +219,7 @@ import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/cor
 import type { WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
 import { sha256Hex } from '@kinu.run/core';
-import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
+import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { openAnalyticsWindow } from "@kinu.run/core/analytics";
 import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
@@ -736,6 +736,11 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   @callable()
+  async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
+    return this.planActions.dismiss(id, revision);
+  }
+
+  @callable()
   async decidePlanReview(
     id: string,
     revision: number,
@@ -1038,13 +1043,21 @@ export abstract class ActorAgent extends Agent<Env> {
     // constructor because that is the one point guaranteed to precede every RPC
     // (`onStart` is not — see `OrchestratorAgent.claimOwner`), and idempotent per
     // isolate, so a re-activation costs nothing.
-    // The workspace is NOT passed. An isolate-level default would be wrong the
-    // moment two actors share an isolate — `setDiagnosticsSink` is module-global
-    // and Cloudflare co-locates Durable Objects, so the first actor to install
-    // would own the attribution of every actor beside it. Each emit that knows
-    // its workspace says so, as a `workspace` field; the rest are honestly
-    // unattributed. See `analytics/install.ts`.
+    // The workspace comes from the invocation, not the isolate: `setDiagnosticsSink` is module-global
+    // and Cloudflare co-locates Durable Objects, so an install-time default would attribute every
+    // co-located actor to the first. The SDK's per-invocation context names the running agent.
     installAnalyticsDiagnostics(this.env);
+    attributeWorkspace(ActorAgent.invocationWorkspace);
+  }
+
+  /**
+   * Total only while every subclass fixes its name at construction or refuses to exist, as
+   * OrchestratorAgent does; one that does not brings PartyServer's throwing `name` into the logger.
+   */
+  private static invocationWorkspace(this: void): string {
+    const { agent } = getCurrentAgent();
+
+    return agent instanceof ActorAgent ? agent.workspaceName() : '';
   }
   protected installClientMessageGate(): void {
     const dispatchMessage = this.onMessage.bind(this);
@@ -1840,6 +1853,7 @@ export abstract class ActorAgent extends Agent<Env> {
           driverGate: () => this.driverGate(),
           // The workspace UI IS the review surface: a plan turn is admitted.
           planTurnRefusal: () => null,
+          stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
           // Prompt-cache warming belongs to the root actor (it owns the wake chain); hosted actors wire none.
           ...(this.cacheWarmingLane() && { cacheWarming: this.cacheWarmingLane() }),
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
@@ -4408,8 +4422,12 @@ export abstract class ActorAgent extends Agent<Env> {
     return turnReasonForMetadata(this.turnDrivingMetadata());
   }
 
+  /** Author-stamped, so the plan hold tells the owner's turn from the harness's. */
   private turnDrivingMetadata(): JsonObject | undefined {
-    return this.turnUserMetadata();
+    const metadata = this.turnUserMetadata();
+    const item = this._chatLoop?.turnInFlight() === true ? this._turnItem : null;
+
+    return item === null ? metadata : authoredTurnMetadata({ kind: item.kind, metadata });
   }
 
   /** Active turn metadata only. Idle operations await canonical metadata in
