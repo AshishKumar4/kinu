@@ -8,13 +8,14 @@ import { MemoryRouter } from 'react-router-dom';
 import * as v from 'valibot';
 import {
   actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS,
-  observedActionEnum, REPORT_TOOL, type JsonValue, TASK_TURN_ENDINGS, terminalTaskReport,
+  observedActionEnum, REPORT_TOOL, SubordinateInspectionRequestSchema, type JsonValue, type Rpc, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
 import type { SubordinateRosterEntry } from '@kinu.run/core/protocol';
 import { present } from '@kinu.run/test-utils';
 import { SubordinateTabs } from '../src/components/SubordinateTabs';
 import { KeptTranscript } from '../src/components/KeptTranscript';
 import { HelperChatBase, MessageView } from '../src/components/MessageView';
+import { nestedAgent } from '../src/pages/nested-agent';
 import type { UIMessage } from 'ai';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
@@ -213,14 +214,15 @@ describe('the call that asked a one-question helper opens its chat', () => {
     parts: [{ type: 'tool-agents', toolCallId: 'agents_0', state: 'output-available', input: { action: 'hire', lifetime: 'task' }, output }],
   });
 
-  const markup = (base: string | null, output: JsonValue) => renderToStaticMarkup(createElement(MemoryRouter, null,
-    createElement(HelperChatBase.Provider, { value: base }, createElement(MessageView, { message: asked(output) }))));
+  const markup = (base: string | null, output: JsonValue, parent: string | null = null) => renderToStaticMarkup(createElement(MemoryRouter, null,
+    createElement(HelperChatBase.Provider, { value: base === null ? null : { base, parent } }, createElement(MessageView, { message: asked(output) }))));
 
   test('a task helper\'s name links to its chat below the chat that asked it', () => {
     const answered = { status: 'completed', agent: 'ask-reviewer-a1', lifetime: 'task', role: 'reviewer', answer: 'Fine.', transcript: 'kept' };
 
     expect(markup('/workspace/ws/agents/', answered)).toContain('href="/workspace/ws/agents/ask-reviewer-a1"');
-    expect(markup('/workspace/ws/agents/auditor/', JSON.stringify(answered))).toContain('href="/workspace/ws/agents/auditor/ask-reviewer-a1"');
+    // The asking chat's id rides along: a released parent has no path to walk, but its id still finds the helper.
+    expect(markup('/workspace/ws/agents/auditor/', JSON.stringify(answered), 'actor-auditor')).toContain('href="/workspace/ws/agents/auditor/ask-reviewer-a1?parent=actor-auditor"');
   });
 
   test('a durable hire, or a chat with no place to open one, links nothing', () => {
@@ -250,8 +252,27 @@ describe('a subordinate below a direct child is reached by its path', () => {
     const children = await parent.agent.inspectSubordinate({ path: [name], view: 'children', page: {} });
     const nested = children.view === 'children' ? children.page.items.find((entry) => entry.name === 'ask-checker-a1') : undefined;
 
-    return { agent: parent.agent, path: `${name}/ask-checker-a1`, id: nested?.actorReference?.actorId };
+    return { agent: parent.agent, name, parentId: present(subordinate.actorId, 'the helper id'), path: `${name}/ask-checker-a1`, id: nested?.actorReference?.actorId };
   }
+
+  /** The page's own resolver over this object's RPCs, as its socket answers them. */
+  const pageRpc = (agent: Awaited<ReturnType<typeof grandchild>>['agent']): Rpc => async <T>(method: string, args: unknown[] = []): Promise<T> => {
+    if (method !== 'inspectSubordinate') throw new Error(`the page asked ${method}`);
+
+    return v.parse(v.custom<T>(() => true), await agent.inspectSubordinate(v.parse(SubordinateInspectionRequestSchema, args[0])));
+  };
+
+  test('with its parent dismissed, a grandchild still opens kept, found from the id of the chat that asked it or its own', async () => {
+    const { agent, name, parentId, path, id } = await grandchild();
+    await agent.dismissSubordinate(name);
+
+    const byParent = await nestedAgent(pageRpc(agent), path, { actor: null, parent: parentId });
+    const byOwnId = await nestedAgent(pageRpc(agent), path, { actor: present(id, 'the grandchild id'), parent: null });
+
+    expect(byParent).toMatchObject({ live: false, actorId: id });
+    expect(byOwnId).toMatchObject({ live: false, actorId: id });
+    expect((await agent.getChatHistoryPage({ actor: present(id, 'the grandchild id') })).status).toBe('end');
+  });
 
   test('the edge resolves the path to the grandchild\'s id, and its chat and window reads follow', async () => {
     const { agent, path, id } = await grandchild();

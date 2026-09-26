@@ -57,7 +57,7 @@ export interface WorkTabProps {
   planRpc: Rpc;
   planOwner?: string;
   workspacePlanArrival?: WorkspacePlanArrival | null;
-  onReviewActor?: (name: string) => void | Promise<void>;
+  onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   /** Polled by the hook so the tab badge and this queue are one read. */
   pendingActions: PendingAction[];
   backgroundJobs: BackgroundJob[];
@@ -192,7 +192,7 @@ function WorkReview({ item, owner, rpc, planRpc, onReviewActor, resource, onRetr
   owner: string;
   rpc: Rpc;
   planRpc: Rpc;
-  onReviewActor?: (name: string) => void | Promise<void>;
+  onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
   onBack: () => void;
@@ -274,7 +274,7 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, on
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
   onRefreshJobs: () => void;
-  onOpenOwner?: (name: string) => void | Promise<void>;
+  onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
   rpc: Rpc;
 }) {
   const nowEmpty = work !== null && openTasks.length === 0 && runningJobs.length === 0;
@@ -323,7 +323,7 @@ function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resou
   onReload: () => void;
   rpc: Rpc;
   onRefreshJobs: () => void;
-  onOpenOwner?: (name: string) => void | Promise<void>;
+  onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
 }) {
   const visible = journal.filter((row) => row.chips.includes(filter));
 

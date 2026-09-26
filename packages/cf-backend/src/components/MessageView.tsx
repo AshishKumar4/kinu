@@ -190,7 +190,7 @@ function toolIcon(toolName: string): ReactNode {
 }
 
 /** Where a one-question helper's chat opens, relative to the chat its `agents` call sits in; null draws no link. */
-export const HelperChatBase = createContext<string | null>(null);
+export const HelperChatBase = createContext<{ readonly base: string; readonly parent: string | null } | null>(null);
 
 const AnsweredHelperObject = v.looseObject({ agent: v.string(), lifetime: v.literal("task") });
 
@@ -205,7 +205,7 @@ function HelperChatLink({ output }: { output?: JsonValue }) {
   const name = helper.output.agent;
 
   return (
-    <Link to={`${base}${encodeURIComponent(name)}`} aria-label={`Open ${name}'s conversation`}
+    <Link to={`${base.base}${encodeURIComponent(name)}${base.parent === null ? "" : `?parent=${encodeURIComponent(base.parent)}`}`} aria-label={`Open ${name}'s conversation`}
       className="ml-10 inline-block p-annotation p-accent hover:underline">{name}</Link>
   );
 }

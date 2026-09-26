@@ -20,7 +20,7 @@ export function isClosedTree(task: AgentTaskTree): boolean {
 
 interface TaskOwnership {
   owner?: WorkspaceWorkOwner;
-  onOpenOwner?: ((name: string) => void | Promise<void>) | undefined;
+  onOpenOwner?: ((name: string, actorId: string) => void | Promise<void>) | undefined;
 }
 
 function OwnerMark({ owner, onOpenOwner }: TaskOwnership) {
@@ -32,7 +32,7 @@ function OwnerMark({ owner, onOpenOwner }: TaskOwnership) {
 
   return (
     <> · <button type="button" className="p-meta p-accent hover:underline" aria-label={`Open ${owner.name}'s conversation`}
-      onClick={() => void onOpenOwner(path.join("/"))}>{owner.name}</button></>
+      onClick={() => void onOpenOwner(path.join("/"), owner.actorId)}>{owner.name}</button></>
   );
 }
 

@@ -1,5 +1,5 @@
 import { startTransition, useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
+import { useParams, useLocation, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
@@ -11,7 +11,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   isPlaceholderMission, summarizeRestorePlan,
 } from "@kinu.run/core";
-import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, Rpc, SeekCursor, SubordinateChild, SubordinateInspectionResult, TakePickOutcome } from "@kinu.run/core";
+import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, Rpc, TakePickOutcome } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
@@ -43,6 +43,7 @@ import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { KeptChatColumn } from "@/components/KeptChatColumn";
+import { nestedAgent, type AgentLinkIds } from "@/pages/nested-agent";
 import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import { ownerFacingSubordinate, revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
@@ -310,38 +311,27 @@ function ForkModal({
   );
 }
 
-async function nestedAgentRow(rpc: Rpc, path: string): Promise<SubordinateChild | null> {
-  const names = path.split("/");
-  const name = names.at(-1);
-  let cursor: SeekCursor | undefined;
-
-  do {
-    const read = await rpc<SubordinateInspectionResult>("inspectSubordinate", [{ path: names.slice(0, -1), view: "children", page: cursor === undefined ? {} : { cursor } }]);
-
-    if (read.view !== "children") throw new Error(`the roster read answered "${read.view}"`);
-    const found = read.page.items.find((entry) => entry.name === name);
-
-    if (found !== undefined) return found;
-    cursor = read.page.status === "more" ? read.page.next : undefined;
-  } while (cursor !== undefined);
-
-  return null;
-}
-
-function NestedAgentColumn({ workspace, path, rpc }: { workspace: string; path: string; rpc: Rpc }) {
-  const { resource, reload } = useAsyncResource(() => nestedAgentRow(rpc, path), undefined, path);
+function NestedAgentColumn({ workspace, path, rpc, ids }: { workspace: string; path: string; rpc: Rpc; ids: AgentLinkIds }) {
+  const { resource, reload } = useAsyncResource(() => nestedAgent(rpc, path, ids), undefined, `${path}|${ids.actor ?? ""}|${ids.parent ?? ""}`);
 
   if (resource.status === "loading") return <div className="flex flex-1 items-center justify-center"><Loader size="sm" /></div>;
 
   if (resource.status === "error") return <LoadFailure className="p-4" what={`${path}'s place in its roster`} message={resource.message} onRetry={reload} />;
-  const row = resource.value;
+  const agent = resource.value;
 
-  if (row === null) return <p className="p-4 text-sm p-text-3">No agent is at {path} in this workspace.</p>;
-  const title = agentTitle(row);
+  if (agent === null) return <p className="p-4 text-sm p-text-3">No agent is at {path} in this workspace.</p>;
 
-  return row.status === "dismissed"
-    ? <KeptChatColumn workspace={workspace} subName={path} title={title} rpc={rpc} actorId={row.actorReference?.actorId ?? null} />
-    : <SubordinateChatColumn workspace={workspace} subName={path} title={title} />;
+  return (
+    <HelperChatBase.Provider value={{ base: helperBase(workspace, path), parent: agent.actorId }}>
+      {agent.live
+        ? <SubordinateChatColumn workspace={workspace} subName={path} title={agent.title} />
+        : <KeptChatColumn workspace={workspace} subName={path} title={agent.title} rpc={rpc} actorId={agent.actorId} />}
+    </HelperChatBase.Provider>
+  );
+}
+
+function helperBase(workspace: string, subName: string): string {
+  return `/workspace/${workspace}/agents/${subName.split("/").map(encodeURIComponent).join("/")}/`;
 }
 
 /** A subordinate below a direct child is addressed by its `/`-joined path of names, as its socket and RPCs take it. */
@@ -358,24 +348,24 @@ function planOwnerName(subName: string | undefined, agentId: string | undefined)
   return agentId ?? "main";
 }
 
-function AgentChatColumn({ workspace, subName, subordinates, rpc }: {
+function AgentChatColumn({ workspace, subName, subordinates, rpc, ids }: {
   workspace: string;
   subName: string;
   subordinates: readonly SubordinateRosterEntry[];
   rpc: Rpc;
+  ids: AgentLinkIds;
 }) {
+  if (subName.includes("/")) return <NestedAgentColumn workspace={workspace} path={subName} rpc={rpc} ids={ids} />;
   const rosterEntry = subordinates.find((entry) => entry.name === subName);
   let column = <SubordinateChatColumn workspace={workspace} subName={subName} title={rosterEntry ? agentTitle(rosterEntry) : subName} />;
 
-  if (subName.includes("/")) {
-    column = <NestedAgentColumn workspace={workspace} path={subName} rpc={rpc} />;
-  } else if (rosterEntry?.status === "dismissed") {
+  if (rosterEntry?.status === "dismissed") {
     // A dismissed agent has no socket; its kept chat is paged over this workspace's.
     column = <KeptChatColumn workspace={workspace} subName={subName} title={agentTitle(rosterEntry)} rpc={rpc} actorId={rosterEntry.actorId} />;
   }
 
   // A helper this agent asked opens below it.
-  return <HelperChatBase.Provider value={`/workspace/${workspace}/agents/${subName.split("/").map(encodeURIComponent).join("/")}/`}>{column}</HelperChatBase.Provider>;
+  return <HelperChatBase.Provider value={{ base: helperBase(workspace, subName), parent: rosterEntry?.actorId ?? null }}>{column}</HelperChatBase.Provider>;
 }
 
 /** One subordinate's chat over its own facet socket; Work Surface and Timeline stay on
@@ -552,6 +542,8 @@ export default function WorkspacePage() {
   const params = useParams();
   const { agentId } = params;
   const subName = routedAgentPath(params);
+  const [search] = useSearchParams();
+  const linkIds = useMemo<AgentLinkIds>(() => ({ actor: search.get("actor"), parent: search.get("parent") }), [search]);
   const location = useLocation();
   const navigate = useNavigate();
   const state = useKinu(agentId);
@@ -930,7 +922,7 @@ export default function WorkspacePage() {
         ref={workbench}
         workspace={agentId}
         contents={state}
-        chat={(inspectorControl) => <HelperChatBase.Provider value={`/workspace/${agentId}/agents/`}><ChatSlates shownInPanel={panelSlate(inspectorControl)}>
+        chat={(inspectorControl) => <HelperChatBase.Provider value={{ base: `/workspace/${agentId}/agents/`, parent: null }}><ChatSlates shownInPanel={panelSlate(inspectorControl)}>
             <SubordinateTabs
               workspace={agentId}
               subordinates={state.subordinates}
@@ -949,7 +941,7 @@ export default function WorkspacePage() {
               </>}
             />
             {subName ? (
-              <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} />
+              <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds} />
             ) : (
             <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${agentId}/main`}
               {...chatDrop}>
@@ -1098,7 +1090,7 @@ export default function WorkspacePage() {
             changesFocus={changesFocus}
             planOwner={planOwnerName(subName, agentId)}
             workspacePlanArrival={state.workspacePlanArrival}
-            onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${name.split("/").map(encodeURIComponent).join("/")}`); }}
+            onReviewActor={async (name, actorId) => { await navigate(`${helperBase(agentId, name).slice(0, -1)}${actorId === undefined ? "" : `?actor=${encodeURIComponent(actorId)}`}`); }}
             onSurface={setSurface}
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}

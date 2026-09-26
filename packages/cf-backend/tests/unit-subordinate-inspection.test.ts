@@ -196,6 +196,22 @@ describe('owner reads of retained subordinate paths', () => {
     expect(await read(fixture, { path: [], view: 'history', page: {}, actor: 'not-an-actor' })).toMatchObject({ view: 'missing' });
   });
 
+  test('a released parent\'s roster reads by its id, so its helpers are still found', async () => {
+    const fixture = workspaceFixture();
+    const child = fixture.child(fixture.main, 'child');
+    const leaf = fixture.child(child, 'leaf');
+    rosterChild(fixture, child, leaf, 1);
+
+    for (const action of ['retire', 'release'] as const) {
+      fixture.directory.apply(actorReferenceOf(fixture.main), [], { action, name: 'child', reference: actorReferenceOf(child) });
+    }
+
+    expect(await read(fixture, { path: ['child'], view: 'children', page: {} })).toMatchObject({ view: 'missing' });
+    expect(await read(fixture, { path: [], view: 'children', page: {}, actor: child.actorId })).toMatchObject({
+      view: 'children', page: { items: [{ name: 'leaf', actorReference: { actorId: leaf.actorId } }] },
+    });
+  });
+
   test('run and history pages retain their own continuation cursors', async () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');

@@ -42,7 +42,7 @@ export const SubordinateInspectionRequestSchema = v.variant('view', [
   v.strictObject({ path: PathSchema, view: v.literal('plans'), page: PageRequestSchema }),
   v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('plan') }),
   v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('planTasks') }),
-  v.strictObject({ path: PathSchema, view: v.literal('children'), page: PageRequestSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('children'), page: PageRequestSchema, actor: v.optional(v.pipe(v.string(), v.nonEmpty())) }),
   v.strictObject({ path: PathSchema, view: v.literal('history'), page: PageRequestSchema, actor: v.optional(v.pipe(v.string(), v.nonEmpty())) }),
   v.strictObject({ path: PathSchema, view: v.literal('runs'), page: PageRequestSchema }),
   v.strictObject({ path: PathSchema, view: v.literal('events'), runId: v.pipe(v.string(), v.nonEmpty()), query: EventQuerySchema }),
