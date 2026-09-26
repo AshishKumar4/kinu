@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { basename } from 'node:path';
 
 import type { AgentClient, AgentClientStatus } from '../src/agent-client';
 import { missingSubordinateHistory, type AgentModelMenu, type SubordinateRosterEntry } from '@kinu.run/core';
@@ -551,6 +552,22 @@ test('/clear empties the transcript on screen once the conversation is cleared',
   await screen.mockInput.typeText('/clear');
   screen.mockInput.pressEnter();
   await screen.waitFor('the transcript cleared', () => !screen.frame().includes('An answer from before.'));
+});
+
+test('!command runs in this directory and shows its output; the agent is sent nothing', async () => {
+  const sent: unknown[] = [];
+
+  const agent = fakeClient({ name: 'bang', send: async (input) => {
+    sent.push(input);
+
+    return TURN;
+  } });
+
+  const screen = await mountChat(agent.client);
+  await screen.mockInput.typeText('!printf "from %s" "$(basename "$PWD")"');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the command output', () => screen.frame().includes(`from ${basename(process.cwd())}`));
+  expect(sent).toEqual([]);
 });
 
 test('a turn waiting on a rate limit names the provider, not thinking', async () => {

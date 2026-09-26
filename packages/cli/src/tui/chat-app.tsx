@@ -49,6 +49,7 @@ import { guideFailure } from '../provider-guidance';
 import { openBrowser } from '../commands/auth';
 import { StatusBar } from './status-bar';
 import { MessageList, type DisplayMessage } from './messages';
+import { createHostShell } from '@kinu.run/cli-backend';
 import type { TurnMeter } from './overlays';
 import {
   ChangelogOverlay,
@@ -412,7 +413,7 @@ function ChatScene({
 
   const writeActiveSegment = useMemo(() => writeLiveMessage(activeSegmentRef, setMessages), []);
   const stream = useStreamingBuffer(writeActiveSegment);
-  // Reasoning streams into its own segment, sealed by the first text or tool after it.
+  // Sealed by the first text or tool after it.
   const activeThinkingRef = useRef<string | null>(null);
   const writeThinking = useMemo(() => writeLiveMessage(activeThinkingRef, setMessages), []);
   const thinkingStream = useStreamingBuffer(writeThinking);
@@ -1098,10 +1099,20 @@ function ChatScene({
     return action;
   }, [addMessage, client, onExit, performBranch, sendPrompt, setInputText]);
 
+  /** `!command` runs here, never sent to the agent, as in omp. */
+  const runLocalCommand = useCallback(async (command: string) => {
+    const result = await createHostShell(process.cwd()).exec(command);
+    const output = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter((part) => part !== '').join('\n');
+
+    addMessage({ role: 'system', content: `$ ${command}\n${output}${result.exitCode === 0 ? '' : `\nexit ${String(result.exitCode)}`}` });
+  }, [addMessage]);
+
   const handleSubmit = useCallback(async (input: string) => {
     const text = input.trim();
 
     if (!text) return;
+
+    if (text.startsWith('!')) return runLocalCommand(text.slice(1).trim());
 
     if (!ready) {
       addMessage({ role: 'system', content: 'Still connecting.' });
@@ -1210,7 +1221,7 @@ function ChatScene({
         );
       }
     }
-  }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, runInputEffects, sendPrompt]);
+  }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, runInputEffects, sendPrompt, runLocalCommand]);
 
   /** Once per set, never for one already picked from. */
   const hintAlternateTakes = useCallback(async () => {
