@@ -44,7 +44,7 @@ export {
   deviceToolchainAnswer, freshDeviceToolchain,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
   sandboxReasonFix, sandboxCause, describeGpuNodes,
-  connectedDevices, deviceByName, deviceFleetAsk,
+  connectedDevices, deviceByName, deviceFleetAsk, sameDeviceStatus,
   DEVICE_TOOLCHAIN_TTL_MS,
   DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS,
   type DeviceStatus,

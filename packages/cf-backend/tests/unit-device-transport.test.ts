@@ -98,6 +98,25 @@ describe('createHubDeviceTransport', () => {
     expect(transport.status().connected).toBe(false);
   });
 
+  // 2026-09-26: a workspace answered first without its hub, then by a hub with no machines, told every open page
+  // its executors moved, though "no devices listed" and "no devices" read the same everywhere.
+  test('the hub arriving with no machines changes nothing a reader sees, so it says nothing', async () => {
+    let attached = false;
+    let moved = 0;
+
+    const transport = createHubDeviceTransport({
+      hub: () => (attached ? fakeHub(() => ({ connected: false, registered: false, toolchain: null, devices: [] })) : null),
+      agentName: 'agent-1', cliCwd: () => null, caller,
+      onStatusChanged: () => { moved += 1; },
+    });
+
+    await transport.refreshStatus();
+    attached = true;
+    await transport.refreshStatus();
+
+    expect(moved).toBe(0);
+  });
+
   test('no owner hub → the workspace is unattached, which is not an unlinked machine', async () => {
     // A null hub means no owner id resolved; `kinu connect` guidance would be wrong.
 
