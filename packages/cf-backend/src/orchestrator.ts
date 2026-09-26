@@ -88,7 +88,7 @@ import {
   drainAssignments,
   appendMemoryNote,
   parseMemoryNotes,
-  type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
+  type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview, answerParts,
   type SlateBindingCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
@@ -1892,7 +1892,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (parentId === null) return;
 
-    const metadata = await this.takeTurnSlates(reference.actorId, completion.turnId, () => transcript.narration(completion.outputPartReferences));
+    const metadata = await this.takeTurnSlates(reference.actorId, completion.turnId, () => transcript.narration(answerParts(completion.outputPartReferences, completion.finalTextReference)));
 
     const entry = await transcript.prepareAssistant({
       id, parentId, turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
@@ -2041,27 +2041,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // The reactor lives on the core AgentOrchestrator. Ingress uses the debounced
   // `this.orch.scheduleDrain()`; the post-turn hook drains via `this.orch.drainPendingEvents()`.
 
-  private readonly turnSlates = new Map<string, { readonly turnId: string; readonly changed: Set<string>; readonly shown: Set<string> }>();
+  private readonly turnSlates = new Map<string, { readonly changed: Set<string>; readonly shown: Set<string> }>();
 
   private noteTurnSlates(kind: 'changed' | 'shown', ids: readonly string[]): void {
     const actor = activeOperationProfile();
 
     if (actor === undefined || actor.turnId === WORKSPACE_RUN_ID) return;
-    let held = this.turnSlates.get(actor.actor.actorId);
+    const key = `${actor.actor.actorId}:${actor.turnId}`;
+    let held = this.turnSlates.get(key);
 
-    if (held?.turnId !== actor.turnId) {
-      held = { turnId: actor.turnId, changed: new Set(), shown: new Set() };
-      this.turnSlates.set(actor.actor.actorId, held);
+    if (held === undefined) {
+      held = { changed: new Set(), shown: new Set() };
+      this.turnSlates.set(key, held);
     }
 
     for (const id of ids) held[kind].add(id);
   }
 
   private async takeTurnSlates(actorId: string, turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null> {
-    const held = this.turnSlates.get(actorId);
+    const key = `${actorId}:${turnId}`;
+    const held = this.turnSlates.get(key);
 
-    if (held?.turnId !== turnId) return null;
-    this.turnSlates.delete(actorId);
+    if (held === undefined) return null;
+    this.turnSlates.delete(key);
     const vfs = this.hostedWorkspace().bundle.vfs;
     const kept = [];
 

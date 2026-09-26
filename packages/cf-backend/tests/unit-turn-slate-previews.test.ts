@@ -7,12 +7,13 @@ import { expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { UIMessage } from 'ai';
-import { toolExecute } from '@kinu.run/test-utils';
-import { CHAT_SESSION_ID, slatesChanged, type JsonValue } from '@kinu.run/core';
+import { mergePolicyProfile, toolExecute } from '@kinu.run/test-utils';
+import { captureOperationProfile, CHAT_SESSION_ID, runOperationProfile, slatesChanged, type JsonValue } from '@kinu.run/core';
 import { SlateInlineContext } from '../src/components/slates/context';
 import { MessageView } from '../src/components/MessageView';
 import {
   chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
+  workspaceMainActor,
 } from './helpers/actor-harness';
 import { scriptedGateway } from './helpers/platform-gateway';
 
@@ -153,15 +154,44 @@ test('an answer that writes the slate:// line itself gets no second preview', as
   expect(previewsDrawn(answer)).toEqual(['board']);
 });
 
-test('a turn that asked for the slate\'s preview itself gets no second preview', async () => {
+// Review job 186: only a preview that succeeded counts as shown; a refused one leaves the owner no preview otherwise.
+test('a turn whose own preview of the slate was refused still gets the automatic one', async () => {
   const answer = await boardTurn(async (tools) => {
     if (tools.eval === undefined) throw new Error('Build has no eval tool');
-    // The harness boots no slate, so the preview is refused; the chat still shows the agent's own answer to it.
+    // The harness boots no slate, so the preview is refused.
     await expect(toolExecute<{ code: string }, JsonValue>(tools.eval)({ code: 'return await workspace.slates.board.$preview()' }))
       .rejects.toThrow('slate board preview');
-  }, 'Here is the preview above.');
+  }, 'Tried to show it.');
 
-  expect(slatesChanged({ metadata: answer?.metadata })).toEqual([]);
+  expect(slatesChanged({ metadata: answer?.metadata })).toEqual(['board']);
+});
+
+// Review job 186: a detached job keeps the operation of the turn that started it. Its write during a later turn is
+// that earlier turn's, and must not take the later turn's slates from its answer.
+test("a write under an earlier turn's operation leaves the running turn's previews alone", async () => {
+  const harness = orchestratorHarness();
+  const { agent } = harness;
+  const files = workspaceFiles(agent);
+
+  await files.mkdir('/slates/board', { recursive: true });
+  await files.mkdir('/slates/notes', { recursive: true });
+  agent.harnessDrivingUserMessage('Add an expiry column.', { kinuMode: 'build' });
+  const turns = chatSessionTurns(agent);
+  const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'Add an expiry column.' }] });
+
+  if (tools.file === undefined) throw new Error('Build has no file tool');
+  await toolExecute<JsonValue, JsonValue>(tools.file)({ action: 'write', path: '/slates/board/client.tsx', content: 'x' });
+
+  const earlier = captureOperationProfile({
+    actor: workspaceMainActor(harness.db), profile: mergePolicyProfile(), inputs: null, runId: 'run-earlier', turnId: 'turn-earlier',
+  });
+
+  await runOperationProfile(earlier, () => files.writeFile('/slates/notes/client.tsx', 'from the job'));
+  await turns.settle({ messageId: 'a-board', text: 'Added the column.' });
+
+  const answer = (await storedChat(harness)).filter((message) => message.role === 'assistant').at(-1);
+
+  expect(slatesChanged({ metadata: answer?.metadata })).toEqual(['board']);
 });
 
 test('a longer id beginning with the same letters does not count as the slate', async () => {

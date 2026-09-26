@@ -583,8 +583,6 @@ export class SlateHost {
 
   /** The application is the root's, so the URL is the same whoever asks and across launches. */
   async preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
-    this.deps.previewed?.(id);
-
     try {
       requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
       const project = await this.project(caller.cred, id);
@@ -592,6 +590,8 @@ export class SlateHost {
       const preview = await this.deps.apps.url(app.port, app.capability);
 
       if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL: ' + preview.unavailable);
+
+      this.deps.previewed?.(id);
 
       return { ok: true, value: { url: preview.url, port: app.port, inline: { height: project.slate.inline.height } } };
     } catch (cause) {
