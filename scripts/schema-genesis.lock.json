@@ -833,6 +833,12 @@
     "crossed INTEGER NOT NULL",
     "clean INTEGER NOT NULL"
   ],
+  "open_turns@packages/core/src/events/recorder.ts": [
+    "actor_id TEXT NOT NULL",
+    "run_id TEXT NOT NULL",
+    "opened_at TEXT NOT NULL",
+    "PRIMARY KEY (actor_id, run_id)"
+  ],
   "operator_requests@packages/core/src/events/recorder.ts": [
     "actor_id TEXT PRIMARY KEY",
     "text TEXT NOT NULL"

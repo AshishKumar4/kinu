@@ -10,7 +10,6 @@ import {
 import { present, testActorHandle } from '@kinu.run/test-utils';
 import { isBackgroundHandle } from '../src/jobs/threshold';
 import { makeSql, makeExecRaw } from './helpers';
-import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/log';
 
 /** The page a read gets when it states no limit. */
 const RUN_EVENT_LIMIT_DEFAULT = 200;
@@ -840,32 +839,23 @@ describe('RunEventRecorder.openTurn — the continuation ledger', () => {
     expect(recorder.openTurn()).toBeNull();
   });
 
-  test('an open run whose start row cannot be read is said so, by run id, not silently passed over', () => {
+  test('an open turn whose start row cannot be read throws, not passes over', () => {
     const { recorder, sql, actor } = setup();
-    const log = createRecordingLogger();
-    const restore = setDiagnosticsSink(log);
+    const at = new Date().toISOString();
 
-    try {
-      expect(sql`INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
-          VALUES (${actor.actorId}, ${'run-unreadable'}, ${1}, ${'run_start'}, ${new Date().toISOString()}, ${'{"type":"run_start"'})`).toEqual([]);
+    expect(sql`INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
+        VALUES (${actor.actorId}, ${'run-unreadable'}, ${1}, ${'run_start'}, ${at}, ${'{"type":"run_start"'})`).toEqual([]);
+    expect(sql`INSERT INTO open_turns (actor_id, run_id, opened_at) VALUES (${actor.actorId}, ${'run-unreadable'}, ${at})`).toEqual([]);
 
-      expect(() => recorder.openTurn()).toThrow();
-    } finally {
-      restore();
-    }
+    expect(() => recorder.openTurn()).toThrow();
+  });
 
-    // A start row naming no turn is a side lane; the ledger says which run it passed over.
-    const side = setup();
-    const sideLog = createRecordingLogger();
-    const restoreSide = setDiagnosticsSink(sideLog);
+  test('a side lane opened after a turn does not hide the open turn', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'run_start', agentId: 'a', turn });
+    recorder.emit('run-side', { type: 'run_start', agentId: 'a' });
 
-    try {
-      side.recorder.emit('run-side', { type: 'run_start', agentId: 'a' });
-      expect(side.recorder.openTurn()).toBeNull();
-      expect(sideLog.emitted.map((line) => [line.event, line.fields.run])).toEqual([['run.open_without_turn', 'run-side']]);
-    } finally {
-      restoreSide();
-    }
+    expect(recorder.openTurn()?.runId).toBe('run-1');
   });
 
   test('the open run answers its turn, the finished steps and the cut step\'s newest partial', () => {
