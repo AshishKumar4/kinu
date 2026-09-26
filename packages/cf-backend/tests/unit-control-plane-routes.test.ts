@@ -252,6 +252,11 @@ function harness(options: World = {}): Harness {
 
       return behaviour.grants ?? { grants: [{ rule: 'git', executor: 'workspace' }] };
     },
+    async supportReadTurn(read: { turnId: string; reason: string }) {
+      rpc.calls.push({ workspace: name, method: 'supportReadTurn', args: [read.turnId, read.reason] });
+
+      return { turnId: read.turnId, claim: null, requests: [] };
+    },
     async revokeShellApprovalGrants(grants: ApprovalGrant[]) {
       rpc.calls.push({ workspace: name, method: 'revokeShellApprovalGrants', args: [grants] });
 
@@ -639,6 +644,7 @@ describe('mutations', () => {
       { action: 'approvals.decide', userId: USER_ID, workspace: 'alpha', ids: ['x'], decision: 'approved' },
       { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' },
       { action: 'workspace.remove', userId: USER_ID, workspace: 'alpha', confirm: 'alpha' },
+      { action: 'workspace.turn_read', userId: USER_ID, workspace: 'alpha', turnId: 't', reason: 'incident' },
       { action: 'nonsense' },
     ];
 
@@ -653,8 +659,57 @@ describe('mutations', () => {
     expect(store.listPendingAudit(h.sql)).toEqual([]);
     expect(new Set(rows.map((row) => row.operation))).toEqual(new Set([
       'job_cancel', 'job_retry', 'job_dismiss', 'jobs_clear',
-      'approvals_decide', 'shell_grants_revoke', 'workspace_remove', 'action_rejected',
+      'approvals_decide', 'shell_grants_revoke', 'workspace_remove', 'workspace_turn_read', 'action_rejected',
     ]));
+    h.close();
+  });
+});
+
+describe('support reads a turn only on the record', () => {
+  test('a read returns the turn to the operator and audits who read it and why, never what was read', async () => {
+    const h = harness();
+
+    const answer = await control(
+      post('/actions', { action: 'workspace.turn_read', userId: USER_ID, workspace: 'alpha', turnId: 'turn-9', reason: 'support_ticket' }),
+      h.env, identity(),
+    );
+
+    expect(answer?.status).toBe(200);
+    expect(h.rpc.calls.map((c) => c.method)).toEqual(['claimOwner', 'supportReadTurn']);
+    expect(v.parse(v.object({ result: v.object({ turnId: v.string() }) }), await answer?.json()).result.turnId).toBe('turn-9');
+    const [row] = store.listAudit(h.sql).items;
+    expect(row).toMatchObject({
+      operation: 'workspace_turn_read', target: `${USER_ID}/alpha/turn-9`, outcome: 'ok', actorEmail: OPERATOR,
+      detail: 'read turn turn-9 for support_ticket',
+    });
+    h.close();
+  });
+
+  test('a read without a stated reason is refused and audited, and reaches nothing', async () => {
+    const h = harness();
+
+    const answer = await control(
+      post('/actions', { action: 'workspace.turn_read', userId: USER_ID, workspace: 'alpha', turnId: 'turn-9' }),
+      h.env, identity(),
+    );
+
+    expect(answer?.status).toBe(400);
+    expect(h.rpc.calls).toEqual([]);
+    expect(store.listAudit(h.sql).items[0]).toMatchObject({ operation: 'action_rejected', outcome: 'denied' });
+    h.close();
+  });
+
+  test('a stale sign-in reads nothing, and the attempt is on the record', async () => {
+    const h = harness();
+
+    const answer = await control(
+      post('/actions', { action: 'workspace.turn_read', userId: USER_ID, workspace: 'alpha', turnId: 'turn-9', reason: 'incident' }),
+      h.env, identity({ authTime: Date.now() - 6 * 60 * 1000 }),
+    );
+
+    expect(answer?.status).toBe(403);
+    expect(h.rpc.calls).toEqual([]);
+    expect(store.listAudit(h.sql).items[0]).toMatchObject({ operation: 'workspace_turn_read', outcome: 'denied' });
     h.close();
   });
 });

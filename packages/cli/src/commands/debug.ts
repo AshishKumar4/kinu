@@ -34,7 +34,41 @@ interface DebugOpts {
   out?: string;
   runs?: string;
   limit?: string;
+  turn?: string;
+  actor?: string;
 }
+
+const TurnRequestRowSchema = v.object({
+  requestId: v.string(), runId: v.string(), epoch: v.number(), revision: v.number(), step: v.nullable(v.number()),
+});
+
+const TurnRequestIndexSchema = v.object({
+  turnId: v.string(),
+  claim: v.nullable(JsonObjectSchema),
+  requests: v.array(TurnRequestRowSchema),
+});
+
+const TurnRequestPageSchema = v.object({
+  request: TurnRequestRowSchema,
+  metadata: JsonValueSchema,
+  messageCount: v.number(),
+  from: v.number(),
+  messages: v.array(JsonObjectSchema),
+  nextFrom: v.nullable(v.number()),
+  response: v.nullable(JsonObjectSchema),
+});
+
+interface TurnStepSummary extends JsonObject {
+  epoch: number;
+  revision: number;
+  step: number | null;
+  messages: number;
+  finish: string;
+}
+
+type TurnRequestIndexRecord = v.InferOutput<typeof TurnRequestIndexSchema>;
+
+type TurnRequestPageRecord = v.InferOutput<typeof TurnRequestPageSchema>;
 
 /** Grouped by run rather than assumed to belong to one known search. */
 interface RawMctsNode extends JsonObject {
@@ -247,6 +281,8 @@ interface DebugSource {
   ): Promise<Page<ExplorationRecord>>;
   /** Cloud-only; local sources return null and the section is omitted rather than faked. */
   activitySnapshot(): Promise<JsonObject | null>;
+  turnRequests(turnId: string, actor: string | undefined): Promise<TurnRequestIndexRecord | null>;
+  turnRequest(turnId: string, at: { epoch: number; revision: number; from: number; actor?: string }): Promise<TurnRequestPageRecord>;
 }
 
 function cloudDebugSource(cloudName: string, auth: { origin: string; token: string }): DebugSource {
@@ -290,6 +326,8 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
       return rpc('readRecordCell', pageSchema(ExplorationRecordSchema), [request]);
     },
     activitySnapshot: () => rpc('getActivitySnapshot', v.nullable(JsonObjectSchema), [{}]),
+    turnRequests: (turnId, actor) => rpc('getTurnRequests', TurnRequestIndexSchema, actor === undefined ? [turnId] : [turnId, actor]),
+    turnRequest: (turnId, at) => rpc('getTurnRequest', TurnRequestPageSchema, [turnId, at]),
   };
 }
 
@@ -319,6 +357,8 @@ function localDebugSource(localName: string): DebugSource {
     recordOccupants: async (handle, cursor, limit) =>
       readLocalRecordCell(localName, handle, cursor, limit),
     activitySnapshot: async () => null,
+    turnRequests: async () => null,
+    turnRequest: () => Promise.reject(new Error('a local agent has no turn-request reader; read its .kinu/context/requests')),
   };
 }
 
@@ -527,6 +567,65 @@ async function writeCellOccupants(
   }
 }
 
+async function writeTurnRequests(
+  source: DebugSource,
+  ask: { readonly turnId: string; readonly actor: string | undefined; readonly outPath: string; readonly json: boolean },
+): Promise<void> {
+  const index = await source.turnRequests(ask.turnId, ask.actor);
+
+  if (index === null) {
+    throw new Error('turn requests are read from cloud workspaces; a local agent keeps them under its home\'s .kinu/context/requests');
+  }
+
+  const writer = fileWriter(ask.outPath);
+  const steps: TurnStepSummary[] = [];
+
+  try {
+    writer.write({ t: 'turn', ...index });
+
+    for (const request of index.requests) {
+      let from: number | null = 0;
+      let first: TurnRequestPageRecord | null = null;
+
+      while (from !== null) {
+        const page: TurnRequestPageRecord = await source.turnRequest(ask.turnId, {
+          epoch: request.epoch, revision: request.revision, from, ...(ask.actor !== undefined && { actor: ask.actor }),
+        });
+
+        writer.write({ t: 'turn_request', ...page });
+
+        first ??= page;
+        from = page.nextFrom;
+      }
+
+      steps.push({
+        epoch: request.epoch, revision: request.revision, step: request.step,
+        messages: first?.messageCount ?? 0,
+        finish: v.parse(v.optional(v.string(), ''), first?.response?.['reason']),
+      });
+    }
+  } finally {
+    writer.close();
+  }
+
+  if (ask.json) {
+    printJson(redactPayload(decodeJsonValue({ value: { bundle: ask.outPath, turnId: index.turnId, claim: index.claim, steps } })));
+
+    return;
+  }
+
+  console.log(`${ACCENT('turn')} ${index.turnId}  ${DIM(`${String(index.requests.length)} requests`)}`);
+
+  for (const step of steps) {
+    const label = step.step === null ? 'admission' : `step ${String(step.step)}`;
+    console.log(`  ${label.padEnd(10)} ${String(step.messages).padStart(4)} messages  ${step.finish}`);
+  }
+
+  console.log(`${OK('wrote')} ${ask.outPath} ${DIM('(owner-only; redaction is not a guarantee)')}`);
+}
+
+type DebugTarget = ReturnType<typeof resolveAgentTarget>;
+
 export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
 
@@ -534,6 +633,14 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     ? cloudDebugSource(target.cloudName, requireAuthConfig())
     : localDebugSource(target.localName);
 
+  if (opts.turn === undefined) return writeDebugBundle(target, source, opts);
+
+  return writeTurnRequests(source, {
+    turnId: opts.turn, actor: opts.actor, outPath: opts.out ?? `${target.name}.turn-${opts.turn}.jsonl`, json: opts.json === true,
+  });
+}
+
+async function writeDebugBundle(target: DebugTarget, source: DebugSource, opts: DebugOpts): Promise<void> {
   const outPath = opts.out ?? `${target.name}.debug.jsonl`;
   const runLimit = opts.runs ? parsePositiveInt(opts.runs, 'runs') : DEFAULT_RUNS;
   const sectionLimit = opts.limit ? parsePositiveInt(opts.limit, 'limit') : 100;

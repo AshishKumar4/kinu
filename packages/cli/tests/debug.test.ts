@@ -422,3 +422,62 @@ describe('kinu debug — cloud backend', () => {
     }
   });
 });
+
+describe('kinu debug --turn — one turn as the model received it', () => {
+  test('writes every request, every page of it, and scrubs a planted secret', async () => {
+    const pagesAsked: number[] = [];
+
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(request) {
+        const body = v.parse(JsonObjectSchema, await request.json());
+        const method = v.parse(v.string(), body.method);
+        const args = v.parse(JsonArraySchema, body.args);
+        const row = { requestId: 'req-1', runId: 'run-1', epoch: 1, revision: 1, step: 0 };
+
+        if (method === 'getTurnRequests') {
+          return Response.json({ result: { turnId: 'turn-1', claim: { status: 'settled' }, requests: [row] } });
+        }
+
+        if (method !== 'getTurnRequest') return Response.json({ error: `unhandled ${method}` }, { status: 404 });
+        const from = v.parse(v.object({ from: v.number() }), args[1]).from;
+        pagesAsked.push(from);
+        const message = { role: 'user', content: from === 0 ? `deploy with ${SECRET_TOKEN}` : 'second page' };
+
+        return Response.json({ result: {
+          request: row, metadata: { workMode: 'build' }, messageCount: 2, from, messages: [message],
+          nextFrom: from === 0 ? 1 : null, response: from === 0 ? { type: 'step_finish', stepIndex: 1, reason: 'stop' } : null,
+        } });
+      },
+    });
+
+    const home = scratch('kinu-debug-turn-');
+    const out = scratch('kinu-debug-turn-out-');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      origin: `http://127.0.0.1:${server.port}`,
+      accessToken: 'ptc_stored_session',
+      agents: { skywriter: { name: 'skywriter', mode: 'cloud', cloudName: 'skywriter', createdAt: '', updatedAt: '' } },
+      aliases: {},
+    }));
+
+    try {
+      const bundle = join(out, 'turn.jsonl');
+
+      const r = await result(runCli(home, ['debug', 'skywriter', '--turn', 'turn-1', '--out', bundle], repoRoot, {
+        KINU_ORIGIN: `http://127.0.0.1:${server.port}`,
+      }));
+
+      expect(r.stderr).toBe('');
+      expect(r.exitCode).toBe(0);
+      expect(pagesAsked).toEqual([0, 1]);
+
+      const records = readFileSync(bundle, 'utf8').trim().split('\n').map((line) => v.parse(JsonObjectSchema, JSON.parse(line)));
+      expect(records.map((record) => record['t'])).toEqual(['turn', 'turn_request', 'turn_request']);
+      expect(readFileSync(bundle, 'utf8')).not.toContain(SECRET_TOKEN);
+      expect(statSync(bundle).mode & 0o077).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+});

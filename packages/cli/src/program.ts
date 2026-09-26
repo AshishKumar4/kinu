@@ -393,6 +393,8 @@ export function buildProgram(): Command {
     .option('--runs <n>', 'How many recent runs, head runs and searches to include')
     .option('--limit <n>', 'Row limit for the smaller sections (messages, jobs, facts and so on)')
     .option('--json', 'Print the summary as JSON instead of text')
+    .option('--turn <id>', 'Write one turn\'s requests, as the model received them, instead of the whole bundle')
+    .option('--actor <id>', 'With --turn: a hosted actor\'s id (default: the workspace\'s main actor)')
     .action(wrapAction(debugCommand));
 
   program
