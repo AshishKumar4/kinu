@@ -13,10 +13,12 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settle, settleSync } from '../obs/effect';
 
-function withCapability<Capability, A>(capability: Capability | undefined, name: string, call: (present: Capability) => Promise<A>): Promise<A> {
-  return settle(capability === undefined
+function withCapability<Capability, A>(
+  capability: Capability | undefined, name: string, call: (present: Capability) => Promise<A>,
+): Effect.Effect<A, KinuError> {
+  return capability === undefined
     ? Effect.fail(new KinuError('unsupported', 'Slate ' + name + ' capability is not configured'))
-    : Effect.promise(() => call(capability)));
+    : Effect.promise(() => call(capability));
 }
 
 class WorkspaceSlateIds extends SlateIdSource {
@@ -67,18 +69,18 @@ export class WorkspaceSlates {
   // The vendored runtime requires each seam. Capabilities arrive independently;
   // an absent effect capability refuses only when that operation is attempted.
   private readonly provider: SlateProvider = {
-    deploy: (request) => withCapability(this.deps.provider, 'deployment', (provider) => provider.deploy(request)),
-    reconcileDeployment: (request) => withCapability(this.deps.provider, 'deployment', (provider) => provider.reconcileDeployment(request)),
-    materializeResource: (request) => withCapability(this.deps.provider, 'resource provisioning', (provider) => provider.materializeResource(request)),
-    reconcileResource: (request) => withCapability(this.deps.provider, 'resource provisioning', (provider) => provider.reconcileResource(request)),
+    deploy: (request) => settle(withCapability(this.deps.provider, 'deployment', (provider) => provider.deploy(request))),
+    reconcileDeployment: (request) => settle(withCapability(this.deps.provider, 'deployment', (provider) => provider.reconcileDeployment(request))),
+    materializeResource: (request) => settle(withCapability(this.deps.provider, 'resource provisioning', (provider) => provider.materializeResource(request))),
+    reconcileResource: (request) => settle(withCapability(this.deps.provider, 'resource provisioning', (provider) => provider.reconcileResource(request))),
   };
   private readonly invocations: SlateInvocationSeam = {
-    prepare: (request) => withCapability(this.deps.invocations, 'external invocation', (seam) => seam.prepare(request)),
-    invoke: (request, id, effect) => withCapability(this.deps.invocations, 'external invocation', (seam) => seam.invoke(request, id, effect)),
-    reconcile: (request, id, effect) => withCapability(this.deps.invocations, 'external invocation', (seam) => seam.reconcile(request, id, effect)),
+    prepare: (request) => settle(withCapability(this.deps.invocations, 'external invocation', (seam) => seam.prepare(request))),
+    invoke: (request, id, effect) => settle(withCapability(this.deps.invocations, 'external invocation', (seam) => seam.invoke(request, id, effect))),
+    reconcile: (request, id, effect) => settle(withCapability(this.deps.invocations, 'external invocation', (seam) => seam.reconcile(request, id, effect))),
   };
   private readonly previewValidation: SlatePreviewValidationSeam = {
-    validate: (request) => withCapability(this.deps.previewValidation, 'durable preview validation', (seam) => seam.validate(request)),
+    validate: (request) => settle(withCapability(this.deps.previewValidation, 'durable preview validation', (seam) => seam.validate(request))),
   };
 
   async synchronize(id: SlateId): Promise<Slate> {

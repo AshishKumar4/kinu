@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Scheduler } from 'effect';
+import { Cause, Effect, Exit, Fiber, Scheduler } from 'effect';
 import { KinuError, toKinuError, type ErrorCode, type Refusal } from './error';
 
 const WITHIN_ONE_EVENT = new Scheduler.MixedScheduler('sync');
@@ -43,6 +43,9 @@ export function settleSync<A>(effect: Effect.Effect<A, KinuError>, options?: Pic
   const exit = Effect.runSyncExit(effect);
 
   if (Exit.isSuccess(exit)) return exit.value;
+  const defect = Cause.squash(exit.cause);
+
+  if (Cause.isAsyncFiberError(defect)) Effect.runFork(Fiber.interrupt(defect.fiber));
 
   return fail(exit.cause, options);
 }

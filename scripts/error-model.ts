@@ -25,7 +25,9 @@ import * as v from 'valibot';
 
 import { assertMeasured, finding, refuseLock, shrinkOnly, type LockRefusal, type LockedNumber } from './gate-ratchet';
 import { readSources } from './sources';
-import { declaredName, literalString, memberCalleeName, parse, superClassName, walk, type SyntaxNode } from './syntax';
+import {
+  declaredName, functionOwner, isFunctionLike, literalString, memberCalleeName, parse, superClassName, walk, type SyntaxNode,
+} from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -73,11 +75,19 @@ const isObsModule = (specifier: string): boolean =>
 
 /**
  * Bridges: a migrated function run at its own edge so its callers keep their signature, spelled
- * `return settle(…)` or `return settleSync(…)` with the runner imported from `obs`. Each is removed
- * when its callers' wave arrives; the migration ends at zero.
+ * `return settle(…)` or `return settleSync(…)` with the runner imported from `obs`, inside an exported
+ * function or a public class member. Each is removed when its callers' wave arrives; the migration
+ * ends at zero. A runner returned anywhere else is a finding: a private helper must return the Effect.
  */
-export function bridgeSites(sources: ReadonlyMap<string, string>): string[] {
-  const sites: string[] = [];
+export interface BridgeCensus {
+  readonly bridges: string[];
+  /** A runner returned from a private helper or a local function: not a bridge, a mistake. */
+  readonly findings: string[];
+}
+
+export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus {
+  const bridges: string[] = [];
+  const findings: string[] = [];
 
   for (const [file, text] of sources) {
     if (file === 'packages/core/src/obs/effect.ts' || HOST_BOUNDARIES.has(file)) continue;
@@ -104,13 +114,48 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): string[] {
       if (raw.type !== 'ReturnStatement' || raw.argument === null) return;
       const call = raw.argument.type === 'AwaitExpression' ? raw.argument.argument : raw.argument;
 
-      if (call.type === 'CallExpression' && call.callee.type === 'Identifier' && runners.has(call.callee.name)) {
-        sites.push(`${file}:${String(parsed.lineAt(node.start))}`);
-      }
+      if (call.type !== 'CallExpression' || call.callee.type !== 'Identifier' || !runners.has(call.callee.name)) return;
+      const site = `${file}:${String(parsed.lineAt(node.start))}`;
+      const owner = bridgeOwner(node);
+
+      if (owner === null) findings.push(`${site}: a runner returned outside an exported function or public member`);
+      else bridges.push(site);
     });
   }
 
-  return sites.sort();
+  return { bridges: bridges.sort(), findings: findings.sort() };
+}
+
+/**
+ * The exported function or public member a return statement belongs to; null for any other owner. A
+ * callback or an object method written inside an exported function's body is that function's code, so
+ * a runner returned there (a seam method on the object it builds) counts; one inside a private helper
+ * or a local function does not.
+ */
+function bridgeOwner(statement: SyntaxNode): SyntaxNode | null {
+  let node: SyntaxNode | undefined = statement.parent;
+
+  while (node !== undefined && !isFunctionLike(node)) node = node.parent;
+
+  if (node === undefined) return null;
+  const owner = functionOwner(node);
+  const { raw } = owner;
+
+  if (raw.type === 'MethodDefinition') {
+    return raw.accessibility === 'private' || raw.accessibility === 'protected' || raw.key.type === 'PrivateIdentifier' ? null : owner;
+  }
+
+  if (raw.type === 'FunctionDeclaration') return owner.parent?.raw.type === 'ExportNamedDeclaration' ? owner : null;
+
+  // A variable-bound function is exported with its declaration; anything else (a callback, an object
+  // method, a function expression) belongs to the function that encloses it.
+  const declaration = owner.parent?.parent;
+
+  if (raw.type === 'ArrowFunctionExpression' && declaration?.raw.type === 'VariableDeclaration') {
+    return declaration.parent?.raw.type === 'ExportNamedDeclaration' ? owner : null;
+  }
+
+  return owner.parent === undefined ? null : bridgeOwner(owner);
 }
 
 /** Built-in error constructors a class can extend; `KinuError` extends `Data.TaggedError(...)`. */
@@ -329,6 +374,25 @@ if (import.meta.main) {
     process.exit(1);
   }
 
+  const misplaced = bridgeSites(sources).findings;
+
+  if (misplaced.length > 0) {
+    console.error(`error-model: ${String(misplaced.length)} runner(s) returned outside a bridge\n`);
+
+    for (const site of misplaced) {
+      console.error(finding({
+        at: site,
+        invariant: 'an effect is run only at an exported function or public member, the bridge its callers see',
+        found: 'a runner returned from a private helper or a local function',
+        silently: 'the helper reads as migrated while its callers still get a thrown failure, and the bridge count '
+          + 'names a site no caller wave will remove',
+        fix: 'return the Effect from the helper and run it once at the exported edge',
+      }));
+    }
+
+    process.exit(1);
+  }
+
   const byMechanism = MECHANISMS.map((mechanism) => {
     const sites = measured.filter(({ key }) => key.endsWith(`#${mechanism}`)).reduce((sum, { value }) => sum + value, 0);
 
@@ -346,11 +410,13 @@ if (import.meta.main) {
     console.log(`  declared: ${file} (${mechanisms.join(', ')}): ${reason}`);
   }
 
-  const bridges = bridgeSites(sources);
+  const { bridges, findings } = bridgeSites(sources);
 
   console.log(`  bridges: ${String(bridges.length)} (the migration ends at zero)`);
 
   for (const site of bridges) console.log(`    ${site}`);
+
+  for (const wrong of findings) console.log(`  finding: ${wrong}`);
 
   for (const [file, reason] of HOST_BOUNDARIES) console.log(`  host boundary: ${file}: ${reason}`);
 

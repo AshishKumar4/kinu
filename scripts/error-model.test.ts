@@ -93,11 +93,20 @@ test('the boundary file grows in the mechanisms it declares and in no other', ()
   expect(keysOf(outcome)).toEqual([{ key: `${outcome}#throw`, value: 1 }]);
 });
 
-test('a bridge is `return settle(…)` or `return settleSync(…)` with the runner from obs, and nothing else is', () => {
+test('a bridge is `return settle(…)` or `return settleSync(…)` from an exported function or public member; elsewhere it is a finding', () => {
   const bridged = `
 import { settle, settleSync as run } from '../obs/index';
 export function parse(text: string): number { return run(parseEffect(text)); }
 export async function load(): Promise<string> { return await settle(loadEffect()); }
+export const read = (): number => { return run(readEffect()); };
+export class Store {
+  open(): number { return run(openEffect()); }
+  private helper(): number { return run(helperEffect()); }
+}
+function local(): number { return run(localEffect()); }
+export function seam(): { open(): number } { return { open() { return run(openEffect()); } }; }
+function hidden(): { open(): number } { return { open() { return run(openEffect()); } }; }
+export function mapped(): Promise<{ open(): number }> { return settle(Effect.map(keyEffect(), () => ({ open() { return run(openEffect()); } }))); }
 export function inner(): Effect.Effect<number, KinuError> { return Effect.succeed(1); }
 `;
 
@@ -107,6 +116,12 @@ function settle(value: number): number { return value; }
 export function done(): number { return settle(1); }
 `;
 
-  expect(bridgeSites(new Map([[FILE, bridged], ['packages/fixture/src/b.ts', local]]))).toEqual([`${FILE}:3`, `${FILE}:4`]);
+  expect(bridgeSites(new Map([[FILE, bridged], ['packages/fixture/src/b.ts', local]]))).toEqual({
+    bridges: [`${FILE}:11`, `${FILE}:13`, `${FILE}:13`, `${FILE}:3`, `${FILE}:4`, `${FILE}:5`, `${FILE}:7`],
+    findings: [
+      `${FILE}:10: a runner returned outside an exported function or public member`,
+      `${FILE}:12: a runner returned outside an exported function or public member`,
+      `${FILE}:8: a runner returned outside an exported function or public member`,
+    ],
+  });
 });
-

@@ -236,3 +236,27 @@ test('a fork writes the tree once and its first version reads nothing; a restore
     ws.db.close();
   }
 });
+
+test('an entry no slate source can retain refuses the capture as bad_input, naming the path', async () => {
+  const { ws, vfs, kernel, files } = await slatePlane();
+
+  try {
+    const id = new SlateId('sockets');
+    const directory = slateDirectory(id);
+    seed(vfs, directory, 1);
+    vfs.writeFile(`${directory}/src/daemon.sock`, '');
+
+    // The working tree reports a kind the slate tree has no entry for.
+    const socketed = new SlateFiles({
+      ...vfs,
+      lstat: (path) => ({ ...vfs.lstat(path), type: path.endsWith('.sock') ? 'socket' : vfs.lstat(path).type }),
+    }, new WorkspaceSlateContentStore(kernel), makeSqlExec(ws.db), (body) => body());
+
+    expect(() => socketed.capture(id)).toThrow(expect.objectContaining({
+      code: 'bad_input', message: `Slate source cannot retain socket: src/daemon.sock`,
+    }));
+    expect(files.transaction(() => files.capture(id))).toBeDefined();
+  } finally {
+    ws.db.close();
+  }
+});

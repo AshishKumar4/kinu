@@ -59,17 +59,29 @@ describe('settleSync', () => {
     expect(() => settleSync(Effect.interrupt, { interrupted: 'stopped' })).toThrow(expect.objectContaining({ code: 'cancelled', message: 'stopped' }));
   });
 
-  test('an async step inside is a defect, not an awaited value and not a KinuError', () => {
+  test('an async step inside is a defect, and the steps after it never run', async () => {
     let thrown: unknown;
+    let written = false;
+    let release: () => void = () => {};
+
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const observed = gate.then(() => { /* the step the fiber awaited has settled; its next step would have run */ });
 
     try {
-      settleSync(Effect.promise(() => Promise.resolve(1)));
+      settleSync(Effect.gen(function* () {
+        yield* Effect.promise(() => gate);
+        written = true;
+      }));
     } catch (error) {
       thrown = error;
     }
 
     expect(thrown).not.toBeInstanceOf(KinuError);
     expect(thrown).toMatchObject({ name: 'AsyncFiberError' });
+    release();
+    await observed;
+    await Promise.resolve();
+    expect(written).toBe(false);
   });
 });
 
