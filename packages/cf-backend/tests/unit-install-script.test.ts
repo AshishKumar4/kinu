@@ -16,6 +16,7 @@ import { staticRouteCliEnv } from './helpers/bindings';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell } from '@kinu.run/core';
 import { CLI_DIST_PATHS, RELEASE_SIGNING_PUBLIC_KEY, generateReleaseSigningKey, signRelease } from '@kinu.run/core';
+import { RUN_MARK } from '../../../scripts/deadline';
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -214,6 +215,8 @@ function runHeadlessInstall(
       KINU_HOME: join(home, '.kinu'),
       PATH: `${stubBin}:/usr/bin:/bin`,
       SHELL: '/bin/bash',
+      // Its own session escapes the deadline's group kill, so the leftover scan finds it by the run's mark instead.
+      [RUN_MARK]: process.env[RUN_MARK],
       ...RELEASE_ENV,
       ...extraEnv,
     },

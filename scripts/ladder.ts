@@ -1125,8 +1125,9 @@ export const LADDER: readonly Gate[] = [
       + 'naming its red runs, apart from a steady red and a steady green, and a run reporting no test is red. And '
       + 'a test file a commit could change that the gate could not repeat: every tracked suite is repeated through '
       + 'the row that runs it or named as measured elsewhere.',
-    blind: 'flakes rarer than one run in REPEATS, which the nightly sweep is for; whether a row\'s narrowed argv '
-      + 'still means what the row means beyond `claims()` crediting it with exactly the file.',
+    blind: 'flakes rarer than one run in REPEATS, which the sweep is for (`bun run sweep:flakes`, on demand); '
+      + 'whether a row\'s narrowed argv still means what the row means beyond `claims()` crediting it with exactly '
+      + 'the file.',
     inputs: AMBIENT_BY_NAME,
   },
   {
@@ -2096,8 +2097,8 @@ export const LADDER: readonly Gate[] = [
       + 'some is a flake, named with the tests and runs that failed, and each red run\'s output is kept. No retry and '
       + 'no quarantine: a flake is fixed where it lives.',
     blind: 'a flake that a changed helper or product file puts into a suite the commit does not change, which the '
-      + 'nightly sweep repeats; interleavings the runs never sampled; two copies of one suite side by side; a suite '
-      + 'whose runner needs a deployment or a model, which is named and left to its tier.',
+      + 'sweep repeats on demand (`bun run sweep:flakes`); interleavings the runs never sampled; two copies of one '
+      + 'suite side by side; a suite whose runner needs a deployment or a model, which is named and left to its tier.',
     inputs: {
       kind: 'live',
       why: 'its subject is the index, the test files the commit being made changes, which no hash over the tree '
