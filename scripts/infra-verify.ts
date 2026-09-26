@@ -79,8 +79,8 @@ import {
 } from './infra-cloudflare';
 import {
   CONTROL_PLANE_ACCESS_PATHS, type InfraWorker, type Infrastructure, type Resource, SUPPLY,
-  UNCAPTURED, UNOBSERVABLE, WRANGLER_CONFIG, claimedHosts, deriveInfrastructure, envFields,
-  readSites, requiredIn, supplyCensus, vectorizeGeometry,
+  INFRA_ENVIRONMENTS, UNCAPTURED, UNOBSERVABLE, WRANGLER_CONFIG, claimedHosts, deriveInfrastructure, envFields,
+  environmentFrom, readSites, requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import { isProductSource, readMatching } from './sources';
 
@@ -186,11 +186,16 @@ export function observedRow(resource: Resource, observation: Observation): Row {
   };
 }
 
+/** The declared blind-spot kind a row's resource id (`<kind>.<name>`) is of, if any. */
+function blindKind(id: string): string | undefined {
+  return [...UNOBSERVABLE.keys()].find((kind) => id.startsWith(`${kind}.`));
+}
+
 /** A resource nothing can look at. The manual check comes from the pinned map;
  *  a resource that reaches here without an entry gets a row saying exactly that,
  *  which is what makes the pin an assertion rather than a courtesy. */
 function unobservableRow(resource: Resource): Row {
-  const check = UNOBSERVABLE.get(resource.id);
+  const check = UNOBSERVABLE.get(resource.kind);
 
   return {
     id: resource.id,
@@ -419,20 +424,16 @@ export function supplyDrift(infrastructure: Infrastructure): readonly string[] {
   ];
 }
 
-/** Stale blind-spot entries, scoped to the rows THIS run declared. Entries for
- *  resources deleted from the manifest entirely are caught by the self-test,
- *  which audits UNOBSERVABLE against the derived manifest. */
+/** Stale blind-spot entries, scoped to the rows THIS run declared: a declared kind whose resource came back
+ *  observed. Kinds with no resource in the manifest at all are caught by the self-test, which audits UNOBSERVABLE
+ *  against the derived manifest. */
 export function unobservableDrift(rows: readonly Row[]): readonly string[] {
-  const seen = rows.filter((entry) => entry.verdict === 'unobservable').map((entry) => entry.id);
-  const declared = new Set(rows.map((entry) => entry.id));
-
-  return [...UNOBSERVABLE.keys()]
-    .filter((id) => declared.has(id))
-    .filter((id) => !seen.includes(id))
-    .map((id) =>
-      `${id} is declared UNOBSERVABLE and was not reported as one — either it is now observable `
-      + '(delete the entry and check it) or the resource is gone (delete the entry). A blind spot '
-      + 'nobody can reach is still a blind spot somebody trusts');
+  return rows
+    .filter((entry) => entry.verdict !== 'unobservable' && blindKind(entry.id) !== undefined)
+    .map((entry) =>
+      `${entry.id} is of a kind declared UNOBSERVABLE and was not reported as one — either its kind is now `
+      + 'observable (delete the entry and check it) or the entry is wrong. A blind spot nobody can reach is still '
+      + 'a blind spot somebody trusts');
 }
 
 /* ── The verdict ──────────────────────────────────────────────────────── */
@@ -513,7 +514,7 @@ export function audit(request: AuditRequest): Audit {
       continue;
     }
 
-    if (entry.verdict === 'unobservable' && !UNOBSERVABLE.has(entry.id)) {
+    if (entry.verdict === 'unobservable' && blindKind(entry.id) === undefined) {
       findings.push(finding({
         at: entry.id,
         invariant: 'a resource nothing can observe is DECLARED unobservable, with the manual '
@@ -713,24 +714,25 @@ export function phaseFrom(
 
 /**
  * ONE PHASE PER RUN, and it is named in every line this prints: a `bootstrap`
- * run is not the gate and must not be readable as one. There is one Worker, so
- * a positional argument names nothing and is refused rather than ignored.
+ * run is not the gate and must not be readable as one. The one positional
+ * argument names the environment; production when it is absent.
  */
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const phase = phaseFrom(argv, process.env);
+  const environment = environmentFrom(argv.filter((argument) => !argument.startsWith('--')));
 
-  if (phase === undefined || argv.some((argument) => !argument.startsWith('--'))) {
-    console.error(`${GATE}: usage: bun scripts/infra-verify.ts `
+  if (phase === undefined || environment === undefined) {
+    console.error(`${GATE}: usage: bun scripts/infra-verify.ts [${INFRA_ENVIRONMENTS.join('|')}] `
       + `[${PHASE_FLAG}${PHASES.join('|')}]`);
 
     return 2;
   }
 
-  // Every line this run prints says which phase produced it. `infra: ok` from a
+  // Every line this run prints says which phase and environment produced it. `infra: ok` from a
   // bootstrap run would be read as the gate passing, and the whole point of the
   // phase is that it has not.
-  const label = phase === 'full' ? GATE : `${GATE} ${phase}`;
+  const label = [GATE, ...(environment === 'production' ? [] : [environment]), ...(phase === 'full' ? [] : [phase])].join(' ');
 
   const session = authenticated();
 
@@ -738,9 +740,9 @@ async function main(): Promise<number> {
     return blocked(label, `no Cloudflare session — ${session.state === 'unknown' ? session.reason : 'wrangler is logged out'}`, ACK, process.env.KINU_INFRA_ACK);
   }
 
-  const infrastructure = deriveInfrastructure();
+  const infrastructure = deriveInfrastructure(environment);
   const { worker } = infrastructure;
-  const live = deployment();
+  const live = deployment(environment);
   const rows: Row[] = [];
 
   for (const resource of infrastructure.resources) {
@@ -753,7 +755,7 @@ async function main(): Promise<number> {
     rows.push(await observe(resource, worker, live));
   }
 
-  const supplied = supplyRows(worker, secretNames());
+  const supplied = supplyRows(worker, secretNames(environment));
 
   const sources = readMatching(isProductSource);
   const unread = [...SUPPLY.keys()].filter((name) => readSites(name, sources).length === 0);

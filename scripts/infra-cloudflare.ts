@@ -29,6 +29,12 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { parseJsonc } from './jsonc';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import type { InfraEnvironment } from './infra-manifest';
+
+/** The argv that points a Worker-scoped wrangler command at `environment`'s Worker; production is the top level. */
+export function environmentArgs(environment: InfraEnvironment): readonly string[] {
+  return environment === 'production' ? [] : ['--env', environment];
+}
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -323,8 +329,8 @@ export type Deployment =
  * typed as a `string`. The active deployment names a version and the version
  * carries the complete binding set, both through wrangler's own commands.
  */
-export function deployment(): Deployment {
-  const status = wrangler(['deployments', 'status', '--json']);
+export function deployment(environment: InfraEnvironment): Deployment {
+  const status = wrangler(['deployments', 'status', '--json', ...environmentArgs(environment)]);
 
   if (!status.ok) {
     const complaint = why(status);
@@ -355,7 +361,7 @@ export function deployment(): Deployment {
 
   if (versionId.length === 0) return { state: 'absent' };
 
-  const view = wrangler(['versions', 'view', versionId, '--json']);
+  const view = wrangler(['versions', 'view', versionId, '--json', ...environmentArgs(environment)]);
 
   if (!view.ok) {
     return { state: 'unknown', reason: `\`wrangler versions view\` failed: ${why(view)}` };
@@ -395,8 +401,8 @@ export function deployment(): Deployment {
  * Cloudflare does not return them, which is also why provisioning displays a
  * generated root secret exactly once.
  */
-export function secretNames(): Observation & { readonly names?: readonly string[] } {
-  const run = wrangler(['secret', 'list', '--format', 'json']);
+export function secretNames(environment: InfraEnvironment): Observation & { readonly names?: readonly string[] } {
+  const run = wrangler(['secret', 'list', '--format', 'json', ...environmentArgs(environment)]);
 
   if (!run.ok) {
     const complaint = why(run);

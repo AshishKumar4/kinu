@@ -85,18 +85,18 @@ Universal SSL on `kinu.run` covers the app host and every preview host. I need n
 
 `infra:provision` reads its inventory from `wrangler.jsonc`. There is no second list. It creates what is missing in dependency order (R2 buckets, then Vectorize indexes). It prints `CREATED` or `existed` per resource, so a second run is visibly a no-op. A failed lookup refuses rather than creates: "network down" and "does not exist" differ, and creating through the first would leave two candidate snapshot buckets. What wrangler cannot create prints as a manual worklist on every run.
 
-`gate:infra` checks that every declared resource exists and that the deployed Worker binds it, and exits non-zero otherwise. The deploy script runs it alone, as the last gate before the build. It takes the environment from argv, then `KINU_DEPLOY_ENV`, then defaults to `production`. It reports one verdict per resource instead of dying on the first failure (`scripts/infra-verify.ts` has the reasoning):
+`gate:infra` checks that every declared resource exists and that the deployed Worker binds it, and exits non-zero otherwise. The deploy script runs it alone, as the last gate before the build. Its one argument names the environment, `production` or `staging`, and it is production without one; staging reads `env.staging` in `wrangler.jsonc` the way Wrangler does, and refuses one that names no routes of its own. `infra:provision` and `infra:teardown` take the same argument. It reports one verdict per resource instead of dying on the first failure (`scripts/infra-verify.ts` has the reasoning):
 
 | Verdict | Meaning |
 | --- | --- |
 | `present` | observed to exist |
 | `absent` | observed not to exist. Fails when `env.d.ts` declares the field required |
 | `unknown` | the lookup failed. Always a failure, because a check that could not look did not pass |
-| `unobservable` | no CLI path can confirm it. Declared in `UNOBSERVABLE` with its manual check, and pinned by equality so the blind spot can only shrink |
+| `unobservable` | no CLI path can confirm it. Its kind is declared in `UNOBSERVABLE` with the manual check, and pinned by equality so the blind spot can only shrink |
 
 With no Cloudflare session the verdict is BLOCKED with a non-zero exit.
 
-`bun run infra:teardown production` deletes in reverse dependency order. It refuses without the typed phrase `destroy kinu production`. It prints what sits inside each data-bearing resource before asking. Nothing imports it and no other command reaches it.
+`bun run infra:teardown [staging]` deletes in reverse dependency order. It refuses without the typed phrase `destroy <worker>` (`destroy kinu`, `destroy kinu-staging`). It prints what sits inside each data-bearing resource before asking. Nothing imports it and no other command reaches it.
 
 ### Every value the Worker reads, and where it comes from
 

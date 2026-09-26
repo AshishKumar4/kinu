@@ -37,13 +37,13 @@
 import { createInterface } from 'node:readline/promises';
 import { randomBytes } from 'node:crypto';
 import {
-  type Deployment, type Observation, authenticated, deployment, kvNamespace, r2, secretNames,
+  type Deployment, type Observation, authenticated, deployment, environmentArgs, kvNamespace, r2, secretNames,
   vectorize, why,
   wrangler,
 } from './infra-cloudflare';
 import {
-  type InfraWorker, type Resource, SUPPLY, UNCAPTURED, deriveInfrastructure, requiredIn,
-  vectorizeGeometry,
+  INFRA_ENVIRONMENTS, type Infrastructure, type Resource, SUPPLY, UNCAPTURED, deriveInfrastructure,
+  environmentFrom, requiredIn, vectorizeGeometry,
 } from './infra-manifest';
 
 const BOLD = '\u001B[1m';
@@ -185,7 +185,7 @@ function ensure(resource: Resource): Step {
  */
 async function putSecret(
   name: string,
-  worker: InfraWorker,
+  { environment, worker }: Pick<Infrastructure, 'environment' | 'worker'>,
   ask: (question: string) => Promise<string>,
   interactive: boolean,
 ): Promise<Step> {
@@ -218,7 +218,7 @@ async function putSecret(
 
   // Through stdin, never argv: an argument is visible in the process table and
   // in anything that echoes the command.
-  const run = wrangler(['secret', 'put', name], 120_000, value);
+  const run = wrangler(['secret', 'put', name, ...environmentArgs(environment)], 120_000, value);
 
   if (!run.ok) {
     return { id, outcome: 'failed', detail: `\`wrangler secret put ${name}\` failed: ${why(run)}` };
@@ -261,6 +261,14 @@ function manualWorklist(resources: readonly Resource[]): void {
 }
 
 async function main(): Promise<number> {
+  const environment = environmentFrom(process.argv.slice(2));
+
+  if (environment === undefined) {
+    console.error(`infra:provision: usage: bun run infra:provision [${INFRA_ENVIRONMENTS.join('|')}]`);
+
+    return 2;
+  }
+
   const session = authenticated();
 
   if (session.state !== 'present') {
@@ -270,9 +278,9 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const infrastructure = deriveInfrastructure();
+  const infrastructure = deriveInfrastructure(environment);
   const { worker } = infrastructure;
-  console.log(`${BOLD}Kinu infrastructure provisioning${NC}`);
+  console.log(`${BOLD}Kinu infrastructure provisioning — ${environment}${NC}`);
   console.log(`Account:      ${infrastructure.accountId}`);
   console.log(`Worker:       ${worker.workerName}`);
 
@@ -291,7 +299,7 @@ async function main(): Promise<number> {
   }
 
   console.log(`\n${BOLD}The Worker${NC} — created by \`bun run deploy\`, never by this command`);
-  const live = deployment();
+  const live = deployment(environment);
   console.log(`  ${worker.workerName}: ${deploymentNote(live)}`);
 
   console.log('  A bare `wrangler deploy` is not a substitute: it skips the CLI-asset check and '
@@ -300,7 +308,7 @@ async function main(): Promise<number> {
   console.log(`\n${BOLD}Secrets${NC} — presence is checked; no value is ever read back`);
   const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
   const reader = interactive ? createInterface({ input: process.stdin, output: process.stderr }) : undefined;
-  const held = live.state === 'deployed' ? secretNames() : undefined;
+  const held = live.state === 'deployed' ? secretNames(environment) : undefined;
 
   try {
     if (held === undefined) {
@@ -335,7 +343,7 @@ async function main(): Promise<number> {
 
         const step = await putSecret(
           name,
-          worker,
+          infrastructure,
           async (question) => (reader === undefined ? '' : reader.question(question)),
           interactive,
         );

@@ -23,10 +23,10 @@
  *     band. That is a judgement about a secret and it must not be guessed, so it
  *     is written down and PINNED BY EQUALITY against the derived census — a new
  *     field in `Env` fails the gate until somebody classifies it.
- *   - `UNOBSERVABLE`. Resources no CLI path can confirm. Also pinned: an
- *     unobservable resource missing from this map fails the gate, and an entry
- *     here that turns out to be observable fails it too, so the list can only
- *     shrink.
+ *   - `UNOBSERVABLE`. Kinds of resource no CLI path can confirm. Also pinned: an
+ *     unobservable resource whose kind is missing from this map fails the gate,
+ *     and an entry here whose kind turns out to be observable fails it too, so
+ *     the list can only shrink.
  *
  * REQUIREDNESS is derived where it can be. `env.d.ts` marks the bindings the
  * Worker tolerates the absence of with a `?`, and that is the Worker's own
@@ -40,11 +40,24 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import * as v from 'valibot';
 import { parseJsonc } from './jsonc';
 
 const REPO = new URL('..', import.meta.url).pathname;
+
+/** The deployments one config describes: the top level, and the one named environment staging deploys. */
+export const INFRA_ENVIRONMENTS = ['production', 'staging'] as const;
+
+export type InfraEnvironment = (typeof INFRA_ENVIRONMENTS)[number];
+
+/** The environment a command line names: none is production, one named environment is itself, anything else is
+ *  refused as undefined. */
+export function environmentFrom(positional: readonly string[]): InfraEnvironment | undefined {
+  if (positional.length === 0) return 'production';
+
+  return positional.length === 1 ? INFRA_ENVIRONMENTS.find((environment) => environment === positional[0]) : undefined;
+}
 
 export const WRANGLER_CONFIG = 'packages/cf-backend/wrangler.jsonc';
 
@@ -100,15 +113,42 @@ const WorkerSchema = v.object({
   }))),
 });
 
-/** One environment (AGENTS.md § Deploy). A named `env` section would be a
- *  second deployment nothing here derives, verifies or tears down, so it fails
- *  the parse instead of being ignored like an unread key. */
+/** Production at the top level, and staging as its one named environment. Any other named environment would be
+ *  a deployment nothing here derives, verifies or tears down, so it fails the parse instead of being ignored like
+ *  an unread key. */
 const WranglerConfigSchema = v.object({
   ...WorkerSchema.entries,
-  env: v.optional(v.never('wrangler.jsonc declares a named `env` section; Kinu has one environment')),
+  env: v.optional(v.strictObject({ staging: v.optional(WorkerSchema) }, 'wrangler.jsonc names an environment other than `staging`')),
 });
 
 type WorkerConfig = v.InferOutput<typeof WorkerSchema>;
+
+/**
+ * What `environment` deploys, read the way Wrangler reads it: an environment inherits the top level's inheritable
+ * keys unless it names its own, and declares every binding and var itself (Wrangler configuration docs, "Inheritable
+ * keys" and "Non-inheritable keys"). An environment with no name of its own deploys as `<name>-<environment>`.
+ * Routes are inheritable, and staging inheriting production's would claim kinu.run, so staging must name its own.
+ */
+function environmentConfig(config: v.InferOutput<typeof WranglerConfigSchema>, environment: InfraEnvironment): WorkerConfig {
+  const { env, ...production } = config;
+
+  if (environment === 'production') return production;
+
+  const staging = env?.staging;
+
+  if (staging === undefined) throw new Error(`${WRANGLER_CONFIG} declares no env.staging, so there is no staging deployment`);
+
+  if (staging.routes === undefined) {
+    throw new Error(`${WRANGLER_CONFIG} env.staging names no routes of its own, so it would inherit production's`);
+  }
+
+  const { name, account_id: accountId, assets, migrations, triggers } = production;
+
+  const inherited = Object.fromEntries(Object.entries({ account_id: accountId, assets, migrations, triggers })
+    .filter(([, value]) => value !== undefined));
+
+  return { ...inherited, name: `${name ?? 'worker'}-staging`, ...staging };
+}
 
 /* ── The shapes ───────────────────────────────────────────────────────── */
 
@@ -222,6 +262,7 @@ export function claimedHosts(worker: InfraWorker): ClaimedHosts {
 }
 
 export interface Infrastructure {
+  readonly environment: InfraEnvironment;
   readonly accountId: string;
   readonly worker: InfraWorker;
   readonly resources: readonly Resource[];
@@ -450,19 +491,20 @@ export const UNCAPTURED: readonly Uncaptured[] = [
 /* ── What no CLI path can confirm ─────────────────────────────────────── */
 
 /**
- * Resources verification cannot observe, by resource id, each with the manual
- * check. PINNED BY EQUALITY: an unobservable resource absent from this map fails
- * the gate, and an entry that becomes observable fails it too. A blind spot that
- * is not in a list is indistinguishable from a pass.
+ * The kinds of resource verification cannot observe, each with the manual
+ * check. Keyed by kind because the reason is the kind's, in every environment.
+ * PINNED BY EQUALITY: an unobservable resource whose kind is absent from this map
+ * fails the gate, and an entry whose kind becomes observable fails it too. A
+ * blind spot that is not in a list is indistinguishable from a pass.
  */
-export const UNOBSERVABLE = new Map<string, string>([
-  ['ai-gateway.kinu-ai-gateway',
+export const UNOBSERVABLE = new Map<ResourceKind, string>([
+  ['ai-gateway',
     'wrangler 4.97 exposes no `ai-gateway` command and the wrangler OAuth session has no `aig` '
     + 'scope (403 code 10000 against the REST API, measured 2026-08-18). Check it in the '
     + 'dashboard: https://dash.cloudflare.com/?to=/:account/ai/ai-gateway'],
-  ['cron.kinu */15 * * * *',
+  ['cron',
     'Wrangler writes cron triggers from config but exposes no command that reads them back. '
-    + 'Check Workers & Pages > kinu > Triggers in the Cloudflare dashboard.'],
+    + 'Check the Worker\'s Triggers under Workers & Pages in the Cloudflare dashboard.'],
 ]);
 
 /* ── Supplying what the manifest does not ─────────────────────────────── */
@@ -1117,16 +1159,17 @@ function draftsFor(
   return drafts;
 }
 
-/** The whole inventory of the one Worker wrangler.jsonc declares. */
+/** The whole inventory of the Worker wrangler.jsonc declares for `environment`. */
 export function deriveInfrastructure(
+  environment: InfraEnvironment = 'production',
   configPath = WRANGLER_CONFIG,
   geometry = vectorizeGeometry(),
 ): Infrastructure {
-  const config = parseJsonc(
-    readFileSync(join(REPO, configPath), 'utf8'),
+  const config = environmentConfig(parseJsonc(
+    readFileSync(isAbsolute(configPath) ? configPath : join(REPO, configPath), 'utf8'),
     WranglerConfigSchema,
     configPath,
-  );
+  ), environment);
 
   const worker = workerRow(config);
   const optionality = new Map(envFields().map((field) => [field.name, field.optional]));
@@ -1153,6 +1196,7 @@ export function deriveInfrastructure(
   }
 
   return {
+    environment,
     accountId: config.account_id ?? '',
     worker,
     resources: [...resources.values()],

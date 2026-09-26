@@ -13,9 +13,12 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
   CONTROL_PLANE_ACCESS_PATHS, type InfraWorker, type Infrastructure, type Resource, SUPPLY,
-  UNCAPTURED, UNOBSERVABLE, claimedHosts, deriveInfrastructure, envFields, readSites,
+  UNCAPTURED, UNOBSERVABLE, claimedHosts, deriveInfrastructure, envFields, environmentFrom, readSites,
   requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import {
@@ -46,6 +49,11 @@ function authStore(): Resource {
 function row(id: string, verdict: Row['verdict'], required: boolean, origin: Row['origin'] = 'manual'): Row {
   return { id, verdict, detail: 'fixture', required, purpose: 'fixture', origin };
 }
+
+/** The rows a clean run reports for the resources of every declared blind kind. */
+const blindRows = (): Row[] => infrastructure.resources
+  .filter((resource) => UNOBSERVABLE.has(resource.kind))
+  .map((resource) => row(resource.id, 'unobservable', true));
 
 describe('the inventory is derived from the manifest, not written beside it', () => {
   test('every resource the live account holds appears, keyed and non-empty', () => {
@@ -430,7 +438,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
   // the stale-declaration reason and every count below would be off by one.
   const clean: readonly Row[] = [
     row(authStore().id, 'present', true),
-    ...[...UNOBSERVABLE.keys()].map((id) => row(id, 'unobservable', true)),
+    ...blindRows(),
   ];
 
   test('a clean inventory produces no findings', () => {
@@ -483,7 +491,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
 
   test('an undeclared blind spot fails, and a stale declaration fails too', () => {
     const undeclared = audit({
-      infrastructure, rows: [...clean, row('cron.whatever', 'unobservable', true)], supplied: [], unreadFields: [],
+      infrastructure, rows: [...clean, row('kv.whatever', 'unobservable', true)], supplied: [], unreadFields: [],
     });
 
     expect(undeclared.findings.length).toBe(1);
@@ -493,7 +501,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
     // the rows THIS run declared: an entry whose row IS declared and observable
     // is stale and fails, while one whose row this run never declared is left
     // to the self-test that audits UNOBSERVABLE against the manifest.
-    const gatewayId = [...UNOBSERVABLE.keys()].find((id) => id.startsWith('ai-gateway.'));
+    const gatewayId = infrastructure.resources.find((resource) => resource.kind === 'ai-gateway')?.id;
 
     if (gatewayId === undefined) throw new Error('fixture expects the ai-gateway blind entry');
     const stale = audit({ infrastructure, rows: [row(gatewayId, 'present', true)], supplied: [], unreadFields: [] });
@@ -511,6 +519,8 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
   test('the declared blind spots are exactly the ones observation reports', () => {
     expect(unobservableDrift(clean)).toEqual([]);
     expect(UNOBSERVABLE.size).toBeGreaterThan(0);
+    // A declared kind no resource of the manifest is of is a stale entry.
+    expect([...UNOBSERVABLE.keys()].filter((kind) => !infrastructure.resources.some((resource) => resource.kind === kind))).toEqual([]);
   });
 
   test('a missing required secret fails and a missing optional one is reported only', () => {
@@ -555,7 +565,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
 describe('the phases differ in exactly one tolerance, and only one direction', () => {
   const clean: readonly Row[] = [
     row(authStore().id, 'present', true),
-    ...[...UNOBSERVABLE.keys()].map((id) => row(id, 'unobservable', true)),
+    ...blindRows(),
   ];
 
   /** The Worker EXISTS. That is what makes this the red case rather than the
@@ -846,5 +856,76 @@ describe('what the manifest cannot express is recorded rather than assumed', () 
       // No shell, so no quoting: a name reaches wrangler as one argv element.
       for (const word of resource.create ?? []) expect(word).not.toContain(' ');
     }
+  });
+});
+
+describe('staging is the one named environment, read the way Wrangler reads it', () => {
+  /** One environment's section, the keys this reads. */
+  interface Section {
+    readonly routes?: readonly { readonly pattern: string; readonly custom_domain: boolean }[];
+    readonly vars: Readonly<Record<string, string>>;
+    readonly r2_buckets: readonly { readonly binding: string; readonly bucket_name: string }[];
+  }
+
+  /** A config with production at the top level and `env`, as `wrangler.jsonc` would hold both. */
+  function config(env: Readonly<Record<string, Section>>): string {
+    const path = join(scratchDir('infra-env'), 'wrangler.jsonc');
+    writeFileSync(path, JSON.stringify({
+      name: 'kinu',
+      account_id: 'acct',
+      routes: [{ pattern: 'kinu.run', custom_domain: true }],
+      triggers: { crons: ['*/15 * * * *'] },
+      migrations: [{ tag: 'v1', new_sqlite_classes: ['Agent'] }],
+      vars: { MODE: 'production' },
+      r2_buckets: [{ binding: 'BACKUPS', bucket_name: 'kinu-backups' }],
+      env,
+    }));
+
+    return path;
+  }
+
+  const staging: Section = {
+    routes: [{ pattern: 'staging.example', custom_domain: true }],
+    vars: { MODE: 'staging' },
+    r2_buckets: [{ binding: 'BACKUPS', bucket_name: 'kinu-backups-staging' }],
+  };
+
+  test('staging deploys its own name, bindings, vars and routes, and inherits the rest', () => {
+    const derived = deriveInfrastructure('staging', config({ staging }));
+    const ids = derived.resources.map((resource) => resource.id);
+
+    expect(derived.worker.workerName).toBe('kinu-staging');
+    expect(derived.worker.vars.get('MODE')).toBe('staging');
+    expect(derived.worker.routes).toEqual(['staging.example']);
+    expect(derived.worker.migrationTags).toEqual(['v1']);
+    expect(ids).toContain('r2.kinu-backups-staging');
+    expect(ids).not.toContain('r2.kinu-backups');
+    expect(ids).toContain('cron.kinu-staging */15 * * * *');
+  });
+
+  test('production reads the top level alone, whatever staging declares', () => {
+    const derived = deriveInfrastructure('production', config({ staging }));
+
+    expect(derived.worker.workerName).toBe('kinu');
+    expect(derived.worker.routes).toEqual(['kinu.run']);
+    expect(derived.resources.map((resource) => resource.id)).toContain('r2.kinu-backups');
+  });
+
+  test('staging that names no routes would claim production\'s, and is refused', () => {
+    const { routes: _routes, ...routeless } = staging;
+
+    expect(() => deriveInfrastructure('staging', config({ staging: routeless }))).toThrow(/inherit production's/);
+  });
+
+  test('another named environment, or staging asked of a config without it, is refused', () => {
+    expect(() => deriveInfrastructure('production', config({ preview: staging }))).toThrow(/other than `staging`/);
+    expect(() => deriveInfrastructure('staging', config({}))).toThrow(/declares no env\.staging/);
+  });
+
+  test('a command line names production by saying nothing, staging by name, and nothing else', () => {
+    expect(environmentFrom([])).toBe('production');
+    expect(environmentFrom(['staging'])).toBe('staging');
+    expect(environmentFrom(['preview'])).toBeUndefined();
+    expect(environmentFrom(['staging', 'production'])).toBeUndefined();
   });
 });
