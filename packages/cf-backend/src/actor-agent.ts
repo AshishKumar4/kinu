@@ -222,7 +222,7 @@ import { sha256Hex } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { openAnalyticsWindow } from "@kinu.run/core/analytics";
 import {
-  recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
+  recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, recordWakeArmsRow, type AgentKind,
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
 
@@ -1425,10 +1425,15 @@ export abstract class ActorAgent extends Agent<Env> {
     const nextOwed = this.nextOwedAt();
 
     const arms = { sweeps: sweepsUnfinished, recovery: recoveryUnfinished, ...this.owedUntimedArms() };
-    const named = Object.entries(arms).filter(([, owed]) => owed).map(([arm]) => arm).join(',');
+    const unfinished = Object.entries(arms).filter(([, owed]) => owed).map(([arm]) => arm);
+    const named = unfinished.join(',');
 
     if (named !== '') {
-      if (named !== prior.arms) diagnostics.event('wake.unfinished_arms', arms);
+      if (named !== prior.arms) {
+        diagnostics.event('wake.unfinished_arms', arms);
+        recordWakeArmsRow(this.env, { workspace: this.name, arms: unfinished, laps: prior.laps + 1 });
+      }
+
       await this.scheduleTerminalRetry(lapAt, { laps: prior.laps + 1, arms: named });
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);

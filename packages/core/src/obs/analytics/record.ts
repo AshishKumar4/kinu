@@ -211,3 +211,21 @@ export function recordSandboxRecovery(env: AnalyticsEnv, input: RecoveryRowInput
     durationMs: input.durationMs,
   }));
 }
+
+export function recordStartupRow(env: AnalyticsEnv, input: { readonly workspace: string }): void {
+  recordAgentRow(env, { kind: 'event', event: 'actor.startup', workspace: input.workspace, agentKind: 'orchestrator' });
+}
+
+export interface WakeArmsRowInput {
+  readonly workspace: string;
+  readonly arms: readonly string[];
+  readonly laps: number;
+}
+
+export function recordWakeArmsRow(env: AnalyticsEnv, input: WakeArmsRowInput): void {
+  for (const arm of input.arms) {
+    recordAgentRow(env, {
+      kind: 'event', event: 'wake.unfinished_arms', workspace: input.workspace, agentKind: 'orchestrator', source: arm, attempts: input.laps,
+    });
+  }
+}

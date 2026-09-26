@@ -1,4 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
+import {
+  AGENT_METRICS_SCHEMA, analyticsDigest, recordStartupRow, type AnalyticsDataPoint,
+} from '@kinu.run/core/analytics';
 import { WAKE_LOOP_STARTUPS_PER_HOUR, findWakeLoops, type StartupHour } from './wake-loops';
 
 const HOUR = 3_600_000;
@@ -6,6 +10,32 @@ const HOUR = 3_600_000;
 const T0 = Date.parse('2026-09-25T00:00:00Z');
 
 const hour = (object: string, at: number, startups: number): StartupHour => ({ object, hour: T0 + at * HOUR, startups });
+
+const slot = (name: string): number => AGENT_METRICS_SCHEMA.blobs.findIndex((b) => b.name === name);
+
+describe('the startup boundary feeds the loop verdict', () => {
+  test('57 activations of one workspace in an hour, written as rows, read back as a loop', () => {
+    const points: AnalyticsDataPoint[] = [];
+    const env = { AGENT_METRICS: { writeDataPoint: (point?: AnalyticsDataPoint) => { if (point !== undefined) points.push(point); } } };
+
+    for (let i = 0; i < 57; i += 1) recordStartupRow(env, { workspace: 'warm-forge-4d6acc02' });
+    recordStartupRow(env, { workspace: 'quiet-owner' });
+
+    // What the `startups` panel selects: `event` rows named `actor.startup`, keyed by the index.
+    const startups = points.filter((p) => p.blobs?.[slot('kind')] === 'event' && p.blobs[slot('event')] === 'actor.startup');
+    const perWorkspace = new Map<string, number>();
+
+    for (const p of startups) {
+      const workspace = v.parse(v.string(), p.indexes?.[0]);
+      perWorkspace.set(workspace, (perWorkspace.get(workspace) ?? 0) + 1);
+    }
+
+    const loops = findWakeLoops([...perWorkspace].map(([object, n]) => ({ object, hour: T0, startups: n })));
+
+    expect(loops.map((l) => l.object)).toEqual([analyticsDigest('warm-forge-4d6acc02')]);
+    expect(loops[0].peakPerHour).toBe(57);
+  });
+});
 
 describe('findWakeLoops', () => {
   test('a reset storm (warm-forge-4d6acc02, 57 startups in an hour) trips; a busy normal workspace does not', () => {

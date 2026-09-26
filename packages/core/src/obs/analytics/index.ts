@@ -38,9 +38,11 @@ export {
   recordJobSettled,
   recordModelRow,
   recordSandboxRecovery,
+  recordStartupRow,
   recordToolRow,
   recordTtftRow,
   recordTurnRow,
+  recordWakeArmsRow,
   type AgentKind,
   type AgentRowKind,
   type JobRowInput,
@@ -50,6 +52,7 @@ export {
   type ToolRowInput,
   type TtftRowInput,
   type TurnRowInput,
+  type WakeArmsRowInput,
 } from './record';
 
 export {

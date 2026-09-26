@@ -45,6 +45,17 @@ RPC entries of `UserDO`, `MonitorDO` and `ControlPlaneDO`. A constructor runs
 once per activation, so a window opened only there would give a hot Durable
 Object one budget for its whole lifetime.
 
+Each workspace object writes an `actor.startup` row when it activates, and a
+wake pass that re-arms itself over unfinished work writes one
+`wake.unfinished_arms` row per arm, once per streak. The Metrics tab's
+`startups` panel lists the busiest workspace-hours. On 2026-09-26 two restart
+loops ran at 120 activations an hour while 1,421 of 1,854 active object-hours
+in the week had under 5.
+
+`scripts/prod-logs.ts` reads Workers Observability history: `timeline` for one
+workspace, `errors` for the fleet, `wakes` for restart loops. It needs the
+token in `~/.config/kinu/obs-token`.
+
 The Metrics tab needs `ANALYTICS_SQL_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 Without either, writes continue and the tab says queries are not configured.
 Reads also need `ANALYTICS_DATASET_SUFFIX`: empty in production, `_staging`
