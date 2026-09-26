@@ -6,7 +6,7 @@ import type { OAuthCredential } from '../credentials/store';
 import { isJsonObject, parseJsonObject, type JsonObject } from '../utils/json';
 import { tolerate } from '../obs/index';
 
-const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+export const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 
 const CODEX_ISSUER = 'https://auth.openai.com';
 
