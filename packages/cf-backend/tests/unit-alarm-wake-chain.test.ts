@@ -32,6 +32,22 @@ function wakeArmed(db: Database): boolean {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** A branch head spawned now: work in flight in this activation, which recovery leaves running. */
+function liveHead(db: Database, id: string): void {
+  db.prepare(
+    `INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
+     VALUES (?, ?, ?, 0, 'take a branch', 'running', ?)`,
+  ).run(harnessActorId(db), id, `branch-${id}`, Date.now() + 5);
+}
+
+/** An assignment row's dispatch state and, once settled, the reason it was dismissed. */
+function orphanRow(db: Database, id: string): { step_idx: number | null; dismissed: string | null } {
+  return present(db
+    .query<{ step_idx: number | null; dismissed: string | null }, [string]>(
+      `SELECT step_idx, json_extract(payload, '$.__dismissed.reason') AS dismissed FROM agent_log WHERE id = ?`)
+    .get(id), `the agent_log row ${id}`);
+}
+
 /**
  * The platform clock moves only across I/O: pinned at `at`, it steps one second after each schedule write, so
  * two arms of one wake straddle a second boundary on every run instead of on a starved box.
@@ -438,21 +454,62 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(await fireArmedTick()).toBe(0);
   });
 
+  // eval-trajectory-evals-pu-eedw1v and warm-forge-4d6acc02, 2026-09-26: their only true arm was admittedDelegations, a
+  // task row for an actor the drain never visits, which woke each object every lap for days.
+  test('a task for an actor that is gone settles with a reason and stops owing a wake', async () => {
+    const { agent, db } = orchestratorHarness();
+    await agent.activateActor();
+    await joinHarnessFibers();
+
+    db.prepare(
+      `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
+       VALUES ('gone-actor', 'orphan-task', 'event', 'subordinate_task', 'trace-orphan', '{"body":"brief"}', ?)`,
+    ).run(Date.now());
+
+    await agent.terminalRetryPass();
+    await joinHarnessFibers();
+
+    expect(orphanRow(db, 'orphan-task')).toMatchObject({ step_idx: -2, dismissed: 'its actor is retired or gone' });
+    expect(wakeArmed(db)).toBe(false);
+  });
+
+  test('a task left for a retired hire settles, and a live hire\'s task still runs', async () => {
+    const { agent, db } = orchestratorHarness();
+    await agent.activateActor();
+    await joinHarnessFibers();
+    await agent.setSoul('# Purpose\n\nDo each task asked.');
+    const { subordinate: retired } = await agent.createSubordinateAgent();
+    const { subordinate: live } = await agent.createSubordinateAgent();
+
+    if (retired.actorId === null || live.actorId === null) throw new Error('the added agents have no actors');
+    await agent.dismissSubordinate(retired.name, true);
+
+    const insert = db.prepare(
+      `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, payload_visibility, received_at)
+       VALUES (?, ?, 'event', 'subordinate_task', 'trace-left', '{"body":"brief","kinu_mode":"build"}', 'full', ?)`,
+    );
+
+    insert.run(retired.actorId, 'left-task', Date.now());
+    insert.run(live.actorId, 'live-task', Date.now());
+
+    await agent.terminalRetryPass();
+    await joinHarnessFibers();
+
+    expect(orphanRow(db, 'left-task')).toMatchObject({ step_idx: -2, dismissed: 'its actor is retired or gone' });
+    expect(orphanRow(db, 'live-task').step_idx).not.toBe(-2);
+  });
+
   // eval-trajectory-evals-pu-eedw1v, 2026-09-22 to 26: one arm stayed true, each ~30 s the idle object was evicted
   // and the in-memory ramp restarted at 2 s, so it woke ~8 times a minute for days instead of at the 60 s ceiling.
   test('evictions between unfinished laps neither shorten the pace nor lift its ceiling', async () => {
     const { db } = orchestratorHarness();
     const lapDelays: number[] = [];
 
-    // A task for an actor the directory does not hold: the drain never visits it, so the arm stays true every lap.
-    db.prepare(
-      `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
-       VALUES ('gone-actor', 'orphan-task', 'event', 'subordinate_task', 'trace-orphan', 'null', ?)`,
-    ).run(Date.now());
-
     for (let lap = 0; lap < 8; lap++) {
       // Every lap is a fresh activation over the same storage, as the platform's idle eviction makes it.
       const { agent } = await reactivateOrchestratorHarness(db);
+      // Work still running in this activation keeps the lap unfinished.
+      liveHead(db, `lap-${String(lap)}`);
       const due = (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
 
       for (const row of due) {
@@ -477,14 +534,13 @@ describe('the workspace keeps exactly one wake row', () => {
   test('an unfinished streak names its arms once, however many laps, and a new streak names them again', async () => {
     const { db } = orchestratorHarness();
     const recorder = createRecordingLogger();
-
-    const orphan = db.prepare(
-      `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
-       VALUES ('gone-actor', 'orphan-task', 'event', 'subordinate_task', 'trace-orphan', 'null', ?)`,
-    );
+    let running = true;
+    let laps = 0;
 
     const lap = async (): Promise<void> => {
       const { agent } = await reactivateOrchestratorHarness(db);
+
+      if (running) liveHead(db, `streak-${String(laps++)}`);
       // Each activation installs its own sink, so the recorder is tapped per activation.
       const untap = tapDiagnostics(recorder);
 
@@ -502,14 +558,12 @@ describe('the workspace keeps exactly one wake row', () => {
       }
     };
 
-    orphan.run(Date.now());
-
     for (let i = 0; i < 5; i++) await lap();
 
-    // The streak ends: a lap with nothing owed.
-    db.prepare(`DELETE FROM agent_log WHERE id = 'orphan-task'`).run();
+    // The streak ends: a lap with nothing owed, since a new activation errors the heads a dead one left.
+    running = false;
     await lap();
-    orphan.run(Date.now());
+    running = true;
 
     for (let i = 0; i < 3; i++) await lap();
 
@@ -518,7 +572,7 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(named).toHaveLength(2);
 
     for (const line of named) {
-      expect(line.fields).toMatchObject({ admittedDelegations: true, sweeps: false, recovery: false, chatLoop: false });
+      expect(line.fields).toMatchObject({ unfinishedHeads: true, admittedDelegations: false, sweeps: false, chatLoop: false });
       expect(Object.values(line.fields).filter((value) => value !== true && value !== false)).toEqual([]);
     }
   });
