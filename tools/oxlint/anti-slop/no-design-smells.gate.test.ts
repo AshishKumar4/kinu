@@ -158,6 +158,24 @@ run(["aws", "configure"], { AWS_ACCESS_KEY_ID: key });
 `,
   },
   {
+    rule: "no-bare-error-in-durable-object",
+    bad: `declare class Agent<E> { constructor(ctx: unknown, env: E); }
+declare function sealRpcSurface(instance: object, surface: readonly string[]): void;
+export class LedgerDO extends Agent<unknown> {
+  constructor(ctx: unknown, env: unknown) { super(ctx, env); sealRpcSurface(this, ['close']); }
+  close(name: string): void { throw new Error(\`\${name} is still being deleted.\`); }
+}
+`,
+    good: `declare class Agent<E> { constructor(ctx: unknown, env: E); }
+declare class KinuError extends Error { constructor(code: string, message: string); }
+declare function sealRpcSurface(instance: object, surface: readonly string[]): void;
+export class LedgerDO extends Agent<unknown> {
+  constructor(ctx: unknown, env: unknown) { super(ctx, env); sealRpcSurface(this, ['close']); }
+  close(name: string): void { throw new KinuError("unavailable", \`\${name} is still being deleted.\`); }
+}
+`,
+  },
+  {
     rule: "no-manufactured-sql-column",
     // The projection read that faked message_updates' shape for its reader (messages.ts, 2026-09-21).
     bad: `declare const sql: <T>(strings: TemplateStringsArray, ...values: unknown[]) => T[];
