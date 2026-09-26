@@ -354,8 +354,6 @@ export type RecentEventRow = Pick<
   | 'payload_visibility' | 'payload' | 'received_at'
 >;
 
-const ORPHANED_ASSIGNMENT = 'its actor is retired or gone';
-
 function clampLimit(requested: number | undefined, max: number): number {
   if (requested === undefined || !Number.isFinite(requested)) return max;
 
@@ -1112,7 +1110,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     let truncated = false;
     const hires = this.workspaceActors().list().filter((record) => record.kind === 'subordinate');
 
-    for (const orphan of dismissOrphanedAssignments(exec, new Set(hires.map((record) => record.actorId)), ORPHANED_ASSIGNMENT)) {
+    for (const orphan of dismissOrphanedAssignments(exec, new Set(hires.map((record) => record.actorId)))) {
       diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id });
     }
 

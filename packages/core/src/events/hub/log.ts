@@ -273,7 +273,7 @@ const RevisitConditionSchema = v.variant('kind', [
 const AssignmentRowSchema = v.object({ actor_id: v.string(), id: v.string(), payload: v.string() });
 
 export function dismissOrphanedAssignments(
-  sql: SqlExec, live: ReadonlySet<string>, reason: string,
+  sql: SqlExec, live: ReadonlySet<string>,
 ): readonly { readonly actorId: string; readonly id: EventId }[] {
   const rows = sql.exec(
     `SELECT actor_id, id, payload FROM agent_log
@@ -283,7 +283,7 @@ export function dismissOrphanedAssignments(
 
   for (const row of rows) {
     const payload = parseJsonObject(row.payload);
-    payload.__dismissed = { reason, by: 'system', at: Date.now() };
+    payload.__dismissed = { reason: 'its actor is retired or gone', by: 'system', at: Date.now() };
     sql.exec(
       `UPDATE agent_log SET payload = ?, step_idx = -2, turn_id = NULL, consumed_at = NULL
        WHERE actor_id = ? AND id = ?`,

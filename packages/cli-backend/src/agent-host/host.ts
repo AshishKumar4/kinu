@@ -13,6 +13,7 @@ import {
   SubordinateRosterStore,
   SubordinateIdentityStore,
   admitSubordinateTask,
+  dismissOrphanedAssignments,
   drainAssignments,
   type SubordinateInheritedContext,
   actorReferenceOf,
@@ -1406,7 +1407,15 @@ export class LocalAgentHost {
    * reactor digest. `drainTurnId` splices the birth context. Roots have no assignments.
    */
   private async drainAssignedWork(entry: HostEntry): Promise<void> {
-    if (entry.parentKey === null) return;
+    if (entry.parentKey === null) {
+      const hires = entry.tree.directory.list().filter((record) => record.kind === 'subordinate');
+
+      for (const orphan of dismissOrphanedAssignments(makeSqlExec(entry.tree.db), new Set(hires.map((record) => record.actorId)))) {
+        diagnostics.event('subordinate.assignment_orphaned', { agent: entry.key, actor: orphan.actorId, assignment: orphan.id });
+      }
+
+      return;
+    }
 
     const swept = await drainAssignments(entry.eventLog, {
       now: Date.now(),
