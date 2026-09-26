@@ -3,7 +3,10 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { scratchDir } from '../packages/test-utils/src/scratch';
-import { adoptDownloads, artifactDigest } from './promote';
+import {
+  adoptDownloads, adoptTarball, artifactDigest, downloadsServed, planRollback, readDownloads, verifyServing, type Promotion,
+  type Verified,
+} from './promote';
 
 /** A build's dist, as Vite and the release scripts leave it. */
 function dist(files: Readonly<Record<string, string>>): string {
@@ -35,28 +38,59 @@ describe('the artifact digest', () => {
   });
 });
 
-describe('staging\'s downloads, adopted', () => {
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
+
+const TARBALL = 'kinu-worker-1+abc.tar.gz';
+
+/**
+ * One deploy's downloads as it publishes them: each CLI artifact and its checksum, the release manifest, the worker
+ * tarball's checksum, and the stamp signing them all. `run` stands for what differs between two deploys of one
+ * commit, such as the stamp's signing time and the re-packed archives.
+ */
+function published(sha: string, run: string, tarball = `worker ${run}`): Map<string, string> {
+  const artifacts = { 'kinu-cli-linux-x64.tar.gz': `cli ${run}` };
+  const checksums = Object.fromEntries(Object.entries({ ...artifacts, [TARBALL]: tarball }).map(([name, text]) => [`/downloads/${name}`, sha256(text)]));
+
+  return new Map([
+    ['kinu-version.json', JSON.stringify({ sha, builtAt: run, checksums })],
+    ['release.json', JSON.stringify({ sha, builtAt: run })],
+    [`${TARBALL}.sha256`, `${sha256(tarball)}  ${TARBALL}\n`],
+    ...Object.entries(artifacts).flatMap(([name, text]) => [[name, text], [`${name}.sha256`, `${sha256(text)}  ${name}\n`]] as const),
+  ]);
+}
+
+/** Every download of `files`, by name, with its hash: what a green run's record lists. */
+const listed = (files: ReadonlyMap<string, string>): Record<string, string> =>
+  Object.fromEntries([...files].map(([name, text]) => [name, sha256(text)]));
+
+const record = (files: ReadonlyMap<string, string>, sha = 'abc'): Verified =>
+  ({ sha, digest: 'd'.repeat(64), stagingVersion: 'v-1', recordedAt: '2026-09-26T00:00:00.000Z', downloads: listed(files) });
+
+describe('a deployment\'s downloads', () => {
   const stops: (() => Promise<void>)[] = [];
 
   afterEach(async () => { await Promise.all(stops.splice(0).map(async (stop) => stop())); });
 
-  const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
-
-  /** A staging deployment serving `files` under /downloads, with a stamp signing `signed`. */
-  function staging(signed: Readonly<Record<string, string>>, served: Readonly<Record<string, string>> = signed, sha = 'abc'): string {
-    const checksums = Object.fromEntries(Object.entries(signed).map(([name, text]) => [`/downloads/${name}`, sha256(text)]));
-
-    const files = new Map(Object.entries({
-      'kinu-version.json': JSON.stringify({ sha, checksums: { ...checksums, '/downloads/kinu-worker-1+abc.tar.gz': 'f'.repeat(64) } }),
-      'release.json': '{"sha":"abc"}',
-      'kinu-worker-1+abc.tar.gz.sha256': `${'f'.repeat(64)}  kinu-worker-1+abc.tar.gz\n`,
-      ...Object.fromEntries(Object.entries(served).flatMap(([name, text]) => [[name, text], [`${name}.sha256`, `${sha256(text)}  ${name}\n`]])),
-    }));
+  /**
+   * A deployment serving `files` under /downloads, the worker tarball through its R2 route, and `health` as the build
+   * its health names, answer by answer: the last one stays.
+   */
+  function deployment(files: ReadonlyMap<string, string>, served: { tarball?: string; health?: readonly string[] } = {}): string {
+    const health = [...served.health ?? []];
 
     const server = Bun.serve({
       port: 0,
       fetch: (request) => {
-        const text = files.get(new URL(request.url).pathname.replace('/downloads/', ''));
+        const path = new URL(request.url).pathname;
+
+        if (path === '/api/health') {
+          const sha = health.length > 1 ? health.shift() : health[0];
+
+          return sha === undefined ? new Response('<html></html>') : Response.json({ ok: true, build: { sha } });
+        }
+
+        const name = path.replace('/downloads/', '');
+        const text = name === TARBALL ? served.tarball : files.get(name);
 
         return text === undefined ? new Response('missing', { status: 404 }) : new Response(text);
       },
@@ -67,29 +101,126 @@ describe('staging\'s downloads, adopted', () => {
     return `http://127.0.0.1:${String(server.port)}`;
   }
 
-  test('every signed file is kept beside its checksum, and the worker tarball is named for R2', async () => {
-    const dir = join(scratchDir('promote-downloads'), 'downloads');
-    const tarball = await adoptDownloads(staging({ 'kinu-cli-linux-x64.tar.gz': 'cli bytes' }), 'abc', dir);
+  describe('staging\'s, adopted', () => {
+    test('every download the green run published is kept, and the signed worker tarball is named for R2', async () => {
+      const green = published('abc', 'green', 'worker bytes');
+      const dir = join(scratchDir('promote-downloads'), 'downloads');
 
-    expect(tarball).toBe('kinu-worker-1+abc.tar.gz');
-    expect(readFileSync(join(dir, 'kinu-cli-linux-x64.tar.gz'), 'utf8')).toBe('cli bytes');
+      expect(await adoptDownloads(deployment(green), record(green), dir)).toEqual({ name: TARBALL, sha256: sha256('worker bytes') });
 
-    for (const name of ['kinu-version.json', 'release.json', 'kinu-cli-linux-x64.tar.gz.sha256', 'kinu-worker-1+abc.tar.gz.sha256']) {
-      expect(existsSync(join(dir, name))).toBe(true);
-    }
+      for (const [name, text] of green) expect(readFileSync(join(dir, name), 'utf8')).toBe(text);
+    });
+
+    // P1, review job 150: a staging re-deploy of the same commit re-signs and re-packs everything, consistently, and
+    // its tiers may still be red. Staging then serves downloads no green run verified.
+    test('a later deploy\'s downloads of the same commit are refused, however consistent, and nothing is kept', async () => {
+      const dir = join(scratchDir('promote-downloads'), 'downloads');
+      const origin = deployment(published('abc', 'red re-deploy'));
+
+      await expect(adoptDownloads(origin, record(published('abc', 'green')), dir)).rejects.toThrow(/is not the file its green run published/);
+      expect(existsSync(dir)).toBe(false);
+    });
+
+    test('a download the signed stamp does not sign as served is refused', async () => {
+      const inconsistent = new Map([...published('abc', 'green'), ['kinu-cli-linux-x64.tar.gz', 'other bytes']]);
+
+      await expect(adoptDownloads(deployment(inconsistent), record(inconsistent), join(scratchDir('promote-downloads'), 'downloads')))
+        .rejects.toThrow(/kinu-cli-linux-x64\.tar\.gz does not hash as the signed stamp says/);
+    });
+
+    test('downloads of another commit are refused', async () => {
+      const other = published('def', 'green');
+
+      await expect(adoptDownloads(deployment(other), record(other), join(scratchDir('promote-downloads'), 'downloads')))
+        .rejects.toThrow(/the signed stamp is def's, not abc's/);
+    });
   });
 
-  test('a download that does not hash as the stamp signed is refused, and nothing is kept', async () => {
-    const dir = join(scratchDir('promote-downloads'), 'downloads');
-    const origin = staging({ 'kinu-cli-linux-x64.tar.gz': 'cli bytes' }, { 'kinu-cli-linux-x64.tar.gz': 'other bytes' });
+  // The build production serves before its first promotion is its history's first entry: a rollback of that promotion
+  // proves itself against these hashes, so a download missing here would fail the rollback it exists for.
+  test('the downloads a deployment serves are every file its deploy published', async () => {
+    const files = published('abc', 'green');
+    const origin = deployment(files);
 
-    await expect(adoptDownloads(origin, 'abc', dir)).rejects.toThrow(/does not hash as the signed stamp says/);
-    expect(existsSync(dir)).toBe(false);
+    expect(await downloadsServed(origin)).toEqual({ sha: 'abc', downloads: listed(files) });
+    expect([...(await readDownloads(origin, listed(files))).keys()].sort()).toEqual([...files.keys()].sort());
   });
 
-  test('downloads of another commit are refused', async () => {
-    const origin = staging({}, {}, 'def');
+  describe('production\'s, after a rollback', () => {
+    const target = (files: ReadonlyMap<string, string>): Promotion =>
+      ({ sha: 'abc', version: 'v-1', at: '2026-09-26T00:00:00.000Z', downloads: listed(files) });
 
-    await expect(adoptDownloads(origin, 'abc', join(scratchDir('promote-downloads'), 'downloads'))).rejects.toThrow(/serves the downloads of def, not abc/);
+    const pauses: number[] = [];
+
+    const pause = async (ms: number): Promise<void> => { pauses.push(ms); };
+
+    afterEach(() => { pauses.splice(0); });
+
+    test('is proven once the edge serves the build, every download and the worker tarball byte for byte', async () => {
+      const files = published('abc', 'green', 'worker bytes');
+      const origin = deployment(files, { tarball: 'worker bytes', health: ['bad', 'bad', 'abc'] });
+
+      expect(await verifyServing(origin, target(files), fetch, pause)).toBeUndefined();
+      expect(pauses).toHaveLength(2);
+    });
+
+    test('is refused while the edge keeps serving another build, or serves another worker tarball', async () => {
+      const files = published('abc', 'green', 'worker bytes');
+
+      await expect(verifyServing(deployment(files, { tarball: 'worker bytes', health: ['bad'] }), target(files), fetch, pause))
+        .rejects.toThrow(/serves bad, not abc/);
+      await expect(verifyServing(deployment(files, { tarball: 'other worker', health: ['abc'] }), target(files), fetch, pause))
+        .rejects.toThrow(/kinu-worker-1\+abc\.tar\.gz is not the tarball the signed stamp names/);
+    });
+  });
+});
+
+// P2, review job 150: staging's bucket holds the tarball of the LAST upload of a commit, which may be a run that went
+// red after it; production's release manifest signs the green run's.
+describe('the worker release tarball, adopted', () => {
+  const signed = { name: TARBALL, sha256: sha256('worker bytes') };
+
+  test('only the bytes the signed stamp names reach production\'s bucket, with their checksum', async () => {
+    const put: [string, string, string][] = [];
+
+    const to = async (name: string, bytes: Uint8Array, type: string): Promise<void> => {
+      put.push([name, new TextDecoder().decode(bytes), type]);
+    };
+
+    const checksum = new TextEncoder().encode(`${signed.sha256}  ${TARBALL}\n`);
+
+    await adoptTarball(signed, checksum, async () => new TextEncoder().encode('worker bytes'), to);
+    expect(put).toEqual([[TARBALL, 'worker bytes', 'application/gzip'], [`${TARBALL}.sha256`, `${signed.sha256}  ${TARBALL}\n`, 'text/plain']]);
+
+    put.splice(0);
+
+    await expect(adoptTarball(signed, checksum, async () => new TextEncoder().encode('a red run\'s worker'), to))
+      .rejects.toThrow(/is not the tarball the signed stamp names/);
+    expect(put).toEqual([]);
+  });
+});
+
+describe('a rollback', () => {
+  const promotion = (version: string): Promotion => ({ sha: `sha-${version}`, version, at: '2026-09-26T00:00:00.000Z', downloads: {} });
+
+  const withdrawn = (version: string, withdrawnAt: string): Promotion => ({ ...promotion(version), withdrawnAt });
+
+  const HISTORY = [promotion('v1'), promotion('v2'), promotion('v3')];
+
+  test('returns to the build before the one serving, and withdraws the one it leaves', () => {
+    expect(planRollback(HISTORY, 'v3', 'now')).toEqual({ target: promotion('v2'), history: [promotion('v1'), promotion('v2'), withdrawn('v3', 'now')] });
+  });
+
+  // A promotion red after its upload serves a version the history never took.
+  test('from a version the history never took returns to the newest build', () => {
+    expect(planRollback(HISTORY, 'v4-red', 'now')).toEqual({ target: promotion('v3'), history: HISTORY });
+  });
+
+  test('never returns to a build a rollback left, and walks back one build at a time', () => {
+    const left = [promotion('v1'), withdrawn('v2', 'then'), promotion('v3')];
+
+    expect(planRollback(left, 'v3', 'now')?.target).toEqual(promotion('v1'));
+    expect(planRollback([...left, promotion('v4')], 'v4', 'now')?.target).toEqual(promotion('v3'));
+    expect(planRollback(HISTORY, 'v1', 'now')).toBeUndefined();
   });
 });

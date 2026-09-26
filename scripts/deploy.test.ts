@@ -60,6 +60,14 @@ function phaseGates(phase: string): string[] {
   return PLAN.filter((row) => row.phase === phase).map((row) => expandGlobs(row.run));
 }
 
+/** A staging deploy's own step before its build: HEAD's record on staging withdrawn (scripts/promote.ts). */
+const WITHDRAW = "bun scripts/promote.ts forget";
+
+/** The gates among a run's events: all but the build and the step the script takes itself. */
+function gatesOf(events: readonly string[]): string[] {
+  return events.filter((event) => !event.startsWith("MUTATE ") && event !== WITHDRAW);
+}
+
 function executable(path: string, source: string): void {
   writeFileSync(path, source);
   chmodSync(path, 0o755);
@@ -359,14 +367,23 @@ describe("deploy gate", () => {
   // Every property a total order stands in for is asserted directly, and one
   //   - every SERIAL_GATE that runs pre-publish sits in its own wave at the
   //     position it declares;
-  test("runs every declared gate before the first build mutation, and builds for staging", () => {
+  // Review job 150, P1: a staging re-deploy of a verified commit replaces what staging serves for it, so it withdraws
+  // that commit's record first, after its gates and before anything it builds can be published.
+  test("runs every declared gate, withdraws HEAD's record, then builds for staging", () => {
     const run = runDeploy();
 
     expect(run.status).not.toBe(0);
-    expect([...run.events].sort()).toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"].sort());
-    expect(run.events.at(-1)).toBe("MUTATE bunx vite build");
+    expect([...run.events].sort()).toEqual([...REQUIRED_GATES, WITHDRAW, "MUTATE bunx vite build"].sort());
+    expect(run.events.slice(-2)).toEqual([WITHDRAW, "MUTATE bunx vite build"]);
     expect(run.buildEnvironment).toBe("staging");
     expect(run.infraEnvironment).toBe("staging");
+  });
+
+  test("a record that cannot be withdrawn builds nothing", () => {
+    const run = runDeploy({ failingGate: WITHDRAW });
+
+    expect(run.status).not.toBe(0);
+    expect(run.events.at(-1)).toBe(WITHDRAW);
   });
 
   // ── Promotion ──────────────────────────────────────────────────
@@ -393,6 +410,17 @@ describe("deploy gate", () => {
     expect(run.status).not.toBe(0);
     expect(run.events).toEqual([...phaseGates("preflight"), PROMOTION_CHECK]);
     expect(run.infraEnvironment).toBeNull();
+  });
+
+  // Review job 150, P2: a red promotion leaves production serving it, and one command must undo it.
+  test("--rollback runs production's rollback and nothing else, and takes no other option", () => {
+    const rollback = runDeploy({ option: "--rollback" });
+
+    expect([rollback.status, rollback.events]).toEqual([0, ["bun scripts/promote.ts rollback"]]);
+
+    const combined = runDeploy({ option: "--rollback", options: ["--promote"] });
+
+    expect([combined.status, combined.events]).toEqual([2, []]);
   });
 
   test("an ambient environment variable cannot point the account gate at the other deployment", () => {
@@ -604,7 +632,7 @@ describe("deploy gate", () => {
   // order: the same observation as the thread test, through the other figure.
   test("a resident-set cap of one MiB runs the wave one gate at a time", () => {
     const run = runDeploy({ rssMb: 1 });
-    const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
+    const gates = gatesOf(run.events);
 
     expect(gates).toEqual([...REQUIRED_GATES]);
     expect(run.stdout).toContain("1 MiB");
@@ -612,7 +640,7 @@ describe("deploy gate", () => {
 
   test("a budget of one thread runs the wave in declared order, one gate at a time", () => {
     const run = runDeploy({ threads: 1 });
-    const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
+    const gates = gatesOf(run.events);
     // With one thread nothing fits beside a running gate, so the scheduler
     // launches the first unlaunched gate only after the previous settled: the
     // event log IS the declared order. A count-based width would need six
@@ -660,7 +688,7 @@ describe("deploy gate", () => {
 
   test("the serial gates are the ends of the real run", () => {
     const run = runDeploy();
-    const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
+    const gates = gatesOf(run.events);
 
     expect(gates[0]).toBe("bun scripts/preflight.ts");
     // The fixture's build stub fails on purpose, so the last gate to RUN is
@@ -753,7 +781,7 @@ describe("deploy gate", () => {
     // the assertion that would catch a future `--bootstrap` that skipped a check
     // rather than re-scoping one.
     expect([...bootstrap.events].sort())
-      .toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"].sort());
+      .toEqual([...REQUIRED_GATES, WITHDRAW, "MUTATE bunx vite build"].sort());
     expect(bootstrap.infraPhase).toBe("bootstrap");
     // The operator is told what is deferred and what is not, before the gates run.
     expect(bootstrap.stdout).toContain("BOOTSTRAP");

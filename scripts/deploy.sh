@@ -4,6 +4,7 @@
 # staging verified.
 #   bun run deploy              staging: every gate, the build, the tiers, the record
 #   bun run deploy --promote    production: HEAD's build, as staging verified it
+#   bun run deploy --rollback   production: back to the build it took before
 #
 # Deploying any other way is how production once shipped without the CLI
 # download assets: the site was fine, but /downloads/* answered with the SPA
@@ -32,16 +33,24 @@
 # Step 3 asserts this from wrangler's own output rather than trusting it.
 #
 # Usage:
-#   bun run deploy [--promote]
+#   bun run deploy [--promote | --rollback]
 #   bash scripts/deploy.sh [--promote] [--bootstrap] [--gates-only] [--all]
+#   bash scripts/deploy.sh --rollback
 #
 # `--promote` deploys production, and only the build staging verified: the
-# record staging's deploy wrote for HEAD (scripts/promote.ts) stands for the
-# source gates, so none runs. It builds production's config at HEAD, refuses a
-# build whose artifact is not the one staging ran, and publishes staging's own
-# downloads and worker release tarball, byte for byte. The account gate still
-# runs first, for production's resources, and so does everything after the
-# upload.
+# record staging's green deploy of HEAD wrote (scripts/promote.ts) stands for
+# the source gates, so none runs. It builds production's config at HEAD,
+# refuses a build whose artifact is not the one staging ran, and publishes
+# the downloads and worker release tarball that green run published, each
+# checked by its hash. The account gate still runs first, for production's
+# resources, and so does everything after the upload. A staging deploy
+# withdraws HEAD's record before it builds, so a promotion never takes what a
+# staging deploy under way, or red, left there.
+#
+# `--rollback` returns production to the newest build it took before the one it
+# serves, a build a rollback left never again, and proves production then serves
+# that build's downloads byte for byte. It runs no gate and builds nothing: it
+# undoes a promotion whatever the tree holds.
 #
 # `--bootstrap` is for the deploy that DECLARES something only a deploy can
 # create — a Durable Object class new to `migrations`, a new container, a new
@@ -106,19 +115,29 @@ KINU_GATES_ALL=0
 # `--promote` is on the argv only, like `--gates-only`: no ambient variable can
 # turn a staging deploy into a production one.
 KINU_PROMOTE=0
+KINU_ROLLBACK=0
 for option in "$@"; do
   case "$option" in
     --promote) KINU_PROMOTE=1 ;;
+    --rollback) KINU_ROLLBACK=1 ;;
     --bootstrap) KINU_BOOTSTRAP=1 ;;
     --gates-only) KINU_GATES_ONLY=1 ;;
     --all) KINU_GATES_ALL=1 ;;
     *)
       echo -e "${RED}Unknown option '$option'.${NC}"
-      echo "Usage: scripts/deploy.sh [--promote] [--bootstrap] [--gates-only] [--all]"
+      echo "Usage: scripts/deploy.sh [--promote] [--bootstrap] [--gates-only] [--all] | --rollback"
       exit 2
       ;;
   esac
 done
+unset CLOUDFLARE_ENV
+if [ "$KINU_ROLLBACK" = "1" ]; then
+  if [ "$#" -ne 1 ]; then
+    echo -e "${RED}--rollback takes no other option.${NC}"
+    exit 2
+  fi
+  exec bun "$KINU_ROOT/scripts/promote.ts" rollback
+fi
 # The pre-deploy phase, read by scripts/infra-verify.ts, travels in the
 # environment so the `bun run gate:infra` line below stays one string for
 # scripts/ladder.ts to parse.
@@ -131,7 +150,6 @@ if [ "$KINU_BOOTSTRAP" = "1" ]; then
 else
   export KINU_INFRA_PHASE="full"
 fi
-unset CLOUDFLARE_ENV
 
 # ── The two environments ─────────────────────────────────────────────────────
 #
@@ -174,10 +192,15 @@ KINU_SHA="$(git -C "$KINU_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
 # of the asset bundle — which is the other half of the same join.
 KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu $KINU_ENV $KINU_SHA")
 
-# Temp log file — trap cleans up on any exit.
+# Temp log file — trap cleans up on any exit. A promotion that fails after its
+# upload leaves production serving the red build, and says how to undo it.
 KINU_DEPLOY_LOG=""
 cleanup() {
+  local status=$?
   [ -n "$KINU_DEPLOY_LOG" ] && rm -f "$KINU_DEPLOY_LOG"
+  if [ "$status" -ne 0 ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ "$KINU_PROMOTE" = "1" ]; then
+    echo -e "${RED}Production serves this red promotion. Return it to the build it took before: bun run deploy --rollback${NC}"
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -654,6 +677,15 @@ fi
 # ── Step 2: Build Kinu ────────────────────────────────────────
 echo ""
 echo -e "${BOLD}Step 2: Building Kinu for $KINU_ENV${NC}"
+
+# A staging deploy is about to replace what staging serves for HEAD, so HEAD's
+# record goes first: until this run's tiers pass and write it again, nothing it
+# publishes, and nothing a red run of it leaves behind, can be promoted.
+if [ "$KINU_ENV" = "staging" ]; then
+  bun "$KINU_ROOT/scripts/promote.ts" forget \
+    || { echo -e "${RED}❌ $KINU_SHA's record on staging could not be withdrawn, so this deploy will not replace what it verified${NC}"; exit 1; }
+fi
+
 cd "$KINU_ROOT/packages/cf-backend" || { echo -e "${RED}cannot cd to cf-backend${NC}"; exit 1; }
 
 # Build the client bundle into dist/client (used by wrangler's assets directive),
@@ -1041,14 +1073,16 @@ else
   exit 1
 fi
 
-# ── Step 6: The record, or the evals ─────────────────────────────
+# ── Step 6: The record, or the history and the evals ─────────────
 #
 # ON STAGING, THE RECORD: every step above passed for this commit, so promotion
-# may take it (scripts/promote.ts). Written last, so a red anywhere above leaves
-# none, and a record that could not be written fails the deploy: without it
-# this build can never be promoted.
+# may take it (scripts/promote.ts). It lists every download this run published
+# by its hash, and promotion takes those bytes and no others. Written last, so a
+# red anywhere above leaves none, and a record that could not be written fails
+# the deploy: without it this build can never be promoted.
 #
-# ON PRODUCTION, the evals: .github/workflows/evals.yml runs every eval task
+# ON PRODUCTION, THE HISTORY: the build it took, which a later rollback may
+# return to. Then the evals: .github/workflows/evals.yml runs every eval task
 # against the build kinu.run now serves and posts the results on the pull
 # request that merged it. It checks the deployed commit out on GitHub, so an
 # unpushed commit cannot be measured. Non-blocking: the deploy is done whatever
@@ -1058,6 +1092,9 @@ if [ "$KINU_ENV" = "staging" ]; then
   echo -e "${BOLD}Step 6: Recording $KINU_SHA as verified on staging${NC}"
   bun "$KINU_ROOT/scripts/promote.ts" record "${KINU_VERSION:-unknown}" \
     || { echo -e "${RED}❌ the record was not written, so this build cannot be promoted${NC}"; exit 1; }
+elif ! bun "$KINU_ROOT/scripts/promote.ts" promoted "${KINU_VERSION:-}"; then
+  echo -e "${RED}❌ production serves $KINU_SHA, and its history does not hold it, so no rollback can return to it${NC}"
+  exit 1
 elif ! command -v gh >/dev/null 2>&1; then
   echo "⚠ Evals not dispatched: gh is not installed. Once build $KINU_SHA is on GitHub: gh workflow run evals.yml"
 elif ! gh api "repos/{owner}/{repo}/commits/$KINU_SHA" --silent >/dev/null 2>&1; then
@@ -1079,4 +1116,6 @@ echo ""
 echo -e "${GREEN}✅ Kinu Worker deployed and verified.${NC}"
 if [ "$KINU_ENV" = "staging" ]; then
   echo "Promote it to production with: bun run deploy --promote"
+else
+  echo "Return production to the build it took before with: bun run deploy --rollback"
 fi
