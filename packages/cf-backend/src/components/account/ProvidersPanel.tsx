@@ -14,6 +14,7 @@ import {
   listAvailableModels, listProviderCatalog, getProfileCatalog, updateProfileCatalog,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
+  listUnrevokedGrants, dismissUnrevokedGrant, type UnrevokedGrant,
   type CredentialSummary, type CodexStatus,
   type ProviderCatalogEntry, type DeviceFlowStart,
   type CloudflareGatewayStatus, type CloudflareAccountStatus,
@@ -26,7 +27,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
-  MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, storedAccounts,
+  CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, storedAccounts,
 } from '@kinu.run/core';
 
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {
@@ -40,6 +41,37 @@ function ConnectedBadge({ detail }: { detail?: ReactNode }) {
 
 const dangerQuietCls = "p-btn-quiet inline-flex h-6.5 shrink-0 items-center gap-1 px-2 text-xs p-danger";
 
+const GRANT_PROVIDER = new Map([[CODEX_CRED_KEY, 'ChatGPT'], [CLOUDFLARE_OAUTH_CRED_KEY, 'Cloudflare']]);
+
+/** A disconnect the provider would not revoke: the login is gone from Kinu but may still work there. */
+function UnrevokedGrants({ grants, onChanged }: { grants: readonly UnrevokedGrant[]; onChanged: () => void }) {
+  const [error, setError] = useState<string | null>(null);
+
+  if (grants.length === 0) return null;
+
+  return (
+    <div className="space-y-2 rounded-md px-3 py-2 text-xs p-notice-warning">
+      {grants.map((grant) => (
+        <div key={grant.key} className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <div>{GRANT_PROVIDER.get(grant.key) ?? grant.key} did not confirm it revoked the login you disconnected. Revoke Kinu&apos;s access in that account&apos;s settings.</div>
+            <div className="p-meta">{grant.reasons.join(' · ')}</div>
+          </div>
+          <button
+            className="p-btn-quiet inline-flex h-6.5 shrink-0 items-center px-2 text-xs"
+            onClick={async () => {
+              try { await dismissUnrevokedGrant(grant.key); onChanged(); } catch (e) { setError(renderThrownChain({ cause: e })); }
+            }}
+          >
+            I revoked it
+          </button>
+        </div>
+      ))}
+      {error && <div className="p-notice-danger rounded-md px-2 py-1">{error}</div>}
+    </div>
+  );
+}
+
 export function ProvidersPanel({ returnTo }: { returnTo: string }) {
   const creds = useAsyncResource(listCredentials);
   const codex = useAsyncResource(codexStatus);
@@ -47,13 +79,17 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
   const catalog = useAsyncResource(listProviderCatalog);
   const gateways = useAsyncResource(listCloudflareGateways);
   const accounts = useAsyncResource(listCloudflareAccounts);
+  const unrevoked = useAsyncResource(listUnrevokedGrants);
 
-  const reads = [creds, codex, models, catalog, gateways, accounts];
+  const reads = [creds, codex, models, catalog, gateways, accounts, unrevoked];
   // Retry re-reads the whole account: mutators invalidate more than their own row.
   const reloadAll = () => { for (const read of reads) read.reload(); };
 
   return (
     <>
+      <CardSlot resource={unrevoked.resource} what="your disconnected logins" onRetry={reloadAll}>
+        {(grants) => <UnrevokedGrants grants={grants} onChanged={reloadAll} />}
+      </CardSlot>
       <Card title="Cloudflare AI" icon={CloudIcon}>
         <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
           {(menu) => menu.models.some((model) => model.provider === 'workers-ai') ? (

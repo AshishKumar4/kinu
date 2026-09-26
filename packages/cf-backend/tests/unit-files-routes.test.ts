@@ -138,7 +138,7 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
           row = {
             path,
             expectedRevision,
-            upload: new ExecutorFileUpload(router, executorId, path, expectedRevision),
+            upload: new ExecutorFileUpload(router, executorId, path, { expectedRevision }),
           };
           uploads.set(transferId, row);
         } else if (row.expectedRevision !== expectedRevision) {

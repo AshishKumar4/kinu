@@ -2,12 +2,15 @@
 // {@link writeSoul} alone, so listings never open (and mutate) a filesystem.
 
 import * as v from 'valibot';
+import { WORKSPACE_SOUL_DDL } from './schema';
+import type { SqlRow } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { AgentSignal } from '../types/signals';
+import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlExecutor, VFS } from '../types/primitives';
 
 export const SOUL_PATH = 'SOUL.md';
 
-/** Generic missions seeded when none was given; nothing workspace-specific derives from them. */
+/** Generic missions seeded when none was given. */
 const PLACEHOLDER_MISSIONS = [
   'Help the user by reading real context, using the available tools, saving durable facts and memory, and improving reusable capabilities over time.',
   'Help the user with the work they assign.',
@@ -23,7 +26,7 @@ export const DEFAULT_SOUL_MD = [
   PLACEHOLDER_MISSIONS[0],
 ].join('\n');
 
-/** Empty or a seeded placeholder; compared on a prefix because `summarizeSoul` truncates. */
+/** Empty or a seeded placeholder, compared by prefix. */
 export function isPlaceholderMission(mission: string | null | undefined): boolean {
   const text = mission?.trim() ?? '';
 
@@ -138,7 +141,7 @@ export function summarizeSoulBytes(bytes: Uint8Array, maxLength = 220): string {
   return scan.summary();
 }
 
-/** {@link soulSummaryFromMarkdown}'s rules fed a chunk at a time; lines are normalized on arrival and capped past the summary length. */
+/** {@link soulSummaryFromMarkdown}'s rules, a chunk at a time. */
 class SoulSummaryScan {
   private readonly cap: number;
   private line = '';
@@ -248,13 +251,17 @@ class SoulSummaryScan {
   }
 }
 
-/** Null when absent; asked, not caught, so an unreadable SOUL.md is not mistaken for none. */
+/** Null when absent; asked, not caught. */
 export async function readSoul(vfs: VFS): Promise<string | null> {
   if (!await vfs.exists(SOUL_PATH)) return null;
+
+  if ((await vfs.lstat?.(SOUL_PATH))?.isSymlink === true) return null;
   const text = v.parse(v.string(), await vfs.readFile(SOUL_PATH, { encoding: 'utf8' }));
 
   return text.trim() ? text : null;
 }
+
+
 
 /** The mission off the identity row, readable without opening a filesystem. */
 export function readMission(sql: SqlExecutor): string | null {
@@ -265,23 +272,111 @@ export function readMission(sql: SqlExecutor): string | null {
   return mission === undefined || mission === '' ? null : mission;
 }
 
-/** The single writer of both the soul and its mirrored mission, so they cannot drift. */
+/** The one writer of soul and mission; `seal` is `writeWorkspaceSoul`. */
 export async function writeSoul(
-  vfs: VFS,
   sql: SqlExecutor,
   markdown: string,
-  writeFile?: (path: string, content: string) => Promise<void>,
+  seal: (content: string) => Promise<void>,
 ): Promise<void> {
-  if (writeFile) await writeFile(SOUL_PATH, markdown);
-  else await vfs.writeFile(SOUL_PATH, markdown);
+  await seal(markdown);
   void sql`UPDATE workspace_identity SET mission = ${summarizeSoul(markdown)}`;
 }
 
 export async function seedSoul(
-  vfs: VFS, sql: SqlExecutor, input: { name: string; mission?: string },
+  sql: SqlExecutor, input: { name: string; mission?: string },
+  seal: (content: string) => Promise<void>,
 ): Promise<string> {
   const soul = renderSoulMarkdown(input);
-  await writeSoul(vfs, sql, soul);
+  await writeSoul(sql, soul, seal);
 
   return soul;
 }
+
+const IdentityRow = v.object({ name: v.string(), mission: v.optional(v.string(), '') });
+
+const SoulRow = v.object({ markdown: v.string() });
+
+function soulText(row: SqlRow): string {
+  return v.parse(SoulRow, row).markdown;
+}
+
+export interface SoulReads {
+  readonly soulTable: boolean;
+  readonly soul: string | null;
+  readonly identity: { name: string; mission: string } | null;
+}
+
+export const UNVERIFIED_SOUL_PATH = 'SOUL.md.unverified';
+
+function soulReadsDb(db: SqlDatabase): SoulReads {
+  const has = (table: string): boolean =>
+    [...db.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, table)].length > 0;
+
+  const soulRows = has('workspace_soul') ? [...db.exec(`SELECT markdown FROM workspace_soul WHERE id = 1`)] : [];
+
+  const soul = soulRows.length === 0 ? null : soulText(soulRows[0]);
+
+  const identity = has('workspace_identity')
+    ? v.safeParse(IdentityRow, [...db.exec(`SELECT * FROM workspace_identity LIMIT 1`)][0])
+    : { success: false as const };
+
+  return {
+    soulTable: has('workspace_soul'),
+    soul,
+    identity: identity.success ? { name: identity.output.name, mission: identity.output.mission } : null,
+  };
+}
+
+export function soulReadsSql(sql: SqlExecutor): SoulReads {
+  const [soulRow] = sql<SqlRow>`SELECT markdown FROM workspace_soul WHERE id = 1`;
+
+  const soul = soulRow === undefined ? null : soulText(soulRow);
+
+  const identity = v.safeParse(IdentityRow, sql<SqlRow>`SELECT * FROM workspace_identity LIMIT 1`[0]);
+
+  return {
+    soulTable: sql<SqlRow>`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_soul'`.length > 0,
+    soul,
+    identity: identity.success ? { name: identity.output.name, mission: identity.output.mission } : null,
+  };
+}
+
+export function ownerSoulDb(db: SqlDatabase, kernelHeld: string | null): { soul: string; seeded: boolean } | null {
+  const reads = soulReadsDb(db);
+
+  if (reads.soul !== null) return { soul: reads.soul, seeded: false };
+
+  if (reads.identity === null) return null;
+
+  if (kernelHeld !== null) {
+    recordKernelSoul(db, kernelHeld);
+
+    return { soul: kernelHeld, seeded: true };
+  }
+
+  const seed = renderSoulMarkdown(reads.identity);
+  db.exec(WORKSPACE_SOUL_DDL);
+  db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, seed);
+
+  return { soul: seed, seeded: true };
+}
+
+function recordKernelSoul(db: SqlDatabase, markdown: string): void {
+
+  db.exec(WORKSPACE_SOUL_DDL);
+  db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, markdown);
+}
+
+/** Null when the soul says nothing a summary keeps (a heading alone, whitespace), as {@link readMission} reads it. */
+export function ownerMissionOf(reads: SoulReads): string | null {
+  const markdown = reads.soul ?? (reads.identity === null ? null : renderSoulMarkdown(reads.identity));
+  const mission = summarizeSoul(markdown);
+
+  return mission === '' ? null : mission;
+}
+
+export function storeDurableSoulDb(db: SqlDatabase, markdown: string): void {
+  db.exec(WORKSPACE_SOUL_DDL);
+  db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown`, markdown);
+}
+

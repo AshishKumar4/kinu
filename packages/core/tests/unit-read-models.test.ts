@@ -9,6 +9,8 @@ import { present, testActorHandle } from '@kinu.run/test-utils';
 import {
   createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
 } from './helpers';
+import { writeSoul } from '../src/identity/soul';
+import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
@@ -46,8 +48,9 @@ function workspace() {
   const exec = makeSqlExec(db);
   initWorkspaceSchema({ execRaw, sql, exec, transactionSync: (write) => db.transaction(write)() });
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'read-model-test');
+  const bundle = createWorkspaceBundle(db);
 
-  return { db, sql, execRaw, actor, vfs: createWorkspaceBundle(db).vfs, config: actor.config };
+  return { db, sql, execRaw, actor, vfs: bundle.vfs, bundle, config: actor.config };
 }
 
 interface SeedRow { id: string; role: 'user' | 'assistant'; content: string }
@@ -272,17 +275,26 @@ describe('run timeline', () => {
 describe('agent status', () => {
   test('identity, counts and the model the next turn runs, in one shape', async () => {
     const w = workspace();
-    const { db, sql, actor, vfs } = w;
+    const { db, sql, actor, vfs, bundle } = w;
     void sql`UPDATE workspace_identity SET name = 'jarvis', created_at = 42`;
     await seedTranscript(chatStore(w).history, [{ id: 'm1', role: 'user', content: 'hi' }]);
 
-    // The read model reports the caller-resolved model as given.
+    // The row, not a file the main agent may have swapped, answers the owner's soul and mission.
+    await writeSoul(sql, '# Mine\n\n## Mission\n\nread the room and update it', (content) => writeWorkspaceSoul(bundle, content));
+
+    try {
+      await vfs.writeFile('SOUL.md', 'forged');
+    } catch (cause) {
+      expect(String(cause)).toContain('EACCES');
+    }
+
     expect(await getAgentStatus({
-      sql, vfs, actor, model: 'anthropic/claude-opus-5', reasoningEffort: 'high', name: 'fallback-name',
+      sql, actor, model: 'anthropic/claude-opus-5', reasoningEffort: 'high', name: 'fallback-name',
       displayName: 'Jarvis',
     })).toMatchObject({
       name: 'jarvis', displayName: 'Jarvis', createdAt: 42, model: 'anthropic/claude-opus-5',
       messageCount: 1, scaffoldVersion: 0, reasoningEffort: 'high', forkLineage: null,
+      soul: '# Mine\n\n## Mission\n\nread the room and update it', purpose: 'read the room and update it',
     });
     db.close();
   });
@@ -292,7 +304,7 @@ describe('agent status', () => {
     const sql = makeSql(db);
     const other = workspace();
     await expect(getAgentStatus({
-      sql, vfs: createWorkspaceBundle(db).vfs,
+      sql,
       actor: other.actor, model: '', reasoningEffort: null, name: 'agent-7',
       displayName: 'ignored',
     })).rejects.toThrow(/no such table/);
@@ -504,11 +516,11 @@ describe('executor file plane', () => {
 
   test('an empty path lists where the environment itself says it starts', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/home/main/SOUL.md', 'me');
+    await rt.storage.vfs.writeFile('/home/main/notes.md', 'me');
 
     const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '');
     expect(listed.path).toBe('/home/main');
-    expect(listed.entries?.map((e) => e.name)).toContain('SOUL.md');
+    expect(listed.entries?.map((e) => e.name)).toContain('notes.md');
     db.close();
   });
 
@@ -525,7 +537,7 @@ describe('executor file plane', () => {
 
   test('the listed directory comes back absolute and resolved, so the caller can walk up', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/home/main/SOUL.md', 'me');
+    await rt.storage.vfs.writeFile('/home/main/notes.md', 'me');
 
     // `..` from the agent's home is /home, not the filesystem root: the old root's link sits beside it.
     const up = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/..');

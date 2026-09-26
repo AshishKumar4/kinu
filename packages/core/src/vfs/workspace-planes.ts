@@ -8,9 +8,10 @@ import {
 } from '../identity/fork-sink';
 import type { ForkFileSource } from '../identity/fork-transfer';
 import type { ForkTreeReader } from '../identity/fork';
-import type { ArchiveFileSource } from '../identity/archive';
-import { SOUL_PATH, summarizeSoulBytes } from '../identity/soul';
+import type { ArchiveFileSource, ArchiveFileTarget } from '../identity/archive';
+import { SOUL_PATH, storeDurableSoulDb, summarizeSoulBytes } from '../identity/soul';
 import { tolerate } from '../obs/index';
+import { resealWorkspaceSoul, sealWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
 import type { WorkspaceBundle } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -21,25 +22,26 @@ async function sessionPlane(bundle: WorkspaceBundle): Promise<CredentialedVfs> {
   return (await bundle.session()).vfs.as(CRED_SESSION_USER);
 }
 
-/**
- * Owner-protected SOUL write: sticky 1777 root owned by the kernel, SOUL.md kernel-owned
- * mode 444, so the agent cannot replace, rename or remove it.
- */
+/** The prompt's soul; reseals the file. */
+export async function settledWorkspaceSoul(bundle: WorkspaceBundle): Promise<string | null> {
+  const session = await bundle.session();
+
+  return resealWorkspaceSoul(session.vfs.as(CRED_KERNEL), session.sql);
+}
+
+/** The owner's SOUL write, then sealed. */
 export async function writeWorkspaceSoul(
   bundle: WorkspaceBundle, content: string | Uint8Array,
 ): Promise<void> {
-  const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
-  const soul = workspacePath(SOUL_PATH);
+  const session = await bundle.session();
+  const kernel = session.vfs.as(CRED_KERNEL);
 
   if (!kernel.exists(WORKSPACE_ROOT) || !kernel.isDirectory(WORKSPACE_ROOT)) {
     throw new Error(`the workspace root ${WORKSPACE_ROOT} does not exist`);
   }
 
-  kernel.chown(WORKSPACE_ROOT, CRED_KERNEL.uid, CRED_KERNEL.gid);
-  kernel.chmod(WORKSPACE_ROOT, 0o1777);
-  kernel.writeFile(soul, content);
-  kernel.chown(soul, CRED_KERNEL.uid, CRED_KERNEL.gid);
-  kernel.chmod(soul, 0o444);
+  sealWorkspaceSoul(kernel, content);
+  storeDurableSoulDb(session.sql, content instanceof Uint8Array ? new TextDecoder().decode(content) : content);
 }
 
 function workspaceForkPort(bundle: WorkspaceBundle): ForkNativeFilePort {
@@ -124,7 +126,9 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
 export function createWorkspaceForkSource(bundle: WorkspaceBundle): ForkFileSource {
   return {
     async open(): Promise<ForkTreeReader> {
-      const plane = (await bundle.session()).vfs.as(CRED_KERNEL);
+      const session = await bundle.session();
+      const plane = session.vfs.as(CRED_KERNEL);
+      resealWorkspaceSoul(plane, session.sql);
 
       return {
         lstat(path) {
@@ -145,12 +149,35 @@ function lstatOrNull(plane: CredentialedVfs, path: string): VfsStat | null {
   return tolerate(() => plane.lstat(path), 'enoent') ?? null;
 }
 
-/** Unsupported node kinds fail the backup rather than producing an incomplete one. */
+/** An unsupported node kind fails the backup. */
+/** An import's target; SOUL.md is an owner write. */
+export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveFileTarget {
+  return {
+    writeFile: async (path, data) => (normalizeVfsPath(workspacePath(path)) === normalizeVfsPath(workspacePath(SOUL_PATH))
+      ? await writeWorkspaceSoul(bundle, data)
+      : await bundle.vfs.writeFile(path, data)),
+    mkdir: async (path, opts) => { await bundle.vfs.mkdir(path, opts); },
+  };
+}
+
 export function workspaceArchiveFiles(bundle: WorkspaceBundle): ArchiveFileSource {
+  // One reseal per export: the walk calls back per entry, and each must see the same sealed soul.
+  let plane: Promise<CredentialedVfs> | null = null;
+  const sealed = (): Promise<CredentialedVfs> => (plane ??= soulPlane(bundle));
+
   return archiveFileTree({
-    readdir: async (path) => [...(await sessionPlane(bundle)).readdir(workspacePath(path))],
-    readFile: async (path) => (await sessionPlane(bundle)).readFile(workspacePath(path)),
+    readdir: async (path) => [...(await sealed()).readdir(workspacePath(path))],
+    readFile: async (path) => (await sealed()).readFile(workspacePath(path)),
   });
+}
+
+/** Files with SOUL.md resealed first. */
+async function soulPlane(bundle: WorkspaceBundle): Promise<CredentialedVfs> {
+  const session = await bundle.session();
+
+  resealWorkspaceSoul(session.vfs.as(CRED_KERNEL), session.sql);
+
+  return sessionPlane(bundle);
 }
 
 export function archiveFileTree(source: {

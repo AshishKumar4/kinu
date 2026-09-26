@@ -9,6 +9,8 @@ import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import * as v from 'valibot';
+import { ownerSoulDb, SOUL_PATH, UNVERIFIED_SOUL_PATH } from '../identity/soul';
+import { diagnostics, toKinuError } from '../obs/index';
 import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
@@ -16,6 +18,7 @@ export const MAIN_AGENT = 'main';
 
 /** Owner writes; everyone reads and traverses. */
 export const AGENT_HOME_MODE = 0o755;
+
 
 /** Owner only, and discarded with the agent. */
 export const AGENT_TMP_MODE = 0o700;
@@ -223,6 +226,91 @@ export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
   if (homes.uid !== 0 || homes.gid !== 0 || (homes.mode & 0o7777) !== 0o755) {
     kernel.chown('/home', 0, 0);
     kernel.chmod('/home', 0o755);
+  }
+}
+
+export type SoulVfs = Pick<CredentialedVfs, 'readdir' | 'lstat' | 'unlink' | 'rename' | 'removeRecursive' | 'writeFile' | 'readFile' | 'chown' | 'chmod'>;
+
+const SOUL_FILE = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
+
+function soulPresent(kernel: SoulVfs): boolean {
+  return soulPresentName(kernel, SOUL_PATH);
+}
+
+function sealedSoul(kernel: SoulVfs): boolean {
+  if (!soulPresent(kernel)) return false;
+  const entry = kernel.lstat(SOUL_FILE);
+
+  return entry.type === 'file' && entry.uid === 0 && entry.gid === 0;
+}
+
+export function sealWorkspaceSoul(kernel: SoulVfs, content: string | Uint8Array): void {
+  if (soulPresent(kernel)) {
+    if (kernel.lstat(SOUL_FILE).type === 'directory') kernel.removeRecursive(SOUL_FILE);
+    else kernel.unlink(SOUL_FILE);
+  }
+
+  kernel.writeFile(SOUL_FILE, content);
+  kernel.chown(SOUL_FILE, 0, 0);
+  kernel.chmod(SOUL_FILE, 0o444);
+}
+
+function kernelHeldSoul(kernel: SoulVfs): string | null {
+  return sealedSoul(kernel) ? new TextDecoder().decode(kernel.readFile(SOUL_FILE)) : null;
+}
+
+/** SOUL.md as the row's view; written only on a mismatch. */
+export function resealWorkspaceSoul(kernel: SoulVfs, sql: SqlDatabase): string | null {
+  const owned = ownerSoulDb(sql, kernelHeldSoul(kernel));
+
+  if (owned === null) return null;
+
+  const { soul, seeded } = owned;
+
+  const intact = sealedSoul(kernel)
+    && (kernel.lstat(SOUL_FILE).mode & 0o7777) === 0o444
+    && new TextDecoder().decode(kernel.readFile(SOUL_FILE)) === soul;
+
+  if (intact) return soul;
+
+  if (soulPresent(kernel) && !sealedSoul(kernel)) {
+    const forged = kernel.lstat(SOUL_FILE).type;
+
+    if (forged === 'directory') kernel.removeRecursive(SOUL_FILE);
+    else if (forged === 'symlink') kernel.unlink(SOUL_FILE);
+    else if (seeded) {
+      const stale = `${WORKSPACE_ROOT}/${UNVERIFIED_SOUL_PATH}`;
+
+      if (soulPresentName(kernel, UNVERIFIED_SOUL_PATH)) kernel.unlink(stale);
+      kernel.rename(SOUL_FILE, stale);
+      writeUnverifiedNote(sql);
+    } else {
+      kernel.unlink(SOUL_FILE);
+      diagnostics.event('soul.forge_discarded', { kind: forged });
+    }
+  }
+
+  sealWorkspaceSoul(kernel, soul);
+
+  return soul;
+}
+
+function soulPresentName(kernel: SoulVfs, name: string): boolean {
+  return kernel.readdir(WORKSPACE_ROOT).some((entry) => entry.name === name);
+}
+
+function writeUnverifiedNote(sql: SqlDatabase): void {
+  try {
+    const [id] = [...sql.exec(`SELECT workspace_id FROM workspace_actors WHERE kind = 'main' AND deleted_at IS NULL LIMIT 1`)];
+    const workspace = v.parse(v.object({ workspace_id: v.string() }), id).workspace_id;
+    sql.exec(
+      `INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at) VALUES (?, 'soul.unverified_moved', 'An older SOUL.md was moved to SOUL.md.unverified and is no longer read; set SOUL.md to adopt it.', 0, ?)`,
+      workspace, Date.now(),
+    );
+  } catch (cause) {
+    diagnostics.failure('soul.unverified_note_failed', toKinuError({
+      doing: 'recording that an older SOUL.md was set aside', cause, otherwise: 'io',
+    }));
   }
 }
 

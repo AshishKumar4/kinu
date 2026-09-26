@@ -385,6 +385,14 @@ export const pollCodexFlow    = () => api(PollResultSchema, 'POST', '/codex/poll
 
  return r; });
 
+const UnrevokedGrantSchema = v.object({ key: v.string(), reasons: v.array(v.string()), recordedAt: v.number() });
+
+export type UnrevokedGrant = v.InferOutput<typeof UnrevokedGrantSchema>;
+
+export const listUnrevokedGrants = () => api(v.array(UnrevokedGrantSchema), 'GET', '/unrevoked-grants');
+
+export const dismissUnrevokedGrant = (key: string) => api(OkSchema, 'DELETE', `/unrevoked-grants/${encodeURIComponent(key)}`);
+
 export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
   .then((r) => { invalidateModelsCache();
 

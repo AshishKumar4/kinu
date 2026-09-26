@@ -34,7 +34,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
@@ -51,6 +51,7 @@ import {
   isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching,
   trackedFiles,
 } from './sources';
+import { discoverArgv } from './python-suites';
 import { CLI_TEST_ROOT } from './test-cli';
 import { modulesReaching } from './import-closure';
 import type { ModuleEdges } from './import-graph';
@@ -1115,6 +1116,20 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
+    run: 'bun test --timeout=0 scripts/flake-gate.test.ts',
+    label: 'Flake gate self-tests',
+    tier: 'push',
+    // Measured 2026-09-26 on the 24-thread box (load 16): 4.1 s, most of it planning every tracked test file.
+    seconds: 4.1,
+    catches: 'a flake gate that cannot see a flake: a planted suite red on alternate runs must come out a flake '
+      + 'naming its red runs, apart from a steady red and a steady green, and a run reporting no test is red. And '
+      + 'a test file a commit could change that the gate could not repeat: every tracked suite is repeated through '
+      + 'the row that runs it or named as measured elsewhere.',
+    blind: 'flakes rarer than one run in REPEATS, which the nightly sweep is for; whether a row\'s narrowed argv '
+      + 'still means what the row means beyond `claims()` crediting it with exactly the file.',
+    inputs: AMBIENT_BY_NAME,
+  },
+  {
     run: 'bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
@@ -2065,6 +2080,31 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
+    run: 'bun scripts/flake-gate.ts',
+    label: 'Changed test files, repeated',
+    tier: 'commit',
+    // 0.3 s when the commit changes no test file, as at push, in CI and at a deploy. A commit that changes one pays
+    // for REPEATS runs of it (BROWSER_REPEATS for a browser suite), which is the gate's whole point.
+    seconds: 0.3,
+    deadline: {
+      seconds: 3600,
+      why: 'six runs of a changed suite at its own row\'s 480 s deadline, 2,880 s, is the longest a commit that changes '
+        + 'one suite can legitimately take. Each run keeps its row\'s deadline, so this bounds the gate, not a test.',
+    },
+    catches: 'a test that passes and fails on one tree, landing. Every test file the commit adds or changes runs '
+      + 'REPEATS times as the row that claims it runs it, the file alone: red in every run is a failing test, red in '
+      + 'some is a flake, named with the tests and runs that failed, and each red run\'s output is kept. No retry and '
+      + 'no quarantine: a flake is fixed where it lives.',
+    blind: 'a flake that a changed helper or product file puts into a suite the commit does not change, which the '
+      + 'nightly sweep repeats; interleavings the runs never sampled; two copies of one suite side by side; a suite '
+      + 'whose runner needs a deployment or a model, which is named and left to its tier.',
+    inputs: {
+      kind: 'live',
+      why: 'its subject is the index, the test files the commit being made changes, which no hash over the tree '
+        + 'stands for.',
+    },
+  },
+  {
     run: 'bun test --timeout=0 scripts/hammer.test.ts scripts/mutation-fences.test.ts',
     label: 'Hammer and fence gate self-tests',
     tier: 'push',
@@ -2948,6 +2988,68 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   return [...new Set(claimed)]
     .filter((path) => !bunWouldSkip(path) && isBunDiscoverableSuite(path)
       && !ignored.some((glob) => glob.match(path)));
+}
+
+/**
+ * The argv that runs `file` ALONE the way `command` runs it: the same runner and flags, the file its only target.
+ * It reads the grammar `claims()` reads and is held to it: an argv `claims()` does not credit with exactly `file`
+ * is refused, `undefined`, never run as a guess. A runner that needs a deployment or a model (the eval suite, the
+ * live tier) narrows to nothing, and so does a form this does not know.
+ *
+ * A Python suite runs as its runner runs a root, `unittest discover` over the file's directory with the pattern
+ * narrowed to its name. `claims()` credits that runner with every Python suite, so that form is exact by
+ * construction rather than by the check.
+ */
+export function narrowedTo(command: string, file: string, tracked: readonly string[]): string[] | undefined {
+  const words = command.split(/\s+/).filter((word) => word.length > 0);
+  const script = words[0] === 'bun' && words[1] === 'run' && words.length === 3 ? packageScripts()[words[2] ?? ''] : undefined;
+  const runner = script === undefined ? words : script.split(/\s+/);
+
+  if (runner[0] === 'bun' && runner[1] === PYTHON_SUITES_SCRIPT) {
+    return isPythonSuite(file) && tracked.includes(file) ? discoverArgv(dirname(file), basename(file)) : undefined;
+  }
+
+  const narrowed = narrowWords(words, file, tracked);
+  const credited = narrowed === undefined ? [] : claims(narrowed.join(' '), tracked);
+
+  return credited.length === 1 && credited[0] === file ? narrowed : undefined;
+}
+
+/** `narrowedTo`'s walk through the forms, one per form `claims()` reads. */
+function narrowWords(words: readonly string[], file: string, tracked: readonly string[]): string[] | undefined {
+  const [first, second] = words;
+
+  if (first === 'bun' && second === 'scripts/ladder.ts' && words[2] === '--run') return narrowWords(words.slice(3), file, tracked);
+
+  if (first === 'bun' && second === DEV_SERVER_WRAPPER) {
+    const inner = narrowWords(words.slice(2), file, tracked);
+
+    return inner === undefined ? undefined : ['bun', DEV_SERVER_WRAPPER, ...inner];
+  }
+
+  if (first === 'bun' && second === 'run') {
+    const part = (packageScripts()[words[2] ?? ''] ?? '').split('&&').map((text) => text.trim())
+      .find((text) => claims(text, tracked).includes(file));
+
+    return part === undefined ? undefined : narrowWords(part.split(/\s+/), file, tracked);
+  }
+
+  // `test-cli.ts` runs its files as `bun test --timeout=0 --parallel=<n> <files>`.
+  if (first === 'bun' && second === 'scripts/test-cli.ts') return ['bun', 'test', '--timeout=0', file];
+
+  const flags = words.filter((word) => word.startsWith('-') && !word.startsWith(`${PATH_IGNORE_FLAG}=`));
+
+  if (first === 'node') return ['node', ...flags, file];
+
+  if (first === 'vitest' && second === 'run') {
+    const base = words[words.indexOf('--root') + 1] ?? '';
+
+    return file.startsWith(`${base}/`) ? ['vitest', 'run', '--root', base, file.slice(base.length + 1)] : undefined;
+  }
+
+  if (first === 'bun' && second === 'test') return ['bun', 'test', ...flags, file];
+
+  return undefined;
 }
 
 /** What a red row that ran to its end found: its exit code, or the processes it left (named above). */

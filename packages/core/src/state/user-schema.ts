@@ -102,6 +102,13 @@ export function initUserTables(sql: SqlExec): void {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_unrevoked_grants (
+      key          TEXT PRIMARY KEY,
+      reasons_json TEXT NOT NULL,
+      recorded_at  INTEGER NOT NULL
+    )
+  `);
   // Bumped by every CLI/access-token revocation; sockets record the generation they were admitted under.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_auth_generation (

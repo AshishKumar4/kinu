@@ -35,7 +35,9 @@ async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: 
   const dbPath = join(dir, 'agent.db');
   const db = new Database(dbPath);
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM, agentName: 'jarvis' });
-  await (rt.agentStateVfs ?? rt.storage.vfs).writeFile('SOUL.md', '# jarvis\n\n## Mission\n\nRun the lab.');
+  // The owner's soul, as `writeWorkspaceSoul` records it; the next turn reseals the file from it.
+  db.exec('CREATE TABLE IF NOT EXISTS workspace_soul (id INTEGER PRIMARY KEY CHECK (id = 1), markdown TEXT NOT NULL)');
+  db.prepare('INSERT INTO workspace_soul (id, markdown) VALUES (1, ?)').run('# jarvis\n\n## Mission\n\nRun the lab.');
 
   if (storedModel !== undefined) rt.actor.config.setModel(storedModel);
 
