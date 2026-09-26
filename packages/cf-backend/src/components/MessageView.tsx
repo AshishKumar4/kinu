@@ -22,7 +22,7 @@ import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
-import { MarkdownContent, CodeBlock, SlateLink } from "@/components/surfaces/shared";
+import { MarkdownContent, CodeBlock, SlateLink, slateLinkIds } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { extractPreviewUrl } from "@kinu.run/core";
 import {
@@ -828,8 +828,8 @@ export const MessageView = memo(function MessageView({
 });
 
 function ChangedSlates({ message }: { message: UIMessage }) {
-  const text = message.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n");
-  const ids = slatesChanged({ metadata: message.metadata }).filter((id) => !text.includes(`slate://${id}`));
+  const shown = slateLinkIds(message.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n"));
+  const ids = slatesChanged({ metadata: message.metadata }).filter((id) => !shown.has(id));
 
   return ids.map((id) => <SlateLink key={id} id={id} />);
 }

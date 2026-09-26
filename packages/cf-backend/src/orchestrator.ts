@@ -195,7 +195,7 @@ import {
   boundEventQuery,
   type WorkMode,
   resolveModelRoute,
-  WORKSPACE_RUN_ID,
+  WORKSPACE_RUN_ID, activeOperationProfile, SLATES_ROOT,
   buildWorkspaceOverview, recoveryBackoffMs, type WorkspaceOverview,
   projectJsonValue,
   type AgentSignal,
@@ -430,7 +430,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (ids.length === 0) return;
 
-        if (this._inFlight) for (const id of ids) this.turnSlates.add(id);
+        this.noteTurnSlates(ids);
         this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
         this.overviewChanged();
       },
@@ -1892,9 +1892,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (parentId === null) return;
 
+    const metadata = await this.takeTurnSlates(reference.actorId, completion.turnId);
+
     const entry = await transcript.prepareAssistant({
       id, parentId, turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
-      finalText: completion.finalTextReference,
+      finalText: completion.finalTextReference, ...(metadata !== null && { metadata }),
     });
 
     this.ctx.storage.transactionSync(() => transcript.appendAssistant(entry));
@@ -2039,20 +2041,43 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // The reactor lives on the core AgentOrchestrator. Ingress uses the debounced
   // `this.orch.scheduleDrain()`; the post-turn hook drains via `this.orch.drainPendingEvents()`.
 
+  private readonly turnSlates = new Map<string, { readonly turnId: string; readonly slates: Set<string> }>();
+
+  private noteTurnSlates(ids: readonly string[]): void {
+    const writer = activeOperationProfile();
+
+    if (writer === undefined || writer.turnId === WORKSPACE_RUN_ID) return;
+    let held = this.turnSlates.get(writer.actor.actorId);
+
+    if (held?.turnId !== writer.turnId) {
+      held = { turnId: writer.turnId, slates: new Set() };
+      this.turnSlates.set(writer.actor.actorId, held);
+    }
+
+    for (const id of ids) held.slates.add(id);
+  }
+
+  private async takeTurnSlates(actorId: string, turnId: string): Promise<JsonObject | null> {
+    const held = this.turnSlates.get(actorId);
+
+    if (held?.turnId !== turnId) return null;
+    this.turnSlates.delete(actorId);
+    const vfs = this.hostedWorkspace().bundle.vfs;
+    const kept = [];
+
+    for (const id of [...held.slates].sort()) if (await vfs.exists(`${SLATES_ROOT}/${id}`)) kept.push(id);
+
+    return kept.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: kept };
+  }
+
+  protected override answerMetadata(turnId: string): Promise<JsonObject | null> {
+    return this.takeTurnSlates(this.actorHandle().actorId, turnId);
+  }
+
   /**
    * Readings this root's settled response owes; all taken now, before any effect runs, since the
    * list is claimed up front. Row order, lanes and gates belong to {@link declareTerminalRoster}.
    */
-  private readonly turnSlates = new Set<string>();
-
-  protected override answerMetadata(): JsonObject | null {
-    const slates = [...this.turnSlates].sort();
-
-    this.turnSlates.clear();
-
-    return slates.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: slates };
-  }
-
   protected owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
     const facts: TerminalTurnFacts = {
       messageId: input.messageId,

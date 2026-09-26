@@ -111,6 +111,20 @@ export function SlateLink({ id }: { id: string }) {
   return <span className="block my-2"><InlineSlate id={id} rpc={inline.rpc} display="inline" /></span>;
 }
 
+const SLATE_LINK = /slate:\/\/[^\s)\]>"'`]+/g;
+
+export function slateLinkIds(text: string): Set<string> {
+  const ids = new Set<string>();
+
+  for (const [link] of text.matchAll(SLATE_LINK)) {
+    const id = slateLinkId(link);
+
+    if (id !== null) ids.add(id);
+  }
+
+  return ids;
+}
+
 function remarkSlateLinks() {
   // Local mdast slice: importing `mdast` types for one plugin is heavier than the plugin.
   interface MdNode {
@@ -120,15 +134,13 @@ function remarkSlateLinks() {
     children?: MdNode[];
   }
 
-  const RE = /slate:\/\/[^\s)\]>"'`]+/g;
-
   const split = (node: MdNode): MdNode[] | null => {
     const parts: MdNode[] = [];
     let rest = node.value ?? '';
 
     while (true) {
-      RE.lastIndex = 0;
-      const hit = RE.exec(rest);
+      SLATE_LINK.lastIndex = 0;
+      const hit = SLATE_LINK.exec(rest);
 
       if (hit === null) break;
 

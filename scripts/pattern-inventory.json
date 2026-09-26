@@ -32,7 +32,7 @@
       "file": "packages/cf-backend/src/components/surfaces/shared.tsx",
       "kind": "hand-parser",
       "owner": "split",
-      "sourceSha256": "bc2ecdf7d45222485edc8dd632734f1b6deda7235281b7315c7042cb2ecb6de6",
+      "sourceSha256": "a0e324d7f8e399e563a3e7fe0d2958f2269d896203e37390a704805ee72a3f88",
       "decision": "lexical"
     },
     {

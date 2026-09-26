@@ -1732,7 +1732,7 @@ export {
 
 export { createScaffoldCandidateSurface, type ScaffoldCandidateBinding } from './evolution/scaffold-candidate';
 
-export { captureOperationProfile, currentOperationProfile, resolveOperationProfile, runOperationProfile,
+export { activeOperationProfile, captureOperationProfile, currentOperationProfile, resolveOperationProfile, runOperationProfile,
   withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
 
 export { createRoutedModelLane } from './profiles/model-lane';
