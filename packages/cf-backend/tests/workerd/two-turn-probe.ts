@@ -806,6 +806,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     if (queued.status !== 'queued') throw new Error(`long cost: measured turn ${JSON.stringify(queued)}`);
     await awaitSleepTimeSettled(recording, 21);
+    await awaitQuiet(recording);
 
     return await target.meterEnd();
   }

@@ -238,7 +238,6 @@ export function initRunEventTables(execRaw: RawSqlExec): void {
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_run_ts ON run_events(actor_id, run_id, ts)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(actor_id, type, ts DESC)`);
-  // An actor's rows by rowid: its newest run reads from the end.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_actor ON run_events(actor_id)`);
   // One row per actor: a person's newest words stay one read however much automation follows.
   execRaw(`CREATE TABLE IF NOT EXISTS operator_requests (
