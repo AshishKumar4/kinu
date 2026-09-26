@@ -7,13 +7,16 @@
  *   3. True rest: startups of the object during the idle tail after the turn ended; the target is zero.
  * Plus what a resume must never cost: a step bought twice (a marker printed twice) or an effect run twice.
  *
+ * Two workloads (`scripts/canary-script.ts`): an inline turn of steps under the 30 s detach threshold, which stays
+ * open for steps x sleep, and a few steps past it, which detach into background jobs that must settle on their own.
+ *
  * Driven by `scripts/durability-canary.sh`, which resolves the `scripted` eval account the way the first-run tier does,
- * so the turn runs on the scripted model at zero model tokens (`scripts/canary-script.ts`).
- *   bun scripts/durability-canary.ts [--steps 240] [--helper-steps 30] [--sleep 55] [--tail-minutes 10] [--worker kinu-staging]
+ * so the turn runs on the scripted model at zero model tokens.
+ *   bun scripts/durability-canary.ts [--steps 720] [--sleep 20] [--jobs 3] [--job-sleep 900] [--helper-steps 30]
+ *     [--tail-minutes 10] [--worker kinu-staging]
  */
 import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
-import type { RunEvent } from '../packages/core/src/index';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 import { resolvePublicSessionPlan } from '../evals/src/session';
 import { CANARY_PREFIX, canaryAsk, canaryMarker, type CanaryLoad } from './canary-script';
@@ -25,10 +28,15 @@ function flag(name: string, fallback: string): string {
 }
 
 const load: CanaryLoad = {
-  steps: Number(flag('steps', '240')),
+  steps: Number(flag('steps', '720')),
+  sleepSeconds: Number(flag('sleep', '20')),
+  jobs: Number(flag('jobs', '3')),
+  jobSleepSeconds: Number(flag('job-sleep', '900')),
   helperSteps: Number(flag('helper-steps', '30')),
-  sleepSeconds: Number(flag('sleep', '55')),
 };
+
+// A step at or past the threshold detaches, and the inline workload would measure nothing.
+if (load.sleepSeconds >= 30 || load.jobSleepSeconds <= 30) throw new Error('inline steps must sleep under 30 s and job steps past it');
 
 const tailMs = Number(flag('tail-minutes', '10')) * 60_000;
 
@@ -40,17 +48,13 @@ if (resolution.kind === 'unavailable') throw new Error(resolution.remedy);
 
 const session = await resolution.plan.open({ subject: 'canary', purpose: 'Durability canary: one long turn, nobody connected.', genesis: false });
 
-/** One count per marker the root's ledger printed, from the tool results it recorded. */
-function markerCounts(events: readonly RunEvent[]): Map<string, number> {
+const MARKER = new RegExp(`${CANARY_PREFIX}_[A-Z]+_STEP_\\d+`, 'g');
+
+/** One count per marker in the given texts. */
+function markerCounts(texts: readonly string[]): Map<string, number> {
   const counts = new Map<string, number>();
 
-  for (const event of events) {
-    if (event.type !== 'tool_call_end') continue;
-
-    for (const marker of JSON.stringify(event.result ?? null).match(new RegExp(`${CANARY_PREFIX}_[A-Z]+_STEP_\\d+`, 'g')) ?? []) {
-      counts.set(marker, (counts.get(marker) ?? 0) + 1);
-    }
-  }
+  for (const marker of texts.flatMap((text) => text.match(MARKER) ?? [])) counts.set(marker, (counts.get(marker) ?? 0) + 1);
 
   return counts;
 }
@@ -107,8 +111,18 @@ try {
 
   await session.connect();
   const events = await session.runEvents();
-  const counts = markerCounts(events.filter((event) => event.runId === opened.runId));
+
+  const inline = markerCounts(events
+    .filter((event) => event.runId === opened.runId && event.type === 'tool_call_end')
+    .map((event) => JSON.stringify(event.type === 'tool_call_end' ? event.result ?? null : null)));
+
   const expected = Array.from({ length: load.steps }, (_, step) => canaryMarker('root', step));
+  const jobs = await session.backgroundJobs();
+  const jobMarkers = markerCounts(jobs.map((job) => job.result ?? ''));
+
+  const runStart = events.find((event) => event.runId === opened.runId && event.type === 'run_start');
+  const runEnd = events.find((event) => event.runId === opened.runId && event.type === 'run_end');
+  const runMs = runStart !== undefined && runEnd !== undefined ? Date.parse(runEnd.timestamp) - Date.parse(runStart.timestamp) : 0;
   const active = timeline(startedAt, endedAt);
   const idle = timeline(endedAt + 30_000, endedAt + tailMs);
   const hours = (endedAt - startedAt) / 3_600_000;
@@ -119,14 +133,27 @@ try {
     object: active.object,
     load,
     activeHours: Number(hours.toFixed(2)),
-    autonomy: { runEnded: true, runsOpened: events.filter((e) => e.type === 'run_start' && e.userMessage?.startsWith(CANARY_PREFIX) === true).length },
+    autonomy: {
+      runEnded: runEnd !== undefined,
+      runsOpened: events.filter((e) => e.type === 'run_start' && e.userMessage?.startsWith(CANARY_PREFIX) === true).length,
+      // The inline workload held the turn open for its planned length, or it measured something else.
+      runMinutes: Number((runMs / 60_000).toFixed(1)),
+      plannedMinutes: Number((load.steps * load.sleepSeconds / 60).toFixed(1)),
+      heldPlannedLength: runMs >= load.steps * load.sleepSeconds * 1000,
+    },
+    detached: {
+      planned: load.jobs,
+      settled: jobs.filter((job) => job.status === 'completed').length,
+      statuses: jobs.map((job) => job.status),
+      markersSeen: Array.from({ length: load.jobs }, (_, j) => canaryMarker('job', j)).filter((marker) => jobMarkers.has(marker)).length,
+    },
     disruptions: {
       resumed,
       perHour: Number((resumed / hours).toFixed(2)),
       outcomes: active.outcomes.filter((o) => o.outcome !== 'ok'),
     },
-    stepsLost: expected.filter((marker) => !counts.has(marker)).length,
-    stepsBoughtTwice: [...counts.entries()].filter(([, n]) => n > 1).map(([marker, n]) => ({ marker, n })),
+    stepsLost: expected.filter((marker) => !inline.has(marker)).length,
+    stepsBoughtTwice: [...inline.entries(), ...jobMarkers.entries()].filter(([, n]) => n > 1).map(([marker, n]) => ({ marker, n })),
     idleStartups: idle.startupsByHour.reduce((sum, h) => sum + h.startups, 0),
     sampling: Math.max(active.sampling, idle.sampling),
   };

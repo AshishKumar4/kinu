@@ -1,7 +1,7 @@
-/** Disruption rows: a dead activation's open turn resumed, or settled by recovery. */
+/** Disruption rows: a dead activation's open turn resumed, or settled. */
 import { diagnostics } from '../obs/index';
 
-/** `unknown` when either side recorded no build (a scaffold program records none). */
+/** `unknown`: a side recorded no build. */
 export type SameBuild = 'yes' | 'no' | 'unknown';
 
 export function sameBuildOf(admitted: string | null | undefined, installed: string | null): SameBuild {
@@ -11,8 +11,9 @@ export function sameBuildOf(admitted: string | null | undefined, installed: stri
 }
 
 export function recordTurnResumed(input: {
+  readonly workspace: string;
   readonly actor: string;
-  /** 0 for a turn that restarts from its input. */
+  /** 0 for a kind that restarts from its input (hosted, today). */
   readonly stepsKept: number;
   readonly midStep: boolean;
   readonly sameBuild: SameBuild;
@@ -21,6 +22,7 @@ export function recordTurnResumed(input: {
 }
 
 export function recordRecoverySettled(input: {
+  readonly workspace: string;
   readonly actor: string;
   readonly cause: 'record_unreadable' | 'stalled' | 'unverified';
   readonly sameBuild: SameBuild;

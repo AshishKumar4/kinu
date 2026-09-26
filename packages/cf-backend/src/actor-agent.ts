@@ -1801,6 +1801,7 @@ export abstract class ActorAgent extends Agent<Env> {
       claims: this.claims,
       history: this.stores.history,
       installedBuild: this.installedBuildIdentity(),
+      workspace: this.workspaceName(),
       events: this.stores.eventRecorder,
       orchestration: this.orchestrationDeps(),
       turns: () => this.tracing.turns({ id: this.actorHandle().actorId, kind: 'main' }),

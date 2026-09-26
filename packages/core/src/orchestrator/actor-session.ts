@@ -56,6 +56,7 @@ export interface ActorSessionOptions {
   readonly history: SessionHistory;
   /** Null is recorded and read back as unknown, never filled in from a placeholder version or descriptor. */
   readonly installedBuild: string | null;
+  readonly workspace?: string;
   /** Optional: the revision rows are the durable record; no recorder means no event, never a fabricated one. */
   readonly events?: ContextEventRecorder | null;
   readonly advisor?: ActorAdvisorContext;
@@ -570,7 +571,7 @@ export class ActorSession {
     return { program, selection: admitted.selection, messages: admitted.messages };
   }
 
-  /** An unsettled claim for this turn means a dead activation left it open. */
+  /** An unsettled claim: a dead activation left this turn open. */
   private async admitClaim(
     lease: ActorTurnLease, program: ActorTurnProgram, context: ContextSelection, input: ActorExecutionInput,
   ): Promise<ActorTurnClaim> {
@@ -587,6 +588,7 @@ export class ActorSession {
 
     if (previous?.status === 'admitted') {
       recordTurnResumed({
+        workspace: this.options.workspace ?? '',
         actor: this.runtime.identity.name,
         stepsKept: input.resumedSteps ?? 0,
         midStep: input.resumedMidStep ?? false,

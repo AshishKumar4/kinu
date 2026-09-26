@@ -611,7 +611,7 @@ export class ChatSession {
     await this.actorSession.orchestrator.drainPendingEvents();
   }
 
-  /** Once at startup, before the recovery drain; see {@link NO_STRANDED_DELIVERY_GRACE}. */
+  /** Once at startup, before the recovery drain; see {@link NO_STRANDED_DELIVERY_GRACE}. Answered deliveries' leases are already closed. */
   reclaimStrandedEventDeliveries(): void {
     const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE);
 
@@ -1080,7 +1080,7 @@ export class ChatSession {
         'turn.finalization_failed',
         toKinuError({ doing: 'finalizing the turn', cause: err, otherwise: 'io' }),
       );
-      // Only bookkeeping failed; the intent row stays, since the transition may never have been claimed.
+      // The answer is durable; only bookkeeping failed. The intent row stays: the transition may never have been claimed.
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn });
     }

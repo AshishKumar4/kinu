@@ -177,6 +177,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     },
     directory: seams.directory,
     installedBuild: seams.installedBuild(),
+    workspace: seams.workspaceName,
     tracing: () => seams.tracing(),
     filesFor: async (bound) => {
       const provisioning = homeFor(bound.record, bound.reference);
