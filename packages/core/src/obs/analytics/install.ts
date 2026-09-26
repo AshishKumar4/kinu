@@ -104,8 +104,8 @@ function agentRow(
   const code = errorCode(fields, reported);
 
   return {
-    // No isolate-level default: co-located DOs share the module-global sink.
-    workspace: analyticsDigest(text(fields, 'workspace')),
+    // Co-located DOs share this sink: no isolate default.
+    workspace: analyticsDigest(text(fields, 'workspace') || invocationWorkspace()),
     kind: 'event',
     family: eventFamily(event),
     event,
@@ -157,6 +157,16 @@ function createAnalyticsLogger(env: AnalyticsEnv): Logger {
       route(name, fields ?? {}, error.code);
     },
   };
+}
+
+let invocationWorkspace: () => string = () => '';
+
+/** Per invocation, for a line naming none. */
+export function attributeWorkspace(resolve: () => string): () => void {
+  const previous = invocationWorkspace;
+  invocationWorkspace = resolve;
+
+  return () => { invocationWorkspace = previous; };
 }
 
 /** Keyed on the env object, which identifies an isolate from here. */

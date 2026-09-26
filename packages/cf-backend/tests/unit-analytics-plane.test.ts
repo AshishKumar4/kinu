@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
-  KinuError, RESERVED_LOG_FIELDS, createCompositeLogger, createRecordingLogger, diagnostics,
+  KinuError, RESERVED_LOG_FIELDS, createCompositeLogger, createRecordingLogger, diagnostics, type LogEventName,
 } from '@kinu.run/core/obs';
 import type { SqlExec } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -27,7 +27,8 @@ import {
   recordTtftRow, recordTurnRow,
 } from '@kinu.run/core/analytics';
 import { feedbackRouteFamily, writeFeedbackMarker } from '@kinu.run/core/analytics';
-import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
+import { attributeWorkspace, installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { controlPlaneMetricsQueries } from '@kinu.run/core/analytics';
 import { reportAdminDenial, type AdminDenial } from '../src/control-plane/admin-caller';
 import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
@@ -625,6 +626,35 @@ describe('the diagnostics sink routes by event name', () => {
     // Absent, and specifically not the first actor's digest.
     expect(plane.agent.points[1].indexes?.[0]).toBe('');
     expect(plane.agent.points[2].indexes?.[0]).toBe(analyticsDigest('second-actor'));
+  });
+
+  test('a line with no workspace takes its invocation\'s, and two interleaved invocations never cross', async () => {
+    // The adapter resolves the invocation (the Agents SDK's per-invocation context); the line wins when it names one.
+    const invocation = new AsyncLocalStorage<string>();
+    const plane = fakeEnv();
+    const restore = installSink(plane);
+    const detach = attributeWorkspace(() => invocation.getStore() ?? '');
+
+    const turn = async (workspace: string, event: LogEventName): Promise<void> => invocation.run(workspace, async () => {
+      await Promise.resolve();
+      diagnostics.event(event, {});
+    });
+
+    try {
+      await Promise.all([turn('warm-forge', 'turn.terminal_effects_owed'), turn('quiet-owl', 'turn.resumed')]);
+      diagnostics.event('actor.startup', { workspace: 'named-on-the-line' });
+      diagnostics.event('rpc_gate.denied', {});
+    } finally {
+      detach();
+      restore();
+    }
+
+    const indexOf = (event: string) => plane.agent.points.find((point) => point.blobs?.[2] === event)?.indexes?.[0];
+    expect(indexOf('turn.terminal_effects_owed')).toBe(analyticsDigest('warm-forge'));
+    expect(indexOf('turn.resumed')).toBe(analyticsDigest('quiet-owl'));
+    expect(indexOf('actor.startup')).toBe(analyticsDigest('named-on-the-line'));
+    // Outside any invocation there is nothing to attribute to.
+    expect(indexOf('rpc_gate.denied')).toBe('');
   });
 
   test('automatic titling is attributed by workspace, and the title is not published', () => {

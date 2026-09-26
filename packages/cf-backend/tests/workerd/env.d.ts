@@ -15,6 +15,7 @@ import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
 import type { AddressedAnswers } from './addressed-name-shapes';
+import type { AttributedLine } from './attribution-shapes';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
 } from './deploy-fake';
@@ -151,6 +152,12 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
 interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
   claimAndEvict(workspace: string): Promise<string>;
   idThenNamed(workspace: string): Promise<AddressedAnswers>;
+}
+
+interface AttributionProbeRpc extends Rpc.DurableObjectBranded {
+  logThreeWays(workspace: string): Promise<void>;
+  releaseLineOf(workspace: string, other: string): Promise<string[]>;
+  written(workspace: string, count: number): Promise<AttributedLine[]>;
 }
 
 interface StoreResetProbeRpc extends Rpc.DurableObjectBranded {
@@ -303,6 +310,7 @@ declare global {
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
       ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;
+      ATTRIBUTION_PROBE: DurableObjectNamespace<AttributionProbeRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
   DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       LOADER: WorkerLoader;

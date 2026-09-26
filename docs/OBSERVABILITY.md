@@ -45,6 +45,11 @@ RPC entries of `UserDO`, `MonitorDO` and `ControlPlaneDO`. A constructor runs
 once per activation, so a window opened only there would give a hot Durable
 Object one budget for its whole lifetime.
 
+A diagnostics line lands under its `workspace` field's digest. A line without that field takes
+the workspace of the invocation it runs in, read from the Agents SDK's per-invocation context
+(`attributeWorkspace`). Until 2026-09-26 such lines were unattributed: 366,725 of the 371,749
+event rows in the preceding 7 days had an empty index.
+
 Each workspace object writes an `actor.startup` row when it activates, and a
 wake pass that re-arms itself over unfinished work writes one
 `wake.unfinished_arms` row per arm, once per streak. The Metrics tab's

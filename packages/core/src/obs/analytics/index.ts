@@ -13,6 +13,7 @@ export {
 } from './feedback-marker';
 
 export {
+  attributeWorkspace,
   installAnalyticsDiagnostics,
 } from './install';
 
