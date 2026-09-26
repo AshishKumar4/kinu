@@ -88,7 +88,7 @@ export async function matchesReference<Method extends string>(input: {
   };
 }
 
-const SlateAnswerSchema = v.variant('ok', [
+export const SlateAnswerSchema = v.variant('ok', [
   v.object({ ok: v.literal(true), value: JsonValueSchema }),
   v.object({ ok: v.literal(false), reason: v.string(), error: v.string() }),
 ]);

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import type { RunEvent } from '@kinu.run/core';
-import { cutButCompleted } from './transcript';
+import { encodeModelMessageValues, type RunEvent } from '@kinu.run/core';
+import { cutButCompleted, toTranscript } from './transcript';
 
 let index = 0;
 
@@ -23,6 +23,29 @@ function run(runId: string, steps: number, lastReason: string, ended: string): R
     row(runId, { type: 'run_end', reason: ended }),
   ];
 }
+
+describe('the transcript', () => {
+  // The ledger's own row digests a large argument, and a large argument is the code the agent wrote.
+  test('a tool call carries its whole arguments, as the model sent them, not the ledger row\'s digest', () => {
+    const source = `export class Slate {\n${'  async book() { return this.storage.get("book"); }\n'.repeat(40)}}\n`;
+    const input = { action: 'write', path: '/slates/exchange/server.ts', content: source };
+    const base = { runId: 'run-1', timestamp: '2026-09-26T00:00:00.000Z' };
+
+    const events: RunEvent[] = [
+      { ...base, eventIndex: 1, type: 'run_start', agentId: 'root', userMessage: 'Build it.' },
+      // As the ledger stores a large argument: its first 800 characters (`digestJsonValue`, core utils/json.ts).
+      { ...base, eventIndex: 2, type: 'tool_call_end', name: 'file', toolCallId: 'call-1', args: `${JSON.stringify(input).slice(0, 800)}…`, result: { ok: true } },
+      {
+        ...base, eventIndex: 3, type: 'step_finish', stepIndex: 1, reason: 'tool-calls',
+        messages: encodeModelMessageValues([{
+          role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'file', input }],
+        }]),
+      },
+    ];
+
+    expect(toTranscript(events).find((event) => event.type === 'tool_call')).toMatchObject({ name: 'file', arguments: input });
+  });
+});
 
 describe('the step-cap probe', () => {
   test('a run cut with tool calls pending and reported completed is found, with its step count', () => {
