@@ -68,8 +68,11 @@ const unreadable = () => new Response(new ReadableStream({
   start(c) { c.error(new Error('connection reset')); },
 }));
 
-async function probe(broken: Partial<Record<string, () => Response>> = {}): Promise<ProbeOutcome[]> {
-  return runSyntheticProbes({ origin: 'https://kinu.test', fetch: site(broken) });
+async function probe(
+  broken: Partial<Record<string, () => Response>> = {},
+  signIn: ProbeDeps['signIn'] = { declared: ['github'], configured: ['github'] },
+): Promise<ProbeOutcome[]> {
+  return runSyntheticProbes({ origin: 'https://kinu.test', fetch: site(broken), signIn });
 }
 
 function outcome(outcomes: ProbeOutcome[], probeName: string): ProbeOutcome {
@@ -134,13 +137,41 @@ describe('synthetic probes', () => {
     expect(outcome(outcomes, 'health').detail).toContain('no build identifier');
   });
 
-  test('a sign-in page with no provider is caught', async () => {
+  test('a sign-in page with no provider is caught when the deployment configures one', async () => {
     const outcomes = await probe({
       '/login': () => new Response('<html><title>Sign in to Kinu</title><p>No OAuth providers</p></html>'),
     });
 
     expect(outcome(outcomes, 'login').ok).toBe(false);
     expect(outcome(outcomes, 'login').detail).toContain('nobody can sign in');
+  });
+
+  test('a declared provider the page does not offer is caught', async () => {
+    const outcomes = await probe({}, { declared: ['github', 'google'], configured: ['github', 'google'] });
+
+    expect(outcome(outcomes, 'login').ok).toBe(false);
+    expect(outcome(outcomes, 'login').detail).toContain('google');
+  });
+
+  test('production with its OAuth secret lost fails, though its page renders the unavailable fallback', async () => {
+    const unavailable = () => new Response(
+      '<html><title>Sign in to Kinu.run</title><p class="lede">Sign-in is unavailable.</p>'
+      + '<div class="providers"><a class="provider" href="/install">Run Kinu locally</a></div></html>',
+    );
+
+    const lost = outcome(await probe({ '/login': unavailable }, { declared: ['cloudflare'], configured: [] }), 'login');
+
+    expect(lost.ok).toBe(false);
+    expect(lost.detail).toContain('cloudflare');
+  });
+
+  test('a deployment that declares no provider passes on its sign-in-unavailable page (staging)', async () => {
+    const unavailable = () => new Response(
+      '<html><title>Sign in to Kinu.run</title><p class="lede">Sign-in is unavailable.</p>'
+      + '<div class="providers"><a class="provider" href="/install">Run Kinu locally</a></div></html>',
+    );
+
+    expect(outcome(await probe({ '/login': unavailable }, { declared: [], configured: [] }), 'login')).toMatchObject({ ok: true });
   });
 
   test('an artifact body that cannot be read is a failure, not an exception', async () => {
@@ -166,6 +197,7 @@ describe('synthetic probes', () => {
     const outcomes = await runSyntheticProbes({
       origin: 'https://kinu.test',
       fetch: unavailableFetch,
+      signIn: { declared: ['github'], configured: ['github'] },
     });
 
     expect(outcomes.every((o) => !o.ok)).toBe(true);

@@ -118,7 +118,7 @@ export interface DeviceExecOptions {
  *  Tool calls gate on neither: the hub answers. */
 export interface DeviceTransport {
   rpc(method: string, params: JsonValue[], opts?: DeviceExecOptions): Promise<JsonValue | undefined>;
-  /** Cached snapshot; may lag the hub by the cache TTL. */
+  /** The last answer: it moves only on a refresh or a device call's outcome. */
   status(): DeviceStatus;
   refreshStatus(): Promise<DeviceStatus>;
 }

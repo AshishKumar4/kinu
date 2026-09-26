@@ -61,6 +61,10 @@ export interface DeviceFleetEntry {
 export type DeviceFleet = readonly DeviceFleetEntry[];
 
 /** Every machine in the fleet that is live right now, fleet order preserved. */
+export function sameDeviceStatus(a: DeviceStatus, b: DeviceStatus): boolean {
+  return JSON.stringify({ ...a, devices: a.devices ?? [] }) === JSON.stringify({ ...b, devices: b.devices ?? [] });
+}
+
 export function connectedDevices(fleet: DeviceFleet | undefined): DeviceFleetEntry[] {
   return (fleet ?? []).filter((device) => device.connected);
 }

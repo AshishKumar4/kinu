@@ -10,7 +10,6 @@ export interface PinnedPreviewPort {
 export interface ExposedPortList {
   ports: Array<{ port: number; url: string; name?: string }>;
   error?: string;
-  /** Starting, so nothing yet; not a failure. */
   pending?: string;
 }
 

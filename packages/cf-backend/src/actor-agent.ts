@@ -36,7 +36,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { hostedWindowMay, requiredRpcAccess, rpcMovesOverview } from "@kinu.run/core";
+import { hostedWindowMay, PAGE_KEEPALIVE, requiredRpcAccess, rpcMovesOverview, type LiveRead } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -1045,8 +1045,9 @@ export abstract class ActorAgent extends Agent<Env> {
     // The workspace comes from the invocation, not the isolate: `setDiagnosticsSink` is module-global
     // and Cloudflare co-locates Durable Objects, so an install-time default would attribute every
     // co-located actor to the first. The SDK's per-invocation context names the running agent.
-    installAnalyticsDiagnostics(this.env);
+    installAnalyticsDiagnostics(this.env, { workspace: ctx.id.name ?? '' });
     attributeWorkspace(ActorAgent.invocationWorkspace);
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PAGE_KEEPALIVE.ping, PAGE_KEEPALIVE.pong));
   }
 
   /**
@@ -1842,6 +1843,7 @@ export abstract class ActorAgent extends Agent<Env> {
         ports: {
           prepareTurn: (item, lease) => this.prepareTurn(item, lease),
           owedTerminalEffects: (input) => this.owedTerminalEffects(input),
+          answerMetadata: (turnId, texts) => this.answerMetadata(turnId, texts),
           terminal: () => this.terminal,
           taskList: () => this.stores.taskList,
           // A running job's settle wakes the session; a reminder fired behind it would race that wake.
@@ -1965,9 +1967,15 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected abstract overviewChanged(): void;
 
+  protected abstract liveReadsMoved(reads: readonly LiveRead[]): void;
+
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 
   protected abstract owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
+
+  protected answerMetadata(_turnId: string, _texts: () => Promise<readonly string[]>): Promise<JsonObject | null> {
+    return Promise.resolve(null);
+  }
 
   private orchestrationDeps(): AgentOrchestratorDeps {
     {
@@ -2990,6 +2998,7 @@ export abstract class ActorAgent extends Agent<Env> {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
         reportModelCall: (report) => this.reportModelCall(report),
+        liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         resolveProfile: () => this.routingProfile(),
         contextPlane: {
           actorId: this.actorHandle().actorId,

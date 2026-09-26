@@ -22,6 +22,7 @@ import {
   type RecordingLogger,
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
+import { TERMINAL_RETRY_CALLBACK } from '../../src/actor-agent';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { SqlMeter, type OperationCost } from './sql-meter';
 import type {
@@ -87,7 +88,7 @@ function meterInPlace(sql: SqlStorage) {
   return { meter, unmetered };
 }
 
-const ScheduleRowsSchema = v.array(v.looseObject({ id: v.string() }));
+const ScheduleRowsSchema = v.array(v.looseObject({ id: v.string(), callback: v.string() }));
 
 /** What still runs in the object, by name, and its schedule rows as read now. */
 export interface SettleState {
@@ -175,6 +176,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
     if (alarm !== null && alarm <= Date.now()) busy.push('an alarm due');
     const schedules = v.parse(ScheduleRowsSchema, this.unmetered('SELECT * FROM cf_agents_schedules ORDER BY id').toArray());
+    // A held retry row is recovery still under way: its next lap fires on the clock, not on anything the measured
+    // operation does (2026-09-26: one fired inside the window in some runs and not others).
+    const retrying = schedules.filter((row) => row.callback === TERMINAL_RETRY_CALLBACK).length;
+
+    if (retrying > 0) busy.push(`${String(retrying)} terminal retry row(s)`);
 
     return { busy, schedules: JSON.stringify(schedules) };
   }
@@ -837,6 +843,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       await awaitSleepTimeSettled(recording, i + 1);
     }
 
+    // The twentieth turn's tail (its detached task, keepAlive hold, fiber and retry tick) outlasts its sleep-time
+    // signal by an amount that follows wall time; opened before it settles, the meter counted part of it (2026-09-26).
+    await awaitSettled(target);
     await target.meterBegin();
     const queued = await target.runTaskFromMcp('long:500');
 

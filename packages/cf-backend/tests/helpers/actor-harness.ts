@@ -104,6 +104,23 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   get harnessChatLoop(): ChatSession { return this.chatLoop; }
   harnessBear(ownerUserId: string): void { this.bearWorkspace(this.name, ownerUserId); }
+  /** The `reads_changed` flushes this object owes; a test runs them where production's macrotask would end. */
+  readonly harnessOwedLiveReads: (() => void)[] = [];
+  protected override deferLiveReads(flush: () => void): void { this.harnessOwedLiveReads.push(flush); }
+  /** Records the text of every statement this object runs from now on, in order. */
+  harnessRecordQueries(): string[] {
+    const queries: string[] = [];
+    const sql = this.ctx.storage.sql;
+    const exec = sql.exec.bind(sql);
+
+    sql.exec = (query, ...bindings) => {
+      queries.push(query);
+
+      return exec(query, ...bindings);
+    };
+
+    return queries;
+  }
   /** The conversation a stated turn is admitted over. Applies only while the actor
    *  holds no working history of its own. */
   async harnessSeedHistory(messages: readonly ModelMessage[]): Promise<void> {
@@ -1187,6 +1204,7 @@ export function makeCtx(db: Database, id = 'harness-actor', objectName = id): Ag
     waitUntil: () => {},
     blockConcurrencyWhile: <Result>(fn: () => Promise<Result>): Promise<Result> => fn(),
     getWebSockets: () => [],
+    setWebSocketAutoResponse: () => {},
     abort: () => {},
     // The script's exports, whose supervisor entrypoint the hosted runtime requires.
     exports: SCRIPT_EXPORTS,

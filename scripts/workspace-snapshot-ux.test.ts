@@ -42,3 +42,43 @@ test('Files recovers current workspace data after a failed read and reconnect', 
     await page.close();
   });
 });
+
+// Review job 183: with the 5 s poll gone, a page opened onto a device command already waiting on its owner (after the
+// away email) showed no ask card, and the command stayed blocked.
+test('a page opened onto a waiting device consent shows its card with no frame', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    await page.goto(`${origin}/gallery.html?frame=workspacepage&consent=waiting`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-device-bind="c-1"]');
+    expect(await page.$eval('[data-device-bind="c-1"]', (card) => card.textContent)).toContain('git push origin main');
+    await page.close();
+  });
+});
+
+// Review job 183: a `reads_changed` frame sent while the socket was down is never replayed, so a reconnect re-reads
+// every live read once, the Work tab's own included.
+test('a task written while the socket was down shows on the Work tab after the reconnect', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[aria-label="Work"]');
+    // The stub's first open belongs to the initial connection.
+    await page.evaluate(() => window.dispatchEvent(new Event('gallery-reconnect')));
+    await page.click('[aria-label="Work"]');
+    // The fixture's plan opens in review; the task list is behind it.
+    await page.waitForSelector('[data-back-to-work]');
+    await page.click('[data-back-to-work]');
+    await page.waitForFunction(() => document.querySelector('[data-back-to-work]') === null);
+    expect(await page.evaluate(() => document.body.textContent)).not.toContain('Written during the outage');
+
+    await page.evaluate(() => {
+      document.documentElement.dataset.workMoved = '1';
+      window.dispatchEvent(new Event('gallery-reconnect'));
+    });
+
+    await page.waitForFunction(() => document.body.textContent?.includes('Written during the outage') === true);
+    await page.close();
+  });
+});

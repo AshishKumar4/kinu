@@ -1901,6 +1901,7 @@ export class UserDO extends Agent<Env> {
       (request.headers.get('user-agent') ?? '').slice(0, 200) || null,
       verified.deviceId,
     );
+    await this.devicesMoved();
     server.send(JSON.stringify({
       type: DEVICE_TOKEN_ROTATION,
       token: await this.rotateDeviceToken(verified.deviceId, verified.tokenWasCurrent === true),
@@ -2034,6 +2035,7 @@ export class UserDO extends Agent<Env> {
 
     if (hello.success) {
       this.recordDeviceHello(deviceId, hello.output);
+      await this.devicesMoved();
       const frame = await this.deviceUpdateFrame(hello.output);
 
       if (frame !== null) {
@@ -2240,6 +2242,8 @@ export class UserDO extends Agent<Env> {
     if (!this._devices.isConnected(deviceId)) {
       this.sqlx(`UPDATE user_devices SET connected_at = NULL WHERE id = ?`, deviceId);
     }
+
+    await this.devicesMoved();
   }
 
   override async webSocketError(...call: Parameters<NonNullable<Agent<Env>['webSocketError']>>): Promise<void> {
@@ -2265,6 +2269,7 @@ export class UserDO extends Agent<Env> {
     );
 
     if (replaced !== null) await this.revokeDevice(caller, replaced);
+    else await this.devicesMoved();
 
     return { deviceId, token };
   }
@@ -2295,6 +2300,7 @@ export class UserDO extends Agent<Env> {
 
     if (!row) return { ok: false };
     this.sqlx(`UPDATE user_devices SET label = ? WHERE id = ?`, trimmed, deviceId);
+    await this.devicesMoved();
 
     return { ok: true };
   }
@@ -2782,6 +2788,7 @@ export class UserDO extends Agent<Env> {
 
     if (!row) return { ok: false };
     this.sqlx(`UPDATE user_devices SET tier = ? WHERE id = ?`, tier, deviceId);
+    await this.devicesMoved();
 
     return { ok: true };
   }
@@ -2859,7 +2866,10 @@ export class UserDO extends Agent<Env> {
 
     if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
 
-    if (decision === 'always') this.setDeviceBinding(agentName, deviceId, 'allow', action);
+    if (decision === 'always') {
+      this.setDeviceBinding(agentName, deviceId, 'allow', action);
+      await this.devicesMoved();
+    }
 
     return { allowed: true };
   }
@@ -2896,6 +2906,7 @@ export class UserDO extends Agent<Env> {
 
     if (!agentName || !deviceId) return { ok: false };
     this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
+    await this.devicesMoved();
 
     return { ok: true };
   }
@@ -2967,6 +2978,33 @@ export class UserDO extends Agent<Env> {
         servedVersion: served,
         update: deviceUpdateState({ version: r.version, updateCheck: r.update_check !== 0 }, served),
       }));
+  }
+
+  async watchDeviceStatus(caller: UserCaller, watching: boolean): Promise<void> {
+    const resolved = await this.requireTier(caller, 'device.rpc');
+
+    if (resolved.kind !== 'workspace') return;
+
+    if (watching) this.sqlx(`INSERT OR IGNORE INTO device_status_watchers (agent_name) VALUES (?)`, resolved.workspace);
+    else this.sqlx(`DELETE FROM device_status_watchers WHERE agent_name = ?`, resolved.workspace);
+  }
+
+  /** A watcher with no page open, or unreachable, drops. */
+  private async devicesMoved(): Promise<void> {
+    const watchers = this.sqlx<{ agent_name: string }>(`SELECT agent_name FROM device_status_watchers`);
+
+    await Promise.all(watchers.map(async ({ agent_name }) => {
+      let watching = false;
+
+      try {
+        const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agent_name));
+        watching = (await workspace.devicesMoved()).watching;
+      } catch (cause) {
+        diagnostics.event('device.watcher_unreachable', { workspace: agent_name, error: renderThrownChain({ cause }) });
+      }
+
+      if (!watching) this.sqlx(`DELETE FROM device_status_watchers WHERE agent_name = ?`, agent_name);
+    }));
   }
 
   /**
@@ -3056,7 +3094,12 @@ export class UserDO extends Agent<Env> {
     const task = this.sweepAndRevokeDevice(deviceId);
     this._revoking.set(deviceId, task);
 
-    try { return await task; } finally { this._revoking.delete(deviceId); }
+    try {
+      const revoked = await task;
+      await this.devicesMoved();
+
+      return revoked;
+    } finally { this._revoking.delete(deviceId); }
   }
 
   private readonly _revoking = new Map<string, Promise<{ ok: boolean; unstoppedCommands: number }>>();

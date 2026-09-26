@@ -20,6 +20,10 @@ export function captureOperationProfile(input: Omit<OperationProfile, 'turnId'> 
   });
 }
 
+export function activeOperationProfile(): OperationProfile | undefined {
+  return scope.getStore();
+}
+
 export function currentOperationProfile(actor: ActorReference): OperationProfile | null {
   const current = scope.getStore();
 

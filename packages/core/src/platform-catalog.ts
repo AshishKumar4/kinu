@@ -1949,11 +1949,10 @@ export const PLATFORM_CATALOG = {
     firstPartySignal: true,
     notes:
       'Cloudflare states this keeps connections alive without waking the Durable Object. '
-      + 'Kinu keeps its sockets warm with a JSON `{type:"ping"}` message instead, which is '
-      + 'not a control frame: it costs a wake, an invocation and a CPU budget reset on every '
-      + 'open connection every 25 s, against the unsourced threshold in '
-      + 'edge.websocket_idle_reap_ms. Recorded, not changed — the fix belongs to whoever owns '
-      + 'the transport.',
+      + 'A browser cannot send a control frame, so a page sends the JSON `PAGE_KEEPALIVE.ping` '
+      + 'every 25 s and every actor registers it with `setWebSocketAutoResponse`, the same '
+      + 'no-wake answer for an application frame. Until 2026-09-26 it reached '
+      + 'webSocketMessage and woke an idle workspace every 25 s, per open page.',
   },
 
   'facet.rpc_timeout_ms': {

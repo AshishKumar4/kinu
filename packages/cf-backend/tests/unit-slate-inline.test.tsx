@@ -9,6 +9,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { buildSlateHostContext, slateFrameSrc, SLATE_QUERY_PARAM, slateLinkId } from '@kinu.run/core';
 import { SlateInlineContext } from '../src/components/slates/context';
 import { MarkdownContent } from '../src/components/surfaces/shared';
+import { MessageView } from '../src/components/MessageView';
+import { SLATES_CHANGED_METADATA_KEY } from '@kinu.run/core';
 
 const noopRpc = async (): Promise<never> => { throw new Error('no rpc in the static renderer'); };
 
@@ -40,12 +42,45 @@ describe('the inline slate card', () => {
     expect(html).not.toContain('data-slate-inline');
   });
 
+  // 2026-09-26: an address that names no slate (`slate://..`) left the pass re-reading it forever, hanging the page.
+  test('an address that names no slate stays text, and the addresses after it still render', () => {
+    const html = renderToStaticMarkup(createElement(
+      SlateInlineContext.Provider,
+      { value: { rpc: noopRpc, openSlate: () => {} } },
+      createElement(MarkdownContent, { content: 'Not slate://.. but slate://board' }),
+    ));
+
+    expect(html).toContain('Not slate://.. but');
+    expect(html).toContain('data-slate-inline="board"');
+  });
+
   test('a non-slate link still renders as a normal anchor', () => {
     const html = renderToStaticMarkup(createElement(MarkdownContent, {
       content: 'See [the docs](https://example.com/docs) here',
     }));
 
     expect(html).toContain('href="https://example.com/docs"');
+  });
+});
+
+/** An answer whose turn changed `slates`, rendered where a card can be hosted. */
+function answer(text: string, slates: string[]): string {
+  return renderToStaticMarkup(createElement(
+    SlateInlineContext.Provider,
+    { value: { rpc: noopRpc, openSlate: () => {} } },
+    createElement(MessageView, {
+      message: { id: 'a-1', role: 'assistant', metadata: { [SLATES_CHANGED_METADATA_KEY]: slates }, parts: [{ type: 'text', text }] },
+    }),
+  ));
+}
+
+const cards = (html: string): string[] => [...html.matchAll(/data-slate-inline="([^"]+)"/g)].map(([, id]) => id ?? '');
+
+// Owner 2026-09-25 (SLATE-INLINE-0925): a slate the turn changed is previewed after the answer. Which ones is the
+// server's rule (`slatesToPreview`); the chat draws what the answer carries.
+describe("an answer's changed slates", () => {
+  test('each is previewed after the answer, in order', () => {
+    expect(cards(answer('Added the column.', ['board', 'notes']))).toEqual(['board', 'notes']);
   });
 });
 

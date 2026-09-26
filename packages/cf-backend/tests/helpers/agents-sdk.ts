@@ -226,19 +226,19 @@ export function mockAgentsSdk(): void {
             configurable: true,
             value: ctx.id.name ?? ctx.id.toString(),
           });
-          Object.defineProperty(this, 'sql', {
-            configurable: true,
-            value: (strings: TemplateStringsArray, ...values: SqlValue[]) => {
-              const query = strings.reduce(
-                (text, part, index) => text + part + (index < values.length ? '?' : ''),
-                '',
-              );
-
-              return ctx.storage.sql.exec(query, ...values).toArray();
-            },
-          });
           this._ensureSchema();
         }
+      }
+      /** A prototype method, as the vendor's is (`agents/dist/src-5W6JNKVb.js:574`), so a subclass override runs. */
+      sql(strings: TemplateStringsArray, ...values: SqlValue[]) {
+        if (!this.ctx) throw new Error('harness Agent: sql needs a ctx');
+
+        const query = strings.reduce(
+          (text, part, index) => text + part + (index < values.length ? '?' : ''),
+          '',
+        );
+
+        return this.ctx.storage.sql.exec(query, ...values).toArray();
       }
       /**
        * Mirrors the vendor's constructor-time migration (schedules table only): the actor activation
