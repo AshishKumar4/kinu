@@ -612,6 +612,34 @@ test('!command output joins the next prompt, and !!command stays on screen only'
   expect(sent[1]).not.toContain('seen-');
 });
 
+test('a failed connect says so and Enter retries it, instead of staying on Connecting', async () => {
+  let attempts = 0;
+  const sent: unknown[] = [];
+
+  const agent = fakeClient({
+    name: 'flaky',
+    connect: async () => {
+      attempts += 1;
+
+      if (attempts === 1) throw new Error('database is locked');
+    },
+    send: async (input) => {
+      sent.push(input);
+
+      return TURN;
+    },
+  });
+
+  const screen = await mountChat(agent.client, { settled: (view) => view.includes('database is locked') });
+  expect(screen.frame()).not.toContain('Connecting…');
+
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the second attempt', () => attempts === 2);
+  await screen.mockInput.typeText('hello');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the prompt sent after reconnecting', () => sent.length === 1);
+});
+
 const EXPORTED_HISTORY = async (): Promise<AgentTranscriptMessage[]> => [
   { id: '1', role: 'user', content: 'Which table keeps its rows?' },
   { id: '2', role: 'tool_call', content: '', toolName: 'shell', toolCallId: 't', args: '{"command":"ls"}' },

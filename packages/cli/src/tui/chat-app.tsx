@@ -487,7 +487,10 @@ function ChatScene({
   }, [draftEditing.replace, syncComposerRows]);
 
   /** @path mentions become attachments: images and PDFs inline, other files as path references. */
-  /** `!command` results the next prompt carries to the agent, as omp's `!` does; `!!` keeps them out. */
+  const [connectFailed, setConnectFailed] = useState(false);
+  const [connectAttempt, setConnectAttempt] = useState(0);
+
+  /** `!command` output the next prompt carries, as in omp. */
   const localOutputsRef = useRef<string[]>([]);
 
   const sendPrompt = useCallback(async (input: string, mode?: WorkMode) => {
@@ -1480,10 +1483,14 @@ function ChatScene({
         } catch (error) {
           connected = false;
 
-          if (!abort.signal.aborted) addError({ cause: error });
+          if (!abort.signal.aborted) {
+            addError({ cause: error });
+            setConnectFailed(true);
+          }
         }
 
         if (!connected || abort.signal.aborted) return;
+        setConnectFailed(false);
         setReady(true);
 
         if (client.mode !== 'cloud') return;
@@ -1518,7 +1525,7 @@ function ChatScene({
       abort.abort();
       unsubscribe();
     };
-  }, [addError, addMessage, client, deviceConnect.offerIfUnconnected, handleClientEvent]);
+  }, [addError, addMessage, client, connectAttempt, deviceConnect.offerIfUnconnected, handleClientEvent]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -1762,6 +1769,14 @@ function ChatScene({
 
   const onInputSubmit = useCallback(() => {
     if (overlayOpen) return;
+
+    if (connectFailed) {
+      setConnectFailed(false);
+      setConnectAttempt((attempt) => attempt + 1);
+
+      return;
+    }
+
     const value = inputRef.current?.plainText ?? '';
 
     if (!value.trim()) return;
@@ -1769,11 +1784,11 @@ function ChatScene({
     draftEditing.reset();
 
     return handleSubmit(expandPastes(value));
-  }, [draftEditing.reset, expandPastes, handleSubmit, overlayOpen, setInputText]);
+  }, [connectFailed, draftEditing.reset, expandPastes, handleSubmit, overlayOpen, setInputText]);
 
   const commandHints = !overlayOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
 
-  const inputFocused = ready && !overlayOpen;
+  const inputFocused = composerTakesKeys(ready, connectFailed, overlayOpen);
   const contextTokens = estimateContextTokens(messages);
   const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
@@ -1782,7 +1797,7 @@ function ChatScene({
   // Turn progress stays in the phase line.
   const composerTitle = surfaceTitle ?? undefined;
 
-  const composerPlaceholder = composerPlaceholderFor(ready, isProcessing);
+  const composerPlaceholder = composerPlaceholderFor(ready, isProcessing, connectFailed);
 
   useEffect(() => {
     if (inputFocused) inputRef.current?.focus();
@@ -2044,7 +2059,14 @@ function ChatScene({
 }
 
 
-function composerPlaceholderFor(ready: boolean, isProcessing: boolean): string {
+/** A failed connect takes keys too: Enter there retries it. */
+function composerTakesKeys(ready: boolean, connectFailed: boolean, overlayOpen: boolean): boolean {
+  return (ready || connectFailed) && !overlayOpen;
+}
+
+function composerPlaceholderFor(ready: boolean, isProcessing: boolean, connectFailed: boolean): string {
+  if (connectFailed) return 'Not connected · Enter to try again';
+
   if (!ready) return 'Connecting…';
 
   return isProcessing ? TUI_COMPOSER_STEERING_PLACEHOLDER : TUI_COMPOSER_PLACEHOLDER;

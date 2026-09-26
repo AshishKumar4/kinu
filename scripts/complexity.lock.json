@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-25",
-  "files": 2701,
-  "functions": 66317,
+  "measuredAt": "2026-09-26",
+  "files": 2710,
+  "functions": 66804,
   "ceiling": 87,
   "line": 31,
   "inventory": [
@@ -34,12 +34,12 @@
       "complexity": 43
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 43
     },
     {
-      "key": "scripts/do-init-gate.ts#auditFile>walk",
-      "complexity": 43
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "complexity": 42
     },
     {
       "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
@@ -70,10 +70,6 @@
       "complexity": 40
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
-      "complexity": 38
-    },
-    {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
       "complexity": 40
     },
@@ -84,6 +80,10 @@
     {
       "key": "scripts/axis-ergonomics/report.ts#score",
       "complexity": 39
+    },
+    {
+      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
+      "complexity": 38
     },
     {
       "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction",
@@ -178,10 +178,6 @@
       "complexity": 32
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
-      "complexity": 30
-    },
-    {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
       "complexity": 32
     },
@@ -214,10 +210,6 @@
       "complexity": 31
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
-      "complexity": 30
-    },
-    {
       "key": "packages/cf-backend/src/drive-design/DriveDesignPage.tsx#DriveDesignPage",
       "complexity": 31
     },
@@ -240,10 +232,6 @@
     {
       "key": "packages/cli/src/chat-loop.ts#applySlashOutcome",
       "complexity": 31
-    },
-    {
-      "key": "packages/cli/src/commands/debug.ts#debugCommand",
-      "complexity": 30
     },
     {
       "key": "packages/core/src/chat.ts#runChat",
