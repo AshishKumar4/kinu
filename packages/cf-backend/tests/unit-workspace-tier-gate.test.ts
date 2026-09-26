@@ -61,6 +61,8 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'credentials.other', name: 'getCredentialBaseURL(github)', run: (u, c) => u.getCredentialBaseURL(c, 'github') },
   { capability: 'credentials.other', name: 'setCredential', run: (u, c) => u.setCredential(c, 'github', { kind: 'bearer', token: 'ghp_x' }) },
   { capability: 'credentials.other', name: 'deleteCredential', run: (u, c) => u.deleteCredential(c, 'github') },
+  { capability: 'credentials.other', name: 'listUnrevokedGrants', run: (u, c) => u.listUnrevokedGrants(c) },
+  { capability: 'credentials.other', name: 'dismissUnrevokedGrant', run: (u, c) => u.dismissUnrevokedGrant(c, 'codex') },
 
   // Binding a secret to a host is like storing a credential; unwrapping a placeholder is more privileged still.
   { capability: 'egress_secrets.manage', name: 'listEgressSecrets', run: (u, c) => u.listEgressSecrets(c) },

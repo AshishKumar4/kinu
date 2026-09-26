@@ -33,7 +33,7 @@ import { updateCraftScores } from '../craft/ema';
 import { createCraftLedger, type CraftLedger } from '../craft/in-episode';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
-import { readSoul, summarizeSoul } from '../identity/soul';
+import { ownerMissionOf, soulReadsSql } from '../identity/soul';
 import { conversationTurnPair } from '../identity/conversation-store';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import {
@@ -927,8 +927,7 @@ export class EvolutionEngine {
   async onLifetimeEvolution(session?: SessionWriter): Promise<void> {
     const rt = this.rt;
 
-    const purpose = summarizeSoul(await readSoul(rt.agentStateVfs ?? rt.storage.vfs))
-      || 'be a helpful assistant';
+    const purpose = ownerMissionOf(soulReadsSql(rt.storage.sql)) ?? 'be a helpful assistant';
 
     this.emit({
       type: 'mcts_started',

@@ -85,7 +85,7 @@ const ROOT_ONLY_TABLES = [
   'slate_previews', 'slate_publications',
   'slate_receipts', 'slate_resource_reservations', 'slate_resources',
   'slate_share_users', 'slate_shares', 'slate_state', 'slate_versions',
-  'slate_viewer_requests', 'slates', 'workspace_actors', 'workspace_identity',
+  'slate_viewer_requests', 'slates', 'workspace_actors', 'workspace_identity', 'workspace_soul',
 ];
 
 /** The three dialects initWorkspaceSchema takes and its transaction, over one bun:sqlite handle; core may not import cli-backend. */
