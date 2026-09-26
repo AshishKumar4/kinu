@@ -2996,7 +2996,7 @@ export class UserDO extends Agent<Env> {
     else this.sqlx(`DELETE FROM device_status_watchers WHERE agent_name = ?`, resolved.workspace);
   }
 
-  /** A watcher with no page open, or unreachable, is dropped. */
+  /** A watcher with no page open, or unreachable, drops. */
   private async devicesMoved(): Promise<void> {
     const watchers = this.sqlx<{ agent_name: string }>(`SELECT agent_name FROM device_status_watchers`);
 

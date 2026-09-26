@@ -75,6 +75,7 @@ export function PreviewTabsGallery() {
   const [edited, setEdited] = useState<typeof EDITED | null>(null);
   const [broken, setBroken] = useState(false);
   const [machine, setMachine] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [narrow, setNarrow] = useState(false);
   const keptNotes = useRef<JsonValue[]>([]);
   const [failHistory, setFailHistory] = useState(false);
@@ -174,6 +175,7 @@ export function PreviewTabsGallery() {
       <button data-break-diff onClick={() => setBroken(true)}>Break read</button>
       <button data-add-machine onClick={() => setMachine(true)}>Connect a machine</button>
       <button data-narrow-pane onClick={() => setNarrow(on => !on)}>Narrow pane</button>
+      <button data-sandbox-starting onClick={() => setStarting(on => !on)}>Sandbox starting</button>
       <button data-notify-plan onClick={() => notify(ARRIVAL_REFERENCE)}>Notify courier plan</button>
       <button data-notify-stale onClick={() => notify(STALE_REFERENCE)}>Notify stale plan</button>
       <button data-notify-malformed onClick={() => notify(MALFORMED_REFERENCE)}>Notify malformed plan</button>
@@ -183,7 +185,7 @@ export function PreviewTabsGallery() {
         workspacePlanArrival={workspacePlanArrival}
         pinnedPorts={[{ executor: 'workspace', port: 8789, url: SLATE_GALLERY_URL, name: 'Duplicate dashboard port' }, { executor: 'sandbox', port: 8080, url: SANDBOX_URL, name: 'Sandbox app' }, { executor: 'device', port: 3000, url: DEVICE_URL, name: 'Device app' }]}
         slates={slates} slateReloads={new Map(slates.map(item => [item.id, reload]))}
-        previewError={null} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}
+        previewError={null} previewStarting={starting ? ['sandbox'] : []} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}
         tools={[]} memory={[]} memoryContent="" onSearchMemory={NOTHING} mctsTrees={new Map()} headActivity={new Map()} isStreaming={false}
         executors={machine ? [MACHINE] : []} executorOutputs={new Map()} onExecute={async () => ({})} backgroundJobs={[]} onRefreshJobs={NOTHING} pendingActions={[]}
         tabPresence={{ explorations: false, work: true }} rpc={rpc} />

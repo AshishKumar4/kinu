@@ -1487,22 +1487,45 @@ function galleryRevertConversation(entryId: string): void {
   galleryServerPush(JSON.stringify({ type: "cf_agent_chat_messages", messages: kept }));
 }
 
+type GalleryListing = { readonly kind: "held" } | { readonly kind: "listed"; readonly value: JsonValue };
+
+function galleryPortListing(executor: string | undefined): GalleryListing | null {
+  const flags = document.documentElement.dataset;
+
+  if (flags.listingHeld === "1") return { kind: "held" };
+
+  if (executor !== "sandbox") return null;
+
+  if (flags.sandboxStarting === "1") return { kind: "listed", value: { ports: [], pending: "the sandbox's container is still restoring" } };
+
+  // Arrives after first paint.
+  if (flags.previewArrived === "1") {
+    return { kind: "listed", value: { ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] } };
+  }
+
+  return null;
+}
+
+/** `&slates=3`: three slates, whose tabs overflow the strip. */
+function gallerySlates() {
+  return {
+    slates: ["Board", "Notes", "Tally"].slice(0, Number(new URLSearchParams(location.search).get("slates") ?? 0))
+      .map((title) => ({ id: title.toLowerCase(), title, bindings: [] })),
+    problems: [],
+  };
+}
+
 /* The reads the first-visit inspector policy decides on, in the shapes the page consumes (`listSlates` needs an array for `slates.map`). */
 const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   getWorkspaceSnapshot: () => {
     const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get("getWorkspaceSnapshot"));
 
-    return { ...snapshot, activePlan: galleryAgentPlan };
+    return { ...snapshot, activePlan: galleryAgentPlan, slates: gallerySlates().slates };
   },
-  // `&slates=3`: three slates, whose tabs overflow the strip.
-  listSlates: () => ({
-    slates: ["Board", "Notes", "Tally"].slice(0, Number(new URLSearchParams(location.search).get("slates") ?? 0))
-      .map((title) => ({ id: title.toLowerCase(), title, bindings: [] })),
-    problems: [],
-  }),
+  listSlates: gallerySlates,
   getActivePlanReview: () => galleryAgentPlan,
   // The Work tab draws this read, not `getActivePlanReview`. The owner is the workspace's name: `createMain({ name: this.name })` registers it, never "main".
-  // `dataset.workMoved`: a task written while the page's socket was down.
+  // `dataset.workMoved`: a task written during an outage.
   listWorkspaceWork: () => ({
     plans: [{
       owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false },
@@ -1520,7 +1543,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   previewSlate: (args?: unknown[]) => ({
     ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
   }),
-  // `&consent=waiting`: a device command already waiting on the owner when the page opens.
+  // `&consent=waiting`: a device command already waiting.
   listPendingConsents: () => (new URLSearchParams(location.search).get("consent") === "waiting"
     ? [{ consentId: "c-1", deviceLabel: "studio", method: "exec", command: "git push origin main", createdAt: 1 }]
     : []),
@@ -1645,9 +1668,8 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
 }
 
 new MutationObserver(() => {
-  if (document.documentElement.dataset.previewArrived !== "1") return;
   galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getExposedPorts"] }));
-}).observe(document.documentElement, { attributes: true, attributeFilter: ["data-preview-arrived"] });
+}).observe(document.documentElement, { attributes: true, attributeFilter: ["data-preview-arrived", "data-sandbox-starting"] });
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   const plan = galleryPlanRpc(method, args);
@@ -1703,10 +1725,11 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult(null).json<T>();
   }
 
-  // Arrives after first paint, once the gate sets the dataset flag.
-  if (method === "getExposedPorts" && document.documentElement.dataset.previewArrived === "1" && args?.[0] === "sandbox") {
-    return rpcResult({ ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] }).json<T>();
-  }
+  const listing = method === "getExposedPorts" ? galleryPortListing(v.parse(v.optional(v.string()), args?.[0])) : null;
+
+  if (listing?.kind === "held") return new Promise<T>(() => {});
+
+  if (listing?.kind === "listed") return rpcResult(listing.value).json<T>();
 
   const page = WORKSPACE_PAGE_RPC.get(method);
 

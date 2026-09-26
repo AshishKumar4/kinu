@@ -6,7 +6,7 @@
 import {
   Devbox, devboxSyncHandlers,
   type DevboxIncident, type DevboxStore,
-  type IncidentDisposition,
+  type IncidentDisposition, type RestoreClockPhase,
 } from "@kinu.run/devbox";
 import { getAgentByName } from "agents";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
@@ -25,7 +25,7 @@ const WORKSPACE_NAME_KEY = "kinu:workspace-name";
 /** Type-only, so nothing here reaches orchestrator code at runtime. */
 type SandboxRootClient = Pick<
   OrchestratorAgent,
-  "acceptSandboxLifecycleFailure" | "sandboxInUse" | "sandboxStopped"
+  "acceptSandboxLifecycleFailure" | "sandboxInUse" | "sandboxStopped" | "sandboxStarting"
 >;
 
 export class KinuSandbox extends Devbox<Env> {
@@ -60,6 +60,23 @@ export class KinuSandbox extends Devbox<Env> {
     if (root === null) return false;
 
     return await root.sandboxInUse();
+  }
+
+  /** A quick restore's settle cannot land before its open. */
+  #startingNotices: Promise<void> = Promise.resolve();
+
+  protected override onRestorePhase(phase: RestoreClockPhase): void {
+    if (phase !== "opened" && phase !== "settled") return;
+
+    this.#startingNotices = this.#startingNotices.then(async () => {
+      try {
+        await (await this.#rootAgent())?.sandboxStarting(phase === "opened");
+      } catch (cause) {
+        diagnostics.failure("sandbox.starting_notice_failed", toKinuError({
+          doing: "telling the workspace its sandbox is starting or ready", cause, otherwise: "unavailable",
+        }));
+      }
+    });
   }
 
   override async onStop(params?: Parameters<Devbox<Env>["onStop"]>[0]): Promise<void> {

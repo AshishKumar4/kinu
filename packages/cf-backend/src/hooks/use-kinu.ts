@@ -842,6 +842,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // Listing ports never provisions a sandbox: getExposedPorts returns [] unless the executor is already active.
   const [pinnedPorts, setPinnedPorts] = useState<PinnedPreviewPort[]>([]);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewStarting, setPreviewStarting] = useState<readonly string[]>([]);
   const exposedPortsRefreshGeneration = useRef(0);
   /** Held in a ref too: the socket handler's effect must not re-subscribe (its cleanup forgets the
    *  live head paint). Null on the workspace pane and until the load resolves it. */
@@ -1510,6 +1511,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setPinnedPorts((previous) => {
       const next = reconcilePreviewPorts(previous, results);
       setPreviewError(next.error);
+      setPreviewStarting((before) => (before.join() === next.starting.join() ? before : next.starting));
 
       if (next.error === null) {
         const ids = next.ports.map(port => `${port.executor}:${port.port}`);
@@ -1742,6 +1744,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setLastActiveExecutor(null);
     setPinnedPorts([]);
     setPreviewError(null);
+    setPreviewStarting([]);
     setBackgroundJobs([]);
     setSlates([]);
     setTabPresence(undefined);
@@ -2022,6 +2025,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     previewFocus, planFocus,
     workspacePlanArrival,
     previewError,
+    previewStarting,
     refreshExposedPorts,
     backgroundJobs,
     refreshBackgroundJobs,

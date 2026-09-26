@@ -281,6 +281,9 @@ const SLEEP_TIME_SETTLED_AT = 'sleep_time_settled_at';
 
 const SLEEP_TIME_CLOSED_AT = 'sleep_time_closed_at';
 
+/** Set by the sandbox's own restore notices. */
+const SANDBOX_STARTING = 'sandbox_starting';
+
 /** Covers one more answer than `SLEEP_TIME_CADENCE.everyTurns` plus steers, so the
  *  window decides every trigger as the whole transcript would. */
 const SLEEP_TIME_READ_ROWS = (SLEEP_TIME_CADENCE.everyTurns + 1) * 8;
@@ -439,7 +442,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.liveReads.moved(reads);
   }
 
-  /** Every actor of this object writes through here, so a hire's write reaches the root's pages too. */
+  /** Every actor of this object writes through here. */
   override sql<T = Record<string, string | number | boolean | null>>(
     strings: TemplateStringsArray,
     ...values: (string | number | boolean | null)[]
@@ -2350,6 +2353,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async sandboxStopped(): Promise<void> {
+    this.config.delete(SANDBOX_STARTING);
+    this.liveReadsMoved(['getExposedPorts']);
+  }
+
+  async sandboxStarting(starting: boolean): Promise<void> {
+    if (starting) this.config.set(SANDBOX_STARTING, String(Date.now()));
+    else this.config.delete(SANDBOX_STARTING);
+
     this.liveReadsMoved(['getExposedPorts']);
   }
 
@@ -4942,6 +4953,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Workspace port registrations live in Nimbus, so they stay authoritative after a restart. */
   @callable() async getExposedPorts(executorId: string): Promise<ExposedPortList> {
+    if (executorId === 'sandbox' && this.config.get(SANDBOX_STARTING) != null) {
+      return { ports: [], pending: "the sandbox's container is still restoring" };
+    }
+
     const provider = this.rt.executionRouter?.getProvider(executorId);
 
     if (!provider) {
