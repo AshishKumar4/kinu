@@ -186,9 +186,9 @@ AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the 
 | Task | Turns | What it checks |
 |---|---|---|
 | `lending-library` | 4 | A lending library slate: loans, due dates, five rejection codes; an overdue report written from it; a rule change that must keep existing loans; a question answered from the data. Survives an eviction. |
-| `request-logs` | 3 | A slate that reads gateway log files through a namespace binding: per-route counts, error rates and nearest-rank percentiles; a new day and a rule change without a rebuild. |
-| `budget-board` | 4 | Two slates joined by an app binding: a ledger and a budget board that reads it live; euros converted at a rate file the checker rewrites; the ledger's listing replaced by pages while the board keeps working. |
-| `order-book` | 3 | A limit order book with price-time priority, market orders and cancels, checked against a reference engine over two seeded days of orders; self-trade prevention and post-only orders added later. |
+| `request-logs` | 3 | A slate that reads gateway log files through a namespace binding: per-route counts, error rates and nearest-rank percentiles; a new day and a rule change without a rebuild. The rule change survives an eviction. |
+| `budget-board` | 4 | Two slates joined by an app binding: a ledger and a budget board that reads it live; euros converted at a rate file the checker rewrites; the ledger's listing replaced by pages while the board keeps working. The expenses and the conversion survive an eviction after each change. |
+| `order-book` | 3 | A limit order book with price-time priority, market orders and cancels, checked against a reference engine over two seeded days of orders; self-trade prevention and post-only orders added later. The book and both features survive an eviction, probed without changing the book. |
 
 ```bash
 bun run evals                                  # every task, 10 trials each, on kinu.run

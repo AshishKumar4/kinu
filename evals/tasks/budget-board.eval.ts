@@ -356,6 +356,10 @@ asked.`,
         });
       });
     },
+    verifyAfterEviction: async (verifier) => {
+      await sameAsReference(verifier, 'expenses-survive-an-eviction', { history: AFTER_TURN_2, script: listEverything, currency: true });
+      await sameAsReference(verifier, 'the-board-converts-after-an-eviction', { history: AFTER_TURN_2, script: readTheMonth, currency: true });
+    },
   }, {
     prompt: `The ledger is getting long. Replace entries with page({ team?, month?, cursor?, limit }) -> { entries,
 next }: at most limit expenses, in the same order as before, and next, a cursor that page takes to
