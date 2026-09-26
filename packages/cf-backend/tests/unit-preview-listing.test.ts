@@ -8,12 +8,15 @@ import * as v from 'valibot';
 import { isPreviewUrl, reconcilePreviewPorts, type ExposedPortList, type PinnedPreviewPort } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
+import { socketConnection } from './helpers/bindings';
 import type { RecordedUserPlaneCalls } from './helpers/actor-harness';
 import type { KinuSandbox } from '../src/kinu-sandbox';
 
 mockAgentsSdk();
 
 const SUFFIX = 'previews.example';
+
+const TERMINAL = 'this devbox has no attached work directory: the mount refused. That recovery class is terminal: call attachNow() to attempt the attach again.';
 
 const PORT = 8788;
 
@@ -24,6 +27,8 @@ type Readiness = Awaited<ReturnType<KinuSandbox['resolveReadiness']>>;
 let readiness: () => Promise<Readiness> = async () => ({ kind: 'restored' });
 
 let readinessAsked = 0;
+
+let restoreStatusAsked = 0;
 
 // Reset in `afterAll`, so a later file meets the real SDK.
 await installSandboxSdkMock();
@@ -36,6 +41,11 @@ setSandboxSdk({
       return await readiness();
     },
     configureEgress: async () => {},
+    restoreStatus: async () => {
+      restoreStatusAsked += 1;
+
+      return { restoring: false, refused: undefined };
+    },
     // The Env terminal's command takes the process lane: no deadline asked for.
     startProcess: async () => ({ id: 'p1', exitCode: 0, waitForExit: async () => ({ exitCode: 0 }), getStatus: async () => 'exited' }),
     getProcessLogs: async () => ({ stdout: '', stderr: '' }),
@@ -48,7 +58,7 @@ setSandboxSdk({
 afterAll(() => { setSandboxSdk(null); });
 
 // Must follow the sandbox double: both helpers' module graphs reach the sandbox SDK.
-const { makeEnv, orchestratorHarness } = await import('./helpers/actor-harness');
+const { makeEnv, orchestratorHarness, until } = await import('./helpers/actor-harness');
 
 const { TEST_CREDENTIAL_ENCRYPTION_KEY } = await import('./helpers/user-do');
 
@@ -110,14 +120,14 @@ describe('the preview listing of a used sandbox', () => {
     const pinned = afterPoll([], await agent.getExposedPorts('sandbox'));
     named();
 
-    await agent.sandboxStarting(true);
+    await agent.sandboxRestore({ restoring: true, refused: undefined });
     expect(named()).toContain('getExposedPorts');
     const listed = await agent.getExposedPorts('sandbox');
 
     expect(listed).toEqual({ ports: [], pending: "the sandbox's container is still restoring" });
     expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: null, starting: ['sandbox'] });
 
-    await agent.sandboxStarting(false);
+    await agent.sandboxRestore({ restoring: false, refused: undefined });
     expect(named()).toContain('getExposedPorts');
     expect(afterPoll(pinned.ports, await agent.getExposedPorts('sandbox')).starting).toEqual([]);
   });
@@ -125,9 +135,45 @@ describe('the preview listing of a used sandbox', () => {
   test('a stop ends the starting line too', async () => {
     const agent = await usedSandbox();
 
-    await agent.sandboxStarting(true);
+    await agent.sandboxRestore({ restoring: true, refused: undefined });
     await agent.sandboxStopped();
 
     expect(await agent.getExposedPorts('sandbox')).not.toHaveProperty('pending');
+  });
+
+  // Owner 2026-09-26: a box that cannot restore shows the listing failure the page used to poll into view.
+  test('a terminal refusal is a failure, and the ports the page pinned stand', async () => {
+    const agent = await usedSandbox();
+    const pinned = afterPoll([], await agent.getExposedPorts('sandbox'));
+
+    await agent.sandboxRestore({ restoring: false, refused: TERMINAL });
+    const listed = await agent.getExposedPorts('sandbox');
+
+    expect(listed).toEqual({ ports: [], error: TERMINAL });
+    expect(afterPoll(pinned.ports, listed)).toEqual({ ports: pinned.ports, error: `sandbox: ${TERMINAL}`, starting: [] });
+  });
+
+  // A sandbox that dies mid-restore sends no settle; the old poll healed that, so a page's open asks it once.
+  test("a page's open asks a sandbox left starting once, and clears the line it no longer holds", async () => {
+    const agent = await usedSandbox();
+
+    await agent.sandboxRestore({ restoring: true, refused: undefined });
+    restoreStatusAsked = 0;
+    readinessAsked = 0;
+    await agent.onConnect(socketConnection({ id: 'page', send: () => {} }), { request: new Request('https://agent/connect') });
+
+    await until(() => restoreStatusAsked === 1, 'the sandbox asked its restore state');
+    await until(() => agent.harnessOwedLiveReads.length > 0, 'the answer applied');
+    expect(await agent.getExposedPorts('sandbox')).not.toHaveProperty('pending');
+    expect(readinessAsked).toBe(0);
+  });
+
+  test('a page opening on a workspace with no starting line asks the sandbox nothing', async () => {
+    const agent = await usedSandbox();
+
+    restoreStatusAsked = 0;
+    await agent.onConnect(socketConnection({ id: 'page', send: () => {} }), { request: new Request('https://agent/connect') });
+
+    expect(restoreStatusAsked).toBe(0);
   });
 });
