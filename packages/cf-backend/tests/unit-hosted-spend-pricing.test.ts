@@ -8,6 +8,7 @@ import { catalogTurn, gatewayWorkspace, workspaceMainActor } from './helpers/act
 import {
   GATEWAY_MODEL, chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
 } from './helpers/platform-gateway';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 
 const FAST_MODEL = 'ai-gateway/workers-ai/@cf/harness/fast';
 
@@ -47,6 +48,7 @@ test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the ro
   workspace.agent.harnessPriceModels(PRICES);
   await catalogTurn(workspace.agent, 'Have a researcher profile the parser.');
   await workspace.agent.terminalRetryPass();
+  await joinHarnessFibers();
 
   const root = workspaceMainActor(workspace.db);
 

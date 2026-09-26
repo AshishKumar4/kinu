@@ -56,7 +56,7 @@ function scaffoldIdentity(name: string, vfs: VFS, sql: SqlExecutor, actorId: str
   };
 }
 
-function build(donor?: Database, unreadableActor?: string, automatic = false): Fixture {
+function build(donor?: Database, unreadableActor?: string, automatic = false, installedBuild: string | null = 'test-build'): Fixture {
   const db = donor ?? new Database(':memory:');
   const sql = sqlOver(db);
   const execRaw = (ddl: string): void => { db.exec(ddl); };
@@ -103,7 +103,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
       exec: (query, ...bindings) => exec.exec(query, ...bindings),
     },
     directory,
-    installedBuild: 'test-build',
+    installedBuild,
     filesFor: async (bound) => ({
       vfs: planeFor(bound.record.actorId),
       artifactDirectory: agentArtifactDirectory(`/actors/${bound.record.actorId}`),
@@ -137,7 +137,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
 
       return { actorId: handle.actorId, workspaceId: handle.workspaceId, parentActorId: handle.parentActorId };
     },
-    rebuild: () => build(db, unreadableActor, automatic),
+    rebuild: () => build(db, unreadableActor, automatic, installedBuild),
   };
 }
 
@@ -412,9 +412,89 @@ describe('one workspace database, many logical actors', () => {
     });
 
     const recovered = await recoverActorTurns(fx.host);
-    expect(recovered).toEqual({ verified: ['turn-a'], refused: [], failed: [], unreadable: [], active: [] });
+    expect(recovered).toEqual({ verified: ['turn-a'], refused: [], failed: [], unreadable: [], active: [], stalled: [] });
     expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', outcome: null, epoch: admitted.epoch });
     expect(await recoverActorTurns(fx.host)).toEqual(recovered);
+    fx.host.releaseAll();
+    fx.db.close();
+  });
+
+  /** A turn whose program verifies, and one run of it: admitted again on `installedBuild`, its model called at each
+   *  of `steps`, and left open there, as a run a memory or wall reset of its activation ended. */
+  async function interruptedRuns(hostBuild?: string | null): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null) => Promise<void>; fx: Fixture }> {
+    const fx = build(undefined, undefined, false, hostBuild);
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
+    const source = 'export default async function main() { return "retained"; }';
+    await actor.runtime.storage.vfs.writeFile(`${actor.runtime.identity.scaffold.path}.v1`, source);
+    const program: ActorProgramIdentity = { kind: 'scaffold', version: 1, digest: sha256Hex(source), build: null };
+
+    return {
+      actor, fx,
+      run: async (steps, installedBuild = fx.host.installedBuild) => {
+        const claim = await actor.stores.claims.admit({
+          runId: crypto.randomUUID(), turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program, installedBuild,
+        });
+
+        for (const index of steps) await actor.stores.claims.consume(claim, { index, messages: [{ role: 'user', content: 'the brief' }] });
+      },
+    };
+  }
+
+  test('a run that ended no further than the run before it is settled as stalled, not owed again', async () => {
+    const { actor, run, fx } = await interruptedRuns();
+
+    await run([0, 1]);
+    expect(await recoverActorTurns(fx.host)).toMatchObject({ verified: ['turn-a'], stalled: [] });
+    await run([0, 1]);
+    const recovered = await recoverActorTurns(fx.host);
+    expect({ verified: recovered.verified, stalled: recovered.stalled.map((turn) => turn.claim.turnId) }).toEqual({ verified: [], stalled: ['turn-a'] });
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: 2 });
+    expect(await recoverActorTurns(fx.host)).toMatchObject({ verified: [], stalled: [] });
+    fx.host.releaseAll();
+    fx.db.close();
+  });
+
+  test('a run our own deploy ended is no stall: both runs judged ran on this host\'s build', async () => {
+    const { actor, run, fx } = await interruptedRuns();
+    const owed = { verified: ['turn-a'], stalled: [] };
+
+    await run([0, 1], 'build-before');
+    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    // A deploy ended this run: this host runs another build.
+    await run([0, 1], 'build-before');
+    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    // This run is this host's own, but the deploy ended the one it follows.
+    await run([0, 1]);
+    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    await run([0, 1]);
+    const recovered = await recoverActorTurns(fx.host);
+    expect(recovered.stalled.map((turn) => turn.claim.turnId)).toEqual(['turn-a']);
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: 4 });
+    fx.host.releaseAll();
+    fx.db.close();
+  });
+
+  test('a host with no build of its own judges no pair: two relaunches of the CLI at one step are not a stall', async () => {
+    const { actor, run, fx } = await interruptedRuns(null);
+    const owed = { verified: ['turn-a'], stalled: [] };
+
+    await run([0, 1]);
+    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    await run([0, 1]);
+    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', epoch: 2 });
+    fx.host.releaseAll();
+    fx.db.close();
+  });
+
+  test('a run that got further than the run before it stays owed', async () => {
+    const { actor, run, fx } = await interruptedRuns();
+
+    await run([0]);
+    await recoverActorTurns(fx.host);
+    await run([0, 1]);
+    expect(await recoverActorTurns(fx.host)).toMatchObject({ verified: ['turn-a'], stalled: [] });
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', epoch: 2 });
     fx.host.releaseAll();
     fx.db.close();
   });
@@ -426,7 +506,7 @@ describe('one workspace database, many logical actors', () => {
     const cold = build(fx.db, 'alpha');
 
     const first = await recoverActorTurns(cold.host);
-    expect(first).toEqual({ verified: [], refused: [], failed: [], unreadable: ['turn-a'], active: [] });
+    expect(first).toEqual({ verified: [], refused: [], failed: [], unreadable: ['turn-a'], active: [], stalled: [] });
     expect(await recoverActorTurns(cold.host)).toEqual(first);
     expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', outcome: null, epoch: 1 });
     cold.host.releaseAll();
@@ -442,13 +522,13 @@ describe('one workspace database, many logical actors', () => {
       program: { kind: 'scaffold', version: 1, digest: sha256Hex('missing'), build: null },
     });
     const lease = actor.session.beginTurn({ runId: 'run-a', turnId: 'turn-a' }, 'build', 0);
-    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: ['turn-a'] });
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: ['turn-a'], stalled: [] });
     expect(actor.stores.claims.read('turn-a')?.status).toBe('admitted');
     actor.session.finishTurn(lease);
 
-    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: ['turn-a'], failed: [], unreadable: [], active: [] });
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: ['turn-a'], failed: [], unreadable: [], active: [], stalled: [] });
     expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'indeterminate', epoch: 1 });
-    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: [] });
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: [], stalled: [] });
     fx.host.releaseAll();
     fx.db.close();
   });
@@ -479,11 +559,11 @@ describe('one workspace database, many logical actors', () => {
     await reading.promise;
     const lease = actor.session.beginTurn({ runId: 'run-a', turnId: 'turn-a' }, 'build', 0);
     release.resolve();
-    expect(await recovering).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: ['turn-a'] });
+    expect(await recovering).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: ['turn-a'], stalled: [] });
     expect(actor.stores.claims.read('turn-a')?.status).toBe('admitted');
     actor.session.finishTurn(lease);
 
-    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: ['turn-a'], failed: [], unreadable: [], active: [] });
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: ['turn-a'], failed: [], unreadable: [], active: [], stalled: [] });
     expect(actor.stores.claims.read('turn-a')?.outcome).toBe('indeterminate');
     fx.host.releaseAll();
     fx.db.close();
@@ -500,10 +580,10 @@ describe('one workspace database, many logical actors', () => {
     const restore = setDiagnosticsSink(log);
 
     try {
-      expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: ['turn-a'], unreadable: [], active: [] });
+      expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: ['turn-a'], unreadable: [], active: [], stalled: [] });
       expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: claim.epoch });
       // Settled, so the next wake's sweep neither retries it nor logs it again.
-      expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: [] });
+      expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], failed: [], unreadable: [], active: [], stalled: [] });
       expect(log.emitted.filter((line) => line.event === 'actor.turn_record_unreadable').map(({ code, cause }) => ({ code, cause }))).toEqual([
         { code: 'io', cause: expect.stringContaining(`request ${step.requestId} has no recorded message list`) },
       ]);

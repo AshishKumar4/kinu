@@ -80,6 +80,16 @@ export async function joinHarnessFibers(): Promise<void> {
   while (harnessFiberBodies.size > 0) await Promise.all(harnessFiberBodies);
 }
 
+/**
+ * The isolate a reset kills, for the fibers it was running: their bodies never settle and their rows stay, so the next
+ * activation's scan finds them interrupted and no join waits on them. A suite whose reset ends an activation with a
+ * run still parked calls this before it builds the next activation.
+ */
+export function abandonHarnessFibers(): void {
+  harnessFiberBodies.clear();
+  harnessActiveFibers.clear();
+}
+
 /** Seeds the row a dead activation leaves: the isolate lost the in-memory active set but kept the
  *  `cf_agents_runs` row (same INSERT as `agents/dist/index.js:2899`). */
 export function seedOrphanFiberRow(

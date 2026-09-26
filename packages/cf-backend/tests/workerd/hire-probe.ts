@@ -8,6 +8,7 @@ import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { ownerCaller } from '@kinu.run/core';
+import { diagnostics } from '@kinu.run/core/obs';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
@@ -26,13 +27,13 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    for (const name of ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'stopHosted']) {
+    for (const name of ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'stopHosted']) {
       Reflect.deleteProperty(this, name);
     }
 
     sealRpcSurface(this, [
       ...ORCHESTRATOR_RPC_SURFACE,
-      'rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'stopHosted',
+      'rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'stopHosted',
     ]);
   }
 
@@ -170,12 +171,33 @@ export class HireOrchestrator extends ProductionOrchestrator {
     return lines;
   }
 
+  private readonly wakeReturn = Promise.withResolvers<void>();
+
+  /** The platform's wake as the SDK dispatches it. It counts only once it returned with a child's turn still
+   *  claimed, so a wake that ran before the hire, or one that ran the child to its end, cannot satisfy it. */
+  override async _kinuTerminalRetryTick(...args: Parameters<ProductionOrchestrator['_kinuTerminalRetryTick']>): Promise<void> {
+    await super._kinuTerminalRetryTick(...args);
+
+    const inFlight = this.probeState.storage.sql.exec<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM actor_turn_claims c JOIN workspace_actors a ON a.actor_id = c.actor_id
+       WHERE a.kind = 'subordinate' AND c.status = 'admitted'`).one().n;
+
+    diagnostics.event('probe.wake_returned', { delegatedTurnsInFlight: inFlight });
+
+    if (inFlight > 0) this.wakeReturn.resolve();
+  }
+
   /** The owner's Stop in an actor pane: the `cancel` frame reaches the hosted room's wire as this call. */
   async stopHosted(name: string): Promise<void> {
     const wire = this.hostedChatWire(name);
 
     if (wire === null) throw new Error(`no hosted chat wire for ${name}`);
     wire.interrupt();
+  }
+
+  /** Settles when a terminal-retry wake returned while a delegated turn was still in flight. */
+  async wakeReturned(): Promise<void> {
+    await this.wakeReturn.promise;
   }
 
   /**
@@ -223,7 +245,7 @@ interface HireRunOptions {
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
   & Pick<HireOrchestrator,
-    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'stopHosted'>;
+    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'stopHosted'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -309,6 +331,10 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     if (child === undefined) throw new Error('no hired child to dismiss');
 
     return (await target.dismissSubordinate(child.name, true)).name;
+  }
+
+  async wakeReturned(workspace: string): Promise<void> {
+    await (await this.target(workspace)).wakeReturned();
   }
 
   async openHire(workspace: string, prompt: string): Promise<void> {

@@ -1348,6 +1348,7 @@ export class LocalAgentSession {
     }
 
     const recovered = await recoverActorTurns({
+      installedBuild: this.actorHost.installedBuild,
       resumable: (limit) => this.actorHost.resumable(limit),
       acquire: async (reference) => reference.actorId === this.rt.actor.actorId
         ? { runtime: this.rt, stores: this.stores, session: this.actorSession }
@@ -1356,7 +1357,7 @@ export class LocalAgentSession {
 
     diagnostics.event('actor.turns_recovered', {
       verified: recovered.verified.length, refused: recovered.refused.length, failed: recovered.failed.length,
-      unreadable: recovered.unreadable.length, active: recovered.active.length,
+      unreadable: recovered.unreadable.length, active: recovered.active.length, stalled: recovered.stalled.length,
     });
     const advisorOrphans: OrphanedFiber[] = [];
 
