@@ -29,6 +29,17 @@ import { release, runTemp } from './test-scratch-home';
 // `gate:test-clocks` refuses per-test durations in the corpus.
 setDefaultTimeout(0);
 
+// workerd's global; an actor registers its page keepalive with one at construction.
+if (!('WebSocketRequestResponsePair' in globalThis)) {
+  Object.defineProperty(globalThis, 'WebSocketRequestResponsePair', {
+    configurable: true,
+    writable: true,
+    value: class {
+      constructor(readonly request: string, readonly response: string) {}
+    },
+  });
+}
+
 // A file that ends with a child still running fails, naming it, and the child
 // is ended first, so it holds no memory and writes into no released scratch.
 // Under `--parallel` this runs per file; without it, once for the run. The

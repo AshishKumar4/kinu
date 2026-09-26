@@ -246,12 +246,14 @@ describe('an agent\'s window hears only what it may act on', () => {
       await workspaceFiles(agent).mkdir('/slates/tally', { recursive: true });
       await workspaceFiles(agent).writeFile('/slates/tally/server.ts', 'export default { fetch() { return new Response("ok"); } };');
       await agent.announceDeviceAvailable({ id: 'device-1', label: 'studio' });
+
+      for (const flush of agent.harnessOwedLiveReads.splice(0)) flush();
     } finally {
       fanout.mockRestore();
     }
 
     const own = [
-      'subordinates_changed', 'workspace_plan_updated', 'work_cancelled', 'pending_actions_changed', 'slates_changed', 'changes_moved',
+      'subordinates_changed', 'workspace_plan_updated', 'work_cancelled', 'reads_changed', 'slates_changed', 'changes_moved',
     ];
 
     expect(heard.get('workspace')).toEqual(expect.arrayContaining([...own, 'device_available']));

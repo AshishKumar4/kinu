@@ -1072,6 +1072,7 @@ export default function WorkspacePage() {
             slates={state.slates}
             slateReloads={state.slateReloads}
             changesMoved={state.changesMoved}
+            readMoves={state.readMoves}
             tabPresence={state.tabPresence}
             presencePending={state.tabPresence === undefined}
             rpc={state.rpc}

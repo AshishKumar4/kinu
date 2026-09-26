@@ -163,7 +163,7 @@ A slate cannot bind \`agents\` or \`eval\`; it never delegates or steers you.
 
 ## A choice card in the chat
 
-Write \`slate://<id>\` on its own line in your reply and the chat renders that slate inline at \`slate.inline.height\` pixels (default 320, at most 720); it grows to fit. A card that asks the user something:
+The chat previews each slate your turn changed after your answer, at \`slate.inline.height\` pixels (default 320, at most 720), growing to fit. To show one you did not change, write \`slate://<id>\` on its own line. A card that asks the user something:
 
 \`\`\`ts
 // server.ts

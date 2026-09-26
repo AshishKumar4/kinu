@@ -760,3 +760,22 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(kv.has('resident-launch:41')).toBe(false);
   });
 });
+
+test('a port that starts or stops listening is heard by the workspace, which re-reads its pages\' port lists', async () => {
+  let moved = 0;
+
+  const workspace = createHostedWorkspace({
+    ctx: actorObject().ctx,
+    env: workspaceBindings(),
+    previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
+    onPortsChanged: () => { moved += 1; },
+  });
+
+  const ports = await workspace.ports();
+
+  ports.register(4321, 7);
+  expect(moved).toBe(1);
+
+  ports.unregisterByPid(7);
+  expect(moved).toBe(2);
+});

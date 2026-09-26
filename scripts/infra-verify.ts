@@ -70,6 +70,7 @@
  * exits 0 is read as a pass by every human and every CI badge that sees it.
  */
 
+import { declaredSignInProviders } from '@kinu.run/core';
 import { assertMeasured, blocked, finding } from './gate-ratchet';
 import {
   type Deployment, type Observation, PROBE_LABEL, accessApplication, accessOrganization,
@@ -391,6 +392,38 @@ export function supplyRows(
       detail: present
         ? `${inVars ? "declared in the Worker's `vars`" : 'set on the Worker'} (${supply.handling})`
         : `${supply.handling} — absent ⇒ ${supply.absent}`,
+    });
+  }
+
+  const declaration = worker.vars.get('SIGN_IN_PROVIDERS');
+
+  // Empty declares none; an absent key is an unwritten decision, and the monitor's probe cannot read it.
+  if (declaration === undefined) {
+    rows.push({
+      name: 'SIGN_IN_PROVIDERS',
+      verdict: 'absent',
+      required: true,
+      detail: 'config-var — absent ⇒ this environment never says which sign-in providers /login must offer',
+    });
+  }
+
+  // A provider the deployment declares must have both halves, or nobody signs in with it.
+  for (const provider of declaredSignInProviders(declaration ?? '')) {
+    const id = `${provider.toUpperCase()}_OAUTH_CLIENT_ID`;
+    const secret = `${provider.toUpperCase()}_OAUTH_CLIENT_SECRET`;
+
+    const missing = [
+      ...(worker.vars.get(id) ?? '').trim() === '' ? [`${id} (a var)`] : [],
+      ...held.has(secret) || !secretsReadable ? [] : [`${secret} (a secret)`],
+    ];
+
+    rows.push({
+      name: `sign-in provider ${provider}`,
+      verdict: missing.length === 0 ? 'present' : 'absent',
+      required: true,
+      detail: missing.length === 0
+        ? 'declared in SIGN_IN_PROVIDERS, with its client id and secret'
+        : `declared in SIGN_IN_PROVIDERS, but ${missing.join(' and ')} is missing — /login cannot offer it`,
     });
   }
 
