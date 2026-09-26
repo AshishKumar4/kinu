@@ -1125,7 +1125,7 @@ export const LADDER: readonly Gate[] = [
       + 'naming its red runs, apart from a steady red and a steady green, and a run reporting no test is red. And '
       + 'a test file a commit could change that the gate could not repeat: every tracked suite is repeated through '
       + 'the row that runs it or named as measured elsewhere.',
-    blind: 'flakes rarer than one run in REPEATS, which the sweep is for (`bun run sweep:flakes`, on demand); '
+    blind: 'flakes rarer than one run in REPEATS, which the nightly sweep is for (`bun run sweep:flakes`); '
       + 'whether a row\'s narrowed argv still means what the row means beyond `claims()` crediting it with exactly '
       + 'the file.',
     inputs: AMBIENT_BY_NAME,
@@ -2097,7 +2097,7 @@ export const LADDER: readonly Gate[] = [
       + 'some is a flake, named with the tests and runs that failed, and each red run\'s output is kept. No retry and '
       + 'no quarantine: a flake is fixed where it lives.',
     blind: 'a flake that a changed helper or product file puts into a suite the commit does not change, which the '
-      + 'sweep repeats on demand (`bun run sweep:flakes`); interleavings the runs never sampled; two copies of one '
+      + 'nightly sweep repeats (`bun run sweep:flakes`); interleavings the runs never sampled; two copies of one '
       + 'suite side by side; a suite whose runner needs a deployment or a model, which is named and left to its tier.',
     inputs: {
       kind: 'live',
@@ -2765,6 +2765,12 @@ export function gatesFor(tier: Tier): Gate[] {
   return LADDER.filter((gate) => TIERS.indexOf(gate.tier) <= upto);
 }
 
+/** The gates `--tier=<tier>` runs: every gate at or below it, and below the deploy tier none of the written CI
+ *  exemptions, which CI cannot host. */
+export function tierRun(tier: Tier): Gate[] {
+  return gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+}
+
 /** Every file changed since `ref`, committed or not, and every addition not yet tracked. */
 function changedSince(ref: string, repo: Repo): Set<string> {
   const run = Bun.spawnSync(['git', 'diff', '--name-only', '-z', ref], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
@@ -3285,7 +3291,7 @@ function printMatrix(): void {
   console.log('');
 
   for (const tier of TIERS) {
-    const gates = gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+    const gates = tierRun(tier);
     const cost = gates.reduce((sum, gate) => sum + gate.seconds, 0);
     const files = new Set(gates.flatMap((gate) => claims(gate.run, tracked)));
     console.log(
@@ -3434,7 +3440,7 @@ if (import.meta.main) {
     const tracked = trackedTestFiles();
 
     const gates = named === -1
-      ? gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT))
+      ? tierRun(tier)
       : LADDER.filter((gate) => gate.run === process.argv[named + 1]);
 
     if (gates.length === 0) {
@@ -3597,7 +3603,7 @@ if (import.meta.main) {
   const repo = repoAt(root, (run, files) => claims(run, files));
 
   const declared = selectedGate === undefined
-    ? gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT))
+    ? tierRun(tier)
     : [selectedGate];
 
   const gates = affectedFrom === undefined ? declared : affectedSince(affectedFrom, repo);

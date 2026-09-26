@@ -27,7 +27,7 @@ import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
 import { runUnderDeadline } from './deadline';
 import { finding } from './gate-ratchet';
-import { GATE_DEADLINE_SECONDS, LADDER, TIERS, claims, gatesFor, narrowedTo, sharedBrowserModules, type Gate } from './ladder';
+import { GATE_DEADLINE_SECONDS, LADDER, TIERS, claims, narrowedTo, sharedBrowserModules, tierRun, type Gate } from './ladder';
 import { discoverArgv } from './python-suites';
 import { parseJUnit } from './skip-ratchet';
 import { writtenSkips } from './test-census';
@@ -270,8 +270,8 @@ export async function repeatAll(
 const BLIND_SPOTS = [
   'a merge repeats only the test files it changes itself: one it takes whole from a side was that side\'s own '
     + 'commits\' subject, and the sweep\'s',
-  'a flake that a changed helper or product file puts into a suite this commit does not change: the sweep, run on '
-    + 'demand with `bun run sweep:flakes`, repeats every suite the CI tier runs',
+  'a flake that a changed helper or product file puts into a suite this commit does not change: the nightly sweep '
+    + '(`bun run sweep:flakes`, .github/workflows/flake-sweep.yml) repeats every suite the CI tier runs',
   'N runs sample N interleavings: greens raise confidence and prove nothing about absence',
   'a suite never runs beside itself here, so a race between two copies of one suite is not provoked',
   'a file runs apart from its row\'s siblings, so a leak between them (a module mock, a global) is not provoked '
@@ -294,7 +294,7 @@ function line(plan: Extract<Plan, { kind: 'repeat' }>, outcomes: readonly RunOut
   }
 }
 
-/* ── The sweep ────────────────────────────────────────────────────────── */
+/* ── The nightly sweep ────────────────────────────────────────────────── */
 
 /** Runs of each suite in the sweep: fewer than a commit's six, over every suite the CI tier runs. */
 export const SWEEP_RUNS = 3;
@@ -307,12 +307,12 @@ export interface SweepBatch {
 }
 
 /**
- * Every batch the sweep runs: each test file the CI tier claims, planned as the commit gate plans it, then its row's
- * files put back together under one command, so every suite runs beside its row's siblings. A Python suite runs its
- * directory's discovery.
+ * Every batch the sweep runs: each test file the CI tier runs claims, planned as the commit gate plans it, then its
+ * row's files put back together under one command, so every suite runs beside its row's siblings. A Python suite runs
+ * its directory's discovery. The rows are exactly `--tier=ci`'s, so a nightly runner hosts all of them.
  */
 export function sweepBatches(tracked: readonly string[]): SweepBatch[] {
-  const rows = gatesFor('ci');
+  const rows = tierRun('ci');
   const files = [...new Set(rows.flatMap((row) => claims(row.run, tracked)))];
   const batches = new Map<string, { row: Pick<Gate, 'label' | 'deadline'>; prefix: string[]; targets: Set<string>; lane: Lane }>();
 
@@ -429,17 +429,48 @@ export async function sweepRun(batch: SweepBatch, seed: number, scratch: string,
   };
 }
 
+/** One of `count` disjoint parts of the sweep, numbered from 1: the batches whose index is `part - 1` modulo `count`.
+ *  The parts together are the whole sweep, so each can run on a runner of its own. */
+export interface Shard {
+  readonly part: number;
+  readonly count: number;
+}
+
+/** `--shard=<part>/<count>` from `argv`, or undefined for the whole sweep. A malformed one throws. */
+export function shardFrom(argv: readonly string[]): Shard | undefined {
+  const word = argv.find((each) => each.startsWith('--shard='));
+
+  if (word === undefined) return undefined;
+  const [part, count] = word.slice('--shard='.length).split('/').map(Number);
+
+  if (part === undefined || count === undefined || !Number.isInteger(part) || !Number.isInteger(count) || part < 1 || part > count) {
+    throw new Error(`${word}: expected --shard=<part>/<count> with 1 <= part <= count`);
+  }
+
+  return { part, count };
+}
+
 /** The sweep: every batch, SWEEP_RUNS seeded runs each, one batch at a time so each runs on the load it would alone.
  *  `only` narrows it to the batches of one row, by label: a flake chased on demand. */
-async function sweep(only: string | undefined): Promise<number> {
+async function sweep(only: string | undefined, shard: Shard | undefined): Promise<number> {
   const tracked = trackedFiles();
-  const batches = sweepBatches(tracked).filter((batch) => only === undefined || batch.row.label === only);
+  const named = sweepBatches(tracked).filter((batch) => only === undefined || batch.row.label === only);
 
-  if (batches.length === 0) throw new Error(`no CI-tier row is labelled ${JSON.stringify(only)}`);
+  if (named.length === 0) throw new Error(`no CI-tier row is labelled ${JSON.stringify(only)}`);
+  const batches = named.filter((_batch, index) => shard === undefined || index % shard.count === shard.part - 1);
+
+  // A part of a narrowed sweep can be left with nothing: the other parts hold its row.
+  if (batches.length === 0) {
+    console.log(`flake-sweep: part ${String(shard?.part)} of ${String(shard?.count)} holds none of the ${String(named.length)} batch(es)`);
+
+    return 0;
+  }
+
   const ci = mainCiVerdict();
 
   console.log(`flake-sweep: main's CI: ${ci}`);
-  console.log(`flake-sweep: ${String(batches.length)} batch(es) from the CI tier, ${String(SWEEP_RUNS)} seeded run(s) each`);
+  console.log(`flake-sweep: ${String(batches.length)} batch(es) from the CI tier${shard === undefined ? '' : `, part ${String(shard.part)} of ${String(shard.count)}`}, `
+    + `${String(SWEEP_RUNS)} seeded run(s) each`);
 
   const scratch = mkdtempSync(join(tmpdir(), 'kinu-scratch-flake-sweep-'));
   const results: { batch: SweepBatch; runs: SweepRun[]; verdict: SweepVerdict }[] = [];
@@ -578,5 +609,5 @@ async function main(): Promise<number> {
 if (import.meta.main) {
   const only = process.argv.find((word) => word.startsWith('--only='))?.slice('--only='.length);
 
-  process.exit(await (process.argv.includes('--sweep') ? sweep(only) : main()));
+  process.exit(await (process.argv.includes('--sweep') ? sweep(only, shardFrom(process.argv)) : main()));
 }
