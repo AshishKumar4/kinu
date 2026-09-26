@@ -43,6 +43,9 @@ const StampedSchema = v.looseObject({ testResults: v.array(v.looseObject({
 export interface TaskKey {
   /** The served build: its artifact digest, or its build sha. */
   readonly build: string;
+  /** The Worker version serving it: a redeploy of the same build with other config or another served model is a
+   *  new version. */
+  readonly version: string | null;
   readonly origin: string;
   /** The `evals/` tree at HEAD. */
   readonly definitions: string;
@@ -141,7 +144,7 @@ async function main(): Promise<number> {
   const target = resolveEvalTarget(process.env);
   const matrix = evalMatrix(process.env, ARMS.map((arm) => arm.id));
   const commit = evalCommit(process.env);
-  const sha = await deployedBuild(target);
+  const { sha, versionId } = await deployedBuild(target);
   const definitions = definitionsTree();
   const tasks = readdirSync(join(REPO, 'evals/tasks')).filter((name) => name.endsWith('.eval.ts')).sort();
   const run = join(REPO, 'bench-artifacts', 'evals', sha);
@@ -149,7 +152,8 @@ async function main(): Promise<number> {
   for (const dir of [join(STORE, 'tasks'), join(STORE, 'baselines'), run]) mkdirSync(dir, { recursive: true });
 
   const stored = (task: string) => join(STORE, 'tasks', `${taskKey({
-    build: values.digest ?? sha, origin: target.origin, definitions, task, models: matrix.models, arms: matrix.arms, trials: matrix.trials,
+    build: values.digest ?? sha, version: versionId, origin: target.origin, definitions, task,
+    models: matrix.models, arms: matrix.arms, trials: matrix.trials,
   })}.json`);
 
   const reports = new Map<string, string>();
