@@ -245,6 +245,26 @@ describe('renaming changes no identity and moves no database', () => {
   });
 });
 
+describe('workspaces the old launcher placed in the install tree', () => {
+  test('are unplaced, so the next open in a project adopts them', async () => {
+    // The launcher used to cd into ~/.kinu/cli/current, so every workspace it created was placed there; once the CLI
+    // runs in the project, a placement under the install tree would hide those workspaces from every project.
+    const install = join(AGENT_HOME, 'cli', 'current');
+    mkdirSync(install, { recursive: true });
+    const created = await create('install-placed', install, 'install');
+    const dbPath = createdDbPath(created);
+    const to = project();
+
+    expect(listUnplacedAgentNames()).toContain('install-placed');
+    expect(listLocalRefsAllProjects().map((ref) => ref.name)).not.toContain('install-placed');
+
+    const opened = await resolveLocalAgent('install-placed', { cwd: to, workspaceId: 'mine' });
+    expect(opened.placement).toBe('adopted');
+    expect(opened.dbPath).toBe(dbPath);
+    expect(listAgentDirs(to)).toEqual(['install-placed']);
+  });
+});
+
 describe('a backend is stated, not inferred from a file', () => {
   test('a configured cloud ref wins over a local database of the same name', async () => {
     unplacedWorkspace('twin', 'ws-twin');

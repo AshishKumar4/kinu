@@ -2,7 +2,7 @@ import {
   chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync, statSync,
   writeFileSync, unlinkSync,
 } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative as relativePath, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
   ANTHROPIC_BASE_URL,
@@ -288,12 +288,19 @@ export interface ResolvedLocalAgent extends LocalAgentRef {
   placement: LocalPlacement;
 }
 
+/** The old launcher ran in the install tree; a placement there names no project, so it reads as unplaced. */
+function insideInstallTree(cwd: string): boolean {
+  const relative = relativePath(canonicalProjectRoot(join(AGENT_HOME, 'cli')), canonicalProjectRoot(cwd));
+
+  return relative === '' || (!relative.startsWith('..') && !isAbsolute(relative));
+}
+
 /** Null without a recorded placement, so an unplaced workspace belongs to no project rather than to the current directory. */
 function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
   if (agent.mode !== 'local' || !agent.cwd || !agent.workspaceId) return null;
 
   // A missing recorded directory places nothing; otherwise a renamed project's agents would vanish from every roster.
-  if (!existsSync(agent.cwd)) return null;
+  if (!existsSync(agent.cwd) || insideInstallTree(agent.cwd)) return null;
   const name = agent.localName ?? agent.name;
 
   if (!KINU_IDENTIFIER_RE.test(name)) return null;
