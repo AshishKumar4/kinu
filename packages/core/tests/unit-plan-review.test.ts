@@ -11,7 +11,6 @@ import {
   applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
-  planReviewAwaitingDecision,
   workModeUnderReview,
   validatePlanEdits,
   buildBuiltinTools,
@@ -89,13 +88,16 @@ describe('durable plan review lifecycle', () => {
     } finally { db.close(); }
   });
 
-  test('only unresolved review states block Build turns', () => {
-    expect(planReviewAwaitingDecision({ status: 'pending', handoffAccepted: false })).toBe(true);
-    expect(planReviewAwaitingDecision({ status: 'changes_requested', handoffAccepted: false })).toBe(true);
-    expect(planReviewAwaitingDecision({ status: 'approved', handoffAccepted: false })).toBe(true);
-    expect(planReviewAwaitingDecision({ status: 'approved', handoffAccepted: true })).toBe(false);
-    expect(planReviewAwaitingDecision({ status: 'superseded', handoffAccepted: false })).toBe(false);
-    expect(planReviewAwaitingDecision(null)).toBe(false);
+  test('only unresolved review states hold an operator Build turn', () => {
+    const held = (review: Parameters<typeof workModeUnderReview>[2]) => workModeUnderReview('build', { kinuAuthor: 'operator' }, review);
+
+    expect(held({ status: 'pending', handoffAccepted: false })).toBe('plan');
+    expect(held({ status: 'changes_requested', handoffAccepted: false })).toBe('plan');
+    expect(held({ status: 'approved', handoffAccepted: false })).toBe('plan');
+    expect(held({ status: 'approved', handoffAccepted: true })).toBe('build');
+    expect(held({ status: 'superseded', handoffAccepted: false })).toBe('build');
+    expect(held({ status: 'dismissed', handoffAccepted: false })).toBe('build');
+    expect(held(null)).toBe('build');
   });
 
   test('persists a pending first revision with durable annotations', () => {
@@ -223,7 +225,7 @@ describe('durable plan review lifecycle', () => {
 
     const dismissed = store.dismiss('plan-1', 1);
     expect(dismissed).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
-    expect(planReviewAwaitingDecision(store.getActive('default'))).toBe(false);
+    expect(workModeUnderReview('build', { kinuAuthor: 'operator' }, store.getActive('default'))).toBe('build');
     expect(store.dismiss('plan-1', 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
     expect(store.decide('plan-1', 1, 'approve')).toMatchObject({ ok: false, error: expect.stringContaining('dismissed') });
 
@@ -238,6 +240,22 @@ describe('durable plan review lifecycle', () => {
     store.markHandoffAccepted('plan-1', 1);
 
     expect(store.dismiss('plan-1', 1)).toMatchObject({ ok: false, plan: { status: 'approved' } });
+  });
+
+  test('a sent-back plan whose revision turn already started cannot be dismissed; one still queued can', () => {
+    // A running revision turn may still submit a new plan, which would bring the hold back after the dismiss.
+    const { store } = setup();
+    store.submit('default', [{ start: 1, content: '# One' }]);
+    store.decide('plan-1', 1, 'request_changes', 'Say what happens to the audit trail.');
+    store.markHandoffAccepted('plan-1', 1);
+
+    expect(store.dismiss('plan-1', 1)).toMatchObject({ ok: false, plan: { status: 'changes_requested' } });
+
+    const queued = setup().store;
+    queued.submit('default', [{ start: 1, content: '# One' }]);
+    queued.decide('plan-1', 1, 'request_changes', 'Say what happens to the audit trail.');
+
+    expect(queued.dismiss('plan-1', 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
   });
 });
 

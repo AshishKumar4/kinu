@@ -52,12 +52,16 @@ export const PlanReviewSchema = v.object({
   createdAt: v.number(), updatedAt: v.number(), decidedAt: v.nullable(v.number()),
 });
 
-export function planReviewAwaitingDecision(
+function planReviewAwaitingDecision(
   review: Pick<PlanReview, 'status' | 'handoffAccepted'> | null | undefined,
 ): boolean {
   return review?.status === 'pending'
     || review?.status === 'changes_requested'
     || (review?.status === 'approved' && !review.handoffAccepted);
+}
+
+export function planDismissable(review: Pick<PlanReview, 'status' | 'handoffAccepted'>): boolean {
+  return review.status === 'pending' || (planReviewAwaitingDecision(review) && !review.handoffAccepted);
 }
 
 export function workModeUnderReview(
@@ -681,7 +685,7 @@ export class PlanReviewStore {
       return { ok: false, error: `stale plan revision ${id}/${revision}`, plan: latest };
     }
 
-    if (!planReviewAwaitingDecision(current)) return { ok: false, error: `plan revision is already ${current.status}`, plan: current };
+    if (!planDismissable(current)) return { ok: false, error: `plan revision ${id}/${revision} already handed off its turn`, plan: current };
     const now = this.now();
     void this.sql`UPDATE plan_reviews SET status='dismissed', updated_at=${now}, decided_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status=${current.status}`;
