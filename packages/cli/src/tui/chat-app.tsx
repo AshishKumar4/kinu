@@ -2,6 +2,7 @@
 
 import {
   createCliRenderer,
+  type CliRenderer,
   type ScrollBoxRenderable,
   type TextareaRenderable,
 } from '@opentui/core';
@@ -49,6 +50,8 @@ import { guideFailure } from '../provider-guidance';
 import { openBrowser } from '../commands/auth';
 import { StatusBar } from './status-bar';
 import { MessageList, type DisplayMessage } from './messages';
+import { createHostShell } from '@kinu.run/cli-backend';
+import type { TurnMeter } from './overlays';
 import {
   ChangelogOverlay,
   CommandHintOverlay,
@@ -69,7 +72,7 @@ import {
 } from './overlays';
 import { useDeviceConnectPrompt, type DeviceConnectPromptState } from './use-device-connect';
 import { useShellApproval } from './use-shell-approval';
-import type { ShellApprovalRequest, WorkMode } from '@kinu.run/core';
+import type { BroadcastEvent, ShellApprovalRequest, WorkMode } from '@kinu.run/core';
 import { useComposerPaste } from './use-composer-paste';
 import { useDraftEditing } from './use-draft-editing';
 import { composerHelp } from './help-view';
@@ -78,7 +81,6 @@ import { composerKeyHandlers } from './draft-keys';
 import { modalKeyHandlers, sceneKeyHandlers } from './surface-keys';
 import type { ComposerKeyDeps } from './draft-keys';
 import type { SurfaceKeyDeps } from './surface-keys';
-import { estimateContextTokens } from '@kinu.run/core';
 import { useStreamingBuffer } from './streaming-buffer';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from '@kinu.run/core';
 import { agentDisplayLabel, clipText } from '@kinu.run/core';
@@ -232,6 +234,7 @@ function ChatScene({
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
   const [modelSpec, setModelSpec] = useState<string>('');
   const [nextTier, setNextTier] = useState<TierId | null>(null);
+  const [admittedContext, setAdmittedContext] = useState<AdmittedContext | null>(null);
   const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>(null);
   const [pendingConsent, setPendingConsent] = useState<PendingDeviceConsent | null>(null);
@@ -409,14 +412,23 @@ function ChatScene({
   /** If false at turn-end, turn.text is appended once. */
   const turnStreamedTextRef = useRef(false);
 
-  const writeActiveSegment = useCallback((value: string | null) => {
-    const id = activeSegmentRef.current;
-
-    if (!id || value === null) return;
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: value } : m)));
-  }, []);
-
+  const writeActiveSegment = useMemo(() => writeLiveMessage(activeSegmentRef, setMessages), []);
   const stream = useStreamingBuffer(writeActiveSegment);
+  const activeThinkingRef = useRef<string | null>(null);
+  const writeThinking = useMemo(() => writeLiveMessage(activeThinkingRef, setMessages), []);
+  const thinkingStream = useStreamingBuffer(writeThinking);
+  const turnMeterRef = useRef<TurnMeter | null>(null);
+
+  const appendThinking = useCallback((delta: string) => {
+    if (!activeThinkingRef.current) {
+      const id = `msg-${++msgIdRef.current}`;
+      activeThinkingRef.current = id;
+      setMessages((prev) => [...prev, { id, role: 'thinking', content: '', live: true }]);
+      thinkingStream.start();
+    }
+
+    thinkingStream.append(delta);
+  }, [thinkingStream]);
 
   const beginSegment = useCallback(() => {
     const id = `msg-${++msgIdRef.current}`;
@@ -425,6 +437,15 @@ function ChatScene({
     setMessages((prev) => [...prev, segment]);
     stream.start();
   }, [stream]);
+
+  const sealThinking = useCallback(() => {
+    const id = activeThinkingRef.current;
+
+    if (!id) return;
+    thinkingStream.finish();
+    activeThinkingRef.current = null;
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, live: false } : m)));
+  }, [thinkingStream]);
 
   /** An empty segment (tool before any text) is removed. */
   const sealSegment = useCallback(() => {
@@ -466,6 +487,20 @@ function ChatScene({
   }, [draftEditing.replace, syncComposerRows]);
 
   /** @path mentions become attachments: images and PDFs inline, other files as path references. */
+  const [connectFailed, setConnectFailed] = useState(false);
+  const [connectAttempt, setConnectAttempt] = useState(0);
+
+  /** `!command` output for the next prompt, as in omp. */
+  const localOutputsRef = useRef<string[]>([]);
+
+  const forgetSessionTurn = useCallback(() => {
+    localOutputsRef.current = [];
+    setAdmittedContext(null);
+    turnMeterRef.current = null;
+    activeThinkingRef.current = null;
+    thinkingStream.clear();
+  }, [thinkingStream]);
+
   const sendPrompt = useCallback(async (input: string, mode?: WorkMode) => {
     rememberPrompt(input);
     const generation = clientGenerationRef.current;
@@ -487,7 +522,8 @@ function ChatScene({
       };
 
       addMessage(message);
-      const payload = prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text;
+      const text = [...localOutputsRef.current.splice(0), prompt.text].join('\n\n');
+      const payload = prompt.files.length > 0 ? { text, files: prompt.files } : text;
       const sendOptions: AgentClientSendOptions = { cwd: process.cwd(), ...(mode !== undefined && { mode }) };
 
       if (nextTier) sendOptions.tier = nextTier;
@@ -538,6 +574,7 @@ function ChatScene({
         setModelCatalog([]);
         setBranchTasks({});
         skipHydrationRef.current = true;
+        forgetSessionTurn();
         const previous = client;
         setClient(result.client);
         onClientChange?.(result.client);
@@ -568,7 +605,7 @@ function ChatScene({
       selectionPendingRef.current = false;
       setReady(true);
     }
-  }, [addError, addMessage, client, dispatchInput, onClientChange, setInputText]);
+  }, [addError, addMessage, client, dispatchInput, forgetSessionTurn, onClientChange, setInputText]);
 
   const switchWorkspace = useCallback(async (
     workspace: TuiAgentSummary,
@@ -632,6 +669,7 @@ function ChatScene({
       skipHydrationRef.current = true;
       clientGenerationRef.current += 1;
       activeSegmentRef.current = null;
+      forgetSessionTurn();
       setTurnPhase(null);
       setStatus(null);
       setModelSpec('');
@@ -686,7 +724,7 @@ function ChatScene({
       addError({ cause: error });
       selectionPendingRef.current = false;
     }
-  }, [addError, addMessage, client, onClientChange, onWorkspaceSelect, setInputText, stream]);
+  }, [addError, addMessage, client, forgetSessionTurn, onClientChange, onWorkspaceSelect, setInputText, stream]);
 
 
   /** Cloud supplies a facet client: the conversation nests under its parent workspace. */
@@ -934,10 +972,25 @@ function ChatScene({
     }
   }, [addError, client]);
 
+  const openWorkspaces = useCallback(() => {
+    setNavigationOpen(true);
+    updatePreferences((current) => ({ ...current, wideSidebarOpen: true }));
+  }, [updatePreferences]);
+
   const applySlashOutcome = useCallback(async (outcome: SlashOutcome) => {
     switch (outcome.kind) {
       case 'text':
-        addMessage({ role: 'system', content: outcome.text });
+        if (outcome.cleared) setMessages([]);
+
+        if (outcome.contextChanged) setAdmittedContext(null);
+
+        if (outcome.workspaces) {
+          openWorkspaces();
+
+          return;
+        }
+
+        addMessage({ role: 'system', content: copyRefused(outcome, rendererInstance) ?? outcome.text });
 
         return;
       case 'changelog':
@@ -1035,6 +1088,7 @@ function ChatScene({
     deviceConnect.open,
     onExit,
     openModelPicker,
+    openWorkspaces,
   ]);
 
   const runInputEffects = useCallback((effects: InputEffect[]) => {
@@ -1077,10 +1131,23 @@ function ChatScene({
     return action;
   }, [addMessage, client, onExit, performBranch, sendPrompt, setInputText]);
 
+  const runLocalCommand = useCallback(async (typed: string) => {
+    const shared = !typed.startsWith('!!');
+    const command = typed.replace(/^!!?/u, '').trim();
+    const result = await createHostShell(process.cwd()).exec(command);
+    const output = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter((part) => part !== '').join('\n');
+    const shown = `$ ${command}\n${output}${result.exitCode === 0 ? '' : `\nexit ${String(result.exitCode)}`}`;
+
+    if (shared) localOutputsRef.current.push(`<local_command>\n${shown}\n</local_command>`);
+    addMessage({ role: 'system', content: shown });
+  }, [addMessage]);
+
   const handleSubmit = useCallback(async (input: string) => {
     const text = input.trim();
 
     if (!text) return;
+
+    if (text.startsWith('!')) return runLocalCommand(text);
 
     if (!ready) {
       addMessage({ role: 'system', content: 'Still connecting.' });
@@ -1189,7 +1256,7 @@ function ChatScene({
         );
       }
     }
-  }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, runInputEffects, sendPrompt]);
+  }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, runInputEffects, sendPrompt, runLocalCommand]);
 
   /** Once per set, never for one already picked from. */
   const hintAlternateTakes = useCallback(async () => {
@@ -1226,6 +1293,8 @@ function ChatScene({
   }, [addMessage, client]);
 
   const handleTurnEnd = useCallback(async (event: Extract<AgentClientEvent, { type: 'turn-end' }>) => {
+    sealThinking();
+
     if (activeSegmentRef.current) stream.finish();
     sealSegment();
 
@@ -1235,14 +1304,25 @@ function ChatScene({
 
     const inputEffects = runInputEffects(dispatchInput({ type: 'turn-settled' }));
 
-    if (machineRef.current.activeTurns === 0) setTurnPhase(null);
+    if (machineRef.current.activeTurns === 0) {
+      setTurnPhase(null);
+      turnMeterRef.current = null;
+    }
 
     if (event.turn.toolCalls.some((call) => call.name === 'agents')) await hintAlternateTakes();
 
     await inputEffects;
-  }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, setTurnPhase, stream]);
+  }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, sealThinking, setTurnPhase, stream]);
 
   const handleBroadcast = useCallback((event: Extract<AgentClientEvent, { type: 'broadcast' }>) => {
+    const admitted = admittedContextOf(event.event);
+
+    if (admitted !== null) {
+      setAdmittedContext(admitted);
+
+      return;
+    }
+
     if (event.event.type === 'plan_updated' && event.event.plan) {
       addMessage({ role: 'system', content: renderPlanReview(event.event.plan) });
 
@@ -1277,7 +1357,9 @@ function ChatScene({
         dispatchInput({ type: 'turn-start' });
         // A new segment opens lazily on the first text-delta — start clean.
         sealSegment();
+        sealThinking();
         turnStreamedTextRef.current = false;
+        turnMeterRef.current ??= { startedAt: Date.now(), streamedChars: 0 };
         setTurnPhase(event.kind === 'programmatic' ? 'running background work' : 'thinking');
 
         if (event.kind === 'programmatic') {
@@ -1287,8 +1369,15 @@ function ChatScene({
         return;
       }
 
+      case 'reasoning-delta':
+        countStreamed(turnMeterRef.current, event.delta);
+        appendThinking(event.delta);
+
+        return;
       case 'text-delta':
         if (!event.delta) return;
+        sealThinking();
+        countStreamed(turnMeterRef.current, event.delta);
         turnStreamedTextRef.current = true;
 
         if (!activeSegmentRef.current) beginSegment();
@@ -1297,6 +1386,7 @@ function ChatScene({
 
         return;
       case 'tool-call':
+        sealThinking();
         sealSegment();
         setTurnPhase(`calling ${event.toolName}`);
         addMessage({
@@ -1323,6 +1413,7 @@ function ChatScene({
 
         return;
       case 'error':
+        sealThinking();
         sealSegment();
         addMessage({ role: 'system', content: errorLine(event.message) });
 
@@ -1346,7 +1437,7 @@ function ChatScene({
         return;
       }
     }
-  }, [addMessage, beginSegment, dispatchInput, handleBroadcast, handleTurnEnd, sealSegment, setTurnPhase, stream]);
+  }, [addMessage, appendThinking, beginSegment, dispatchInput, handleBroadcast, handleTurnEnd, sealSegment, sealThinking, setTurnPhase, stream]);
 
   // Connect once per client; re-runs when a walk-back fork swaps in a sibling client.
   useEffect(() => {
@@ -1410,10 +1501,14 @@ function ChatScene({
         } catch (error) {
           connected = false;
 
-          if (!abort.signal.aborted) addError({ cause: error });
+          if (!abort.signal.aborted) {
+            addError({ cause: error });
+            setConnectFailed(true);
+          }
         }
 
         if (!connected || abort.signal.aborted) return;
+        setConnectFailed(false);
         setReady(true);
 
         if (client.mode !== 'cloud') return;
@@ -1448,7 +1543,7 @@ function ChatScene({
       abort.abort();
       unsubscribe();
     };
-  }, [addError, addMessage, client, deviceConnect.offerIfUnconnected, handleClientEvent]);
+  }, [addError, addMessage, client, connectAttempt, deviceConnect.offerIfUnconnected, handleClientEvent]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -1541,7 +1636,6 @@ function ChatScene({
     pendingConsent, shellApproval: shellApproval.pending, deviceConnect: deviceConnect.state,
   });
 
-  // Auto-copy selected text to clipboard (OSC 52) on mouse release.
   useEffect(() => {
     if (!rendererInstance?.root) return;
     let copied = false;
@@ -1594,7 +1688,11 @@ function ChatScene({
     commandPalette,
     wideLayout: tuiLayoutForWidth(width) === 'wide',
     setNavigationOpen,
-    toggleWideSidebar: () => updatePreferences((current) => ({ ...current, wideSidebarOpen: !current.wideSidebarOpen })),
+    toggleWideSidebar: () => {
+      const closing = preferences.wideSidebarOpen && navigationOpen;
+      updatePreferences((current) => ({ ...current, wideSidebarOpen: !closing }));
+      setNavigationOpen(!closing);
+    },
     busy: () => machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0,
     addMessage,
     lastUrl: () => lastUrlFromMessages(messagesRef.current),
@@ -1675,7 +1773,7 @@ function ChatScene({
       return;
     }
 
-    if (navigationOpen && tuiLayoutForWidth(width) !== 'wide') return;
+    if (navigationOpen) return;
     const modalActive = activeSurface !== null || inputState.walkbackOpen;
     const result = keyDispatcher.feed(key, modalActive ? ['modal'] : ['editor', 'conversation', 'global']);
 
@@ -1693,6 +1791,14 @@ function ChatScene({
 
   const onInputSubmit = useCallback(() => {
     if (overlayOpen) return;
+
+    if (connectFailed) {
+      setConnectFailed(false);
+      setConnectAttempt((attempt) => attempt + 1);
+
+      return;
+    }
+
     const value = inputRef.current?.plainText ?? '';
 
     if (!value.trim()) return;
@@ -1700,20 +1806,19 @@ function ChatScene({
     draftEditing.reset();
 
     return handleSubmit(expandPastes(value));
-  }, [draftEditing.reset, expandPastes, handleSubmit, overlayOpen, setInputText]);
+  }, [connectFailed, draftEditing.reset, expandPastes, handleSubmit, overlayOpen, setInputText]);
 
   const commandHints = !overlayOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
 
-  const inputFocused = ready && !overlayOpen;
-  const contextTokens = estimateContextTokens(messages);
-  const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
+  const inputFocused = composerTakesKeys(ready, connectFailed, overlayOpen);
+  const meter = headerMeter(admittedContext, contextWindowForSpec(modelCatalog, modelSpec));
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
 
   const surfaceTitle = surfaceTitleFor(activeSurface, inputState.walkbackOpen);
   // Turn progress stays in the phase line.
   const composerTitle = surfaceTitle ?? undefined;
 
-  const composerPlaceholder = composerPlaceholderFor(ready, isProcessing);
+  const composerPlaceholder = composerPlaceholderFor(ready, isProcessing, connectFailed);
 
   useEffect(() => {
     if (inputFocused) inputRef.current?.focus();
@@ -1869,6 +1974,7 @@ function ChatScene({
       roster={shownRoster}
       currentAgent={{ name: client.agentName, mode: client.mode }}
       navigationOverlayOpen={navigationOpen}
+      navigationFocused={navigationOpen}
       onNavigationOverlayChange={setNavigationOpen}
       onNavigationFocusChange={handleNavigationFocusChange}
       onAgentSelect={switchWorkspace}
@@ -1886,8 +1992,8 @@ function ChatScene({
         scaffoldVersion={status?.scaffoldVersion}
         toolCount={status?.toolCount}
         autoEvolve={status?.autoEvolve}
-        contextTokens={contextTokens}
-        contextWindow={contextWindow}
+        contextTokens={meter.tokens}
+        contextWindow={meter.window}
         branchCount={Object.keys(branchTasks).length}
         profile={hub?.data.profile.resolved}
       />
@@ -1908,7 +2014,7 @@ function ChatScene({
         }}
       >
         <MessageList messages={messages} toolDetailsExpanded={toolDetailsExpanded} />
-        <PhaseLine label={phaseLineLabel(isProcessing, turnPhase, nextTier)} />
+        <PhaseLine label={phaseLineLabel(isProcessing, turnPhase, nextTier)} meter={turnMeterRef} />
       </scrollbox>
 
       {inputState.queue.length > 0 && (
@@ -1975,10 +2081,55 @@ function ChatScene({
 }
 
 
-function composerPlaceholderFor(ready: boolean, isProcessing: boolean): string {
+function copyRefused(outcome: Extract<SlashOutcome, { kind: 'text' }>, renderer: CliRenderer): string | null {
+  if (outcome.copy === undefined || renderer.copyToClipboardOSC52(outcome.copy)) return null;
+
+  return 'This terminal does not accept clipboard writes (OSC 52), so nothing was copied.';
+}
+
+interface AdmittedContext {
+  readonly tokens: number;
+  readonly window: number;
+}
+
+function admittedContextOf(event: BroadcastEvent): AdmittedContext | null {
+  const { type, requestTokens, contextWindow } = event;
+
+  return type === 'context_admitted' && requestTokens !== undefined && contextWindow !== undefined
+    ? { tokens: requestTokens, window: contextWindow }
+    : null;
+}
+
+function headerMeter(admitted: AdmittedContext | null, catalogWindow: number | undefined): { tokens: number | null; window: number | undefined } {
+  return admitted ?? { tokens: null, window: catalogWindow };
+}
+
+function composerTakesKeys(ready: boolean, connectFailed: boolean, overlayOpen: boolean): boolean {
+  return (ready || connectFailed) && !overlayOpen;
+}
+
+function composerPlaceholderFor(ready: boolean, isProcessing: boolean, connectFailed: boolean): string {
+  if (connectFailed) return 'Not connected · Enter to try again';
+
   if (!ready) return 'Connecting…';
 
   return isProcessing ? TUI_COMPOSER_STEERING_PLACEHOLDER : TUI_COMPOSER_PLACEHOLDER;
+}
+
+function writeLiveMessage(
+  ref: { readonly current: string | null },
+  setMessages: (update: (prev: DisplayMessage[]) => DisplayMessage[]) => void,
+): (value: string | null) => void {
+  return (value) => {
+    const id = ref.current;
+
+    if (!id || value === null) return;
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: value } : m)));
+  };
+}
+
+function countStreamed(meter: TurnMeter | null, delta: string): void {
+  if (meter) meter.streamedChars += delta.length;
 }
 
 function phaseLineLabel(isProcessing: boolean, turnPhase: string | null, nextTier: TierId | null): string | null {

@@ -236,6 +236,24 @@ floor, because fabric kept `prev`. The guard now compares the counter read
 before the adopt with the value after it (`before + 1`, which fabric takes
 only once its put resolved); measured by "a bump that did not persist refuses
 the open, on a boot that is not the first" in the same suite.
+Reversed 2026-09-25 (bc405ef307): Kinu takes the generation again, as one
+upsert and read inside `transactionSync` (`takeWorkspaceGeneration`), and
+fabric's `adoptGeneration` is no longer called. Fabric's adopt reads the row
+and writes it in two steps, so two openers of one database file (the CLI's
+daemon and its chat, on a workspace's first open) can take the same
+generation, and so the same pid floor. `unit-workspace-generation`'s "two
+openers booting one workspace at once take different generations, and both
+boot" was red under fabric's adopt (both took 1) and is green with the
+transaction. The same commit sets `busy_timeout` on the CLI runtime; without
+it the second opener's write failed with "database is locked" at once.
+Re-measured under both shapes by review (job 143): 6 concurrent `bun`
+processes × 3 rounds on one WAL file, plus 3 behind a 1.5 s `BEGIN
+IMMEDIATE` holder, took 21 distinct generations with no failure under
+busy_timeout 30000; with busy_timeout 0, 5 of 18 openers failed. The row, the
+table and the floor are unchanged, so the counter continues across the switch.
+The read-back guard of the 2026-09-16 amendment is gone: the transaction
+either commits the bump or throws, and "a generation write that fails refuses
+the open and leaves the counter where it was" pins that.
 
 ## Chat loop
 

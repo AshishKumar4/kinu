@@ -28,6 +28,8 @@ export interface BroadcastEvent {
   readonly headId?: string;
   /** `plan_updated`: the review as it now stands. */
   readonly plan?: PlanReview;
+  readonly requestTokens?: number;
+  readonly contextWindow?: number;
 }
 
 /** A programmatic turn in the same serialized loop the user drives; `metadata.kinuEvent` renders

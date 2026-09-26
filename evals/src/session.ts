@@ -102,7 +102,7 @@ import {
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type WorkspaceSpend,
 } from '../../packages/core/src/index';
-import { tolerate } from '../../packages/core/src/obs/index';
+import { renderThrownChain, tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
 import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from '../../packages/cli/src/agent-client';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
@@ -761,6 +761,13 @@ const SubordinateRosterSchema = v.array(SubordinateRowSchema);
 /** One row of the roster, as the Agents surface lists it. */
 export type PublicSubordinate = v.InferOutput<typeof SubordinateRowSchema>;
 
+/** One entry of a folder as the Files tab lists it (`getExecutorFiles`). */
+const DirEntrySchema = v.object({ name: v.string(), type: v.picklist(['file', 'dir']) });
+
+const DirectorySchema = v.object({ entries: v.optional(v.array(DirEntrySchema)), error: v.optional(v.string()) });
+
+export type PublicDirEntry = v.InferOutput<typeof DirEntrySchema>;
+
 /** What `readExecutorFile` answers, exactly as `ExecutorTextFile` declares it
  *  (core/src/read-models/files.ts): the preview's text, or the reason there is
  *  none. Both optional, because the read model answers one or the other. */
@@ -813,6 +820,68 @@ export interface PublicSubmission {
  *  shared rather than re-typed. */
 const SESSION_DISPLAY_NAME = 'Trajectory Evals';
 
+const RosterRowSchema = v.object({ name: v.string(), lastVisited: v.number() });
+
+const RosterPageSchema = v.object({ entries: v.array(RosterRowSchema), nextCursor: v.nullable(v.string()) });
+
+/** A workspace as the account's roster lists it: `lastVisited` is the last mark any run or visit put on it. */
+export type RosterRow = v.InferOutput<typeof RosterRowSchema>;
+
+/**
+ * How often a run marks its workspace live on the deployment, through `touch` (the roster's
+ * `last_visited`, which every machine reads). The eval sweep deletes an `eval-` workspace whose mark
+ * is older than its lease (`sweep.ts`), so a run on any machine keeps its workspaces by beating.
+ */
+export const WORKSPACE_BEAT_MS = 60_000;
+
+/** Every workspace on the identity's account, page by page, as the sidebar's roster lists them. */
+export async function listWorkspaces(origin: string, identity: PublicWebIdentity): Promise<RosterRow[]> {
+  const rows: RosterRow[] = [];
+  let cursor: string | null = null;
+
+  do {
+    const url = `${origin}/api/user/workspaces${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`;
+
+    // Annotated because the loop reads its own result: `page.nextCursor` feeds the next iteration.
+    const page: v.InferOutput<typeof RosterPageSchema> = v.parse(RosterPageSchema, await infraBoundary(`GET ${url}`, async () =>
+      readJson(await fetch(url, { headers: webHeaders(identity) }), 'list the workspaces')));
+
+    rows.push(...page.entries);
+    cursor = page.nextCursor;
+  } while (cursor !== null);
+
+  return rows;
+}
+
+/** Delete a workspace, the DELETE the sidebar's Remove issues. */
+export async function deleteWorkspace(origin: string, identity: PublicWebIdentity, name: string): Promise<void> {
+  await infraBoundary(`DELETE ${origin}/api/user/workspaces/${name}`, async () => {
+    const response = await fetch(`${origin}/api/user/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE', headers: webHeaders(identity) });
+
+    await readJson(response, `delete the workspace ${name}`);
+  });
+}
+
+/** One beat: the roster's mark on `name` moves to now. A beat that fails is said, and the lease rides out the next nine. */
+async function markLive(origin: string, identity: PublicWebIdentity, name: string): Promise<void> {
+  try {
+    const response = await fetch(`${origin}/api/user/workspaces/${encodeURIComponent(name)}/touch`, { method: 'POST', headers: webHeaders(identity) });
+
+    await readJson(response, `mark the workspace ${name} live`);
+  } catch (error) {
+    console.warn(`[evals] ${name} missed a beat: ${renderThrownChain({ cause: error })}`);
+  }
+}
+
+/** Mark `name` live every {@link WORKSPACE_BEAT_MS} until the returned stop is called; its create is the first mark. */
+export function beatWorkspace(origin: string, identity: PublicWebIdentity, name: string): () => void {
+  const timer = setInterval(async () => { await markLive(origin, identity, name); }, WORKSPACE_BEAT_MS);
+
+  timer.unref();
+
+  return () => { clearInterval(timer); };
+}
+
 export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
   const headers = webHeaders(input.identity);
 
@@ -843,6 +912,8 @@ export async function openPublicSession(input: PublicSessionInput): Promise<Kinu
   );
 
   const session = new KinuPublicSession(input, created.name);
+
+  session.beat();
 
   try {
     await session.connect();
@@ -970,12 +1041,20 @@ export class KinuPublicSession {
   }>();
   private nextId = 0;
 
+  /** Stops the beat that keeps this workspace out of every eval sweep; none until {@link beat}. */
+  private stopBeat: () => void = () => undefined;
+
   constructor(
     private readonly input: PublicSessionInput,
     /** The name the deployment gave this workspace, which is not always the one
      *  asked for: the create path may answer with an existing row. */
     readonly workspace: string,
   ) {}
+
+  /** Mark this workspace live on the deployment until teardown (`beatWorkspace`). */
+  beat(): void {
+    this.stopBeat = beatWorkspace(this.input.origin, this.input.identity, this.workspace);
+  }
 
   get describe(): string {
     return `public session · ${this.input.origin} · workspace ${this.workspace} `
@@ -1336,6 +1415,22 @@ export class KinuPublicSession {
     return v.parse(SubordinateRosterSchema, rows);
   }
 
+  /** One folder of the workspace as the Files tab lists it. With
+   *  `allowMissing`, a folder that does not exist lists nothing; any other
+   *  refusal is the build's answer. */
+  async listFiles(dir: string, options: { allowMissing?: boolean } = {}): Promise<readonly PublicDirEntry[]> {
+    const listing = v.parse(DirectorySchema, await infraBoundary(
+      `getExecutorFiles ${dir} on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getExecutorFiles', [WORKSPACE_EXECUTOR, dir]),
+    ));
+
+    if (listing.error === undefined) return listing.entries ?? [];
+
+    if (options.allowMissing === true && /\bENOENT\b/.test(listing.error)) return [];
+
+    throw new DeploymentAnswer(`could not list ${dir}: ${listing.error.slice(0, 200)}`, 500);
+  }
+
   /** Resolve when a response chunk of `requestId` satisfies `accept` — a
    *  wait on the socket's own output, for a row that must act while a turn
    *  is inside its work (its first tool result has streamed). */
@@ -1546,6 +1641,21 @@ export class KinuPublicSession {
     });
   }
 
+  /** One file's bytes off the same route: what a trial leaves behind is kept
+   *  as the workspace held it, text or not. */
+  readBytes(path: string): Promise<Uint8Array> {
+    return infraBoundary(`GET files ${path}`, async () => {
+      const response = await fetch(this.filesUrl(path), { headers: webHeaders(this.input.identity) });
+
+      if (!response.ok) {
+        throw new DeploymentAnswer(`could not read ${path} over the files route: ${String(response.status)} `
+          + `${response.statusText} — ${(await response.text()).slice(0, 200)}`, response.status);
+      }
+
+      return new Uint8Array(await response.arrayBuffer());
+    });
+  }
+
   /** Seed one file through the same route, so a case's inputs arrive on the
    *  plane the agent's own tools read. */
   writeFile(path: string, content: string): Promise<void> {
@@ -1573,18 +1683,10 @@ export class KinuPublicSession {
    * deployment failing, not the agent.
    */
   async teardown(): Promise<void> {
-    try {
-      await infraBoundary(
-        `DELETE ${this.input.origin}/api/user/workspaces/${this.workspace}`,
-        async () => {
-          const response = await fetch(
-            `${this.input.origin}/api/user/workspaces/${encodeURIComponent(this.workspace)}`,
-            { method: 'DELETE', headers: webHeaders(this.input.identity) },
-          );
+    this.stopBeat();
 
-          await readJson(response, `delete the workspace ${this.workspace}`);
-        },
-      );
+    try {
+      await deleteWorkspace(this.input.origin, this.input.identity, this.workspace);
     } finally {
       this.failInFlight('the session was torn down');
       this.socket?.close();

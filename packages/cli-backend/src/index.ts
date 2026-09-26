@@ -8,6 +8,8 @@ export {
 
 export { createHostCheckpoints } from './checkpoints';
 
+export { createLocalProfileAuthority, resolverModelPlane } from './profile-authority';
+
 export { kinuHome } from './home';
 
 export {

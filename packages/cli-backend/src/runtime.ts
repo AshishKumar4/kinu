@@ -205,11 +205,17 @@ function actorFacetName(record: WorkspaceActor): string {
   return headAgentName(record.storageKey);
 }
 
+/** A lock held longer than this is a hung opener, and the write fails naming the lock. */
+const SHARED_WRITE_WAIT_MS = 30_000;
+
 export function createCLIRuntime(
   db: Database,
   config: CLIRuntimeConfig,
 ): CLIRuntime {
   db.exec('PRAGMA foreign_keys = ON');
+  // The daemon and an interactive chat open one workspace file; bun:sqlite fails a write that meets the other's
+  // transaction at once. Each holds a write only for one statement batch, so a write waits for it.
+  db.exec(`PRAGMA busy_timeout = ${String(SHARED_WRITE_WAIT_MS)}`);
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   requireLocalDatabasePath(db, config.dbPath);

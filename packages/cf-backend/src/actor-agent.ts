@@ -159,7 +159,7 @@ import {
   reasoningEffortOptions,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
-  resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, createAgentConfigStore, type PinnedProfile,
+  resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
@@ -4220,13 +4220,9 @@ export abstract class ActorAgent extends Agent<Env> {
       workMode: requestedWorkMode,
       availableTools,
       activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
+      ...ownProfileChoices(this.config, profileInputs),
       // Request tier, then the tier pinned at hire, then the role's own default.
-      // An absent pin must not read as the workspace default.
       explicitTier: readTurnTier(input.body) ?? this.config.getAssignedTier() ?? undefined,
-      // The workspace's pinned model overrides the role's tier model; without it a setModel pin
-      // is accepted but never used.
-      workspaceModel: this.config.getModel(),
-      explicitEffort: this.config.getReasoningEffort(),
     });
 
     const operation = captureOperationProfile({

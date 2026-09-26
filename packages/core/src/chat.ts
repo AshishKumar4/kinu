@@ -30,7 +30,7 @@ import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import { contextWindowForModel, type ResolvedModelWindow } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
-import type { ExtensionHost } from './extension';
+import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
 import { describeProviderError, providerFailureFacts, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
@@ -80,6 +80,7 @@ export type ChatEvent =
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
   | { type: 'error'; message: string }
   | { type: 'model-fallback'; from: string; to: string; reason: string }
+  | { type: 'context-admitted'; tokens: number; contextWindow: number }
   /** `text`: the answer, else what streamed, else a tool-result synthesis. `answer`: only the final step's text
    *  ({@link answerFromSteps}), absent when there is none. */
   | { type: 'done'; text: string; responseMessages: ModelMessage[]; answer?: string };
@@ -126,8 +127,7 @@ export interface ChatOptions {
   credentialOf?: (spec: string) => Promise<string | null>;
   /** Provider-reported prompt tokens of the previous turn's final request, the measured compaction trigger. */
   providerReportedTokens?: number;
-  /** 'force' when the caller consumed an armed force-compaction flag after an overflow. */
-  transformTrigger?: 'auto' | 'force';
+  transformTrigger?: CompactionTrigger;
   /** The provider's own request token count (providers/input-tokens.ts); omitted, the shared estimate gates. */
   countInputTokens?: (request: CountableRequest) => Promise<InputTokenCount>;
   signal?: AbortSignal;
@@ -552,6 +552,10 @@ function dialectSpec(current: { readonly spec: string; readonly provider: string
 
 /** One chat turn; callers append its response messages to history. A cut turn yields `done`, then throws
  *  {@link INTERRUPTED_TURN}; a dead provider stream throws without `done`. */
+function* admittedEvent(tokens: number | undefined, contextWindow: number): Generator<ChatEvent> {
+  if (tokens !== undefined) yield { type: 'context-admitted', tokens, contextWindow };
+}
+
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const extensions = opts.extensions;
 
@@ -594,9 +598,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   // Blocks born at the turn's first step ride right before its input, so the request stays the last user-role
   // content.
-  const { messages: turnMessages, turnStart } = await assembleTurnMessages({
+  const { messages: turnMessages, turnStart, admittedTokens } = await assembleTurnMessages({
     ...assembly, history: initialContext?.messages ?? assembly.history, turnStart: initialContext?.turnStart,
   });
+
+  yield* admittedEvent(admittedTokens, contextWindow);
 
   let initialContextAvailable = initialContext !== null;
 

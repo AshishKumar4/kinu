@@ -165,6 +165,8 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
           status: event.success ? 'completed' : 'failed',
           content: [{ type: 'content', content: { type: 'text', text: event.result } }],
         };
+      case 'reasoning-delta':
+        return { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: event.delta } };
       // The agent's own evolution commentary is thinking, not its answer.
       case 'evolution':
         return {

@@ -4,7 +4,7 @@
  */
 
 
-import { SPILL_DIRS, type ActorHandle, type SqlExecutor, type VFS } from '@kinu.run/core';
+import { SPILL_DIRS, type ActorHandle, type ArmedCompaction, type SqlExecutor, type VFS } from '@kinu.run/core';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
 import type { ArchiveIndexStore, ArchiveRange } from './manifest';
 import * as v from 'valibot';
@@ -52,16 +52,21 @@ export function createVfsTranscriptStore(getVfs: () => VFS): VfsTranscriptStore 
  * Durable per-session plan snapshot and last prompt-token measurement. A measurement taken against a
  * longer history than the current one reads as absent: history is append-only, so shorter means rewritten.
  */
+/** 1: overflow recovery (as before); 2: the owner's /compact. */
+const ARMED_CODES: Readonly<Record<ArmedCompaction, number>> = { force: 1, user: 2 };
+
+const ARMED_KINDS: readonly ArmedCompaction[] = ['force', 'user'];
+
 export interface CompactionStateStore {
   plans: PlanStore;
   archive: ArchiveIndexStore;
   /** Null when none reported or `historyLength` is shorter than at measurement. */
   loadPromptTokens(sessionKey: string, historyLength: number): number | null;
   savePromptTokens(sessionKey: string, tokens: number, historyLength: number): void;
-  /** The next turn assembly runs the transform with trigger:'force'. */
-  armForceCompaction(sessionKey: string): void;
-  /** True at most once per arm, so a forced rebuild cannot loop. */
-  takeForceCompaction(sessionKey: string): boolean;
+  /** The next turn assembly runs with this trigger. */
+  armCompaction(sessionKey: string, kind: ArmedCompaction): void;
+  /** At most once per arm, so a rebuild cannot loop. */
+  takeArmedCompaction(sessionKey: string): ArmedCompaction | null;
 }
 
 interface ArchiveRangeRow {
@@ -219,24 +224,27 @@ export function createCompactionStateStore(
             last_prompt_tokens = excluded.last_prompt_tokens,
             measured_at_length = excluded.measured_at_length`;
     },
-    armForceCompaction(sessionKey) {
+    armCompaction(sessionKey, kind) {
       authorize();
+      const code = ARMED_CODES[kind];
       void sql`INSERT INTO compaction_state (actor_id, session_key, force_compaction)
-          VALUES (${actorId}, ${sessionKey}, 1)
-          ON CONFLICT(actor_id, session_key) DO UPDATE SET force_compaction = 1`;
+          VALUES (${actorId}, ${sessionKey}, ${code})
+          ON CONFLICT(actor_id, session_key) DO UPDATE SET force_compaction = ${code}`;
     },
-    takeForceCompaction(sessionKey) {
+    takeArmedCompaction(sessionKey) {
       authorize();
 
       const rows = sql<{ force_compaction: number | null }>`
         SELECT force_compaction FROM compaction_state
         WHERE actor_id = ${actorId} AND session_key = ${sessionKey} LIMIT 1`;
 
-      if (rows[0]?.force_compaction !== 1) return false;
+      const armed = ARMED_KINDS.find((kind) => ARMED_CODES[kind] === rows[0]?.force_compaction) ?? null;
+
+      if (armed === null) return null;
       void sql`UPDATE compaction_state SET force_compaction = NULL
         WHERE actor_id = ${actorId} AND session_key = ${sessionKey}`;
 
-      return true;
+      return armed;
     },
   };
 }

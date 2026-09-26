@@ -5,7 +5,7 @@ import { basename } from 'node:path';
 import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
 import { redact } from './redact';
-import { parseResults, trials, type Assertion, type TranscriptEntry } from './results';
+import { parseResults, trials, type HarnessRun, type TranscriptEntry } from './results';
 
 const LINE_LIMIT = 1_900;
 
@@ -53,14 +53,14 @@ function entry(event: TranscriptEntry): string {
   }
 }
 
-function trial(assertion: Assertion): string {
-  const run = assertion.meta.harness.run;
+/** One trial's section: its checks turn by turn, its errors, and its whole transcript. */
+export function renderTrial(run: HarnessRun, verdict: { status: 'passed' | 'failed'; durationMs: number }): string {
   const { taskId, arm } = run.session.metadata;
   const cost = run.usage.metadata.costUsd;
 
   const lines = [
-    `## ${taskId} \u00b7 ${run.usage.model} \u00b7 ${arm} \u00b7 trial ${String(run.session.metadata.trial)} \u2014 ${assertion.status} `
-      + `(${(assertion.duration / 60_000).toFixed(1)} min)`,
+    `## ${taskId} \u00b7 ${run.usage.model} \u00b7 ${arm} \u00b7 trial ${String(run.session.metadata.trial)} \u2014 ${verdict.status} `
+      + `(${(verdict.durationMs / 60_000).toFixed(1)} min)`,
     '',
     `Model steps ${String(run.output.metrics.modelTurns)} \u00b7 tool calls ${String(run.output.metrics.toolCalls)} \u00b7 `
       + `tool errors ${String(run.output.metrics.toolErrors)}${cost === undefined ? '' : ` \u00b7 cost $${cost.toFixed(4)}`}`,
@@ -92,7 +92,9 @@ export function renderTrajectories(text: string, only: 'all' | 'failed' = 'all')
     : []);
 
   for (const assertion of trials(files)) {
-    if (only === 'all' || assertion.status === 'failed') sections.push(trial(assertion));
+    if (only === 'all' || assertion.status === 'failed') {
+      sections.push(renderTrial(assertion.meta.harness.run, { status: assertion.status, durationMs: assertion.duration }));
+    }
   }
 
   return `# Eval trajectories\n\n${sections.join('\n\n---\n\n')}\n`;

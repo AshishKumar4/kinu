@@ -124,7 +124,23 @@ interface ActiveTurn {
   claimSettled: boolean;
 }
 
+interface TurnTally {
+  text: string;
+  answer: string | null;
+  steps: number;
+  completed: boolean;
+  failure: Error | null;
+  admittedMessages: readonly ModelMessage[];
+  readonly pending: Array<Extract<ChatEvent, { type: 'tool-call' }>>;
+}
+
+function newTurnTally(): TurnTally {
+  return { text: '', answer: null, steps: 0, completed: false, failure: null, admittedMessages: [], pending: [] };
+}
+
 export const REVERT_NEEDS_IDLE = 'Stop the turn that is running before you revert the conversation.';
+
+export const CLEAR_NEEDS_IDLE = 'Stop the turn that is running before you start a new conversation.';
 
 /** An actor's mutable execution state, apart from its host, which keeps admission, queueing and settlement and
  *  may share immutable catalogs, never this context, orchestrator or abort. */
@@ -288,6 +304,15 @@ export class ActorSession {
   async revertConversation(sessionId: string, entryId: string, assertIdle: () => void): Promise<void> {
     this.canonical.revertTo(sessionId, entryId, () => {
       if (this.inFlight) throw new KinuError('denied', REVERT_NEEDS_IDLE);
+      assertIdle();
+    });
+    this.dynamic.unload();
+    await this.restoreWorkingHistory();
+  }
+
+  async clearConversation(sessionId: string, assertIdle: () => void): Promise<void> {
+    this.canonical.clearConversation(sessionId, () => {
+      if (this.inFlight) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
       assertIdle();
     });
     this.dynamic.unload();
@@ -488,43 +513,18 @@ export class ActorSession {
 
     if (active.phase !== 'preparing' || active.profile === null) throw new KinuError('denied', 'a profiled actor turn executes once');
     const profile = active.profile;
-    const allowedTools = new Set(profile.allowedTools);
-    const tools = Object.fromEntries(Object.entries(input.chat.tools ?? {}).filter(([name]) => allowedTools.has(name)));
-    const extensions = new ExtensionHost();
-
-    for (const extension of input.extensions) extensions.register(extension);
-    extensions.register(this.orchestrator.turnExtension);
-    const pending: Array<Extract<ChatEvent, { type: 'tool-call' }>> = [];
-    let text = '';
-    let answer: string | null = null;
-    let steps = 0;
-    let completed = false;
+    const tally = newTurnTally();
     let program: ActorTurnProgram | null = null;
-    let failure: Error | null = null;
     let durableOutput: SessionStream | null = null;
-    let admittedMessages: readonly ModelMessage[] = [];
 
     try {
       active.phase = 'running';
       active.abort.signal.throwIfAborted();
-      const control = { signal: active.abort.signal };
-      program = await prepareActorProgram({
-        ...control, runtime: this.runtime, mode: this.mode, version: input.loopVersion,
-      });
-      const admitted = await this.canonical.materialize();
-      this.messages.splice(0, this.messages.length, ...admitted.messages);
-
-      const claim = await this.options.claims.admit({
-        runId: lease.runId,
-        turnId: lease.turnId,
-        workMode: this.mode,
-        program: programIdentityOf(program, this.options.installedBuild),
-        context: admitted.selection,
-        installedBuild: this.options.installedBuild,
-      });
-
+      const prepared = await this.prepareProgram(input.loopVersion, active.abort.signal);
+      program = prepared.program;
+      const claim = await this.admitClaim(lease, program, prepared.selection);
       active.claim = claim;
-      admittedMessages = admitted.messages;
+      tally.admittedMessages = prepared.messages;
 
       if (profile.tier.replaced !== null) {
         await emit({ type: 'model-fallback', from: profile.tier.replaced, to: profile.tier.model, reason: 'its provider no longer lists it' });
@@ -532,132 +532,187 @@ export class ActorSession {
 
       durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
       const stream = durableOutput;
-      // Activation names the input's entry after its message; an edit keeps the entry.
-      const turnInput = this.canonical.admittedInput(claim.turnId);
-      const assertClaim = () => this.canonical.assertEpoch(claim.turnId, claim.epoch);
-      let stepEntries: readonly ContextEntry[] = [];
-      let turnOpened = false;
-
-      const events = operationProfileStream(startActorTurn({
-        runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
-        program, scaffoldSpend: input.scaffoldSpend,
-        assertActive: input.assertActive,
-        scaffoldStreamOptions: input.scaffoldStreamOptions,
-        chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
-          measureContext: true, trace,
-          persistStreamPart: part => stream.nativePart(part),
-          persistStep: messages => stream.nativeStep(messages),
-          dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
-          stepContext: {
-            base: async () => {
-              const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null);
-              this.messages.splice(0, this.messages.length, ...base.messages);
-              stepEntries = base.entries;
-
-              // A cold cache makes rewriting free: the stored blocks collapse into one.
-              if (!turnOpened) {
-                turnOpened = true;
-                const last = this.canonical.requests.lastStep();
-
-                if (!promptCacheWarm(last === null ? null : cachedRequestOf(last), Date.now(), input.cacheKeptAliveUntil ?? null)) this.dynamic.reset();
-              }
-
-              this.dynamic.adopt(base.rendered.map(render => ({ text: v.parse(v.string(), render.message.content), before: render.before, after: render.after })));
-              const turnStart = turnInput === null ? -1 : base.entries.findIndex(entry => entry.entryId === turnInput.messageId);
-
-              return { messages: base.messages, changed: base.changed, ...(turnStart >= 0 && { turnStart }) };
-            },
-            consume: async ({ stepNumber, messages, cache }) => {
-              for (const birth of this.dynamic.takeBirths()) {
-                const entry = birth.before === null ? undefined : stepEntries[this.messages.indexOf(birth.before)];
-                await this.canonical.recordRender({ role: 'user', content: birth.text }, { before: entry?.entryId ?? null, replaces: birth.replaces }, claim.turnId, assertClaim);
-              }
-
-              const consumed = await this.options.claims.consume(claim, { index: stepNumber, messages, cache });
-
-              if (stepNumber === 0) admittedMessages = [...messages];
-              stream.beginRequest(consumed.requestId, stepNumber);
-            },
-          } } satisfies ChatOptions,
-      }), captureOperationProfile({
-        actor: this.runtime.actor, profile: active.profile,
-        inputs: active.profileInputs, runId: lease.runId, turnId: lease.turnId,
-      }));
+      const events = this.turnEvents({ lease, active, profile, input, trace, program, claim, stream, tally });
 
       for await (const event of events) {
         this.requireTurn(lease);
         await stream.observe(event);
-
-        switch (event.type) {
-          case 'text-delta': this.orchestrator.acc.onFirstChunk(); text += event.delta; break;
-          case 'tool-call': pending.push(event); break;
-          case 'tool-result': this.recordToolResult(pending, event); break;
-
-          // Reasoning is never the turn's answer.
-          case 'reasoning-delta':
-          case 'model-fallback':
-            break;
-
-          case 'step-finish':
-            steps += 1;
-            this.orchestrator.acc.recordStep({
-              text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
-              response: { messages: event.responseMessages, modelId: event.modelId }, usage: event.usage,
-              request: event.request, context: event.context, account: event.account, fallback: event.fallback,
-            });
-            break;
-          case 'error': {
-            this.orchestrator.acc.hadError = true;
-
-            // The scaffold loop pushes an `error` event rather than throwing, so an empty turn never settles `completed`.
-            // First failure wins; an abort is not one.
-            if (failure === null
-              && !active.abort.signal.aborted
-              && event.message !== INTERRUPTED_TURN) {
-              failure = new Error(event.message);
-            }
-
-            break;
-          }
-
-          case 'done':
-            this.messages.push(...this.orchestrator.inbox.replayInto(event.responseMessages));
-
-            // The runner's `done` answer wins over the concatenated deltas; deltas are the fallback when there is no `done`.
-            if (event.text.trim()) text = event.text;
-
-            if (event.answer !== undefined && event.answer.trim()) answer = event.answer;
-            completed = true;
-            break;
-        }
-
+        this.tallyEvent(tally, event, active.abort.signal);
         await emit(event);
       }
     } catch (cause) {
-      if (!completed) this.messages.push(...this.orchestrator.inbox.recordedMessages());
-      failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
+      if (!tally.completed) this.messages.push(...this.orchestrator.inbox.recordedMessages());
+      tally.failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
 
-      if (failure.message !== INTERRUPTED_TURN && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
+      if (tally.failure.message !== INTERRUPTED_TURN && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
       await emit({ type: 'error', message: renderThrownChain({ cause }) });
     } finally {
       active.phase = 'settling';
-
-      if (active.claim !== null) {
-        await durableOutput?.settle();
-        const settled = await this.canonical.materialize();
-        this.messages.splice(0, this.messages.length, ...settled.messages);
-      }
+      await this.settleOutput(active, durableOutput);
     }
 
+    return this.turnResult(lease, active, tally, program);
+  }
+
+  private async prepareProgram(version: number, signal: AbortSignal): Promise<{
+    readonly program: ActorTurnProgram;
+    readonly selection: ContextSelection;
+    readonly messages: readonly ModelMessage[];
+  }> {
+    const program = await prepareActorProgram({ signal, runtime: this.runtime, mode: this.mode, version });
+    const admitted = await this.canonical.materialize();
+    this.messages.splice(0, this.messages.length, ...admitted.messages);
+
+    return { program, selection: admitted.selection, messages: admitted.messages };
+  }
+
+  private admitClaim(lease: ActorTurnLease, program: ActorTurnProgram, context: ContextSelection): Promise<ActorTurnClaim> {
+    return this.options.claims.admit({
+      runId: lease.runId,
+      turnId: lease.turnId,
+      workMode: this.mode,
+      program: programIdentityOf(program, this.options.installedBuild),
+      context,
+      installedBuild: this.options.installedBuild,
+    });
+  }
+
+  private turnEvents(turn: {
+    readonly lease: ActorTurnLease;
+    readonly active: ActiveTurn;
+    readonly profile: ResolvedTurnProfile;
+    readonly input: ActorExecutionInput;
+    readonly trace: TracedInvocation | undefined;
+    readonly program: ActorTurnProgram;
+    readonly claim: ActorTurnClaim;
+    readonly stream: SessionStream;
+    readonly tally: TurnTally;
+  }): AsyncIterable<ChatEvent> {
+    const { lease, active, profile, input, program, claim, stream, tally } = turn;
+    const allowedTools = new Set(profile.allowedTools);
+    const tools = Object.fromEntries(Object.entries(input.chat.tools ?? {}).filter(([name]) => allowedTools.has(name)));
+    const extensions = new ExtensionHost();
+
+    for (const extension of input.extensions) extensions.register(extension);
+    extensions.register(this.orchestrator.turnExtension);
+    // Activation names the input's entry after its message; an edit keeps the entry.
+    const turnInput = this.canonical.admittedInput(claim.turnId);
+    const assertClaim = () => this.canonical.assertEpoch(claim.turnId, claim.epoch);
+    let stepEntries: readonly ContextEntry[] = [];
+    let turnOpened = false;
+
+    return operationProfileStream(startActorTurn({
+      runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
+      program, scaffoldSpend: input.scaffoldSpend,
+      assertActive: input.assertActive,
+      scaffoldStreamOptions: input.scaffoldStreamOptions,
+      chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
+        measureContext: true, trace: turn.trace,
+        persistStreamPart: part => stream.nativePart(part),
+        persistStep: messages => stream.nativeStep(messages),
+        dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
+        stepContext: {
+          base: async () => {
+            const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null);
+            this.messages.splice(0, this.messages.length, ...base.messages);
+            stepEntries = base.entries;
+
+            // A cold cache makes rewriting free: the stored blocks collapse into one.
+            if (!turnOpened) {
+              turnOpened = true;
+              const last = this.canonical.requests.lastStep();
+
+              if (!promptCacheWarm(last === null ? null : cachedRequestOf(last), Date.now(), input.cacheKeptAliveUntil ?? null)) this.dynamic.reset();
+            }
+
+            this.dynamic.adopt(base.rendered.map(render => ({ text: v.parse(v.string(), render.message.content), before: render.before, after: render.after })));
+            const turnStart = turnInput === null ? -1 : base.entries.findIndex(entry => entry.entryId === turnInput.messageId);
+
+            return { messages: base.messages, changed: base.changed, ...(turnStart >= 0 && { turnStart }) };
+          },
+          consume: async ({ stepNumber, messages, cache }) => {
+            for (const birth of this.dynamic.takeBirths()) {
+              const entry = birth.before === null ? undefined : stepEntries[this.messages.indexOf(birth.before)];
+              await this.canonical.recordRender({ role: 'user', content: birth.text }, { before: entry?.entryId ?? null, replaces: birth.replaces }, claim.turnId, assertClaim);
+            }
+
+            const consumed = await this.options.claims.consume(claim, { index: stepNumber, messages, cache });
+
+            if (stepNumber === 0) tally.admittedMessages = [...messages];
+            stream.beginRequest(consumed.requestId, stepNumber);
+          },
+        } } satisfies ChatOptions,
+    }), captureOperationProfile({
+      actor: this.runtime.actor, profile,
+      inputs: active.profileInputs, runId: lease.runId, turnId: lease.turnId,
+    }));
+  }
+
+  private tallyEvent(tally: TurnTally, event: ChatEvent, abort: AbortSignal): void {
+    switch (event.type) {
+      case 'text-delta': this.orchestrator.acc.onFirstChunk(); tally.text += event.delta; break;
+      case 'tool-call': tally.pending.push(event); break;
+      case 'tool-result': this.recordToolResult(tally.pending, event); break;
+
+      // Reasoning is never the turn's answer.
+      case 'reasoning-delta':
+      case 'model-fallback':
+      case 'context-admitted':
+        break;
+
+      case 'step-finish':
+        tally.steps += 1;
+        this.orchestrator.acc.recordStep({
+          text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
+          response: { messages: event.responseMessages, modelId: event.modelId }, usage: event.usage,
+          request: event.request, context: event.context, account: event.account, fallback: event.fallback,
+        });
+        break;
+      case 'error': {
+        this.orchestrator.acc.hadError = true;
+
+        // The scaffold loop pushes an `error` event rather than throwing, so an empty turn never settles `completed`.
+        // First failure wins; an abort is not one.
+        if (tally.failure === null && !abort.aborted && event.message !== INTERRUPTED_TURN) {
+          tally.failure = new Error(event.message);
+        }
+
+        break;
+      }
+
+      case 'done':
+        this.messages.push(...this.orchestrator.inbox.replayInto(event.responseMessages));
+
+        // The runner's `done` answer wins over the concatenated deltas; deltas are the fallback when there is no `done`.
+        if (event.text.trim()) tally.text = event.text;
+
+        if (event.answer !== undefined && event.answer.trim()) tally.answer = event.answer;
+        tally.completed = true;
+        break;
+    }
+  }
+
+  private async settleOutput(active: ActiveTurn, stream: SessionStream | null): Promise<void> {
+    if (active.claim === null) return;
+    await stream?.settle();
+    const settled = await this.canonical.materialize();
+    this.messages.splice(0, this.messages.length, ...settled.messages);
+  }
+
+  private async turnResult(
+    lease: ActorTurnLease,
+    active: ActiveTurn,
+    tally: TurnTally,
+    program: ActorTurnProgram | null,
+  ): Promise<ActorExecutionResult> {
     const output = await this.canonical.outputForTurn(lease.turnId);
-    const outputReferences = output.messages;
-    const said = await this.saidText(outputReferences, text, answer);
+    const said = await this.saidText(output.messages, tally.text, tally.answer);
 
     return {
-      text: said.text, answer, steps, failure, program, claim: active.claim,
-      interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
-      admittedMessages,
-      outputReferences, finalTextReference: said.reference,
+      text: said.text, answer: tally.answer, steps: tally.steps, failure: tally.failure, program, claim: active.claim,
+      interrupted: active.abort.signal.aborted || tally.failure?.message === INTERRUPTED_TURN,
+      admittedMessages: tally.admittedMessages,
+      outputReferences: output.messages, finalTextReference: said.reference,
       outputPartReferences: output.parts,
     };
   }

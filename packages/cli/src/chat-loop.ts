@@ -460,12 +460,17 @@ async function runDeviceConnect(session: boolean): Promise<void> {
   }
 }
 
+function showText(outcome: Extract<SlashOutcome, { kind: 'text' }>): void {
+  if (outcome.copy !== undefined) process.stdout.write(`\x1b]52;c;${Buffer.from(outcome.copy).toString('base64')}\x07`);
+  console.log(`\n${MUTED(outcome.text)}\n`);
+}
+
 async function applySlashOutcome(client: AgentClient, rl: readline.Interface, outcome: SlashOutcome): Promise<'ok' | 'exit'> {
   switch (outcome.kind) {
     case 'exit':
       return 'exit';
     case 'text':
-      console.log(`\n${MUTED(outcome.text)}\n`);
+      showText(outcome);
 
       return 'ok';
     case 'model-set':
@@ -649,6 +654,8 @@ function renderClientEvent({ event, agentName, status, getHeader, setHeader }: C
     case 'text-delta':
       header();
       process.stdout.write(event.delta);
+      break;
+    case 'reasoning-delta':
       break;
     case 'tool-call':
       status.clear();

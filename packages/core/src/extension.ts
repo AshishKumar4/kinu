@@ -46,6 +46,11 @@ interface PrepareStepResumption {
   readonly first: Promise<ModelMessage[] | undefined>;
 }
 
+/** 'force': overflow recovery; 'user': /compact. */
+export type CompactionTrigger = 'auto' | 'force' | 'user';
+
+export type ArmedCompaction = Exclude<CompactionTrigger, 'auto'>;
+
 export interface TransformContext {
   /** The agent/DO name on cf, the session key on cli. */
   readonly sessionKey: string;
@@ -55,8 +60,7 @@ export interface TransformContext {
   readonly contextWindow: number;
   /** Previous turn's measured prompt tokens; preferred over chars/4 estimates. */
   readonly providerReportedTokens?: number;
-  /** 'force': overflow recovery requires a rewrite before replay. */
-  readonly trigger: 'auto' | 'force';
+  readonly trigger: CompactionTrigger;
   readonly abortSignal?: AbortSignal;
 }
 

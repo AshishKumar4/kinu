@@ -351,6 +351,36 @@ const TURN_2: readonly Script<Method>[] = [selfTrades, postOnlyOrders, replay(SE
 
 const AFTER_TURN_2: readonly Step[] = [TURN_1, TURN_2_FEATURES, TURN_2];
 
+/**
+ * Turn 2's features, probed after an eviction without changing the book: a post-only order that would
+ * take is refused, and trader t20's sell against its own new top bid cancels that bid instead of
+ * trading, rests, and is cancelled in turn. The probe needs a cent between a symbol's best bid and ask.
+ */
+async function featuresProbe(history: readonly Step[]): Promise<Script<Method>> {
+  const exchange = await exchangeAfter(history);
+
+  const symbol = SYMBOLS.find((name) => {
+    const { bids, asks } = exchange.book(name);
+
+    return bids[0] !== undefined && asks[0] !== undefined && Math.round(asks[0].price * 100) - Math.round(bids[0].price * 100) >= 2;
+  });
+
+  const { bids, asks } = exchange.book(symbol ?? '');
+  const [bid, ask] = [bids[0], asks[0]];
+
+  if (symbol === undefined || bid === undefined || ask === undefined) throw new Error('no symbol leaves a cent inside its spread for the probe');
+  const inside = (Math.round(bid.price * 100) + 1) / 100;
+  const order = { trader: 't20', symbol, type: 'limit', qty: 5 };
+
+  return async (client) => {
+    await client('place', { ...order, id: 'r-1', side: 'buy', price: ask.price, postOnly: true });
+    await client('place', { ...order, id: 'r-2', side: 'buy', price: inside });
+    await client('place', { ...order, id: 'r-3', side: 'sell', price: inside });
+    await client('cancel', { id: 'r-3' });
+    await lookBoth(client);
+  };
+}
+
 const QUESTION_SYMBOL = 'ACME';
 
 // ── The task ─────────────────────────────────────────────────────────
@@ -410,6 +440,7 @@ usual. "WOULD_CROSS" comes after the other rules. Orders already in the book sta
     },
     verifyAfterEviction: async (verifier) => {
       await sameAsReference(verifier, 'the-book-survives-an-eviction', AFTER_TURN_2, lookBoth);
+      await sameAsReference(verifier, 'the-features-survive-an-eviction', AFTER_TURN_2, await featuresProbe(AFTER_TURN_2));
     },
   }, {
     prompt: `What is the volume-weighted average price of every ${QUESTION_SYMBOL} trade so far? Reply with just the number, rounded to 2 decimals.`,
@@ -428,6 +459,7 @@ usual. "WOULD_CROSS" comes after the other rules. Orders already in the book sta
       await sameAsReference(verifier, 'asking-changes-nothing', AFTER_TURN_2, lookBoth);
     },
   }],
+  evidence: (call) => lookBoth((method, input) => call('exchange', method, input)),
 });
 
 defineTaskEval(task);

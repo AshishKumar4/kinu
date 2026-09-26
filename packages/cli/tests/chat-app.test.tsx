@@ -1,12 +1,16 @@
 /** @jsxImportSource @opentui/react */
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { scratchDir } from '@kinu.run/test-utils';
 
-import type { AgentClient, AgentClientStatus } from '../src/agent-client';
+import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
 import { missingSubordinateHistory, type AgentModelMenu, type SubordinateRosterEntry } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat, type FixtureWorkspace } from './helpers/chat-app-fixture';
+import { executeSlashCommand } from '../src/slash-commands';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
 import { SelectRenderable, TextareaRenderable } from '@opentui/core';
 import { flushSync } from '@opentui/react';
@@ -341,7 +345,6 @@ describe('ChatApp terminal interaction', () => {
     });
 
     expect(screen.frame()).toContain('Error: the workspace socket refused: ECONNREFUSED 127.0.0.1');
-    expect(screen.frame()).toContain('Connecting…');
   });
 
   test('a failed slash command reports the whole cause chain', async () => {
@@ -387,6 +390,98 @@ describe('ChatApp terminal interaction', () => {
     expect(screen.frame()).toContain('Send a message');
     expect(controlled.state.closed).toBe(0);
     expect(candidate.state.closed).toBe(1);
+  });
+
+  test('!command output held for one workspace never reaches the next one after a switch', async () => {
+    const beta = fakeClient({ name: 'beta', send: async (input) => {
+      betaSent.push(JSON.stringify(input));
+
+      return TURN;
+    } });
+
+    const betaSent: string[] = [];
+
+    const screen = await mountChat(fakeClient({ name: 'alpha' }).client, {
+      listWorkspaces: () => [ALPHA_LOCAL, BETA_LOCAL],
+      onWorkspaceSelect: async () => beta.client,
+      width: 80,
+    });
+
+    await screen.mockInput.typeText('!printf alpha-secret');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the command output', () => screen.frame().includes('alpha-secret'));
+    await screen.mockInput.typeText('/resume');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the workspace picker', () => screen.frame().includes('Beta'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('beta connected', () => screen.frame().includes('Connected to beta'));
+
+    await screen.mockInput.typeText('hello beta');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the prompt to beta', () => betaSent.length === 1);
+    expect(betaSent[0]).toContain('hello beta');
+    expect(betaSent[0]).not.toContain('alpha-secret');
+  });
+
+  test('/resume opens the workspace picker, where a workspace is picked with the keys', async () => {
+    const alpha = fakeClient({ name: 'alpha' });
+    const beta = fakeClient({ name: 'beta' });
+    const picked: string[] = [];
+
+    const screen = await mountChat(alpha.client, {
+      listWorkspaces: () => [ALPHA_LOCAL, BETA_LOCAL],
+      onWorkspaceSelect: async (name) => {
+        picked.push(name);
+
+        return beta.client;
+      },
+      width: 80,
+    });
+
+    await screen.mockInput.typeText('/resume');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the workspace picker', () => screen.frame().includes('Beta'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the picked workspace', () => picked.length === 1);
+    expect(picked).toEqual(['beta']);
+  });
+
+  test('in a wide terminal Alt+W moves the keys into the sidebar, where a workspace is picked and Esc leaves', async () => {
+    // The pinned sidebar only showed: its rows took no keys, so a keyboard user could not pick a workspace.
+    const beta = fakeClient({ name: 'beta' });
+    const picked: string[] = [];
+    let exits = 0;
+
+    const screen = await mountChat(fakeClient({ name: 'alpha' }).client, {
+      listWorkspaces: () => [ALPHA_LOCAL, BETA_LOCAL],
+      onWorkspaceSelect: async (name) => {
+        picked.push(name);
+
+        return beta.client;
+      },
+      width: 160,
+      // Legacy keys read Esc then a letter as Alt+letter.
+      kittyKeyboard: true,
+      onExit: () => { exits += 1; },
+    });
+
+    screen.mockInput.pressKey('w', { meta: true });
+    await screen.waitFor('the sidebar holding the keys', () => screen.frame().includes('Esc back'));
+    screen.mockInput.pressEscape();
+    await screen.waitFor('the sidebar letting go', () => !screen.frame().includes('Esc back'));
+    await screen.mockInput.typeText('still typing');
+    await screen.waitFor('keys back in the composer', () => screen.frame().includes('still typing'));
+    // The sidebar's Esc is its own: the composer would read it as quitting a fresh session.
+    expect(exits).toBe(0);
+
+    screen.mockInput.pressKey('w', { meta: true });
+    await screen.waitFor('the sidebar holding the keys again', () => screen.frame().includes('Esc back'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the picked workspace', () => picked.length === 1);
+    expect(picked).toEqual(['beta']);
   });
 
   test('workspace selection is single-flight while the candidate connects', async () => {
@@ -516,6 +611,145 @@ test('when a turn ends, the next keys still land in the composer', async () => {
   await screen.waitFor('the turn to end', () => !screen.frame().includes('thinking'));
   await screen.mockInput.typeText('and again');
   await screen.waitFor('the next draft in the composer', () => screen.frame().includes('and again'));
+});
+
+test('a turn shows its reasoning as it streams, its elapsed time and a token count, then folds the reasoning', async () => {
+  // Nothing streamed while a model reasoned: a minute on a bare spinner, with no sign of progress.
+  const agent = fakeClient({ name: 'reasons' });
+
+  const screen = await mountChat(agent.client);
+  agent.emit({ type: 'turn-start', kind: 'user', text: 'plan the migration' });
+  agent.emit({ type: 'reasoning-delta', delta: 'Weigh the two schemas first.\nThe old table keeps its rows.' });
+  await screen.waitFor('the reasoning, live', () => screen.frame().includes('The old table keeps its rows.'));
+  expect(screen.frame()).toMatch(/\b\d+s · ~\d+ tokens\b/u);
+
+  agent.emit({ type: 'text-delta', delta: 'Migrate in two steps.' });
+  agent.emit({ type: 'turn-end', turn: TURN });
+  await screen.waitFor('the answer', () => screen.frame().includes('Migrate in two steps.'));
+  await screen.waitFor('the reasoning folded', () => !screen.frame().includes('The old table keeps its rows.'));
+  expect(screen.frame()).toContain('Weigh the two schemas first.');
+  expect(screen.frame()).not.toMatch(/\d+s · ~\d+ tokens/u);
+
+  screen.mockInput.pressKey('o', { ctrl: true });
+  await screen.waitFor('the reasoning expanded', () => screen.frame().includes('The old table keeps its rows.'));
+});
+
+test('/clear empties the transcript on screen once the conversation is cleared', async () => {
+  const agent = fakeClient({ name: 'clears' });
+
+  const screen = await mountChat(agent.client);
+  agent.emit({ type: 'turn-start', kind: 'user', text: 'first' });
+  agent.emit({ type: 'text-delta', delta: 'An answer from before.' });
+  agent.emit({ type: 'turn-end', turn: TURN });
+  await screen.waitFor('the earlier answer', () => screen.frame().includes('An answer from before.'));
+
+  await screen.mockInput.typeText('/clear');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the transcript cleared', () => !screen.frame().includes('An answer from before.'));
+});
+
+test('!command output joins the next prompt, and !!command stays on screen only', async () => {
+  const sent: string[] = [];
+
+  const agent = fakeClient({ name: 'bang', send: async (input) => {
+    sent.push(JSON.stringify(input));
+
+    return TURN;
+  } });
+
+  const screen = await mountChat(agent.client);
+  await screen.mockInput.typeText('!printf "seen-%s" "$(basename "$PWD")"');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the command output', () => screen.frame().includes(`seen-${basename(process.cwd())}`));
+  await screen.mockInput.typeText('!!printf private-output');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the private output', () => screen.frame().includes('private-output'));
+  expect(sent).toEqual([]);
+
+  await screen.mockInput.typeText('what did it print?');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the prompt sent', () => sent.length === 1);
+  expect(sent[0]).toContain(`seen-${basename(process.cwd())}`);
+  expect(sent[0]).toContain('what did it print?');
+  expect(sent[0]).not.toContain('private-output');
+
+  await screen.mockInput.typeText('and again');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the second prompt', () => sent.length === 2);
+  expect(sent[1]).not.toContain('seen-');
+});
+
+test('a failed connect says so and Enter retries it, instead of staying on Connecting', async () => {
+  let attempts = 0;
+  const sent: unknown[] = [];
+
+  const agent = fakeClient({
+    name: 'flaky',
+    connect: async () => {
+      attempts += 1;
+
+      if (attempts === 1) throw new Error('database is locked');
+    },
+    send: async (input) => {
+      sent.push(input);
+
+      return TURN;
+    },
+  });
+
+  const screen = await mountChat(agent.client, { settled: (view) => view.includes('database is locked') });
+  expect(screen.frame()).not.toContain('Connecting…');
+
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the second attempt', () => attempts === 2);
+  await screen.mockInput.typeText('hello');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the prompt sent after reconnecting', () => sent.length === 1);
+});
+
+const EXPORTED_HISTORY = async (): Promise<AgentTranscriptMessage[]> => [
+  { id: '1', role: 'user', content: 'Which table keeps its rows?' },
+  { id: '2', role: 'tool_call', content: '', toolName: 'shell', toolCallId: 't', args: '{"command":"ls"}' },
+  { id: '3', role: 'tool_result', content: 'schema.sql', toolName: 'shell', toolCallId: 't', success: true },
+  { id: '4', role: 'assistant', content: 'The old table keeps its rows.' },
+];
+
+test('/copy hands the last answer to the clipboard, and says when there is none', async () => {
+  const answered = fakeClient({ name: 'copies', history: EXPORTED_HISTORY });
+  const silent = fakeClient({ name: 'silent' });
+
+  expect(await executeSlashCommand(answered.client, '/copy')).toMatchObject({ copy: 'The old table keeps its rows.' });
+  expect(await executeSlashCommand(silent.client, '/copy')).not.toHaveProperty('copy');
+});
+
+test('/export writes the conversation to a Markdown file in its order, and names the file', async () => {
+  const agent = fakeClient({ name: 'exports', history: EXPORTED_HISTORY });
+  const screen = await mountChat(agent.client);
+  const file = join(scratchDir('export'), 'conversation.md');
+
+  await screen.mockInput.typeText(`/export ${file}`);
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the export', () => existsSync(file) && screen.frame().includes('conversation.md'));
+  const written = readFileSync(file, 'utf8');
+  const order = ['Which table keeps its rows?', 'schema.sql', 'The old table keeps its rows.'].map((text) => written.indexOf(text));
+
+  expect(order.every((at) => at >= 0)).toBeTrue();
+  expect(order).toEqual([...order].sort((x, y) => x - y));
+});
+
+test('the header shows the size the gate measured the last request at, not the size of the transcript on screen', async () => {
+  // It summed the transcript's characters, so after /compact it still showed the whole conversation.
+  const agent = fakeClient({ name: 'meter' });
+
+  const screen = await mountChat(agent.client);
+  await screen.waitFor('an unmeasured context', () => screen.frame().includes('ctx —/'));
+
+  agent.emit({ type: 'turn-start', kind: 'user', text: 'long' });
+  agent.emit({ type: 'broadcast', event: { type: 'context_admitted', requestTokens: 1_500, contextWindow: 200_000 } });
+  agent.emit({ type: 'text-delta', delta: 'word '.repeat(40_000) });
+  agent.emit({ type: 'turn-end', turn: TURN });
+
+  await screen.waitFor('the measured size', () => screen.frame().includes('ctx ~1.5k/200k'));
 });
 
 test('a turn waiting on a rate limit names the provider, not thinking', async () => {

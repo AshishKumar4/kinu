@@ -113,6 +113,14 @@ export class CloudTurnStream {
         return;
       }
 
+      case 'reasoning-delta': {
+        const delta = jsonString(chunk.delta, '');
+
+        if (delta) this.emit({ type: 'reasoning-delta', delta });
+
+        return;
+      }
+
       case 'tool-input-available': {
         const toolName = jsonString(chunk.toolName, 'tool');
         const toolCallId = jsonString(chunk.toolCallId, '');

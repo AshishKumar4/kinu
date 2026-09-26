@@ -257,6 +257,8 @@ export class LocalAgentClient implements AgentClient {
       readInstructionApproval: (path) => this.session.readInstructionApproval(path),
       approveInstruction: (path, digest) => this.session.approveInstruction(path, digest),
       revokeInstruction: (path) => this.session.revokeInstruction(path),
+      clearConversation: () => this.session.clearConversation(),
+      compactNow: () => { this.session.armCompaction('user'); },
       listModelProviders: async () => (await this.session.listModelProviders()).map((provider) => ({
         id: provider.id,
         available: provider.available,
@@ -453,14 +455,15 @@ export class LocalAgentClient implements AgentClient {
 
   async status(): Promise<AgentClientStatus> {
     const info = await this.deps.refreshInfo();
+    const tier = await this.session.nextTurnTier();
 
     return {
       name: info.name,
       purpose: info.purpose,
-      model: this.session.getEffectiveModelSpec(),
-      reasoningEffort: this.session.getReasoningEffort().effort,
+      model: tier.model,
+      reasoningEffort: tier.reasoningEffort,
       roleId: this.session.getActiveRoleId(),
-      tierId: this.session.getEffectiveTierId(),
+      tierId: tier.id,
       scaffoldVersion: info.scaffoldVersion,
       searchNodeCount: info.searchNodeCount,
       craftedToolCount: info.craftedToolCount,
@@ -646,7 +649,8 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
     case 'turn-start':
       return { type: 'turn-start', kind: event.kind, text: event.text, event: event.event };
     case 'text-delta':
-      return { type: 'text-delta', delta: event.delta };
+    case 'reasoning-delta':
+      return { type: event.type, delta: event.delta };
     case 'tool-call':
       return { type: 'tool-call', toolName: event.toolName, toolCallId: event.toolCallId, args: event.args };
     case 'tool-result':

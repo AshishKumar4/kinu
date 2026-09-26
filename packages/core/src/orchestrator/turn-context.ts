@@ -11,7 +11,7 @@ import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls';
 import { stepContextLimit, type ResolvedModelWindow } from '../context-window';
 import { turnInputStart } from '../prompting/volatile-context';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
-import type { ExtensionHost } from '../extension';
+import type { ArmedCompaction, CompactionTrigger, ExtensionHost } from '../extension';
 import { KinuError, diagnostics } from '../obs/index';
 import { ADMISSION_REFUSAL_MARK } from '../turn-failure';
 import { estimateTokens } from '../llm';
@@ -28,7 +28,7 @@ export interface TurnContextInput {
   sessionKey: string;
   contextWindow: number;
   providerReportedTokens?: number;
-  trigger: 'auto' | 'force';
+  trigger: CompactionTrigger;
   abortSignal?: AbortSignal | undefined;
   admission?: TurnAdmission;
 }
@@ -36,6 +36,7 @@ export interface TurnContextInput {
 export interface AssembledTurn {
   readonly messages: ModelMessage[];
   readonly turnStart: number;
+  readonly admittedTokens?: number;
 }
 
 /**
@@ -68,15 +69,15 @@ function refuseOversizedRequest(tokens: number, limit: number): KinuError {
 /** Structural: the concrete store lives in @kinu.run/compaction, which depends on core. */
 export interface CompactionTriggerReader {
   loadPromptTokens(sessionKey: string, historyLength: number): number | null;
-  takeForceCompaction(sessionKey: string): boolean;
+  takeArmedCompaction(sessionKey: string): ArmedCompaction | null;
 }
 
 export interface MeasuredCompactionTrigger {
   providerReportedTokens?: number;
-  trigger: 'auto' | 'force';
+  trigger: CompactionTrigger;
 }
 
-/** `durableLength` is measured without runtime context. `takeForceCompaction` consumes the flag, so it runs
+/** `durableLength` is measured without runtime context. `takeArmedCompaction` consumes the arm, so it runs
  *  exactly once per assembly. */
 export function measureCompactionTrigger(
   state: CompactionTriggerReader,
@@ -86,7 +87,7 @@ export function measureCompactionTrigger(
   const lastPromptTokens = state.loadPromptTokens(sessionKey, durableLength);
 
   const measured: MeasuredCompactionTrigger = {
-    trigger: state.takeForceCompaction(sessionKey) ? 'force' : 'auto',
+    trigger: state.takeArmedCompaction(sessionKey) ?? 'auto',
   };
 
   if (lastPromptTokens !== null) measured.providerReportedTokens = lastPromptTokens;
@@ -111,7 +112,7 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Ass
   await input.extensions?.emitTurnStart({ system: input.system, history });
 
   // One closure: admission may re-run it with trigger:'force' and the ordering must match.
-  const assemble = async (trigger: 'auto' | 'force'): Promise<AssembledTurn> => {
+  const assemble = async (trigger: CompactionTrigger): Promise<AssembledTurn> => {
     const transformed = await input.extensions?.runTransformContext({
       sessionKey: input.sessionKey,
       messages: history,
@@ -159,7 +160,7 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Ass
 
   const tokens = await measure(assembled);
 
-  if (tokens <= limit) return assembled;
+  if (tokens <= limit) return { ...assembled, admittedTokens: tokens };
 
   // An unmeasured window neither refuses nor spends the forced compaction; the provider answers.
   if (!admission.limits.windowMeasured) {
@@ -167,16 +168,16 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Ass
       sessionKey: input.sessionKey, tokens, limit, contextWindow: admission.limits.contextWindow,
     });
 
-    return assembled;
+    return { ...assembled, admittedTokens: tokens };
   }
 
-  // trigger:'force' already spent the one forced compaction.
-  if (input.trigger === 'force') throw refuseOversizedRequest(tokens, limit);
+  // An armed compaction already rewrote this assembly.
+  if (input.trigger !== 'auto') throw refuseOversizedRequest(tokens, limit);
 
   const compacted = await assemble('force');
   const recounted = await measure(compacted);
 
   if (recounted > limit) throw refuseOversizedRequest(recounted, limit);
 
-  return compacted;
+  return { ...compacted, admittedTokens: recounted };
 }

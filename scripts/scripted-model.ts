@@ -74,7 +74,18 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
       }
 
       if (url.pathname === '/chat/completions' && request.method === 'POST') {
-        const asked = readScriptedRequest(body);
+        const read = readScriptedRequest(body);
+
+        if ('refusal' in read) {
+          process.stderr.write(`scripted-model: refused ${read.refusal.body}\n`);
+          response.statusCode = read.refusal.status;
+          response.setHeader('content-type', 'application/json');
+          response.end(read.refusal.body);
+
+          return;
+        }
+
+        const asked = read.request;
         const answer = script(asked);
         // Every request's surface, on the run's own log: a script that answered
         // prose where a tool call was meant is read here first.
