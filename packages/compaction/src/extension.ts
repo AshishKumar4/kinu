@@ -118,11 +118,14 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       concurrency: profile.summarizerConcurrency,
     });
 
-  const buildInputs = (ctx: TransformContext, reportedTokens: number): BuildPlanInputs => ({
+  // /compact: target 0; a trigger past the largest turn keeps the last exchanges.
+  const buildInputs = (ctx: TransformContext, reportedTokens: number, turns: readonly Turn[]): BuildPlanInputs => ({
     sessionKey: ctx.sessionKey,
     contextLimit: ctx.contextWindow,
-    triggerRatio: profile.triggerPercent / 100,
-    targetRatio: profile.targetPercent / 100,
+    triggerRatio: ctx.trigger === 'user'
+      ? (Math.max(0, ...turns.map((turn) => kinuCodec.estimateTurns([turn]))) + 1) / ctx.contextWindow
+      : profile.triggerPercent / 100,
+    targetRatio: ctx.trigger === 'user' ? 0 : profile.targetPercent / 100,
     recentToolResultBudgetTokens: profile.recentToolTokens,
     providerReportedTokens: reportedTokens,
     citablePath: (sessionKey, rangeHash) => deps.ports.transcripts.citablePath(sessionKey, rangeHash),
@@ -137,7 +140,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     const measured = measuredTokens(ctx, turns, 0);
     const triggerTokens = Math.floor(ctx.contextWindow * profile.triggerPercent / 100);
 
-    if (ctx.trigger !== 'force' && measured < triggerTokens) return 0;
+    if (ctx.trigger === 'auto' && measured < triggerTokens) return 0;
     const freed = deps.ephemeral.dropSuperseded();
 
     if (freed > 0) {
@@ -149,11 +152,11 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     return freed;
   }
 
-  /** Overflow recovery: rebuild with `force`, using the prior plan as the monotonic floor. */
+  /** An armed rebuild over the prior plan as the monotonic floor. */
   async function forceRebuild(
     { turns, ctx, prior, reportedTokens, summarize }: ForceRebuildInputs,
   ): Promise<ProcessResult> {
-    const inputs: BuildPlanInputs = { ...buildInputs(ctx, reportedTokens), force: true, priorPlan: prior ?? undefined };
+    const inputs: BuildPlanInputs = { ...buildInputs(ctx, reportedTokens, turns), force: true, priorPlan: prior ?? undefined };
     let plan = buildPlan(turns, inputs, kinuSpec);
 
     if (!plan) return { outcome: 'unchanged' };
@@ -222,7 +225,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     const upgraded = buildPlan(
       turns,
       {
-        ...buildInputs(ctx, reportedTokens),
+        ...buildInputs(ctx, reportedTokens, turns),
         force: true,
         priorPlan: toPlanSnapshot(plan),
         prefixSummary: wrapCompactionSummary(body),
@@ -282,7 +285,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       const reportedTokens = measuredTokens(ctx, turns, relieveEphemeralPressure(ctx, turns));
 
       const processed =
-        ctx.trigger === 'force'
+        ctx.trigger !== 'auto'
           ? await forceRebuild({ turns, ctx, prior, reportedTokens, summarize })
           : await engine.process({
               sessionKey: ctx.sessionKey,

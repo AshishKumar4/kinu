@@ -11,6 +11,7 @@ export const TUI_MARKS = {
   failure: '✗',
   /** A lesson, a crafted tool, or a scaffold change. */
   evolution: '✦',
+  thinking: '∴',
   prompt: '❯',
   /** Status bar only: is the client attached. */
   connected: '●',

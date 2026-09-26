@@ -4,12 +4,12 @@
  */
 
 import type {
-  AgentConfigStore, ProfileAuthorityInputs, ProfileCatalog, ProfileCatalogEnvelope,
-  ProviderListing, ProviderSnapshotRead, ResolvedTurnProfile, RunEventInput,
+  AgentConfigStore, PinnedProfile, ProfileAuthorityInputs, ProfileCatalog, ProfileCatalogEnvelope,
+  ProviderListing, ProviderSnapshotRead, ResolvedTurnProfile, RunEventInput, WorkMode,
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, ProviderListingCache,
-  loadProfileAuthorityInputs, providerListingOf, providerSnapshotOf,
+  loadProfileAuthorityInputs, ownProfileChoices, providerListingOf, providerSnapshotOf,
   profileCatalogDigest, resolveAgentTurnProfile,
 } from '@kinu.run/core';
 import type { LocalModelResolver } from './model-resolver';
@@ -82,6 +82,8 @@ export interface LocalProfileAuthority {
    * mode, since these lanes resolve tiers only.
    */
   resolvePreTurn(availableTools?: readonly string[]): Promise<ResolvedTurnProfile>;
+  /** The tier, model and effort the actor's next turn resolves to, before it runs. */
+  nextTurnTier(options: { readonly workMode: WorkMode; readonly ancestors?: readonly PinnedProfile[] }): Promise<ResolvedTurnProfile['tier']>;
   refreshListing(): void;
   /** Replacing the plane drops the listing cached under the old one. */
   refine(inputs: ProfileAuthorityRefinement): void;
@@ -175,6 +177,18 @@ export function createLocalProfileAuthority(deps: {
         activeSkills: [],
         explicitTier: deps.config.getAssignedTier() ?? undefined,
       });
+    },
+    async nextTurnTier({ workMode, ancestors }) {
+      const authority = await inputs();
+
+      return resolveAgentTurnProfile({
+        ...authority,
+        ...ownProfileChoices(deps.config, authority, ancestors),
+        activeRoleId: deps.config.getRoleSelection(),
+        workMode,
+        availableTools: [],
+        activeSkills: [],
+      }).tier;
     },
     refreshListing() {
       listings.invalidate();

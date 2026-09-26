@@ -219,7 +219,8 @@ const NOTE_FILE = { filename: 'note.txt', mediaType: 'text/plain', url: 'data:te
 function frontendView(event: SessionEvent): JsonValue {
   switch (event.type) {
     case 'turn-start': return { type: event.type, kind: event.kind, text: event.text, workMode: event.workMode, ...(event.event !== undefined && { event: event.event }) };
-    case 'text-delta': return { type: event.type, delta: event.delta };
+    case 'text-delta':
+    case 'reasoning-delta': return { type: event.type, delta: event.delta };
     case 'tool-call': return { type: event.type, toolName: event.toolName, toolCallId: event.toolCallId };
     case 'tool-result': return { type: event.type, toolName: event.toolName, toolCallId: event.toolCallId, success: event.success };
     case 'turn-end': return {

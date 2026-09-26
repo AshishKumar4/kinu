@@ -107,6 +107,8 @@ export function fakeClient(options: FakeClientOptions) {
       readInstructionApproval: async () => null,
       approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
       revokeInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
+      clearConversation: async () => {},
+      compactNow: () => {},
     }) : null,
     checkpoints: null,
     inlineAttachmentLimitBytes: 1024,
@@ -212,6 +214,8 @@ export async function mountChat(
     settled?: (frame: string) => boolean;
     /** Kitty-protocol keys, for chords the legacy byte set cannot express (Shift+Enter, Ctrl+J distinct from Enter). */
     kittyKeyboard?: boolean;
+    /** The TUI asked to quit (Esc on an empty, fresh session, or /exit). */
+    onExit?: () => void;
   } = {},
 ) {
   const testRenderer = await createTestRenderer({
@@ -238,7 +242,7 @@ export async function mountChat(
     <ChatApp
       client={client}
       tui={options.tui ?? { preferenceStore: createMemoryTuiPreferenceStore() }}
-      onExit={() => {}}
+      onExit={options.onExit ?? (() => {})}
       workspaceSource={workspaceSource}
       onWorkspaceSelect={options.onWorkspaceSelect}
       hubData={options.hubData}

@@ -13,6 +13,7 @@ import {
   SubordinateRosterStore,
   SubordinateIdentityStore,
   admitSubordinateTask,
+  dismissOrphanedAssignments,
   drainAssignments,
   delegatedTaskMetadata,
   MAIN_AGENT,
@@ -461,6 +462,8 @@ export class LocalAgentHost {
     const orchestrations = new Map<string, LocalOrchestration>();
 
     const host = createActorHost({
+      // The CLI has no tracer.
+      tracing: undefined,
       storage: {
         sql,
         transactionSync: (write) => db.transaction(write)(),
@@ -1410,7 +1413,15 @@ export class LocalAgentHost {
   private async drainAssignedWork(entry: HostEntry): Promise<void> {
     const { parentKey } = entry;
 
-    if (parentKey === null) return;
+    if (parentKey === null) {
+      const hires = entry.tree.directory.list().filter((record) => record.kind === 'subordinate');
+
+      for (const orphan of dismissOrphanedAssignments(makeSqlExec(entry.tree.db), new Set(hires.map((record) => record.actorId)))) {
+        diagnostics.event('subordinate.assignment_orphaned', { agent: entry.key, actor: orphan.actorId, assignment: orphan.id });
+      }
+
+      return;
+    }
 
     const swept = await drainAssignments(entry.eventLog, {
       now: Date.now(),

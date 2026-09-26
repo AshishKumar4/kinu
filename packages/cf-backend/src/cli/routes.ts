@@ -27,7 +27,7 @@ import {
 } from '@kinu.run/core';
 import type { AgentRpcDispatch } from './rpc-gate';
 import { buildCliInstallCommand } from '@kinu.run/core';
-import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
+import { bunResolutionShell, cliPlatformShell, ISOLATED_BUN_FLAGS } from '@kinu.run/core';
 import { listAvailableModels, testAvailableModel } from '../user/available-models';
 import { readUserAccountUsage, type AccountLedgerTarget } from '../user/account-usage';
 import { answerCatalogPut } from '../user/routes';
@@ -947,6 +947,10 @@ RUNTIME_URL="\${KINU_ORIGIN}${CLI_RUNTIME_PATH}"
 
 ${bunResolutionShell()}
 
+# Every Bun that runs code runs in the caller's directory, which may be a cloned repo: its bunfig.toml preload
+# and .env stay out. The CLI's own Bun children take the same flags from core.
+KINU_BUN_ISOLATED=(${ISOLATED_BUN_FLAGS.join(' ')})
+
 die() {
   echo "Kinu update error: $*" >&2
   exit 1
@@ -1004,7 +1008,7 @@ DOWNLOADS=""
 verify_release() {
   manifest="$1"
   wait "$2" || die "Could not download the release manifest from $MANIFEST_URL."
-  "$KINU_BUN" -e '
+  "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" -e '
     const [file, publicKeyHex] = process.argv.slice(1);
     const manifest = JSON.parse(require("fs").readFileSync(file, "utf8"));
     const checksums = manifest.checksums, signature = manifest.signature, version = manifest.version;
@@ -1020,7 +1024,7 @@ verify_release() {
   ' "$manifest" "$RELEASE_SIGNING_PUBLIC_KEY" || die "The release is not one this launcher trusts."
 }
 signed_checksum() {
-  "$KINU_BUN" -e '
+  "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" -e '
     const [file, artifact] = process.argv.slice(1);
     const manifest = JSON.parse(require("fs").readFileSync(file, "utf8"));
     const digest = manifest.checksums && manifest.checksums[artifact];
@@ -1080,7 +1084,7 @@ refresh_cli() {
   [ -f "$tmp/extract/kinu/cli.js" ] || die "The Kinu build archive carries no cli.js."
   rm -rf "$next"
   mv "$tmp/extract/kinu" "$next"
-  "$KINU_BUN" run "$next/cli.js" --version >/dev/null 2>&1 || die "The downloaded Kinu build does not launch."
+  "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$next/cli.js" --version >/dev/null 2>&1 || die "The downloaded Kinu build does not launch."
   adopt_tree "$next"
   rm -rf "$tmp"
 }
@@ -1109,7 +1113,7 @@ recover_current() {
   [ -f "$CLI_DIR/cli.js" ] && return 0
   for candidate in "$CLI_ROOT"/next-*; do
     [ -f "$candidate/cli.js" ] || continue
-    if "$KINU_BUN" run "$candidate/cli.js" --version >/dev/null 2>&1; then
+    if "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$candidate/cli.js" --version >/dev/null 2>&1; then
       rm -rf "$CLI_DIR"
       adopt_tree "$candidate"
       return 0
@@ -1131,7 +1135,7 @@ recover_current() {
 # build that just landed, and prev comes back. Nothing here downloads.
 check_launch() {
   [ -d "$CLI_ROOT/prev" ] || return 0
-  if "$KINU_BUN" run "$CLI_DIR/cli.js" --version >/dev/null 2>&1; then
+  if "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$CLI_DIR/cli.js" --version >/dev/null 2>&1; then
     rm -rf "$CLI_ROOT/prev"
   else
     echo "Kinu: the installed build does not launch; restoring the previous one." >&2
@@ -1171,8 +1175,8 @@ if [ "\${KINU_REFRESH_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
-cd "$CLI_DIR"
-exec "$KINU_BUN" run "$CLI_DIR/cli.js" "$@"
+# In the caller's directory, which is the session's project.
+exec "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$CLI_DIR/cli.js" "$@"
 `;
 
   return new Response(head ? null : script, {

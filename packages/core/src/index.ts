@@ -378,6 +378,8 @@ export {
   type TurnEndContext,
   type PrepareStepContext,
   type TransformContext,
+  type CompactionTrigger,
+  type ArmedCompaction,
 } from './extension';
 
 export {
@@ -1149,6 +1151,8 @@ export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observ
 export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 
 export { oneAtATime } from './utils/one-at-a-time';
+
+export { ISOLATED_BUN_FLAGS, isolatedBunArgs } from './utils/bun-isolation';
 
 export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
 
@@ -2099,7 +2103,7 @@ export type {
 
 export {
   resolveModelRoute,
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices,
   type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource, type PinnedProfile,
   type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
@@ -2410,9 +2414,7 @@ export {
 } from './providers/model-menu';
 
 export {
-  type TextForContextEstimate,
   modelDisplayName,
-  estimateContextTokens,
   formatContextUsage,
 } from './tui/context-status';
 

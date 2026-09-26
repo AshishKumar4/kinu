@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { DEV_IDENTITY_HEADER, JsonValueSchema, type JsonValue } from '@kinu.run/core';
-import { PUBLIC_IDENTITY_ENV } from './session';
+import { EVAL_WEB_IDENTITY_ENV } from '@kinu.run/test-utils';
 
 const JsonObjectSchema = v.record(v.string(), JsonValueSchema);
 
@@ -27,24 +27,27 @@ const SECRETS: readonly (readonly [RegExp, string])[] = [
 const SHORTEST_SECRET = 8;
 
 /**
- * The credential a trial runs with, the eval-service's browser-plane identity, in every spelling
- * a report could carry it: as written, inside a URL, and inside a JSON string.
+ * The credentials a trial may run with, each deployment's browser-plane identity, in every spelling
+ * a report could carry one: as written, inside a URL, and inside a JSON string.
  */
 export function heldSecrets(env: Readonly<Record<string, string | undefined>>): string[] {
-  const secret = env[PUBLIC_IDENTITY_ENV]?.trim() ?? '';
+  const secrets = Object.values(EVAL_WEB_IDENTITY_ENV)
+    .map((name) => env[name]?.trim() ?? '')
+    .filter((secret) => secret.length >= SHORTEST_SECRET);
 
-  if (secret.length < SHORTEST_SECRET) return [];
-
-  return [...new Set([secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)])];
+  return [...new Set(secrets.flatMap((secret) => [secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)]))];
 }
 
 const HELD = heldSecrets(process.env);
 
+/** `text` with the held credential replaced, and nothing else: a kept file stays the workspace's own. */
+export function unheld(text: string, held: readonly string[] = HELD): string {
+  return held.reduce((scrubbed, secret) => scrubbed.replaceAll(secret, '<secret>'), text);
+}
+
 /** `text` with the held credential and every secret-shaped string replaced. */
 export function redact(text: string, held: readonly string[] = HELD): string {
-  const unheld = held.reduce((scrubbed, secret) => scrubbed.replaceAll(secret, '<secret>'), text);
-
-  return SECRETS.reduce((scrubbed, [pattern, replacement]) => scrubbed.replace(pattern, replacement), unheld);
+  return SECRETS.reduce((scrubbed, [pattern, replacement]) => scrubbed.replace(pattern, replacement), unheld(text, held));
 }
 
 /** Every string in a JSON value, scrubbed; keys are the product's own names and stay. */

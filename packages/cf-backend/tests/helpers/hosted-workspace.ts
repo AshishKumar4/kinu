@@ -10,6 +10,7 @@ import {
   type WorkspaceActor,
 } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
+import { createAgentTracing, createRecordingTracer } from '@kinu.run/core/obs';
 import { makeExecRaw, makeSqlExec } from '../../../core/tests/helpers';
 import { makeCtx, makeEnv } from './actor-harness';
 import { createWorkspaceActorHost, type WorkspaceHostSeams } from '../../src/actor-hosting';
@@ -145,6 +146,7 @@ export async function hostedWorkspace(
     setTimer: () => undefined,
     reconcileDurableWake: () => undefined,
     logActivity: () => undefined,
+    tracing: () => createAgentTracing({ tracer: createRecordingTracer(), isolateGen: 1, selfPath: [], actor: { id: main.actorId, kind: 'main' } }),
     slate: () => Promise.resolve({ ok: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
     deferrals: () => undefined,
     refinementLane: () => () => Promise.resolve(),

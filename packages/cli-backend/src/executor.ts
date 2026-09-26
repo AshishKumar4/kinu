@@ -13,6 +13,7 @@ import { writeFileSync, unlinkSync } from 'node:fs';
 import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
 import { requireBuild } from '@kinu.run/core';
+import { ISOLATED_BUN_FLAGS } from '@kinu.run/core';
 
 const subprocessResultSchema = v.variant('ok', [
   v.object({ ok: v.literal(true), result: v.optional(JsonValueSchema) }),
@@ -77,7 +78,7 @@ async function executeWithInterpreter(
   interpreter: { readonly command: string; readonly extension: string },
   timeoutMs?: number,
 ): Promise<ExecuteResult> {
-  const run = await runToCompletion([interpreter.command], code, interpreter.extension, timeoutMs);
+  const run = await runToCompletion([interpreter.command], code, interpreter.extension, { timeoutMs });
 
   if (run.error) return { result: undefined, error: run.error };
 
@@ -94,7 +95,7 @@ async function runToCompletion(
   argv: string[],
   code: string,
   extension: string,
-  timeoutMs?: number,
+  { timeoutMs, cwd }: { readonly timeoutMs?: number; readonly cwd?: string },
 ): Promise<{ exitCode: number; stdout: string; stderr: string; error?: string }> {
   const stem = join(tmpdir(), `kinu-exec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const tmpFile = `${stem}${extension}`;
@@ -106,6 +107,7 @@ async function runToCompletion(
 
   try {
     const proc = Bun.spawn([...argv, tmpFile], {
+      ...(cwd !== undefined && { cwd }),
       stdout: Bun.file(outFile),
       stderr: Bun.file(errFile),
       env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
@@ -156,7 +158,8 @@ async function executeInSubprocess(code: string, timeoutMs?: number): Promise<Ex
     }
   `;
 
-  const run = await runToCompletion([bunBin, 'run'], wrapper, '.mjs', timeoutMs);
+  // Beside its temp script, not in the project, and reading no bunfig or .env.
+  const run = await runToCompletion([bunBin, ...ISOLATED_BUN_FLAGS, 'run'], wrapper, '.mjs', { timeoutMs, cwd: tmpdir() });
 
   if (run.error) return { result: undefined, error: run.error };
 

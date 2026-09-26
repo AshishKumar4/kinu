@@ -159,7 +159,7 @@ import {
   reasoningEffortOptions,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
-  resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, createAgentConfigStore, type PinnedProfile,
+  resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
@@ -1428,7 +1428,8 @@ export abstract class ActorAgent extends Agent<Env> {
     const named = Object.entries(arms).filter(([, owed]) => owed).map(([arm]) => arm).join(',');
 
     if (named !== '') {
-      if (named !== prior.arms) diagnostics.event('wake.unfinished_arms', arms);
+      if (named !== prior.arms) diagnostics.event('wake.unfinished_arms', { ...arms, workspace: this.name, source: named });
+
       await this.scheduleTerminalRetry(lapAt, { laps: prior.laps + 1, arms: named });
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
@@ -1802,6 +1803,7 @@ export abstract class ActorAgent extends Agent<Env> {
       installedBuild: this.installedBuildIdentity(),
       events: this.stores.eventRecorder,
       orchestration: this.orchestrationDeps(),
+      turns: () => this.tracing.turns({ id: this.actorHandle().actorId, kind: 'main' }),
     });
 
     return this._actorSession;
@@ -2970,6 +2972,7 @@ export abstract class ActorAgent extends Agent<Env> {
       tracer: createWorkersTracer(),
       isolateGen: this.isolateGeneration,
       selfPath: this.selfPath,
+      actor: { id: this.actorHandle().actorId, kind: 'main' },
     });
 
     return this._tracing;
@@ -4217,13 +4220,9 @@ export abstract class ActorAgent extends Agent<Env> {
       workMode: requestedWorkMode,
       availableTools,
       activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
+      ...ownProfileChoices(this.config, profileInputs),
       // Request tier, then the tier pinned at hire, then the role's own default.
-      // An absent pin must not read as the workspace default.
       explicitTier: readTurnTier(input.body) ?? this.config.getAssignedTier() ?? undefined,
-      // The workspace's pinned model overrides the role's tier model; without it a setModel pin
-      // is accepted but never used.
-      workspaceModel: this.config.getModel(),
-      explicitEffort: this.config.getReasoningEffort(),
     });
 
     const operation = captureOperationProfile({
