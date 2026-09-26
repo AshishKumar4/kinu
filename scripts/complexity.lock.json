@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-26",
-  "files": 2737,
-  "functions": 67550,
+  "files": 2739,
+  "functions": 67611,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -291,10 +291,6 @@
     },
     {
       "key": "packages/cli-backend/src/opencode-provider.ts#discoverModels",
-      "complexity": 30
-    },
-    {
-      "key": "packages/cli/src/commands/debug.ts#debugCommand",
       "complexity": 30
     },
     {

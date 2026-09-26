@@ -557,6 +557,21 @@ export class RunEventRecorder {
     return rows[0]?.n ?? 0;
   }
 
+  stepFinish(runId: string, stepIndex: number): Extract<RunEvent, { type: 'step_finish' }> | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = 'step_finish'
+        AND json_extract(payload, '$.stepIndex') = ${stepIndex}
+      ORDER BY event_index DESC LIMIT 1`[0];
+
+    if (row === undefined) return null;
+    const event = parseStoredRunEvent(row.payload);
+
+    return event.type === 'step_finish' ? event : null;
+  }
+
   /** No live caller; SSE resume goes through {@link readText}. */
   readSince(runId: string, afterIndex: number, limit = RUN_EVENT_LIMIT_MAX): RunEvent[] {
     this.actor.assertCurrent();

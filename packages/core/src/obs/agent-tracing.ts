@@ -1,7 +1,6 @@
 /**
- * The only way a Kinu agent opens a span; platform-free, so it computes `isolateGen`/`selfPath` once.
- * Trace context does not survive `alarm()`, a hibernation wake or a cold start, so an invocation
- * handle is revoked when its callback settles; no `AsyncLocalStorage`, which has no revocation point.
+ * The only way an agent opens a span. Context dies across `alarm()`, a wake or a cold start, so a
+ * handle is revoked on settle; no `AsyncLocalStorage`, which has no revocation point.
  */
 import { analyticsDigest } from './analytics/privacy';
 import { KinuError } from './error';
@@ -9,7 +8,7 @@ import {
   renderSelfPath, type ScopedSpan, type SpanOpenAttributes, type Tracer,
 } from './tracer';
 
-/** In-memory invocation counter, never persisted: restarts after a cold start while
+/** In-memory, never persisted: restarts after a cold start while
  *  `kinu.isolate_gen` does not, so the pair signals discontinuity. */
 export const SPAN_ATTR_INVOCATION = 'kinu.invocation';
 

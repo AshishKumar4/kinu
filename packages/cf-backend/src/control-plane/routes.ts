@@ -258,7 +258,7 @@ async function handleAction<Id>(
 
   const status = ACTION_STATUS[outcome.outcome];
 
-  return json({ body: { outcome: outcome.outcome, detail: outcome.detail } }, { status });
+  return json({ body: { outcome: outcome.outcome, detail: outcome.detail, ...(outcome.result !== undefined && { result: outcome.result }) } }, { status });
 }
 
 /** An owning-object refusal is 409, not 500: well-formed, authorized, and the state said no. */

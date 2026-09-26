@@ -168,6 +168,7 @@ import {
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
+  turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
   restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
@@ -3827,6 +3828,43 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** With candidateCode: the GEPA metric's rollout; without: runs the live scaffold. */
   private runScaffoldCaptureText(task: string, candidateCode?: string): Promise<string> {
     return runScaffoldCaptureText(this.scaffoldControl, task, candidateCode);
+  }
+
+  /** Not @callable. */
+  async getTurnRequests(turnId: string, actor?: string): Promise<TurnRequestIndex> {
+    return turnRequestIndex(this.turnRequestSources(actor), turnId);
+  }
+
+  async getTurnRequest(
+    turnId: string, at: { readonly epoch: number; readonly revision: number; readonly from?: number; readonly actor?: string },
+  ): Promise<TurnRequestPage> {
+    return await turnRequestPage(this.turnRequestSources(at.actor), { turnId, epoch: at.epoch, revision: at.revision, from: at.from });
+  }
+
+  /** Not @callable: the audited `workspace.turn_read`. */
+  async supportReadTurn(read: {
+    readonly turnId: string;
+    readonly reason: string;
+    readonly actor?: string;
+    readonly at?: { readonly epoch: number; readonly revision: number; readonly from?: number };
+  }): Promise<TurnRequestIndex | TurnRequestPage> {
+    this.logActivity('support.read', `support read turn ${read.turnId} (${read.reason})`);
+
+    return read.at === undefined
+      ? await this.getTurnRequests(read.turnId, read.actor)
+      : await this.getTurnRequest(read.turnId, { ...read.at, ...(read.actor !== undefined && { actor: read.actor }) });
+  }
+
+  private turnRequestSources(actorId: string | undefined): AgentStores {
+    this.ensureSchema();
+
+    if (actorId === undefined) return this.stores;
+    const host = this.actorHost();
+    const record = host.describe(actorId);
+
+    if (record === null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
+
+    return host.bindStores({ actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId }).stores;
   }
 
   /** For resume, pass the last seen `since` index; returns events strictly after it. */

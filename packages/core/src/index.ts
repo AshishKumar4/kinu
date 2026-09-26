@@ -1881,6 +1881,10 @@ export { recoveryBackoffMs } from './utils/recovery-backoff';
 
 export { getRunEvents, getRunEventText, getRunSummaries, listRuns } from './read-models/runs';
 
+export { turnRequestIndex, turnRequestPage } from './read-models/turn-requests';
+
+export type { TurnRequestHead, TurnRequestIndex, TurnRequestPage, TurnRequestRow } from './read-models/turn-requests';
+
 export type { RunListEntry, RunSummary } from './read-models/runs';
 
 export { workspaceSpend } from './read-models/workspace-spend';
