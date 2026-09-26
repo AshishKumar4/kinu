@@ -11,6 +11,7 @@ import type { ForkTreeReader } from '../identity/fork';
 import type { ArchiveFileSource } from '../identity/archive';
 import { SOUL_PATH, summarizeSoulBytes } from '../identity/soul';
 import { tolerate } from '../obs/index';
+import { settleWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
 import type { WorkspaceBundle } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -21,25 +22,18 @@ async function sessionPlane(bundle: WorkspaceBundle): Promise<CredentialedVfs> {
   return (await bundle.session()).vfs.as(CRED_SESSION_USER);
 }
 
-/**
- * Owner-protected SOUL write: sticky 1777 root owned by the kernel, SOUL.md kernel-owned
- * mode 444, so the agent cannot replace, rename or remove it.
- */
+/** The owner's SOUL write, then sealed. */
 export async function writeWorkspaceSoul(
   bundle: WorkspaceBundle, content: string | Uint8Array,
 ): Promise<void> {
   const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
-  const soul = workspacePath(SOUL_PATH);
 
   if (!kernel.exists(WORKSPACE_ROOT) || !kernel.isDirectory(WORKSPACE_ROOT)) {
     throw new Error(`the workspace root ${WORKSPACE_ROOT} does not exist`);
   }
 
-  kernel.chown(WORKSPACE_ROOT, CRED_KERNEL.uid, CRED_KERNEL.gid);
-  kernel.chmod(WORKSPACE_ROOT, 0o1777);
-  kernel.writeFile(soul, content);
-  kernel.chown(soul, CRED_KERNEL.uid, CRED_KERNEL.gid);
-  kernel.chmod(soul, 0o444);
+  kernel.writeFile(workspacePath(SOUL_PATH), content);
+  settleWorkspaceSoul(kernel);
 }
 
 function workspaceForkPort(bundle: WorkspaceBundle): ForkNativeFilePort {
@@ -145,7 +139,7 @@ function lstatOrNull(plane: CredentialedVfs, path: string): VfsStat | null {
   return tolerate(() => plane.lstat(path), 'enoent') ?? null;
 }
 
-/** Unsupported node kinds fail the backup rather than producing an incomplete one. */
+/** An unsupported node kind fails the backup. */
 export function workspaceArchiveFiles(bundle: WorkspaceBundle): ArchiveFileSource {
   return archiveFileTree({
     readdir: async (path) => [...(await sessionPlane(bundle)).readdir(workspacePath(path))],

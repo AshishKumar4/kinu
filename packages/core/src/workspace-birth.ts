@@ -16,6 +16,7 @@ import { initRunEventTables, RunEventRecorder } from './events/recorder';
 import { buildRuntime } from './runtime-builder';
 import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from './read-models/workspace-diff';
 import type { WorkspaceBundle } from './vfs/nimbus-workspace';
+import { writeWorkspaceSoul } from './vfs/workspace-planes';
 import type { ActorHandle } from './identity/actor-handle';
 import { initWorkspaceActorTable, WorkspaceActorDirectory } from './identity/workspace-actors';
 
@@ -94,7 +95,7 @@ export async function createWorkspace(
   const titled = config.title?.trim();
   const heading = titled === undefined || titled === '' ? UNTITLED_WORKSPACE_NAME : titled;
 
-  await seedSoul(workspace.vfs, sql, { name: heading, mission: config.purpose });
+  await seedSoul(workspace.vfs, sql, { name: heading, mission: config.purpose }, (_path, content) => writeWorkspaceSoul(workspace, content));
 
   await workspace.vfs.mkdir('scaffold', { recursive: true });
   // The versioned source is authoritative; agent.js is its rebuildable view.

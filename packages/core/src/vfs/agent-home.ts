@@ -9,6 +9,7 @@ import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import * as v from 'valibot';
+import { SOUL_PATH } from '../identity/soul';
 import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
@@ -16,6 +17,8 @@ export const MAIN_AGENT = 'main';
 
 /** Owner writes; everyone reads and traverses. */
 export const AGENT_HOME_MODE = 0o755;
+
+const WORKSPACE_ROOT_MODE = 0o1777;
 
 /** Owner only, and discarded with the agent. */
 export const AGENT_TMP_MODE = 0o700;
@@ -174,8 +177,13 @@ interface AgentDir {
 
 /** In creation order. */
 function agentHomeLayout(agentName: string, identity: AgentIdentity): readonly AgentDir[] {
+  // The root holds the owner's SOUL.md: the kernel's, sticky.
+  const home = agentName === MAIN_AGENT
+    ? { path: WORKSPACE_ROOT, uid: 0, gid: 0, mode: WORKSPACE_ROOT_MODE }
+    : { path: agentHome(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_HOME_MODE };
+
   return [
-    { path: agentHome(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_HOME_MODE },
+    home,
     { path: agentTmpRoot(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_TMP_MODE },
     { path: `${agentHome(agentName)}/.kinu`, uid: identity.uid, gid: identity.gid, mode: 0o700 },
     { path: agentArtifactDirectory(agentHome(agentName)), uid: identity.uid, gid: identity.gid, mode: 0o700 },
@@ -223,6 +231,19 @@ export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
   if (homes.uid !== 0 || homes.gid !== 0 || (homes.mode & 0o7777) !== 0o755) {
     kernel.chown('/home', 0, 0);
     kernel.chmod('/home', 0o755);
+  }
+}
+
+/** SOUL.md is the owner's: kernel-owned, 444; resealed each boot. */
+export function settleWorkspaceSoul(kernel: RootMoveVfs): void {
+  const soul = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
+
+  if (!kernel.exists(soul) || kernel.isSymlink(soul)) return;
+  const file = kernel.stat(soul);
+
+  if (file.uid !== 0 || file.gid !== 0 || (file.mode & 0o7777) !== 0o444) {
+    kernel.chown(soul, 0, 0);
+    kernel.chmod(soul, 0o444);
   }
 }
 

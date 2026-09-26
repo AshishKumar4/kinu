@@ -279,9 +279,10 @@ export async function writeSoul(
 
 export async function seedSoul(
   vfs: VFS, sql: SqlExecutor, input: { name: string; mission?: string },
+  writeFile?: (path: string, content: string) => Promise<void>,
 ): Promise<string> {
   const soul = renderSoulMarkdown(input);
-  await writeSoul(vfs, sql, soul);
+  await writeSoul(vfs, sql, soul, writeFile);
 
   return soul;
 }

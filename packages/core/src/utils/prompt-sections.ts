@@ -5,7 +5,7 @@ export interface PromptSection {
   readonly chars: number;
 }
 
-/** The soul opens the prompt with no heading of its own. */
+/** The soul opens the prompt, unheaded. */
 const SOUL_SECTION_TITLE = 'Soul';
 
 export const DYNAMIC_CONTEXT_OPEN_TAG = '<dynamic_context';
@@ -16,6 +16,15 @@ export const WORKSPACE_INSTRUCTIONS_TAG = 'workspace_instructions';
 export const SYSTEM_REMINDER_TAG = 'system-reminder';
 
 export const DYNAMIC_CONTEXT_DELIMITER = /<(\/?)dynamic_context/g;
+
+const SOUL_TAG = 'soul';
+
+const SOUL_FORGEABLE = /<(\/?)(soul|dynamic_context|workspace_instructions|system-reminder)/gu;
+
+/** One block nothing inside can close. */
+export function sealSoul(soul: string): string {
+  return `<${SOUL_TAG}>\n${soul.replace(SOUL_FORGEABLE, '&lt;$1$2')}\n</${SOUL_TAG}>`;
+}
 
 export const WORKSPACE_INSTRUCTIONS_DELIMITER = /<(\/?)workspace_instructions/g;
 

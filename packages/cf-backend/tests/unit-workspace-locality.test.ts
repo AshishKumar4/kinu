@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { fakeMossaic, sqlOver } from '@kinu.run/test-utils';
-import { mossaicVfs, sharedDriveMount, withMountTable, type JsonValue } from '@kinu.run/core';
+import { mossaicVfs, sharedDriveMount, withMountTable, writeWorkspaceSoul, type JsonValue } from '@kinu.run/core';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { RouteableFacetTarget, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, SCRIPT_EXPORTS } from './helpers/programmatic-host';
@@ -128,6 +128,41 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(await workspace.bundle.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' }))
       .toBe('the bytes are here\n');
   });
+
+  for (const [label, write] of [
+    ['the owner\'s write', (bundle: HostedWorkspace['bundle'], text: string) => writeWorkspaceSoul(bundle, text)],
+    ['a soul written before the seal', (bundle: HostedWorkspace['bundle'], text: string) => bundle.vfs.writeFile('SOUL.md', text)],
+  ] as const) {
+    test(`SOUL.md from ${label} is written by no agent path after a restart: file plane, shell, box files`, async () => {
+      const actor = actorObject();
+
+      const open = (): HostedWorkspace => createHostedWorkspace({
+        ctx: actor.ctx,
+        env: workspaceBindings(),
+        previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
+      });
+
+      await write(open().bundle, '# the owner wrote this\n');
+
+      const restarted = open();
+      const box = restarted.box('agent:main');
+
+      const attempts = [
+        () => restarted.bundle.vfs.writeFile('SOUL.md', 'forged'),
+        () => restarted.bundle.vfs.unlink('SOUL.md'),
+        () => box.files.write('/home/main/SOUL.md', 'forged'),
+      ];
+
+      for (const attempt of attempts) await expect(attempt()).rejects.toThrow();
+
+      for (const command of ['printf forged > SOUL.md', 'printf forged >> SOUL.md', 'rm -f SOUL.md', 'mv SOUL.md gone.md',
+        'chmod 666 SOUL.md', 'printf forged > f && mv -f f SOUL.md', 'ln -sf /tmp/x SOUL.md', 'chmod 777 /home/main']) {
+        await box.exec(command);
+      }
+
+      expect(await restarted.bundle.vfs.readFile('SOUL.md', { encoding: 'utf8' })).toBe('# the owner wrote this\n');
+    });
+  }
 
   test('the shell and the file plane are two views of the same rows', async () => {
     const actor = actorObject();
