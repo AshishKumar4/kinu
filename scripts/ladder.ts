@@ -973,6 +973,23 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
+    run: 'bun scripts/gen-cli-docs.ts --check',
+    label: 'CLI reference is current',
+    tier: 'commit',
+    // Measured 2026-09-26 on the 24-thread box, three runs: 0.30/0.30/0.30 s, 134 MB.
+    // The commit tier is where this belongs: the reference is rendered from the command
+    // registry, and the drift is written in the same hunk as the option. Checked only in
+    // the CLI suite, at ci, a commit adding `bundle --turn/--actor` (6c5aa9dd76) reached
+    // a staging deploy with the reference still missing them.
+    seconds: 0.3,
+    catches: 'a command or option added, renamed or removed in the CLI\'s command registry '
+      + 'while docs/CLI.md, the reference rendered from it, still says the old thing: '
+      + 'the checked-in file must equal what `bun run docs:cli` would write.',
+    blind: 'whether what the registry says is true of the command; a hidden option, which '
+      + 'the reference leaves out on purpose.',
+    inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
+  },
+  {
     run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts',
     label: 'Gate self-tests',
     tier: 'push',

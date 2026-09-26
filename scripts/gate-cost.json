@@ -937,6 +937,17 @@
       "samples": 8,
       "loadAtStart": 17.33,
       "exit": 0
+    },
+    "bun scripts/gen-cli-docs.ts --check": {
+      "wallSeconds": 0.52,
+      "cpuSeconds": 0.54,
+      "peakRssMb": 82.43,
+      "peakRunnable": 2,
+      "peakCpuThreads": 1,
+      "meanThreads": 1.05,
+      "samples": 8,
+      "loadAtStart": 12.21,
+      "exit": 0
     }
   }
 }
