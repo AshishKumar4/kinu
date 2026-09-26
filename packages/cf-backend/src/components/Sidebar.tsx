@@ -165,6 +165,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
     entries: workspaces,
     total: workspaceTotal,
     error: listError,
+    loading: listLoading,
     refresh: refreshWorkspaces,
     rename: renameWorkspace,
     remove: removeFromRoster,
@@ -263,7 +264,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
         <div className="px-5 pb-2 pt-4 p-eyebrow">
           Workspaces{workspaceTotal > workspaces.length ? ` · ${workspaces.length}/${workspaceTotal}` : ""}
         </div>
-        {workspaces.length === 0 && !listError && (
+        {!listLoading && workspaces.length === 0 && !listError && (
           <div className="px-5 py-3 text-xs p-text-3">No workspaces yet.</div>
         )}
         {listError && (
@@ -272,7 +273,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
             className="w-full text-left px-5 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
           >Could not load workspaces. Retry</button>
         )}
-        <ul className="space-y-1">
+        <ul className="space-y-1" aria-busy={listLoading && !listError}>
           {workspaces.map((a) => {
             const age = shortAge(a.lastVisited);
             const live = activity[a.name];
