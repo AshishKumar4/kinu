@@ -9,12 +9,14 @@ import {
 } from '@agent-core/core/slates';
 import { nanoid } from '../utils/nanoid';
 import type { SlateFiles } from './files';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settle, settleSync } from '../obs/effect';
 
-function requireCapability<Capability>(capability: Capability | undefined, name: string): Capability {
-  if (capability === undefined) throw new KinuError('unsupported', 'Slate ' + name + ' capability is not configured');
-
-  return capability;
+function withCapability<Capability, A>(capability: Capability | undefined, name: string, call: (present: Capability) => Promise<A>): Promise<A> {
+  return settle(capability === undefined
+    ? Effect.fail(new KinuError('unsupported', 'Slate ' + name + ' capability is not configured'))
+    : Effect.promise(() => call(capability)));
 }
 
 class WorkspaceSlateIds extends SlateIdSource {
@@ -65,31 +67,37 @@ export class WorkspaceSlates {
   // The vendored runtime requires each seam. Capabilities arrive independently;
   // an absent effect capability refuses only when that operation is attempted.
   private readonly provider: SlateProvider = {
-    deploy: (request) => requireCapability(this.deps.provider, 'deployment').deploy(request),
-    reconcileDeployment: (request) => requireCapability(this.deps.provider, 'deployment').reconcileDeployment(request),
-    materializeResource: (request) => requireCapability(this.deps.provider, 'resource provisioning').materializeResource(request),
-    reconcileResource: (request) => requireCapability(this.deps.provider, 'resource provisioning').reconcileResource(request),
+    deploy: (request) => withCapability(this.deps.provider, 'deployment', (provider) => provider.deploy(request)),
+    reconcileDeployment: (request) => withCapability(this.deps.provider, 'deployment', (provider) => provider.reconcileDeployment(request)),
+    materializeResource: (request) => withCapability(this.deps.provider, 'resource provisioning', (provider) => provider.materializeResource(request)),
+    reconcileResource: (request) => withCapability(this.deps.provider, 'resource provisioning', (provider) => provider.reconcileResource(request)),
   };
   private readonly invocations: SlateInvocationSeam = {
-    prepare: (request) => requireCapability(this.deps.invocations, 'external invocation').prepare(request),
-    invoke: (request, id, effect) => requireCapability(this.deps.invocations, 'external invocation').invoke(request, id, effect),
-    reconcile: (request, id, effect) => requireCapability(this.deps.invocations, 'external invocation').reconcile(request, id, effect),
+    prepare: (request) => withCapability(this.deps.invocations, 'external invocation', (seam) => seam.prepare(request)),
+    invoke: (request, id, effect) => withCapability(this.deps.invocations, 'external invocation', (seam) => seam.invoke(request, id, effect)),
+    reconcile: (request, id, effect) => withCapability(this.deps.invocations, 'external invocation', (seam) => seam.reconcile(request, id, effect)),
   };
   private readonly previewValidation: SlatePreviewValidationSeam = {
-    validate: (request) => requireCapability(this.deps.previewValidation, 'durable preview validation').validate(request),
+    validate: (request) => withCapability(this.deps.previewValidation, 'durable preview validation', (seam) => seam.validate(request)),
   };
 
   async synchronize(id: SlateId): Promise<Slate> {
-    const source = this.deps.files.transaction(() => this.deps.files.capture(id));
-    const current = this.deps.store.getSlate(id);
+    return settle(this.synchronized(id));
+  }
 
-    if (current === undefined) return this.runtime(id).create(this.deps.workspaceId, source);
+  private synchronized(id: SlateId): Effect.Effect<Slate, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const source = this.deps.files.transaction(() => this.deps.files.capture(id));
+      const current = this.deps.store.getSlate(id);
 
-    if (!current.workspaceId.equals(this.deps.workspaceId)) throw new KinuError('denied', 'Slate belongs to another workspace');
+      if (current === undefined) return yield* Effect.promise(() => this.runtime(id).create(this.deps.workspaceId, source));
 
-    if (current.source.equals(source)) return current;
+      if (!current.workspaceId.equals(this.deps.workspaceId)) return yield* new KinuError('denied', 'Slate belongs to another workspace');
 
-    return this.runtime().update(id, source, current.revision);
+      if (current.source.equals(source)) return current;
+
+      return yield* Effect.promise(() => this.runtime().update(id, source, current.revision));
+    });
   }
 
   async commit(id: SlateId) {
@@ -103,17 +111,19 @@ export class WorkspaceSlates {
   }
 
   async restore(id: SlateId, versionId: SlateVersionId): Promise<Slate> {
-    const version = this.deps.store.getVersion(versionId);
+    return settle(Effect.gen({ self: this }, function* () {
+      const version = this.deps.store.getVersion(versionId);
 
-    if (version === undefined || !version.slateId.equals(id) || !version.workspaceId.equals(this.deps.workspaceId)) {
-      throw new KinuError('missing', 'Source restoration requires a version of this Slate');
-    }
+      if (version === undefined || !version.slateId.equals(id) || !version.workspaceId.equals(this.deps.workspaceId)) {
+        return yield* new KinuError('missing', 'Source restoration requires a version of this Slate');
+      }
 
-    const current = await this.synchronize(id);
+      const current = yield* this.synchronized(id);
 
-    if (current.source.equals(version.source)) return current;
+      if (current.source.equals(version.source)) return current;
 
-    return this.runtime(undefined, true).update(id, version.source, current.revision);
+      return yield* Effect.promise(() => this.runtime(undefined, true).update(id, version.source, current.revision));
+    }));
   }
 
   /** `materialization` is the whole version source by default, or the owner's included subset. */
@@ -124,7 +134,7 @@ export class WorkspaceSlates {
   }
 
   publication(publicationId: SlatePublicationId): SlatePublication {
-    return this.owned(this.deps.store.getPublication(publicationId), 'Slate publication not found');
+    return settleSync(this.owned(this.deps.store.getPublication(publicationId), 'Slate publication not found'));
   }
 
   /** Credential-free: when a subset was published, the skeleton names the materialization, not the version source. */
@@ -137,7 +147,7 @@ export class WorkspaceSlates {
     return new SlateSkeleton(publication.materialization.digest, publication.bindings);
   }
 
-  /** Admit a skeleton as a new slate of this workspace. Every requirement comes back unsatisfied; nothing runs. */
+  /** Admit a skeleton as a new slate of this workspace: every requirement comes back unsatisfied, nothing runs. */
   instantiate(skeleton: SlateSkeleton, source: ContentRef): Promise<SlateInstantiation> {
     return this.runtime().instantiate(skeleton, this.deps.workspaceId, source);
   }
@@ -159,13 +169,13 @@ export class WorkspaceSlates {
   }
 
   version(versionId: SlateVersionId): SlateVersion {
-    return this.owned(this.deps.store.getVersion(versionId), 'Slate version not found');
+    return settleSync(this.owned(this.deps.store.getVersion(versionId), 'Slate version not found'));
   }
 
-  private owned<T extends { readonly workspaceId: WorkspaceId }>(found: T | undefined, missing: string): T {
-    if (found === undefined || !found.workspaceId.equals(this.deps.workspaceId)) throw new KinuError('missing', missing);
-
-    return found;
+  private owned<T extends { readonly workspaceId: WorkspaceId }>(found: T | undefined, missing: string): Effect.Effect<T, KinuError> {
+    return found === undefined || !found.workspaceId.equals(this.deps.workspaceId)
+      ? Effect.fail(new KinuError('missing', missing))
+      : Effect.succeed(found);
   }
 
   private runtime(authoredId?: SlateId, restoring = false): SlateRuntime {

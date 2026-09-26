@@ -14,15 +14,13 @@ export function attempt<A>(
   return Effect.tryPromise({ try: run, catch: (cause) => toKinuError({ ...input, cause }) });
 }
 
-export async function settle<A>(
-  effect: Effect.Effect<A, KinuError>,
-  options?: { readonly signal?: AbortSignal; readonly interrupted?: string },
-): Promise<A> {
-  const exit = await Effect.runPromiseExit(effect, { scheduler: WITHIN_ONE_EVENT, signal: options?.signal });
+interface SettleOptions {
+  readonly signal?: AbortSignal;
+  readonly interrupted?: string;
+}
 
-  if (Exit.isSuccess(exit)) return exit.value;
-
-  if (!Cause.hasInterruptsOnly(exit.cause)) throw Cause.squash(exit.cause);
+function fail(cause: Cause.Cause<KinuError>, options?: SettleOptions): never {
+  if (!Cause.hasInterruptsOnly(cause)) throw Cause.squash(cause);
 
   const signal = options?.signal;
 
@@ -31,6 +29,22 @@ export async function settle<A>(
     options?.interrupted ?? 'interrupted',
     signal?.aborted === true ? { cause: signal.reason } : undefined,
   );
+}
+
+export async function settle<A>(effect: Effect.Effect<A, KinuError>, options?: SettleOptions): Promise<A> {
+  const exit = await Effect.runPromiseExit(effect, { scheduler: WITHIN_ONE_EVENT, signal: options?.signal });
+
+  if (Exit.isSuccess(exit)) return exit.value;
+
+  return fail(exit.cause, options);
+}
+
+export function settleSync<A>(effect: Effect.Effect<A, KinuError>, options?: Pick<SettleOptions, 'interrupted'>): A {
+  const exit = Effect.runSyncExit(effect);
+
+  if (Exit.isSuccess(exit)) return exit.value;
+
+  return fail(exit.cause, options);
 }
 
 export function toWire<A, F>(

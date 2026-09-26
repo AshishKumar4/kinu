@@ -7,7 +7,7 @@
 
 import { expect, test } from 'bun:test';
 
-import { type ErrorModelLock, judge, lower, measure } from './error-model';
+import { bridgeSites, type ErrorModelLock, judge, lower, measure } from './error-model';
 
 const FILE = 'packages/fixture/src/a.ts';
 
@@ -92,3 +92,21 @@ test('the boundary file grows in the mechanisms it declares and in no other', ()
   expect(keysOf(boundary)).toEqual([]);
   expect(keysOf(outcome)).toEqual([{ key: `${outcome}#throw`, value: 1 }]);
 });
+
+test('a bridge is `return settle(…)` or `return settleSync(…)` with the runner from obs, and nothing else is', () => {
+  const bridged = `
+import { settle, settleSync as run } from '../obs/index';
+export function parse(text: string): number { return run(parseEffect(text)); }
+export async function load(): Promise<string> { return await settle(loadEffect()); }
+export function inner(): Effect.Effect<number, KinuError> { return Effect.succeed(1); }
+`;
+
+  // A local \`settle\` is not the runner, and a runner that is not returned is not the bridge shape.
+  const local = `
+function settle(value: number): number { return value; }
+export function done(): number { return settle(1); }
+`;
+
+  expect(bridgeSites(new Map([[FILE, bridged], ['packages/fixture/src/b.ts', local]]))).toEqual([`${FILE}:3`, `${FILE}:4`]);
+});
+

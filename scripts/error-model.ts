@@ -46,11 +46,72 @@ export const DECLARED = new Map<string, Declaration>([
     mechanisms: MECHANISMS,
     reason: 'the one runner: `settle` rethrows the typed failure or the defect, and `toWire` writes the wire union',
   }],
+  ['packages/core/src/slates/content.ts', {
+    mechanisms: ['throw'],
+    reason: 'a vendored `ContentStore`: its failures are the vendored package\'s `AgentCoreError` codes, its contract',
+  }],
+  ['packages/core/src/slates/store.ts', {
+    mechanisms: ['throw'],
+    reason: 'a vendored `SlateStore`: its failures are the vendored package\'s `AgentCoreError` codes, its contract',
+  }],
   ['packages/core/src/tools/outcome.ts', {
     mechanisms: ['result-literal', 'result-type'],
     reason: '`ToolOutcome`, the recorded outcome of a native tool invocation; `success` is its stored field',
   }],
 ]);
+
+/** Where an effect is run for a host that owns the call, permanently: not a bridge. */
+export const HOST_BOUNDARIES = new Map<string, string>([
+  ['packages/core/src/execution/parent.ts', '`answerParentRpc` answers a fork over DO RPC and in the CLI: a platform-owned call'],
+]);
+
+const RUNNERS: readonly string[] = ['settle', 'settleSync'];
+
+/** A module an `obs` runner is imported from: the adapter itself, its barrel, or the package roots re-exporting it. */
+const isObsModule = (specifier: string): boolean =>
+  /(^|\/)obs(\/(effect|index))?$/.test(specifier) || specifier === '@kinu.run/core' || specifier === '@kinu.run/core/obs';
+
+/**
+ * Bridges: a migrated function run at its own edge so its callers keep their signature, spelled
+ * `return settle(…)` or `return settleSync(…)` with the runner imported from `obs`. Each is removed
+ * when its callers' wave arrives; the migration ends at zero.
+ */
+export function bridgeSites(sources: ReadonlyMap<string, string>): string[] {
+  const sites: string[] = [];
+
+  for (const [file, text] of sources) {
+    if (file === 'packages/core/src/obs/effect.ts' || HOST_BOUNDARIES.has(file)) continue;
+    const parsed = parse(file, text);
+    const runners = new Set<string>();
+
+    walk(parsed.root, (node) => {
+      const { raw } = node;
+
+      if (raw.type !== 'ImportDeclaration' || !isObsModule(raw.source.value)) return;
+
+      for (const specifier of raw.specifiers) {
+        if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier' && RUNNERS.includes(specifier.imported.name)) {
+          runners.add(specifier.local.name);
+        }
+      }
+    });
+
+    if (runners.size === 0) continue;
+
+    walk(parsed.root, (node) => {
+      const { raw } = node;
+
+      if (raw.type !== 'ReturnStatement' || raw.argument === null) return;
+      const call = raw.argument.type === 'AwaitExpression' ? raw.argument.argument : raw.argument;
+
+      if (call.type === 'CallExpression' && call.callee.type === 'Identifier' && runners.has(call.callee.name)) {
+        sites.push(`${file}:${String(parsed.lineAt(node.start))}`);
+      }
+    });
+  }
+
+  return sites.sort();
+}
 
 /** Built-in error constructors a class can extend; `KinuError` extends `Data.TaggedError(...)`. */
 const ERROR_BASES: readonly string[] = ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'AggregateError', 'DOMException', 'KinuError'];
@@ -195,6 +256,8 @@ export const BLIND_SPOTS: readonly string[] = [
   'A RETURNED `{ error }` WITH NO `ok` FIELD — NOT COUNTED. It is a failure value by convention only.',
   'TESTS, SCRIPTS AND TOOLS — OUT OF SCOPE. The corpus is product source (`readSources`).',
   'A MECHANISM MOVED INTO A DECLARED FILE — NOT DETECTED. `DECLARED` is read by review, one reason per file.',
+  'A BRIDGE SPELLED ANOTHER WAY — NOT COUNTED. A runner result stored and returned later, or a runner '
+  + 'called outside a `return`, is not the bridge shape; review keeps bridges to the one spelling.',
   'A DELETED LOCK — REFUSED. With no lock on disk the gate is red; the first lock is written with '
   + '`--init`, which only a reviewer should see in a diff.',
 ];
@@ -282,6 +345,14 @@ if (import.meta.main) {
   for (const [file, { mechanisms, reason }] of DECLARED) {
     console.log(`  declared: ${file} (${mechanisms.join(', ')}): ${reason}`);
   }
+
+  const bridges = bridgeSites(sources);
+
+  console.log(`  bridges: ${String(bridges.length)} (the migration ends at zero)`);
+
+  for (const site of bridges) console.log(`    ${site}`);
+
+  for (const [file, reason] of HOST_BOUNDARIES) console.log(`  host boundary: ${file}: ${reason}`);
 
   for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
 }

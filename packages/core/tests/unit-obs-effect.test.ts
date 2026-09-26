@@ -8,7 +8,7 @@
 import { describe, expect, test } from 'bun:test';
 import { inspect } from 'node:util';
 import { Effect } from 'effect';
-import { attempt, KinuError, settle } from '../src/obs/index';
+import { attempt, KinuError, settle, settleSync } from '../src/obs/index';
 
 describe('settle', () => {
   test('resolves the success value', async () => {
@@ -37,6 +37,39 @@ describe('settle', () => {
     controller.abort(reason);
     await expect(pending).rejects.toBeInstanceOf(KinuError);
     await expect(pending).rejects.toMatchObject({ code: 'cancelled', message: 'stopped before the answer', cause: reason });
+  });
+});
+
+describe('settleSync', () => {
+  test('returns the success value, in the same tick', () => {
+    expect(settleSync(Effect.succeed(3))).toBe(3);
+  });
+
+  test('throws the failed KinuError itself, and a defect unchanged', () => {
+    const failure = new KinuError('denied', 'the gate refused');
+    const bug = new TypeError('reading an absent field');
+
+    expect(() => settleSync(Effect.fail(failure))).toThrow(failure);
+    expect(() => settleSync(Effect.sync(() => {
+      throw bug;
+    }))).toThrow(bug);
+  });
+
+  test('an interruption is cancelled, as under settle', () => {
+    expect(() => settleSync(Effect.interrupt, { interrupted: 'stopped' })).toThrow(expect.objectContaining({ code: 'cancelled', message: 'stopped' }));
+  });
+
+  test('an async step inside is a defect, not an awaited value and not a KinuError', () => {
+    let thrown: unknown;
+
+    try {
+      settleSync(Effect.promise(() => Promise.resolve(1)));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).not.toBeInstanceOf(KinuError);
+    expect(thrown).toMatchObject({ name: 'AsyncFiberError' });
   });
 });
 

@@ -5,7 +5,9 @@ import type { SqlExec } from '../types/primitives';
 import { SLATES_ROOT } from '../vfs/workspace-path';
 import { SlateDirectoryName } from './rpc';
 import type { WorkspaceSlateContentStore } from './content';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import { tolerate } from '../obs/index';
 import { compareCodeUnits } from '../utils/text';
 import { unmovedSince } from '../vfs/unmoved';
@@ -25,11 +27,15 @@ const Tree = v.object({ mode: v.number(), entries: v.array(TreeEntry) });
 type TreeEntry = v.InferOutput<typeof TreeEntry>;
 
 export function slateDirectory(id: SlateId): string {
+  return settleSync(slateRoot(id));
+}
+
+function slateRoot(id: SlateId): Effect.Effect<string, KinuError> {
   const name = v.safeParse(SlateDirectoryName, id.value);
 
-  if (!name.success) throw new KinuError('bad_input', 'Slate id must be one directory name', { cause: new v.ValiError(name.issues) });
-
-  return `${SLATES_ROOT}/${name.output}`;
+  return name.success
+    ? Effect.succeed(`${SLATES_ROOT}/${name.output}`)
+    : Effect.fail(new KinuError('bad_input', 'Slate id must be one directory name', { cause: new v.ValiError(name.issues) }));
 }
 
 export function forgetSlateFiles(sql: SqlExec, id: SlateId): void {
@@ -108,12 +114,15 @@ export class SlateFiles {
   ) {}
 
   capture(id: SlateId): ContentRef {
-    const root = slateDirectory(id);
+    return settleSync(Effect.flatMap(slateRoot(id), (root) => this.captureAt(id, root)));
+  }
+
+  private captureAt(id: SlateId, root: string): Effect.Effect<ContentRef, KinuError> {
     const manifest = new SlateManifest(this.sql, id.value);
     const known = new Map(manifest.known);
     const entries: TreeEntry[] = [];
 
-    const walk = (directory: string, relative: string): void => {
+    const walk = (directory: string, relative: string): string | null => {
       // Never locale order: the walk order is part of the content-addressed ref.
       for (const entry of this.vfs.readdir(directory).sort((left, right) => compareCodeUnits(left.name, right.name))) {
         const absolute = `${directory}/${entry.name}`;
@@ -124,23 +133,29 @@ export class SlateFiles {
           entries.push({ path, kind: 'symlink', target: this.vfs.readlink(absolute) });
         } else if (stat.type === 'directory') {
           entries.push({ path, kind: 'directory', mode: stat.mode & 0o7777 });
-          walk(absolute, path);
+          const refused = walk(absolute, path);
+
+          if (refused !== null) return refused;
         } else if (stat.type === 'file') {
           const row = known.get(path);
           known.delete(path);
           const content = row !== undefined && unmoved(row, stat) ? this.readable(absolute, row) : this.retain(manifest, path, absolute, stat);
           entries.push({ path, kind: 'file', mode: stat.mode & 0o7777, content });
         } else {
-          throw new Error(`Slate source cannot retain ${stat.type}: ${path}`);
+          return `Slate source cannot retain ${stat.type}: ${path}`;
         }
       }
+
+      return null;
     };
 
-    walk(root, '');
+    const refused = walk(root, '');
+
+    if (refused !== null) return Effect.fail(new KinuError('bad_input', refused));
 
     for (const path of known.keys()) manifest.forget(path);
 
-    return this.content.retain(new TextEncoder().encode(JSON.stringify({ mode: this.vfs.stat(root).mode & 0o7777, entries }))).ref;
+    return Effect.succeed(this.content.retain(new TextEncoder().encode(JSON.stringify({ mode: this.vfs.stat(root).mode & 0o7777, entries }))).ref);
   }
 
   readTree(source: ContentRef) {
@@ -148,7 +163,10 @@ export class SlateFiles {
   }
 
   restore(id: SlateId, source: ContentRef): void {
-    const root = slateDirectory(id);
+    return settleSync(Effect.map(slateRoot(id), (root) => this.restoreAt(id, root, source)));
+  }
+
+  private restoreAt(id: SlateId, root: string, source: ContentRef): void {
     const tree = this.readTree(source);
     const manifest = new SlateManifest(this.sql, id.value);
     const target = new Map(tree.entries.map((entry) => [entry.path, entry]));
