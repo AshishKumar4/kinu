@@ -581,20 +581,35 @@ test('/clear empties the transcript on screen once the conversation is cleared',
   await screen.waitFor('the transcript cleared', () => !screen.frame().includes('An answer from before.'));
 });
 
-test('!command runs in this directory and shows its output; the agent is sent nothing', async () => {
-  const sent: unknown[] = [];
+test('!command output joins the next prompt, and !!command stays on screen only', async () => {
+  const sent: string[] = [];
 
   const agent = fakeClient({ name: 'bang', send: async (input) => {
-    sent.push(input);
+    sent.push(JSON.stringify(input));
 
     return TURN;
   } });
 
   const screen = await mountChat(agent.client);
-  await screen.mockInput.typeText('!printf "from %s" "$(basename "$PWD")"');
+  await screen.mockInput.typeText('!printf "seen-%s" "$(basename "$PWD")"');
   screen.mockInput.pressEnter();
-  await screen.waitFor('the command output', () => screen.frame().includes(`from ${basename(process.cwd())}`));
+  await screen.waitFor('the command output', () => screen.frame().includes(`seen-${basename(process.cwd())}`));
+  await screen.mockInput.typeText('!!printf private-output');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the private output', () => screen.frame().includes('private-output'));
   expect(sent).toEqual([]);
+
+  await screen.mockInput.typeText('what did it print?');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the prompt sent', () => sent.length === 1);
+  expect(sent[0]).toContain(`seen-${basename(process.cwd())}`);
+  expect(sent[0]).toContain('what did it print?');
+  expect(sent[0]).not.toContain('private-output');
+
+  await screen.mockInput.typeText('and again');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the second prompt', () => sent.length === 2);
+  expect(sent[1]).not.toContain('seen-');
 });
 
 const EXPORTED_HISTORY = async (): Promise<AgentTranscriptMessage[]> => [

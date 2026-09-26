@@ -487,6 +487,9 @@ function ChatScene({
   }, [draftEditing.replace, syncComposerRows]);
 
   /** @path mentions become attachments: images and PDFs inline, other files as path references. */
+  /** `!command` results the next prompt carries to the agent, as omp's `!` does; `!!` keeps them out. */
+  const localOutputsRef = useRef<string[]>([]);
+
   const sendPrompt = useCallback(async (input: string, mode?: WorkMode) => {
     rememberPrompt(input);
     const generation = clientGenerationRef.current;
@@ -508,7 +511,8 @@ function ChatScene({
       };
 
       addMessage(message);
-      const payload = prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text;
+      const text = [...localOutputsRef.current.splice(0), prompt.text].join('\n\n');
+      const payload = prompt.files.length > 0 ? { text, files: prompt.files } : text;
       const sendOptions: AgentClientSendOptions = { cwd: process.cwd(), ...(mode !== undefined && { mode }) };
 
       if (nextTier) sendOptions.tier = nextTier;
@@ -1114,12 +1118,15 @@ function ChatScene({
     return action;
   }, [addMessage, client, onExit, performBranch, sendPrompt, setInputText]);
 
-  /** `!command` runs here, never sent to the agent, as in omp. */
-  const runLocalCommand = useCallback(async (command: string) => {
+  const runLocalCommand = useCallback(async (typed: string) => {
+    const shared = !typed.startsWith('!!');
+    const command = typed.replace(/^!!?/u, '').trim();
     const result = await createHostShell(process.cwd()).exec(command);
     const output = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter((part) => part !== '').join('\n');
+    const shown = `$ ${command}\n${output}${result.exitCode === 0 ? '' : `\nexit ${String(result.exitCode)}`}`;
 
-    addMessage({ role: 'system', content: `$ ${command}\n${output}${result.exitCode === 0 ? '' : `\nexit ${String(result.exitCode)}`}` });
+    if (shared) localOutputsRef.current.push(`<local_command>\n${shown}\n</local_command>`);
+    addMessage({ role: 'system', content: shown });
   }, [addMessage]);
 
   const handleSubmit = useCallback(async (input: string) => {
@@ -1127,7 +1134,7 @@ function ChatScene({
 
     if (!text) return;
 
-    if (text.startsWith('!')) return runLocalCommand(text.slice(1).trim());
+    if (text.startsWith('!')) return runLocalCommand(text);
 
     if (!ready) {
       addMessage({ role: 'system', content: 'Still connecting.' });
