@@ -135,30 +135,21 @@ function remarkSlateLinks() {
   }
 
   const split = (node: MdNode): MdNode[] | null => {
+    const value = node.value ?? '';
     const parts: MdNode[] = [];
-    let rest = node.value ?? '';
+    let from = 0;
 
-    while (true) {
-      SLATE_LINK.lastIndex = 0;
-      const hit = SLATE_LINK.exec(rest);
+    for (const hit of value.matchAll(SLATE_LINK)) {
+      if (slateLinkId(hit[0]) === null) continue;
 
-      if (hit === null) break;
-
-      const id = slateLinkId(hit[0]);
-
-      if (id === null) continue;
-
-      const before = rest.slice(0, hit.index);
-
-      if (before !== '') parts.push({ type: 'text', value: before });
-
+      if (hit.index > from) parts.push({ type: 'text', value: value.slice(from, hit.index) });
       parts.push({ type: 'link', url: hit[0], children: [{ type: 'text', value: hit[0] }] });
-      rest = rest.slice(hit.index + hit[0].length);
+      from = hit.index + hit[0].length;
     }
 
     if (parts.length === 0) return null;
 
-    if (rest !== '') parts.push({ type: 'text', value: rest });
+    if (from < value.length) parts.push({ type: 'text', value: value.slice(from) });
 
     return parts;
   };
