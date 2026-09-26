@@ -331,6 +331,23 @@ describe('workspace subordinate roster', () => {
     expect(roster.get('researcher')).toEqual(beforeDismiss);
     expect(() => roster.requireExisting('missing')).toThrow('unknown subordinate');
   });
+
+  test('a durable hire whose turn ended reads idle, and keeps the assignment it may still answer', () => {
+    const roster = makeRosterStore();
+    roster.ensureSchema();
+    roster.create({ ...initialRosterEntry, name: 'hello', createdBy: 'user', status: 'idle', currentTask: null });
+
+    roster.assign('hello', 'Say hello to the team.');
+    roster.applyReport('hello', 'progress', 'report_tool', NOW);
+    expect(roster.requireActive('hello').status).toBe('working');
+
+    roster.applyReport('hello', 'progress', 'turn_end', NOW);
+    expect(roster.requireActive('hello')).toMatchObject({ status: 'idle', currentTask: 'Say hello to the team.' });
+
+    roster.assign('hello', 'And again.');
+    roster.applyReport('hello', 'blocked', 'turn_end', NOW);
+    expect(roster.requireActive('hello').status).toBe('awaiting_input');
+  });
 });
 
 describe('subordinate live status', () => {

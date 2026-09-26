@@ -73,12 +73,11 @@ function parseStoredRosterRow(row: SqlExecRow): SubordinateRosterEntry {
   }
 }
 
-/** Where a row lands on its child's own word: an answer idles it, a block waits
- *  on the operator, and anything else keeps the open assignment it still has. */
-function reportedRosterStatus(status: SubordinateReportStatus, currentTask: string | null): SubordinateStatus {
-  if (status === 'completed') return 'idle';
-
+/** Only a mid-turn note on an open assignment keeps a row working; a turn's end idles it. */
+function reportedRosterStatus(status: SubordinateReportStatus, origin: SubordinateReportOrigin, currentTask: string | null): SubordinateStatus {
   if (status === 'blocked') return 'awaiting_input';
+
+  if (temporaryRunSettles({ status, origin })) return 'idle';
 
   return currentTask === null || currentTask === '' ? 'idle' : 'working';
 }
@@ -343,7 +342,7 @@ export class SubordinateRosterStore {
            current_task = CASE WHEN ? = 'completed' THEN NULL ELSE current_task END,
            task_event_id = CASE WHEN ? = 'completed' THEN NULL ELSE task_event_id END
        WHERE actor_id = ? AND name = ?`,
-      reportedRosterStatus(status, entry.currentTask),
+      reportedRosterStatus(status, origin, entry.currentTask),
       status,
       status,
       this.actorId,
