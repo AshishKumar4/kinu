@@ -11,7 +11,7 @@ import {
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
-  recoverActorTurns, EventLog, actorReferenceOf,
+  recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf,
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
@@ -353,6 +353,8 @@ export type RecentEventRow = Pick<
   'id' | 'trace_id' | 'caused_by' | 'ingress' | 'variant' | 'trust' | 'priority'
   | 'payload_visibility' | 'payload' | 'received_at'
 >;
+
+const ORPHANED_ASSIGNMENT = 'its actor is retired or gone';
 
 function clampLimit(requested: number | undefined, max: number): number {
   if (requested === undefined || !Number.isFinite(requested)) return max;
@@ -1108,10 +1110,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const now = Date.now();
     let budget = HOSTED_DELEGATION_DRAIN_BUDGET;
     let truncated = false;
+    const hires = this.workspaceActors().list().filter((record) => record.kind === 'subordinate');
 
-    for (const record of this.workspaceActors().list()) {
-      if (record.kind !== 'subordinate') continue;
+    for (const orphan of dismissOrphanedAssignments(exec, new Set(hires.map((record) => record.actorId)), ORPHANED_ASSIGNMENT)) {
+      diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id });
+    }
 
+    for (const record of hires) {
       if (budget <= 0) { truncated = true; break; }
 
       const reference: ActorReference = {

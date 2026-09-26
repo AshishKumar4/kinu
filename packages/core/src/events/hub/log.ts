@@ -270,6 +270,30 @@ const RevisitConditionSchema = v.variant('kind', [
   v.object({ kind: v.literal('after_seconds'), n: v.number() }),
 ]);
 
+const AssignmentRowSchema = v.object({ actor_id: v.string(), id: v.string(), payload: v.string() });
+
+export function dismissOrphanedAssignments(
+  sql: SqlExec, live: ReadonlySet<string>, reason: string,
+): readonly { readonly actorId: string; readonly id: EventId }[] {
+  const rows = sql.exec(
+    `SELECT actor_id, id, payload FROM agent_log
+     WHERE kind = 'event' AND variant = 'subordinate_task'
+       AND turn_id IS NULL AND (step_idx IS NULL OR step_idx >= 0)`,
+  ).toArray().map((row) => v.parse(AssignmentRowSchema, row)).filter((row) => !live.has(row.actor_id));
+
+  for (const row of rows) {
+    const payload = parseJsonObject(row.payload);
+    payload.__dismissed = { reason, by: 'system', at: Date.now() };
+    sql.exec(
+      `UPDATE agent_log SET payload = ?, step_idx = -2, turn_id = NULL, consumed_at = NULL
+       WHERE actor_id = ? AND id = ?`,
+      JSON.stringify(payload), row.actor_id, row.id,
+    );
+  }
+
+  return rows.map((row) => ({ actorId: row.actor_id, id: row.id }));
+}
+
 export class EventLog {
   private readonly actorId: string;
 
