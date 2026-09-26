@@ -367,13 +367,12 @@ function recordKernelSoul(db: SqlDatabase, markdown: string): void {
   db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, markdown);
 }
 
+/** Null when the soul says nothing a summary keeps (a heading alone, whitespace), as {@link readMission} reads it. */
 export function ownerMissionOf(reads: SoulReads): string | null {
-  if (reads.soul !== null) return summarizeSoul(reads.soul);
+  const markdown = reads.soul ?? (reads.identity === null ? null : renderSoulMarkdown(reads.identity));
+  const mission = summarizeSoul(markdown);
 
-
-  if (reads.identity === null) return null;
-
-  return summarizeSoul(renderSoulMarkdown(reads.identity));
+  return mission === '' ? null : mission;
 }
 
 export function storeDurableSoulDb(db: SqlDatabase, markdown: string): void {

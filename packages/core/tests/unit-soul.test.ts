@@ -2,7 +2,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  readSoul, readMission, writeSoul, seedSoul, summarizeSoul, summarizeSoulBytes, SOUL_PATH,
+  readSoul, readMission, writeSoul, seedSoul, summarizeSoul, summarizeSoulBytes, SOUL_PATH, ownerMissionOf,
 } from '../src/identity/soul';
 import { initAllTables } from '../src/state/workspace-schema';
 import { createWorkspace } from '../src/workspace-birth';
@@ -67,6 +67,14 @@ describe('the mission a read-only listing reads', () => {
   test('a workspace whose soul was never written reports no mission', () => {
     const { sql } = freshWorkspace();
     expect(readMission(sql)).toBeNull();
+  });
+
+  test('a soul that says nothing a summary keeps is no mission, so a caller can fall back', () => {
+    for (const soul of ['# Atlas\n', '  \n\n']) {
+      expect(ownerMissionOf({ soulTable: true, soul, identity: null })).toBeNull();
+    }
+
+    expect(ownerMissionOf({ soulTable: true, soul: '# Atlas\n\n## Mission\n\nShip it.', identity: null })).toBe('Ship it.');
   });
 });
 
