@@ -30,9 +30,9 @@ export type TrialIdentity = { readonly taskVersion: string; readonly evalCommit:
 /** How an isolate memory reset reads when it surfaces (platform catalog `do.isolate.oom_reported`). */
 const MEMORY_RESETS = platformFact('do.isolate.oom_reported').observable.map((observable) => observable.message);
 
-/** The deployment answered with its workspace's isolate reset for memory: the owner counts that as infrastructure. */
-function memoryReset(answer: DeploymentAnswer): boolean {
-  return MEMORY_RESETS.some((message) => answer.message.includes(message));
+/** Whether a failure the deployment reported is its workspace's isolate reset for memory. */
+function memoryReset(message: string): boolean {
+  return MEMORY_RESETS.some((reset) => message.includes(reset));
 }
 
 function openRuns(events: readonly RunEvent[]): string[] {
@@ -90,8 +90,9 @@ function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): Ev
     && (event.reason === 'error' || event.reason === 'aborted'));
 
   if (failed?.type !== 'run_end') return { status: 'completed' };
+  const message = failed.error ?? `a run ended ${failed.reason ?? 'without a reason'}`;
 
-  return { status: 'error', message: redact(failed.error ?? `a run ended ${failed.reason ?? 'without a reason'}`) };
+  return { status: memoryReset(message) ? 'reset' : 'error', message: redact(message) };
 }
 
 async function runTurn(session: KinuPublicSession, turn: EvalTurn): Promise<EvalTurnResult> {
@@ -211,11 +212,12 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       } catch (error) {
         const message = renderThrownChain({ cause: error });
 
-        if (error instanceof DeploymentAnswer && memoryReset(error)) {
-          errors.push({ name: 'InfraError', message: `the workspace's isolate was reset for memory: ${message}` });
-        } else if (error instanceof DeploymentAnswer) {
-          // The build answered one of this turn's requests with a failure of its own: the turn failed on the build.
-          turns.push({ outcome: { status: 'refused', message: redact(message) }, checks: [], turnWallMs: Date.now() - turnStartedAt, verificationWallMs: 0 });
+        if (error instanceof DeploymentAnswer) {
+          // The build answered one of this turn's requests with a failure of its own, a memory reset among them: the
+          // turn failed on the build.
+          const status = memoryReset(error.message) ? 'reset' : 'refused';
+
+          turns.push({ outcome: { status, message: redact(message) }, checks: [], turnWallMs: Date.now() - turnStartedAt, verificationWallMs: 0 });
         } else {
           // infraBoundary marks a failure of the deployment's transport; anything else is the harness's own.
           errors.push({ name: message.includes(INFRA_FAILURE_MARKER) ? 'InfraError' : 'EvalRunError', message });

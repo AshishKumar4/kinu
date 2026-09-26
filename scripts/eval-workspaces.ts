@@ -7,7 +7,6 @@
  *   bun scripts/eval-workspaces.ts --origin <origin>   # somewhere else
  *   bun scripts/eval-workspaces.ts --all               # every row, classified
  *   bun scripts/eval-workspaces.ts --prefix drill      # claim a name shape too
- *   bun scripts/eval-workspaces.ts --hold <name> --reason <why>   # keep one out of every sweep
  *
  * WHY IT EXISTS. On 2026-08-20 the owner's production account held 28
  * workspaces. 23 of them were test debris: twenty-two named `drill*`, created
@@ -33,57 +32,31 @@
  * agent's whole history, the list above was 82% debris and 18% real work, and no
  * heuristic is worth the 18%. The eval runner's sweep (`evals/src/sweep.ts`) does
  * delete, by rule rather than by guess: an `eval-` workspace on the eval account
- * that no live process on this machine claims and no one holds. Each row here says
- * which of those it is, and `--hold` is how a person keeps one for a reason.
+ * whose run stopped marking it live, and that `evals/held-workspaces.json` does not
+ * hold. A held row here says so, with its reason.
  */
 import { listCloudAgents, type CloudAgent } from '../packages/cli/src/cloud-api';
 import {
-  EVAL_DEPLOYMENT_ORIGIN, EVAL_WORKSPACE_PREFIX, resolveEvalIdentity, type EvalIdentity,
+  EVAL_WORKSPACE_PREFIX, resolveEvalIdentity, type EvalIdentity,
 } from '../packages/test-utils/src/eval-identity';
 import { parseArgs } from 'node:util';
 import { resolveCloudSession } from '../packages/cli/src/config';
-import { evalWorkspaceClaim, holdEvalWorkspace } from '../evals/src/claims';
-import { ownerAlive } from './process-owner';
+import { heldWorkspaces } from '../evals/src/sweep';
 
 interface Options {
   readonly origin: string | null;
   readonly all: boolean;
   /** Name shapes this invocation claims, `eval-` always among them. */
   readonly prefixes: readonly string[];
-  /** A workspace to keep out of every sweep, and why. */
-  readonly hold: { readonly name: string; readonly reason: string } | null;
 }
 
 function readOptions(argv: readonly string[]): Options {
   const { values } = parseArgs({
     args: [...argv],
-    options: {
-      origin: { type: 'string' }, all: { type: 'boolean' }, prefix: { type: 'string', multiple: true },
-      hold: { type: 'string' }, reason: { type: 'string' },
-    },
+    options: { origin: { type: 'string' }, all: { type: 'boolean' }, prefix: { type: 'string', multiple: true } },
   });
 
-  const { hold, reason } = values;
-
-  if ((hold === undefined) !== (reason === undefined)) throw new Error('--hold and --reason go together: a hold says why');
-
-  return {
-    origin: values.origin ?? null,
-    all: values.all === true,
-    prefixes: [EVAL_WORKSPACE_PREFIX, ...values.prefix ?? []],
-    hold: hold === undefined || reason === undefined ? null : { name: hold, reason },
-  };
-}
-
-/** Whether the eval runner's sweep would delete `name`, and why not when it would not. */
-function sweepVerdict(origin: string, name: string): string {
-  const claim = evalWorkspaceClaim(origin, name);
-
-  if (claim?.kind === 'held') return `held: ${claim.reason}`;
-
-  if (claim?.kind === 'owned' && ownerAlive(claim.owner)) return `owned by pid ${String(claim.owner.pid)}, which still runs`;
-
-  return 'no live run owns it: the next eval run deletes it';
+  return { origin: values.origin ?? null, all: values.all === true, prefixes: [EVAL_WORKSPACE_PREFIX, ...values.prefix ?? []] };
 }
 
 /** One account's list endpoint and the credential that reads it, with WHOSE
@@ -144,8 +117,12 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
   lines.push(`${String(evalRows.length)} of ${String(agents.length)} workspace(s) match `
     + `${options.prefixes.map((p) => `\`${p}\``).join(' or ')}:`);
 
+  const held = heldWorkspaces(origin);
+
   for (const agent of [...evalRows].sort((a, b) => a.createdAt - b.createdAt)) {
-    lines.push(`  ${agent.name}  ${when(agent.createdAt)}  ${agent.displayName}  (${sweepVerdict(origin, agent.name)})`);
+    const reason = held.get(agent.name);
+
+    lines.push(`  ${agent.name}  ${when(agent.createdAt)}  ${agent.displayName}${reason === undefined ? '' : `  (held: ${reason})`}`);
   }
 
   if (evalRows.length === 0) lines.push('  (none)');
@@ -164,8 +141,9 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
   }
 
   lines.push('');
+  const removable = evalRows.filter((agent) => !held.has(agent.name));
 
-  if (evalRows.length === 0) {
+  if (removable.length === 0) {
     lines.push('Nothing to clean.');
 
     return lines;
@@ -177,7 +155,7 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
   // origin is carried explicitly so the command cannot land on a different
   // account than the list above was read from.
   lines.push('To remove them, run:');
-  lines.push(`  KINU_ORIGIN=${origin} sh -c 'for w in ${evalRows.map((a) => a.name).join(' ')};`
+  lines.push(`  KINU_ORIGIN=${origin} sh -c 'for w in ${removable.map((a) => a.name).join(' ')};`
     + " do kinu workspace delete -y \"$w\"; done'");
 
   return lines;
@@ -185,17 +163,6 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
 
 async function main(argv: readonly string[]): Promise<number> {
   const options = readOptions(argv);
-
-  // A hold is this machine's own record and reads no account.
-  if (options.hold !== null) {
-    const origin = options.origin ?? EVAL_DEPLOYMENT_ORIGIN;
-
-    holdEvalWorkspace(origin, options.hold.name, options.hold.reason);
-    console.log(`${options.hold.name} on ${origin} is held: ${options.hold.reason}`);
-
-    return 0;
-  }
-
   const { origin, token, via } = credentials(options);
   console.log(`account at ${origin}, read as ${via}`);
   console.log(render(await listCloudAgents(origin, token), options, origin).join('\n'));

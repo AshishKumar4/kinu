@@ -56,9 +56,11 @@ export type EvalRunInput = { model: string; arm: string; trial: number };
  * `error`: the deployment reported the run failed (a provider outage, a crashed run), which says
  * nothing about the agent's work and is counted as infrastructure. `refused`: the deployment
  * answered one of the turn's requests with a failure of its own (a 5xx, a refused RPC), which is
- * the build's result and counts against it like a failed check.
+ * the build's result and counts against it like a failed check. `reset`: the workspace's isolate
+ * was reset for memory, which may be the build's own regression: it fails the trial like a refusal,
+ * and the comparison also counts resets apart and compares their rate.
  */
-export const TURN_OUTCOMES = ['completed', 'error', 'refused'] as const;
+export const TURN_OUTCOMES = ['completed', 'error', 'refused', 'reset'] as const;
 
 export type EvalTurnOutcome = { status: (typeof TURN_OUTCOMES)[number]; message?: string };
 

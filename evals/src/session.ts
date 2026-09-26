@@ -102,11 +102,10 @@ import {
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type WorkspaceSpend,
 } from '../../packages/core/src/index';
-import { tolerate } from '../../packages/core/src/obs/index';
+import { renderThrownChain, tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
 import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from '../../packages/cli/src/agent-client';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
-import { claimEvalWorkspace, releaseEvalWorkspace } from './claims';
 import {
   absorbingRunId, compareRunEventOrder, DeploymentAnswer, evalAccount, evalNameSlug, evalTargetVerdict,
   evalWorkspaceName, INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend, workerSession,
@@ -832,11 +831,23 @@ export interface PublicSubmission {
  *  shared rather than re-typed. */
 const SESSION_DISPLAY_NAME = 'Trajectory Evals';
 
-const RosterPageSchema = v.object({ entries: v.array(v.object({ name: v.string() })), nextCursor: v.nullable(v.string()) });
+const RosterRowSchema = v.object({ name: v.string(), lastVisited: v.number() });
 
-/** Every workspace name on the identity's account, page by page, as the sidebar's roster lists them. */
-export async function listWorkspaces(origin: string, identity: PublicWebIdentity): Promise<string[]> {
-  const names: string[] = [];
+const RosterPageSchema = v.object({ entries: v.array(RosterRowSchema), nextCursor: v.nullable(v.string()) });
+
+/** A workspace as the account's roster lists it: `lastVisited` is the last mark any run or visit put on it. */
+export type RosterRow = v.InferOutput<typeof RosterRowSchema>;
+
+/**
+ * How often a run marks its workspace live on the deployment, through `touch` (the roster's
+ * `last_visited`, which every machine reads). The eval sweep deletes an `eval-` workspace whose mark
+ * is older than its lease (`sweep.ts`), so a run on any machine keeps its workspaces by beating.
+ */
+export const WORKSPACE_BEAT_MS = 60_000;
+
+/** Every workspace on the identity's account, page by page, as the sidebar's roster lists them. */
+export async function listWorkspaces(origin: string, identity: PublicWebIdentity): Promise<RosterRow[]> {
+  const rows: RosterRow[] = [];
   let cursor: string | null = null;
 
   do {
@@ -846,29 +857,44 @@ export async function listWorkspaces(origin: string, identity: PublicWebIdentity
     const page: v.InferOutput<typeof RosterPageSchema> = v.parse(RosterPageSchema, await infraBoundary(`GET ${url}`, async () =>
       readJson(await fetch(url, { headers: webHeaders(identity) }), 'list the workspaces')));
 
-    names.push(...page.entries.map((entry) => entry.name));
+    rows.push(...page.entries);
     cursor = page.nextCursor;
   } while (cursor !== null);
 
-  return names;
+  return rows;
 }
 
-/** Delete a workspace, the DELETE the sidebar's Remove issues, then drop this machine's claim on it. */
+/** Delete a workspace, the DELETE the sidebar's Remove issues. */
 export async function deleteWorkspace(origin: string, identity: PublicWebIdentity, name: string): Promise<void> {
   await infraBoundary(`DELETE ${origin}/api/user/workspaces/${name}`, async () => {
     const response = await fetch(`${origin}/api/user/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE', headers: webHeaders(identity) });
 
     await readJson(response, `delete the workspace ${name}`);
   });
+}
 
-  releaseEvalWorkspace(origin, name);
+/** One beat: the roster's mark on `name` moves to now. A beat that fails is said, and the lease rides out the next nine. */
+async function markLive(origin: string, identity: PublicWebIdentity, name: string): Promise<void> {
+  try {
+    const response = await fetch(`${origin}/api/user/workspaces/${encodeURIComponent(name)}/touch`, { method: 'POST', headers: webHeaders(identity) });
+
+    await readJson(response, `mark the workspace ${name} live`);
+  } catch (error) {
+    console.warn(`[evals] ${name} missed a beat: ${renderThrownChain({ cause: error })}`);
+  }
+}
+
+/** Mark `name` live every {@link WORKSPACE_BEAT_MS} until the returned stop is called; its create is the first mark. */
+export function beatWorkspace(origin: string, identity: PublicWebIdentity, name: string): () => void {
+  const timer = setInterval(async () => { await markLive(origin, identity, name); }, WORKSPACE_BEAT_MS);
+
+  timer.unref();
+
+  return () => { clearInterval(timer); };
 }
 
 export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
   const headers = webHeaders(input.identity);
-
-  // Before the create, so a run sweeping this account never finds the workspace unclaimed.
-  claimEvalWorkspace(input.origin, input.workspace);
 
   const created = await infraBoundary(
     `POST ${input.origin}/api/user/workspaces`,
@@ -897,6 +923,8 @@ export async function openPublicSession(input: PublicSessionInput): Promise<Kinu
   );
 
   const session = new KinuPublicSession(input, created.name);
+
+  session.beat();
 
   try {
     await session.connect();
@@ -1024,12 +1052,20 @@ export class KinuPublicSession {
   }>();
   private nextId = 0;
 
+  /** Stops the beat that keeps this workspace out of every eval sweep; none until {@link beat}. */
+  private stopBeat: () => void = () => undefined;
+
   constructor(
     private readonly input: PublicSessionInput,
     /** The name the deployment gave this workspace, which is not always the one
      *  asked for: the create path may answer with an existing row. */
     readonly workspace: string,
   ) {}
+
+  /** Mark this workspace live on the deployment until teardown (`beatWorkspace`). */
+  beat(): void {
+    this.stopBeat = beatWorkspace(this.input.origin, this.input.identity, this.workspace);
+  }
 
   get describe(): string {
     return `public session · ${this.input.origin} · workspace ${this.workspace} `
@@ -1658,6 +1694,8 @@ export class KinuPublicSession {
    * deployment failing, not the agent.
    */
   async teardown(): Promise<void> {
+    this.stopBeat();
+
     try {
       await deleteWorkspace(this.input.origin, this.input.identity, this.workspace);
     } finally {

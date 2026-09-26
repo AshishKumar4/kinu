@@ -6,7 +6,7 @@ import { resolveArtifactRoot } from '../../scripts/bench-retention';
 import { evalCommit, evalMatrix } from './config';
 import { createKinuHarness } from './harness';
 import { deleteWorkspace, listWorkspaces } from './session';
-import { sweepEvalWorkspaces } from './sweep';
+import { heldWorkspaces, sweepEvalWorkspaces } from './sweep';
 import { ARMS, resolveEvalTarget, type EvalTarget } from './target';
 import { taskVersion, type EvalRunInput, type EvalRunOutput, type EvalTask } from './task';
 
@@ -28,13 +28,14 @@ const FunctionalJudge = createJudge<EvalRunInput, EvalRunOutput>('functional res
 /** Before a task's first trial: its account keeps no eval workspace a dead run left behind (`sweep.ts`). */
 async function sweep(target: EvalTarget): Promise<void> {
   const swept = await sweepEvalWorkspaces({
-    origin: target.origin,
     list: () => listWorkspaces(target.origin, target.identity),
     remove: (name) => deleteWorkspace(target.origin, target.identity, name),
+    held: heldWorkspaces(target.origin),
+    now: Date.now(),
   });
 
-  console.warn(`[evals] ${target.origin}: deleted ${String(swept.deleted.length)} eval workspace(s) no live run owned`
-    + `${swept.deleted.length === 0 ? '' : ` (${swept.deleted.join(', ')})`}; ${String(swept.owned.length)} owned by a live run`
+  console.warn(`[evals] ${target.origin}: deleted ${String(swept.deleted.length)} eval workspace(s) no run still marks live`
+    + `${swept.deleted.length === 0 ? '' : ` (${swept.deleted.join(', ')})`}; ${String(swept.live.length)} marked live`
     + `${swept.held.map(({ name, reason }) => `; ${name} held: ${reason}`).join('')}`);
 }
 

@@ -56,7 +56,6 @@ import {
 import { CloudAgentClient } from '../../packages/cli/src/cloud-agent-client';
 import { requireSandboxedExecutors } from './harness';
 import { launchTestChrome } from '../../scripts/test-chrome';
-import { claimEvalWorkspace, releaseEvalWorkspace } from '../../evals/src/claims';
 import {
   evalWorkspaceName, infraBoundary, liveChatModel, liveModelTarget, recordLiveModelEpisode,
   recordWorkspaceSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
@@ -164,7 +163,6 @@ describe('Live Smoke — one real turn per backend', () => {
       for (const name of createdCloudAgents) {
         try {
           await deleteCloudAgent(origin, token, name);
-          releaseEvalWorkspace(origin, name);
         } catch (err) {
           console.warn(`[live-smoke] cloud agent ${name} was NOT deleted and may still exist `
             + `on the account — delete it with \`kinu delete ${name}\`: ${String(err)}`);
@@ -184,9 +182,6 @@ describe('Live Smoke — one real turn per backend', () => {
     // `settle-probe` that nothing could attribute; `scripts/eval-workspaces.ts`
     // globs this prefix, so an undeleted agent is now findable by name alone.
     const name = evalWorkspaceName('live-smoke');
-
-    // Claimed before it exists, so an eval run's sweep of this account leaves it alone while this runs.
-    claimEvalWorkspace(origin, name);
 
     // Every step below that depends on the DEPLOYMENT rather than on the model's
     // choices is wrapped, so a cold start, a 5xx or a dropped socket is labelled

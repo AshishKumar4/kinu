@@ -1,56 +1,33 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
-import { claimEvalWorkspace, holdEvalWorkspace } from './claims';
-import { sweepEvalWorkspaces } from './sweep';
+import { expect, test } from 'bun:test';
+import { sweepEvalWorkspaces, WORKSPACE_LEASE_MS } from './sweep';
 
-const ORIGIN = 'https://kinu.run';
+const NOW = Date.parse('2026-09-26T06:00:00.000Z');
 
-let home: string | undefined;
-
-beforeEach(() => {
-  home = process.env.HOME;
-  process.env.HOME = scratchDir('eval-claims');
-});
-
-afterEach(() => {
-  process.env.HOME = home;
-});
-
-/** A claim left by a process that has ended: another boot's. */
-function claimedByTheDead(name: string): void {
-  const dir = join(homedir(), '.config', 'kinu', 'eval-workspaces', 'kinu.run');
-
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ kind: 'owned', owner: { bootId: 'a-boot-that-ended', pid: 1, startTicks: 0 } }));
-}
-
-test('a run deletes the eval workspaces no live run owns and no one holds, and nothing else', async () => {
-  claimEvalWorkspace(ORIGIN, 'eval-order-book-3-live01');
-  holdEvalWorkspace(ORIGIN, 'eval-trajectory-evals-pu-eedw1v', 'the reproduction of the 30 s wake loop');
-  claimedByTheDead('eval-order-book-2-dead01');
-
+test('a run deletes the eval workspaces whose mark outlived the lease and no one holds, and nothing else', async () => {
   const removed: string[] = [];
 
   const sweep = await sweepEvalWorkspaces({
-    origin: ORIGIN,
+    // Marked a beat ago on some machine; stopped marking past the lease; held since long ago; not an eval's.
     list: () => Promise.resolve([
-      'eval-order-book-3-live01', 'eval-trajectory-evals-pu-eedw1v', 'eval-order-book-2-dead01',
-      'eval-budget-board-1-lost01', 'fernhill-bakery',
+      { name: 'eval-order-book-3-live01', lastVisited: NOW - 60_000 },
+      { name: 'eval-order-book-3-edge01', lastVisited: NOW - WORKSPACE_LEASE_MS + 1 },
+      { name: 'eval-order-book-2-dead01', lastVisited: NOW - WORKSPACE_LEASE_MS },
+      { name: 'eval-trajectory-evals-pu-eedw1v', lastVisited: Date.parse('2026-09-22T12:00:00.000Z') },
+      { name: 'fernhill-bakery', lastVisited: Date.parse('2026-09-01T12:00:00.000Z') },
     ]),
     remove: (name) => {
       removed.push(name);
 
       return Promise.resolve();
     },
+    held: new Map([['eval-trajectory-evals-pu-eedw1v', 'the reproduction of the 30 s wake loop']]),
+    now: NOW,
   });
 
-  expect(removed).toEqual(['eval-order-book-2-dead01', 'eval-budget-board-1-lost01']);
+  expect(removed).toEqual(['eval-order-book-2-dead01']);
   expect(sweep).toEqual({
-    deleted: ['eval-order-book-2-dead01', 'eval-budget-board-1-lost01'],
-    owned: ['eval-order-book-3-live01'],
+    deleted: ['eval-order-book-2-dead01'],
+    live: ['eval-order-book-3-live01', 'eval-order-book-3-edge01'],
     held: [{ name: 'eval-trajectory-evals-pu-eedw1v', reason: 'the reproduction of the 30 s wake loop' }],
   });
 });

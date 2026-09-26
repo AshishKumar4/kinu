@@ -27,8 +27,7 @@ import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
-import { claimEvalWorkspace, releaseEvalWorkspace } from '../evals/src/claims';
-import { webHeaders, type PublicWebIdentity } from '../evals/src/session';
+import { beatWorkspace, webHeaders, type PublicWebIdentity } from '../evals/src/session';
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import { FLOW_SLATE, SLATE_ASK, WRITE_FILE_ASK } from './flows-script';
@@ -176,28 +175,32 @@ const CreatedSchema = v.object({ name: v.string() });
 
 /** A workspace made for one row through the app's own create route, with no
  *  mission, so no turn runs before the row's own. */
+/** The beat each row's workspace keeps until it is removed, so no eval run's sweep takes it mid-row. */
+const beats = new Map<string, () => void>();
+
 async function createFlowWorkspace(target: FlowTarget, subject: string): Promise<string> {
-  const name = evalWorkspaceName(`browser-${subject}`);
-
-  // Claimed before it exists, so an eval run's sweep of this account leaves it alone while this runs.
-  claimEvalWorkspace(target.origin, name);
-
   const response = await fetch(`${target.origin}/api/user/workspaces`, {
     method: 'POST',
     headers: { ...webHeaders(target.identity), 'content-type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name: evalWorkspaceName(`browser-${subject}`) }),
   });
 
   const text = await response.text();
 
   if (!response.ok) throw new Error(`creating a workspace answered ${String(response.status)}: ${text.slice(0, 400)}`);
+  const { name } = v.parse(CreatedSchema, JSON.parse(text));
 
-  return v.parse(CreatedSchema, JSON.parse(text)).name;
+  beats.set(name, beatWorkspace(target.origin, target.identity, name));
+
+  return name;
 }
 
 /** Delete the row's workspace, the same DELETE the sidebar's Remove issues. A
  *  failed teardown is reported, never thrown over the row's own verdict. */
 async function removeFlowWorkspace(target: FlowTarget, workspace: string): Promise<void> {
+  beats.get(workspace)?.();
+  beats.delete(workspace);
+
   const response = await fetch(`${target.origin}/api/user/workspaces/${encodeURIComponent(workspace)}`, {
     method: 'DELETE',
     headers: webHeaders(target.identity),
@@ -206,11 +209,7 @@ async function removeFlowWorkspace(target: FlowTarget, workspace: string): Promi
   if (!response.ok) {
     console.warn(`product-flows: removing ${workspace} answered ${String(response.status)}: `
       + `${(await response.text()).slice(0, 200)}`);
-
-    return;
   }
-
-  releaseEvalWorkspace(target.origin, workspace);
 }
 
 /** The chat column, `#chat` — the id the workspace shell gives that panel. A
