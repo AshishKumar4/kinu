@@ -326,6 +326,9 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     const streamId = this.resume?.resumable.start(requestId, { messageId: turn.messageId }) ?? requestId;
 
+    // A tab told to resume the previous stream waits on one that no longer grows: it hears this one from its start.
+    this.pendingResume.clear();
+
     this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), taken: false, broken: false, failure: null };
 
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
@@ -370,6 +373,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         if (event.message === INTERRUPTED_TURN) return;
 
         this.resume?.resumable.markError(live.streamId);
+        this.pendingResume.clear();
         live.failure = event.message;
 
         return;
@@ -455,6 +459,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     diagnostics.failure('chat.stream_observe_failed', error);
     live.broken = true;
     this.resume?.resumable.markError(live.streamId);
+    this.pendingResume.clear();
     this.wire.broadcast(JSON.stringify({
       type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: refusalOf(error).error, done: false, error: true,
     }));

@@ -84,6 +84,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   const chunkRows = () => db.query<{ body: string }, []>('SELECT body FROM cf_ai_chat_stream_chunks ORDER BY chunk_index').all().map((row) => row.body);
 
   return {
+    /** The object after an eviction: a fresh transport over the same database and sockets. */
+    afterEviction: () => new ChatWireTransport(wire),
     transport, broadcasts, history, reserved, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, chunkRows, db,
     interrupts: () => interrupts, clears: () => clears,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
@@ -519,6 +521,30 @@ describe('ChatWireTransport', () => {
    *  part it never saw open, so every part a joining tab continues must open in what it reads, before its deltas. */
   // 2026-09-26 (two-turn.test.ts red): a done frame for another request is never stored, so the replay on ack
   // cannot carry it; skipped for a joining tab, it was lost, and that tab's send waited on it for good.
+  // 2026-09-26 (chat-session-parity red): a tab that connects after an eviction is told to resume the stream the
+  // evicted turn left active. The resumed turn opens a new stream; the tab, still pending for the old one, missed all of it.
+  test('a tab told to resume a stream an eviction left behind hears the next stream whole', async () => {
+    const h = harness();
+    const first = h.connection('c1');
+    await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }]), { index: 0 });
+
+    const revived = h.afterEviction();
+    const second = h.connection('c2');
+    await revived.onConnect(second);
+
+    // The client this pins never acknowledges the old stream: its request is gone with the evicted object.
+    await revived.deliver(turnStart('input-req-1', 'msg-2'));
+    await revived.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }, { type: 'text-delta', id: 'text-0', delta: 'resumed' }]), { index: 0 });
+
+    const bodies = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
+      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.done === false && frame.body !== undefined)
+      .map((frame) => v.parse(v.looseObject({ type: v.string() }), JSON.parse(frame.body ?? '')).type);
+
+    expect(bodies).toEqual(['start', 'text-start', 'text-delta']);
+  });
+
   test('a tab still in its handshake that sends a message spliced into the live turn hears its landing', async () => {
     const h = harness(['turn', 'mid-turn']);
     const first = h.connection('c1');
