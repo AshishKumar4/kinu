@@ -108,7 +108,7 @@ const CHECKOUT_TASKS = [
   { id: 't4', parentId: null, title: 'Add a regression test for the percentage case', status: 'done', createdAt: NOW - 52e5, updatedAt: NOW - 4e5, note: null, subtasks: [] },
 ];
 
-const LANDING_OWNER = { actorId: 'actor-main', name: 'main', retired: false };
+const LANDING_OWNER = { actorId: 'actor-main', name: 'main', retired: false, path: [] };
 
 const CHECKOUT_CHANGELOG = {
   seenAt: NOW - 30e5,

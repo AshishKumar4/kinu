@@ -1504,7 +1504,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   // The Work tab draws this read, not `getActivePlanReview`. The owner is the workspace's name: `createMain({ name: this.name })` registers it, never "main".
   listWorkspaceWork: () => ({
     plans: [{
-      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false },
+      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false, path: [] },
       plan: galleryAgentPlan, tasks: [],
     }],
     tasks: [],
@@ -4079,7 +4079,7 @@ const AGENT_TASKS = [
 const WORKSPACE_WORK = {
   plans: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false },
+      owner: { actorId: "actor-main", name: "main", retired: false, path: [] },
       plan: {
         id: "plan-gateway", sessionId: "default", revision: 3,
         content: "# Gateway timeout repair\n\nPatch the gateway timeout, then prove the expired-coupon branch.",
@@ -4089,7 +4089,7 @@ const WORKSPACE_WORK = {
       tasks: AGENT_TASKS.filter((task) => task.id === "t2"),
     },
     {
-      owner: { actorId: "actor-courier", name: "courier", retired: false },
+      owner: { actorId: "actor-courier", name: "courier", retired: false, path: ["courier"] },
       plan: {
         id: "plan-courier", sessionId: "default", revision: 1,
         content: "# Courier rollout\n\nStage the rollout and verify the receipt.",
@@ -4103,7 +4103,7 @@ const WORKSPACE_WORK = {
   ],
   tasks: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false }, plan: null,
+      owner: { actorId: "actor-main", name: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id !== "t2"),
     },
   ],
@@ -4326,7 +4326,7 @@ const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promis
   if (method === "listWorkspaceWork") return rpcResult({
     plans: [],
     tasks: [{
-      owner: { actorId: "actor-main", name: "main", retired: false }, plan: null,
+      owner: { actorId: "actor-main", name: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id === "t1"),
     }],
   }).json<T>();

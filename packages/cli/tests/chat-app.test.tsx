@@ -783,6 +783,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       roleId: 'task', tierId: 'default', workspace: 'shop',
     }],
     subordinates: [],
+    work: [],
     profile: {
       envelope: {
         authority: { kind: 'local' },
@@ -987,6 +988,45 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressEscape();
     await screen.waitFor('back in the Agent Hub', () => screen.frame().includes('Agent Hub'));
     expect(screen.frame()).not.toContain('Found 3 errors in app.log');
+  });
+
+  test('a helper with no tab appears as the owner of its task in the Agent Hub, and Enter opens its conversation', async () => {
+    const helper = ['ask-refiner-fb0gr9'];
+    const opened: string[][] = [];
+
+    const main = fakeClient({
+      name: 'checkout',
+      workspaceWork: async () => ({
+        plans: [],
+        tasks: [{
+          owner: { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', retired: true, path: helper },
+          plan: null,
+          tasks: [{ id: 't1', parentId: null, title: 'Tighten the turn-ending rule', status: 'active', createdAt: 1, updatedAt: 1, note: null, subtasks: [] }],
+        }],
+      }),
+      inspectSubordinate: async (request) => {
+        if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
+
+        if (request.view !== 'history') return missingSubordinateHistory(request.path);
+        opened.push(request.path);
+
+        return {
+          view: 'history',
+          path: request.path,
+          page: { status: 'end', items: [{ id: 'h1', role: 'assistant', content: 'Two edits proposed for the turn-ending section', createdAt: 1 }] },
+        };
+      },
+    });
+
+    const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the helper\'s task in the hub', () => screen.frame().includes('Tighten the turn-ending rule · ask-refiner-fb0gr9'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the helper\'s conversation', () => screen.frame().includes('Two edits proposed for the turn-ending section'));
+    expect(opened).toEqual([helper]);
+    screen.mockInput.pressEscape();
   });
 
   test('drafts stay with their conversation across a workspace switch', async () => {

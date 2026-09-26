@@ -5,6 +5,7 @@ import { tierIdsOf,
   type ResolvedTurnProfile,
   type RoleId,
   type SubordinateChild,
+  type WorkspaceWork,
   ownerFacingSubordinate,
 } from '@kinu.run/core';
 import type { ScrollBoxRenderable } from '@opentui/core';
@@ -33,6 +34,29 @@ export interface TuiAgentHubEntry {
 }
 
 type HubEntryDraft = { -readonly [Key in keyof TuiAgentHubEntry]: TuiAgentHubEntry[Key] };
+
+export type TuiHubRow = Pick<TuiAgentHubEntry, 'id' | 'label' | 'path'>;
+
+export interface TuiWorkEntry extends TuiHubRow {
+  readonly title: string;
+  readonly status: TuiAgentStatus;
+}
+
+type WorkEntryDraft = { -readonly [Key in keyof TuiWorkEntry]: TuiWorkEntry[Key] };
+
+export function workFromWorkspace(work: WorkspaceWork): TuiWorkEntry[] {
+  return [...work.tasks, ...work.plans].flatMap(({ owner, tasks }) => tasks
+    .filter((task) => [task, ...task.subtasks].some((item) => item.status === 'open' || item.status === 'active'))
+    .map((task): TuiWorkEntry => {
+      const entry: WorkEntryDraft = {
+        id: `task:${owner.actorId}:${task.id}`, title: task.title, label: owner.name, status: task.status === 'active' ? 'running' : 'idle',
+      };
+
+      if (owner.path !== null && owner.path.length > 0) entry.path = owner.path;
+
+      return entry;
+    }));
+}
 
 type SubordinateDraft = { -readonly [Key in keyof TuiSubordinate]: TuiSubordinate[Key] };
 
@@ -119,6 +143,8 @@ export interface TuiHubData {
   readonly agents: readonly TuiAgentHubEntry[];
   readonly subordinates: readonly TuiSubordinate[];
   readonly subordinatesError?: string;
+  readonly work: readonly TuiWorkEntry[];
+  readonly workError?: string;
   readonly profile: TuiProfileHubData;
 }
 
@@ -265,10 +291,27 @@ function AgentHubRows({ data, newAgentHint, selectedAgentId }: {
           ))}
         </box>
       ))}
+      {data.work.length > 0 && (
+        <box flexDirection="column" style={{ marginBottom: 1 }}>
+          <text><span fg={colors.text.muted}>Work</span></text>
+          {data.work.map((item) => (
+            <box key={item.id} style={{ backgroundColor: item.id === selectedAgentId ? colors.background.selection : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
+              <text>
+                <span fg={statusColor(item.status, colors)}>{item.status === 'running' ? '● ' : '○ '}</span>
+                <strong fg={colors.text.strong}>{item.title}</strong>
+                <span fg={colors.text.muted}> · {item.label}</span>
+              </text>
+            </box>
+          ))}
+        </box>
+      )}
       {data.subordinatesError !== undefined && (
         <text><span fg={colors.intent.danger}>{data.subordinatesError}</span></text>
       )}
-      {data.agents.some((agent) => agent.kind === 'subordinate') && (
+      {data.workError !== undefined && (
+        <text><span fg={colors.intent.danger}>{data.workError}</span></text>
+      )}
+      {[...data.agents, ...data.work].some((row) => row.path !== undefined) && (
         <text><span fg={colors.text.muted}>↑↓ choose · Enter opens a subagent's conversation</span></text>
       )}
       {hint}

@@ -6,10 +6,11 @@ import './helpers/ui-module-globals';
 import { describe, test, expect } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { AgentTaskTree, ChangelogEntry, MemoryEntry, PendingAction, Rpc } from '@kinu.run/core';
+import type { AgentTaskTree, ChangelogEntry, MemoryEntry, PendingAction, Rpc, WorkspaceWorkOwner } from '@kinu.run/core';
 import type { BackgroundJob } from '@kinu.run/core/protocol';
 import { buildJournal, WorkTab } from '../src/components/surfaces/WorkTab';
 import { CHANGELOG_REVALIDATE_MS } from '../src/components/surfaces/changelog-entries';
+import { TaskTree } from '../src/components/surfaces/work-tasks';
 import { LIVE_DATA_REFRESH_MS } from '../src/hooks/use-kinu';
 
 function job(over: Partial<BackgroundJob> & { id: string }): BackgroundJob {
@@ -141,5 +142,24 @@ describe('Learnings lists what the workspace remembered', () => {
     expect(markup.indexOf('Prompt assembles lanes')).toBeLessThan(markup.indexOf('Gateway timeout repair'));
     expect(markup).toContain('2026-09-17 · worker');
     expect(markup).toContain('2026-09-15 · main');
+  });
+});
+
+/** A helper's tab is gone, so the task it owns is the door to its conversation. */
+describe('a task names its owner, and a subordinate owner opens from the row', () => {
+  const owner = (name: string, path: string[] | null): WorkspaceWorkOwner => ({ actorId: `actor-${name}`, name, retired: false, path });
+  const open = { ...task('Tighten the turn-ending rule', 0), status: 'active' as const };
+
+  const row = (shown: WorkspaceWorkOwner) => renderToStaticMarkup(createElement(TaskTree, { task: open, owner: shown, onOpenOwner: () => {} }));
+
+  test('a helper\'s task names it, and its owner is a control that opens that helper\'s conversation', () => {
+    expect(row(owner('ask-refiner-fb0gr9', ['ask-refiner-fb0gr9']))).toContain('aria-label="Open ask-refiner-fb0gr9&#x27;s conversation"');
+  });
+
+  test('the workspace\'s own task and one past a head name their owner and offer no door', () => {
+    for (const shown of [owner('workspace', []), owner('ask-reader-b2', null)]) {
+      expect(row(shown)).toContain(shown.name);
+      expect(row(shown)).not.toContain('<button');
+    }
   });
 });

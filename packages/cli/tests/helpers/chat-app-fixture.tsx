@@ -43,6 +43,7 @@ export function soloHub(client: AgentClient): TuiHubData {
       roleId: 'task', tierId: 'default', workspace: client.agentName,
     }],
     subordinates: [],
+    work: [],
     profile: {
       envelope: {
         authority: { kind: 'local' },
@@ -74,6 +75,7 @@ interface FakeClientOptions {
   history?: AgentClient['history'];
   rename?: AgentClient['rename'];
   inspectSubordinate?: AgentClient['inspectSubordinate'];
+  workspaceWork?: AgentClient['workspaceWork'];
   workspaceSpend?: AgentClient['workspaceSpend'];
 }
 
@@ -168,6 +170,7 @@ export function fakeClient(options: FakeClientOptions) {
     })),
     testModel: options.testModel ?? (async () => ({ ok: true, firstTokenMs: 0, totalMs: 0 })),
     inspectSubordinate: options.inspectSubordinate ?? (async (request) => missingSubordinateHistory(request.path)),
+    workspaceWork: options.workspaceWork ?? (async () => ({ plans: [], tasks: [] })),
   };
 
   const rename = options.rename ?? (mode === 'local'

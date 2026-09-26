@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-26",
-  "files": 2756,
-  "functions": 68061,
+  "files": 2767,
+  "functions": 68426,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -38,10 +38,6 @@
       "complexity": 43
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
-      "complexity": 42
-    },
-    {
       "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
       "complexity": 42
     },
@@ -52,6 +48,10 @@
     {
       "key": "scripts/platform-catalog.ts#auditSchema",
       "complexity": 42
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "complexity": 41
     },
     {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",

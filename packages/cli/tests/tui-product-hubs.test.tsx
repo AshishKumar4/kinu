@@ -41,6 +41,7 @@ describe('role, tier, and agent hubs', () => {
         },
       ],
       subordinates: [],
+      work: [],
       profile: {
         envelope: {
           authority: { kind: 'local' },

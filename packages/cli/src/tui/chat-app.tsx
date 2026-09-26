@@ -86,8 +86,8 @@ import { initialInputState, reduceInput, type InputEffect, type InputMachineEven
 import { agentDisplayLabel, clipText } from '@kinu.run/core';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import {
-  buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster,
-  type TuiAgentHubEntry, type TuiHubData, type TuiHubView, type TuiSubagentChat,
+  buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace,
+  type TuiHubData, type TuiHubRow, type TuiHubView, type TuiSubagentChat,
 } from './hubs';
 import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
 import {
@@ -139,7 +139,7 @@ export type ActiveSurface =
   | { kind: 'model'; menu: AgentModelMenu; loading: boolean; error: string | null }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
-  | { kind: 'subagent'; name: string; label: string }
+  | { kind: 'subagent'; path: readonly string[]; label: string }
   | null;
 
 function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string | null {
@@ -839,23 +839,22 @@ function ChatScene({
     return () => { live = false; };
   }, [client, hubView]);
 
-  const openSubagent = useCallback((entry: TuiAgentHubEntry) => {
-    const name = entry.path?.at(-1);
-
-    if (name !== undefined) setActiveSurface({ kind: 'subagent', name, label: entry.label });
+  const openSubagent = useCallback((entry: TuiHubRow) => {
+    if (entry.path !== undefined) setActiveSurface({ kind: 'subagent', path: entry.path, label: entry.label });
   }, []);
 
   const subagentSurface = activeSurface?.kind === 'subagent' ? activeSurface : null;
 
   useEffect(() => {
     if (subagentSurface === null) return;
-    const { name, label } = subagentSurface;
+    const { path, label } = subagentSurface;
+    const name = path.join('/');
     let live = true;
     setSubagentChat({ name, label, messages: null, error: null });
 
     subagentTaskRef.current = (async () => {
       try {
-        const conversation = await readSubagentConversation(client, name);
+        const conversation = await readSubagentConversation(client, path);
 
         if (live) setSubagentChat({ name, label, messages: conversation, error: null });
       } catch (cause) {
@@ -1708,7 +1707,7 @@ function ChatScene({
     rememberScroll: scrollAnchor.remember,
     createNewAgent: onNewAgent === undefined ? undefined : createNewAgent,
     bumpModelRequest: () => { modelRequestRef.current += 1; },
-    hubAgents: hubLive?.agents ?? [],
+    hubAgents: hubLive === undefined ? [] : [...hubLive.agents, ...hubLive.work],
     hubSelectedId: () => hubSelectedRef.current,
     setHubSelectedId,
     openSubagent,
@@ -1875,9 +1874,9 @@ function ChatScene({
     }
 
     if (subagentSurface !== null) {
-      const shown = subagentChat?.name === subagentSurface.name
+      const shown = subagentChat?.name === subagentSurface.path.join('/')
         ? subagentChat
-        : { name: subagentSurface.name, label: subagentSurface.label, messages: null, error: null };
+        : { name: subagentSurface.path.join('/'), label: subagentSurface.label, messages: null, error: null };
 
       return (
         <SubagentChatOverlay
@@ -2190,21 +2189,26 @@ async function loadHubData(client: AgentClient): Promise<TuiHubData> {
   };
 }
 
-async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError'>> {
-  try {
-    return { subordinates: await readSubordinates(client) };
-  } catch (cause) {
-    return { subordinates: [], subordinatesError: `Subagents could not be read: ${renderThrownChain({ cause })}` };
-  }
+async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError' | 'work' | 'workError'>> {
+  const [subordinates, work] = await Promise.allSettled([readSubordinates(client), client.workspaceWork()]);
+
+  return {
+    ...(subordinates.status === 'fulfilled'
+      ? { subordinates: subordinates.value }
+      : { subordinates: [], subordinatesError: `Subagents could not be read: ${renderThrownChain({ cause: subordinates.reason })}` }),
+    ...(work.status === 'fulfilled'
+      ? { work: workFromWorkspace(work.value) }
+      : { work: [], workError: `Work could not be read: ${renderThrownChain({ cause: work.reason })}` }),
+  };
 }
 
 /** Pages arrive newest first. */
-async function readSubagentConversation(client: AgentClient, name: string): Promise<DisplayMessage[]> {
+async function readSubagentConversation(client: AgentClient, path: readonly string[]): Promise<DisplayMessage[]> {
   const pages: DisplayMessage[][] = [];
   let cursor: SeekCursor | undefined;
 
   do {
-    const result = await client.inspectSubordinate({ path: [name], view: 'history', page: cursor === undefined ? {} : { cursor } });
+    const result = await client.inspectSubordinate({ path: [...path], view: 'history', page: cursor === undefined ? {} : { cursor } });
 
     if (result.view === 'missing') throw new Error(result.error);
 

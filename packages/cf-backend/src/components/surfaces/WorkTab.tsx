@@ -10,7 +10,7 @@ import {
   NotePencilIcon, ArrowLeftIcon, DatabaseIcon,
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, revealMisrepresenting, timeAgo } from "@kinu.run/core";
-import type { AgentTaskTree, ChangelogEntry, MemoryEntry, OwnedPlan, PendingAction, PendingActionKind, PlanReview, WorkspaceWork } from "@kinu.run/core";
+import type { AgentTaskTree, ChangelogEntry, MemoryEntry, OwnedPlan, PendingAction, PendingActionKind, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -106,8 +106,8 @@ export function WorkTab({
   } = useChangelog(rpc, onChangelogSeen);
 
   const taskRows = useMemo(() => {
-    const rows = (groups: readonly { owner: { name: string }; tasks: AgentTaskTree[] }[]) =>
-      groups.flatMap((owned) => owned.tasks.map((task) => ({ task, owner: owned.owner.name })));
+    const rows = (groups: readonly { owner: WorkspaceWorkOwner; tasks: AgentTaskTree[] }[]) =>
+      groups.flatMap((owned) => owned.tasks.map((task) => ({ task, owner: owned.owner })));
 
     return [...rows(work?.tasks ?? []), ...rows(work?.plans ?? [])];
   }, [work]);
@@ -181,7 +181,7 @@ export function WorkTab({
     <div className="space-y-6 animate-fade-in">
       <WorkPlans work={work} owner={planOwner ?? "main"} arrival={workspacePlanArrival} onPresence={setHasPlans} onNewPlan={onNewPlan} onOpenReview={openReview} />
       <NeedsYou pendingActions={pendingActions} rpc={rpc} onDecided={onRefreshQueue} onOpenSurface={onOpenSurface} onOpenReview={setReview} />
-      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} runningJobs={runningJobs} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} rpc={rpc} />
+      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} runningJobs={runningJobs} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
       <WorkJournal journal={journal} filter={filter} onFilter={setFilter} view={changelog} seenAt={changelogSeenAt} seenError={changelogSeenError} resource={changelogResource} onReload={reloadChangelog} rpc={rpc} onRefreshJobs={onRefreshJobs} />
       <Learnings memory={memory} onOpenSurface={onOpenSurface} />
     </div>
@@ -264,11 +264,11 @@ function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenReview 
 
 interface WorkTaskRow {
   task: AgentTaskTree;
-  owner: string;
+  owner: WorkspaceWorkOwner;
 }
 
 /** The read's tri-state gates only the work half, so a running job never waits behind the plan's spinner. */
-function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, onRefreshJobs, rpc }: {
+function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
   work: WorkspaceWork | null;
   taskRows: WorkTaskRow[];
   openTasks: WorkTaskRow[];
@@ -276,6 +276,7 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, on
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
   onRefreshJobs: () => void;
+  onOpenOwner?: (name: string) => void | Promise<void>;
   rpc: Rpc;
 }) {
   const nowEmpty = work !== null && openTasks.length === 0 && runningJobs.length === 0;
@@ -295,7 +296,7 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, on
             {taskRows.length > 0 && <PlanProgress tasks={taskRows.map(({ task }) => task)} />}
             {openTasks.length > 0 && (
               <div className="space-y-2">
-                {openTasks.map(({ task, owner }) => <TaskTree key={`${owner}:${task.id}`} task={task} owner={owner} />)}
+                {openTasks.map(({ task, owner }) => <TaskTree key={`${owner.actorId}:${task.id}`} task={task} owner={owner} onOpenOwner={onOpenOwner} />)}
               </div>
             )}
           </>
