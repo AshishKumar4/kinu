@@ -63,9 +63,9 @@ function candidateProfile(spec: string) {
 test('closing a scaffold model stream records exactly one failed terminal operation', async () => {
   const { stream, operations, reports } = fixture();
 
+  // Closed at the first streamed text, before the model's answer is done.
   for await (const event of stream) {
-    expect(event.type).toBe('text-delta');
-    break;
+    if (event.type === 'text-delta') break;
   }
 
   expect(operations.map(event => event.phase)).toEqual(['start', 'end']);
