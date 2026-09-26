@@ -32,6 +32,7 @@ export interface ProbeDeps {
   origin: string;
   /** Structural rather than `typeof fetch`: the bound global differs between worker runtime and tests. */
   fetch(input: string, init?: RequestInit): Promise<Response>;
+  signInProviders: readonly string[];
 }
 
 const TIMEOUT_MS = 10_000;
@@ -200,9 +201,15 @@ async function probeLogin(deps: ProbeDeps): Promise<ProbeOutcome> {
     return fail('GET /login did not render the sign-in page');
   }
 
+  if (deps.signInProviders.length === 0) return { probe: 'login', ok: true, detail: 'sign-in page renders; this deployment configures no provider' };
+
   if (!body.includes('href="/auth/')) {
     return fail('GET /login offers no sign-in provider — nobody can sign in');
   }
+
+  const missing = deps.signInProviders.filter((id) => !body.includes(`href="/auth/${id}/start`));
+
+  if (missing.length > 0) return fail(`GET /login does not offer ${missing.join(', ')}, which this deployment configures`);
 
   return { probe: 'login', ok: true, detail: 'sign-in page renders' };
 }

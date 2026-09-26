@@ -11,6 +11,7 @@ import { runSyntheticProbes } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import { KinuError } from '@kinu.run/core/obs';
+import { listConfiguredOAuthProviders } from '../auth/providers';
 
 export const MONITOR_SINGLETON = 'site';
 
@@ -48,7 +49,12 @@ export class MonitorDO extends DurableObject<Env> {
       throw new KinuError('unavailable', 'CLI_PUBLIC_ORIGIN is not configured; there is no origin to probe.');
     }
 
-    const probes = await runSyntheticProbes({ origin, fetch: (input, init) => fetch(input, init) });
+    const probes = await runSyntheticProbes({
+      origin,
+      fetch: (input, init) => fetch(input, init),
+      signInProviders: listConfiguredOAuthProviders(this.env).map((provider) => provider.id),
+    });
+
     const fleet = await sampleFleet(this.env, now, (input, init) => fetch(input, init));
     const open = new Map(listIncidents(this.ctx.storage.sql).map((row) => [row.probe, row.detail]));
     const outcomes = [...probes, ...settleFleet(this.ctx.storage.sql, fleet, open)];
