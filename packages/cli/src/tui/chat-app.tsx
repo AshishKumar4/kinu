@@ -1678,7 +1678,11 @@ function ChatScene({
     commandPalette,
     wideLayout: tuiLayoutForWidth(width) === 'wide',
     setNavigationOpen,
-    toggleWideSidebar: () => updatePreferences((current) => ({ ...current, wideSidebarOpen: !current.wideSidebarOpen })),
+    toggleWideSidebar: () => {
+      const closing = preferences.wideSidebarOpen && navigationOpen;
+      updatePreferences((current) => ({ ...current, wideSidebarOpen: !closing }));
+      setNavigationOpen(!closing);
+    },
     busy: () => machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0,
     addMessage,
     lastUrl: () => lastUrlFromMessages(messagesRef.current),
@@ -1759,7 +1763,7 @@ function ChatScene({
       return;
     }
 
-    if (navigationOpen && tuiLayoutForWidth(width) !== 'wide') return;
+    if (navigationOpen) return;
     const modalActive = activeSurface !== null || inputState.walkbackOpen;
     const result = keyDispatcher.feed(key, modalActive ? ['modal'] : ['editor', 'conversation', 'global']);
 
@@ -1961,6 +1965,7 @@ function ChatScene({
       roster={shownRoster}
       currentAgent={{ name: client.agentName, mode: client.mode }}
       navigationOverlayOpen={navigationOpen}
+      navigationFocused={navigationOpen}
       onNavigationOverlayChange={setNavigationOpen}
       onNavigationFocusChange={handleNavigationFocusChange}
       onAgentSelect={switchWorkspace}

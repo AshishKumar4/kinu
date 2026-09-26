@@ -448,6 +448,42 @@ describe('ChatApp terminal interaction', () => {
     expect(picked).toEqual(['beta']);
   });
 
+  test('in a wide terminal Alt+W moves the keys into the sidebar, where a workspace is picked and Esc leaves', async () => {
+    // The pinned sidebar only showed: its rows took no keys, so a keyboard user could not pick a workspace.
+    const beta = fakeClient({ name: 'beta' });
+    const picked: string[] = [];
+    let exits = 0;
+
+    const screen = await mountChat(fakeClient({ name: 'alpha' }).client, {
+      listWorkspaces: () => [ALPHA_LOCAL, BETA_LOCAL],
+      onWorkspaceSelect: async (name) => {
+        picked.push(name);
+
+        return beta.client;
+      },
+      width: 160,
+      // Legacy keys read Esc then a letter as Alt+letter.
+      kittyKeyboard: true,
+      onExit: () => { exits += 1; },
+    });
+
+    screen.mockInput.pressKey('w', { meta: true });
+    await screen.waitFor('the sidebar holding the keys', () => screen.frame().includes('Esc back'));
+    screen.mockInput.pressEscape();
+    await screen.waitFor('the sidebar letting go', () => !screen.frame().includes('Esc back'));
+    await screen.mockInput.typeText('still typing');
+    await screen.waitFor('keys back in the composer', () => screen.frame().includes('still typing'));
+    // The sidebar's Esc is its own: the composer would read it as quitting a fresh session.
+    expect(exits).toBe(0);
+
+    screen.mockInput.pressKey('w', { meta: true });
+    await screen.waitFor('the sidebar holding the keys again', () => screen.frame().includes('Esc back'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the picked workspace', () => picked.length === 1);
+    expect(picked).toEqual(['beta']);
+  });
+
   test('workspace selection is single-flight while the candidate connects', async () => {
     const alpha = fakeClient({ name: 'alpha' });
     const beta = fakeClient({ name: 'beta', mode: 'cloud' });

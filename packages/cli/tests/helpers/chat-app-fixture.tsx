@@ -213,6 +213,8 @@ export async function mountChat(
     settled?: (frame: string) => boolean;
     /** Kitty-protocol keys, for chords the legacy byte set cannot express (Shift+Enter, Ctrl+J distinct from Enter). */
     kittyKeyboard?: boolean;
+    /** The TUI asked to quit (Esc on an empty, fresh session, or /exit). */
+    onExit?: () => void;
   } = {},
 ) {
   const testRenderer = await createTestRenderer({
@@ -239,7 +241,7 @@ export async function mountChat(
     <ChatApp
       client={client}
       tui={options.tui ?? { preferenceStore: createMemoryTuiPreferenceStore() }}
-      onExit={() => {}}
+      onExit={options.onExit ?? (() => {})}
       workspaceSource={workspaceSource}
       onWorkspaceSelect={options.onWorkspaceSelect}
       hubData={options.hubData}
