@@ -307,7 +307,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   }
 
   private done(requestId: string, extra: { landed?: SendLanding; error?: string } = {}): void {
-    this.broadcastResponse(doneFrame(requestId, extra));
+    this.wire.broadcast(doneFrame(requestId, extra));
   }
 
   /** The stream answers under the admitting request (`turnId` is the opening row id), else a minted id. */
@@ -440,7 +440,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           if (live.cadence.flushes(flushSignal(chunk))) resume.resumable.flushBuffer();
         }
 
-        this.broadcastResponse(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }));
+        // Stored above, so a tab still joining reads it in its replay, in order; sent to it now it would run ahead of the parts the replay opens.
+        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
       }
     } catch (cause) {
       this.degradeRelay(live, toKinuError({
@@ -449,18 +450,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
   }
 
-  /** A stream frame skips a tab still joining: its replay, sent on its acknowledgement, opens each part the live
-   *  frames continue, and a live frame read first is a delta for a part it never saw open (2026-09-26). */
-  private broadcastResponse(frame: string): void {
-    this.wire.broadcast(frame, this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
-  }
-
   /** The relay broke; the turn did not. The tab gets our classification; the SDK's words go to diagnostics. */
   private degradeRelay(live: LiveStream, error: KinuError): void {
     diagnostics.failure('chat.stream_observe_failed', error);
     live.broken = true;
     this.resume?.resumable.markError(live.streamId);
-    this.broadcastResponse(JSON.stringify({
+    this.wire.broadcast(JSON.stringify({
       type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: refusalOf(error).error, done: false, error: true,
     }));
   }

@@ -517,6 +517,27 @@ describe('ChatWireTransport', () => {
 
   /** Owner report 2026-09-26, "reasoning-delta for missing reasoning part": the tab's reader throws on a delta whose
    *  part it never saw open, so every part a joining tab continues must open in what it reads, before its deltas. */
+  // 2026-09-26 (two-turn.test.ts red): a done frame for another request is never stored, so the replay on ack
+  // cannot carry it; skipped for a joining tab, it was lost, and that tab's send waited on it for good.
+  test('a tab still in its handshake that sends a message spliced into the live turn hears its landing', async () => {
+    const h = harness(['turn', 'mid-turn']);
+    const first = h.connection('c1');
+    await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }]), { index: 0 });
+
+    const second = h.connection('c2');
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
+    await h.transport.onConnect(second);
+    await h.transport.onMessage(second, chatRequest('req-2', 'and also this'));
+
+    const landings = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
+      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === 'req-2' && frame.done === true);
+
+    expect(landings).toHaveLength(1);
+    expect(landings[0]?.landed).toBe('mid-turn');
+  });
+
   test('a tab joining mid-reasoning reads each part opened before its deltas, live chunks included', async () => {
     const h = openRequest();
     const first = h.connection('c1');
