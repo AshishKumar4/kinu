@@ -30,7 +30,7 @@ import {
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError, type AgentTracing } from '@kinu.run/core/obs';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
-import type { HostedNodeHome } from '@kinu.run/core';
+import type { HostedNodeHome, LiveRead } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
 export type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'>;
@@ -61,6 +61,8 @@ export interface WorkspaceHostSeams {
     readonly workMode: WorkMode;
   }): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
   reportModelCall(report: ModelCallReport): void;
+  /** The sandbox is the workspace's, so a hosted actor's port moves the root's pages' read too. */
+  liveReadsMoved(reads: readonly LiveRead[]): void;
   readonly modelOperations: ModelOperationSink;
   pricing(spec?: string): ModelPricing | null;
   hostedModel(actor: ActorHandle): string | undefined;
@@ -202,6 +204,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
       const hooks: CFRuntimeHooks = {
         reportModelCall: (report) => { seams.reportModelCall(report); },
+        liveReadsMoved: (reads) => { seams.liveReadsMoved(reads); },
         slate: (operation) => seams.slate(bound.handle, operation),
         deferrals: () => seams.deferrals(),
         // The chat's authority: a self-resolved profile could differ from the turn's and make a search unreproducible.

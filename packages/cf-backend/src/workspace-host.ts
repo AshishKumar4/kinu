@@ -81,6 +81,7 @@ export interface HostedWorkspaceDeps<Id> {
   /** Supplied by the actor: the URL names the workspace and is signed with a user-plane-derived key. */
   previewUrl: (port: number, capability: string) => Promise<WorkspacePreviewUrl>;
   onFilesChanged?: (paths: readonly string[]) => void;
+  onPortsChanged?: () => void;
   /** Asked before a preview request is routed and by the launch journal after a reset. A refusal says why
      *  the slate cannot serve. */
   ensureSlate?(owner: string): Promise<Refusal | null>;
@@ -232,7 +233,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
   if (deps.onFilesChanged) bundle.onFilesChanged(deps.onFilesChanged);
 
   // One registry per isolate: a port is a live listener in this isolate's memory.
-  const portRegistry = new PortRegistry();
+  const portRegistry = deps.onPortsChanged ? new ObservedPortRegistry(deps.onPortsChanged) : new PortRegistry();
   let composing: Promise<HostComposition> | undefined;
 
   // This object's alarm slot is the SDK scheduler's, so tasks run on a timer plus waitUntil. Timers die with
@@ -442,6 +443,34 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     },
     destroy: () => bundle.destroy(),
   };
+}
+
+/** Nimbus mutates listeners only through these three, so they are where the workspace's port list moves. */
+class ObservedPortRegistry extends PortRegistry {
+  constructor(private readonly moved: () => void) {
+    super();
+  }
+
+  override register(port: number, pid: number): void {
+    super.register(port, pid);
+    this.moved();
+  }
+
+  override unregister(port: number): boolean {
+    const removed = super.unregister(port);
+
+    if (removed) this.moved();
+
+    return removed;
+  }
+
+  override unregisterByPid(pid: number): number {
+    const removed = super.unregisterByPid(pid);
+
+    if (removed > 0) this.moved();
+
+    return removed;
+  }
 }
 
 async function json(result: Promise<unknown>): Promise<JsonValue | undefined> {

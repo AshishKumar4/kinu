@@ -9,6 +9,7 @@ import {
   type IncidentDisposition,
 } from "@kinu.run/devbox";
 import { getAgentByName } from "agents";
+import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
 import { SANDBOX_LIFECYCLE_ENVELOPE_VERSION } from "./sandbox-lifecycle";
 import type { SandboxLifecycleFailure } from "./sandbox-lifecycle";
@@ -24,7 +25,7 @@ const WORKSPACE_NAME_KEY = "kinu:workspace-name";
 /** Type-only, so nothing here reaches orchestrator code at runtime. */
 type SandboxRootClient = Pick<
   OrchestratorAgent,
-  "acceptSandboxLifecycleFailure" | "sandboxInUse"
+  "acceptSandboxLifecycleFailure" | "sandboxInUse" | "sandboxStopped"
 >;
 
 export class KinuSandbox extends Devbox<Env> {
@@ -59,6 +60,18 @@ export class KinuSandbox extends Devbox<Env> {
     if (root === null) return false;
 
     return await root.sandboxInUse();
+  }
+
+  override async onStop(params?: Parameters<Devbox<Env>["onStop"]>[0]): Promise<void> {
+    await super.onStop(params);
+
+    try {
+      await (await this.#rootAgent())?.sandboxStopped();
+    } catch (cause) {
+      diagnostics.failure("sandbox.stop_notice_failed", toKinuError({
+        doing: "telling the workspace its sandbox stopped", cause, otherwise: "unavailable",
+      }));
+    }
   }
 
   /** Devbox re-delivers until `queued`. `attempt` is Devbox's delivery count, which an evicted

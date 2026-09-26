@@ -192,13 +192,17 @@ function notDispatched(): Error {
 export function createSandboxExecutor(
   handle?: SandboxHandle,
   previewHostSuffix?: string,
+  activated?: () => void,
 ): ExecutorProvider {
   const connected = handle != null;
   const previews = previewHostSuffix !== undefined && previewHostSuffix.length > 0;
   let active = false;
 
   const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
-    active = true;
+    if (!active) {
+      active = true;
+      activated?.();
+    }
 
     return fn();
   };

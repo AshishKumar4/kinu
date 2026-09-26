@@ -1047,7 +1047,6 @@ export default function WorkspacePage() {
             onSurface={setSurface}
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}
-            previewStarting={state.previewStarting}
             onRefreshPorts={state.refreshExposedPorts}
             plan={visiblePlan}
             snapshot={state.snapshot}
@@ -1072,6 +1071,7 @@ export default function WorkspacePage() {
             slates={state.slates}
             slateReloads={state.slateReloads}
             changesMoved={state.changesMoved}
+            readMoves={state.readMoves}
             tabPresence={state.tabPresence}
             presencePending={state.tabPresence === undefined}
             rpc={state.rpc}

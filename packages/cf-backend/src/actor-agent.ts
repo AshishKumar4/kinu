@@ -36,7 +36,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { hostedWindowMay, requiredRpcAccess, rpcMovesOverview } from "@kinu.run/core";
+import { hostedWindowMay, requiredRpcAccess, rpcMovesOverview, type LiveRead } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -1968,6 +1968,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected abstract overviewChanged(): void;
 
+  protected abstract liveReadsMoved(reads: readonly LiveRead[]): void;
+
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 
   protected abstract owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
@@ -2993,6 +2995,7 @@ export abstract class ActorAgent extends Agent<Env> {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
         reportModelCall: (report) => this.reportModelCall(report),
+        liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         resolveProfile: () => this.routingProfile(),
         contextPlane: {
           actorId: this.actorHandle().actorId,

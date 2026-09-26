@@ -2,7 +2,7 @@
 
 import type { VFS, Memory } from '../types/primitives';
 
-const MEMORY_PATH = 'memory/MEMORY.md';
+export const MEMORY_PATH = 'memory/MEMORY.md';
 
 /** Only files under this directory are FTS5 indexed. */
 const MEMORY_DIR = 'memory/';

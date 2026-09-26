@@ -21,7 +21,7 @@ import {
 } from "@phosphor-icons/react";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import { mcpPresetById, seededRandom } from "@kinu.run/core";
+import { mcpPresetById, READS_CHANGED_EVENT, seededRandom } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT } from "@kinu.run/core";
 import type { ReasoningEffort } from "@kinu.run/core";
 import {
@@ -1637,6 +1637,11 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
   };
 }
 
+new MutationObserver(() => {
+  if (document.documentElement.dataset.previewArrived !== "1") return;
+  galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getExposedPorts"] }));
+}).observe(document.documentElement, { attributes: true, attributeFilter: ["data-preview-arrived"] });
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   const plan = galleryPlanRpc(method, args);
 
@@ -1691,13 +1696,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult(null).json<T>();
   }
 
-  if (method === "getExposedPorts" && document.documentElement.dataset.listingHeld === "1") return new Promise<T>(() => {});
-
-  if (method === "getExposedPorts" && document.documentElement.dataset.sandboxStarting === "1" && args?.[0] === "sandbox") {
-    return rpcResult({ ports: [], pending: "the sandbox's container is still restoring" }).json<T>();
-  }
-
-  // Arrives after first paint: once the gate sets the dataset flag, the next live refresh lists a new port.
+  // Arrives after first paint: once the gate sets the dataset flag, the pushed frame's re-read lists a new port.
   if (method === "getExposedPorts" && document.documentElement.dataset.previewArrived === "1" && args?.[0] === "sandbox") {
     return rpcResult({ ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] }).json<T>();
   }

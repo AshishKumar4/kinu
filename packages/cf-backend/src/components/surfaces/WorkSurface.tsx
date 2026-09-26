@@ -8,16 +8,15 @@ import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { HeadDeltas } from "@kinu.run/core";
 import { tabCls, tabStripH } from "@/components/ui/form";
-import type { AgentStatus, ExecutorOutput } from "@/hooks/use-kinu";
+import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
-import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
+import type { ExecutorInfo } from "@kinu.run/core";
 import type { ToolInfo, MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { Loader } from "@cloudflare/kumo";
 import { AgentSurface } from "./AgentSurface";
 import { ExplorationSurface } from "./ExplorationSurface";
 import { WorkTab } from "./WorkTab";
@@ -60,7 +59,6 @@ export interface WorkSurfaceProps {
   onSurface: (s: SurfaceKind) => void;
   pinnedPorts: PinnedPort[];
   previewError: string | null;
-  previewStarting?: readonly string[];
   onRefreshPorts: () => void;
   plan: PlanReview | null;
   planRpc?: Rpc;
@@ -88,6 +86,7 @@ export interface WorkSurfaceProps {
   slates?: readonly SlateSummary[];
   slateReloads?: ReadonlyMap<string, number>;
   changesMoved?: number;
+  readMoves?: ReadMoves;
   /** Absent in fixture frames, which keeps every tab visible: unknown is not empty. */
   tabPresence?: TabPresence;
   /** The workspace's presence read has not answered: no tab is marked until it has or the reader picks one. */
@@ -132,18 +131,10 @@ function OpenSlatePanel(props: WorkSurfaceProps & { readonly slate: string; read
 
 const LISTING_STRIP = "shrink-0 border-t p-border px-3 py-2";
 
-/** A failed listing wins over a starting one. */
-function ListingStatus({ error, starting, onRetry }: { error: string | null; starting: readonly string[]; onRetry: () => void }) {
-  if (error) return <LoadFailure what="preview listings" message={error} onRetry={onRetry} className={LISTING_STRIP} />;
+function ListingStatus({ error, onRetry }: { error: string | null; onRetry: () => void }) {
+  if (!error) return null;
 
-  if (starting.length === 0) return null;
-
-  return (
-    <div role="status" className={`flex items-center gap-2 text-xs p-text-3 ${LISTING_STRIP}`} data-preview-starting>
-      <Loader size="sm" />
-      <span className="min-w-0 truncate">{starting.map(executorLabel).join(" and ")} starting…</span>
-    </div>
-  );
+  return <LoadFailure what="preview listings" message={error} onRetry={onRetry} className={LISTING_STRIP} />;
 }
 
 export function WorkSurface(props: WorkSurfaceProps) {
@@ -290,8 +281,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
               onOpenSurface={focus.navigate}
               onChangelogSeen={props.onChangelogSeen}
               memory={props.memory}
-              isStreaming={props.isStreaming}
               rpc={props.rpc}
+              readMoves={props.readMoves}
             />
           </ErrorBoundary>
         </div>
@@ -338,7 +329,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           active={surface === "Changes"} moved={props.changesMoved} turnLive={props.isStreaming} onOpenFile={openChangedFile}
           onCount={setChangeCount} />
       </div>
-      <ListingStatus error={props.previewError} starting={props.previewStarting ?? []} onRetry={props.onRefreshPorts} />
+      <ListingStatus error={props.previewError} onRetry={props.onRefreshPorts} />
       {connecting && <ConnectDeviceDialog onClose={closeConnect} />}
     </div>
   );

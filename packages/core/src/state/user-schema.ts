@@ -333,6 +333,12 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS device_status_watchers (
+      agent_name TEXT PRIMARY KEY
+    )
+  `);
+
   // Single-use tickets keep long-lived device tokens out of URLs and edge logs.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS device_connect_tickets (

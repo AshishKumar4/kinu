@@ -496,6 +496,9 @@
     "agent_name TEXT PRIMARY KEY",
     "announced_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
   ],
+  "device_status_watchers@packages/core/src/state/user-schema.ts": [
+    "agent_name TEXT PRIMARY KEY"
+  ],
   "driver_lease@packages/core/src/execution/driver-lease.ts": [
     "id TEXT PRIMARY KEY",
     "pid INTEGER NOT NULL",

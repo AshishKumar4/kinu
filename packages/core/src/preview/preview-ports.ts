@@ -10,8 +10,6 @@ export interface PinnedPreviewPort {
 export interface ExposedPortList {
   ports: Array<{ port: number; url: string; name?: string }>;
   error?: string;
-  /** Starting, so nothing yet; not a failure. */
-  pending?: string;
 }
 
 export interface ExecutorPortRefresh {
@@ -22,10 +20,9 @@ export interface ExecutorPortRefresh {
 export interface PreviewPortState {
   ports: PinnedPreviewPort[];
   error: string | null;
-  starting: string[];
 }
 
-/** A failed or pending read keeps its previous ports; an empty success removes them. */
+/** A failed read keeps its previous ports; an empty success removes them. */
 export function reconcilePreviewPorts(
   previous: readonly PinnedPreviewPort[],
   refreshes: readonly ExecutorPortRefresh[],
@@ -33,16 +30,10 @@ export function reconcilePreviewPorts(
 ): PreviewPortState {
   const replacements = new Map<string, PinnedPreviewPort[]>();
   const failures: string[] = [];
-  const starting: string[] = [];
 
   for (const { executor, result } of refreshes) {
     if (result.error) {
       failures.push(`${executor}: ${result.error}`);
-      continue;
-    }
-
-    if (result.pending !== undefined) {
-      starting.push(executor);
       continue;
     }
 
@@ -84,6 +75,5 @@ export function reconcilePreviewPorts(
       ...[...replacements.values()].flat(),
     ],
     error: failures.length > 0 ? failures.join(' · ') : null,
-    starting,
   };
 }
