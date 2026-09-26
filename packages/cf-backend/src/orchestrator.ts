@@ -259,6 +259,8 @@ import {
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 
+const LeasedRowSchema = v.object({ id: v.string() });
+
 /**
  * Row budget per sweep activation: each item is a full inference turn. A full pass
  * answers truncated and the wake drains the rest on the next frame.
@@ -1094,6 +1096,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
          AND turn_id IS NULL AND (step_idx IS NULL OR step_idx >= 0)
        LIMIT 1`,
     ).toArray().length > 0;
+  }
+
+  /** A lease from before this activation lost its runner; effects dedupe on rerun. */
+  private rependDeadActivationLeases(): void {
+    const rows = this.boundExec().exec(
+      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
+       WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
+         AND consumed_at IS NOT NULL AND consumed_at < ?
+       RETURNING id`,
+      this.activationStartedAt,
+    ).toArray();
+
+    for (const row of rows) {
+      diagnostics.event('subordinate.assignment_repended', { workspace: this.name, assignment: v.parse(LeasedRowSchema, row).id, cause: 'dead_activation' });
+    }
   }
 
   /** One drain per isolate: a second would open two turns on one actor's chat room. */
@@ -2712,6 +2729,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // An unborn workspace owes nothing: its first claim writes it.
     if (this.storageRefusal !== undefined || this.nimbusSibling || !this.workspaceBorn()) return;
+    this.rependDeadActivationLeases();
     // Every budgeted sweep via the alarm-frame seam; row-budgeted because this is the init gate,
     // and a truncated pass is drained by the wake below in alarm frames.
     const sweepsTruncated = this.maintenanceSweeps();
