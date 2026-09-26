@@ -15,7 +15,9 @@ export const DEV_IDENTITY_HEADER = 'x-kinu-dev-identity-secret' satisfies Platfo
 
 export const DEV_IDENTITY_ACCOUNT_HEADER = 'x-kinu-dev-identity-account';
 
-export const EVAL_ACCOUNTS = ['devices'] as const;
+/** The eval identity's other accounts, each its own user: `devices` holds the first-run fleet's machines, and
+ *  `scripted` runs the product tiers on the scripted model, its default tier, which no eval may share. */
+export const EVAL_ACCOUNTS = ['devices', 'scripted'] as const;
 
 export type EvalAccount = (typeof EVAL_ACCOUNTS)[number];
 

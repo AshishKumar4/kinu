@@ -31,7 +31,7 @@ describe(SUITE, () => {
     if (PLAN === null) throw new Error('Explicit operator plan required');
     let calls = 0;
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', purpose: 'Disposable command-boundary verification; no model task.', calls: () => calls,
+      id: CASE, modelCalls: 'none', genesis: false, purpose: 'Disposable command-boundary verification; no model task.', calls: () => calls,
       async run({ session }) {
         const exec = async (command: string) => {
           calls += 1;

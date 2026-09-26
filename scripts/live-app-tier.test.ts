@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import { hostedActorSocketPath, TurnClaimFrameSchema } from '@kinu.run/core';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
+import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
@@ -36,12 +37,13 @@ import {
 } from './product-flows';
 import { rowVerdicts } from './row-verdicts';
 import {
-  FALLBACK_ANSWER, KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_SILENCE_MS, PACED_TURN_ANSWER,
-  ANSWERED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
-  SLEPT_TURN_ASK, TOLD_BACK_ASK, WATCHED_SLEPT_TURN_ASK, toldBackTurn, type ScriptedRequest,
+  KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_SILENCE_MS, PACED_TURN_ANSWER,
+  ANSWERED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLATE_TITLE,
+  SLEPT_TURN_ASK, TOLD_BACK_ASK, WATCHED_SLEPT_TURN_ASK, toldBackTurn,
   heldCall, keptTabProbe, pacedFirstTurn, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
   startScriptedModel, type HeldCall,
 } from './scripted-model';
+import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
 
 /** Screenshots land beside the other lanes' evidence, outside the worktree. */
@@ -1590,7 +1592,7 @@ async function run(): Promise<void> {
   await withLiveApp(async (app) => {
     const { newPage, origin } = app;
 
-    await registerScriptedModel(origin, model.port);
+    await registerScriptedModel(origin, model.baseURL);
     observed.liveIndicator = await attempt('live-indicator', () => measureLiveIndicator(newPage, origin));
     observed.openedMidTurn = await attempt('opened-mid-turn', () => measureOpenedMidTurn(newPage, origin, firstTurn));
     observed.reconnect = await attempt('reconnect', () => measureReconnect(newPage, origin, reconnectHeld));

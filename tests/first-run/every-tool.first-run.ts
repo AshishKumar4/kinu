@@ -27,6 +27,10 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
+import {
+  TOOLS_CODEMODE_MARK as CODEMODE_MARK, TOOLS_FACT as FACT, TOOLS_LIST_ASK as LIST_ASK, TOOLS_PROBE_BYTES as PROBE_BYTES,
+  TOOLS_PROBE_PATH as PROBE_PATH, TOOLS_RUN_MARK as RUN_MARK, TOOLS_TASK_TITLE as TASK_TITLE, TOOLS_USE_ASK as USE_ASK,
+} from './asks';
 
 const SUITE = 'First-run · every-tool';
 
@@ -36,32 +40,6 @@ const CASE = 'every-tool' as const;
  *  deps only a hired actor has. Derived, so a tool that joins or leaves the
  *  table moves this row with it. */
 const ROOT_TOOLS: readonly string[] = BUILTIN_TOOLS.filter((name) => !DEPS_GATED_TOOLS.includes(name));
-
-const PROBE_PATH = '/home/main/tools-probe.txt';
-
-const PROBE_BYTES = 'KINU-EVERY-TOOL';
-
-const RUN_MARK = 'tools-probe-ok';
-
-const CODEMODE_MARK = 'codemode-ok';
-
-const FACT = 'every-tool probe: ok';
-
-const TASK_TITLE = 'every-tool probe';
-
-const HEALTH_URL = 'https://kinu.run/api/health';
-
-const LIST_ASK = 'List every tool you can call right now, one per line, names only, nothing else.';
-
-const USE_ASK = 'Use each of these tools exactly once, in this order, then answer. '
-  + `1. With the file tool, write ${PROBE_PATH} containing exactly ${PROBE_BYTES} and nothing else. `
-  + `2. With the shell tool in the workspace runtime, run: echo ${RUN_MARK} `
-  + `3. With eval, run a one-line program that returns the string "${CODEMODE_MARK}". `
-  + `4. With the memory tool, save the fact "${FACT}", then search memory for "${TASK_TITLE}". `
-  + `5. With the tasks tool, add one task titled "${TASK_TITLE}". `
-  + `6. With the web tool, fetch ${HEALTH_URL} and read its "ok" field. `
-  + 'Do not use the agents tool. When all six are done, reply with ONE line that starts with DONE '
-  + 'followed by the six results in order.';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
 

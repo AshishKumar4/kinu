@@ -4,14 +4,11 @@ import type { EvalObservation } from '@kinu.run/test-utils';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
+import { WAKE_ASK, WAKE_STEPS as STEPS } from './asks';
 
 const SUITE = 'First-run · background-wake';
 
 const CASE = 'background-wake' as const;
-
-/** The three commands the turn runs, one call each: what "no tool ran twice"
- *  is counted over. */
-const STEPS = ['KINU_WAKE_STEP_ONE', 'KINU_WAKE_STEP_TWO', 'KINU_WAKE_STEP_THREE'] as const;
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
 
@@ -60,12 +57,7 @@ describe(SUITE, () => {
       modelCalls: 'expected',
       budgetMs: 10 * 60_000,
       async run({ session, budget }) {
-        const submission = session.submit(
-          `Use your run tool with runtime 'workspace' three times, one command per call, in this order, `
-          + `and wait for each result before the next: echo ${STEPS[0]}; then echo ${STEPS[1]}; then echo ${STEPS[2]}. `
-          + 'Do not combine them into one command. When all three have printed, reply with exactly the three '
-          + 'words they printed, one per line, and nothing else.',
-        );
+        const submission = session.submit(WAKE_ASK);
 
         // The turn is inside its work: its first tool result has streamed to
         // this socket (a wait on the socket's own output). The run row is

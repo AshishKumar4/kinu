@@ -4,6 +4,7 @@
 import type { ActiveRoster } from '../types/dynamic-context';
 import type { AgentTaskTree } from '../tools/task-store';
 import type { WorkMode } from '../types/turn';
+import { SYSTEM_REMINDER_TAG } from '../utils/prompt-sections';
 
 /** Admit pre-flight drops a signal once the ledger no longer owes its reminder row. */
 export const TASK_REMINDER_EVENT = 'task_reminder';
@@ -135,9 +136,9 @@ function renderTaskReminder(groups: readonly AgentTaskTree[], incomplete: number
     return lines.join('\n');
   }).join('\n');
 
-  return '<system-reminder>\n'
+  return `<${SYSTEM_REMINDER_TAG}>\n`
     + `You stopped with ${incomplete} open task(s):\n${todoList}\n\n`
     + 'Continue working on these tasks or mark them done if finished.\n'
     + `(Reminder ${attempt}/${TASK_REMINDER_MAX_ATTEMPTS})\n`
-    + '</system-reminder>';
+    + `</${SYSTEM_REMINDER_TAG}>`;
 }

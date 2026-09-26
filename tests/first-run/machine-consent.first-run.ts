@@ -25,6 +25,7 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { openPublicSocket } from './public-socket';
+import { CONSENT_ASK as ASK } from './asks';
 
 const SUITE = 'First-run · machine-consent';
 
@@ -32,9 +33,6 @@ const CASE = 'machine-consent' as const;
 
 /** The machine this case connects halfway through. */
 const MACHINE = 'kinu-first-run-consent';
-
-const ASK = 'Use the shell tool with runtime "device" to run the command `hostname` on my computer, '
-  + 'even if you expect it to fail. Then reply with one line: HOST <what it printed>, or NONE if nothing ran.';
 
 /** The broadcast the chat renders a consent card from (the orchestrator's `consents` announce). */
 const CONSENT_REQUESTED = 'device_consent';

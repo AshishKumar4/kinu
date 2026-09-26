@@ -20,16 +20,11 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
+import { PANES_ASK as ASK, PANES_PROBE as PROBE } from './asks';
 
 const SUITE = 'First-run · workspace-panes';
 
 const CASE = 'workspace-panes' as const;
-
-/** The file the turn writes, named so no scaffold file can be it. */
-const PROBE = 'panes-probe.txt';
-
-const ASK = `Use your file tool to write a new file named ${PROBE} in the workspace, `
-  + 'containing exactly the words panes probe. Then reply with one line: DONE.';
 
 /** The agent's own executor, which the Changes pane opens on. */
 const WORKSPACE_EXECUTOR = 'workspace';

@@ -6,9 +6,9 @@
 # the only tier in this repository whose subject is the DEPLOYED product rather
 # than this tree. Every other gate runs before the upload, over inputs their
 # authors wrote; this one drives the deployment the way a person does — a fresh
-# workspace over the public REST, the real model, a real browser click, two real
-# daemons, real pty bytes — and it is RED on any of the five defects the owner
-# found by hand.
+# workspace over the public REST, the scripted model on the deployment's own
+# provider path, a real browser click, two real daemons, real pty bytes — and it
+# is RED on any of the defects the owner found by hand.
 #
 # WHAT IT NEEDS, and what it does with nothing:
 #
@@ -44,8 +44,8 @@ cd "$(dirname "$0")/.."
 
 # The knob the suites gate on, before anything reads a credential.
 export KINU_EVAL_BACKEND=cloud
-# The consent that lets a live model be called at all, exactly as the eval tier
-# spells it: being driven by this script is the consent.
+# The consent that lets a case drive the deployment's model path at all, exactly
+# as the eval tier spells it: being driven by this script is the consent.
 export KINU_EVAL_LIVE=1
 
 REPORT_DIR="$(bun scripts/bench-retention.ts --family first-run --backend cloud)"
@@ -106,6 +106,25 @@ if [[ ${#FLEET_RESOLVED[@]} -ne 2 || "${FLEET_RESOLVED[0]}" != "$KINU_ORIGIN" ]]
 fi
 FLEET_TOKEN="${FLEET_RESOLVED[1]}"
 
+# THE CASES ACT AS THE `scripted` ACCOUNT, ON THE SCRIPTED MODEL. The tier
+# checks the product, not what a model chooses: every workspace of both
+# accounts, and every helper and swarm node they hire, answers from
+# `tierModel` (scripts/tier-model.ts) through the tiers' Worker. A helper's
+# model comes from its account's default tier, so the cases need an account
+# of their own; the eval service's is shared with the evals, whose runs must
+# keep a real model. Whether a model makes the calls a case names when asked
+# in plain words is an eval's question, with a pass rate per model (evals/).
+CASES_ACCOUNT=scripted
+KINU_EVAL_ACCOUNT=$CASES_ACCOUNT bun scripts/eval-session-mint.ts || exit 1
+CASES_OUT="$(KINU_EVAL_ACCOUNT=$CASES_ACCOUNT bun scripts/eval-credentials.ts)"
+mapfile -t CASES_RESOLVED <<< "$CASES_OUT"
+if [[ ${#CASES_RESOLVED[@]} -ne 2 || "${CASES_RESOLVED[0]}" != "$KINU_ORIGIN" ]]; then
+  echo "first-run: no CLI bearer for the $CASES_ACCOUNT eval account at $KINU_ORIGIN." >&2
+  exit 1
+fi
+CASES_TOKEN="${CASES_RESOLVED[1]}"
+bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$CASES_ACCOUNT" "$FLEET_ACCOUNT" || exit 1
+
 echo "── first-run tier ────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN"
 echo "declared cases: $(ls tests/first-run/*.first-run.ts | wc -l | tr -d ' ') (executed/skipped cases are listed in JUnit)"
@@ -141,7 +160,7 @@ run_project() {
 set +e
 KINU_EVAL_ACCOUNT=$FLEET_ACCOUNT KINU_TOKEN=$FLEET_TOKEN run_project first-run-fleet "$@" &
 FLEET_PID=$!
-run_project first-run-cases "$@" &
+KINU_EVAL_ACCOUNT=$CASES_ACCOUNT KINU_TOKEN=$CASES_TOKEN run_project first-run-cases "$@" &
 CASES_PID=$!
 wait "$FLEET_PID"
 FLEET_STATUS=$?

@@ -860,6 +860,26 @@ if [ "$SMOKE_FAIL" -ne 0 ]; then
   exit 1
 fi
 
+# ── Step 4a: The tiers' scripted model ────────────────────────────────────
+#
+# The product tiers below check the product, not a model's choices: their
+# workspaces run on the scripted model (scripts/tier-model.ts), which the
+# deployment reaches at its own Worker on a Custom Domain. That is the one way a
+# Worker of this account is fetchable from ours without a service binding or a
+# compatibility flag in production's own config (Workers fetch docs: anything
+# else answers error 1042). Published every run, from this tree, because its
+# script is what the tiers' assertions were written against.
+echo ""
+echo -e "${BOLD}Step 4a: Publishing the tiers' scripted model${NC}"
+npx wrangler deploy -c scripts/scripted-model-worker.jsonc \
+  || { echo -e "${RED}❌ publishing the scripted model Worker failed${NC}"; exit 1; }
+SCRIPTED_MODEL_ORIGIN="$(bun -e "console.log((await import('./packages/test-utils/src/scripted-model-spec')).SCRIPTED_MODEL_ORIGIN)")"
+if ! curl -fsS --max-time 30 "$SCRIPTED_MODEL_ORIGIN/models" | grep -q '"fake-live"'; then
+  echo -e "${RED}❌ $SCRIPTED_MODEL_ORIGIN/models does not list the scripted model${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✅ The scripted model answers at $SCRIPTED_MODEL_ORIGIN${NC}"
+
 # ── Step 4b: The post-publish tiers ─────────────────────────────────────────
 #
 # AGAINST THE DEPLOYED PRODUCT, every deploy. There is one environment, so the
@@ -880,9 +900,9 @@ fi
 # it four times in one day. It is unconditional now.
 #
 # So this tier drives the DEPLOYED product the way a person does: a fresh
-# workspace per case over the public REST, the real model, a real click in
-# Chrome, two real daemons, real pty bytes. One case per defect, hard assertions
-# only, red on any of them.
+# workspace per case over the public REST, the scripted model (Step 4a) on the
+# deployment's own provider path, a real click in Chrome, two real daemons, real
+# pty bytes. One case per defect, hard assertions only, red on any of them.
 #
 # AFTER THE SMOKE GATE, because the smoke gate answers a cheaper question first:
 # did the deploy land at all. Running this against an origin that is not serving

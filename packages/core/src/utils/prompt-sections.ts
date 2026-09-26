@@ -13,6 +13,9 @@ export const DYNAMIC_CONTEXT_OPEN_TAG = '<dynamic_context';
 /** Workspace instruction files the owner has not approved (KINU-N028). */
 export const WORKSPACE_INSTRUCTIONS_TAG = 'workspace_instructions';
 
+/** A note the harness adds in the user's role at a turn's stop, such as the open-task reminder. */
+export const SYSTEM_REMINDER_TAG = 'system-reminder';
+
 export const DYNAMIC_CONTEXT_DELIMITER = /<(\/?)dynamic_context/g;
 
 export const WORKSPACE_INSTRUCTIONS_DELIMITER = /<(\/?)workspace_instructions/g;

@@ -44,12 +44,10 @@ import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 
 import { withLiveApp, createWorkspace, deleteWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
-import {
-  PLAN_MISSION, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
-  countingScript, planWalkthrough, registerScriptedModel, startScriptedModel,
-  type ScriptedModel,
-} from './scripted-model';
+import { PLAN_MISSION, SLATE_TITLE, countingScript, planWalkthrough, registerScriptedModel, startScriptedModel } from './scripted-model';
+import type { ScriptedModel } from './scripted-protocol';
 import { scratchDir } from '../packages/test-utils/src/scratch';
+import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
 const REPO = resolve(import.meta.dir, '..');
 
@@ -730,7 +728,7 @@ if (import.meta.main) {
   const model = await startScriptedModel(filmScript());
 
   const result = await withLiveApp(async (app) => {
-    await registerScriptedModel(app.origin, model.port);
+    await registerScriptedModel(app.origin, model.baseURL);
 
     return filmPlanReview(app, out, evidenceDir);
   }, { env: { DEV_USER_EMAIL: FILM_USER_EMAIL } });
