@@ -11,7 +11,7 @@ import {
 } from "agents";
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
-  actorConnectionTag, actorFromConnectionTags, hostedActorRoute, actorReadHandle, readSessionTranscript,
+  actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle, readSessionTranscript,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS,
   type RunEventInput, type SubordinateInspectionAuthority, type SessionTranscriptReader,
 } from '@kinu.run/core';
@@ -667,16 +667,18 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private clientRpcRefusal(connection: Connection, rpc: RpcFrame): string | null {
     if (this.isClientRpcMethodDenied(rpc.method)) return `${rpc.method} is not available from client connections.`;
-    const name = actorFromConnectionTags(connection.tags);
+    const id = actorFromConnectionTags(connection.tags);
 
-    if (name === null) return null;
+    if (id === null) return null;
+    const name = this.hostedWindowName(id);
     // The SDK runs any array of arguments; a window's must be JSON values.
     const args = v.safeParse(v.array(JsonValueSchema), rpc.args);
 
-    if (!args.success) return `${rpc.method} from ${name}'s window carries arguments that are not JSON values.`;
-    const id = this.hostedActorId(name);
+    if (name === null) return `${rpc.method} from a window whose agent this workspace no longer holds.`;
 
-    return id !== null && hostedWindowMay(rpc.method, args.output, { name, id }) ? null : `${rpc.method} from ${name}'s window may act only on ${name}.`;
+    if (!args.success) return `${rpc.method} from ${name}'s window carries arguments that are not JSON values.`;
+
+    return hostedWindowMay(rpc.method, args.output, { name, id }) ? null : `${rpc.method} from ${name}'s window may act only on ${name}.`;
   }
 
   private addressedActor(): string | null {
@@ -1168,8 +1170,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
     // The seed is fetched on the same path the pane's socket opens, so each pane gets its own actor's rows.
     const seed = async (c: Context): Promise<Response> => {
-      const hosted = hostedActorRoute(c.req.path);
-      const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted.name)?.history());
+      const hosted = hostedActorRoute(c.req.path) === null ? null : c.req.header(HOSTED_ACTOR_ID_HEADER) ?? '';
+      const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted)?.history());
 
       if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
 
@@ -1638,9 +1640,8 @@ export abstract class ActorAgent extends Agent<Env> {
     const scopeTag = cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER));
     const bearerTag = cliBearerConnectionTag(ctx.request.headers.get(CLI_BEARER_HEADER));
     const sessionTag = sessionBearerConnectionTag(ctx.request.headers.get(SESSION_BEARER_HEADER));
-    // server.ts routes a hosted actor's chat without rewriting the path, so the addressed actor
-    // is readable only here.
-    const actorTag = actorConnectionTag(new URL(ctx.request.url).pathname);
+    const actorId = ctx.request.headers.get(HOSTED_ACTOR_ID_HEADER);
+    const actorTag = actorId === null || hostedActorRoute(new URL(ctx.request.url).pathname) === null ? null : actorConnectionTag(actorId);
 
     return [
       ...tags,
@@ -1934,7 +1935,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private _chatRooms: ActorChatRooms | null = null;
   protected get chatRooms(): ActorChatRooms {
-    return this._chatRooms ??= new ActorChatRooms(() => this.chatTransport, (name) => this.hostedChatWire(name));
+    return this._chatRooms ??= new ActorChatRooms(() => this.chatTransport, (actorId) => this.hostedChatWire(actorId));
   }
 
   /** Null when the addressed actor is no longer hosted here. */
@@ -1943,9 +1944,9 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Null when this workspace hosts no such actor; only the workspace root knows its directory. */
-  protected abstract hostedChatWire(name: string): ChatWire | null;
+  protected abstract hostedChatWire(actorId: string): ChatWire | null;
 
-  protected abstract hostedActorId(name: string): string | null;
+  protected abstract hostedWindowName(actorId: string): string | null;
 
   /** Fires for any actor's connection; the root's sleep-time closed-tab trigger overrides both hooks. */
   protected connectionOpened(): void {}
@@ -3513,7 +3514,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * The chat behind a pane's actor id; the directory refuses ids it never issued or non-children.
+   * The chat behind a pane's actor id; the directory refuses ids it never issued or outside this actor's subordinates.
    * A retired actor is unbound, so it reads via the presence-fenced handle with no file plane.
    */
   private subordinateChat(actorId: string): SessionTranscriptReader {
@@ -3522,8 +3523,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (record === null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
 
-    if (record.parentActorId !== this.actorHandle().actorId || record.kind !== 'subordinate') {
-      throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
+    for (let step: typeof record | null = record; step?.actorId !== this.actorHandle().actorId; step = directory.retained(step.parentActorId ?? '')) {
+      if (step === null || step.kind !== 'subordinate') throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
     }
 
     if (record.retiringAt === null && record.deletedAt === null) return this.transcriptFor(directory.open(actorId));

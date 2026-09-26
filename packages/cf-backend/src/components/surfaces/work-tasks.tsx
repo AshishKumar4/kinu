@@ -20,18 +20,19 @@ export function isClosedTree(task: AgentTaskTree): boolean {
 
 interface TaskOwnership {
   owner?: WorkspaceWorkOwner;
-  /** Opens a direct subordinate's conversation by name: the one door to a helper that has no chat tab. */
   onOpenOwner?: ((name: string) => void | Promise<void>) | undefined;
 }
 
 function OwnerMark({ owner, onOpenOwner }: TaskOwnership) {
   if (owner === undefined) return null;
 
-  if (onOpenOwner === undefined || owner.path?.length !== 1) return <span className="p-meta p-text-3"> · {owner.name}</span>;
+  const path = owner.path ?? [];
+
+  if (onOpenOwner === undefined || path.length === 0) return <span className="p-meta p-text-3"> · {owner.name}</span>;
 
   return (
     <> · <button type="button" className="p-meta p-accent hover:underline" aria-label={`Open ${owner.name}'s conversation`}
-      onClick={() => void onOpenOwner(owner.name)}>{owner.name}</button></>
+      onClick={() => void onOpenOwner(path.join("/"))}>{owner.name}</button></>
   );
 }
 

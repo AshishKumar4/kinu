@@ -2468,6 +2468,7 @@ export {
   isForeignAgentNamespacePath,
   hostedActorRoute,
   hostedActorSocketPath,
+  HOSTED_ACTOR_ID_HEADER,
 } from './http/agent-routing';
 
 export {

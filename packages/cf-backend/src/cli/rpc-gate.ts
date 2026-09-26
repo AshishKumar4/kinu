@@ -8,7 +8,7 @@ import { diagnostics, tolerate } from '@kinu.run/core/obs';
 import type { WSMessage } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
 import {
-  type AccessTokenScope, type AgentRpcAccess, type AgentRpcMethod, DEV_IDENTITY_HEADER, normalizeAccessTokenScopes,
+  type AccessTokenScope, type AgentRpcAccess, type AgentRpcMethod, DEV_IDENTITY_HEADER, HOSTED_ACTOR_ID_HEADER, normalizeAccessTokenScopes,
   requiredRpcAccess, rpcAccessScope,
 } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -107,6 +107,7 @@ export function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Heade
   }
 
   next.delete(SESSION_BEARER_HEADER);
+  next.delete(HOSTED_ACTOR_ID_HEADER);
 
   if (identity.sessionTokenHash) {
     next.set(SESSION_BEARER_HEADER, identity.sessionTokenHash);

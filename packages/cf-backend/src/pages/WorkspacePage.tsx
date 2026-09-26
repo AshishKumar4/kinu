@@ -11,7 +11,8 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   isPlaceholderMission, summarizeRestorePlan,
 } from "@kinu.run/core";
-import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, TakePickOutcome } from "@kinu.run/core";
+import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, Rpc, SeekCursor, SubordinateChild, SubordinateInspectionResult, TakePickOutcome } from "@kinu.run/core";
+import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useAutogrow } from "@/hooks/use-autogrow";
@@ -22,7 +23,8 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { touchWorkspace } from "@/lib/user-api";
-import { describeError } from "@/hooks/use-async-resource";
+import { describeError, useAsyncResource } from "@/hooks/use-async-resource";
+import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Modal } from "@/components/ui/Modal";
@@ -308,6 +310,71 @@ function ForkModal({
   );
 }
 
+async function nestedAgentRow(rpc: Rpc, path: string): Promise<SubordinateChild | null> {
+  const names = path.split("/");
+  const name = names.at(-1);
+  let cursor: SeekCursor | undefined;
+
+  do {
+    const read = await rpc<SubordinateInspectionResult>("inspectSubordinate", [{ path: names.slice(0, -1), view: "children", page: cursor === undefined ? {} : { cursor } }]);
+
+    if (read.view !== "children") throw new Error(`the roster read answered "${read.view}"`);
+    const found = read.page.items.find((entry) => entry.name === name);
+
+    if (found !== undefined) return found;
+    cursor = read.page.status === "more" ? read.page.next : undefined;
+  } while (cursor !== undefined);
+
+  return null;
+}
+
+function NestedAgentColumn({ workspace, path, rpc }: { workspace: string; path: string; rpc: Rpc }) {
+  const { resource, reload } = useAsyncResource(() => nestedAgentRow(rpc, path), undefined, path);
+
+  if (resource.status === "loading") return <div className="flex flex-1 items-center justify-center"><Loader size="sm" /></div>;
+
+  if (resource.status === "error") return <LoadFailure className="p-4" what={`${path}'s place in its roster`} message={resource.message} onRetry={reload} />;
+  const row = resource.value;
+
+  if (row === null) return <p className="p-4 text-sm p-text-3">No agent is at {path} in this workspace.</p>;
+  const title = agentTitle(row);
+
+  return row.status === "dismissed"
+    ? <KeptChatColumn workspace={workspace} subName={path} title={title} rpc={rpc} actorId={row.actorReference?.actorId ?? null} />
+    : <SubordinateChatColumn workspace={workspace} subName={path} title={title} />;
+}
+
+/** A subordinate below a direct child is addressed by its `/`-joined path of names, as its socket and RPCs take it. */
+function routedAgentPath({ subName, "*": below }: Readonly<Record<string, string | undefined>>): string | undefined {
+  if (subName === undefined) return undefined;
+
+  return [subName, ...(below ?? "").split("/").filter(Boolean)].join("/");
+}
+
+/** The work read names an owner by its own name, the last of its path. */
+function planOwnerName(subName: string | undefined, agentId: string | undefined): string {
+  if (subName !== undefined) return subName.slice(subName.lastIndexOf("/") + 1);
+
+  return agentId ?? "main";
+}
+
+function AgentChatColumn({ workspace, subName, subordinates, rpc }: {
+  workspace: string;
+  subName: string;
+  subordinates: readonly SubordinateRosterEntry[];
+  rpc: Rpc;
+}) {
+  if (subName.includes("/")) return <NestedAgentColumn workspace={workspace} path={subName} rpc={rpc} />;
+  const rosterEntry = subordinates.find((entry) => entry.name === subName);
+
+  // A dismissed agent has no socket; its kept chat is paged over this workspace's.
+  if (rosterEntry?.status === "dismissed") {
+    return <KeptChatColumn workspace={workspace} subName={subName} title={agentTitle(rosterEntry)} rpc={rpc} actorId={rosterEntry.actorId} />;
+  }
+
+  return <SubordinateChatColumn workspace={workspace} subName={subName} title={rosterEntry ? agentTitle(rosterEntry) : subName} />;
+}
+
 /** One subordinate's chat over its own facet socket; Work Surface and Timeline stay on
  *  the parent socket. The facet exposes no fork/feedback/takes/restore. */
 function SubordinateChatColumn({
@@ -479,7 +546,9 @@ function loadNotices(error: WorkspaceNotice | null, onRetry: () => void): Compos
 
 
 export default function WorkspacePage() {
-  const { agentId, subName } = useParams();
+  const params = useParams();
+  const { agentId } = params;
+  const subName = routedAgentPath(params);
   const location = useLocation();
   const navigate = useNavigate();
   const state = useKinu(agentId);
@@ -876,26 +945,9 @@ export default function WorkspacePage() {
                 {inspectorControl && <InspectorToggle control={inspectorControl} />}
               </>}
             />
-            {subName ? (() => {
-              const rosterEntry = state.subordinates.find((entry) => entry.name === subName);
-
-              // A dismissed agent has no socket; its kept chat is paged over this workspace's.
-              if (rosterEntry?.status === "dismissed") {
-                return (
-                  <KeptChatColumn key={subName} workspace={agentId} subName={subName}
-                    title={agentTitle(rosterEntry)} rpc={state.rpc} actorId={rosterEntry.actorId} />
-                );
-              }
-
-              return (
-                <SubordinateChatColumn
-                  key={subName}
-                  workspace={agentId}
-                  subName={subName}
-                  title={rosterEntry ? agentTitle(rosterEntry) : subName}
-                />
-              );
-            })() : (
+            {subName ? (
+              <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} />
+            ) : (
             <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${agentId}/main`}
               {...chatDrop}>
             {dragOver && (
@@ -1041,9 +1093,9 @@ export default function WorkspacePage() {
             previewFocus={state.previewFocus}
             planFocus={state.planFocus}
             changesFocus={changesFocus}
-            planOwner={subName ?? agentId ?? "main"}
+            planOwner={planOwnerName(subName, agentId)}
             workspacePlanArrival={state.workspacePlanArrival}
-            onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
+            onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${name.split("/").map(encodeURIComponent).join("/")}`); }}
             onSurface={setSurface}
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}

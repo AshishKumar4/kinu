@@ -7,8 +7,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import * as v from 'valibot';
 import {
-  actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS, hostedActorSocketPath,
-  observedActionEnum, ORCHESTRATOR_AGENT_SLUG, REPORT_TOOL, TASK_TURN_ENDINGS, terminalTaskReport,
+  actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS,
+  observedActionEnum, REPORT_TOOL, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
 import type { SubordinateRosterEntry } from '@kinu.run/core/protocol';
 import { present } from '@kinu.run/test-utils';
@@ -19,7 +19,7 @@ import {
   chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, workspaceFiles,
 } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
-import { answeringGateway, offeredTools } from './helpers/platform-gateway';
+import { answeringGateway, chatCompletion, offeredTools, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 mockAgentsSdk();
 
@@ -204,6 +204,46 @@ describe('a dismissed agent keeps its conversation reachable', () => {
   });
 });
 
+/** A helper below a direct child has no tab; the Work tab opens its chat by the path the TUI walks. */
+describe('a subordinate below a direct child is reached by its path', () => {
+  /** The helper's own model hires when its task says so, as a delegated turn does. */
+  const hiringGateway = () => stubAiBinding((run) => {
+    const asked = requestOf(run).messages.some((message) => message.role === 'user' && JSON.stringify(message.content).includes('Hire ask-checker-a1'));
+    const answered = requestOf(run).messages.some((message) => message.role === 'tool');
+
+    return asked && !answered
+      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', agent: 'ask-checker-a1', role: 'task', mission: 'Check the ledger.' } }, 'agents_0')
+      : chatCompletion(run, 'Done.');
+  });
+
+  async function grandchild() {
+    const parent = gatewayWorkspace(hiringGateway());
+    await parent.agent.setSoul('# Purpose\n\nAudit the ledger.');
+    const { name, subordinate } = await parent.agent.createSubordinateAgent();
+
+    await runDelegatedTask(parent, present(subordinate.actorId, 'the helper id'), 'Hire ask-checker-a1 to check the ledger.');
+    const children = await parent.agent.inspectSubordinate({ path: [name], view: 'children', page: {} });
+    const nested = children.view === 'children' ? children.page.items.find((entry) => entry.name === 'ask-checker-a1') : undefined;
+
+    return { agent: parent.agent, path: `${name}/ask-checker-a1`, id: nested?.actorReference?.actorId };
+  }
+
+  test('the edge resolves the path to the grandchild\'s id, and its chat and window reads follow', async () => {
+    const { agent, path, id } = await grandchild();
+    const resolved = await agent.resolveHostedActorRoute(path);
+
+    expect(resolved).toEqual({ ok: true, actorId: present(id, 'the grandchild id') });
+    expect((await agent.getChatHistoryPage({ actor: present(id, 'the grandchild id') })).status).toBe('end');
+    expect((await agent.getActorSnapshot(path)).name).toBe('ask-checker-a1');
+  });
+
+  test('a name the root does not employ resolves to nothing, even when a grandchild has it', async () => {
+    const { agent } = await grandchild();
+
+    expect(await agent.resolveHostedActorRoute('ask-checker-a1')).toMatchObject({ reason: 'missing' });
+  });
+});
+
 describe('an agent\'s window hears only what it may act on', () => {
   /**
    * One object serves the workspace's windows and each agent's. The workspace's own frames once reached an agent's
@@ -231,7 +271,10 @@ describe('an agent\'s window hears only what it may act on', () => {
       // An added agent inherits the workspace's purpose, so the workspace needs one first.
       await agent.setSoul('# Purpose\n\nAudit the ledger.');
       const { name } = await agent.createSubordinateAgent();
-      const tag = present(actorConnectionTag(`/agents/${ORCHESTRATOR_AGENT_SLUG}/ledger/${hostedActorSocketPath(name)}`), 'the window tag');
+      const resolved = await agent.resolveHostedActorRoute(name);
+
+      if ('reason' in resolved) throw new Error(resolved.error);
+      const tag = actorConnectionTag(resolved.actorId);
 
       windows.push(socketConnection({ id: 'agent', tags: [tag] }));
       await agent.renameSubordinateAgent(name, 'Ledger auditor');

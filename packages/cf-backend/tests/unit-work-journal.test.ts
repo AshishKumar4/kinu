@@ -142,8 +142,10 @@ describe('a task names its owner, and a subordinate owner opens from the row', (
 
   const row = (shown: WorkspaceWorkOwner) => renderToStaticMarkup(createElement(TaskTree, { task: open, owner: shown, onOpenOwner: () => {} }));
 
-  test('a helper\'s task names it, and its owner is a control that opens that helper\'s conversation', () => {
-    expect(row(owner('ask-refiner-fb0gr9', ['ask-refiner-fb0gr9']))).toContain('aria-label="Open ask-refiner-fb0gr9&#x27;s conversation"');
+  test('a helper\'s task names it, and its owner is a control that opens that helper\'s conversation, at any depth', () => {
+    for (const path of [['ask-refiner-fb0gr9'], ['auditor', 'ask-refiner-fb0gr9']]) {
+      expect(row(owner('ask-refiner-fb0gr9', path))).toContain('aria-label="Open ask-refiner-fb0gr9&#x27;s conversation"');
+    }
   });
 
   test('the workspace\'s own task and one past a head name their owner and offer no door', () => {

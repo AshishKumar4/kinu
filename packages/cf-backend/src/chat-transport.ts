@@ -502,7 +502,7 @@ export class ActorChatRooms {
 
   constructor(
     private readonly root: () => ChatWireTransport,
-    private readonly wireFor: (name: string) => ChatWire | null,
+    private readonly wireFor: (actorId: string) => ChatWire | null,
   ) {}
 
   for(actor: string | null): ChatWireTransport | null {

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-26",
-  "files": 2772,
-  "functions": 68639,
+  "files": 2775,
+  "functions": 68729,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -271,10 +271,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
-      "complexity": 30
-    },
-    {
-      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
       "complexity": 30
     },
     {
