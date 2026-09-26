@@ -2,7 +2,7 @@
  *  session writers, and carried by the production frame stream into the production receiver. */
 
 import { describe, test, expect } from 'bun:test';
-import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { forkTransferFrames, readForkLineage, readSoul } from '../src/index';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
 import {
@@ -52,6 +52,25 @@ describe('a workspace fork', () => {
     const chain = await readChain(tgt);
     expect(inherited(chain.ids)).toEqual(['m1', 'm2']);
     expect(chain.text.slice(0, 2)).toEqual(['hi', 'hello']);
+    expect(await readSoul(tgt.vfs)).toBe('help with testing');
+  });
+
+  test('a soul swapped since the seal does not become the fork\'s: the target row holds the owner\'s', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    await seedForkTarget(tgt, { workspaceId: 'TGT' });
+    const chat = await seedForkSource(src);
+    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+
+    // A mid-turn swap of the file: the fork carries the owner's row through the resealed source.
+    const kernel = (await src.bundle.session()).vfs.as(CRED_KERNEL);
+    kernel.unlink(`${WORKSPACE_ROOT}/SOUL.md`);
+    kernel.writeFile(`${WORKSPACE_ROOT}/SOUL.md`, 'forged');
+    kernel.chown(`${WORKSPACE_ROOT}/SOUL.md`, 1000, 1000);
+    kernel.chmod(`${WORKSPACE_ROOT}/SOUL.md`, 0o644);
+
+    await forkInto(src, tgt, { untilMessageId: 'm1' });
+
     expect(await readSoul(tgt.vfs)).toBe('help with testing');
   });
 

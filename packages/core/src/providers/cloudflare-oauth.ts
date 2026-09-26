@@ -51,29 +51,34 @@ export interface CloudflareTokenPayload {
   scope?: unknown;
 }
 
+export function cloudflareClientAuth(env: CloudflareOAuthEnv): { fields: Record<string, string>; headers: Record<string, string> } | null {
+  const clientId = cleanEnv(env.CLOUDFLARE_OAUTH_CLIENT_ID);
+  const clientSecret = cleanEnv(env.CLOUDFLARE_OAUTH_CLIENT_SECRET);
+
+  if (!clientId) return null;
+
+  if (!clientSecret) return { fields: { client_id: clientId }, headers: {} };
+
+  return env.CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD === 'client_secret_post'
+    ? { fields: { client_id: clientId, client_secret: clientSecret }, headers: {} }
+    : { fields: { client_id: clientId }, headers: { authorization: `Basic ${base64(`${clientId}:${clientSecret}`)}` } };
+}
+
 async function requestCloudflareOAuthToken(
   env: CloudflareOAuthEnv,
   fields: Record<string, string>,
 ): Promise<JsonObject> {
-  const clientId = cleanEnv(env.CLOUDFLARE_OAUTH_CLIENT_ID);
-  const clientSecret = cleanEnv(env.CLOUDFLARE_OAUTH_CLIENT_SECRET);
+  const client = cloudflareClientAuth(env);
 
-  if (!clientId) throw new Error('Cloudflare OAuth client id is not configured.');
+  if (client === null) throw new Error('Cloudflare OAuth client id is not configured.');
 
-  const body = new URLSearchParams({ client_id: clientId, ...fields });
+  const body = new URLSearchParams({ ...client.fields, ...fields });
 
   const headers = new Headers({
     accept: 'application/json',
     'content-type': 'application/x-www-form-urlencoded',
+    ...client.headers,
   });
-
-  if (clientSecret) {
-    if (env.CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD === 'client_secret_post') {
-      body.set('client_secret', clientSecret);
-    } else {
-      headers.set('authorization', `Basic ${base64(`${clientId}:${clientSecret}`)}`);
-    }
-  }
 
   const response = await fetch(CLOUDFLARE_TOKEN_URL, { method: 'POST', headers, body });
   const payload = await readJsonObject(response, 'Cloudflare token endpoint');
@@ -126,8 +131,7 @@ export async function cloudflareTokenToCredential(
   if (!accessToken) throw new Error('Cloudflare OAuth did not return an access token.');
 
   const refreshToken = nonEmptyString({ value: token.refresh_token });
-  // Account discovery is not authentication: a failed lookup must still store the credential
-  // (a missing account already reports "Connect Cloudflare Workers AI").
+  // A failed account lookup still stores the credential; a missing account already says so.
   let accounts: CloudflareAccount[] = [];
 
   try {
@@ -144,7 +148,7 @@ export async function cloudflareTokenToCredential(
     tokenType: nonEmptyString({ value: token.token_type }) ?? 'bearer',
   };
 
-  // Record every visible account so a multi-account user can switch without another API call; the first is selected.
+  // Every visible account, so switching needs no API call; the first is selected.
   if (accounts.length > 0) {
     metadata.accounts = accounts.map((account) => ({ id: account.id, name: account.name }));
     metadata.accountId = accounts[0].id;
@@ -360,7 +364,7 @@ function scopeList(input: { value: unknown }): string[] | undefined {
   return undefined;
 }
 
-/** A payload field as non-empty text; blank counts as absent. */
+/** Non-empty text; blank is absent. */
 function stringField(obj: JsonObject, key: string): string | undefined {
   return nonEmptyString({ value: obj[key] });
 }

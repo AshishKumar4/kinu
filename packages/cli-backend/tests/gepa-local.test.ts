@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import {
-  bootstrapScaffold, initWorkspaceSchema, listGepaRuns, recordTurnOutcome, seedSoul,
+  bootstrapScaffold, initWorkspaceSchema, listGepaRuns, recordTurnOutcome,
   type LLMProviderConfig,
 } from '@kinu.run/core';
 import type { ActorHandle } from '@kinu.run/core';
@@ -77,7 +77,6 @@ async function setup(judge: () => Promise<string>) {
   });
 
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  await seedSoul(rt.storage.vfs, rt.storage.sql, { name: 'gepa-local', mission: 'prove the pass runs locally' });
   await bootstrapScaffold(rt);
 
   let judgeCalls = 0;
