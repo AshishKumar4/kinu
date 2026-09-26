@@ -163,10 +163,14 @@ function request(input: {
     };
   });
 
-  return readScriptedRequest(JSON.stringify({
+  const read = readScriptedRequest(JSON.stringify({
     messages,
     tools: input.available.map((name) => ({ function: { name } })),
   }));
+
+  if ('refusal' in read) throw new Error(read.refusal.body);
+
+  return read.request;
 }
 
 const MISSION = { role: 'user', content: PLAN_MISSION };

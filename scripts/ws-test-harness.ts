@@ -12,6 +12,7 @@
 import * as v from "valibot";
 import { BUILTIN_TOOLS, JsonValueSchema, parseJsonValue, type JsonValue } from "../packages/core/src/index";
 import { renderThrownChain } from "../packages/core/src/obs/index";
+import { beatWorkspace } from "../evals/src/session";
 
 const BASE_URL = process.argv[2] ?? "http://localhost:5173";
 
@@ -453,6 +454,10 @@ async function main() {
   console.log(`Target: ${BASE_URL}`);
   console.log(`Agent:  ${AGENT_NAME}`);
   console.log(`────────────────────────────────────`);
+
+  // The agent is an `eval-` workspace on the target's account: marked live while this runs, so no eval run's sweep
+  // takes it; a run that dies leaves it to the next sweep. Its unref'd timer never holds the process open.
+  beatWorkspace(BASE_URL, { kind: "loopback" }, AGENT_NAME);
 
   // §1 — HTTP endpoint
   console.log(`\n§1. HTTP Endpoints`);

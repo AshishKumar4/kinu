@@ -28,7 +28,7 @@ import {
   type SqlValue, type WorkMode,
   type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError, type AgentTracing } from '@kinu.run/core/obs';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
 import type { HostedNodeHome } from '@kinu.run/core';
 
@@ -77,6 +77,7 @@ export interface WorkspaceHostSeams {
   /** Re-derive the root's alarm; a hosted actor has no alarm slot of its own. */
   reconcileDurableWake(): void;
   logActivity(actorId: string, event: string, detail?: string): void;
+  tracing(): AgentTracing;
   slate(actor: ActorHandle, operation: SlateOperation): Promise<SlateCallResult>;
   /** The owner's needs-you queue: one per workspace. */
   deferrals(): DeferredApprovalChannel | undefined;
@@ -176,6 +177,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     },
     directory: seams.directory,
     installedBuild: seams.installedBuild(),
+    tracing: () => seams.tracing(),
     filesFor: async (bound) => {
       const provisioning = homeFor(bound.record, bound.reference);
       const box = seams.workspaceBox(hostedActorShellId(bound.record));

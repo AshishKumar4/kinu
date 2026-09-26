@@ -1720,7 +1720,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
           const state = {
             savePromptTokens: (key: string, tokens: number, len: number) => { saved.push([key, tokens, len]); },
-            armForceCompaction: () => {},
+            armCompaction: () => {},
           };
 
           s.persistMeasuredPromptTokens(state, 'k', undefined, 12);
@@ -1734,7 +1734,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'a context overflow arms force-compaction and declares exactly one retry; a failed retry and a rate limit never do',
         observe: (s) => {
           const armed: string[] = [];
-          const state = { savePromptTokens: () => {}, armForceCompaction: (key: string) => { armed.push(key); } };
+          const state = { savePromptTokens: () => {}, armCompaction: (key: string) => { armed.push(key); } };
 
           const decisions = [
             s.applyOverflowRecovery({

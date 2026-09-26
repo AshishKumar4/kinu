@@ -926,6 +926,17 @@
       "samples": 92,
       "loadAtStart": 11.54,
       "exit": 0
+    },
+    "bun test --timeout=0 scripts/deadline-capability.test.ts": {
+      "wallSeconds": 0.33,
+      "cpuSeconds": 0.28,
+      "peakRssMb": 67.96,
+      "peakRunnable": 3,
+      "peakCpuThreads": 0,
+      "meanThreads": 0.84,
+      "samples": 5,
+      "loadAtStart": 6.36,
+      "exit": 0
     }
   }
 }

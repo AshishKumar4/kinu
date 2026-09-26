@@ -40,11 +40,14 @@ export function heldSecrets(env: Readonly<Record<string, string | undefined>>): 
 
 const HELD = heldSecrets(process.env);
 
+/** `text` with the held credential replaced, and nothing else: a kept file stays the workspace's own. */
+export function unheld(text: string, held: readonly string[] = HELD): string {
+  return held.reduce((scrubbed, secret) => scrubbed.replaceAll(secret, '<secret>'), text);
+}
+
 /** `text` with the held credential and every secret-shaped string replaced. */
 export function redact(text: string, held: readonly string[] = HELD): string {
-  const unheld = held.reduce((scrubbed, secret) => scrubbed.replaceAll(secret, '<secret>'), text);
-
-  return SECRETS.reduce((scrubbed, [pattern, replacement]) => scrubbed.replace(pattern, replacement), unheld);
+  return SECRETS.reduce((scrubbed, [pattern, replacement]) => scrubbed.replace(pattern, replacement), unheld(text, held));
 }
 
 /** Every string in a JSON value, scrubbed; keys are the product's own names and stay. */

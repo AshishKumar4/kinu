@@ -97,6 +97,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
   };
 
   const host = createActorHost({
+    tracing: undefined,
     storage: {
       sql,
       transactionSync: (write) => db.transaction(write)(),

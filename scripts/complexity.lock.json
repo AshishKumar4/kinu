@@ -1,9 +1,9 @@
 {
-  "measuredAt": "2026-09-25",
-  "files": 2701,
-  "functions": 66317,
+  "measuredAt": "2026-09-26",
+  "files": 2737,
+  "functions": 67550,
   "ceiling": 87,
-  "line": 31,
+  "line": 30,
   "inventory": [
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
@@ -34,12 +34,12 @@
       "complexity": 43
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 43
     },
     {
-      "key": "scripts/do-init-gate.ts#auditFile>walk",
-      "complexity": 43
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "complexity": 42
     },
     {
       "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
@@ -62,16 +62,8 @@
       "complexity": 41
     },
     {
-      "key": "scripts/infra-manifest.ts#draftsFor",
-      "complexity": 41
-    },
-    {
       "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
       "complexity": 40
-    },
-    {
-      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
-      "complexity": 38
     },
     {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
@@ -84,6 +76,10 @@
     {
       "key": "scripts/axis-ergonomics/report.ts#score",
       "complexity": 39
+    },
+    {
+      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
+      "complexity": 38
     },
     {
       "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction",
@@ -111,6 +107,10 @@
     },
     {
       "key": "packages/pc-agent/src/index.js#handle",
+      "complexity": 37
+    },
+    {
+      "key": "scripts/infra-manifest.ts#draftsFor",
       "complexity": 37
     },
     {
@@ -178,10 +178,6 @@
       "complexity": 32
     },
     {
-      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
-      "complexity": 30
-    },
-    {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
       "complexity": 32
     },
@@ -214,10 +210,6 @@
       "complexity": 31
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
-      "complexity": 30
-    },
-    {
       "key": "packages/cf-backend/src/drive-design/DriveDesignPage.tsx#DriveDesignPage",
       "complexity": 31
     },
@@ -240,10 +232,6 @@
     {
       "key": "packages/cli/src/chat-loop.ts#applySlashOutcome",
       "complexity": 31
-    },
-    {
-      "key": "packages/cli/src/commands/debug.ts#debugCommand",
-      "complexity": 30
     },
     {
       "key": "packages/core/src/chat.ts#runChat",
@@ -284,6 +272,62 @@
     {
       "key": "tests/first-run/exploration.first-run.ts#describe>liveTest>run",
       "complexity": 31
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
+      "complexity": 30
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
+      "complexity": 30
+    },
+    {
+      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
+      "complexity": 30
+    },
+    {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
+      "complexity": 30
+    },
+    {
+      "key": "packages/cli-backend/src/opencode-provider.ts#discoverModels",
+      "complexity": 30
+    },
+    {
+      "key": "packages/cli/src/commands/debug.ts#debugCommand",
+      "complexity": 30
+    },
+    {
+      "key": "packages/cli/src/commands/run.ts#runLocalRpcCommand",
+      "complexity": 30
+    },
+    {
+      "key": "packages/core/src/chat.ts#ProviderCall.consume",
+      "complexity": 30
+    },
+    {
+      "key": "packages/core/src/memory/hybrid-search.ts#hybridSearch>map#4",
+      "complexity": 30
+    },
+    {
+      "key": "packages/core/src/orchestrator/terminal-roster.ts#declareTerminalRoster",
+      "complexity": 30
+    },
+    {
+      "key": "packages/core/src/providers/util.ts#readProviderFailure",
+      "complexity": 30
+    },
+    {
+      "key": "scripts/fixtures/kinu-durability/worker.ts#fetch",
+      "complexity": 30
+    },
+    {
+      "key": "scripts/infra-verify.ts#observe",
+      "complexity": 30
+    },
+    {
+      "key": "scripts/shell-words.ts#readScript",
+      "complexity": 30
     }
   ]
 }

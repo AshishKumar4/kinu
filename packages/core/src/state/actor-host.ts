@@ -21,7 +21,7 @@ import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { readVersionedScaffoldSource } from '../scaffold/shadow';
 import { sha256Hex } from '../safety/argument-digest';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError, type AgentTracing } from '../obs/index';
 
 /** The runtime must be built over this same handle, never a second binding. */
 export interface BoundActor {
@@ -74,6 +74,7 @@ export interface ActorHostDeps {
   contextEvents(bound: BoundActor): ContextEventRecorder | null;
   /** Called after the rows are gone, so a failed reclaim leaves no half-removed readable actor. */
   discardBytes?(record: WorkspaceActor): Promise<void>;
+  readonly tracing: (() => AgentTracing) | undefined;
 }
 
 export interface ActorHost {
@@ -206,8 +207,12 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     await seedActorLoop(runtime, seed.parent, seed.origin);
     const orchestration = await deps.orchestrationFor({ ...bound, runtime });
 
+    const tracing = deps.tracing;
+    const actor = { id: bound.record.actorId, kind: bound.record.kind };
+
     const session = new ActorSession({
       runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
+      turns: tracing && (() => tracing().turns(actor)),
       history: bound.stores.history,
       events: deps.contextEvents(bound),
       advisor: reference.parentActorId === null ? undefined : {

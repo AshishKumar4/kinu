@@ -460,6 +460,8 @@ export class LocalAgentHost {
     const orchestrations = new Map<string, LocalOrchestration>();
 
     const host = createActorHost({
+      // The CLI has no tracer.
+      tracing: undefined,
       storage: {
         sql,
         transactionSync: (write) => db.transaction(write)(),

@@ -33,7 +33,7 @@ function recordingState(): CompactionTriggerState & {
   return {
     saved, armed,
     savePromptTokens: (key, tokens, len) => { saved.push([key, tokens, len]); },
-    armForceCompaction: (key) => { armed.push(key); },
+    armCompaction: (key) => { armed.push(key); },
   };
 }
 

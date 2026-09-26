@@ -17,7 +17,7 @@ interface Props {
   scaffoldVersion?: number;
   toolCount?: number;
   autoEvolve?: boolean;
-  contextTokens?: number;
+  contextTokens?: number | null;
   contextWindow?: number;
   branchCount?: number;
   profile?: ResolvedTurnProfile;
@@ -31,7 +31,7 @@ function widestThatFits(budget: number, full: string, bare: string): string {
   return budget >= bare.length ? bare : '';
 }
 
-export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, connected, scaffoldVersion, toolCount, autoEvolve, contextTokens = 0, contextWindow, branchCount = 0, profile }: Props) {
+export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, connected, scaffoldVersion, toolCount, autoEvolve, contextTokens = null, contextWindow, branchCount = 0, profile }: Props) {
   const width = useSceneWidth();
   const { colors } = useTuiTheme();
   const keybindings = useKeybindingRegistry();

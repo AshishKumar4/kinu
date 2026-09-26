@@ -30,13 +30,18 @@
  *
  * It never deletes, for the same reason it never guesses. A workspace holds an
  * agent's whole history, the list above was 82% debris and 18% real work, and no
- * heuristic is worth the 18%.
+ * heuristic is worth the 18%. The eval runner's sweep (`evals/src/sweep.ts`) does
+ * delete, by rule rather than by guess: an `eval-` workspace on the eval account
+ * whose run stopped marking it live, and that `evals/held-workspaces.json` does not
+ * hold. A held row here says so, with its reason.
  */
 import { listCloudAgents, type CloudAgent } from '../packages/cli/src/cloud-api';
 import {
   EVAL_WORKSPACE_PREFIX, resolveEvalIdentity, type EvalIdentity,
 } from '../packages/test-utils/src/eval-identity';
+import { parseArgs } from 'node:util';
 import { resolveCloudSession } from '../packages/cli/src/config';
+import { heldWorkspaces } from '../evals/src/sweep';
 
 interface Options {
   readonly origin: string | null;
@@ -45,31 +50,13 @@ interface Options {
   readonly prefixes: readonly string[];
 }
 
-function parseArgs(argv: readonly string[]): Options {
-  let origin: string | null = null;
-  let all = false;
-  const prefixes = [EVAL_WORKSPACE_PREFIX];
+function readOptions(argv: readonly string[]): Options {
+  const { values } = parseArgs({
+    args: [...argv],
+    options: { origin: { type: 'string' }, all: { type: 'boolean' }, prefix: { type: 'string', multiple: true } },
+  });
 
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-
-    if (arg === '--all') { all = true; continue; }
-
-    if (arg === '--origin' || arg === '--prefix') {
-      const value = argv[i + 1];
-
-      if (!value) throw new Error(`${arg} needs a value`);
-
-      if (arg === '--origin') origin = value;
-      else prefixes.push(value);
-      i += 1;
-      continue;
-    }
-
-    throw new Error(`unknown argument ${String(arg)}`);
-  }
-
-  return { origin, all, prefixes };
+  return { origin: values.origin ?? null, all: values.all === true, prefixes: [EVAL_WORKSPACE_PREFIX, ...values.prefix ?? []] };
 }
 
 /** One account's list endpoint and the credential that reads it, with WHOSE
@@ -130,8 +117,12 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
   lines.push(`${String(evalRows.length)} of ${String(agents.length)} workspace(s) match `
     + `${options.prefixes.map((p) => `\`${p}\``).join(' or ')}:`);
 
+  const held = heldWorkspaces(origin);
+
   for (const agent of [...evalRows].sort((a, b) => a.createdAt - b.createdAt)) {
-    lines.push(`  ${agent.name}  ${when(agent.createdAt)}  ${agent.displayName}`);
+    const reason = held.get(agent.name);
+
+    lines.push(`  ${agent.name}  ${when(agent.createdAt)}  ${agent.displayName}${reason === undefined ? '' : `  (held: ${reason})`}`);
   }
 
   if (evalRows.length === 0) lines.push('  (none)');
@@ -150,8 +141,9 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
   }
 
   lines.push('');
+  const removable = evalRows.filter((agent) => !held.has(agent.name));
 
-  if (evalRows.length === 0) {
+  if (removable.length === 0) {
     lines.push('Nothing to clean.');
 
     return lines;
@@ -163,14 +155,14 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
   // origin is carried explicitly so the command cannot land on a different
   // account than the list above was read from.
   lines.push('To remove them, run:');
-  lines.push(`  KINU_ORIGIN=${origin} sh -c 'for w in ${evalRows.map((a) => a.name).join(' ')};`
+  lines.push(`  KINU_ORIGIN=${origin} sh -c 'for w in ${removable.map((a) => a.name).join(' ')};`
     + " do kinu workspace delete -y \"$w\"; done'");
 
   return lines;
 }
 
 async function main(argv: readonly string[]): Promise<number> {
-  const options = parseArgs(argv);
+  const options = readOptions(argv);
   const { origin, token, via } = credentials(options);
   console.log(`account at ${origin}, read as ${via}`);
   console.log(render(await listCloudAgents(origin, token), options, origin).join('\n'));

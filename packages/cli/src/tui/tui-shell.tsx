@@ -556,7 +556,7 @@ export function TuiShell(props: TuiShellProps) {
     const action = result.actionId;
 
     if (action === 'modal.close') {
-      if (!overlayOpen) return;
+      if (!overlayOpen && props.scene !== 'chat') return;
       event.preventDefault();
       props.onNavigationOverlayChange(false);
 
@@ -630,6 +630,7 @@ export function TuiShell(props: TuiShellProps) {
       selectedIndex={overlayOpen || (sidebarPinned && props.navigationFocused === true) ? selectedIndex : undefined}
       onActivate={activateRow}
       scrollRef={navScrollRef}
+      leaveHint={host === 'sidebar' && props.scene === 'chat' && props.navigationFocused === true}
     />
   );
 
@@ -703,6 +704,7 @@ function WorkspaceNavigator(props: {
   readonly selectedIndex?: number;
   readonly onActivate: (row: TuiSidebarRow) => void;
   readonly scrollRef: RefObject<ScrollBoxRenderable | null>;
+  readonly leaveHint?: boolean;
 }) {
   const { colors } = useTuiTheme();
   const currentKey = props.current === undefined ? null : agentRowKey(props.current);
@@ -740,6 +742,9 @@ function WorkspaceNavigator(props: {
         ))}
       </scrollbox>
       {props.loading && <text style={{ flexShrink: 0 }}><span fg={colors.text.muted}>Loading…</span></text>}
+      {props.leaveHint === true && (
+        <text style={{ flexShrink: 0 }}><span fg={colors.intent.accent}>Enter open · Esc back</span></text>
+      )}
       {props.page.items.length === 0 && !props.loading && props.error === null && (
         <text style={{ flexShrink: 0 }}><span fg={colors.text.muted}>Create a workspace from a mission.</span></text>
       )}

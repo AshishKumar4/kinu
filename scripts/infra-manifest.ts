@@ -860,6 +860,74 @@ function workerRow(config: WorkerConfig): InfraWorker {
   };
 }
 
+/** The resources a config's routes declare: each Custom Domain, and each zone route with the DNS record it needs. */
+function routeDrafts(routes: NonNullable<WorkerConfig['routes']>): Draft[] {
+  const drafts: Draft[] = [];
+  const customDomains = new Set(routes.flatMap((route) => (route.custom_domain === true ? [route.pattern] : [])));
+
+  for (const route of routes) {
+    if (route.custom_domain === true) {
+      drafts.push({
+        kind: 'custom-domain',
+        name: route.pattern,
+        origin: 'wrangler-deploy',
+        required: true,
+        purpose: 'the public origin. `custom_domain: true` makes wrangler create the DNS record '
+          + 'on deploy.',
+      });
+      continue;
+    }
+
+    const host = route.pattern.replace(/^\*\./u, '').replace(/\/.*$/u, '');
+    const wildcard = route.pattern.startsWith('*.');
+    drafts.push({
+      kind: 'zone-route',
+      name: route.pattern,
+      origin: 'wrangler-deploy',
+      required: true,
+      purpose: wildcard
+        ? 'preview capability hostnames — one per exposed Workspace or Sandbox port'
+        : `the ${host} origin, taken as a route rather than a custom domain so that an exact `
+          + 'hostname outranks the wildcard route covering it',
+    });
+
+    // The route matches; it does not resolve. The record it needs is the single
+    // most invisible prerequisite production has.
+    if (wildcard) {
+      drafts.push({
+        kind: 'wildcard-dns',
+        name: `*.${host}`,
+        origin: 'manual',
+        required: true,
+        purpose: `the proxied wildcard record the ${route.pattern} route needs to resolve`,
+        manual: `create a proxied wildcard DNS record for *.${host} on the zone. wrangler has no `
+          + 'DNS command and cannot read the zone either — see UNCAPTURED.',
+      });
+      continue;
+    }
+
+    // A host this config also makes a Custom Domain gets its record from the deploy: wrangler creates the Custom
+    // Domain's record, and refuses one already there (docs/DEPLOYMENT.md, staging's prerequisites). The
+    // custom-domain row asks for that host, so the account is asked for no record of its own.
+    if (customDomains.has(host)) continue;
+
+    drafts.push({
+      kind: 'dns-record',
+      name: host,
+      origin: 'manual',
+      required: true,
+      purpose: `the proxied record the ${route.pattern} route needs to resolve`,
+      manual: `create a proxied DNS record for ${host} on the zone — any target, orange cloud `
+        + 'on, because the route is what answers. `custom_domain: true` would create it and is '
+        + 'deliberately not used: it would put this claim and the wildcard route on two '
+        + 'mechanisms whose relative precedence Cloudflare documents only for identical '
+        + 'hostnames. wrangler has no DNS command — see UNCAPTURED.',
+    });
+  }
+
+  return drafts;
+}
+
 /** Everything the Worker's config declares, as resources before requiredness
  *  is resolved against `Env`. */
 function draftsFor(
@@ -956,60 +1024,7 @@ function draftsFor(
     });
   }
 
-  for (const route of config.routes ?? []) {
-    if (route.custom_domain === true) {
-      drafts.push({
-        kind: 'custom-domain',
-        name: route.pattern,
-        origin: 'wrangler-deploy',
-        required: true,
-        purpose: 'the public origin. `custom_domain: true` makes wrangler create the DNS record '
-          + 'on deploy.',
-      });
-      continue;
-    }
-
-    const host = route.pattern.replace(/^\*\./u, '').replace(/\/.*$/u, '');
-    const wildcard = route.pattern.startsWith('*.');
-    drafts.push({
-      kind: 'zone-route',
-      name: route.pattern,
-      origin: 'wrangler-deploy',
-      required: true,
-      purpose: wildcard
-        ? 'preview capability hostnames — one per exposed Workspace or Sandbox port'
-        : `the ${host} origin, taken as a route rather than a custom domain so that an exact `
-          + 'hostname outranks the wildcard route covering it',
-    });
-
-    // The route matches; it does not resolve. The record it needs is the single
-    // most invisible prerequisite production has.
-    if (wildcard) {
-      drafts.push({
-        kind: 'wildcard-dns',
-        name: `*.${host}`,
-        origin: 'manual',
-        required: true,
-        purpose: `the proxied wildcard record the ${route.pattern} route needs to resolve`,
-        manual: `create a proxied wildcard DNS record for *.${host} on the zone. wrangler has no `
-          + 'DNS command and cannot read the zone either — see UNCAPTURED.',
-      });
-      continue;
-    }
-
-    drafts.push({
-      kind: 'dns-record',
-      name: host,
-      origin: 'manual',
-      required: true,
-      purpose: `the proxied record the ${route.pattern} route needs to resolve`,
-      manual: `create a proxied DNS record for ${host} on the zone — any target, orange cloud `
-        + 'on, because the route is what answers. `custom_domain: true` would create it and is '
-        + 'deliberately not used: it would put this claim and the wildcard route on two '
-        + 'mechanisms whose relative precedence Cloudflare documents only for identical '
-        + 'hostnames. wrangler has no DNS command — see UNCAPTURED.',
-    });
-  }
+  drafts.push(...routeDrafts(config.routes ?? []));
 
   for (const cron of config.triggers?.crons ?? []) {
     drafts.push({

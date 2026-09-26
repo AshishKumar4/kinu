@@ -5,7 +5,7 @@
 import type { LogEventName } from '../log';
 
 /** Closed set: a family is the question a query asks; a sixth must be argued for. */
-const BOUNDARY_FAMILIES = ['error', 'turn', 'provider', 'job'] as const;
+const BOUNDARY_FAMILIES = ['error', 'turn', 'provider', 'job', 'lifecycle'] as const;
 
 type BoundaryFamily = (typeof BOUNDARY_FAMILIES)[number];
 
@@ -158,6 +158,28 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     emitter: 'recordJobSettled',
     means: 'A background job was cancelled, retried, dismissed or cleared, and '
       + 'whether the operation took effect.',
+  },
+  {
+    id: 'actor.startup',
+    family: 'lifecycle',
+    event: 'actor.startup',
+    site: 'packages/cf-backend/src/orchestrator.ts',
+    mechanism: 'diagnostics',
+    emitter: 'event',
+    means: 'A workspace object activated: one row per construction, whatever woke it (a request, '
+      + 'an alarm, a reset). Counted per workspace per hour it separates an idle eviction from a '
+      + 'restart loop.',
+  },
+  {
+    id: 'wake.unfinished_arms',
+    family: 'lifecycle',
+    event: 'wake.unfinished_arms',
+    site: 'packages/cf-backend/src/actor-agent.ts',
+    mechanism: 'diagnostics',
+    emitter: 'event',
+    means: 'A wake pass found work it could not finish and re-armed itself: one row per streak or '
+      + 'change of arms, `source` naming the unfinished arms. The arm names why a workspace keeps '
+      + 'waking.',
   },
 ];
 

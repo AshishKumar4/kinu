@@ -30,7 +30,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
-import { REVERT_NEEDS_IDLE } from './actor-session';
+import { CLEAR_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
@@ -109,6 +109,8 @@ export type SessionEvent =
       /** A rerun answers every leftover as one turn; a transport closes their requests with it. */
       carried: readonly string[] }
   | { type: 'text-delta'; delta: string }
+  /** Shown live; never the answer, never stored. */
+  | { type: 'reasoning-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
   | { type: 'turn-end'; turn: CompletedTurn }
@@ -587,6 +589,12 @@ export class ChatSession {
     await this.flushEvents();
   }
 
+  async clear(): Promise<void> {
+    await this.actorSession.clearConversation(this.sessionId, () => {
+      if (this.turnInFlight()) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
+    });
+  }
+
   /** Bypasses the debounce, for a batch tick that ends the session right after. Interactive sessions keep the debounced path. */
   async flushPendingDrains(): Promise<void> {
     if (this.ended) return;
@@ -902,6 +910,7 @@ export class ChatSession {
             return;
           case 'reasoning-delta':
           case 'model-fallback':
+          case 'context-admitted':
           case 'done':
           case 'error':
             return;
@@ -941,9 +950,14 @@ export class ChatSession {
 
       if (event.type === 'model-fallback') this.recordModelFallback(event);
 
+      if (event.type === 'context-admitted') {
+        this.emit({ type: 'broadcast', event: { type: 'context_admitted', requestTokens: event.tokens, contextWindow: event.contextWindow } });
+      }
+
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
 
-      if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') return this.emit(event);
+      if (event.type === 'text-delta' || event.type === 'reasoning-delta' || event.type === 'tool-call' || event.type === 'tool-result'
+        || event.type === 'error') return this.emit(event);
     });
 
     const fullText = continuedAnswer(item.continuation, execution);
