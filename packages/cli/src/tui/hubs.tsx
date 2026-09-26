@@ -6,6 +6,7 @@ import { tierIdsOf,
   type RoleId,
   type SubordinateChild,
   type WorkspaceWork,
+  type AgentTaskTree,
   ownerFacingSubordinate,
 } from '@kinu.run/core';
 import type { ScrollBoxRenderable } from '@opentui/core';
@@ -13,6 +14,7 @@ import { agentWorkspaceKey } from '../agent-list';
 import type { TuiAgentStatus, TuiAgentSummary, TuiSubordinate } from './tui-shell';
 import { agentDisplayLabel } from '@kinu.run/core';
 import { MessageList, type DisplayMessage } from './messages';
+import * as v from 'valibot';
 import { useTuiTheme, type TuiThemeColors } from './theme';
 
 export type TuiHubView = 'agents' | 'roles' | 'tiers';
@@ -35,27 +37,59 @@ export interface TuiAgentHubEntry {
 
 type HubEntryDraft = { -readonly [Key in keyof TuiAgentHubEntry]: TuiAgentHubEntry[Key] };
 
-export type TuiHubRow = Pick<TuiAgentHubEntry, 'id' | 'label' | 'path'>;
+export interface TuiHubRow extends Pick<TuiAgentHubEntry, 'id' | 'label' | 'path'> {
+  readonly actorId?: string;
+}
 
 export interface TuiWorkEntry extends TuiHubRow {
   readonly title: string;
-  readonly status: TuiAgentStatus;
+  readonly status: TuiAgentHubEntry['status'];
 }
 
 type WorkEntryDraft = { -readonly [Key in keyof TuiWorkEntry]: TuiWorkEntry[Key] };
 
+function workStatus(task: AgentTaskTree): TuiWorkEntry['status'] {
+  if (task.status === 'active') return 'running';
+
+  return [task, ...task.subtasks].some((item) => item.status === 'open' || item.status === 'active') ? 'idle' : 'settled';
+}
+
 export function workFromWorkspace(work: WorkspaceWork): TuiWorkEntry[] {
-  return [...work.tasks, ...work.plans].flatMap(({ owner, tasks }) => tasks
-    .filter((task) => [task, ...task.subtasks].some((item) => item.status === 'open' || item.status === 'active'))
-    .map((task): TuiWorkEntry => {
-      const entry: WorkEntryDraft = {
-        id: `task:${owner.actorId}:${task.id}`, title: task.title, label: owner.name, status: task.status === 'active' ? 'running' : 'idle',
-      };
+  const entries = [...work.tasks, ...work.plans].flatMap(({ owner, tasks }) => tasks.map((task): TuiWorkEntry => {
+    const entry: WorkEntryDraft = {
+      id: `task:${owner.actorId}:${task.id}`, title: task.title, label: owner.name, actorId: owner.actorId, status: workStatus(task),
+    };
 
-      if (owner.path !== null && owner.path.length > 0) entry.path = owner.path;
+    if (owner.path !== null && owner.path.length > 0) entry.path = owner.path;
 
-      return entry;
-    }));
+    return entry;
+  }));
+
+  return [...entries.filter((entry) => entry.status !== 'settled'), ...entries.filter((entry) => entry.status === 'settled')];
+}
+
+export interface TuiHelperRef {
+  readonly name: string;
+  readonly actorId: string;
+}
+
+const AnsweredHelperSchema = v.looseObject({ agent: v.string(), lifetime: v.literal('task') });
+
+/** Newest first. */
+export function answeredHelpers(messages: readonly DisplayMessage[], helpers: readonly TuiHelperRef[]): TuiHubRow[] {
+  const rows: TuiHubRow[] = [];
+
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'tool_result' || message.toolName !== 'agents') continue;
+    const answered = v.safeParse(v.pipe(v.string(), v.parseJson(), AnsweredHelperSchema), message.content);
+    const helper = answered.success ? helpers.find((entry) => entry.name === answered.output.agent) : undefined;
+
+    if (helper !== undefined && !rows.some((row) => row.actorId === helper.actorId)) {
+      rows.push({ id: `helper:${helper.actorId}`, label: helper.name, path: [helper.name], actorId: helper.actorId });
+    }
+  }
+
+  return rows;
 }
 
 type SubordinateDraft = { -readonly [Key in keyof TuiSubordinate]: TuiSubordinate[Key] };
@@ -145,6 +179,8 @@ export interface TuiHubData {
   readonly subordinatesError?: string;
   readonly work: readonly TuiWorkEntry[];
   readonly workError?: string;
+  readonly helpers: readonly TuiHelperRef[];
+  readonly answered?: readonly TuiHubRow[];
   readonly profile: TuiProfileHubData;
 }
 
@@ -175,6 +211,8 @@ export function subordinatesFromRoster(entries: readonly SubordinateChild[]): Tu
     return [subordinate];
   });
 }
+
+const WORK_MARK = { running: '● ', idle: '○ ', 'needs-you': '○ ', failed: '○ ', settled: '✓ ' } as const satisfies Record<TuiWorkEntry['status'], string>;
 
 const HUB_TITLES = { agents: 'Agent Hub', roles: 'Role Hub', tiers: 'Tier Hub' } as const;
 
@@ -297,10 +335,20 @@ function AgentHubRows({ data, newAgentHint, selectedAgentId }: {
           {data.work.map((item) => (
             <box key={item.id} style={{ backgroundColor: item.id === selectedAgentId ? colors.background.selection : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
               <text>
-                <span fg={statusColor(item.status, colors)}>{item.status === 'running' ? '● ' : '○ '}</span>
+                <span fg={statusColor(item.status, colors)}>{WORK_MARK[item.status]}</span>
                 <strong fg={colors.text.strong}>{item.title}</strong>
                 <span fg={colors.text.muted}> · {item.label}</span>
               </text>
+            </box>
+          ))}
+        </box>
+      )}
+      {(data.answered?.length ?? 0) > 0 && (
+        <box flexDirection="column" style={{ marginBottom: 1 }}>
+          <text><span fg={colors.text.muted}>Answered</span></text>
+          {data.answered?.map((row) => (
+            <box key={row.id} style={{ backgroundColor: row.id === selectedAgentId ? colors.background.selection : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
+              <text><span fg={colors.text.muted}>{WORK_MARK.settled}</span><strong fg={colors.text.strong}>{row.label}</strong></text>
             </box>
           ))}
         </box>
@@ -311,7 +359,7 @@ function AgentHubRows({ data, newAgentHint, selectedAgentId }: {
       {data.workError !== undefined && (
         <text><span fg={colors.intent.danger}>{data.workError}</span></text>
       )}
-      {[...data.agents, ...data.work].some((row) => row.path !== undefined) && (
+      {[...data.agents, ...data.work, ...(data.answered ?? [])].some((row) => row.path !== undefined) && (
         <text><span fg={colors.text.muted}>↑↓ choose · Enter opens a subagent's conversation</span></text>
       )}
       {hint}

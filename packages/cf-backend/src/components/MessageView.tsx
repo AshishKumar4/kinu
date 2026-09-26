@@ -1,4 +1,4 @@
-import { Fragment, memo, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
+import { createContext, Fragment, memo, useContext, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import {
   WrenchIcon, CaretDownIcon, CaretRightIcon,
   GitBranchIcon, CheckCircleIcon, ClockIcon,
@@ -189,6 +189,27 @@ function toolIcon(toolName: string): ReactNode {
   return <DotsThreeCircleIcon size={15} />;
 }
 
+/** Where a one-question helper's chat opens, relative to the chat its `agents` call sits in; null draws no link. */
+export const HelperChatBase = createContext<string | null>(null);
+
+const AnsweredHelperObject = v.looseObject({ agent: v.string(), lifetime: v.literal("task") });
+
+const AnsweredHelperSchema = v.union([AnsweredHelperObject, v.pipe(v.string(), v.parseJson(), AnsweredHelperObject)]);
+
+/** A task-lifetime helper has no tab and makes no report card: the call that asked it is its durable door. */
+function HelperChatLink({ output }: { output?: JsonValue }) {
+  const base = useContext(HelperChatBase);
+  const helper = v.safeParse(AnsweredHelperSchema, output);
+
+  if (base === null || !helper.success) return null;
+  const name = helper.output.agent;
+
+  return (
+    <Link to={`${base}${encodeURIComponent(name)}`} aria-label={`Open ${name}'s conversation`}
+      className="ml-10 inline-block p-annotation p-accent hover:underline">{name}</Link>
+  );
+}
+
 function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, errorText, expanded, onToggleExpand }: {
   toolName: string; input?: JsonObject; output?: JsonValue; isRunning: boolean; isError: boolean;
   effect: ToolCallEffect;
@@ -270,6 +291,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
         </span>
         <CaretRightIcon size={11} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
       </button>
+      {toolName === "agents" && <HelperChatLink output={output} />}
       {expanded && provisionErr && (
         <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
           <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />

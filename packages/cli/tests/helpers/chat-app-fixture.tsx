@@ -44,6 +44,7 @@ export function soloHub(client: AgentClient): TuiHubData {
     }],
     subordinates: [],
     work: [],
+    helpers: [],
     profile: {
       envelope: {
         authority: { kind: 'local' },
