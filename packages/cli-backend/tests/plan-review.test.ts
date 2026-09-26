@@ -20,17 +20,20 @@ const USAGE = {
 
 type Step =
   | { readonly call: string; readonly input: JsonObject }
-  | { readonly answer: string };
+  | { readonly answer: string; readonly waitFor?: Promise<void>; readonly onTaken?: () => void };
 
 /** Replays `steps` one per request, then answers, so an extra request ends the turn instead of re-running a tool. */
 function scriptedSteps(steps: readonly Step[]) {
   const taken: Step[] = [];
 
-  const model = scriptedTurnModel({ doGenerate: () => {
+  const model = scriptedTurnModel({ doGenerate: async () => {
     const step = steps[taken.length] ?? { answer: 'nothing left to do' };
     taken.push(step);
 
     if ('answer' in step) {
+      step.onTaken?.();
+      await step.waitFor;
+
       return {
         content: [{ type: 'text' as const, text: step.answer }],
         finishReason: { unified: 'stop' as const, raw: undefined },
@@ -184,6 +187,113 @@ describe('LocalAgentSession — plan review', () => {
     } finally {
       await agent.end();
       db.close();
+    }
+  });
+
+  test('an explicit Auto message runs as build while the plan stays pending for its own decision', async () => {
+    const { db, agent, events } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+      { answer: 'Plan submitted for review.' },
+      { call: 'file', input: { action: 'write', path: '/home/main/typo.txt', content: 'fixed' } },
+      { answer: 'Fixed the typo.' },
+    ]);
+
+    try {
+      await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
+      await agent.send('Fix the typo meanwhile.', { id: crypto.randomUUID(), mode: 'build' });
+
+      expect(fileResults(events)).toMatchObject([{ success: true }]);
+      expect(turnModes(agent)).toEqual(['plan', 'build']);
+      expect(await agent.getActivePlanReview()).toMatchObject({ status: 'pending' });
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
+  test('a harness turn such as an event drain is outside the plan\'s thread and keeps build', async () => {
+    const { db, agent, events } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+      { answer: 'Plan submitted for review.' },
+      { call: 'file', input: { action: 'write', path: '/home/main/report.txt', content: 'noted' } },
+      { answer: 'Handled the report.' },
+    ]);
+
+    try {
+      await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
+      await agent.enqueueTurn({ text: '[subordinate_report] done', idempotencyKey: 'drain:1' });
+      await agent.settleBackgroundWork();
+
+      expect(fileResults(events)).toMatchObject([{ success: true }]);
+      expect(turnModes(agent)).toEqual(['plan', 'build']);
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
+  test('dismissing a pending plan lifts the hold with no handoff turn', async () => {
+    const { db, agent, events, taken } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+      { answer: 'Plan submitted for review.' },
+      { call: 'file', input: { action: 'write', path: '/home/main/other.txt', content: 'unrelated' } },
+      { answer: 'Done.' },
+    ]);
+
+    try {
+      await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
+      const plan = await agent.getActivePlanReview();
+
+      if (!plan) throw new Error('the submitted plan was not stored');
+      expect(await agent.dismissPlanReview(plan.id, 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+      await agent.settleBackgroundWork();
+      expect(taken).toHaveLength(2);
+      expect(planBroadcasts(events).at(-1)?.plan).toMatchObject({ status: 'dismissed' });
+
+      await agent.send('Do the other thing.', { id: crypto.randomUUID() });
+      expect(fileResults(events)).toMatchObject([{ success: true }]);
+      expect(turnModes(agent)).toEqual(['plan', 'build']);
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
+  test('a dismissed plan\'s handoff that was still queued never runs, approved or sent back', async () => {
+    // The handoff waits in the queue behind a running turn, so the plan still reads as awaiting and Dismiss is offered.
+    for (const decision of ['approve', 'request_changes'] as const) {
+      const running = Promise.withResolvers<void>();
+      const started = Promise.withResolvers<void>();
+
+      const { db, agent, taken } = session([
+        { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+        { answer: 'Plan submitted for review.' },
+        { answer: 'Still on the other thing.', waitFor: running.promise, onTaken: started.resolve },
+      ]);
+
+      try {
+        await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
+        const plan = await agent.getActivePlanReview();
+
+        if (!plan) throw new Error('the submitted plan was not stored');
+        const other = agent.send('Meanwhile, look at the logs.', { id: crypto.randomUUID(), mode: 'build' });
+        await started.promise;
+        // The running turn holds the queue, so the handoff this decision enqueues waits behind it.
+        const decided = agent.decidePlanReview(plan.id, 1, decision, decision === 'approve' ? undefined : 'Say what happens to the audit trail.');
+
+        expect(await agent.dismissPlanReview(plan.id, 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+        running.resolve();
+        await other;
+        await decided;
+        await agent.settleBackgroundWork();
+
+        expect(taken).toHaveLength(3);
+        expect(turnModes(agent)).toEqual(['plan', 'build']);
+        expect(await agent.getActivePlanReview()).toMatchObject({ status: 'dismissed' });
+      } finally {
+        await agent.end();
+        db.close();
+      }
     }
   });
 

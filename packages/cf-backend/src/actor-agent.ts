@@ -72,7 +72,7 @@ import {
   activePromptSectionOverrides,
   currentDateForPrompt,
   turnReasonForMetadata,
-  workModeForTurnMetadata,
+  workModeForTurnMetadata, authoredTurnMetadata,
   renderUnverifiedInstructions,
   observeSystemPromptHash, steerSkillsBlock,
   type DynamicContext, type DynamicApproval, type MissingCapability,
@@ -127,7 +127,7 @@ import {
   resolveTurnSkills, filterToolNamesBySkills,
   type ActiveSkillSet,
   inheritedContextFromTranscript,
-  PlanReviewActions, type PlanDecisionOutcome,
+  PlanReviewActions, planHandoffStillOwed, type PlanDecisionOutcome,
   type PlanEdit, type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
@@ -733,6 +733,11 @@ export abstract class ActorAgent extends Agent<Env> {
     annotations: ReviewAnnotation[],
   ): Promise<PlanReviewResult> {
     return this.planActions.saveAnnotations(id, revision, { value: annotations });
+  }
+
+  @callable()
+  async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
+    return this.planActions.dismiss(id, revision);
   }
 
   @callable()
@@ -1848,6 +1853,7 @@ export abstract class ActorAgent extends Agent<Env> {
           driverGate: () => this.driverGate(),
           // The workspace UI IS the review surface: a plan turn is admitted.
           planTurnRefusal: () => null,
+          stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
           // Prompt-cache warming belongs to the root actor (it owns the wake chain); hosted actors wire none.
           ...(this.cacheWarmingLane() && { cacheWarming: this.cacheWarmingLane() }),
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
@@ -4416,8 +4422,12 @@ export abstract class ActorAgent extends Agent<Env> {
     return turnReasonForMetadata(this.turnDrivingMetadata());
   }
 
+  /** Author-stamped, so the plan hold tells the owner's turn from the harness's. */
   private turnDrivingMetadata(): JsonObject | undefined {
-    return this.turnUserMetadata();
+    const metadata = this.turnUserMetadata();
+    const item = this._chatLoop?.turnInFlight() === true ? this._turnItem : null;
+
+    return item === null ? metadata : authoredTurnMetadata({ kind: item.kind, metadata });
   }
 
   /** Active turn metadata only. Idle operations await canonical metadata in

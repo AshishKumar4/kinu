@@ -147,7 +147,7 @@ import { TierIdSchema,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
-  PlanReviewActions, SUBMIT_PLAN_TOOL, workModeUnderReview,
+  PlanReviewActions, SUBMIT_PLAN_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
@@ -601,6 +601,7 @@ export class LocalAgentSession {
       ports: {
         prepareTurn: (item, lease) => this.prepareTurn(item, lease),
         // Only a root chat can approve a plan; a subordinate's plan is refused at admission.
+        stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
         planTurnRefusal: () => this.planReviewSurface()
           ? null
           : 'Plan review belongs to the owner of this workspace; a delegated task reports its result instead.',
@@ -1036,6 +1037,10 @@ export class LocalAgentSession {
     }
 
     return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.enqueueTurn(turn));
+  }
+
+  async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
+    return this.planActions.dismiss(id, revision);
   }
 
   logActivity(event: string, detail?: string): void {
@@ -1627,7 +1632,7 @@ export class LocalAgentSession {
 
     const candidateExternalNames = Object.keys(this.extraTools);
     // Read once so the tool list, codemode providers and profile agree.
-    const workMode = this.turnWorkMode(item.metadata);
+    const workMode = this.turnWorkMode(item);
     const candidateAgentActions = agentsActionsFor(this.agentsToolDeps(workMode));
 
     const profile = resolveAgentTurnProfile({
@@ -2594,14 +2599,13 @@ export class LocalAgentSession {
     return mode === 'plan' && this.planReviewSurface();
   }
 
-  /** The typed mode, except a build turn is held in Plan while a submitted plan awaits the owner;
-   *  `plan_approved` metadata passes. Mirrors the cloud orchestrator's `workModeForMetadata`. */
-  private turnWorkMode(metadata: ProgrammaticTurn['metadata']): WorkMode {
+  /** The typed mode, under core's plan hold. Mirrors the cloud orchestrator's `workModeForMetadata`. */
+  private turnWorkMode(item: ChatTurnInput): WorkMode {
     const requested = this.actorSession.workMode;
 
     if (!this.planReviewSurface()) return requested;
 
-    return workModeUnderReview(requested, metadata, this.stores.planReviews.getActive(CHAT_SESSION_ID));
+    return workModeUnderReview(requested, authoredTurnMetadata(item), this.stores.planReviews.getActive(CHAT_SESSION_ID));
   }
 
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {

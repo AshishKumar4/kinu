@@ -16,7 +16,7 @@ import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useAutogrow } from "@/hooks/use-autogrow";
 import { useChatThread } from "@/hooks/use-chat-thread";
-import { useConversationUiState, usePlanGatedMode } from "@/hooks/use-conversation-ui-state";
+import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
@@ -326,8 +326,7 @@ function SubordinateChatColumn({
   const ui = useConversationUiState(`${workspace}/agents/${subName}`);
   const input = ui.draft;
   const setInput = ui.setDraft;
-  const planGate = usePlanGatedMode(state.activePlan, ui);
-  const effectiveMode = planGate.mode;
+  usePlanApprovedMode(state.activePlan, ui.setMode);
 
   // History reads name this pane's actor; the default actor is the workspace's own chat.
   const { history, transcript, thread } = useChatThread({
@@ -351,7 +350,7 @@ function SubordinateChatColumn({
   useAutogrow(inputRef, input);
 
   const { notice: steerNotice, send, stop } = useSteerActions({
-    sendChat: (text, files) => state.sendChat(text, [...files], effectiveMode),
+    sendChat: (text, files) => state.sendChat(text, [...files], ui.mode),
     abortChat: state.abortChat,
     draft: input,
     setDraft: ui.updateDraft,
@@ -437,7 +436,7 @@ function SubordinateChatColumn({
           liveness={state.liveness}
           onRecover={state.recoverTurn}
           onStop={stop}
-          mode={{ value: effectiveMode, onChange: ui.setMode, locked: planGate.locked }}
+          mode={{ value: ui.mode, onChange: ui.setMode }}
           modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={state.setModel} size="xs"
             effort={{ value: as?.reasoningEffort ?? null, onChange: state.setReasoningEffort }} />}
           notices={[
@@ -569,8 +568,7 @@ export default function WorkspacePage() {
   }, [landingSlate, state.slates, show]);
   const ui = useConversationUiState(`${agentId ?? ""}/main`);
   const setChatMode = ui.setMode;
-  const planGate = usePlanGatedMode(subName === undefined ? state.activePlan : null, ui);
-  const effectiveChatMode = planGate.mode;
+  usePlanApprovedMode(subName === undefined ? state.activePlan : null, setChatMode);
   const chatInput = ui.draft;
   const setChatInput = ui.setDraft;
   const [forkFor, setForkFor] = useState<string | null>(null);
@@ -650,7 +648,7 @@ export default function WorkspacePage() {
   const handleBranch = useCallback(() => {
     const t = chatInput.trim();
 
-    if (!t || !live || effectiveChatMode === "plan") return;
+    if (!t || !live || ui.mode === "plan") return;
     setBranchNotice(null);
     // Clear the draft only once the branch is accepted, and only if it was not edited meanwhile.
     startTransition(async () => {
@@ -663,10 +661,10 @@ export default function WorkspacePage() {
         setBranchNotice(renderThrownChain({ cause }));
       }
     });
-  }, [chatInput, effectiveChatMode, live, state]);
+  }, [chatInput, ui.mode, live, state]);
 
   const { notice: steerNotice, send: handleSend, stop: handleStop } = useSteerActions({
-    sendChat: (text, files) => state.sendChat(text, [...files], effectiveChatMode),
+    sendChat: (text, files) => state.sendChat(text, [...files], ui.mode),
     abortChat: state.abortChat,
     draft: chatInput,
     setDraft: ui.updateDraft,
@@ -1000,7 +998,7 @@ export default function WorkspacePage() {
                 onRecover={state.recoverTurn}
                 onStop={handleStop}
                 onBranch={handleBranch}
-                mode={{ value: effectiveChatMode, onChange: setChatMode, locked: planGate.locked }}
+                mode={{ value: ui.mode, onChange: setChatMode }}
                 attachments={{
                   parts: [...attachments.parts],
                   onAdd: attachments.add,

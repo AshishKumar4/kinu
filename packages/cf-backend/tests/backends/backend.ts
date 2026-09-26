@@ -49,7 +49,7 @@ type SameCall =
   | 'listRuns' | 'getRunEvents'
   | 'markChangelogSeen' | 'revertChangelogEntry' | 'getShadowStatus' | 'applyScaffoldDecision'
   | 'latestAlternateTakes' | 'pickAlternateTake'
-  | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview'
+  | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview' | 'dismissPlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
   | 'listRefinements' | 'showRefinement' | 'decideRefinement'
   | 'revertConversation' | 'runScaffoldGepaOptimization';
@@ -141,6 +141,7 @@ async function cloudflare(): Promise<SharedBackend> {
       getActivePlanReview: () => agent.getActivePlanReview(),
       savePlanReviewAnnotations: (id, revision, annotations) => agent.savePlanReviewAnnotations(id, revision, annotations),
       decidePlanReview: (id, revision, decision, feedback) => agent.decidePlanReview(id, revision, decision, feedback),
+      dismissPlanReview: (id, revision) => agent.dismissPlanReview(id, revision),
       checkpointStatus: () => agent.checkpointStatus(),
       listFileCheckpoints: (limit, turnId) => agent.listFileCheckpoints(limit, turnId),
       planFileRestore: (dir, id) => agent.planFileRestore(dir, id),
@@ -247,6 +248,7 @@ function cli(): SharedBackend {
       getActivePlanReview: () => session.getActivePlanReview(),
       savePlanReviewAnnotations: (id, revision, annotations) => session.savePlanReviewAnnotations(id, revision, annotations),
       decidePlanReview: (id, revision, decision, feedback) => session.decidePlanReview(id, revision, decision, feedback),
+      dismissPlanReview: (id, revision) => session.dismissPlanReview(id, revision),
       checkpointStatus: () => session.checkpointStatus(),
       listFileCheckpoints: (limit, turnId) => session.listFileCheckpoints(limit, turnId),
       planFileRestore: (dir, id) => session.planFileRestore(dir, id),

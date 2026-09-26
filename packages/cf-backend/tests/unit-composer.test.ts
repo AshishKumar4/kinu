@@ -100,23 +100,6 @@ describe('the composer under a partial failure', () => {
   });
 });
 
-describe('the mode control', () => {
-  test('the composer renders no explanatory caption beside Auto and Plan', () => {
-    const html = renderToStaticMarkup(createElement(Composer, {
-      value: '',
-      onValueChange: () => {},
-      onSend: () => {},
-      placeholder: 'Send a message...',
-      disabled: false,
-      liveness: { kind: 'idle' } as const,
-      onStop: () => {},
-      mode: { value: 'build', onChange: () => {}, locked: false },
-    }));
-
-    expect(html).not.toContain('Auto acts within');
-  });
-});
-
 // Overflow is measured by a client layout effect, so SSR asserts only the initial markup.
 const LONG_NOTICE_TEXT = 'The provider reset the stream before the turn finished, so the panel below shows the last known snapshot. '
   + 'The provider reset the stream before the turn finished, so the panel below shows the last known snapshot. ';

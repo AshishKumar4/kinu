@@ -29,7 +29,7 @@ import type { TierId } from '../types/profile';
 import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
-import { PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
+import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
 import { CLEAR_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
@@ -253,6 +253,8 @@ export interface ChatSessionPorts {
   steerSkills(text: string): Promise<string | null>;
   /** A backend with no review surface refuses a plan turn at admission. */
   planTurnRefusal(): string | null;
+  /** Asked at dequeue; false drops the turn. */
+  stillOwed(metadata: JsonObject | undefined): boolean;
   /** The session drives it because both instants it needs are the session's; the policy is the lane's. */
   readonly cacheWarming?: CacheWarmingLane;
 }
@@ -529,7 +531,7 @@ export class ChatSession {
     const metadata: JsonObject = {
       ...card?.metadata,
       ...(opts.tier !== undefined && { profile_tier: opts.tier }),
-      kinuMode: mode,
+      ...(opts.mode !== undefined && { kinuMode: opts.mode }),
     };
 
     // The pending_steers insert runs before the pump can begin the turn.
@@ -683,6 +685,14 @@ export class ChatSession {
           continue;
         }
 
+        if (!this.ports.stillOwed(item.metadata)) {
+          diagnostics.event('turn.no_longer_owed', {
+            signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
+          });
+          item.settle(null, true);
+          continue;
+        }
+
         // Checked at dequeue, never admission: somebody spoke first, so the offer is consumed.
         if (item.yieldsToUserMessage === true
           && (this.queue.some((queued) => queued.kind === 'user')
@@ -773,7 +783,7 @@ export class ChatSession {
     const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message: turnInputMessage(item), assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
 
     const opening = await this.transcript.prepareUser({ id: this.turnId, turnId: this.turnId, runId: this.runId, message: inputReference,
-      metadata: item.kind === 'user' ? { ...item.metadata, [TURN_AUTHOR_METADATA_KEY]: 'operator' } : stampTurnAuthor(item.metadata) });
+      metadata: authoredTurnMetadata(item) });
 
     this.openingRow = item.kind === 'programmatic' ? opening : null;
 
