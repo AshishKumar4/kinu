@@ -20,6 +20,7 @@ import {
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
+import { workspaceArchiveTarget, type ArchiveFileTarget } from '@kinu.run/core';
 import {
   adoptUnplacedLocalAgent, agentDbPath, agentDir, ensureAgentHome,
   requireStoredAuthConfig, resolveAgentRef, resolveLocalAgent,
@@ -112,10 +113,10 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
       const db = new Database(partial, { create: true });
 
       try {
-        let files: ReturnType<typeof createInlineWorkspace>['vfs'] | null = null;
+        let files: ArchiveFileTarget | null = null;
 
         const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), {
-          files: () => (files ??= createInlineWorkspace(db).vfs),
+          files: () => (files ??= workspaceArchiveTarget(createInlineWorkspace(db))),
         });
 
         restored = { rows: result.rows, tables: result.tables };

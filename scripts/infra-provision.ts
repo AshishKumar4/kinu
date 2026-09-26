@@ -113,6 +113,7 @@ function look(resource: Resource): Observation {
     case 'ai-gateway':
     case 'binding':
     case 'container':
+    case 'container-namespace':
     case 'cron':
     case 'custom-domain':
     case 'dns-record':

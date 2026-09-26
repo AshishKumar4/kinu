@@ -13,7 +13,12 @@ export const WORKSPACE_IDENTITY_DDL =
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`;
 
-/** Durable state owned by every full-loop actor, including facet actors. */
+/** The owner's soul; SOUL.md is resealed from it. */
+export const WORKSPACE_SOUL_DDL = `CREATE TABLE IF NOT EXISTS workspace_soul (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    markdown TEXT NOT NULL
+  )`;
+
 const ACTOR_DDL = [
   // mcts/schemas.ts and scaffold/schemas.ts own their DDL (initActorTables runs it): one owner per table.
 
@@ -78,7 +83,7 @@ const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
     forked_at                     INTEGER NOT NULL
   )`;
 
-/** The one unpublished fork transfer being received; a second `begin` replaces it (identity/fork-staging.ts). */
+/** A second `begin` replaces the unpublished fork transfer. */
 const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     id                              INTEGER PRIMARY KEY CHECK (id = 1),
     head_declared                   INTEGER NOT NULL DEFAULT 0,
@@ -123,6 +128,7 @@ export function initActorDdl(execRaw: RawSqlExec): void {
 
 export function initWorkspaceOwnershipTables(execRaw: RawSqlExec): void {
   execRaw(WORKSPACE_IDENTITY_DDL);
+  execRaw(WORKSPACE_SOUL_DDL);
   execRaw(FORK_LINEAGE_DDL);
   execRaw(FORK_TRANSFER_DDL);
   execRaw(FORK_STAGED_FILES_DDL);

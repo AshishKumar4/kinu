@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import type { Connection } from 'agents';
+import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { Nimbus } from '@nimbus-sh/sdk';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type {
@@ -20,6 +22,50 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 mockAgentsSdk();
 
 const { orchestratorHarness } = await import('./helpers/actor-harness');
+
+import { socketConnection } from './helpers/bindings';
+
+interface AdmissionSocket {
+  readonly wire: Connection;
+  readonly sent: string[];
+  readonly frame: (holds: (sent: readonly string[]) => boolean) => Promise<void>;
+}
+
+function connection(agent: { broadcast: (message: string, exclude?: string[]) => void }): AdmissionSocket {
+  const frames = new AwaitedList<string>();
+  const sent = frames.items;
+  const wire = socketConnection({ id: 'soul-conn', send: (data: string) => { frames.push(data); } });
+  const fanout = agent.broadcast.bind(agent);
+
+  Object.defineProperty(agent, 'broadcast', {
+    configurable: true,
+    value: (message: string, exclude?: string[]) => {
+      if (exclude === undefined || !exclude.includes('soul-conn')) frames.push(message);
+      fanout(message, exclude);
+    },
+  });
+
+  return { wire, sent, frame: (holds) => frames.until(holds) };
+}
+
+function chatRequest(id: string, text: string): string {
+  return JSON.stringify({
+    type: 'cf_agent_use_chat_request', id,
+    init: { method: 'POST', body: JSON.stringify({
+      messages: [{ id: `input-${id}`, role: 'user', parts: [{ type: 'text', text }] }],
+      trigger: 'submit-message',
+    }) },
+  });
+}
+
+function doneFrames(sent: readonly string[]): Array<{ id: string }> {
+  // Every frame on this socket is JSON the actor wrote; a non-JSON line is a harness failure, not a done frame.
+  return sent.flatMap((raw) => {
+    const done = v.safeParse(v.object({ type: v.literal('cf_agent_use_chat_response'), id: v.string(), done: v.optional(v.boolean()) }), JSON.parse(raw));
+
+    return done.success && done.output.done === true ? [{ id: done.output.id }] : [];
+  });
+}
 
 type NativeSqlValue = string | number | bigint | null | Uint8Array;
 
@@ -252,29 +298,66 @@ describe('installed Nimbus dependency integrity', () => {
     });
   });
 
-  // `writeWorkspaceSoul` rests on the installed filesystem: a sticky 1777 root owned by the kernel, SOUL.md kernel-owned 444.
-  test('the agent cannot remove, rename or rewrite the SOUL.md its owner wrote', async () => {
+  // The installed filesystem keeps the main agent at home: the root is 1000:1000 0755, and SOUL.md is a
+  // kernel-owned 444 view of the workspace_soul row, resealed from it at every boot and turn start.
+  test('a forged SOUL.md never reaches a prompt: the next turn start reseals it from the row', async () => {
     const { agent } = orchestratorHarness();
     const soul = '# Checkout\n\n## Mission\n\nAudit the checkout flow.';
 
     await agent.setSoul(soul);
 
-    const attempts = await Promise.all([
-      'rm -f /home/main/SOUL.md',
-      'mv /home/main/SOUL.md /home/main/renamed.md',
-      'echo rewritten > /home/main/SOUL.md',
-    ].map(async (command) => {
-      const ran = await agent.execWorkspaceCommand(`${command}; echo "exit=$?"`);
+    // The root is the main agent's own directory, so its rm and its rewrite land.
+    const removed = await agent.execWorkspaceCommand('rm -f /home/main/SOUL.md; echo "exit=$?"');
 
-      return ran.ok ? ran.value.stdout.trim() : ran.error.message;
-    }));
+    expect(removed.ok ? removed.value.stdout.trim() : removed.error.message).toBe('exit=0');
 
-    expect(attempts).toEqual(['exit=1', 'exit=1', 'exit=1']);
-    expect((await agent.deleteWorkspaceFile('SOUL.md')).ok).toBe(false);
-    expect((await agent.writeWorkspaceFile({ kind: 'file', path: 'SOUL.md', data: 'rewritten' })).ok).toBe(false);
+    const rewritten = await agent.execWorkspaceCommand('echo rewritten > /home/main/SOUL.md; echo "exit=$?"');
 
-    const kept = await agent.execWorkspaceCommand('cat /home/main/SOUL.md');
+    expect(rewritten.ok ? rewritten.value.stdout.trim() : rewritten.error.message).toBe('exit=0');
 
-    expect(kept.ok ? kept.value.stdout : kept.error.message).toBe(soul);
+    // The next turn start reseals the file from the row: kernel 444, the owner's bytes.
+    agent.harnessSupplyTurnModel(scriptedTurnModel({ doGenerate: () => ({
+      content: [{ type: 'text', text: 'noted' }], finishReason: { unified: 'stop', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    }) }));
+    const gate = agent.harnessChatGate();
+    const { wire, sent, frame } = connection(agent);
+
+    await gate(wire, chatRequest('req-soul', 'hello'));
+    await frame((frames) => doneFrames(frames).length > 0);
+    expect(doneFrames(sent)).toEqual([{ id: 'req-soul' }]);
+    const kept = await agent.execWorkspaceCommand('cat /home/main/SOUL.md; stat -c %a /home/main/SOUL.md');
+
+    expect(kept.ok ? kept.value.stdout : kept.error.message).toBe(`${soul}444\n`);
+
+    // Neither the prompt's soul nor the status read ever sees the forged text.
+    const status = await agent.getAgentStatus();
+
+    expect(status.soul).toBe(soul);
+    expect(status.purpose).toBe('Audit the checkout flow.');
+  });
+
+  test("an owner's Drive save of SOUL.md updates the row; a Drive delete is refused", async () => {
+    const { agent } = orchestratorHarness();
+    const soul = '# Checkout\n\n## Mission\n\nAudit the checkout flow.';
+
+    await agent.setSoul(soul);
+
+    const revised = '# Checkout\n\n## Mission\n\nAudit the refunds flow.';
+
+
+    const saved = await agent.writeExecutorFileChunk({
+      executorId: 'workspace', path: 'SOUL.md', transferId: 'soul-save', offset: 0,
+      chunk: new TextEncoder().encode(revised), final: true,
+    });
+
+    expect(saved).toEqual({ ok: true });
+    expect((await agent.getAgentStatus()).soul).toBe(revised);
+
+    const deleted = await agent.deleteExecutorFile('workspace', 'SOUL.md');
+
+    expect(deleted).toMatchObject({ error: expect.stringContaining('Settings') });
+    expect((await agent.getAgentStatus()).soul).toBe(revised);
   });
 });

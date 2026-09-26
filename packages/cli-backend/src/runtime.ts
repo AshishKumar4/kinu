@@ -20,7 +20,7 @@ import { join, resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
-  WORKSPACE_IDENTITY_DDL, WORKSPACE_ROOT,
+  WORKSPACE_IDENTITY_DDL, WORKSPACE_ROOT, WORKSPACE_SOUL_DDL,
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor,
@@ -56,7 +56,7 @@ import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
-import { createSqlFiber, detectOrphanedFibers } from '@kinu.run/core';
+import { createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
 import { BRANCH_CREDENTIAL_ENV, createBranchSpawner } from './branch-process';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
@@ -107,6 +107,8 @@ export interface CLIRuntime extends AgentRuntime {
   setModelOperations?(sink: ModelOperationSink | null): void;
   /** Null when this runtime keeps the in-SQLite plane. See CLIRuntimeConfig.cwd. */
   cwd?: string | null;
+  /** The owner's soul from its row, the file view resealed first; absent on a facet, whose soul is its own. */
+  ownerSoul?: () => Promise<string | null>;
   setModelForRoute?(factory: (resolution: ModelRouteResolution) => LLM): void;
   modelForRoute?: (resolution: ModelRouteResolution) => LLM;
   /**
@@ -234,6 +236,7 @@ export function createCLIRuntime(
     agentName = config.actorBinding.name;
   } else {
     execRaw(WORKSPACE_IDENTITY_DDL);
+    execRaw(WORKSPACE_SOUL_DDL);
     const existing = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`[0];
 
     if (existing) {
@@ -511,6 +514,7 @@ export function createCLIRuntime(
     runtime.facetShell = facetShell;
   } else {
     runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: storage.sql });
+    runtime.ownerSoul = () => settledWorkspaceSoul(workspace);
   }
 
   runtime.nodeRuntime = localNodeRuntime({

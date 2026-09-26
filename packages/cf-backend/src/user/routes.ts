@@ -31,7 +31,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
-  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listActiveWorkspaces' | 'getAuthHeaders'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listUnrevokedGrants' | 'dismissUnrevokedGrant' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow'
   | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
@@ -349,6 +349,14 @@ userRoutes.delete('/api/user/credentials/:key', async (c) => {
   catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause }); }
 
   credentialsChanged(c);
+
+  return json({ body: { ok: true } });
+});
+
+userRoutes.get('/api/user/unrevoked-grants', async (c) => json({ body: await c.get('stub').listUnrevokedGrants(c.get('owner')) }));
+
+userRoutes.delete('/api/user/unrevoked-grants/:key', async (c) => {
+  await c.get('stub').dismissUnrevokedGrant(c.get('owner'), decodeURIComponent(rawParam(c, 'key')));
 
   return json({ body: { ok: true } });
 });
