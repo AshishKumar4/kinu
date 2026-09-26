@@ -229,8 +229,8 @@ export async function retireStalledTask(
   const owed = await terminalTaskReport({
     lifetime: hostedLifetime(child.record),
     ending: 'recovered',
-    assistantText: `This task was run ${String(turn.runs)} times, and each run was ended by a reset of the `
-      + 'workspace (a platform memory or time limit) no further along than the last, so it is not being run again.',
+    assistantText: 'This task was cut off twice at the same step by resets of the workspace (a platform memory or time '
+      + 'limit), so it is not being run again. A reset may have come from other work in the workspace, not from this task.',
     narration: () => Promise.resolve([]),
   });
 

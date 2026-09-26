@@ -104,7 +104,7 @@ test('a delegated turn whose runs stall at the same step is not run a third time
   expect(await drainEndsOrThirdRun(third, runs)).toBe('ended');
   const reports = eventsOver(first.db).query({ variant: 'subordinate_report' }).map((event) => v.parse(ReportSchema, event.payload));
   expect(reports).toEqual([expect.objectContaining({ from_subordinate: 'stalled-child', status: 'blocked' })]);
-  expect(reports[0]?.content).toContain('run 2 times');
+  expect(reports[0]?.content).toMatch(/cut off twice at the same step by resets of the workspace.*other work in the workspace/su);
 
   // The drain re-pends a lease held past its stale age (10 minutes); a retired one stays retired.
   setSystemTime(new Date(Date.now() + 11 * 60_000));

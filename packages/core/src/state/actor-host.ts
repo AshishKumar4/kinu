@@ -489,15 +489,15 @@ async function admittedBuild(stores: Pick<AgentStores, 'history'>, admission: Pr
  * run that died no further than the last one did repeats the reset that ended both (a memory or wall limit its
  * activation hit), and running it again repeats it again. A deploy restarts every object on the build it ships, so a
  * run whose next one ran on another build ended for a reason of ours, not its own: the two runs judged must share
- * this host's build.
+ * this host's build. The CLI's host has none, and cannot tell a relaunch from a reset, so it judges no pair.
  */
 async function stalledRun(stores: Pick<AgentStores, 'history'>, claim: StoredActorClaim, installedBuild: string | null): Promise<boolean> {
-  if (claim.epoch < 2) return false;
+  if (claim.epoch < 2 || installedBuild === null) return false;
   const requests = stores.history.requests.forTurn(claim.turnId);
   const admission = (epoch: number) => requests.find((request) => request.epoch === epoch && request.step === null);
   const builds = await Promise.all([admittedBuild(stores, admission(claim.epoch - 1)), admittedBuild(stores, admission(claim.epoch))]);
 
-  if (builds.some((build) => build === undefined || build !== installedBuild)) return false;
+  if (builds.some((build) => build !== installedBuild)) return false;
 
   return furthestStep(requests, claim.epoch) <= furthestStep(requests, claim.epoch - 1);
 }

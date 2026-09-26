@@ -56,7 +56,7 @@ function scaffoldIdentity(name: string, vfs: VFS, sql: SqlExecutor, actorId: str
   };
 }
 
-function build(donor?: Database, unreadableActor?: string, automatic = false): Fixture {
+function build(donor?: Database, unreadableActor?: string, automatic = false, installedBuild: string | null = 'test-build'): Fixture {
   const db = donor ?? new Database(':memory:');
   const sql = sqlOver(db);
   const execRaw = (ddl: string): void => { db.exec(ddl); };
@@ -103,7 +103,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
       exec: (query, ...bindings) => exec.exec(query, ...bindings),
     },
     directory,
-    installedBuild: 'test-build',
+    installedBuild,
     filesFor: async (bound) => ({
       vfs: planeFor(bound.record.actorId),
       artifactDirectory: agentArtifactDirectory(`/actors/${bound.record.actorId}`),
@@ -137,7 +137,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false): F
 
       return { actorId: handle.actorId, workspaceId: handle.workspaceId, parentActorId: handle.parentActorId };
     },
-    rebuild: () => build(db, unreadableActor, automatic),
+    rebuild: () => build(db, unreadableActor, automatic, installedBuild),
   };
 }
 
@@ -421,8 +421,8 @@ describe('one workspace database, many logical actors', () => {
 
   /** A turn whose program verifies, and one run of it: admitted again on `installedBuild`, its model called at each
    *  of `steps`, and left open there, as a run a memory or wall reset of its activation ended. */
-  async function interruptedRuns(): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null) => Promise<void>; fx: Fixture }> {
-    const fx = build();
+  async function interruptedRuns(hostBuild?: string | null): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null) => Promise<void>; fx: Fixture }> {
+    const fx = build(undefined, undefined, false, hostBuild);
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
     const source = 'export default async function main() { return "retained"; }';
     await actor.runtime.storage.vfs.writeFile(`${actor.runtime.identity.scaffold.path}.v1`, source);
@@ -470,6 +470,19 @@ describe('one workspace database, many logical actors', () => {
     const recovered = await recoverActorTurns(fx.host);
     expect(recovered.stalled.map((turn) => turn.claim.turnId)).toEqual(['turn-a']);
     expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error', epoch: 4 });
+    fx.host.releaseAll();
+    fx.db.close();
+  });
+
+  test('a host with no build of its own judges no pair: two relaunches of the CLI at one step are not a stall', async () => {
+    const { actor, run, fx } = await interruptedRuns(null);
+    const owed = { verified: ['turn-a'], stalled: [] };
+
+    await run([0, 1]);
+    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    await run([0, 1]);
+    expect(await recoverActorTurns(fx.host)).toMatchObject(owed);
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', epoch: 2 });
     fx.host.releaseAll();
     fx.db.close();
   });
