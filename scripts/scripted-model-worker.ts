@@ -21,7 +21,13 @@ export default {
     }
 
     if (pathname === '/chat/completions' && request.method === 'POST') {
-      const asked = readScriptedRequest(await request.text());
+      const read = readScriptedRequest(await request.text());
+
+      if ('refusal' in read) {
+        return new Response(read.refusal.body, { status: read.refusal.status, headers: { 'content-type': 'application/json' } });
+      }
+
+      const asked = read.request;
       const answer = tierModel(asked);
 
       if (asked.streamed && answer.pace !== undefined) {

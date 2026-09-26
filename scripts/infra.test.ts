@@ -22,7 +22,7 @@ import {
   requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import {
-  type AccessApplicationView, accessCovering, accessDestinations, accessOverreach, routeAnswer,
+  type AccessApplicationView, accessCovering, accessDestinations, accessOverreach, edgeResponds, routeAnswer,
 } from './infra-cloudflare';
 import {
   type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observedRow, phaseFrom, supplyDrift,
@@ -935,6 +935,74 @@ describe('staging is the one named environment, read the way Wrangler reads it',
     expect(environmentFrom(['staging'])).toBe('staging');
     expect(environmentFrom(['preview'])).toBeUndefined();
     expect(environmentFrom(['staging', 'production'])).toBeUndefined();
+  });
+});
+
+/**
+ * The account staging's first deploy meets, as docs/DEPLOYMENT.md prescribes it: every hand-made prerequisite in
+ * place, including the proxied `*.staging` record, and NO record of its own for staging.kinu.run, which the deploy's
+ * Custom Domain creates and a record already there would refuse. Nothing the deploy creates exists yet.
+ */
+describe('the first staging deploy is refused for nothing it creates', () => {
+  const staging = deriveInfrastructure('staging');
+  const host = new URL(staging.worker.vars.get('CLI_PUBLIC_ORIGIN') ?? '').host;
+
+  const observed = (resource: Resource, deployed: boolean): Row => {
+    if (UNOBSERVABLE.has(resource.kind)) return row(resource.id, 'unobservable', resource.required, resource.origin);
+    const createdByTheDeploy = resource.origin === 'wrangler-deploy' || (resource.kind === 'dns-record' && resource.name === host);
+
+    return row(resource.id, createdByTheDeploy && !deployed ? 'absent' : 'present', resource.required, resource.origin);
+  };
+
+  const at = (phase: Phase, rows: readonly Row[]) =>
+    audit({ infrastructure: staging, rows, supplied: [], unreadFields: [], phase });
+
+  test('the host\'s own record is the Custom Domain\'s, so its absence before the upload is deferred', () => {
+    const before = at('bootstrap', staging.resources.map((resource) => observed(resource, false)));
+
+    expect(before.findings).toEqual([]);
+    expect(before.notes.join('\n')).toContain(`custom-domain.${host}`);
+  });
+
+  test('a preview host the edge holds no certificate for is deferred before the upload and refused after it', async () => {
+    // Cloudflare's edge answers a name it holds no certificate for with a fatal handshake_failure alert: measured
+    // 2026-09-26 on infra-verify-probe.staging.kinu.run, before staging's Custom Domain existed.
+    const handshakeFailure = new Uint8Array([0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28]);
+
+    const edge = Bun.listen({
+      hostname: '127.0.0.1', port: 0, socket: { data(socket) { socket.write(handshakeFailure); socket.end(); } },
+    });
+
+    try {
+      const previews = staging.resources.find((resource) => resource.id === `zone-route.*.${host}/*`);
+
+      if (previews === undefined) throw new Error(`staging declares no *.${host}/* route`);
+      const probe = observedRow(previews, await edgeResponds(`127.0.0.1:${String(edge.port)}`));
+
+      const beside = (deployed: boolean) => [
+        ...staging.resources.filter((resource) => resource !== previews).map((resource) => observed(resource, deployed)),
+        probe,
+      ];
+
+      const before = at('bootstrap', beside(false));
+      expect(before.findings).toEqual([]);
+      expect(before.notes.join('\n')).toContain(previews.id);
+      // After the upload the certificate must be there, whichever phase asks.
+      expect(at('post-deploy', beside(true)).findings.join('\n')).toContain(previews.id);
+      expect(at('full', beside(true)).findings.join('\n')).toContain(previews.id);
+    } finally {
+      edge.stop(true);
+    }
+  });
+
+  test('a connection the far end closes without answering is a lookup that failed, not an absence', async () => {
+    const closing = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { open(socket) { socket.end(); }, data() {} } });
+
+    try {
+      expect((await edgeResponds(`127.0.0.1:${String(closing.port)}`)).state).toBe('unknown');
+    } finally {
+      closing.stop(true);
+    }
   });
 });
 
