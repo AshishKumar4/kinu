@@ -297,6 +297,17 @@ The pilot searches. A human reads each survivor and decides whether it is an equ
 
 The pilot mutates source in place and refuses to run in the main checkout. The reason is measured and recorded in `mutation-sweep.ts`: a sandbox copy resolves `@kinu.run/*` through the donor `node_modules` to the pristine package, so two thirds of a mutant's own defenders would never see it. So `nightly-mutation.sh` builds a detached worktree, runs `setup-worktree.sh` in it, and removes it in a trap.
 
+## Flakes
+
+A test that passes and fails on one tree is a flake. A row runs each suite once, so only a repeat can show one.
+
+| Program | Repeats | Runs where | Verdict |
+|---|---|---|---|
+| `bun scripts/flake-gate.ts` | each test file the commit adds or changes, 6 times (3 for one that drives Chrome), through the row that claims it | commit tier, every commit | gate: one red run fails the commit, named `RED` or `FLAKE` |
+| `bun run sweep:flakes` | every suite the CI tier runs, beside its row's siblings, 3 times under `--randomize` with recorded seeds | on request (`--only=<row label>` for one row) | reports each flaky or red test, after main's latest CI verdict |
+
+Neither one retries or quarantines. A red run is the only evidence of the race or leak behind it, so each flake is fixed at its root. The gate keeps every red run's output under `bench-artifacts/flake-gate/`, and the sweep writes its report under `bench-artifacts/flake-sweep/`. A merge repeats only the test files that differ from every parent. A file it takes whole from one side was already repeated by that side's own commits.
+
 ## Mocking philosophy
 
 Mock boundaries, never the pure function under test.

@@ -270,8 +270,8 @@ export async function repeatAll(
 const BLIND_SPOTS = [
   'a merge repeats only the test files it changes itself: one it takes whole from a side was that side\'s own '
     + 'commits\' subject, and the sweep\'s',
-  'a flake that a changed helper or product file puts into a suite this commit does not change: the nightly sweep '
-    + '(`bun scripts/flake-gate.ts --sweep`) repeats every suite the CI tier runs',
+  'a flake that a changed helper or product file puts into a suite this commit does not change: the sweep, run on '
+    + 'demand with `bun run sweep:flakes`, repeats every suite the CI tier runs',
   'N runs sample N interleavings: greens raise confidence and prove nothing about absence',
   'a suite never runs beside itself here, so a race between two copies of one suite is not provoked',
   'a file runs apart from its row\'s siblings, so a leak between them (a module mock, a global) is not provoked '
@@ -294,7 +294,7 @@ function line(plan: Extract<Plan, { kind: 'repeat' }>, outcomes: readonly RunOut
   }
 }
 
-/* ── The nightly sweep ────────────────────────────────────────────────── */
+/* ── The sweep ────────────────────────────────────────────────────────── */
 
 /** Runs of each suite in the sweep: fewer than a commit's six, over every suite the CI tier runs. */
 export const SWEEP_RUNS = 3;
