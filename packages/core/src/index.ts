@@ -2232,7 +2232,7 @@ export {
 } from './read-models/alternate-takes';
 
 export {
-  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, applySignalCard,
+  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, applySignalCard,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,

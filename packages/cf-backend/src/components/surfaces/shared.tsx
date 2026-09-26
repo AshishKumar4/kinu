@@ -102,7 +102,7 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
   );
 }
 
-function SlateLink({ id }: { id: string }) {
+export function SlateLink({ id }: { id: string }) {
   const inline = useContext(SlateInlineContext);
 
   if (inline === null) return <code className="p-code-inline">{`slate://${id}`}</code>;

@@ -1845,6 +1845,7 @@ export abstract class ActorAgent extends Agent<Env> {
         ports: {
           prepareTurn: (item, lease) => this.prepareTurn(item, lease),
           owedTerminalEffects: (input) => this.owedTerminalEffects(input),
+          answerMetadata: () => this.answerMetadata(),
           terminal: () => this.terminal,
           taskList: () => this.stores.taskList,
           // A running job's settle wakes the session; a reminder fired behind it would race that wake.
@@ -1971,6 +1972,10 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 
   protected abstract owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
+
+  protected answerMetadata(): JsonObject | null {
+    return null;
+  }
 
   private orchestrationDeps(): AgentOrchestratorDeps {
     {

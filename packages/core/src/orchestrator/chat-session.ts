@@ -229,11 +229,18 @@ export interface OwedTerminalEffectsInput {
   readonly taskReminder: { readonly text: string } | null;
 }
 
+function answerMetadata(ports: ChatSessionPorts, ending: string): JsonObject | null {
+  const metadata: JsonObject = { ...ports.answerMetadata?.(), ...(ending === 'incomplete' && { [TURN_END_METADATA_KEY]: ending }) };
+
+  return Object.keys(metadata).length === 0 ? null : metadata;
+}
+
 /** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
   prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
+  answerMetadata?(): JsonObject | null;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
   /** Asked per call: the bodies close over stores built after this session. */
@@ -1006,10 +1013,12 @@ export class ChatSession {
     const finalText = execution.claim === null ? execution.finalTextReference
       : await this.actorSession.recordTranscriptText(execution.claim, 'answer', fullText, execution.outputReferences);
 
+    const metadata = answerMetadata(this.ports, end.reason);
+
     const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
       id: this.messageId, parentId: this.actorSession.landedSteers.at(-1)?.id ?? lease.turnId,
       turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
-      ...(end.reason === 'incomplete' && { metadata: { [TURN_END_METADATA_KEY]: end.reason } }),
+      ...(metadata !== null && { metadata }),
     }) : null;
 
     const owedReport = await this.ports.owedReport?.(

@@ -88,7 +88,7 @@ import {
   drainAssignments,
   appendMemoryNote,
   parseMemoryNotes,
-  type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT,
+  type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY,
   type SlateBindingCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
@@ -429,6 +429,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const ids = this.slates.filesChanged(paths);
 
         if (ids.length === 0) return;
+
+        if (this._inFlight) for (const id of ids) this.turnSlates.add(id);
         this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
         this.overviewChanged();
       },
@@ -2041,6 +2043,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Readings this root's settled response owes; all taken now, before any effect runs, since the
    * list is claimed up front. Row order, lanes and gates belong to {@link declareTerminalRoster}.
    */
+  private readonly turnSlates = new Set<string>();
+
+  protected override answerMetadata(): JsonObject | null {
+    const slates = [...this.turnSlates].sort();
+
+    this.turnSlates.clear();
+
+    return slates.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: slates };
+  }
+
   protected owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
     const facts: TerminalTurnFacts = {
       messageId: input.messageId,

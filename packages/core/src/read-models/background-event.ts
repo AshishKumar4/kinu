@@ -121,6 +121,12 @@ export function isSteeredMessage(row: { metadata: unknown }): boolean {
 export const TURN_END_METADATA_KEY = 'kinuTurnEnd';
 
 /** Whether the turn ended while the model was still calling tools. */
+export const SLATES_CHANGED_METADATA_KEY = 'kinuSlatesChanged';
+
+export function slatesChanged(row: { metadata: unknown }): readonly string[] {
+  return metadataField(row, SLATES_CHANGED_METADATA_KEY, v.array(v.string())) ?? [];
+}
+
 export function endedMidWork(row: { metadata: unknown }): boolean {
   return metadataField(row, TURN_END_METADATA_KEY, v.string()) === 'incomplete';
 }
