@@ -196,7 +196,10 @@ bun run evals evals/tasks/order-book.eval.ts   # one task
 KINU_EVAL_TRIALS=3 bun run evals               # a pilot
 bun run evals:ui                               # the report in the vitest-evals UI
 bun evals/scripts/compare.ts --candidate bench-artifacts/evals/results.json --out /tmp/cmp [--baseline <results.json>]
+bun evals/scripts/gate.ts [--digest <artifact digest>] [--gate]   # every task at once, unchanged results reused
 ```
+
+**On this machine.** `evals/scripts/gate.ts` runs every task at once, each in its own process with all its trials at once, against the deployment `KINU_EVAL_ORIGIN` names. A task's report is stored under `~/.cache/kinu-evals` keyed by everything it measured: the served build (its artifact digest when given, else its build sha), the origin, the `evals/` tree, the task file and the matrix. A later run with the same key reuses it instead of running the task. Only a report that is complete and free of infrastructure failures is stored for reuse, and the joined report is stored as a baseline only when `validateEvalResults` accepts it: every task, trials 1 to N once each, one build, one eval commit, no infrastructure failure. The run is compared with the newest baseline of a strict ancestor build and written to `bench-artifacts/evals/<sha>/` with each trial's evidence; `--gate` exits 1 on a regression or on a report that cannot be a baseline.
 
 A run needs `KINU_EVAL_WEB_IDENTITY` (the deployment's `DEV_IDENTITY_SECRET`, in `.dev.vars`), which makes each trial the `eval-service` identity. Every trial deletes its workspace when it ends. Nothing ends a trial on a clock: a turn ends when the deployment says so.
 
