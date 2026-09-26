@@ -1473,6 +1473,10 @@
       },
       {
         "socket": "A",
+        "type": "context_admitted"
+      },
+      {
+        "socket": "A",
         "type": "cf_agent_use_chat_response",
         "id": "PARITY-ONE",
         "done": false,
@@ -1553,6 +1557,10 @@
       {
         "socket": "A",
         "type": "turn_claim"
+      },
+      {
+        "socket": "A",
+        "type": "context_admitted"
       },
       {
         "socket": "A",
@@ -1651,6 +1659,10 @@
       },
       {
         "socket": "A",
+        "type": "context_admitted"
+      },
+      {
+        "socket": "A",
         "type": "cf_agent_use_chat_response",
         "id": "PARITY-TWO-STEER",
         "done": false,
@@ -1734,6 +1746,10 @@
       },
       {
         "socket": "A",
+        "type": "context_admitted"
+      },
+      {
+        "socket": "A",
         "type": "cf_agent_use_chat_response",
         "id": "PARITY-THREE",
         "done": false,
@@ -1765,6 +1781,10 @@
       {
         "socket": "A",
         "type": "turn_claim"
+      },
+      {
+        "socket": "A",
+        "type": "context_admitted"
       },
       {
         "socket": "A",
@@ -1907,6 +1927,10 @@
       },
       {
         "socket": "B",
+        "type": "context_admitted"
+      },
+      {
+        "socket": "B",
         "type": "cf_agent_use_chat_response",
         "id": "<uuid#14>",
         "done": false,
@@ -1993,6 +2017,10 @@
       {
         "socket": "B",
         "type": "turn_claim"
+      },
+      {
+        "socket": "B",
+        "type": "context_admitted"
       },
       {
         "socket": "B",
