@@ -168,7 +168,9 @@ async function closeWorkspace(session: KinuPublicSession, task: EvalTask, errors
   try {
     await session.teardown();
   } catch (error) {
-    errors.push({ name: 'EvalCleanupError', message: renderThrownChain({ cause: error }) });
+    const message = renderThrownChain({ cause: error });
+
+    errors.push({ name: message.includes(INFRA_FAILURE_MARKER) ? 'InfraError' : 'EvalCleanupError', message });
   }
 
   return { events, costUsd, workspace };

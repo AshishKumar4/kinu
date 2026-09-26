@@ -35,7 +35,7 @@ import {
   decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity,
   type PublicTurnRecorder,
-  KinuPublicSession, openPublicSession,
+  KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS,
 } from './session';
 import {
   BROADCAST_FRAME, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID,
@@ -674,6 +674,28 @@ test('an explicitly missing file is an oracle miss; a failed answer is the build
     await expect(session.snapshot()).rejects.toThrow(INFRA_FAILURE_MARKER);
   } finally {
     session.disconnect();
+    await server.stop(true);
+  }
+});
+
+test('the workspace answering 404 once its own mark is a lease old is a sweep\'s doing, not the build\'s', async () => {
+  // A machine that sleeps past the lease stops beating, another run's sweep deletes the workspace, and the trial
+  // wakes to 404s on its own workspace.
+  let status = 404;
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('no such workspace', { status }) });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'swept-workspace probe',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await expect(session.readFile('notes.txt')).rejects.toBeInstanceOf(DeploymentAnswer);
+    session.lastMarked = Date.now() - WORKSPACE_LEASE_MS;
+    await expect(session.readFile('notes.txt')).rejects.toThrow(`${INFRA_FAILURE_MARKER} — GET files notes.txt: the workspace was swept`);
+    status = 500;
+    await expect(session.readFile('notes.txt')).rejects.toBeInstanceOf(DeploymentAnswer);
+  } finally {
     await server.stop(true);
   }
 });
