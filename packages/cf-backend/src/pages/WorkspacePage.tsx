@@ -343,7 +343,7 @@ function SubordinateChatColumn({
     onReachEdge: history.loadMore,
     initialScroll: ui.savedScroll,
     onScrollPosition: ui.rememberScroll,
-    exhausted: history.exhausted,
+    settled: state.transcriptSeeded,
   });
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -590,7 +590,7 @@ export default function WorkspacePage() {
     onReachEdge: history.loadMore,
     initialScroll: ui.savedScroll,
     onScrollPosition: ui.rememberScroll,
-    exhausted: history.exhausted,
+    settled: state.transcriptSeeded,
   });
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
