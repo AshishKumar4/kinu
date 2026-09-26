@@ -179,4 +179,27 @@ describe('the launcher launch check', () => {
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toBe(JSON.stringify({ cwd: realpathSync(tree), leak: null }));
   });
+
+  test('the launcher\'s own checks of a build keep the project\'s bunfig and .env out, as its exec does', async () => {
+    // check_launch runs the build's --version in the caller's directory, before the isolated exec.
+    const { home, launcher } = await launcherHome();
+    const tree = cliTree(home, 'current', '2.0.0+new');
+    cliTree(home, 'prev', '1.0.0+old');
+    const seen = join(home, 'version-saw.json');
+    writeFileSync(join(tree, 'cli.js'), [
+      `if (process.argv[2] === '--version') require('node:fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ leak: process.env.KINU_PROJECT_LEAK ?? null }));`,
+      "console.log('2.0.0+new');",
+    ].join('\n'));
+    const project = scratchDir('launcher-check-project');
+    writeFileSync(join(project, 'preload.ts'), `require('node:fs').writeFileSync(${JSON.stringify(join(project, 'PRELOAD-RAN'))}, '');\n`);
+    writeFileSync(join(project, 'bunfig.toml'), 'preload = ["./preload.ts"]\n');
+    writeFileSync(join(project, '.env'), 'KINU_PROJECT_LEAK=1\n');
+
+    const run = await launchIn(project, home, launcher, 'chat');
+
+    expect(run.exitCode).toBe(0);
+    expect(existsSync(join(home, 'cli', 'prev'))).toBe(false);
+    expect(JSON.parse(readFileSync(seen, 'utf8'))).toEqual({ leak: null });
+    expect(existsSync(join(project, 'PRELOAD-RAN'))).toBe(false);
+  });
 });
