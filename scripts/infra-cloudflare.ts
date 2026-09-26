@@ -307,41 +307,56 @@ export interface ContainerApplication {
 }
 
 /**
- * Whether a container class's Durable Object namespace is bound to `application`, the one the deploy names, or to
- * none. `namespace` undefined is a class with no namespace yet: the Worker was never deployed, or never bound the
- * class, so nothing can hold one.
+ * Whether a container class's Durable Object namespace and `application`, the one the deploy names, are bound to
+ * each other or to nothing else. `namespace` undefined is a class with no namespace yet: the Worker was never
+ * deployed, or never bound the class, and the deploy creates one. Two states refuse the deploy after the Worker is
+ * uploaded (wrangler 4.129): another application holding the namespace (DURABLE_OBJECT_ALREADY_HAS_APPLICATION), and
+ * an application of this name bound to another namespace or to none, as a Worker deleted and recreated or a class
+ * migrated leaves it ("There is already an application with the name … associated with a different durable object
+ * namespace").
  */
 export function namespaceBinding(
   namespace: string | undefined,
   application: string,
   applications: readonly ContainerApplication[],
 ): Observation {
-  if (namespace === undefined) return present(`no namespace yet, so the deploy binds ${application} to the one it creates`);
-  const holders = applications.filter((candidate) => candidate.namespace === namespace);
-  const strays = holders.filter((holder) => holder.name !== application);
+  const blocking: string[] = [];
 
-  if (strays.length > 0) {
+  if (namespace !== undefined) {
+    for (const stray of applications.filter((candidate) => candidate.namespace === namespace && candidate.name !== application)) {
+      blocking.push(`namespace ${namespace} is bound to ${stray.name} (${stray.id}), not ${application}`);
+    }
+  }
+
+  const named = applications.find((candidate) => candidate.name === application);
+
+  if (named !== undefined && (namespace === undefined || named.namespace !== namespace)) {
+    blocking.push(`${application} (${named.id}) is bound to ${named.namespace === undefined ? 'no namespace' : `namespace ${named.namespace}`}, `
+      + `not ${namespace ?? 'the one this deploy creates'}`);
+  }
+
+  if (blocking.length > 0) {
     return {
       state: 'absent',
-      detail: `namespace ${namespace} is bound to ${strays.map((stray) => `${stray.name} (${stray.id})`).join(', ')}, not `
-        + `${application}: \`wrangler deploy\` uploads the Worker, then refuses to create ${application} with `
-        + 'DURABLE_OBJECT_ALREADY_HAS_APPLICATION. Delete it (`npx wrangler containers delete <id>`) and deploy again; '
-        + 'the namespace and its storage stay with the Worker.',
+      detail: `${blocking.join('; ')}: \`wrangler deploy\` uploads the Worker, then refuses the application. Delete `
+        + 'each one named here (`npx wrangler containers delete <id>`) and deploy again; a namespace and its storage stay '
+        + 'with their Worker.',
     };
   }
 
-  return present(holders.length === 0
+  if (namespace === undefined) return present(`no namespace yet, so the deploy binds ${application} to the one it creates`);
+
+  return present(named === undefined
     ? `namespace ${namespace} is bound to no application, so the deploy binds ${application}`
-    : `namespace ${namespace} is bound to ${application} (${holders[0]?.id ?? ''})`);
+    : `namespace ${namespace} is bound to ${application} (${named.id})`);
 }
 
 /**
- * {@link namespaceBinding} over the account. Every application is asked, because the one holding the namespace can
- * have any name: on 2026-09-26 staging's was `kinu-staging-kinusandbox-staging`, left from a 2026-09-05 attempt, and
- * the deploy that named `kinu-kinusandbox-staging` uploaded the Worker and was then refused.
+ * {@link namespaceBinding} over the account. Every application is asked for its namespace, because the one holding
+ * the class's can have any name: on 2026-09-26 staging's was `kinu-staging-kinusandbox-staging`, left from a
+ * 2026-09-05 attempt, and the deploy that named `kinu-kinusandbox-staging` uploaded the Worker and was then refused.
  */
 export function containerNamespace(namespace: string | undefined, application: string): Observation {
-  if (namespace === undefined) return namespaceBinding(namespace, application, []);
   const loaded = containerCatalog.load();
 
   if ('failure' in loaded) return unknown(loaded.failure);

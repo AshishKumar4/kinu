@@ -590,6 +590,18 @@ describe('a container namespace is bound to the application the deploy names, or
     }
   });
 
+  test('an application of the deploy\'s name bound to another namespace, or to one before any is live, blocks it', () => {
+    // A Worker deleted and recreated, or a class migrated, leaves the name bound to a namespace that no longer serves
+    // the class; wrangler refuses to move it.
+    const OLD = { id: 'b0000000-0000-4000-8000-000000000001', name: 'kinu-kinusandbox-staging', namespace: 'old-namespace' };
+
+    for (const live of [STRAY.namespace, undefined]) {
+      const observed = namespaceBinding(live, OLD.name, [OLD]);
+
+      expect(observed.state === 'absent' ? observed.detail : observed.state).toContain(`${OLD.name} (${OLD.id}) is bound to namespace old-namespace`);
+    }
+  });
+
   test('the named application, or none, is a namespace the deploy proceeds from', () => {
     expect(namespaceBinding(STRAY.namespace, STRAY.name, [STRAY]).state).toBe('present');
     expect(namespaceBinding(STRAY.namespace, 'kinu-kinusandbox-staging', [{ ...STRAY, namespace: 'another' }]).state)
