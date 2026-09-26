@@ -284,6 +284,20 @@ describe('a model or effort chosen for a workspace', () => {
     expect(await nextTurnModel(machine, 'slashed')).toBe('beta-model');
   });
 
+  test('kinu status names the model and effort the next turn runs at, a pin included', async () => {
+    // It read the tier before the pin, so it named a model the next turn would not run.
+    const machine = await connectedMachine();
+    await mustRun(machine, ['create', 'pinned', '--mode', 'local']);
+    await mustRun(machine, ['model', 'pinned', 'openai-compat/beta-model']);
+    await mustRun(machine, ['effort', 'pinned', 'high']);
+
+    const status = await mustRun(machine, ['status', 'pinned']);
+
+    expect(status).toContain('openai-compat/beta-model');
+    expect(status).toMatch(/Effort:\s+high/u);
+    expect(await nextTurnModel(machine, 'pinned')).toBe('beta-model');
+  });
+
   test('with kinu model and kinu effort is that workspace\'s alone', async () => {
     const machine = await connectedMachine();
     await mustRun(machine, ['create', 'retuned', '--mode', 'local']);

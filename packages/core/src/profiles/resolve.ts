@@ -430,6 +430,20 @@ export function parentReasoningEffort(authority: ProfileAuthorityInputs, ancesto
   return inherited;
 }
 
+/** One source for a turn's own choices. */
+export function ownProfileChoices(
+  config: PinnedProfile,
+  authority: ProfileAuthorityInputs,
+  ancestors?: readonly PinnedProfile[],
+): Pick<ResolveTurnProfileInput, 'explicitTier' | 'workspaceModel' | 'explicitEffort' | 'inheritedEffort'> {
+  return {
+    explicitTier: config.getAssignedTier() ?? undefined,
+    workspaceModel: config.getModel(),
+    explicitEffort: config.getReasoningEffort(),
+    inheritedEffort: ancestors === undefined ? null : parentReasoningEffort(authority, ancestors),
+  };
+}
+
 /** Detached work inherits its issuer; new work reads current authority. */
 export async function resolveRoutingProfile(deps: {
   readonly actor: ActorReference;

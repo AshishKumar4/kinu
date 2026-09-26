@@ -123,7 +123,7 @@ import { TierIdSchema,
   reasoningEffortOptions,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
   changeRoleAsOwner, agentsProfileContext, canonicalConversationId,
-  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile, parentReasoningEffort,
+  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile, ownProfileChoices,
   type PinnedProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
@@ -844,29 +844,8 @@ export class LocalAgentSession {
     return this.effectiveModelSpec();
   }
 
-  /** What this actor's own configuration chooses, which every turn resolves under. */
-  private ownProfileChoices(inputs: ProfileAuthorityInputs) {
-    return {
-      explicitTier: this.config.getAssignedTier() ?? undefined,
-      // Without this a setModel pin is accepted but never used.
-      workspaceModel: this.config.getModel(),
-      explicitEffort: this.config.getReasoningEffort(),
-      inheritedEffort: this.ancestors === undefined ? null : parentReasoningEffort(inputs, this.ancestors()),
-    };
-  }
-
-  /** The tier, model and effort the next turn resolves to, before one runs: what a status line shows. */
-  async nextTurnTier(): Promise<ResolvedTurnProfile['tier']> {
-    const inputs = await this.profiles().inputs();
-
-    return resolveAgentTurnProfile({
-      ...inputs,
-      ...this.ownProfileChoices(inputs),
-      activeRoleId: this.getActiveRoleId(),
-      workMode: this.actorSession.workMode,
-      availableTools: [],
-      activeSkills: [],
-    }).tier;
+  nextTurnTier(): Promise<ResolvedTurnProfile['tier']> {
+    return this.profiles().nextTurnTier({ workMode: this.actorSession.workMode, ancestors: this.ancestors?.() });
   }
 
   getActiveRoleId(): string {
@@ -1665,7 +1644,7 @@ export class LocalAgentSession {
         ...codemodeCapabilitiesFor(this.codemodeProviders(workMode)),
       ],
       activeSkills: activeSkills?.active.map((skill) => skill.name) ?? [],
-      ...this.ownProfileChoices(profileInputs),
+      ...ownProfileChoices(this.config, profileInputs, this.ancestors?.()),
       // This message's tier, then the hire's pinned tier, else the role's own default (not the workspace's).
       explicitTier: tierFromMetadata(item.metadata) ?? this.config.getAssignedTier() ?? undefined,
     });

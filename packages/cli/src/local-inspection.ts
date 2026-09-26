@@ -61,7 +61,7 @@ import {
   type LabelingItem,
   type JsonObject,
   type JsonValue,
-  type TierId,
+  type ResolvedTurnProfile,
   type OutcomeLabel,
   type EventVariant,
   type KinuEvent,
@@ -97,12 +97,13 @@ import {
 } from '@kinu.run/core';
 import { classify } from '@kinu.run/core/obs';
 import {
-  makeSql, makeSqlExec, createHostShell, hostToolchainCapabilities, inspectionFiles,
-  type LocalModelResolver,
+  makeSql, makeSqlExec, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
+  resolverModelPlane, type LocalModelResolver,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveAgentRef } from './config';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
+import { createProfileAuthorityReader } from './profiles';
 import { KinuError } from '@kinu.run/core/obs';
 
 type SqliteDb = Database;
@@ -242,24 +243,12 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
   });
 }
 
-export interface LocalProfileCoordinates {
-  readonly roleId: string;
-  readonly assignedTier: TierId | null;
-}
-
-export function getLocalProfileCoordinates(name: string): LocalProfileCoordinates {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'actor_config')) {
-      return { roleId: 'task', assignedTier: null };
-    }
-
-    const config = openWorkspaceMainActor(makeSql(db)).config;
-
-    return {
-      roleId: config.getRoleSelection(),
-      assignedTier: config.getAssignedTier(),
-    };
-  });
+export async function readLocalNextTurnTier(name: string): Promise<ResolvedTurnProfile['tier']> {
+  return withLocalDbAsync(name, async (db) => createLocalProfileAuthority({
+    config: openWorkspaceMainActor(makeSql(db)).config,
+    plane: resolverModelPlane(createConfiguredLocalModelResolver().resolver),
+    envelope: createProfileAuthorityReader(),
+  }).nextTurnTier({ workMode: 'build' }));
 }
 
 /** Reassembled from `memory_chunks`, MemoryStore's index of `memory/MEMORY.md`; opening the file would write (see getLocalStatus). */
