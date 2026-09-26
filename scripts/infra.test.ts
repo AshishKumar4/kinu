@@ -173,6 +173,12 @@ describe('the supply census is pinned to `Env`', () => {
 
     const undeclared: InfraWorker = { ...worker, vars: new Map([...worker.vars, ['SIGN_IN_PROVIDERS', '']]) };
     expect(providerRow(undeclared, [])).toBeUndefined();
+
+    // An environment block that omits the key entirely is refused, not read as "declares none".
+    const omitted: InfraWorker = { ...worker, vars: new Map([...worker.vars].filter(([name]) => name !== 'SIGN_IN_PROVIDERS')) };
+    const declaration = supplyRows(omitted, held(['CLOUDFLARE_OAUTH_CLIENT_SECRET'])).find((entry) => entry.name === 'SIGN_IN_PROVIDERS');
+    expect(declaration).toMatchObject({ verdict: 'absent', required: true });
+    expect(supplyRows(worker, held([])).find((entry) => entry.name === 'SIGN_IN_PROVIDERS')).toBeUndefined();
   });
 
   test('a required value missing fails by name', () => {

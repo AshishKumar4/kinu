@@ -382,8 +382,20 @@ export function supplyRows(
     });
   }
 
+  const declaration = worker.vars.get('SIGN_IN_PROVIDERS');
+
+  // Empty declares none; an absent key is an unwritten decision, and the monitor's probe cannot read it.
+  if (declaration === undefined) {
+    rows.push({
+      name: 'SIGN_IN_PROVIDERS',
+      verdict: 'absent',
+      required: true,
+      detail: 'config-var — absent ⇒ this environment never says which sign-in providers /login must offer',
+    });
+  }
+
   // A provider the deployment declares must have both halves, or nobody signs in with it.
-  for (const provider of declaredSignInProviders(worker.vars.get('SIGN_IN_PROVIDERS') ?? '')) {
+  for (const provider of declaredSignInProviders(declaration ?? '')) {
     const id = `${provider.toUpperCase()}_OAUTH_CLIENT_ID`;
     const secret = `${provider.toUpperCase()}_OAUTH_CLIENT_SECRET`;
 
