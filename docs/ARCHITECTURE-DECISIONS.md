@@ -410,6 +410,32 @@ The CLI host needs nothing. It folds only trigger times into its process timer
 debounce lives as long as the process that owns the workspace. Two
 mechanisms, one rule each; nothing to reconcile.
 
+D7. The terminal wake starts a delegated turn; a fiber runs it. Amends D3's
+cloud arm, and the rule that everything owed rides the one durable terminal
+wake (in force since 2026-08-31, not logged here). Decided 2026-09-25, commit
+9359ce96e. History, for the reader who asks "weren't we on fibers once?": lanes
+ran on fibers before 2026-08-31, moved onto the wake from 2026-08-31 and
+2026-09-17 (D3), and delegation went back to a fiber here.
+What stays: the wake arms and recovers, `drainAssignments` is still the one
+runner, and admission never runs a turn. What changes: `maintenanceWork` calls
+`startDelegationDrain`, which opens one `runFiber('delegation:drain')` and
+returns. An evicted fiber needs no re-drive, because its turn claim re-pends
+through the next wake.
+Why: run inside the wake, a delegated turn held the alarm until its 15-minute
+wall. On warm-forge-4d6acc02 (2026-09-25, 14:00-19:57 UTC), task-j7gjjr slept
+on an 8-day Retry-After inside the alarm. Telemetry shows 20 consecutive
+`alarm exceededWallTime` events of about 900,000 ms, and each reset closed every
+socket. Measured in the workerd pool, `tests/workerd/hire.test.ts`, "the wake
+that starts a delegated turn returns while that turn is still running": at
+f41eb85615 it hung until killed at 180 s, with no wake return while the child
+was parked; at 9359ce96e it passed, with two wake returns while one delegated
+turn was in flight. D3's own rows (hire cases 1-6) re-ran under the new shape,
+green with the rest of hire.test and two-turn.test (26 of 26). Per-case times
+were not recorded.
+Hypothesis until production shows it: `alarm exceededWallTime` stops for
+delegated turns once this shape is deployed. miniflare enforces no alarm wall,
+so only Workers Logs can confirm it.
+
 
 ## Deploy ladder
 
