@@ -43,7 +43,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/tools', description: 'List the tools this agent can use', run: toolsCommand },
   { name: '/model', description: 'Show or set this workspace\'s model', usage: '/model [spec]', run: modelCommand },
   { name: '/effort', description: 'Show or set this workspace\'s reasoning effort', usage: '/effort [level]', run: effortCommand },
-  { name: '/stats', description: 'Show each provider account\'s limits and what is left, then usage and API-equivalent cost', usage: '/stats [refresh]', run: statsCommand },
+  { name: '/stats', description: 'Show each provider account\'s limits and what is left, then usage and API-equivalent cost', usage: '/stats [refresh]', aliases: ['/usage', '/cost'], run: statsCommand },
   { name: '/accounts', description: 'Show each provider\'s accounts; choose this workspace\'s or the default', usage: ACCOUNTS_USAGE, run: accountsCommand },
   { name: '/role', description: 'Show or choose this agent\'s role', usage: '/role [id]', run: roleCommand },
   { name: '/rename', description: 'Rename this agent. Kinu never renames over a name you chose', usage: '/rename <name>', requires: 'rename', run: renameCommand },
@@ -58,6 +58,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/jobs', description: 'List background jobs', run: jobsCommand },
   { name: '/connect', description: 'Connect this computer so the agent can run commands on it', requires: 'consents', run: connectCommand },
   { name: '/stop', description: 'Stop the running turn', run: stopCommand },
+  { name: '/clear', description: 'Start a new conversation in this workspace; files and memory stay', aliases: ['/new'], requires: 'localControls', run: clearCommand },
   { name: '/queue', description: 'Send a message after the running turn ends', usage: '/queue <text>', run: queueCommand },
   { name: '/branch', description: 'Try another direction alongside the running turn', usage: '/branch <text>', run: branchCommand },
   { name: '/plan', description: 'Have the agent draft a plan, then approve it or send it back', usage: '/plan [<text>|show|approve [notes]|changes <feedback>]', requires: 'plans', run: planCommand },
@@ -166,7 +167,7 @@ export function resolveCommandDraft(commands: readonly SlashCommandInfo[], draft
 }
 
 export type SlashOutcome =
-  | { kind: 'text'; text: string }
+  | { kind: 'text'; text: string; cleared?: true }
   | { kind: 'status'; status: AgentClientStatus }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
@@ -475,6 +476,13 @@ function connectCommand({ client, command }: SlashContext): SlashOutcome {
   if (!client.consents) return { kind: 'unknown', command };
 
   return { kind: 'device-connect' };
+}
+
+async function clearCommand({ client, command }: SlashContext): Promise<SlashOutcome> {
+  if (!client.localControls) return { kind: 'unknown', command };
+  await client.localControls.clearConversation();
+
+  return { kind: 'text', text: 'A new conversation starts with the next message.', cleared: true };
 }
 
 function stopCommand({ client }: SlashContext): SlashOutcome {

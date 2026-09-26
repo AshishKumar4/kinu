@@ -957,6 +957,7 @@ function ChatScene({
   const applySlashOutcome = useCallback(async (outcome: SlashOutcome) => {
     switch (outcome.kind) {
       case 'text':
+        if (outcome.cleared) setMessages([]);
         addMessage({ role: 'system', content: outcome.text });
 
         return;

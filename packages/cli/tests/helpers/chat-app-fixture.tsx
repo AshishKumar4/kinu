@@ -107,6 +107,7 @@ export function fakeClient(options: FakeClientOptions) {
       readInstructionApproval: async () => null,
       approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
       revokeInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
+      clearConversation: async () => {},
     }) : null,
     checkpoints: null,
     inlineAttachmentLimitBytes: 1024,

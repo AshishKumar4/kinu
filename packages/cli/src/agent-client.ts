@@ -266,6 +266,7 @@ export interface LocalSessionControls {
   readInstructionApproval(path: string): Promise<InstructionSourceView | null>;
   approveInstruction(path: string, digest: string): Promise<AdmittedInstructionDecision>;
   revokeInstruction(path: string): Promise<AdmittedInstructionDecision>;
+  clearConversation(): Promise<void>;
 }
 
 /** The owner's half of Plan mode; both backends serve core's `PlanReviewStore`. */

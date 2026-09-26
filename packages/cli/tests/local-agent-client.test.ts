@@ -544,6 +544,20 @@ describe('LocalAgentClient', () => {
     await client.close();
   });
 
+  test('/clear starts a new conversation: the transcript and the next prompt hold nothing earlier', async () => {
+    const prompts: LanguageModelV2Prompt[] = [];
+    const { client } = setup(fakeModel('noted', (prompt) => prompts.push(prompt)));
+    await client.connect();
+    await client.send('remember the word heron', { cwd: '/work' });
+
+    await client.localControls.clearConversation();
+    expect(await client.history()).toEqual([]);
+    await client.send('what word?', { cwd: '/work' });
+
+    expect(JSON.stringify(prompts.at(-1))).not.toContain('heron');
+    await client.close();
+  });
+
   test('status and tools reflect the live session', async () => {
     const { client } = setup(fakeModel('ok'));
     await client.connect();

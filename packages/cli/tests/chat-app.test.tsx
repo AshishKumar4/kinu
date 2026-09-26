@@ -539,6 +539,20 @@ test('a turn shows its reasoning as it streams, its elapsed time and a token cou
   await screen.waitFor('the reasoning expanded', () => screen.frame().includes('The old table keeps its rows.'));
 });
 
+test('/clear empties the transcript on screen once the conversation is cleared', async () => {
+  const agent = fakeClient({ name: 'clears' });
+
+  const screen = await mountChat(agent.client);
+  agent.emit({ type: 'turn-start', kind: 'user', text: 'first' });
+  agent.emit({ type: 'text-delta', delta: 'An answer from before.' });
+  agent.emit({ type: 'turn-end', turn: TURN });
+  await screen.waitFor('the earlier answer', () => screen.frame().includes('An answer from before.'));
+
+  await screen.mockInput.typeText('/clear');
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the transcript cleared', () => !screen.frame().includes('An answer from before.'));
+});
+
 test('a turn waiting on a rate limit names the provider, not thinking', async () => {
   const agent = fakeClient({ name: 'wait-visible' });
 

@@ -1159,6 +1159,10 @@ export class LocalAgentSession {
     return this.chat.revertTo(entryId);
   }
 
+  clearConversation(): Promise<void> {
+    return this.chat.clear();
+  }
+
   /** Force compaction on the next turn; one-shot (`takeForceCompaction` consumes it). */
   armForcedCompaction(): void {
     this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey);

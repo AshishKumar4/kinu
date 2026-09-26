@@ -291,6 +291,16 @@ export class ActorSession {
     await this.restoreWorkingHistory();
   }
 
+  /** Empty the conversation; the running turn must be stopped first. */
+  async clearConversation(sessionId: string, assertIdle: () => void): Promise<void> {
+    this.canonical.clearConversation(sessionId, () => {
+      if (this.inFlight) throw new KinuError('denied', REVERT_NEEDS_IDLE);
+      assertIdle();
+    });
+    this.dynamic.unload();
+    await this.restoreWorkingHistory();
+  }
+
   restoreWorkingHistory(): Promise<boolean> {
     return this.restoreAfterPending(async () => {
       const current = await this.canonical.materialize();

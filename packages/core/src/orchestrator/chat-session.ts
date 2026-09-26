@@ -589,6 +589,13 @@ export class ChatSession {
     await this.flushEvents();
   }
 
+  /** A new conversation in the same workspace: the transcript and the model's context start empty. */
+  async clear(): Promise<void> {
+    await this.actorSession.clearConversation(this.sessionId, () => {
+      if (this.turnInFlight()) throw new KinuError('denied', REVERT_NEEDS_IDLE);
+    });
+  }
+
   /** Bypasses the debounce, for a batch tick that ends the session right after. Interactive sessions keep the debounced path. */
   async flushPendingDrains(): Promise<void> {
     if (this.ended) return;
