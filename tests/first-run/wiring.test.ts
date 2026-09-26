@@ -160,6 +160,16 @@ describe('the first-run corpus is the set this tier runs', () => {
     // deadline here would report a slow model as a product defect.
     expect(firstRunConfig.test?.testTimeout).toBe(0);
   });
+
+  test('every case loads under the tier\'s own runner', () => {
+    // Collecting a case imports it, under Bun as the tier runs it, which the partition above never does. On
+    // 2026-09-25 35 cases failed there at import (`import { z } from 'zod'` in core came back undefined), and only a
+    // deploy's post-publish wave would have shown it.
+    const listed = spawnSync('bun', ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts', '--json'],
+      { cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
+
+    expect(listed.status, listed.stderr).toBe(0);
+  });
 });
 
 describe('every case has a defect register entry', () => {

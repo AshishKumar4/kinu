@@ -96,6 +96,11 @@ export default defineConfig({
     name: 'first-run',
     include: [FIRST_RUN_INCLUDE],
     environment: 'node',
+    // Bun already gives an external module its own exports, a CommonJS one included, and vitest's default-export
+    // interop misreads them there: a Bun module namespace answers `'__esModule' in ns`, so a package whose default
+    // export is a namespace is swapped for that namespace. zod's `export default z` made `import { z } from 'zod'`
+    // undefined in every suite that reached core (2026-09-25; vitest 4.1.11, bun 1.4.0).
+    deps: { interopDefault: false },
     // The same throwaway KINU_HOME every bun test process gets. Load-bearing
     // here rather than hygiene: the pty case runs the real CLI, which roots a
     // checkpoint engine under `$KINU_HOME`, and the device cases install real
