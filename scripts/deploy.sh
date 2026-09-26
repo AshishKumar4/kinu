@@ -863,19 +863,24 @@ fi
 # ── Step 4a: The tiers' scripted model ────────────────────────────────────
 #
 # The product tiers below check the product, not a model's choices: their
-# workspaces run on the scripted model (scripts/tier-model.ts), which the
-# deployment reaches at its own Worker on a Custom Domain. That is the one way a
-# Worker of this account is fetchable from ours without a service binding or a
-# compatibility flag in production's own config (Workers fetch docs: anything
-# else answers error 1042). Published every run, from this tree, because its
-# script is what the tiers' assertions were written against. That the deployment
-# reaches it is proven by the tier itself, through the deployment's own proxy
-# (scripts/scripted-tier.ts). A check from here cannot: production's
-# `*.kinu.run/*` route answers an outside request for this host before the
-# Custom Domain does.
+# workspaces run on the scripted model (scripts/tier-model.ts), served by its own
+# Worker at `scripted-model.kinu.run`. Published every run, from this tree,
+# because its script is what the tiers' assertions were written against.
+#
+# TWO PATHS REACH THAT HOST, and its config holds one entry for each
+# (scripts/scripted-model-worker.jsonc). A hosted turn calls the model from the
+# workspace's Durable Object, whose fetch runs the zone's routes first, as a
+# request from outside does: the Worker's own route, `scripted-model.kinu.run/*`,
+# beats production's `*.kinu.run/*` there. A fetch the product's Worker makes
+# from its request context, the provider proxy's, skips same-zone routes and goes
+# to the host's origin: the Custom Domain makes this Worker that origin, the one
+# way a Worker of this account is fetchable so without a service binding
+# (Workers fetch docs: otherwise error 1042). The tier proves both before its
+# cases (scripts/scripted-tier.ts): one hosted turn must come back with the
+# script's own answer, and the proxy must list the model.
 echo ""
 echo -e "${BOLD}Step 4a: Publishing the tiers' scripted model${NC}"
-npx wrangler deploy -c scripts/scripted-model-worker.jsonc \
+bunx wrangler deploy -c scripts/scripted-model-worker.jsonc \
   || { echo -e "${RED}❌ publishing the scripted model Worker failed${NC}"; exit 1; }
 
 # ── Step 4b: The post-publish tiers ─────────────────────────────────────────

@@ -1,6 +1,10 @@
 // The deployed tiers' scripted model (scripts/scripted-model-worker.ts), published by scripts/deploy.sh before the
-// post-deploy wave. A Custom Domain, not a route, because the product's Worker calls it: a same-account Worker is
-// fetchable at a Custom Domain only.
+// post-deploy wave. Its host is reached two ways, routed differently, and it needs both entries. A Durable Object's
+// fetch, which is how a hosted turn calls it, runs the zone's routes first, as a request from outside does, so the
+// most specific route there has to be this Worker's: with the Custom Domain alone, production's `*.kinu.run/*`
+// answered every hosted turn with its preview 404 (measured 2026-09-25). A Worker's fetch from its own request on the
+// same zone skips routes and reaches the host's origin, and the Custom Domain makes this Worker that origin: a
+// same-account Worker is fetchable that way only (Workers routing docs), which the product's provider proxy relies on.
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "kinu-scripted-model",
@@ -8,6 +12,9 @@
   "main": "scripted-model-worker.ts",
   "compatibility_date": "2025-12-01",
   "workers_dev": false,
-  "routes": [{ "pattern": "scripted-model.kinu.run", "custom_domain": true }],
+  "routes": [
+    { "pattern": "scripted-model.kinu.run", "custom_domain": true },
+    { "pattern": "scripted-model.kinu.run/*", "zone_name": "kinu.run" }
+  ],
   "observability": { "logs": { "enabled": true } }
 }
