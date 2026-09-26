@@ -475,7 +475,7 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('an unfinished streak names its arms once, however many laps, and a new streak names them again', async () => {
-    const { db } = orchestratorHarness();
+    const { db, agent: first } = orchestratorHarness();
     const recorder = createRecordingLogger();
 
     const orphan = db.prepare(
@@ -518,8 +518,11 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(named).toHaveLength(2);
 
     for (const line of named) {
-      expect(line.fields).toMatchObject({ admittedDelegations: true, sweeps: false, recovery: false, chatLoop: false });
-      expect(Object.values(line.fields).filter((value) => value !== true && value !== false)).toEqual([]);
+      // `workspace` and `source` are what its fleet row keeps; the arm flags stay in the log.
+      expect(line.fields).toMatchObject({
+        admittedDelegations: true, sweeps: false, recovery: false, chatLoop: false,
+        workspace: first.name, source: 'admittedDelegations',
+      });
     }
   });
 

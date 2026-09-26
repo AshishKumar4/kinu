@@ -164,8 +164,8 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     family: 'lifecycle',
     event: 'actor.startup',
     site: 'packages/cf-backend/src/orchestrator.ts',
-    mechanism: 'writer',
-    emitter: 'recordStartupRow',
+    mechanism: 'diagnostics',
+    emitter: 'event',
     means: 'A workspace object activated: one row per construction, whatever woke it (a request, '
       + 'an alarm, a reset). Counted per workspace per hour it separates an idle eviction from a '
       + 'restart loop.',
@@ -175,11 +175,11 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     family: 'lifecycle',
     event: 'wake.unfinished_arms',
     site: 'packages/cf-backend/src/actor-agent.ts',
-    mechanism: 'writer',
-    emitter: 'recordWakeArmsRow',
-    means: 'A wake pass found work it could not finish and re-armed itself: one row per unfinished '
-      + 'arm, once per streak or change of arms, with the lap count. The arm names why a workspace '
-      + 'keeps waking.',
+    mechanism: 'diagnostics',
+    emitter: 'event',
+    means: 'A wake pass found work it could not finish and re-armed itself: one row per streak or '
+      + 'change of arms, `source` naming the unfinished arms. The arm names why a workspace keeps '
+      + 'waking.',
   },
 ];
 
