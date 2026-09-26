@@ -326,6 +326,16 @@ count anywhere, not as requests and not as skipped lines, and a 429 now counts a
         });
       });
     },
+    verifyAfterEviction: async (verifier) => {
+      await sameAsReference(verifier, 'the-new-rules-survive-an-eviction', {
+        logs: { days: [...FIRST_DAYS, JUNE_4, JUNE_5], rules: TURN_2_RULES },
+        script: async (slate) => {
+          await readEveryDay(slate);
+          await slate('routes', { date: JUNE_5.date });
+          await slate('slowest', { from: '2027-06-01', to: '2027-06-05', n: 4 });
+        },
+      });
+    },
   }, {
     prompt: `Which route had the highest p95 latency on ${SLOW_SEARCH_DAY}? Reply with just the route, like GET /api/orders/:id.`,
     verify: async (verifier) => {
@@ -341,6 +351,7 @@ count anywhere, not as requests and not as skipped lines, and a 429 now counts a
       });
     },
   }],
+  evidence: (call) => readEveryDay((method, input) => call('logs', method, input)),
 });
 
 defineTaskEval(task);

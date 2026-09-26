@@ -557,6 +557,21 @@ export class RunEventRecorder {
     return rows[0]?.n ?? 0;
   }
 
+  stepFinish(runId: string, stepIndex: number): Extract<RunEvent, { type: 'step_finish' }> | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = 'step_finish'
+        AND json_extract(payload, '$.stepIndex') = ${stepIndex}
+      ORDER BY event_index DESC LIMIT 1`[0];
+
+    if (row === undefined) return null;
+    const event = parseStoredRunEvent(row.payload);
+
+    return event.type === 'step_finish' ? event : null;
+  }
+
   /** No live caller; SSE resume goes through {@link readText}. */
   readSince(runId: string, afterIndex: number, limit = RUN_EVENT_LIMIT_MAX): RunEvent[] {
     this.actor.assertCurrent();
@@ -594,6 +609,7 @@ export class RunEventRecorder {
     readonly runId: string;
     readonly turn: OpenTurnIdentity;
     readonly steps: ModelMessage[];
+    readonly finishedSteps: number;
     readonly partial: Extract<RunEvent, { type: 'step_partial' }> | null;
   } | null {
     this.actor.assertCurrent();
@@ -633,7 +649,7 @@ export class RunEventRecorder {
     const newest = partials[0] === undefined ? null : parseStoredRunEvent(partials[0].payload);
     const partial = newest !== null && newest.type === 'step_partial' && newest.stepIndex > finishedSteps ? newest : null;
 
-    return { runId: row.run_id, turn: start.turn, steps, partial };
+    return { runId: row.run_id, turn: start.turn, steps, finishedSteps, partial };
   }
 
   /** Filtered in SQL so `limit` is a real bound. Ties on `ts` break by rowid: `event_index`

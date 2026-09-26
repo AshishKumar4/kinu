@@ -37,13 +37,13 @@
 import { createInterface } from 'node:readline/promises';
 import { randomBytes } from 'node:crypto';
 import {
-  type Deployment, type Observation, authenticated, deployment, kvNamespace, r2, secretNames,
+  type Deployment, type Observation, type Run, authenticated, deployment, environmentArgs, kvNamespace, r2, secretNames,
   vectorize, why,
   wrangler,
 } from './infra-cloudflare';
 import {
-  type InfraWorker, type Resource, SUPPLY, UNCAPTURED, deriveInfrastructure, requiredIn,
-  vectorizeGeometry,
+  INFRA_ENVIRONMENTS, type Infrastructure, type Resource, SUPPLY, UNCAPTURED, deriveInfrastructure,
+  environmentFrom, requiredIn, vectorizeGeometry,
 } from './infra-manifest';
 
 const BOLD = '\u001B[1m';
@@ -64,6 +64,16 @@ interface Step {
   readonly id: string;
   readonly outcome: Outcome;
   readonly detail: string;
+}
+
+/** Where installing a secret talks to: the operator at a terminal, and the Worker. */
+export interface SecretIo {
+  ask(question: string): Promise<string>;
+  readonly interactive: boolean;
+  /** Installs the value on the Worker, `wrangler secret put` through stdin. */
+  install(name: string, value: string): Run;
+  /** Shows the operator a value minted here, once. */
+  show(text: string): void;
 }
 
 /** What one environment's Worker says about itself, for the report line. */
@@ -183,16 +193,11 @@ function ensure(resource: Resource): Step {
  * generated into a CI log is worse than a secret that is absent: the absent one
  * is reported by the gate.
  */
-async function putSecret(
-  name: string,
-  worker: InfraWorker,
-  ask: (question: string) => Promise<string>,
-  interactive: boolean,
-): Promise<Step> {
+export async function putSecret(name: string, { worker }: Pick<Infrastructure, 'worker'>, io: SecretIo): Promise<Step> {
   const id = name;
   const supply = SUPPLY.get(name);
 
-  if (!interactive) {
+  if (!io.interactive) {
     return {
       id,
       outcome: 'refused',
@@ -202,34 +207,34 @@ async function putSecret(
     };
   }
 
-  const generated = name.startsWith('CREDENTIAL_ENCRYPTION_KEY');
+  const minted = supply?.minted;
 
-  const prompt = generated
-    ? `\n${name} for ${worker.workerName}.\n  Paste an existing value, or press enter to generate one: `
-    : `\n${name} for ${worker.workerName}.\n  ${supply?.source ?? ''}\n  Paste the value (enter to skip): `;
+  const prompt = minted === undefined
+    ? `\n${name} for ${worker.workerName}.\n  ${supply?.source ?? ''}\n  Paste the value (enter to skip): `
+    : `\n${name} for ${worker.workerName}.\n  ${minted.paste ? 'Paste an existing value, or press' : 'Press'} enter to generate one: `;
 
-  const typed = (await ask(prompt)).trim();
+  const typed = (await io.ask(prompt)).trim();
 
-  if (typed.length === 0 && !generated) {
+  if (typed.length === 0 && minted === undefined) {
     return { id, outcome: 'refused', detail: 'skipped at the prompt' };
+  }
+
+  if (typed.length > 0 && minted?.paste === false) {
+    return { id, outcome: 'refused', detail: `a pasted value was refused: ${supply?.source ?? 'it is minted here'}` };
   }
 
   const value = typed.length > 0 ? typed : randomBytes(32).toString('base64');
 
   // Through stdin, never argv: an argument is visible in the process table and
   // in anything that echoes the command.
-  const run = wrangler(['secret', 'put', name], 120_000, value);
+  const run = io.install(name, value);
 
   if (!run.ok) {
     return { id, outcome: 'failed', detail: `\`wrangler secret put ${name}\` failed: ${why(run)}` };
   }
 
   if (typed.length === 0) {
-    process.stderr.write(
-      `\n  ${BOLD}COPY THIS NOW — Cloudflare cannot show it again.${NC}\n`
-      + `  ${name}=${value}\n`
-      + '  Losing it means every user reconnects every provider.\n\n',
-    );
+    io.show(`\n  ${BOLD}COPY THIS NOW — Cloudflare cannot show it again.${NC}\n  ${name}=${value}\n  Keep it ${minted?.keep ?? ''}.\n\n`);
   }
 
   return { id, outcome: 'created', detail: typed.length > 0 ? 'installed from the value you pasted' : 'generated and installed' };
@@ -261,6 +266,14 @@ function manualWorklist(resources: readonly Resource[]): void {
 }
 
 async function main(): Promise<number> {
+  const environment = environmentFrom(process.argv.slice(2));
+
+  if (environment === undefined) {
+    console.error(`infra:provision: usage: bun run infra:provision [${INFRA_ENVIRONMENTS.join('|')}]`);
+
+    return 2;
+  }
+
   const session = authenticated();
 
   if (session.state !== 'present') {
@@ -270,9 +283,9 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const infrastructure = deriveInfrastructure();
+  const infrastructure = deriveInfrastructure(environment);
   const { worker } = infrastructure;
-  console.log(`${BOLD}Kinu infrastructure provisioning${NC}`);
+  console.log(`${BOLD}Kinu infrastructure provisioning — ${environment}${NC}`);
   console.log(`Account:      ${infrastructure.accountId}`);
   console.log(`Worker:       ${worker.workerName}`);
 
@@ -291,7 +304,7 @@ async function main(): Promise<number> {
   }
 
   console.log(`\n${BOLD}The Worker${NC} — created by \`bun run deploy\`, never by this command`);
-  const live = deployment();
+  const live = deployment(environment);
   console.log(`  ${worker.workerName}: ${deploymentNote(live)}`);
 
   console.log('  A bare `wrangler deploy` is not a substitute: it skips the CLI-asset check and '
@@ -300,7 +313,7 @@ async function main(): Promise<number> {
   console.log(`\n${BOLD}Secrets${NC} — presence is checked; no value is ever read back`);
   const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
   const reader = interactive ? createInterface({ input: process.stdin, output: process.stderr }) : undefined;
-  const held = live.state === 'deployed' ? secretNames() : undefined;
+  const held = live.state === 'deployed' ? secretNames(environment) : undefined;
 
   try {
     if (held === undefined) {
@@ -333,12 +346,12 @@ async function main(): Promise<number> {
           continue;
         }
 
-        const step = await putSecret(
-          name,
-          worker,
-          async (question) => (reader === undefined ? '' : reader.question(question)),
+        const step = await putSecret(name, infrastructure, {
+          ask: async (question) => (reader === undefined ? '' : reader.question(question)),
           interactive,
-        );
+          install: (secret, value) => wrangler(['secret', 'put', secret, ...environmentArgs(infrastructure.environment)], 120_000, value),
+          show: (text) => { process.stderr.write(text); },
+        });
 
         steps.push(step);
         console.log(`  [${MARK[step.outcome]}] ${step.id}\n           ${step.detail}`);

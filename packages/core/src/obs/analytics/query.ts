@@ -50,6 +50,7 @@ interface QueryMetric {
 interface WeightedQuery<S extends AnalyticsSchema> {
   readonly schema: S;
   readonly groupBy: readonly BlobName<S>[];
+  readonly groupByComputed?: readonly QueryMetric[];
   readonly metrics: readonly QueryMetric[];
   /** AE interval expression, e.g. `'24' HOUR`. */
   readonly since: string;
@@ -64,8 +65,10 @@ interface WeightedQuery<S extends AnalyticsSchema> {
 function buildWeightedQuery<S extends AnalyticsSchema>(query: WeightedQuery<S>): string {
   const { schema } = query;
   const grouped = query.groupBy.map((name) => `${blobColumn(schema, name)} AS ${String(name)}`);
+  const computed = query.groupByComputed ?? [];
 
   const selected = [
+    ...computed.map((key) => `${key.expression} AS ${key.as}`),
     ...grouped,
     ...query.metrics.map((metric) => `${metric.expression} AS ${metric.as}`),
   ];
@@ -81,9 +84,9 @@ function buildWeightedQuery<S extends AnalyticsSchema>(query: WeightedQuery<S>):
     `WHERE ${predicates.join(' AND ')}`,
   ];
 
-  if (query.groupBy.length > 0) {
-    lines.push(`GROUP BY ${query.groupBy.map((name) => blobColumn(schema, name)).join(', ')}`);
-  }
+  const groupKeys = [...computed.map((key) => key.as), ...query.groupBy.map((name) => blobColumn(schema, name))];
+
+  if (groupKeys.length > 0) lines.push(`GROUP BY ${groupKeys.join(', ')}`);
 
   if (query.orderBy !== undefined) lines.push(`ORDER BY ${query.orderBy} DESC`);
 
@@ -99,6 +102,7 @@ export interface ControlPlaneMetricQueries {
   readonly tokens: string;
   readonly toolFailures: string;
   readonly adminOps: string;
+  readonly startups: string;
 }
 
 /**
@@ -196,6 +200,19 @@ export function controlPlaneMetricsQueries(
       // Separate row kind: exists only for turns that streamed.
       where: scoped('ttft'),
       orderBy: 'turns',
+      limit: PANEL_ROW_LIMIT,
+    }),
+    startups: buildWeightedQuery({
+      schema: agent,
+      groupBy: [],
+      groupByComputed: [
+        { as: 'workspace', expression: indexColumn(agent) },
+        { as: 'hour', expression: "toStartOfInterval(timestamp, INTERVAL '1' HOUR)" },
+      ],
+      metrics: [{ as: 'startups', expression: weightedCount() }],
+      since,
+      where: [...scoped('event'), `${blobColumn(agent, 'event')} = 'actor.startup'`],
+      orderBy: 'startups',
       limit: PANEL_ROW_LIMIT,
     }),
     adminOps: buildWeightedQuery({

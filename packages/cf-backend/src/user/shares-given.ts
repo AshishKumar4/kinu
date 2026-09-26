@@ -14,6 +14,7 @@ import type { ObjectNamespace } from '@kinu.run/core';
 import type { UserDO } from './user-do';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
 import { deriveUserId } from '../auth/store';
+import { KinuError } from '@kinu.run/core/obs';
 
 const ShareRowSchema = v.object({
   id: v.string(), slate: v.string(), createdAt: v.number(), revokedAt: v.nullable(v.number()),
@@ -49,7 +50,7 @@ async function sharesGiven<Id>(
     const owned = workspaceOwner(env, workspace.name);
     const listing = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'shares' });
 
-    if (!listing.ok) throw new Error(`listing blueprints of ${workspace.name}: ${listing.reason}: ${listing.error}`);
+    if (!listing.ok) throw new KinuError('io', `listing blueprints of ${workspace.name}: ${listing.reason}: ${listing.error}`);
     answer.push({ workspace: workspace.name, shares: v.parse(v.array(ShareRowSchema), listing.value) });
   }
 

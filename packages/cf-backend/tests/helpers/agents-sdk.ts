@@ -80,6 +80,16 @@ export async function joinHarnessFibers(): Promise<void> {
   while (harnessFiberBodies.size > 0) await Promise.all(harnessFiberBodies);
 }
 
+/**
+ * The isolate a reset kills, for the fibers it was running: their bodies never settle and their rows stay, so the next
+ * activation's scan finds them interrupted and no join waits on them. A suite whose reset ends an activation with a
+ * run still parked calls this before it builds the next activation.
+ */
+export function abandonHarnessFibers(): void {
+  harnessFiberBodies.clear();
+  harnessActiveFibers.clear();
+}
+
 /** Seeds the row a dead activation leaves: the isolate lost the in-memory active set but kept the
  *  `cf_agents_runs` row (same INSERT as `agents/dist/index.js:2899`). */
 export function seedOrphanFiberRow(
@@ -135,6 +145,9 @@ function facetOnlyStub(lookup: string, cls: { name: string }, name: string) {
   });
 }
 
+/** Marks the stub's Agent: a class built on the real `agents` runs fibers no harness join can see. */
+export const HARNESS_AGENT = Symbol('kinu.test.harness-agent');
+
 /**
  * Stub the Agent SDK: the real `agents` dist imports workerd-only `cloudflare:*` modules.
  * bun keeps one mock per specifier (first registration wins); call before importing the module under test.
@@ -143,6 +156,7 @@ export function mockAgentsSdk(): void {
   registerSynchronousMock('agents', () => ({
     /** Also the real base for DO classes a test instantiates directly (UserDO), hence the ctx/env assignment. */
     Agent: class {
+      readonly [HARNESS_AGENT] = true;
       readonly ctx: AgentContext | undefined;
       readonly env: Env | undefined;
       /** The vendor base builds the one manager in its constructor (`agents/dist/src-5W6JNKVb.js:821`);
@@ -413,7 +427,7 @@ export function mockAgentsSdk(): void {
 
         return { fiberId, name, status: 'running', createdAt: now, accepted: true };
       }
-      /** The managed-fiber ledger read `hasSandboxBackgroundWork` asks. */
+      /** The managed-fiber ledger read `sandboxInUse` asks. */
       async listFibers(options?: { status?: string | string[] }): Promise<HarnessFiber[]> {
         const wanted = options?.status === undefined
           ? null

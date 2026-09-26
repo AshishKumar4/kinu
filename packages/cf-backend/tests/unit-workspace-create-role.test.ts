@@ -7,7 +7,13 @@ import {
   resolveTurnProfile, workspaceSlug, type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import { handleCreateWorkspaceRequest, type CreateWorkspaceEnv } from '../src/user/workspace-access';
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
+import { acrossRpc } from './helpers/jsrpc-stub';
+import type { CloudWorkspaceRegistry } from '../src/user/workspace-create';
+import { Hono } from 'hono';
+import type { FamilyEnv } from '../src/api/context';
+import { serveFamily } from './helpers/api';
+import { present } from '@kinu.run/test-utils';
 import { userAccount, workspaceObject } from './helpers/bindings';
 import type { NameOrigin, ReasoningEffort, UserCaller } from '@kinu.run/core';
 
@@ -40,6 +46,7 @@ async function postCreate(
   body: CreateBody,
   envelope: ProfileCatalogEnvelope = envelopeWithDefault(DEFAULT_WORKERS_AI_MODEL_SPEC),
   authHeaders: Record<string, string> | null = CONNECTED,
+  register?: CloudWorkspaceRegistry['registerWorkspace'],
 ): Promise<{ status: number; calls: string[]; registered: string[]; error: string | null }> {
   const calls: string[] = [];
   const registered: string[] = [];
@@ -52,8 +59,10 @@ async function postCreate(
     },
     async listCredentials(_caller: UserCaller) { return []; },
     async ensureWorkspaceCapability() {},
-    async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
+    async registerWorkspace(caller: UserCaller, name: string, displayName?: string, options?: Parameters<CloudWorkspaceRegistry['registerWorkspace']>[3]) {
       registered.push(name);
+
+      if (register !== undefined) return await register(caller, name, displayName, options);
 
       return {
         entry: { name, displayName: displayName ?? name, createdAt: 7, lastVisited: 7, archivedAt: null },
@@ -104,16 +113,15 @@ async function postCreate(
   globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
   try {
-    const response = await handleCreateWorkspaceRequest({
-      request: new Request('https://kinu.run/api/user/workspaces', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      }),
-      env,
-      userId: USER_ID,
-      userDO,
-    });
+    // Served as the app serves it, so a refusal thrown past the handler is answered by the router.
+    const family = new Hono<FamilyEnv<CreateWorkspaceEnv<string>, object>>()
+      .post('/api/user/workspaces', async (c) => handleCreateWorkspaceRequest({ request: c.req.raw, env: c.env, userId: USER_ID, userDO }));
+
+    const response = present(await serveFamily(family)(new Request('https://kinu.run/api/user/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }), env), 'an answer');
 
     const error = response.ok ? null : v.parse(v.object({ error: v.string() }), await response.json()).error;
 
@@ -122,6 +130,26 @@ async function postCreate(
     globalThis.fetch = originalFetch;
   }
 }
+
+describe('a name whose teardown is still pending', () => {
+  test('a create is refused with the object\'s class and reason, across RPC', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID, destroyWorkspaceError: 'the container refused to go' });
+    const owner = await testOwner();
+    await harness.userDO.registerWorkspace(owner, AGENT);
+
+    await expect(harness.userDO.removeWorkspace(owner, AGENT, USER_ID)).rejects.toThrow();
+
+    const register = acrossRpc((name: string) => harness.userDO.registerWorkspace(owner, name));
+
+    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' }, undefined, CONNECTED,
+      async (_caller, name) => await register(name));
+
+    // `unavailable`: the name frees once its teardown finishes.
+    expect(created.status).toBe(503);
+    expect(created.error).toContain('still being deleted');
+    harness.close();
+  });
+});
 
 describe('the role a create request asks for', () => {
   test('reaches the new workspace, before its first turn runs', async () => {

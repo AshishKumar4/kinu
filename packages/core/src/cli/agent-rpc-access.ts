@@ -109,6 +109,8 @@ export const AGENT_RPC_ACCESS = {
   getReplayEvals: 'interactive',
   // Raw unredacted event payloads; a workspace.read token gets only the read models.
   getRunEvents: 'interactive',
+  getTurnRequests: 'interactive',
+  getTurnRequest: 'interactive',
   getRunSummaries: 'interactive',
   listRuns: 'interactive',
   getScaffoldDiff: 'interactive',

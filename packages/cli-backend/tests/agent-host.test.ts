@@ -2072,6 +2072,41 @@ describe('LocalAgentHost — the driver lease', () => {
     }
   });
 
+  test('opening a workspace settles a task left for a hire that is gone, with a reason', async () => {
+    // The rule lives in core; cf's copy of this row woke its workspace every lap for days (2026-09-26).
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
+    const db = new Database(dbPath);
+
+    try {
+      db.query(
+        `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
+         VALUES ('gone-actor', 'orphan-task', 'event', 'subordinate_task', 'trace-orphan', '{"body":"brief"}', ?)`,
+      ).run(Date.now());
+    } finally {
+      db.close();
+    }
+
+    const { host } = makeHost(state, streamingModel('unused'), refs, { driverKind: 'daemon' });
+
+    try {
+      await host.acquire('root');
+    } finally {
+      await host.close();
+    }
+
+    const view = new Database(dbPath, { readonly: true });
+
+    try {
+      expect(view.query<{ step_idx: number | null; reason: string | null }, []>(
+        `SELECT step_idx, json_extract(payload, '$.__dismissed.reason') AS reason FROM agent_log WHERE id = 'orphan-task'`,
+      ).get()).toEqual({ step_idx: -2, reason: 'its actor is retired or gone' });
+    } finally {
+      view.close();
+    }
+  });
+
   test('a drained event whose turn is refused goes back to pending and is delivered once', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');

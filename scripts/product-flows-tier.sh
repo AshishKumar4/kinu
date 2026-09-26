@@ -12,9 +12,13 @@ cd "$(dirname "$0")/.."
 export KINU_EVAL_LIVE=1
 export KINU_ORIGIN="${KINU_ORIGIN:-$(bun -e "import { EVAL_DEPLOYMENT_ORIGIN } from '@kinu.run/test-utils'; console.log(EVAL_DEPLOYMENT_ORIGIN)")}"
 
-if [[ -z "${KINU_EVAL_WEB_IDENTITY:-}" ]]; then
-  echo "product-flows: KINU_EVAL_WEB_IDENTITY is not set, so the browser has no authority at $KINU_ORIGIN." >&2
-  echo "  Its value is the deployment's DEV_IDENTITY_SECRET, sent as x-kinu-dev-identity on every request." >&2
+# Each deployment's secret arrives in its own variable (evalWebIdentityEnv).
+IDENTITY_ENV="$(bun -e "import { evalWebIdentityEnv } from '@kinu.run/test-utils'; console.log(evalWebIdentityEnv(process.argv[1]))" "$KINU_ORIGIN")" \
+  && [[ -n "$IDENTITY_ENV" ]] \
+  || { echo "product-flows: cannot name the variable holding $KINU_ORIGIN's DEV_IDENTITY_SECRET." >&2; exit 1; }
+if [[ -z "${!IDENTITY_ENV:-}" ]]; then
+  echo "product-flows: $IDENTITY_ENV is not set, so the browser has no authority at $KINU_ORIGIN." >&2
+  echo "  Its value is that deployment's DEV_IDENTITY_SECRET, sent as x-kinu-dev-identity on every request." >&2
   exit 1
 fi
 

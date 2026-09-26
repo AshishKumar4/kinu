@@ -220,15 +220,16 @@ describe('createCompactionStateStore', () => {
     expect(() => store.plans.load('s1')).toThrow(SyntaxError);
   });
 
-  test('force-compaction arms once and is consumed exactly once (never loops)', () => {
+  test('an armed compaction is consumed exactly once, as the kind armed (never loops)', () => {
     const { store } = stateRig();
-    expect(store.takeForceCompaction('s1')).toBe(false);
-    store.armForceCompaction('s1');
-    expect(store.takeForceCompaction('s1')).toBe(true);
-    expect(store.takeForceCompaction('s1')).toBe(false);
-    store.armForceCompaction('s1');
-    expect(store.takeForceCompaction('s2')).toBe(false);
-    expect(store.takeForceCompaction('s1')).toBe(true);
+    expect(store.takeArmedCompaction('s1')).toBeNull();
+    store.armCompaction('s1', 'force');
+    expect(store.takeArmedCompaction('s1')).toBe('force');
+    expect(store.takeArmedCompaction('s1')).toBeNull();
+    store.armCompaction('s1', 'user');
+    expect(store.takeArmedCompaction('s2')).toBeNull();
+    expect(store.takeArmedCompaction('s1')).toBe('user');
+    expect(store.takeArmedCompaction('s1')).toBeNull();
   });
 
   test('arming force-compaction never clobbers the plan or the token signal', async () => {
@@ -236,10 +237,10 @@ describe('createCompactionStateStore', () => {
     const snap = snapshot('s1');
     await store.plans.save('s1', snap);
     store.savePromptTokens('s1', 9_000, 30);
-    store.armForceCompaction('s1');
+    store.armCompaction('s1', 'force');
     expect(store.plans.load('s1')).toEqual(snap);
     expect(store.loadPromptTokens('s1', 30)).toBe(9_000);
-    expect(store.takeForceCompaction('s1')).toBe(true);
+    expect(store.takeArmedCompaction('s1')).toBe('force');
     expect(store.plans.load('s1')).toEqual(snap);
     expect(store.loadPromptTokens('s1', 30)).toBe(9_000);
   });

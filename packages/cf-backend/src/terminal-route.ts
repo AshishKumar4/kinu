@@ -7,10 +7,10 @@
 import { Hono, type Context } from "hono";
 import type { PtyOptions } from "@cloudflare/sandbox";
 import { getAgentByName } from "agents";
-import { diagnostics, renderCauseChain, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
 
-import { err, json } from "@kinu.run/core";
+import { err, json, publicText } from "@kinu.run/core";
 import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
@@ -180,7 +180,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
 
     diagnostics.failure("terminal.device_open_failed", error, scope);
 
-    return err(503, renderCauseChain(error));
+    return err(503, publicText(error));
   }
 
   if ("error" in opened) {
@@ -247,7 +247,7 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
 
     diagnostics.failure("terminal.workspace_open_failed", error, scope);
 
-    return err(503, renderCauseChain(error));
+    return err(503, publicText(error));
   }
 }
 
@@ -272,7 +272,7 @@ async function sandboxKeepalive(sandbox: TerminalSandbox, call: TerminalCall): P
 
     diagnostics.failure("terminal.lease_renewal_failed", error, call.scope);
 
-    return err(503, renderCauseChain(error));
+    return err(503, publicText(error));
   }
 }
 
@@ -297,7 +297,7 @@ async function sandboxReset(sandbox: TerminalSandbox, call: TerminalCall): Promi
 
     diagnostics.failure("terminal.reset_failed", error, call.scope);
 
-    return err(503, renderCauseChain(error));
+    return err(503, publicText(error));
   }
 }
 
@@ -343,7 +343,7 @@ async function sandboxPreflight(call: TerminalCall): Promise<Response | null> {
 
     diagnostics.failure("terminal.preflight_failed", error, scope);
 
-    return err(503, renderCauseChain(error));
+    return err(503, publicText(error));
   }
 
   return null;
@@ -401,7 +401,7 @@ async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: 
 
     diagnostics.failure("terminal.attach_failed", error, scope);
 
-    return err(503, renderCauseChain(error));
+    return err(503, publicText(error));
   }
 }
 

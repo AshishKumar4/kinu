@@ -94,7 +94,7 @@ async function main(): Promise<void> {
       // Fold at every episode boundary, so a continuation task genuinely
       // crosses compaction rather than depending on the corpus happening to
       // trip the measured trigger.
-      if (index < input.asks.length - 1) session.armForcedCompaction();
+      if (index < input.asks.length - 1) session.armCompaction('force');
     }
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);

@@ -21,13 +21,15 @@
 #                             tier resolves it. It registers devices and drives
 #                             the pty client. `scripts/eval-session-mint.ts` mints
 #                             it when none is persisted.
-#   KINU_EVAL_WEB_IDENTITY    the deployment's DEV_IDENTITY_SECRET. The browser
-#                             plane's authority: the REST create, the run-event
-#                             and file routes, the consent and revoke routes,
-#                             and the Chrome page all act as it.
-#   KINU_EVAL_ORIGIN          which deployment. Defaults to https://kinu.run, and
-#                             the allowlist admits that and loopback dev servers
-#                             only.
+#   KINU_EVAL_WEB_IDENTITY    the deployment's DEV_IDENTITY_SECRET; staging's
+#                             is KINU_EVAL_STAGING_WEB_IDENTITY (each
+#                             deployment has its own: `evalWebIdentityEnv`).
+#                             The browser plane's authority: the REST create,
+#                             the run-event and file routes, the consent and
+#                             revoke routes, and the Chrome page all act as it.
+#   KINU_EVAL_ORIGIN          which deployment. Defaults to https://kinu.run;
+#                             the allowlist admits that, https://staging.kinu.run
+#                             and loopback dev servers only.
 #
 # WITH A CREDENTIAL MISSING IT FAILS. That is the opposite of the eval tier's
 # rule and it is deliberate: the eval tier must be reproducible on a machine
@@ -63,7 +65,10 @@ export KINU_EVAL_SPEND_FILE="$SPEND"
 # The tier runs inside the deploy, against the build it just shipped, so the
 # eval-service bearer for THIS deployment may not exist yet. The web identity
 # can approve the device flow that mints one; a persisted session is reused.
-if [[ -n "${KINU_EVAL_WEB_IDENTITY:-}" && -z "${KINU_EVAL_TOKEN:-}" ]]; then
+IDENTITY_ENV="$(bun -e "import { EVAL_DEPLOYMENT_ORIGIN, evalWebIdentityEnv } from '@kinu.run/test-utils'; console.log(evalWebIdentityEnv(process.argv[1] || EVAL_DEPLOYMENT_ORIGIN))" "${KINU_EVAL_ORIGIN:-}")" \
+  && [[ -n "$IDENTITY_ENV" ]] \
+  || { echo "first-run: cannot name the variable holding ${KINU_EVAL_ORIGIN:-the deployment}'s DEV_IDENTITY_SECRET." >&2; exit 1; }
+if [[ -n "${!IDENTITY_ENV:-}" && -z "${KINU_EVAL_TOKEN:-}" ]]; then
   bun scripts/eval-session-mint.ts || exit 1
 fi
 RESOLVED_OUT="$(bun scripts/eval-credentials.ts)"
@@ -76,12 +81,12 @@ fi
 if [[ -z "${KINU_TOKEN:-}" || -z "${KINU_ORIGIN:-}" ]]; then
   echo "first-run: no deployment credential resolved, so this tier would measure nothing." >&2
   echo "  It drives the DEPLOYED product; a skip here is a deploy gate passing over a product" >&2
-  echo "  nobody looked at. Export KINU_EVAL_TOKEN (the CLI bearer) and KINU_EVAL_WEB_IDENTITY" >&2
+  echo "  nobody looked at. Export KINU_EVAL_TOKEN (the CLI bearer) and $IDENTITY_ENV" >&2
   echo "  (the deployment's DEV_IDENTITY_SECRET). scripts/eval-session-mint.ts mints the bearer." >&2
   exit 1
 fi
-if [[ -z "${KINU_EVAL_WEB_IDENTITY:-}" ]]; then
-  echo "first-run: KINU_EVAL_WEB_IDENTITY is not set, so the browser plane has no authority." >&2
+if [[ -z "${!IDENTITY_ENV:-}" ]]; then
+  echo "first-run: $IDENTITY_ENV is not set, so the browser plane has no authority at $KINU_ORIGIN." >&2
   echo "  Every case creates its workspace over /api/user/workspaces and one of them clicks a" >&2
   echo "  button in Chrome; the CLI bearer reaches neither. Its value is the deployment's" >&2
   echo "  DEV_IDENTITY_SECRET." >&2

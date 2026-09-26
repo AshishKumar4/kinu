@@ -46,7 +46,7 @@ interface Reader {
   readonly calls: { edge: number };
 }
 
-function reader(initialScroll: ConversationScroll | undefined, exhausted: boolean): Reader {
+function reader(initialScroll: ConversationScroll | undefined, settled = true): Reader {
   const reported: ConversationScroll[] = [];
   const calls = { edge: 0 };
   const captured: CapturedRef = {};
@@ -56,7 +56,7 @@ function reader(initialScroll: ConversationScroll | undefined, exhausted: boolea
       grows: 'up',
       content: 'transcript',
       fetched: 'page',
-      exhausted,
+      settled,
       initialScroll,
       onReachEdge: () => { calls.edge += 1; },
       onScrollPosition: (position) => { reported.push(position); },
@@ -75,37 +75,45 @@ function reader(initialScroll: ConversationScroll | undefined, exhausted: boolea
 }
 
 describe('a conversation reopened where its reader left it', () => {
-  test('a remembered offset waits for a transcript tall enough to hold it', () => {
-    const conversation = reader(900, false);
-
-    // 560px of travel cannot hold the remembered 900: neither declared reached nor quietly clamped.
-    conversation.attach(scrollHost(700, 140));
-    expect(conversation.reported).toEqual([]);
-    expect(conversation.calls.edge).toBe(1);
-
-    const grown = scrollHost(1080, 140);
-    conversation.attach(grown);
-    expect(grown.scrollTop).toBe(900);
-    expect(conversation.reported).toEqual([900]);
-    expect(conversation.calls.edge).toBe(1);
-  });
-
-  test('a store with no older page settles at the oldest offset it can reach', () => {
-    const conversation = reader(900, true);
+  test('a remembered offset inside the loaded transcript is restored without a fetch', () => {
+    const conversation = reader(500);
     const host = scrollHost(700, 140);
 
     conversation.attach(host);
 
-    // Exhaustion makes the clamp terminal: 560 is an answer rather than a wait.
+    expect(host.scrollTop).toBe(500);
+    expect(conversation.reported).toEqual([500]);
+    expect(conversation.calls.edge).toBe(0);
+  });
+
+  test('a remembered offset past the loaded transcript opens at the newest message and fetches nothing', () => {
+    const conversation = reader(900);
+    const host = scrollHost(700, 140);
+
+    conversation.attach(host);
+
     expect(host.scrollTop).toBe(560);
     expect(conversation.reported).toEqual(['pinned']);
     expect(conversation.calls.edge).toBe(0);
   });
 
+  test('before the first content arrives the offset waits instead of giving up', () => {
+    const waiting = reader(500, false);
+    const empty = scrollHost(140, 140);
+
+    waiting.attach(empty);
+    expect(waiting.reported).toEqual([]);
+
+    const arrived = reader(500, true);
+    const host = scrollHost(700, 140);
+    arrived.attach(host);
+    expect(host.scrollTop).toBe(500);
+  });
+
   test('a reader who left at the live edge is returned to the live edge', () => {
     // 'pinned' and absence arm no restore: new turns arrived above yesterday's offset.
     for (const saved of ['pinned', undefined] as const) {
-      const conversation = reader(saved, false);
+      const conversation = reader(saved);
       const host = scrollHost(700, 140);
 
       conversation.attach(host);

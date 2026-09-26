@@ -230,7 +230,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'headJournalRecordReport',
   'headJournalRecordSplit',
   // Reached both directions of the tree: a subordinate rides its parent's container.
-  'hasSandboxBackgroundWork',
+  'sandboxInUse',
   'installWorkspaceCapability',
   'getWorkspaceInstructionApprovals',
   'listWorkspaceFiles',

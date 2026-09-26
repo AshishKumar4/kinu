@@ -260,7 +260,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
   }
 
-  /** One send per message the loop does not hold (`reconcileMessages`); answered only once the landing is decided. */
+  /** One send per message the loop does not hold (`reconcileMessages`); answered only once the landing is decided.
+   *  Every request ends in exactly one terminal frame: its turn's, or this method's, whatever failed. */
   private async admitChatRequest(requestId: string, body: string | undefined): Promise<void> {
     const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
 
@@ -270,46 +271,43 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return;
     }
 
-    // The client resends only its window, so reconcile against the window.
-    const storedMessages = await this.wire.history(TRANSCRIPT_WINDOW);
+    // A message that opens a turn hands the request to it: that turn's `turn-end` closes it. Every other
+    // taken message, a splice or the one that failed, gives its mapping back.
+    let opener: string | null = null;
+    const taken: string[] = [];
+    const release = (): void => { for (const id of taken) if (id !== opener) this.requests.delete(id); };
 
-    const fresh = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage)
-      .filter((message) => message.role === 'user' && !this.wire.admitted(message.id));
+    try {
+      // The client resends only its window, so reconcile against the window.
+      const storedMessages = await this.wire.history(TRANSCRIPT_WINDOW);
 
-    if (fresh.length === 0) {
-      this.done(requestId);
+      const fresh = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage)
+        .filter((message) => message.role === 'user' && !this.wire.admitted(message.id));
+
+      for (const message of fresh) {
+        this.requests.set(message.id, requestId);
+        taken.push(message.id);
+
+        if (await this.wire.send({ ...chatInput(message), id: message.id }) === 'turn') opener = message.id;
+      }
+    } catch (cause) {
+      release();
+
+      if (opener === null) this.done(requestId, { error: refusalOf(cause instanceof KinuError ? cause : toKinuError({ doing: 'taking a chat message', cause, otherwise: 'io' })).error });
+
+      // The loop refused and wrote nothing; anything else is a fault its caller must see.
+      if (!(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
 
       return;
     }
 
-    let landed: SendLanding = 'mid-turn';
+    release();
 
-    for (const message of fresh) {
-      this.requests.set(message.id, requestId);
-
-      try {
-        landed = await this.wire.send({ ...chatInput(message), id: message.id });
-      } catch (cause) {
-        // The loop refused and wrote nothing; close the request with the refusal so the hook's send
-        // rejects instead of waiting on a turn-end that never comes.
-        if (!(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
-        this.requests.delete(message.id);
-        this.done(requestId, { error: refusalOf(cause).error });
-
-        return;
-      }
-    }
-
-    // A spliced message is answered by the absorbing turn's stream; an opening message's id is
-    // the turn id, so its `turn-end` closes the request.
-    if (landed === 'mid-turn') {
-      for (const message of fresh) this.requests.delete(message.id);
-      this.done(requestId, { landed });
-    }
+    if (opener === null) this.done(requestId, taken.length === 0 ? {} : { landed: 'mid-turn' });
   }
 
   private done(requestId: string, extra: { landed?: SendLanding; error?: string } = {}): void {
-    this.wire.broadcast(doneFrame(requestId, extra));
+    this.broadcastResponse(doneFrame(requestId, extra));
   }
 
   /** The stream answers under the admitting request (`turnId` is the opening row id), else a minted id. */
@@ -389,6 +387,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         return;
 
       case 'text-delta':
+      case 'reasoning-delta':
       case 'tool-call':
       case 'tool-result':
       case 'evolution':
@@ -441,7 +440,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           if (live.cadence.flushes(flushSignal(chunk))) resume.resumable.flushBuffer();
         }
 
-        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }));
+        this.broadcastResponse(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }));
       }
     } catch (cause) {
       this.degradeRelay(live, toKinuError({
@@ -450,12 +449,18 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
   }
 
+  /** A stream frame skips a tab still joining: its replay, sent on its acknowledgement, opens each part the live
+   *  frames continue, and a live frame read first is a delta for a part it never saw open (2026-09-26). */
+  private broadcastResponse(frame: string): void {
+    this.wire.broadcast(frame, this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
+  }
+
   /** The relay broke; the turn did not. The tab gets our classification; the SDK's words go to diagnostics. */
   private degradeRelay(live: LiveStream, error: KinuError): void {
     diagnostics.failure('chat.stream_observe_failed', error);
     live.broken = true;
     this.resume?.resumable.markError(live.streamId);
-    this.wire.broadcast(JSON.stringify({
+    this.broadcastResponse(JSON.stringify({
       type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: refusalOf(error).error, done: false, error: true,
     }));
   }

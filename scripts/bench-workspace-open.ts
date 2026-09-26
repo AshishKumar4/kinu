@@ -24,7 +24,7 @@ import { registerScriptedModel, startScriptedModel } from './scripted-model';
 import type { ScriptedAnswer, ScriptedRequest } from './scripted-protocol';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 import { openPublicSocket } from '../tests/first-run/public-socket';
-import { HEADER_WEBSOCKET, webHeaders, type PublicWebIdentity } from '../evals/src/session';
+import { HEADER_WEBSOCKET, resolveWebIdentity, webHeaders, type PublicWebIdentity } from '../evals/src/session';
 
 const TARGET = process.argv[2] ?? 'local';
 
@@ -458,8 +458,8 @@ if (TARGET === 'local') {
     await model.stop();
   }
 } else {
-  const secret = process.env.KINU_EVAL_WEB_IDENTITY?.trim();
+  const identity = resolveWebIdentity(TARGET);
 
-  if (!secret) throw new Error('KINU_EVAL_WEB_IDENTITY is required for a deployed target');
-  await run(TARGET, { kind: 'secret', secret }, process.env.BENCH_OPEN_MODEL ?? 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
+  if (identity.kind === 'absent') throw new Error(identity.remedy);
+  await run(TARGET, identity.identity, process.env.BENCH_OPEN_MODEL ?? 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
 }

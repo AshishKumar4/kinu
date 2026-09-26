@@ -973,7 +973,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
   test('the control plane gets exactly the panels it is promised', () => {
     const queries = controlPlaneMetricsQueries({ sinceHours: 24 });
     expect(Object.keys(queries).sort())
-      .toEqual(['adminOps', 'firstToken', 'latency', 'tokens', 'toolFailures', 'turns']);
+      .toEqual(['adminOps', 'firstToken', 'latency', 'startups', 'tokens', 'toolFailures', 'turns']);
     expect(queries.firstToken).toContain("blob1 = 'ttft'");
     expect(queries.firstToken).toContain('quantileExactWeighted(0.95)(double3, _sample_interval)');
     expect(queries.turns).toContain("blob1 = 'turn'");

@@ -378,6 +378,8 @@ export {
   type TurnEndContext,
   type PrepareStepContext,
   type TransformContext,
+  type CompactionTrigger,
+  type ArmedCompaction,
 } from './extension';
 
 export {
@@ -1150,6 +1152,8 @@ export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 
 export { oneAtATime } from './utils/one-at-a-time';
 
+export { ISOLATED_BUN_FLAGS, isolatedBunArgs } from './utils/bun-isolation';
+
 export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
 
 export {
@@ -1563,6 +1567,8 @@ export {
   refusedHostname,
 } from './safety/egress-destination';
 
+export { revealMisrepresenting } from './safety/untrusted-text';
+
 // Utils
 export { fnv1a64, Fnv1a64 } from './utils/fnv1a';
 
@@ -1875,6 +1881,10 @@ export { recoveryBackoffMs } from './utils/recovery-backoff';
 
 export { getRunEvents, getRunEventText, getRunSummaries, listRuns } from './read-models/runs';
 
+export { turnRequestIndex, turnRequestPage } from './read-models/turn-requests';
+
+export type { TurnRequestHead, TurnRequestIndex, TurnRequestPage, TurnRequestRow } from './read-models/turn-requests';
+
 export type { RunListEntry, RunSummary } from './read-models/runs';
 
 export { workspaceSpend } from './read-models/workspace-spend';
@@ -2099,7 +2109,7 @@ export type {
 
 export {
   resolveModelRoute,
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices,
   type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource, type PinnedProfile,
   type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
@@ -2174,7 +2184,7 @@ export {
 } from './preview/preview-exposures';
 
 export {
-  err, ERROR_STATUS, escapeHtml, fileResponseHeaders, firstResponse, json,
+  err, ERROR_STATUS, escapeHtml, fileResponseHeaders, json, PUBLIC_MESSAGE, publicError, publicText,
   readBounded, readBoundedStream, reoriginateRequest, requestUrl, safeJson,
 } from './http/http';
 
@@ -2184,7 +2194,7 @@ export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './h
 
 export { serveApp } from './http/app-shell';
 
-export { ingressAdmitted, ingressDenied, peerIp } from './http/ingress-budget';
+export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressAdmission } from './http/ingress-budget';
 
 export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
@@ -2192,7 +2202,7 @@ export {
 } from './http/deployed-assets';
 
 export {
-  handleReleaseArtifactRequest, type ReleaseArtifactObject, type ReleaseArtifactStore,
+  serveReleaseArtifact, type ReleaseArtifactObject, type ReleaseArtifactStore,
 } from './http/release-artifact';
 
 export {
@@ -2220,7 +2230,7 @@ export {
 } from './read-models/alternate-takes';
 
 export {
-  classifyProgrammaticTurn, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, applySignalCard,
+  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, applySignalCard,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,
@@ -2410,9 +2420,7 @@ export {
 } from './providers/model-menu';
 
 export {
-  type TextForContextEstimate,
   modelDisplayName,
-  estimateContextTokens,
   formatContextUsage,
 } from './tui/context-status';
 
@@ -2546,7 +2554,8 @@ export {
   type ObjectNamespace,
   type PcUserNamespace,
   type PcIngressEnv,
-  handlePcRequest,
+  handlePcConnect,
+  handlePcConnectTicket,
 } from './http/pc-ingress';
 
 export {

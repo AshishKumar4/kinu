@@ -11,6 +11,7 @@ import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core
 import type { ReasoningEffort, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './helpers/agents-sdk';
+import { KinuError } from '@kinu.run/core/obs';
 
 // `agents` reaches `cloudflare:email`: mock first, then the harness.
 mockAgentsSdk();
@@ -376,7 +377,7 @@ describe('CLI control routes', () => {
   test('a throwing method surfaces as a 400 with its message', async () => {
     const workspace = workspaceObject({
       async claimOwner() { return { owner: USER_ID, capabilityHash: 'sha-existing' }; },
-      async createTimerTrigger() { throw new Error('Timer trigger requires cron or atMs'); },
+      async createTimerTrigger() { throw new KinuError('bad_input', 'Timer trigger requires cron or atMs'); },
     });
 
     const env = testEnv(tokenHolderUserDO(), { idFromName: (n) => n, get: () => workspace });

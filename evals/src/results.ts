@@ -27,40 +27,41 @@ const CheckSchema = v.looseObject({ id: v.string(), pass: v.boolean(), evidence:
 
 const Count = v.pipe(v.number(), v.integer(), v.minValue(0));
 
+/** One trial as the harness reported it, normalized by vitest-evals (`normalizeHarnessRun`). */
+export const HarnessRunSchema = v.looseObject({
+  session: v.looseObject({
+    metadata: v.looseObject({
+      taskId: v.pipe(v.string(), v.minLength(1)),
+      taskVersion: v.pipe(v.string(), v.minLength(1)),
+      evalCommit: v.pipe(v.string(), v.minLength(1)),
+      productSha: v.pipe(v.string(), v.minLength(1)),
+      arm: v.pipe(v.string(), v.minLength(1)),
+      trial: v.pipe(v.number(), v.integer(), v.minValue(1)),
+    }),
+    events: v.optional(v.array(TranscriptEventSchema), []),
+  }),
+  usage: v.looseObject({
+    model: v.pipe(v.string(), v.minLength(1)),
+    inputTokens: v.optional(Count, 0),
+    outputTokens: v.optional(Count, 0),
+    metadata: v.optional(v.looseObject({ costUsd: v.optional(v.pipe(v.number(), v.minValue(0))) }), {}),
+  }),
+  output: v.looseObject({
+    metrics: v.object({ modelTurns: Count, toolCalls: Count, toolErrors: Count, providerWaits: Count, providerWaitMs: v.pipe(v.number(), v.minValue(0)) }),
+    turns: v.array(v.looseObject({
+      outcome: v.looseObject({ status: v.picklist(TURN_OUTCOMES), message: v.optional(v.string()) }),
+      checks: v.optional(v.array(CheckSchema), []),
+    })),
+  }),
+  errors: v.array(v.looseObject({ name: v.string(), message: v.string() })),
+});
+
+export type HarnessRun = v.InferOutput<typeof HarnessRunSchema>;
+
 const AssertionSchema = v.looseObject({
   status: v.picklist(['passed', 'failed']),
   duration: v.pipe(v.number(), v.minValue(0)),
-  meta: v.looseObject({
-    harness: v.looseObject({
-      run: v.looseObject({
-        session: v.looseObject({
-          metadata: v.looseObject({
-            taskId: v.pipe(v.string(), v.minLength(1)),
-            taskVersion: v.pipe(v.string(), v.minLength(1)),
-            evalCommit: v.pipe(v.string(), v.minLength(1)),
-            productSha: v.pipe(v.string(), v.minLength(1)),
-            arm: v.pipe(v.string(), v.minLength(1)),
-            trial: v.pipe(v.number(), v.integer(), v.minValue(1)),
-          }),
-          events: v.optional(v.array(TranscriptEventSchema), []),
-        }),
-        usage: v.looseObject({
-          model: v.pipe(v.string(), v.minLength(1)),
-          inputTokens: v.optional(Count, 0),
-          outputTokens: v.optional(Count, 0),
-          metadata: v.optional(v.looseObject({ costUsd: v.optional(v.pipe(v.number(), v.minValue(0))) }), {}),
-        }),
-        output: v.looseObject({
-          metrics: v.object({ modelTurns: Count, toolCalls: Count, toolErrors: Count, providerWaits: Count, providerWaitMs: v.pipe(v.number(), v.minValue(0)) }),
-          turns: v.array(v.looseObject({
-            outcome: v.looseObject({ status: v.picklist(TURN_OUTCOMES), message: v.optional(v.string()) }),
-            checks: v.optional(v.array(CheckSchema), []),
-          })),
-        }),
-        errors: v.array(v.looseObject({ name: v.string(), message: v.string() })),
-      }),
-    }),
-  }),
+  meta: v.looseObject({ harness: v.looseObject({ run: HarnessRunSchema }) }),
 });
 
 // One entry per task file. A file that failed before its first trial (a collection error) is still

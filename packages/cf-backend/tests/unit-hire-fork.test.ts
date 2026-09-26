@@ -7,6 +7,7 @@ import {
 } from '../../test-utils/src/hire-fork';
 import { catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness } from './helpers/actor-harness';
 import { modelGateway } from './helpers/platform-gateway';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 
 for (const context of ['inherit', 'fresh', undefined] as const) {
   test(`a cf hire context=${String(context)} starts from its birth-time conversation`, async () => {
@@ -18,6 +19,7 @@ for (const context of ['inherit', 'fresh', undefined] as const) {
     await catalogTurn(agent, HIRE_FORK_REQUEST);
     expect(model.doGenerateCalls.flatMap(hireConversation)).toContainEqual(HIRE_FORK_PREFIX[2]);
     await agent.terminalRetryPass();
+    await joinHarnessFibers();
     expect(childRequests).toHaveLength(1);
     const first = childRequests[0];
 
@@ -44,6 +46,7 @@ for (const cold of [false, true]) {
     await catalogTurn(initial.agent, HIRE_FORK_PARENT);
     await catalogTurn(initial.agent, HIRE_FORK_REQUEST);
     await initial.agent.terminalRetryPass();
+    await joinHarnessFibers();
     expect(childRequests).toHaveLength(2);
     const first = childRequests[1];
 
@@ -65,6 +68,7 @@ for (const cold of [false, true]) {
     if (cold) await agent.onStart();
     await catalogTurn(agent, HIRE_FORK_FOLLOWUP_REQUEST);
     await agent.terminalRetryPass();
+    await joinHarnessFibers();
     const followup = childRequests[2];
 
     if (!followup) throw new Error('The second assignment never reached the child provider.');
@@ -77,6 +81,7 @@ for (const cold of [false, true]) {
     expect(next).toBeGreaterThan(conversation.findIndex((message) => message.content === HIRE_CHILD_CONTEXT));
     expect(conversation.filter((message) => message.content.includes(HIRE_FORK_FOLLOWUP))).toHaveLength(1);
     await agent.terminalRetryPass();
+    await joinHarnessFibers();
     expect(childRequests).toHaveLength(3);
   });
 }

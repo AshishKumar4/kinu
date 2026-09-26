@@ -47,6 +47,7 @@ describe('a terminal sequence on real Durable Object storage', () => {
   it('claims every owed effect before the first one runs', async () => {
     const stub = probe('claim-first');
 
+    await stub.holdWakes();
     expect(await stub.settle('u-head', 'a-head', ANSWER, {
       cut: { name: 'takes', phase: 'before' },
     })).toMatch(/interrupted before its side effect/u);
@@ -68,6 +69,7 @@ describe('an eviction part-way through a terminal sequence', () => {
   it('leaves exactly the unfinished suffix, and a fresh activation finishes it', async () => {
     const stub = probe('interrupted-suffix');
 
+    await stub.holdWakes();
     expect(await stub.settle('u-cut', 'a-cut', ANSWER, {
       cut: { name: 'turn_record', phase: 'before' },
     })).toMatch(/interrupted before its side effect/u);
@@ -75,6 +77,8 @@ describe('an eviction part-way through a terminal sequence', () => {
       { key: terminalEffectKey('takes', 'a-cut'), runs: 1 },
       { key: terminalEffectKey('event_reply', 'a-cut'), runs: 1 },
     ]);
+    // The suffix is owed a wake before the isolate dies, or nothing would ever finish it.
+    expect(await stub.armedWake()).not.toBeNull();
 
     await abortAllDurableObjects();
 
@@ -123,6 +127,7 @@ describe('an eviction part-way through a terminal sequence', () => {
   it('replays an effect cut after its side effect, and the keyed boundary holds', async () => {
     const stub = probe('indeterminate');
 
+    await stub.holdWakes();
     expect(await stub.settle('u-after', 'a-after', ANSWER, {
       cut: { name: 'turn_record', phase: 'after' },
     })).toMatch(/interrupted after its side effect/u);
@@ -174,6 +179,8 @@ describe('two responses interrupted before one sweep', () => {
   /** `resumeAll` over several open claims, as a cold start finds them; identities come off the rows. */
   it('finds both from storage and converges both', async () => {
     const stub = probe('two-sequences');
+
+    await stub.holdWakes();
 
     for (const messageId of ['a-one', 'a-two']) {
       expect(await stub.settle('u-both', messageId, ANSWER, {

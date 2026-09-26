@@ -8,7 +8,7 @@ import {
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
 } from '@kinu.run/core';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
@@ -69,7 +69,7 @@ export async function createCloudWorkspaceForUser<Id>(
   const purpose = trimmedPurpose === '' ? undefined : trimmedPurpose;
 
   if (input.reasoningEffort !== undefined && !isReasoningEffort(input.reasoningEffort)) {
-    throw new Error(`Invalid reasoning effort: ${String(input.reasoningEffort)}`);
+    throw new KinuError('bad_input', `Invalid reasoning effort: ${String(input.reasoningEffort)}`);
   }
 
   const menu = await listAvailableModels(env, userId, caller);
@@ -82,7 +82,7 @@ export async function createCloudWorkspaceForUser<Id>(
   );
 
   if (!model) {
-    throw new Error('Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, or choose a default model in your user settings, then create the workspace again.');
+    throw new KinuError('unavailable', 'Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, or choose a default model in your user settings, then create the workspace again.');
   }
 
   const identity = createInitialCloudAgentIdentity(input, purpose);
@@ -94,7 +94,7 @@ export async function createCloudWorkspaceForUser<Id>(
 
   // A 'reserved' row is an uncommitted fork transfer's reservation; a create may not take it.
   if (registered.status === 'reserved') {
-    throw new Error(`Workspace name conflict: "${identity.name}" is being created by a transfer that has not finished. Choose another name or try again once it lands.`);
+    throw new KinuError('bad_input', `Workspace name conflict: "${identity.name}" is being created by a transfer that has not finished. Choose another name or try again once it lands.`);
   }
 
   const entry = registered.entry;
@@ -205,7 +205,7 @@ function createInitialCloudAgentIdentity(
     // The name is the object's permanent address; refuse names no preview hostname could carry.
     const refusal = workspaceAddressRefusal(requestedName);
 
-    if (refusal !== null) throw new Error(`Invalid workspace name: ${refusal}`);
+    if (refusal !== null) throw new KinuError('bad_input', `Invalid workspace name: ${refusal}`);
 
     const named = input.displayName?.trim() ?? '';
 

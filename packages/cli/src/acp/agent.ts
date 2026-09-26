@@ -17,6 +17,7 @@ import {
 } from '@agentclientprotocol/sdk';
 import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { literalText } from '@kinu.run/core';
 import type { AgentClient, AgentClientEvent } from '../agent-client';
 import { toAgentPrompt } from './prompt';
 import * as v from 'valibot';
@@ -165,6 +166,8 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
           status: event.success ? 'completed' : 'failed',
           content: [{ type: 'content', content: { type: 'text', text: event.result } }],
         };
+      case 'reasoning-delta':
+        return { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: event.delta } };
       // The agent's own evolution commentary is thinking, not its answer.
       case 'evolution':
         return {
@@ -209,7 +212,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
           sessionId: session.id,
           toolCall: {
             toolCallId: `approval-${crypto.randomUUID()}`,
-            title: req.command,
+            title: literalText(req.command),
             kind: 'execute' as const,
             status: 'pending' as const,
             content: [{

@@ -126,7 +126,7 @@ describe('a public destination is still the program\'s own business', () => {
 
     expect(response.status).toBe(502);
     expect(response.headers.get(EGRESS_FAILURE_HEADER)).toBe('1');
-    expect(await response.text()).toContain('ENOTFOUND');
+    expect(await response.text()).not.toContain('ENOTFOUND');
   });
 });
 

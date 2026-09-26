@@ -10,10 +10,6 @@ const PIN_THRESHOLD = 40;
 /** Larger than PIN_THRESHOLD so the page renders before the reader reaches the edge. */
 const PREFETCH_THRESHOLD = 400;
 
-type PendingScrollRestore =
-  | { readonly kind: "load-more" }
-  | { readonly kind: "restore"; readonly scrollTop: number };
-
 interface GrowingScrollHost {
   readonly style: { overflowAnchor: string };
   readonly scrollHeight: number;
@@ -25,17 +21,6 @@ interface GrowingScrollHost {
   removeEventListener(type: 'scroll', listener: () => void): void;
 }
 
-/** Clamping is terminal only when the store says there are no older pages. */
-function resolvePendingScrollRestore(input: {
-  readonly target: number;
-  readonly maxScrollTop: number;
-  readonly exhausted: boolean;
-}): PendingScrollRestore {
-  if (input.maxScrollTop < input.target && !input.exhausted) return { kind: "load-more" };
-
-  return { kind: "restore", scrollTop: Math.min(input.target, input.maxScrollTop) };
-}
-
 export interface GrowingScrollOptions {
   grows: "up" | "down";
   content: unknown;
@@ -45,16 +30,15 @@ export interface GrowingScrollOptions {
   loading?: boolean | undefined;
   /** Must tolerate repeat calls before the previous one settles. */
   onReachEdge?: (() => void) | undefined;
-  /** The backing walk has no older page. A restore larger than the final
-   * content settles only after this becomes true. */
-  exhausted?: boolean | undefined;
-  /** 'pinned' or absence keeps the newest edge; a pixel offset applies once content is tall enough. */
+  /** The first content has arrived; a saved position waits for it. */
+  settled?: boolean | undefined;
+  /** A pixel offset applies only inside the loaded content, else the newest edge: never a fetch (2026-09-26). */
   initialScroll?: ConversationScroll | undefined;
   onScrollPosition?: ((position: ConversationScroll) => void) | undefined;
 }
 
 export function useGrowingScroll({
-  grows, content, fetched, loading = false, exhausted = false,
+  grows, content, fetched, loading = false, settled = true,
   onReachEdge, initialScroll, onScrollPosition,
 }: GrowingScrollOptions) {
   const el = useRef<GrowingScrollHost | null>(null);
@@ -70,30 +54,20 @@ export function useGrowingScroll({
   reportPosition.current = onScrollPosition;
   const latestInitialScroll = useRef(initialScroll);
   latestInitialScroll.current = initialScroll;
-  const latestExhausted = useRef(exhausted);
-  latestExhausted.current = exhausted;
+  const latestSettled = useRef(settled);
+  latestSettled.current = settled;
   // Restoring into an empty scroller clamps to 0, so wait for content. Re-armed on every attach.
   const pendingRestore = useRef<number | null>(null);
 
   const tryRestore = useCallback((node: GrowingScrollHost) => {
     const target = pendingRestore.current;
 
-    if (target === null) return;
+    if (target === null || !latestSettled.current) return;
 
-    const resolution = resolvePendingScrollRestore({
-      target,
-      maxScrollTop: Math.max(0, node.scrollHeight - node.clientHeight),
-      exhausted: latestExhausted.current,
-    });
-
-    if (resolution.kind === "load-more") {
-      reachEdge.current?.();
-
-      return;
-    }
+    const maxScrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
 
     pendingRestore.current = null;
-    node.scrollTop = resolution.scrollTop;
+    node.scrollTop = target <= maxScrollTop ? target : node.scrollHeight;
     pinned.current = grows === "up"
       && node.scrollHeight - node.scrollTop - node.clientHeight < PIN_THRESHOLD;
     reportPosition.current?.(pinned.current ? "pinned" : node.scrollTop);
@@ -185,7 +159,14 @@ export function useGrowingScroll({
 
     // A flick ending at the edge fires no more scroll events, so re-check after each page settles.
     if (fetchedChanged || !loadingChanged) maybeLoadMore(node);
-  }, [grows, content, exhausted, fetched, loading, maybeLoadMore, tryRestore]);
+  }, [grows, content, settled, fetched, loading, maybeLoadMore, tryRestore]);
+
+  // A walk that could not start asks again once it can.
+  useEffect(() => {
+    const node = el.current;
+
+    if (node && pendingRestore.current === null) maybeLoadMore(node);
+  }, [onReachEdge, maybeLoadMore]);
 
   useEffect(() => {
     if (loading || !settlingPrepend.current) return;

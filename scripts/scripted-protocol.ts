@@ -11,6 +11,7 @@
  * that asks for no stream, as a workspace's titling does, gets one completion.
  */
 import * as v from 'valibot';
+import type { ExpectedFailure } from '../packages/core/src/obs/expected-failure';
 import { DYNAMIC_CONTEXT_OPEN_TAG, SYSTEM_REMINDER_TAG, WORKSPACE_INSTRUCTIONS_TAG } from '../packages/core/src/utils/prompt-sections';
 import { SCRIPTED_MODEL_ID } from '../packages/test-utils/src/scripted-model-spec';
 
@@ -28,6 +29,8 @@ export interface ScriptedPace {
   readonly hold?: Promise<void>;
   /** A silence after the lead, ended the same way: the text stops mid-way until the row lets it finish. */
   readonly rest?: Promise<void>;
+  /** Reasoning streamed before the answer, `deltas` words `everyMs` apart: a thinking model's steady trickle. */
+  readonly reasoning?: { readonly deltas: number; readonly everyMs: number };
 }
 
 /** One answer: prose, or a tool call with its complete arguments. Unpaced, it is written in one piece. */
@@ -135,21 +138,39 @@ function callsOf(messages: readonly OutboundMessage[]) {
   return { calls, latestAsk };
 }
 
-/** The request body as a script reads it. */
-export function readScriptedRequest(body: string): ScriptedRequest {
-  const parsed = v.parse(v.pipe(v.string(), v.parseJson(), OutboundBodySchema), body);
-  const messages = parsed.messages ?? [];
+/** A body this protocol cannot read, refused the way a provider refuses one: `400`, with an OpenAI-shaped error
+ *  whose `code` is the failure's class, so the product reports a request it sent wrong, never an outage. */
+export interface ScriptedRefusal {
+  readonly status: 400;
+  readonly body: string;
+}
+
+const UNREADABLE: ExpectedFailure = 'malformed-input';
+
+/** The request body as a script reads it, or the refusal a body it cannot read gets. */
+export function readScriptedRequest(body: string): { readonly request: ScriptedRequest } | { readonly refusal: ScriptedRefusal } {
+  const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), OutboundBodySchema), body);
+
+  if (!parsed.success) {
+    const message = `the body is not a chat completion request this model reads: ${v.summarize(parsed.issues)}`;
+
+    return { refusal: { status: 400, body: JSON.stringify({ error: { message, type: 'invalid_request_error', code: UNREADABLE } }) } };
+  }
+
+  const messages = parsed.output.messages ?? [];
   const { calls, latestAsk } = callsOf(messages);
 
   return {
-    userTexts: messages.flatMap((message) => isAsk(message) ? [message.content ?? ''] : []),
-    assistantTexts: messages.flatMap((message) => message.role === 'assistant' && message.content ? [message.content] : []),
-    system: messages.flatMap((message) => message.role === 'system' ? [message.content ?? ''] : []).join('\n'),
-    called: calls.map((call) => call.name),
-    calls,
-    turn: calls.slice(latestAsk),
-    available: (parsed.tools ?? []).flatMap((tool) => tool.function?.name === undefined ? [] : [tool.function.name]),
-    streamed: parsed.stream === true,
+    request: {
+      userTexts: messages.flatMap((message) => isAsk(message) ? [message.content ?? ''] : []),
+      assistantTexts: messages.flatMap((message) => message.role === 'assistant' && message.content ? [message.content] : []),
+      system: messages.flatMap((message) => message.role === 'system' ? [message.content ?? ''] : []).join('\n'),
+      called: calls.map((call) => call.name),
+      calls,
+      turn: calls.slice(latestAsk),
+      available: (parsed.output.tools ?? []).flatMap((tool) => tool.function?.name === undefined ? [] : [tool.function.name]),
+      streamed: parsed.output.stream === true,
+    },
   };
 }
 
@@ -239,6 +260,12 @@ export async function* pacedStream(
 ): AsyncGenerator<string> {
   yield streamFrame({ role: 'assistant' });
   await pace.hold;
+
+  for (let word = 0; word < (pace.reasoning?.deltas ?? 0); word += 1) {
+    yield streamFrame({ reasoning_content: `thought${String(word)} ` });
+    await wait(pace.reasoning?.everyMs ?? 0);
+  }
+
   await wait(pace.firstTokenMs);
   yield streamFrame({ content: pace.lead });
   await pace.rest;

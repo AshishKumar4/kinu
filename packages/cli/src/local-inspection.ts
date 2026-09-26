@@ -61,7 +61,7 @@ import {
   type LabelingItem,
   type JsonObject,
   type JsonValue,
-  type TierId,
+  type ResolvedTurnProfile,
   type OutcomeLabel,
   type EventVariant,
   type KinuEvent,
@@ -97,12 +97,13 @@ import {
 } from '@kinu.run/core';
 import { classify } from '@kinu.run/core/obs';
 import {
-  makeSql, makeSqlExec, createHostShell, hostToolchainCapabilities, inspectionFiles,
-  type LocalModelResolver,
+  makeSql, makeSqlExec, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
+  resolverModelPlane, type LocalModelResolver,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 import { agentDbPath, resolveAgentRef } from './config';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
+import { createProfileAuthorityReader } from './profiles';
 import { KinuError } from '@kinu.run/core/obs';
 
 type SqliteDb = Database;
@@ -242,23 +243,18 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
   });
 }
 
-export interface LocalProfileCoordinates {
-  readonly roleId: string;
-  readonly assignedTier: TierId | null;
-}
+/** Null when nothing names a model. */
+export async function readLocalNextTurnTier(name: string): Promise<ResolvedTurnProfile['tier'] | null> {
+  const envelope = await createProfileAuthorityReader()();
+  const { llmConfig, resolver } = createConfiguredLocalModelResolver();
 
-export function getLocalProfileCoordinates(name: string): LocalProfileCoordinates {
-  return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'actor_config')) {
-      return { roleId: 'task', assignedTier: null };
-    }
+  return withLocalDbAsync(name, async (db) => {
+    const { config } = openWorkspaceMainActor(makeSql(db));
 
-    const config = openWorkspaceMainActor(makeSql(db)).config;
+    if (envelope === null && config.getModel() === null && llmConfig === null) return null;
 
-    return {
-      roleId: config.getRoleSelection(),
-      assignedTier: config.getAssignedTier(),
-    };
+    return createLocalProfileAuthority({ config, plane: resolverModelPlane(resolver), envelope: async () => envelope })
+      .nextTurnTier({ workMode: 'build' });
   });
 }
 

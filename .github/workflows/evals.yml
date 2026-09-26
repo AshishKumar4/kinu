@@ -1,9 +1,9 @@
 name: Evals
 
 # Measures the build kinu.run is serving: every task in evals/tasks, ten trials each, run as the
-# eval-service identity against the deployment itself. There is one environment, so a pull request
-# cannot be measured before it ships; the comparison is deploy to deploy. scripts/deploy.sh
-# dispatches this after a publish, and anyone with write access can dispatch it by hand.
+# eval-service identity against production itself, so a pull request cannot be measured before it
+# ships; the comparison is deploy to deploy. scripts/deploy.sh dispatches this after a promotion,
+# and anyone with write access can dispatch it by hand.
 #
 # The candidate is the deployed build. The baseline is the latest complete report of an earlier
 # deployed build that is an ancestor of it: deploys come several a day and a run takes hours, so it

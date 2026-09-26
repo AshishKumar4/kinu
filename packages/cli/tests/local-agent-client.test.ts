@@ -7,13 +7,17 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
-import { NO_COUNT_ENDPOINT, openWorkspaceMainActor, type LLMProviderConfig } from '@kinu.run/core';
+import {
+  NO_COUNT_ENDPOINT, openWorkspaceMainActor, profileCatalogDigest, type LLMProviderConfig, type ProfileCatalog, type ProfileCatalogEnvelope,
+} from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, type LocalModelResolver , makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { LocalAgentClient } from '../src/local-agent-client';
 import type { CliSessionOptions } from '../src/session';
 import type { AgentClientEvent } from '../src/agent-client';
+
+type CliProfileSource = () => Promise<ProfileCatalogEnvelope | null>;
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'openai-compat', baseURL: 'http://localhost:0', headers: { Authorization: 'x' }, model: 'fake-model',
@@ -47,6 +51,29 @@ function fakeModel(answer: string, onPrompt?: (prompt: LanguageModelV2Prompt) =>
   });
 }
 
+function reasoningModel(thought: string, answer: string): LanguageModel {
+  return new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doStream: async () => ({
+      stream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'stream-start', warnings: [] });
+          controller.enqueue({ type: 'reasoning-start', id: 'r' });
+          controller.enqueue({ type: 'reasoning-delta', id: 'r', delta: thought });
+          controller.enqueue({ type: 'reasoning-end', id: 'r' });
+          controller.enqueue({ type: 'text-start', id: '0' });
+          controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
+          controller.enqueue({ type: 'text-end', id: '0' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop', usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 } });
+          controller.close();
+        },
+      }),
+      response: { headers: {} },
+    }),
+  });
+}
+
 function stallingModel(): LanguageModel {
   return new TestLanguageModelV2({
     provider: 'fake',
@@ -77,7 +104,9 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
     resolveModel: () => model,
     credentialFor: async () => null,
     listProviders: async () => [{ id: 'fake', label: 'Fake', available: true }],
-    listModels: async () => ({ models: [{ id: 'fake-model', label: 'Fake Model', provider: 'fake' }], failures: [] }),
+    listModels: async () => ({
+      models: ['fake-model', 'big-model', 'pinned-model'].map((id) => ({ id, label: id, provider: 'fake' })), failures: [],
+    }),
     modelInfo: async () => null,
     judgeCandidates: async () => [],
     getAuth: async () => null,
@@ -90,7 +119,7 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
   };
 }
 
-function setup(model: LanguageModel) {
+function setup(model: LanguageModel, profileAuthority: CliProfileSource = async () => null) {
   const home = scratchDir('client');
   const dbPath = join(home, 'agent.db');
   // `createCLIRuntime` requires the actor database to be `dbPath` on disk (`requireLocalDatabasePath`),
@@ -114,7 +143,7 @@ function setup(model: LanguageModel) {
     refreshInfo: async () => info,
     model,
     modelResolver: fakeResolver(model),
-    profileAuthority: async () => null,
+    profileAuthority,
     mcpServers: {},
     noAutoEvolve: true,
     transcript: { transcriptDir: join(home, 'sessions') },
@@ -481,6 +510,104 @@ describe('LocalAgentClient', () => {
       }
     });
   }
+
+  test('before any turn, status names the model and effort the next turn runs at, and a pin wins over the tier', async () => {
+    // It named the resolver's bare default and 'medium', so a workspace whose default tier is a big model at max
+    // looked like it would run a small one, and the owner re-picked both in every workspace.
+    const catalog: ProfileCatalog = { roles: {}, tiers: { default: { model: 'fake/big-model', reasoningEffort: 'max' } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'account', accountId: 'acct' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const { client } = setup(fakeModel('ok'), async () => envelope);
+    await client.connect();
+
+    expect(await client.status()).toMatchObject({ model: 'fake/big-model', reasoningEffort: 'max', tierId: 'default' });
+    await client.setModel('fake/pinned-model');
+    expect(await client.status()).toMatchObject({ model: 'fake/pinned-model', reasoningEffort: 'max' });
+    await client.close();
+  });
+
+  test('a turn\'s reasoning reaches the client as it streams, apart from the answer', async () => {
+    const { client } = setup(reasoningModel('check the index first', 'done'));
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+    await client.connect();
+
+    const result = await client.send('go', { cwd: '/work' });
+
+    expect(events.filter((event) => event.type === 'reasoning-delta')).toEqual([{ type: 'reasoning-delta', delta: 'check the index first' }]);
+
+    if (result.landed !== 'turn') throw new Error('an idle agent runs the message as its own turn');
+    expect(result.text).toBe('done');
+    await client.close();
+  });
+
+  test('/clear starts a new conversation: the transcript and the next prompt hold nothing earlier', async () => {
+    const prompts: LanguageModelV2Prompt[] = [];
+    const { client } = setup(fakeModel('noted', (prompt) => prompts.push(prompt)));
+    await client.connect();
+    await client.send('remember the word heron', { cwd: '/work' });
+
+    await client.localControls.clearConversation();
+    expect(await client.history()).toEqual([]);
+    await client.send('what word?', { cwd: '/work' });
+
+    expect(JSON.stringify(prompts.at(-1))).not.toContain('heron');
+    await client.close();
+  });
+
+  test('/compact folds all but the last exchange out of the next prompt; without it every turn is sent', async () => {
+    // Folded turns survive only inside the summary; as messages of their own, only the kept tail is sent.
+    const turnsSentAsMessages = async (compact: boolean): Promise<string[]> => {
+      const prompts: LanguageModelV2Prompt[] = [];
+      const { client } = setup(fakeModel('noted', (prompt) => prompts.push(prompt)));
+      await client.connect();
+
+      for (let turn = 0; turn < 5; turn++) await client.send(`turn ${String(turn)}: ${'context '.repeat(200)}`, { cwd: '/work' });
+
+      if (compact) client.localControls.compactNow();
+      await client.send('what came first?', { cwd: '/work' });
+      await client.close();
+      const asked = prompts.filter((prompt) => JSON.stringify(prompt.at(-1)).includes('what came first?')).at(-1) ?? [];
+
+      return asked.flatMap((message) => (message.role === 'user' ? message.content : []))
+        .flatMap((part) => (part.type === 'text' && part.text.startsWith('turn ') ? [part.text.slice(0, 6)] : []));
+    };
+
+    expect(await turnsSentAsMessages(false)).toEqual(['turn 0', 'turn 1', 'turn 2', 'turn 3', 'turn 4']);
+    expect(await turnsSentAsMessages(true)).toEqual(['turn 4']);
+  });
+
+  test('each turn reports the size the admission gate measured its request at, and /compact shrinks the next one', async () => {
+    // Short asks and long answers, as a working session reads: the fold keeps each ask and summarizes the answers.
+    const admittedSizes = async (compact: boolean): Promise<number[]> => {
+      const { client } = setup(fakeModel('findings '.repeat(600)));
+      const sizes: number[] = [];
+
+      client.subscribe((event) => {
+        if (event.type === 'broadcast' && event.event.type === 'context_admitted') sizes.push(event.event.requestTokens ?? -1);
+      });
+
+      await client.connect();
+
+      for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+      if (compact) client.localControls.compactNow();
+      await client.send('what came first?', { cwd: '/work' });
+      await client.close();
+
+      return sizes;
+    };
+
+    const whole = await admittedSizes(false);
+    const folded = await admittedSizes(true);
+
+    expect(whole).toHaveLength(6);
+    expect(whole.every((size, index) => index === 0 || size > (whole[index - 1] ?? 0))).toBeTrue();
+    expect(folded.at(-1)).toBeLessThan(whole.at(-1) ?? 0);
+  });
 
   test('status and tools reflect the live session', async () => {
     const { client } = setup(fakeModel('ok'));

@@ -6,6 +6,8 @@ import { HARNESS_ERRORS } from './task';
 export type EvalStats = {
   trials: number;
   passed: number;
+  /** Trials a turn of which ended `reset`, the workspace's isolate reset for memory: failed, and counted apart. */
+  resets: number;
   /** A trial's wall time less its waits on the model provider, which measure the account's rate limit. */
   meanDurationMs: number;
   /** The slowest trial: trials of a task run at once, so this is the task's wall time. */
@@ -30,16 +32,19 @@ type Cohort = { taskId: string; model: string; arm: string; taskVersion: string;
 
 type Identity = { taskId: string; model: string; arm: string };
 
-/** One task/model/arm cohort. `reason` is null exactly when both sides compare, and then `pValue` is the two-sided Fisher exact test. */
+/**
+ * One task/model/arm cohort. `reason` is null exactly when both sides compare, and then `pValue` is the two-sided
+ * Fisher exact test on the pass counts and `resetPValue` the same test on the reset counts.
+ */
 export type EvalComparisonRow = Identity & (
-  | { reason: null; baseline: EvalStats; candidate: EvalStats; pValue: number }
+  | { reason: null; baseline: EvalStats; candidate: EvalStats; pValue: number; resetPValue: number }
   | { reason: string; baseline: EvalStats | null; candidate: EvalStats | null }
 );
 
 /**
- * `regressed` when any comparable task's pass rate fell significantly (p < 0.05), `improved` when
- * some rose and none fell, `unchanged` when none moved beyond noise, `inconclusive` when nothing
- * could be compared.
+ * `regressed` when any comparable task's pass rate fell significantly (p < 0.05), or its workspaces
+ * reset for memory significantly more often, `improved` when some rose and none of that happened,
+ * `unchanged` when none moved beyond noise, `inconclusive` when nothing could be compared.
  */
 export type EvalVerdict = 'improved' | 'regressed' | 'unchanged' | 'inconclusive';
 
@@ -181,9 +186,11 @@ function stats({ assertions }: Cohort): EvalStats {
   const metrics = runs.map((run) => run.output.metrics);
   const costs = runs.flatMap((run) => run.usage.metadata.costUsd === undefined ? [] : [run.usage.metadata.costUsd]);
 
-  // A turn the deployment refused failed on the build, so it is listed with the checks, its answer as the evidence.
+  // A turn the deployment refused or reset failed on the build, so it is listed with the checks, its answer as the evidence.
   const failedChecks = countBy(runs.flatMap((run) => run.output.turns.flatMap((turn, index) => [
-    ...turn.outcome.status === 'refused' ? [{ id: 'deployment.refused', evidence: turn.outcome.message }] : [],
+    ...turn.outcome.status === 'refused' || turn.outcome.status === 'reset'
+      ? [{ id: `deployment.${turn.outcome.status}`, evidence: turn.outcome.message }]
+      : [],
     ...turn.checks.filter((check) => !check.pass),
   ].map((check) => ({
     check: `t${String(index + 1)} ${check.id}`,
@@ -200,6 +207,7 @@ function stats({ assertions }: Cohort): EvalStats {
   return {
     trials: assertions.length,
     passed: assertions.filter((assertion) => assertion.status === 'passed').length,
+    resets: runs.filter((run) => run.output.turns.some((turn) => turn.outcome.status === 'reset')).length,
     meanDurationMs: mean(assertions.map((assertion) => Math.max(0, assertion.duration - assertion.meta.harness.run.output.metrics.providerWaitMs))),
     slowestTrialMs: Math.max(0, ...assertions.map((assertion) => assertion.duration)),
     meanModelTurns: mean(metrics.map((value) => value.modelTurns)),
@@ -287,13 +295,18 @@ function passRate(side: EvalStats): number {
   return side.passed / side.trials;
 }
 
+/** Whether a compared cohort's workspaces reset for memory significantly more often than the baseline's. */
+function resetMore(row: ComparedRow): boolean {
+  return row.resetPValue < SIGNIFICANCE && row.candidate.resets > row.baseline.resets;
+}
+
 function verdictOf(rows: readonly EvalComparisonRow[]): EvalVerdict {
   const compared = rows.flatMap((row) => row.reason === null ? [row] : []);
 
   if (compared.length === 0) return 'inconclusive';
   const moved = compared.filter((row) => row.pValue < SIGNIFICANCE);
 
-  if (moved.some((row) => passRate(row.candidate) < passRate(row.baseline))) return 'regressed';
+  if (moved.some((row) => passRate(row.candidate) < passRate(row.baseline)) || compared.some(resetMore)) return 'regressed';
 
   return moved.length > 0 ? 'improved' : 'unchanged';
 }
@@ -331,7 +344,12 @@ export function compareEvalResults(baselineText: string | null, candidateText: s
 
     if (reason !== null) return { ...identity, reason, baseline: baselineStats, candidate: candidateStats };
 
-    return { ...identity, reason, baseline: baselineStats, candidate: candidateStats, pValue: fisherExact(baselineStats, candidateStats) };
+    return {
+      ...identity, reason, baseline: baselineStats, candidate: candidateStats, pValue: fisherExact(baselineStats, candidateStats),
+      resetPValue: fisherExact(
+        { passed: baselineStats.resets, trials: baselineStats.trials }, { passed: candidateStats.resets, trials: candidateStats.trials },
+      ),
+    };
   }).sort((left, right) => left.taskId.localeCompare(right.taskId)
     || left.model.localeCompare(right.model) || left.arm.localeCompare(right.arm));
 
@@ -438,11 +456,20 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
   const falls = moved.filter((row) => passRate(row.candidate) < passRate(row.baseline)).map(change);
   const rises = moved.filter((row) => passRate(row.candidate) > passRate(row.baseline)).map(change);
 
+  const resets = comparison.rows.flatMap((row) => row.reason === null && resetMore(row)
+    ? [`${rowName(row, shared)} ${String(row.baseline.resets)}/${String(row.baseline.trials)} \u2192 `
+      + `${String(row.candidate.resets)}/${String(row.candidate.trials)} (p = ${row.resetPValue.toFixed(2)})`]
+    : []);
+
   switch (comparison.verdict) {
     case 'inconclusive': return `No task can be compared: ${[...new Set(comparison.rows.flatMap((row) => row.reason ?? []))].join(', ')}.`;
     case 'unchanged': return `No task moved beyond what ${shared.trials === null ? 'these' : String(shared.trials)} runs can tell apart from noise.`;
     case 'improved': return `Rose: ${rises.join(', ')}.`;
-    case 'regressed': return [`Fell: ${falls.join(', ')}.`, ...rises.length > 0 ? [`Rose: ${rises.join(', ')}.`] : []].join(' ');
+    case 'regressed': return [
+      ...falls.length > 0 ? [`Fell: ${falls.join(', ')}.`] : [],
+      ...resets.length > 0 ? [`Reset for memory more often: ${resets.join(', ')}.`] : [],
+      ...rises.length > 0 ? [`Rose: ${rises.join(', ')}.`] : [],
+    ].join(' ');
   }
 }
 
@@ -532,6 +559,11 @@ function failureSection(row: EvalComparisonRow, shared: Shared): string[] {
     const others = side.toolErrors.length - 1;
     lines.push(`Most common tool error: \`${top.tool}\` ${quoted(top.message, 100)} \u00d7${String(top.count)}`
       + (others > 0 ? `, and ${String(others)} other kind${others === 1 ? '' : 's'}` : ''), '');
+  }
+
+  if (side.resets > 0) {
+    lines.push(`Workspaces reset for memory, the build's own result: ${String(side.resets)} of ${String(side.trials)} runs`
+      + `${before === null ? '' : ` (baseline ${String(before.resets)} of ${String(before.trials)})`}`, '');
   }
 
   if (side.infrastructureErrors.length > 0) {

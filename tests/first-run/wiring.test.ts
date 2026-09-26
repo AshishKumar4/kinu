@@ -42,6 +42,7 @@ test('a red in either project reds the tier, which still reports spend and keeps
   // project's green must not become the tier's verdict.
   writeFileSync(join(bin, 'bun'), `#!/bin/bash
 case "$1" in
+  -e) printf '%s\\n' KINU_EVAL_WEB_IDENTITY ;;
   scripts/bench-retention.ts) mkdir -p "$REPORT_FIXTURE"; printf '%s\\n' "$REPORT_FIXTURE" ;;
   scripts/eval-session-mint.ts) ;;
   scripts/eval-credentials.ts) printf '%s\\n' 'https://kinu.run' 'fixture-token' ;;

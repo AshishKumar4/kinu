@@ -1,9 +1,9 @@
 import type { Context, Env as HonoEnv, MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
 import {
-  err, ERROR_STATUS, OwnerCapabilityUnavailableError, ownerCaller, type OwnerCapabilityEnv, type UserCaller,
+  err, OwnerCapabilityUnavailableError, ownerCaller, PUBLIC_MESSAGE, publicError, type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
 import type { AccessIdentity } from '../control-plane/access-gate';
 
@@ -18,11 +18,21 @@ export interface FamilyEnv<Bindings extends object, Variables extends object = A
   Variables: Variables;
 }
 
-/** The raw path: Hono's default decodes first (`/api/user/%70rofile` would reach `profile`). Control collapses `//`, as its split did. */
+/** The path as spelled: Hono's default decodes first (`/%6Cogin` would reach `/login`). */
+export function rawPath(request: Request): string {
+  return new URL(request.url).pathname;
+}
+
+/** {@link rawPath}; control collapses `//`, as its split did. */
 export function apiPath(request: Request): string {
-  const { pathname } = new URL(request.url);
+  const pathname = rawPath(request);
 
   return pathname.startsWith('/api/control/') ? pathname.replace(/\/{2,}/g, '/') : pathname;
+}
+
+/** Hono sends HEAD to GET routes; a GET-only route passes it on. */
+export function noHead<E extends HonoEnv>(handler: MiddlewareHandler<E>): MiddlewareHandler<E> {
+  return async (c, next) => (c.req.method === 'HEAD' ? next() : handler(c, next));
 }
 
 /** A segment as spelled; routes decode it with `decodeURIComponent`, which throws on a bad escape, as before. */
@@ -81,23 +91,15 @@ export function ownerGate<E extends FamilyEnv<OwnerCapabilityEnv, { owner: UserC
   };
 }
 
-const UNCAUGHT_MESSAGE: Readonly<Record<ErrorCode, string>> = {
-  bad_input: 'The request is not valid.',
-  denied: 'Not allowed.',
-  missing: 'Not found.',
-  unsupported: 'Not supported.',
-  budget: 'Over a limit.',
-  unavailable: 'Unavailable; try again.',
-  timeout: 'Timed out.',
-  cancelled: 'Cancelled.',
-  oom: 'Out of memory.',
-  io: 'Internal error.',
-};
+/** Every router's `onError`: the chain goes to `http.request_failed` by route pattern; the client gets its class. */
+export function routeError(cause: Error, c: Context): Response {
+  const error = cause instanceof KinuError ? cause : toKinuError({ doing: 'answering an HTTP request', cause, otherwise: 'io' });
+  diagnostics.failure('http.request_failed', error, { route: routePath(c) });
 
-/** An uncaught throw: the chain goes to `http.api_failed` by route pattern (the path is caller text); the client gets its class. */
-export function apiError(cause: Error, c: Context): Response {
-  const error = toKinuError({ doing: 'answering an /api request', cause, otherwise: 'io' });
-  diagnostics.failure('http.api_failed', error, { route: routePath(c) });
+  return publicError(cause instanceof KinuError ? cause : new KinuError(error.code, PUBLIC_MESSAGE[error.code]));
+}
 
-  return err(ERROR_STATUS[error.code], UNCAUGHT_MESSAGE[error.code]);
+/** A Durable Object router's `onError`: the caller sees the throw. */
+export function rethrow(error: Error): never {
+  throw error;
 }

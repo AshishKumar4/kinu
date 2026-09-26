@@ -9,6 +9,7 @@ import {
   PROTOCOL_VERSION,
   type ClientContext,
   type ContentBlock,
+  type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
@@ -73,6 +74,8 @@ function fakeClient(opts: FakeOptions = {}): Fake {
       readInstructionApproval: async () => null,
       approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
       revokeInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
+      clearConversation: async () => {},
+      compactNow: () => {},
     },
     connect: async () => {},
     subscribe: (listener: (e: AgentClientEvent) => void) => {
@@ -139,7 +142,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
 async function withConnection<T>(
   fake: Fake,
   op: (ctx: ClientContext, updates: SessionNotification[]) => Promise<T>,
-  onPermission?: () => RequestPermissionResponse,
+  onPermission?: (request: RequestPermissionRequest) => RequestPermissionResponse,
 ): Promise<T> {
   const toAgent = new TransformStream<Uint8Array, Uint8Array>();
   const toClient = new TransformStream<Uint8Array, Uint8Array>();
@@ -158,7 +161,7 @@ async function withConnection<T>(
     .onNotification(CLIENT_METHODS.session_update, (ctx) => { updates.push(ctx.params); });
 
   if (onPermission) {
-    clientApp.onRequest(CLIENT_METHODS.session_request_permission, () => onPermission());
+    clientApp.onRequest(CLIENT_METHODS.session_request_permission, (ctx) => onPermission(ctx.params));
   }
 
   try {
@@ -422,6 +425,35 @@ describe('kinu acp — permission', () => {
       expect(outcome).toBe(permission.outcome);
     });
   }
+});
+
+describe('kinu acp — what the editor shows for approval', () => {
+  test('a command\'s bidi and zero-width characters show as marks, so the title reads as what runs', async () => {
+    const fake = fakeClient();
+    const titles: string[] = [];
+
+    await withConnection(
+      fake,
+      async (ctx) => {
+        await newSession(ctx);
+
+        return present(fake.approval, 'the fake client approval hook')({
+          command: 'rm -rf ./build \u202E\u2066gpj.x\u200B',
+          executor: 'device',
+          review: { decision: 'gate', hits: [] },
+        });
+      },
+      (request) => {
+        titles.push(request.toolCall.title ?? '');
+
+        return { outcome: { outcome: 'cancelled' } };
+      },
+    );
+
+    expect(titles).toHaveLength(1);
+    expect(titles[0]).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u);
+    expect(titles[0]).toContain('\uFFFD');
+  });
 });
 
 describe('kinu acp — session lifecycle', () => {

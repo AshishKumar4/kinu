@@ -9,6 +9,7 @@ import {
   appendMemoryNote, CHAT_SESSION_ID, DYNAMIC_CONTEXT_OPEN_TAG, initWorkspaceSchema, workspaceSkillPath, WORKSPACE_SKILLS_DIR,
   type LLMProviderConfig,
 } from '@kinu.run/core';
+import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import { planForkConversation } from '../../core/src/identity/fork-plan';
 import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
@@ -169,6 +170,37 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
     // The dead process is never resumed; racing its landing against the last close lets the test end without awaiting it.
     await Promise.race([dying, Promise.resolve()]);
     db.close();
+  });
+
+  test('a turn re-opened after its process died is counted once as resumed, with the steps it kept', async () => {
+    const db = new Database(scratchPath('turn-continuation', 'agent.db'));
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+    const logger = createRecordingLogger();
+    const restore = setDiagnosticsSink(logger);
+
+    try {
+      const eventsA: SessionEvent[] = [];
+      const a = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('call-1'), parked('part-')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
+      const dying = a.send('keep going', { id: crypto.randomUUID() });
+      await waitFor(() => eventsA.some((event) => event.type === 'text-delta'));
+      // A fresh turn in a live process is not a resume.
+      expect(logger.emitted.filter((line) => line.event === 'turn.resumed')).toHaveLength(0);
+
+      const eventsB: SessionEvent[] = [];
+      const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('done')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+      await waitFor(() => eventsB.some((event) => event.type === 'turn-end'));
+      await b.end();
+
+      expect(logger.emitted.filter((line) => line.event === 'turn.resumed').map((line) => line.fields)).toEqual([
+        expect.objectContaining({ stepsKept: 1, midStep: true }),
+      ]);
+
+      await Promise.race([dying, Promise.resolve()]);
+    } finally {
+      restore();
+      db.close();
+    }
   });
 
   test('a re-opened turn keeps the person\u2019s request after this turn\u2019s runtime context on every step', async () => {

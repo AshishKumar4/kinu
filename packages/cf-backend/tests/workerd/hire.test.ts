@@ -83,6 +83,26 @@ describe('hire', () => {
     );
   });
 
+  // warm-forge-4d6acc02, 2026-09-25: a delegated turn run inside the alarm slept on an 8-day Retry-After until the
+  // 15-minute alarm wall reset the object, every 15 minutes, closing every socket. The wake must hand the turn off.
+  it('the wake that starts a delegated turn returns while that turn is still running', async () => {
+    const workspace = 'hire-wake-returns';
+
+    await probe(workspace).setup(workspace, 'hire-root', 'park');
+    const hiring = probe(workspace).openHire(workspace, 'Hire one auditor; it will park.');
+
+    await probe(workspace).childSpoke();
+    // Hangs while the wake holds the parked turn: the release below is never reached.
+    await probe(workspace).wakeReturned(workspace);
+    await probe(workspace).releaseChild();
+    await hiring;
+    await probe(workspace).callerObserved();
+
+    const observed: HireObservation = await probe(workspace).observe(workspace);
+
+    expect(observed.toolResults.join(' ')).toContain(CHILD_ANSWER);
+  });
+
   it('the owner\'s Stop ends a parked delegated turn, and a restart does not run it again', async () => {
     const workspace = 'hire-stop';
 

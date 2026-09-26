@@ -5,7 +5,7 @@ import type {
   DeviceConsentSurface,
   PendingDeviceConsent,
 } from '../src/agent-client';
-import { watchDeviceConsents, type ConsentNoteKind } from '../src/consent-watch';
+import { watchDeviceConsents, watchHeadlessConsents, watchTerminalConsents, type ConsentNoteKind } from '../src/consent-watch';
 
 function consent(id: string): PendingDeviceConsent {
   return { consentId: id, deviceLabel: 'device', method: 'exec', command: 'ls' };
@@ -253,5 +253,36 @@ describe('watchDeviceConsents', () => {
 
     expect(presented).toEqual(['c1']);
     expect(notes.map((entry) => entry.kind)).toEqual(['error', 'error']);
+  });
+});
+
+describe('what a line-mode consent prompt prints', () => {
+  test('the command\'s bidi and zero-width characters show as marks, so what reads is what runs', async () => {
+    const printed: string[] = [];
+    const log = console.log;
+    const error = console.error;
+
+    console.log = (...parts: string[]) => { printed.push(parts.join(' ')); };
+
+    console.error = (...parts: string[]) => { printed.push(parts.join(' ')); };
+
+    try {
+      const bidi = { ...consent('c1'), command: 'rm -rf ./build \u202E\u2066gpj.x\u200B' };
+      const headless = makeSurface([bidi]);
+      const denied = watchHeadlessConsents(headless.surface, 'agent', { json: false, onDenied: () => {} });
+      await headless.settled(1);
+      denied.stop();
+      const terminal = makeSurface([bidi]);
+      const printedOnce = watchTerminalConsents(terminal.surface, 'agent', async () => 'n');
+      await terminal.polled(2);
+      printedOnce.stop();
+    } finally {
+      console.log = log;
+      console.error = error;
+    }
+
+    const shown = printed.join('\n');
+    expect(shown).toContain('\uFFFD');
+    expect(shown).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u);
   });
 });

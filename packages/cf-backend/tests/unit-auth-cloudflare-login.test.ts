@@ -2,8 +2,9 @@
 // token) to the UserDO in the same authorization. Real callback and KV store; only network seams faked.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, setSystemTime, test } from 'bun:test';
-import { handleAuthRequest, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
-import { bootstrappedProfile } from './helpers/bindings';
+import { authPageRoutes, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
+import { bootstrappedProfile, workerContext } from './helpers/bindings';
+import { serveFamily } from './helpers/api';
 import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/session';
 import { calculatePKCECodeChallenge } from 'oauth4webapi';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '@kinu.run/core';
@@ -12,6 +13,8 @@ import { makeKv } from './helpers/kv';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
 import { requestBodyText } from '@kinu.run/test-utils';
+
+const authPages = serveFamily(authPageRoutes, { ctx: workerContext() });
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -111,7 +114,7 @@ async function startCloudflareLogin(env: AuthRoutesEnv<string>, prompt?: 'login'
   const start = new URL(`${ORIGIN}/auth/cloudflare/start`);
 
   if (prompt) start.searchParams.set('prompt', prompt);
-  const response = await handleAuthRequest(new Request(start), env);
+  const response = await authPages(new Request(start), env);
 
   if (!response) throw new Error('auth route did not handle the sign-in start');
   const location = response.headers.get('location');
@@ -140,7 +143,7 @@ async function completeCloudflareLogin(
   callback.searchParams.set('state', handoff.state);
   callback.searchParams.set('code', 'auth-code-1');
 
-  const response = await handleAuthRequest(new Request(callback.toString(), {
+  const response = await authPages(new Request(callback.toString(), {
     headers: handoff.setCookie === undefined ? {} : { cookie: handoff.setCookie.split(';')[0] },
   }), env);
 
@@ -316,12 +319,12 @@ describe('a stale session sent to re-authenticate', () => {
       expect(firstAuthTime).toBeGreaterThan(0);
 
       // The counterexample: plain /login with a live session redirects.
-      const plain = await handleAuthRequest(loginRequest(token, null), env);
+      const plain = await authPages(loginRequest(token, null), env);
       expect(plain?.status).toBe(302);
       expect(plain?.headers.get('location')).toBe(`${ORIGIN}/`);
 
       // The rendered links carry the parameter so the provider re-authenticates rather than replaying its session.
-      const stepUp = await handleAuthRequest(loginRequest(token, 'login'), env);
+      const stepUp = await authPages(loginRequest(token, 'login'), env);
       expect(stepUp?.status).toBe(200);
       expect(await stepUp?.text() ?? '').toContain('prompt=login');
 

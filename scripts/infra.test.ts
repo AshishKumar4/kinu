@@ -13,20 +13,23 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
   CONTROL_PLANE_ACCESS_PATHS, type InfraWorker, type Infrastructure, type Resource, SUPPLY,
-  UNCAPTURED, UNOBSERVABLE, claimedHosts, deriveInfrastructure, envFields, readSites,
+  UNCAPTURED, UNOBSERVABLE, claimedHosts, deriveInfrastructure, envFields, environmentFrom, readSites,
   requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import {
-  type AccessApplicationView, accessCovering, accessDestinations, accessOverreach, routeAnswer,
+  type AccessApplicationView, accessCovering, accessDestinations, accessOverreach, edgeResponds, routeAnswer,
 } from './infra-cloudflare';
 import {
-  type AuditRequest, type Phase, type Row, PHASES, audit, observedRow, phaseFrom, supplyDrift,
+  type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observedRow, phaseFrom, supplyDrift,
   supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
 import { confirmationPhrase, partition } from './infra-teardown';
-import { plan } from './infra-provision';
+import { plan, putSecret, type SecretIo } from './infra-provision';
 import { isProductSource, readMatching } from './sources';
 
 const infrastructure = deriveInfrastructure();
@@ -46,6 +49,11 @@ function authStore(): Resource {
 function row(id: string, verdict: Row['verdict'], required: boolean, origin: Row['origin'] = 'manual'): Row {
   return { id, verdict, detail: 'fixture', required, purpose: 'fixture', origin };
 }
+
+/** The rows a clean run reports for the resources of every declared blind kind. */
+const blindRows = (): Row[] => infrastructure.resources
+  .filter((resource) => UNOBSERVABLE.has(resource.kind))
+  .map((resource) => row(resource.id, 'unobservable', true));
 
 describe('the inventory is derived from the manifest, not written beside it', () => {
   test('every resource the live account holds appears, keyed and non-empty', () => {
@@ -430,7 +438,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
   // the stale-declaration reason and every count below would be off by one.
   const clean: readonly Row[] = [
     row(authStore().id, 'present', true),
-    ...[...UNOBSERVABLE.keys()].map((id) => row(id, 'unobservable', true)),
+    ...blindRows(),
   ];
 
   test('a clean inventory produces no findings', () => {
@@ -483,7 +491,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
 
   test('an undeclared blind spot fails, and a stale declaration fails too', () => {
     const undeclared = audit({
-      infrastructure, rows: [...clean, row('cron.whatever', 'unobservable', true)], supplied: [], unreadFields: [],
+      infrastructure, rows: [...clean, row('kv.whatever', 'unobservable', true)], supplied: [], unreadFields: [],
     });
 
     expect(undeclared.findings.length).toBe(1);
@@ -493,7 +501,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
     // the rows THIS run declared: an entry whose row IS declared and observable
     // is stale and fails, while one whose row this run never declared is left
     // to the self-test that audits UNOBSERVABLE against the manifest.
-    const gatewayId = [...UNOBSERVABLE.keys()].find((id) => id.startsWith('ai-gateway.'));
+    const gatewayId = infrastructure.resources.find((resource) => resource.kind === 'ai-gateway')?.id;
 
     if (gatewayId === undefined) throw new Error('fixture expects the ai-gateway blind entry');
     const stale = audit({ infrastructure, rows: [row(gatewayId, 'present', true)], supplied: [], unreadFields: [] });
@@ -511,6 +519,8 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
   test('the declared blind spots are exactly the ones observation reports', () => {
     expect(unobservableDrift(clean)).toEqual([]);
     expect(UNOBSERVABLE.size).toBeGreaterThan(0);
+    // A declared kind no resource of the manifest is of is a stale entry.
+    expect([...UNOBSERVABLE.keys()].filter((kind) => !infrastructure.resources.some((resource) => resource.kind === kind))).toEqual([]);
   });
 
   test('a missing required secret fails and a missing optional one is reported only', () => {
@@ -555,7 +565,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
 describe('the phases differ in exactly one tolerance, and only one direction', () => {
   const clean: readonly Row[] = [
     row(authStore().id, 'present', true),
-    ...[...UNOBSERVABLE.keys()].map((id) => row(id, 'unobservable', true)),
+    ...blindRows(),
   ];
 
   /** The Worker EXISTS. That is what makes this the red case rather than the
@@ -583,6 +593,14 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     // deploy for a reason no output explains.
     expect(phaseFrom(['--phase=post-deply'], {})).toBeUndefined();
     expect(phaseFrom(['--phase='], { KINU_INFRA_PHASE: 'bootstrap' })).toBeUndefined();
+  });
+
+  test('the environment is the argument, else the deploy script\'s variable, and a mistyped one is refused', () => {
+    expect(environmentOf(['staging', '--phase=post-deploy'], { KINU_INFRA_ENVIRONMENT: 'production' })).toBe('staging');
+    expect(environmentOf([], { KINU_INFRA_ENVIRONMENT: 'staging' })).toBe('staging');
+    expect(environmentOf(['--phase=full'], {})).toBe('production');
+    // A staging gate that fell back to production would certify the wrong account's resources.
+    expect(environmentOf([], { KINU_INFRA_ENVIRONMENT: 'stagin' })).toBeUndefined();
   });
 
   test('a newly declared namespace is deferred before the upload and rejected after', () => {
@@ -848,3 +866,182 @@ describe('what the manifest cannot express is recorded rather than assumed', () 
     }
   });
 });
+
+describe('staging is the one named environment, read the way Wrangler reads it', () => {
+  /** One environment's section, the keys this reads. */
+  interface Section {
+    readonly routes?: readonly { readonly pattern: string; readonly custom_domain: boolean }[];
+    readonly vars: Readonly<Record<string, string>>;
+    readonly r2_buckets: readonly { readonly binding: string; readonly bucket_name: string }[];
+  }
+
+  /** A config with production at the top level and `env`, as `wrangler.jsonc` would hold both. */
+  function config(env: Readonly<Record<string, Section>>): string {
+    const path = join(scratchDir('infra-env'), 'wrangler.jsonc');
+    writeFileSync(path, JSON.stringify({
+      name: 'kinu',
+      account_id: 'acct',
+      routes: [{ pattern: 'kinu.run', custom_domain: true }],
+      triggers: { crons: ['*/15 * * * *'] },
+      migrations: [{ tag: 'v1', new_sqlite_classes: ['Agent'] }],
+      vars: { MODE: 'production' },
+      r2_buckets: [{ binding: 'BACKUPS', bucket_name: 'kinu-backups' }],
+      env,
+    }));
+
+    return path;
+  }
+
+  const staging: Section = {
+    routes: [{ pattern: 'staging.example', custom_domain: true }],
+    vars: { MODE: 'staging' },
+    r2_buckets: [{ binding: 'BACKUPS', bucket_name: 'kinu-backups-staging' }],
+  };
+
+  test('staging deploys its own name, bindings, vars and routes, and inherits the rest', () => {
+    const derived = deriveInfrastructure('staging', config({ staging }));
+    const ids = derived.resources.map((resource) => resource.id);
+
+    expect(derived.worker.workerName).toBe('kinu-staging');
+    expect(derived.worker.vars.get('MODE')).toBe('staging');
+    expect(derived.worker.routes).toEqual(['staging.example']);
+    expect(derived.worker.migrationTags).toEqual(['v1']);
+    expect(ids).toContain('r2.kinu-backups-staging');
+    expect(ids).not.toContain('r2.kinu-backups');
+    expect(ids).toContain('cron.kinu-staging */15 * * * *');
+  });
+
+  test('production reads the top level alone, whatever staging declares', () => {
+    const derived = deriveInfrastructure('production', config({ staging }));
+
+    expect(derived.worker.workerName).toBe('kinu');
+    expect(derived.worker.routes).toEqual(['kinu.run']);
+    expect(derived.resources.map((resource) => resource.id)).toContain('r2.kinu-backups');
+  });
+
+  test('staging that names no routes would claim production\'s, and is refused', () => {
+    const { routes: _routes, ...routeless } = staging;
+
+    expect(() => deriveInfrastructure('staging', config({ staging: routeless }))).toThrow(/inherit production's/);
+  });
+
+  test('another named environment, or staging asked of a config without it, is refused', () => {
+    expect(() => deriveInfrastructure('production', config({ preview: staging }))).toThrow(/other than `staging`/);
+    expect(() => deriveInfrastructure('staging', config({}))).toThrow(/declares no env\.staging/);
+  });
+
+  test('a command line names production by saying nothing, staging by name, and nothing else', () => {
+    expect(environmentFrom([])).toBe('production');
+    expect(environmentFrom(['staging'])).toBe('staging');
+    expect(environmentFrom(['preview'])).toBeUndefined();
+    expect(environmentFrom(['staging', 'production'])).toBeUndefined();
+  });
+});
+
+/**
+ * The account staging's first deploy meets, as docs/DEPLOYMENT.md prescribes it: every hand-made prerequisite in
+ * place, including the proxied `*.staging` record, and NO record of its own for staging.kinu.run, which the deploy's
+ * Custom Domain creates and a record already there would refuse. Nothing the deploy creates exists yet.
+ */
+describe('the first staging deploy is refused for nothing it creates', () => {
+  const staging = deriveInfrastructure('staging');
+  const host = new URL(staging.worker.vars.get('CLI_PUBLIC_ORIGIN') ?? '').host;
+
+  const observed = (resource: Resource, deployed: boolean): Row => {
+    if (UNOBSERVABLE.has(resource.kind)) return row(resource.id, 'unobservable', resource.required, resource.origin);
+    const createdByTheDeploy = resource.origin === 'wrangler-deploy' || (resource.kind === 'dns-record' && resource.name === host);
+
+    return row(resource.id, createdByTheDeploy && !deployed ? 'absent' : 'present', resource.required, resource.origin);
+  };
+
+  const at = (phase: Phase, rows: readonly Row[]) =>
+    audit({ infrastructure: staging, rows, supplied: [], unreadFields: [], phase });
+
+  test('the host\'s own record is the Custom Domain\'s, so its absence before the upload is deferred', () => {
+    const before = at('bootstrap', staging.resources.map((resource) => observed(resource, false)));
+
+    expect(before.findings).toEqual([]);
+    expect(before.notes.join('\n')).toContain(`custom-domain.${host}`);
+  });
+
+  test('a preview host the edge holds no certificate for is deferred before the upload and refused after it', async () => {
+    // Cloudflare's edge answers a name it holds no certificate for with a fatal handshake_failure alert: measured
+    // 2026-09-26 on infra-verify-probe.staging.kinu.run, before staging's Custom Domain existed.
+    const handshakeFailure = new Uint8Array([0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28]);
+
+    const edge = Bun.listen({
+      hostname: '127.0.0.1', port: 0, socket: { data(socket) { socket.write(handshakeFailure); socket.end(); } },
+    });
+
+    try {
+      const previews = staging.resources.find((resource) => resource.id === `zone-route.*.${host}/*`);
+
+      if (previews === undefined) throw new Error(`staging declares no *.${host}/* route`);
+      const probe = observedRow(previews, await edgeResponds(`127.0.0.1:${String(edge.port)}`));
+
+      const beside = (deployed: boolean) => [
+        ...staging.resources.filter((resource) => resource !== previews).map((resource) => observed(resource, deployed)),
+        probe,
+      ];
+
+      const before = at('bootstrap', beside(false));
+      expect(before.findings).toEqual([]);
+      expect(before.notes.join('\n')).toContain(previews.id);
+      // After the upload the certificate must be there, whichever phase asks.
+      expect(at('post-deploy', beside(true)).findings.join('\n')).toContain(previews.id);
+      expect(at('full', beside(true)).findings.join('\n')).toContain(previews.id);
+    } finally {
+      edge.stop(true);
+    }
+  });
+
+  test('a connection the far end closes without answering is a lookup that failed, not an absence', async () => {
+    const closing = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { open(socket) { socket.end(); }, data() {} } });
+
+    try {
+      expect((await edgeResponds(`127.0.0.1:${String(closing.port)}`)).state).toBe('unknown');
+    } finally {
+      closing.stop(true);
+    }
+  });
+});
+
+/**
+ * KINU-001: DEV_IDENTITY_SECRET is the whole authority for the synthetic identity, so a staging secret that is also
+ * production's would let whoever holds staging's act as the eval identity on production.
+ */
+describe('the synthetic identity\'s secret, as provisioning installs it', () => {
+  const staging = { worker: deriveInfrastructure('staging').worker };
+
+  /** An operator who types `typed` at every prompt, and the values installed. */
+  function operator(typed: string): SecretIo & { readonly installed: string[] } {
+    const installed: string[] = [];
+
+    return {
+      installed,
+      ask: async () => typed,
+      interactive: true,
+      install: (_name, value) => {
+        installed.push(value);
+
+        return { ok: true, stdout: '', stderr: '', code: 0 };
+      },
+      show: () => undefined,
+    };
+  }
+
+  test('is minted fresh for each deployment, and a value pasted from anywhere is refused', async () => {
+    const pasted = operator('the value production already holds');
+
+    expect((await putSecret('DEV_IDENTITY_SECRET', staging, pasted)).outcome).toBe('refused');
+    expect(pasted.installed).toEqual([]);
+
+    const [first, second] = [operator(''), operator('')];
+
+    await putSecret('DEV_IDENTITY_SECRET', staging, first);
+    await putSecret('DEV_IDENTITY_SECRET', { worker: deriveInfrastructure('production').worker }, second);
+    expect([...first.installed, ...second.installed].map((value) => Buffer.from(value, 'base64').length)).toEqual([32, 32]);
+    expect(first.installed).not.toEqual(second.installed);
+  });
+});
+

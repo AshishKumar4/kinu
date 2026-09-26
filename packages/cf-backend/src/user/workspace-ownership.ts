@@ -77,7 +77,7 @@ export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>
   } catch (e) {
     const message = renderThrownChain({ cause: e });
 
-    if (/owned by a different user/i.test(message)) return { ok: false, status: 403, error: message };
+    if (/owned by a different user/i.test(message)) return { ok: false, status: 403, error: `Workspace ${workspaceName} belongs to another account.` };
 
     const transient = classifyTransientDO({ cause: e });
 
@@ -87,7 +87,7 @@ export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>
       otherwise: 'unavailable',
     }), { workspace: workspaceName, transient: transient ?? 'none' });
 
-    return { ok: false, status: transient === null ? 500 : 503, error: message };
+    return { ok: false, status: transient === null ? 500 : 503, error: `Could not reach workspace ${workspaceName}; try again.` };
   }
 
   // The UserDO serializes this reconcile; it returns immediately once both sides agree.
@@ -102,7 +102,7 @@ export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>
     if (/not in your registry/i.test(message)) {
       forgetWorkspaceMembership(userId, workspaceName);
 
-      return { ok: false, status: 404, error: message };
+      return { ok: false, status: 404, error: `Workspace ${workspaceName} is not in your registry.` };
     }
 
     const transient = classifyTransientDO({ cause: e });
@@ -115,7 +115,7 @@ export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>
     return {
       ok: false,
       status: transient !== null ? 503 : 500,
-      error: `Could not issue this workspace's capability token: ${message}`,
+      error: 'Could not issue this workspace\'s capability token; try again.',
     };
   }
 

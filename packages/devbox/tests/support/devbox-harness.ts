@@ -115,6 +115,8 @@ export interface FakeStorage {
   /** Stands in for an attach failure: an ephemeral box's `attach()` cannot fail, and every later
    *  step reports instead of throwing, so a container fault cannot propagate past the ladder. */
   faultOn(key: string, error: Error): void;
+  /** Every `list` under `prefix` rejects with `error` until cleared with `undefined`. */
+  failListOn(prefix: string, error: Error | undefined): void;
 }
 
 /** Durable Object storage double: a Map honouring the runtime contract for the four ops used.
@@ -124,6 +126,7 @@ export function fakeStorage(): FakeStorage {
   const schedules: { callback: string; time: number }[] = [];
   const gates: Record<string, Gate | undefined> = {};
   const faults: Record<string, Error | undefined> = {};
+  const listFaults = new Map<string, Error>();
   /** A transaction refuses to commit a key another writer moved meanwhile: the runtime
    *  isolates concurrent transactions, so the second committer fails instead of overwriting. */
   const keyVersions = new Map<string, number>();
@@ -246,9 +249,13 @@ export function fakeStorage(): FakeStorage {
         return { toArray: () => distinct.map((callback) => ({ callback })) };
       },
     },
-    list: (options: { prefix: string }): Promise<Map<string, StoredValue>> => Promise.resolve(
-      new Map([...rows].filter(([key]) => key.startsWith(options.prefix))),
-    ),
+    list: (options: { prefix: string }): Promise<Map<string, StoredValue>> => {
+      const failure = listFaults.get(options.prefix);
+
+      if (failure !== undefined) return Promise.reject(failure);
+
+      return Promise.resolve(new Map([...rows].filter(([key]) => key.startsWith(options.prefix))));
+    },
   } as DurableObjectStorage;
 
   scheduleTables.set(handle, schedules);
@@ -257,6 +264,7 @@ export function fakeStorage(): FakeStorage {
     rows,
     handle,
     gateOn: (key, held) => { gates[key] = held; },
+    failListOn: (prefix, error) => { if (error === undefined) listFaults.delete(prefix); else listFaults.set(prefix, error); },
     faultOn: (key, error) => { faults[key] = error; },
   };
 }

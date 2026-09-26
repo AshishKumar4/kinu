@@ -11,7 +11,8 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { handleCliRequest } from '../src/cli/routes';
+import { cliPageRoutes } from '../src/cli/routes';
+import { serveFamily } from './helpers/api';
 import { staticRouteCliEnv } from './helpers/bindings';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell } from '@kinu.run/core';
@@ -46,7 +47,7 @@ const PtyResultSchema = v.object({
 });
 
 async function servedScript(path: string): Promise<string> {
-  const response = await handleCliRequest(new Request(`${ORIGIN}${path}`), staticRouteCliEnv());
+  const response = await cliPages(new Request(`${ORIGIN}${path}`), staticRouteCliEnv());
 
   if (!response) throw new Error(`${path} was not handled`);
   expect(response.status).toBe(200);
@@ -70,8 +71,9 @@ function bunStub(version: string, logPath: string): string {
     `printf '%s\\n' "$0" >> "${logPath}"`,
     `if [ "$1" = "--version" ]; then printf '%s\\n' '${version}'; exit 0; fi`,
     // The launcher's release-signature check runs for real on this suite's own Bun.
-    `if [ "$1" = "-e" ]; then exec "${process.execPath}" "$@"; fi`,
-    'if [ "$1" = "run" ]; then printf \'  setup   connect your account\\n\'; exit 0; fi',
+    `for arg in "$@"; do if [ "$arg" = "-e" ]; then exec "${process.execPath}" "$@"; fi; done`,
+    // The launcher passes its own flags before `-e` and `run`.
+    'for arg in "$@"; do if [ "$arg" = "run" ]; then printf \'  setup   connect your account\\n\'; exit 0; fi; done',
     'exit 0',
     '',
   ].join('\n');
@@ -416,7 +418,6 @@ describe('the CLI installs as a prebuilt artifact', () => {
     // Staging tree beside the install; the swap keeps prev until the proven tree is in place
     // (unit-cli-launcher-swap drives those states).
     expect(launcher).toContain('mv "$tmp/extract/kinu" "$next"');
-    expect(launcher).toContain('"$KINU_BUN" run "$next/cli.js" --version');
     expect(launcher).toContain('mv "$CLI_DIR" "$CLI_ROOT/prev"');
     expect(launcher).toContain('adopt_tree "$next"');
     expect(launcher).toContain('mv "$proven" "$CLI_DIR"');
@@ -516,7 +517,6 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(launcher.split('command -v bun').length - 1).toBe(shared.split('command -v bun').length - 1);
     expect(install).not.toContain('command -v bun');
     expect(install).not.toContain('bun.sh/install');
-    expect(launcher).toContain('exec "$KINU_BUN" run "$CLI_DIR/cli.js" "$@"');
   });
 
   /**
@@ -712,3 +712,5 @@ print(json.dumps({
     },
 }))
 `;
+
+const cliPages = serveFamily(cliPageRoutes);
