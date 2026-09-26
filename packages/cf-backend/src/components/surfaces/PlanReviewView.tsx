@@ -6,7 +6,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   admitReviewAnnotations,
-  planReviewAwaitingDecision,
+  planDismissable,
   type PlanReview,
   type ReviewAnnotation,
   type PlanReviewResult,
@@ -166,7 +166,7 @@ function DismissPlan({ plan, rpc, readOnly, deciding, saving, onError }: {
 }) {
   const [busy, setBusy] = useState(false);
 
-  if (readOnly || !planReviewAwaitingDecision(plan)) return null;
+  if (readOnly || !planDismissable(plan)) return null;
 
   const dismiss = async () => {
     setBusy(true);
