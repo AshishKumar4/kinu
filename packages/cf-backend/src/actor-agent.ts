@@ -1046,7 +1046,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // The workspace comes from the invocation, not the isolate: `setDiagnosticsSink` is module-global
     // and Cloudflare co-locates Durable Objects, so an install-time default would attribute every
     // co-located actor to the first. The SDK's per-invocation context names the running agent.
-    installAnalyticsDiagnostics(this.env);
+    installAnalyticsDiagnostics(this.env, { workspace: ctx.id.name ?? '' });
     attributeWorkspace(ActorAgent.invocationWorkspace);
   }
 
