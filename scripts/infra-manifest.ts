@@ -611,6 +611,14 @@ export const SUPPLY = new Map<string, Supply>([
     source: 'https://dash.cloudflare.com/profile/api-tokens — a custom token with '
       + 'Account | Account Analytics | Read, scoped to this account.',
   }],
+  ['KINU_OBS_TOKEN', {
+    handling: 'prompt',
+    required: false,
+    absent: 'the monitor cannot see workspace objects killed for memory or wall time, and says so '
+      + 'once as a `fleet.sources` alert. Every other fleet signal reads Analytics Engine and is unaffected.',
+    source: 'https://dash.cloudflare.com/profile/api-tokens — a custom token with '
+      + 'Account | Workers Observability | Read, scoped to this account. The owner mints it.',
+  }],
   ['CREDENTIAL_ENCRYPTION_KEY_PREVIOUS', {
     handling: 'out-of-band',
     required: false,

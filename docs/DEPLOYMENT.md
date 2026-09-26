@@ -129,6 +129,7 @@ This derives from `Env` in `packages/cf-backend/env.d.ts` and from `SUPPLY` in `
 | `MCP_GITHUB_CLIENT_ID`, `MCP_GITHUB_CLIENT_SECRET` | **out of band**: a GitHub OAuth app the owner registers, whose authorization callback URL is `https://<deployment-origin>/api/user/mcp/callback` ([register](https://github.com/settings/applications/new), [remote-server docs](https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md)); the preset asks `repo read:user` | no | The GitHub preset card falls back to a personal-access-token field. |
 | `MCP_GOOGLE_CLIENT_ID`, `MCP_GOOGLE_CLIENT_SECRET` | **out of band**: a Google OAuth client created under the Workspace MCP setup, whose authorized redirect URI is `https://<deployment-origin>/api/user/mcp/callback` ([guide](https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server)); the preset asks `https://www.googleapis.com/auth/gmail.readonly` | no | The Gmail preset card is not rendered. It has no token fallback. |
 | `ANALYTICS_SQL_API_TOKEN` | **prompt**: Account Analytics Read token | for `/control` metrics queries | Analytics Engine writes continue; the Metrics tab reports that queries are not configured. |
+| `KINU_OBS_TOKEN` | **prompt**: a token the owner mints with one scope, Account · Workers Observability · Read | for the monitor's platform-kill alert | The monitor cannot see out-of-memory or wall-time kills and sends one `fleet.sources` alert naming this secret. |
 | `CONTROL_PLANE_ADMINS` | **config var**: comma-separated operator email addresses | for `/control` | The control route returns 404 and no admin link appears. |
 | `CLOUDFLARE_ACCOUNT_ID` | **config var** | for Analytics Engine queries | The Metrics tab reports that queries are not configured. |
 
@@ -204,6 +205,9 @@ printf '<cloudflare-client-secret>' | bunx wrangler secret put CLOUDFLARE_OAUTH_
 
 # The control plane queries Analytics Engine through the account SQL API.
 printf '<account-analytics-read-token>' | bunx wrangler secret put ANALYTICS_SQL_API_TOKEN
+# Workers Observability read token (one scope: Account · Workers Observability · Read).
+# The monitor reads invocation kills with it; `scripts/prod-logs.ts` reads the same name.
+printf '<workers-observability-read-token>' | bunx wrangler secret put KINU_OBS_TOKEN
 ```
 
 #### Rotating CREDENTIAL_ENCRYPTION_KEY
