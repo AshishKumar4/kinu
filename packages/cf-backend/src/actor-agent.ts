@@ -439,6 +439,36 @@ const CODEMODE_TOOL_TOOL = 'eval' satisfies BuiltinToolName;
  * `Agent.schedule()` types its callback as `keyof this`, which excludes protected members. */
 export const TERMINAL_RETRY_CALLBACK = '_kinuTerminalRetryTick';
 
+/** A lap wake's streak, in its schedule row: eviction cannot restart the pace. */
+export interface WakePace {
+  readonly laps: number;
+  /** Comma-joined arms last named; null outside a streak. */
+  readonly arms: string | null;
+}
+
+/** Ledgers that can owe work with no instant. */
+export interface UntimedArms {
+  readonly openDrainLease?: boolean;
+  readonly terminalIncomplete?: boolean;
+  readonly unfinishedHeads?: boolean;
+  readonly runningSwarms?: boolean;
+  readonly untimedJobs?: boolean;
+  readonly retirements?: boolean;
+  readonly pendingBirths?: boolean;
+  readonly pendingDeletions?: boolean;
+  readonly unsettledClaims?: boolean;
+  readonly admittedDelegations?: boolean;
+  readonly chatLoop?: boolean;
+}
+
+const WakePaceSchema = v.object({ laps: v.pipe(v.number(), v.integer(), v.minValue(0)), arms: v.nullable(v.string()) });
+
+function wakePaceOf(row: Pick<Schedule<unknown>, 'payload'>): WakePace | null {
+  const parsed = v.safeParse(WakePaceSchema, row.payload);
+
+  return parsed.success ? parsed.output : null;
+}
+
 export interface ActorDynamicContextExtras {
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
   readonly extraMissingCapabilities?: () => readonly MissingCapability[];
@@ -1303,18 +1333,18 @@ export abstract class ActorAgent extends Agent<Env> {
    * Soonest-wins arm of one wake row per `callback`. A due row counts (it fires now) unless its tick is
    * running, since the SDK deletes that one. Re-reads after its write so racers converge.
    */
-  protected async armWakeRow(callback: keyof this & string, atMs: number): Promise<string> {
+  protected async armWakeRow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
     const nowSec = Math.floor(Date.now() / 1000);
     // Round up: the SDK stores whole seconds, and waking early would re-arm and busy-spin the alarm.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
 
-    const armed = async (): Promise<{ id: string; time: number }[]> =>
+    const armed = async (): Promise<{ id: string; time: number; pace: WakePace | null }[]> =>
       (await this.listSchedules())
         .filter((row) => row.callback === callback && !this.runningWakeRows.has(row.id))
-        .map((row) => ({ id: row.id, time: row.time }));
+        .map((row) => ({ id: row.id, time: row.time, pace: wakePaceOf(row) }));
 
-    const earliest = (rows: readonly { id: string; time: number }[]): { id: string; time: number } | undefined =>
-      rows.reduce<{ id: string; time: number } | undefined>((best, row) =>
+    const earliest = <Row extends { id: string; time: number }>(rows: readonly Row[]): Row | undefined =>
+      rows.reduce<Row | undefined>((best, row) =>
         best === undefined || row.time < best.time || (row.time === best.time && row.id < best.id) ? row : best, undefined);
 
     const before = await armed();
@@ -1326,6 +1356,14 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (keeper === undefined) throw new KinuError('io', `the ${callback} wake row vanished while it was armed`);
 
+    // A paceless arm (a timed retry) inherits the streak it replaces.
+    const carried = pace ?? [...before, ...settled].reduce<WakePace | null>(
+      (most, row) => row.pace !== null && (most === null || row.pace.laps > most.laps) ? row.pace : most, null);
+
+    if (carried !== null && JSON.stringify(carried) !== JSON.stringify(keeper.pace)) {
+      this.ctx.storage.sql.exec('UPDATE cf_agents_schedules SET payload = ? WHERE id = ?', JSON.stringify(carried), keeper.id);
+    }
+
     // The keeper is never cancelled, so failure leaves extra wakes, never zero; errors propagate.
     for (const row of settled) {
       if (row.id !== keeper.id) await this.cancelSchedule(row.id);
@@ -1334,7 +1372,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return keeper.id;
   }
 
-  protected async runWakeRow(own: Schedule<undefined>, body: () => Promise<void>): Promise<void> {
+  protected async runWakeRow(own: Schedule<unknown>, body: () => Promise<void>): Promise<void> {
     this.runningWakeRows.add(own.id);
 
     try {
@@ -1345,15 +1383,15 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** One soonest-wins row per actor; returns the surviving row's id so a caller can release it. */
-  protected scheduleTerminalRetry(atMs: number): Promise<string> {
-    return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs);
+  protected scheduleTerminalRetry(atMs: number, pace?: WakePace): Promise<string> {
+    return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs, pace);
   }
 
   /**
    * Public because `Agent.schedule()` types callbacks as `keyof this`. One pass per alarm: the SDK read
    * every due row first, so a row this pass retired still arrives and runs nothing.
    */
-  async _kinuTerminalRetryTick(_payload: undefined, own: Schedule<undefined>): Promise<void> {
+  async _kinuTerminalRetryTick(_payload: WakePace | undefined, own: Schedule<unknown>): Promise<void> {
     const nowSec = Math.floor(Date.now() / 1000);
     const rows = (await this.listSchedules()).filter((row) => row.callback === TERMINAL_RETRY_CALLBACK);
 
@@ -1363,14 +1401,15 @@ export abstract class ActorAgent extends Agent<Env> {
       if (row.time <= nowSec && row.id !== own.id) await this.cancelSchedule(row.id);
     }
 
-    await this.runWakeRow(own, () => this.terminalRetryPass());
+    await this.runWakeRow(own, () => this.terminalRetryPass(wakePaceOf(own) ?? undefined));
   }
 
-  async terminalRetryPass(): Promise<void> {
+  /** `prior`: the firing row's streak; in memory, eviction reset it every lap. */
+  async terminalRetryPass(prior: WakePace = { laps: 0, arms: null }): Promise<void> {
     // Arm first, drain second: the next-lap wake is durable before any pass runs, so a kill
     // inside this frame leaves a future row. A tick that finds nothing owed releases it at the end.
-    const armedRowId = await this.scheduleTerminalRetry(
-      Date.now() + recoveryBackoffMs(this.#maintenanceLaps + 1));
+    const lapAt = Date.now() + recoveryBackoffMs(prior.laps + 1);
+    const armedRowId = await this.scheduleTerminalRetry(lapAt, { laps: prior.laps + 1, arms: prior.arms });
 
     // Owed deliveries run every tick; unfinished maintenance re-arms at the shared capped backoff,
     // so a pass that keeps answering unfinished settles at the ceiling, not a one-second loop.
@@ -1385,26 +1424,23 @@ export abstract class ActorAgent extends Agent<Env> {
     // an external event). Only timed work: arm at its instant, soonest-wins. Nothing owed: sleep.
     const nextOwed = this.nextOwedAt();
 
-    if (sweepsUnfinished || recoveryUnfinished || this.owedUntimedWork()) {
-      this.#maintenanceLaps = this.#maintenanceLaps + 1;
+    const arms = { sweeps: sweepsUnfinished, recovery: recoveryUnfinished, ...this.owedUntimedArms() };
+    const named = Object.entries(arms).filter(([, owed]) => owed).map(([arm]) => arm).join(',');
+
+    if (named !== '') {
+      if (named !== prior.arms) diagnostics.event('wake.unfinished_arms', arms);
+      await this.scheduleTerminalRetry(lapAt, { laps: prior.laps + 1, arms: named });
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
     } else {
-      this.#maintenanceLaps = 0;
       await this.cancelSchedule(armedRowId);
 
-      if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
+      if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed, { laps: 0, arms: null });
     }
 
     // A turn a deploy cut short reads right by the next tick of the wake it armed.
     this.overviewChanged();
   }
-
-  /**
-   * Consecutive unfinished laps; paces the re-arm. In-memory is enough: the delay is baked into
-   * the schedule row, so a restart only resets the ramp and cannot shorten an armed wake.
-   */
-  #maintenanceLaps = 0;
 
   /**
    * Runs every tick regardless of maintenance's answer, so owed replies never queue behind a sweep.
@@ -1420,7 +1456,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** While true, the tick keeps its lap-paced row. Base owns no rosters; subclasses override. */
   protected owedUntimedWork(): boolean {
-    return false;
+    return Object.values(this.owedUntimedArms()).some(Boolean);
+  }
+
+  protected owedUntimedArms(): UntimedArms {
+    return {};
   }
 
   /** Earliest timed obligation instant, or null when only untimed work (or nothing) remains.

@@ -4,10 +4,12 @@
  */
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
-import { openWorkspaceMainActor } from '@kinu.run/core';
+import { openWorkspaceMainActor, recoveryBackoffMs } from '@kinu.run/core';
+import { createRecordingLogger } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
-  hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, until, type HarnessOrchestratorAgent,
+  hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness, tapDiagnostics, until,
+  type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { present } from '@kinu.run/test-utils';
@@ -410,9 +412,15 @@ describe('the workspace keeps exactly one wake row', () => {
       const before = (await agent.listSchedules())
         .filter((row) => row.callback === '_kinuTerminalRetryTick');
 
-      for (const row of before) await agent.cancelSchedule(row.id);
       const firedAtSec = Math.floor(Date.now() / 1000);
-      await agent.terminalRetryPass();
+
+      // The first lap has no row yet: the backlog was seeded after activation armed nothing.
+      if (before.length === 0) await agent.terminalRetryPass();
+
+      for (const row of before) {
+        await agent._kinuTerminalRetryTick(undefined, row);
+        await agent.cancelSchedule(row.id);
+      }
 
       const armed = (await agent.listSchedules())
         .filter((row) => row.callback === '_kinuTerminalRetryTick');
@@ -428,6 +436,91 @@ describe('the workspace keeps exactly one wake row', () => {
 
     expect(await fireArmedTick()).toBeGreaterThan(second);
     expect(await fireArmedTick()).toBe(0);
+  });
+
+  // eval-trajectory-evals-pu-eedw1v, 2026-09-22 to 26: one arm stayed true, each ~30 s the idle object was evicted
+  // and the in-memory ramp restarted at 2 s, so it woke ~8 times a minute for days instead of at the 60 s ceiling.
+  test('evictions between unfinished laps neither shorten the pace nor lift its ceiling', async () => {
+    const { db } = orchestratorHarness();
+    const lapDelays: number[] = [];
+
+    // A task for an actor the directory does not hold: the drain never visits it, so the arm stays true every lap.
+    db.prepare(
+      `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
+       VALUES ('gone-actor', 'orphan-task', 'event', 'subordinate_task', 'trace-orphan', 'null', ?)`,
+    ).run(Date.now());
+
+    for (let lap = 0; lap < 8; lap++) {
+      // Every lap is a fresh activation over the same storage, as the platform's idle eviction makes it.
+      const { agent } = await reactivateOrchestratorHarness(db);
+      const due = (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
+
+      for (const row of due) {
+        const firedAtSec = Math.floor(Date.now() / 1000);
+        await agent._kinuTerminalRetryTick(undefined, row);
+        // The SDK deletes a one-shot row once its callback returns.
+        await agent.cancelSchedule(row.id);
+
+        const next = (await agent.listSchedules()).filter((armed) => armed.callback === '_kinuTerminalRetryTick');
+
+        if (row === due[0]) lapDelays.push((next[0]?.time ?? firedAtSec) - firedAtSec);
+      }
+    }
+
+    for (let lap = 1; lap < lapDelays.length; lap++) expect(lapDelays[lap]).toBeGreaterThanOrEqual(lapDelays[lap - 1] ?? 0);
+    // The SDK stores whole seconds and the arm rounds up, so a lap lands at most one second late.
+    const ceiling = recoveryBackoffMs(Infinity) / 1000;
+    expect(lapDelays.at(-1)).toBeGreaterThanOrEqual(ceiling);
+    expect(Math.max(...lapDelays)).toBeLessThanOrEqual(ceiling + 1);
+  });
+
+  test('an unfinished streak names its arms once, however many laps, and a new streak names them again', async () => {
+    const { db } = orchestratorHarness();
+    const recorder = createRecordingLogger();
+
+    const orphan = db.prepare(
+      `INSERT INTO agent_log (actor_id, id, kind, variant, trace_id, payload, received_at)
+       VALUES ('gone-actor', 'orphan-task', 'event', 'subordinate_task', 'trace-orphan', 'null', ?)`,
+    );
+
+    const lap = async (): Promise<void> => {
+      const { agent } = await reactivateOrchestratorHarness(db);
+      // Each activation installs its own sink, so the recorder is tapped per activation.
+      const untap = tapDiagnostics(recorder);
+
+      try {
+        const rows = (await agent.listSchedules()).filter((armed) => armed.callback === '_kinuTerminalRetryTick');
+
+        if (rows.length === 0) await agent.terminalRetryPass();
+
+        for (const row of rows) {
+          await agent._kinuTerminalRetryTick(undefined, row);
+          await agent.cancelSchedule(row.id);
+        }
+      } finally {
+        untap();
+      }
+    };
+
+    orphan.run(Date.now());
+
+    for (let i = 0; i < 5; i++) await lap();
+
+    // The streak ends: a lap with nothing owed.
+    db.prepare(`DELETE FROM agent_log WHERE id = 'orphan-task'`).run();
+    await lap();
+    orphan.run(Date.now());
+
+    for (let i = 0; i < 3; i++) await lap();
+
+    const named = recorder.emitted.filter((line) => line.event === 'wake.unfinished_arms');
+
+    expect(named).toHaveLength(2);
+
+    for (const line of named) {
+      expect(line.fields).toMatchObject({ admittedDelegations: true, sweeps: false, recovery: false, chatLoop: false });
+      expect(Object.values(line.fields).filter((value) => value !== true && value !== false)).toEqual([]);
+    }
   });
 
   test('a tick killed after its arm and before its drain still leaves the wake', async () => {
