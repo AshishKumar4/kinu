@@ -86,7 +86,7 @@ import { initialInputState, reduceInput, type InputEffect, type InputMachineEven
 import { agentDisplayLabel, clipText } from '@kinu.run/core';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import {
-  buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace,
+  buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace, answeredHelpers,
   type TuiHubData, type TuiHubRow, type TuiHubView, type TuiSubagentChat,
 } from './hubs';
 import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
@@ -102,7 +102,6 @@ import {
   type TuiRuntimeOptions,
   type TuiAgentSource,
   type TuiAgentSummary,
-  type TuiSubordinate,
 } from './tui-shell';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
@@ -139,7 +138,7 @@ export type ActiveSurface =
   | { kind: 'model'; menu: AgentModelMenu; loading: boolean; error: string | null }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
-  | { kind: 'subagent'; path: readonly string[]; label: string }
+  | { kind: 'subagent'; path: readonly string[]; label: string; actorId: string | null }
   | null;
 
 function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string | null {
@@ -821,6 +820,8 @@ function ChatScene({
     }),
   }, [hub, roster.page.items, client, status?.name, isProcessing, projectRoot]);
 
+  const answered = useMemo(() => answeredHelpers(messages, hub?.data.helpers ?? []), [messages, hub]);
+
   useEffect(() => {
     if (hubView !== 'agents') return;
     const identity = `${client.mode}:${client.agentName}`;
@@ -840,21 +841,22 @@ function ChatScene({
   }, [client, hubView]);
 
   const openSubagent = useCallback((entry: TuiHubRow) => {
-    if (entry.path !== undefined) setActiveSurface({ kind: 'subagent', path: entry.path, label: entry.label });
+    if (entry.path === undefined) return;
+    setActiveSurface({ kind: 'subagent', path: entry.path, label: entry.label, actorId: entry.actorId ?? null });
   }, []);
 
   const subagentSurface = activeSurface?.kind === 'subagent' ? activeSurface : null;
 
   useEffect(() => {
     if (subagentSurface === null) return;
-    const { path, label } = subagentSurface;
+    const { path, label, actorId } = subagentSurface;
     const name = path.join('/');
     let live = true;
     setSubagentChat({ name, label, messages: null, error: null });
 
     subagentTaskRef.current = (async () => {
       try {
-        const conversation = await readSubagentConversation(client, path);
+        const conversation = await readSubagentConversation(client, actorId === null ? { path: [...path] } : { path: [], actor: actorId });
 
         if (live) setSubagentChat({ name, label, messages: conversation, error: null });
       } catch (cause) {
@@ -1707,7 +1709,7 @@ function ChatScene({
     rememberScroll: scrollAnchor.remember,
     createNewAgent: onNewAgent === undefined ? undefined : createNewAgent,
     bumpModelRequest: () => { modelRequestRef.current += 1; },
-    hubAgents: hubLive === undefined ? [] : [...hubLive.agents, ...hubLive.work],
+    hubAgents: hubLive === undefined ? [] : [...hubLive.agents, ...hubLive.work, ...answered],
     hubSelectedId: () => hubSelectedRef.current,
     setHubSelectedId,
     openSubagent,
@@ -1892,7 +1894,7 @@ function ChatScene({
       return (
         <HubOverlay
           view={hubView}
-          data={hubLive}
+          data={{ ...hubLive, answered }}
           width={sceneWidth}
           height={height}
           selectedAgentId={hubSelectedId}
@@ -2189,13 +2191,13 @@ async function loadHubData(client: AgentClient): Promise<TuiHubData> {
   };
 }
 
-async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError' | 'work' | 'workError'>> {
+async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError' | 'work' | 'workError' | 'helpers'>> {
   const [subordinates, work] = await Promise.allSettled([readSubordinates(client), client.workspaceWork()]);
 
   return {
     ...(subordinates.status === 'fulfilled'
-      ? { subordinates: subordinates.value }
-      : { subordinates: [], subordinatesError: `Subagents could not be read: ${renderThrownChain({ cause: subordinates.reason })}` }),
+      ? subordinates.value
+      : { subordinates: [], helpers: [], subordinatesError: `Subagents could not be read: ${renderThrownChain({ cause: subordinates.reason })}` }),
     ...(work.status === 'fulfilled'
       ? { work: workFromWorkspace(work.value) }
       : { work: [], workError: `Work could not be read: ${renderThrownChain({ cause: work.reason })}` }),
@@ -2203,12 +2205,12 @@ async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subord
 }
 
 /** Pages arrive newest first. */
-async function readSubagentConversation(client: AgentClient, path: readonly string[]): Promise<DisplayMessage[]> {
+async function readSubagentConversation(client: AgentClient, target: { path: string[]; actor?: string }): Promise<DisplayMessage[]> {
   const pages: DisplayMessage[][] = [];
   let cursor: SeekCursor | undefined;
 
   do {
-    const result = await client.inspectSubordinate({ path: [...path], view: 'history', page: cursor === undefined ? {} : { cursor } });
+    const result = await client.inspectSubordinate({ ...target, view: 'history', page: cursor === undefined ? {} : { cursor } });
 
     if (result.view === 'missing') throw new Error(result.error);
 
@@ -2220,7 +2222,7 @@ async function readSubagentConversation(client: AgentClient, path: readonly stri
   return pages.flat();
 }
 
-async function readSubordinates(client: AgentClient): Promise<TuiSubordinate[]> {
+async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'helpers'>> {
   const entries: SubordinateChild[] = [];
   let cursor: SeekCursor | undefined;
 
@@ -2232,7 +2234,11 @@ async function readSubordinates(client: AgentClient): Promise<TuiSubordinate[]> 
     cursor = result.page.status === 'more' ? result.page.next : undefined;
   } while (cursor !== undefined);
 
-  return subordinatesFromRoster(entries);
+  const helpers = entries.flatMap((entry) => entry.lifetime === 'task' && entry.actorReference !== null
+    ? [{ name: entry.name, actorId: entry.actorReference.actorId }]
+    : []);
+
+  return { subordinates: subordinatesFromRoster(entries), helpers };
 }
 
 

@@ -8,12 +8,14 @@ import { MemoryRouter } from 'react-router-dom';
 import * as v from 'valibot';
 import {
   actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS,
-  observedActionEnum, REPORT_TOOL, TASK_TURN_ENDINGS, terminalTaskReport,
+  observedActionEnum, REPORT_TOOL, type JsonValue, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
 import type { SubordinateRosterEntry } from '@kinu.run/core/protocol';
 import { present } from '@kinu.run/test-utils';
 import { SubordinateTabs } from '../src/components/SubordinateTabs';
 import { KeptTranscript } from '../src/components/KeptTranscript';
+import { HelperChatBase, MessageView } from '../src/components/MessageView';
+import type { UIMessage } from 'ai';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
   chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, workspaceFiles,
@@ -201,6 +203,29 @@ describe('a dismissed agent keeps its conversation reachable', () => {
     expect(markup.indexOf('asked before')).toBeLessThan(note);
     expect(note).toBeLessThan(markup.indexOf('asked after'));
     expect(markup.slice(note, markup.indexOf('</p>', note))).toContain('unavailable');
+  });
+});
+
+/** A task-lifetime helper makes no report card and has no tab; the `agents` call that asked it survives a reload. */
+describe('the call that asked a one-question helper opens its chat', () => {
+  const asked = (output: JsonValue): UIMessage => ({
+    id: 'a1', role: 'assistant',
+    parts: [{ type: 'tool-agents', toolCallId: 'agents_0', state: 'output-available', input: { action: 'hire', lifetime: 'task' }, output }],
+  });
+
+  const markup = (base: string | null, output: JsonValue) => renderToStaticMarkup(createElement(MemoryRouter, null,
+    createElement(HelperChatBase.Provider, { value: base }, createElement(MessageView, { message: asked(output) }))));
+
+  test('a task helper\'s name links to its chat below the chat that asked it', () => {
+    const answered = { status: 'completed', agent: 'ask-reviewer-a1', lifetime: 'task', role: 'reviewer', answer: 'Fine.', transcript: 'kept' };
+
+    expect(markup('/workspace/ws/agents/', answered)).toContain('href="/workspace/ws/agents/ask-reviewer-a1"');
+    expect(markup('/workspace/ws/agents/auditor/', JSON.stringify(answered))).toContain('href="/workspace/ws/agents/auditor/ask-reviewer-a1"');
+  });
+
+  test('a durable hire, or a chat with no place to open one, links nothing', () => {
+    expect(markup('/workspace/ws/agents/', { ok: true, agent: 'auditor', lifetime: 'durable' })).not.toContain('conversation"');
+    expect(markup(null, { agent: 'ask-reviewer-a1', lifetime: 'task' })).not.toContain('conversation"');
   });
 });
 

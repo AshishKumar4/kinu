@@ -111,7 +111,7 @@ export function WorkTab({
   }, [work]);
 
   const openTasks = taskRows.filter(({ task }) => !isClosedTree(task));
-  const closedTasks = taskRows.filter(({ task }) => isClosedTree(task)).map(({ task }) => task);
+  const closedTasks = taskRows.filter(({ task }) => isClosedTree(task));
   const runningJobs = backgroundJobs.filter((job) => job.status === "running");
   const settledJobs = backgroundJobs.filter((job) => job.status !== "running");
 
@@ -180,7 +180,7 @@ export function WorkTab({
       <WorkPlans work={work} owner={planOwner ?? "main"} arrival={workspacePlanArrival} onPresence={setHasPlans} onNewPlan={onNewPlan} onOpenReview={openReview} />
       <NeedsYou pendingActions={pendingActions} rpc={rpc} onDecided={onRefreshQueue} onOpenSurface={onOpenSurface} onOpenReview={setReview} />
       <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} runningJobs={runningJobs} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
-      <WorkJournal journal={journal} filter={filter} onFilter={setFilter} view={changelog} seenAt={changelogSeenAt} seenError={changelogSeenError} resource={changelogResource} onReload={reloadChangelog} rpc={rpc} onRefreshJobs={onRefreshJobs} />
+      <WorkJournal journal={journal} filter={filter} onFilter={setFilter} view={changelog} seenAt={changelogSeenAt} seenError={changelogSeenError} resource={changelogResource} onReload={reloadChangelog} rpc={rpc} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} />
       <Learnings memory={memory} onOpenSurface={onOpenSurface} />
     </div>
   );
@@ -260,7 +260,7 @@ function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenReview 
   );
 }
 
-interface WorkTaskRow {
+export interface WorkTaskRow {
   task: AgentTaskTree;
   owner: WorkspaceWorkOwner;
 }
@@ -312,7 +312,7 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, on
 }
 
 /** Drawn while the digest read owes a retry too, so a broken read never blanks the tab; revalidation failures also show. */
-function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resource, onReload, rpc, onRefreshJobs }: {
+function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resource, onReload, rpc, onRefreshJobs, onOpenOwner }: {
   journal: JournalRow[];
   filter: JournalFilter;
   onFilter: (filter: JournalFilter) => void;
@@ -323,6 +323,7 @@ function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resou
   onReload: () => void;
   rpc: Rpc;
   onRefreshJobs: () => void;
+  onOpenOwner?: (name: string) => void | Promise<void>;
 }) {
   const visible = journal.filter((row) => row.chips.includes(filter));
 
@@ -359,7 +360,7 @@ function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resou
             {visible.map((row) => (
               <div key={row.key}>
                 {row.kind === "job" && <JobCard grouped job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
-                {row.kind === "task" && <TaskTree grouped task={row.task} />}
+                {row.kind === "task" && <TaskTree grouped task={row.task} owner={row.owner} onOpenOwner={onOpenOwner} />}
                 {row.kind === "self" && (
                   <ChangelogEntryCard grouped entry={row.entry} seenAt={seenAt}
                     rpc={rpc} onReverted={onReload} />
@@ -593,21 +594,21 @@ function PendingRow(
 /** Membership is decided by the builder, never the renderer, so no chip drifts from the feed. */
 type JournalRow =
   | { key: string; at: number; chips: readonly JournalFilter[]; kind: "job"; job: BackgroundJob }
-  | { key: string; at: number; chips: readonly JournalFilter[]; kind: "task"; task: AgentTaskTree }
+  | { key: string; at: number; chips: readonly JournalFilter[]; kind: "task"; task: AgentTaskTree; owner: WorkspaceWorkOwner }
   | { key: string; at: number; chips: readonly JournalFilter[]; kind: "self"; entry: ChangelogEntry };
 
 /** Exported for its test: the ordering is the feature. Every row answers to `All`, a no-change self-review included, because the queue counts it as unseen. */
 export function buildJournal(
   jobs: readonly BackgroundJob[],
-  tasks: readonly AgentTaskTree[],
+  tasks: readonly WorkTaskRow[],
   entries: readonly ChangelogEntry[],
 ): JournalRow[] {
   const rows: JournalRow[] = [
     ...jobs.map((job): JournalRow => ({
       key: `job:${job.id}`, at: job.settledAt ?? job.createdAt, chips: ["all", "jobs"], kind: "job", job,
     })),
-    ...tasks.map((task): JournalRow => ({
-      key: `task:${task.id}`, at: task.updatedAt, chips: ["all", "self"], kind: "task", task,
+    ...tasks.map(({ task, owner }): JournalRow => ({
+      key: `task:${owner.actorId}:${task.id}`, at: task.updatedAt, chips: ["all", "self"], kind: "task", task, owner,
     })),
     ...entries.map((entry): JournalRow => ({
       key: `self:${entry.id}`, at: entry.at, chips: ["all", "self"], kind: "self", entry,

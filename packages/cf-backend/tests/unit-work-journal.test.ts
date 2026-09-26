@@ -22,6 +22,13 @@ function task(id: string, updatedAt: number): AgentTaskTree {
   return { id, parentId: null, title: id, status: 'done', createdAt: 0, updatedAt, note: null, subtasks: [] };
 }
 
+const MAIN: WorkspaceWorkOwner = { actorId: 'actor-main', name: 'main', retired: false, path: [] };
+
+/** A closed task as the Work read hands it: with the owner it belongs to. */
+function closed(id: string, updatedAt: number, owner: WorkspaceWorkOwner = MAIN) {
+  return { task: task(id, updatedAt), owner };
+}
+
 function entry(id: string, at: number): ChangelogEntry {
   return { id, kind: 'tool', at, summary: id, evidence: '' };
 }
@@ -30,17 +37,17 @@ describe('the work journal', () => {
   test('interleaves jobs, closed plan items and self-changes by time, newest first', () => {
     const rows = buildJournal(
       [job({ id: 'j-old', settledAt: 100 }), job({ id: 'j-new', settledAt: 500 })],
-      [task('t-mid', 300)],
+      [closed('t-mid', 300)],
       [entry('c-newest', 700), entry('c-oldest', 50)],
     );
 
     expect(rows.map((r) => r.key)).toEqual([
-      'self:c-newest', 'job:j-new', 'task:t-mid', 'job:j-old', 'self:c-oldest',
+      'self:c-newest', 'job:j-new', 'task:actor-main:t-mid', 'job:j-old', 'self:c-oldest',
     ]);
   });
 
   test('every row carries the chips it answers to, so the chips are views over one list', () => {
-    const rows = buildJournal([job({ id: 'j' })], [task('t', 1)], [entry('c', 2)]);
+    const rows = buildJournal([job({ id: 'j' })], [closed('t', 1)], [entry('c', 2)]);
     expect(new Set(rows.flatMap((r) => r.chips))).toEqual(new Set(['all', 'jobs', 'self']));
 
     expect(rows.filter((r) => r.chips.includes('jobs'))).toHaveLength(1);
@@ -53,11 +60,11 @@ describe('the work journal', () => {
     // OWNER, 2026-09-17: the chip named for everything holds every row; `changesOnly` is the curated feed.
     const noop: ChangelogEntry = { ...entry('c-refused', 2), kind: 'refinement', noChange: true };
     const changed: ChangelogEntry = { ...entry('c-applied', 3), kind: 'refinement' };
-    const rows = buildJournal([job({ id: 'j' })], [task('t', 1)], [noop, changed]);
+    const rows = buildJournal([job({ id: 'j' })], [closed('t', 1)], [noop, changed]);
 
     expect(rows.filter((r) => r.chips.includes('all'))).toEqual(rows);
     expect(rows.filter((r) => r.chips.includes('self')).map((r) => r.key))
-      .toEqual(['self:c-applied', 'self:c-refused', 'task:t']);
+      .toEqual(['self:c-applied', 'self:c-refused', 'task:actor-main:t']);
   });
 
   test('a job that never settled is placed by when it started, not dropped', () => {
@@ -67,11 +74,18 @@ describe('the work journal', () => {
   });
 
   test('keys are stable across re-reads, so a poll does not re-key and re-animate the feed', () => {
-    const args = [[job({ id: 'j', settledAt: 1 })], [task('t', 2)], [entry('c', 3)]] as const;
+    const args = [[job({ id: 'j', settledAt: 1 })], [closed('t', 2)], [entry('c', 3)]] as const;
     // The second read proves a poll re-keys nothing.
     const first = buildJournal(...args).map((r) => r.key);
-    expect(first).toEqual(['self:c', 'task:t', 'job:j']);
+    expect(first).toEqual(['self:c', 'task:actor-main:t', 'job:j']);
     expect(buildJournal(...args).map((r) => r.key)).toEqual(first);
+  });
+
+  test('a finished task keeps the owner it belongs to, so a helper with no tab still opens from it', () => {
+    const helper: WorkspaceWorkOwner = { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', retired: true, path: ['ask-refiner-fb0gr9'] };
+    const [row] = buildJournal([], [closed('t', 1, helper)], []);
+
+    expect(row?.kind === 'task' ? row.owner : null).toEqual(helper);
   });
 
   test('nothing settled is an empty feed, not a throw', () => {

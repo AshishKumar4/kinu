@@ -177,6 +177,25 @@ describe('owner reads of retained subordinate paths', () => {
     expect(after.filter((row) => row.name === 'child')).toHaveLength(1);
   });
 
+  test('a finished helper\'s kept history reads by its id, where its name no longer resolves', async () => {
+    const fixture = workspaceFixture();
+    const child = fixture.child(fixture.main, 'child');
+    const leaf = fixture.child(child, 'leaf');
+    await fixture.history(leaf).record(CHAT_SESSION_ID, {
+      id: 'answer', parentId: null, origin: 'input', message: { role: 'user', content: 'kept answer' },
+    });
+
+    for (const action of ['retire', 'release'] as const) {
+      fixture.directory.apply(actorReferenceOf(fixture.main), [], { action, name: 'child', reference: actorReferenceOf(child) });
+    }
+
+    expect(await read(fixture, { path: ['child', 'leaf'], view: 'history', page: {} })).toMatchObject({ view: 'missing' });
+    expect(await read(fixture, { path: [], view: 'history', page: {}, actor: leaf.actorId })).toMatchObject({
+      view: 'history', page: { status: 'end', items: [{ content: 'kept answer' }] },
+    });
+    expect(await read(fixture, { path: [], view: 'history', page: {}, actor: 'not-an-actor' })).toMatchObject({ view: 'missing' });
+  });
+
   test('run and history pages retain their own continuation cursors', async () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');

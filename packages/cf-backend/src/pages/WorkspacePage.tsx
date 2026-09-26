@@ -29,7 +29,7 @@ import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Modal } from "@/components/ui/Modal";
 import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
-import { ChatLiveTail, DeviceOfflineRow, MessageView, ModelFallbackRows, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
+import { ChatLiveTail, DeviceOfflineRow, HelperChatBase, MessageView, ModelFallbackRows, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, threadLiveTail, turnRows } from "@kinu.run/core";
@@ -364,15 +364,18 @@ function AgentChatColumn({ workspace, subName, subordinates, rpc }: {
   subordinates: readonly SubordinateRosterEntry[];
   rpc: Rpc;
 }) {
-  if (subName.includes("/")) return <NestedAgentColumn workspace={workspace} path={subName} rpc={rpc} />;
   const rosterEntry = subordinates.find((entry) => entry.name === subName);
+  let column = <SubordinateChatColumn workspace={workspace} subName={subName} title={rosterEntry ? agentTitle(rosterEntry) : subName} />;
 
-  // A dismissed agent has no socket; its kept chat is paged over this workspace's.
-  if (rosterEntry?.status === "dismissed") {
-    return <KeptChatColumn workspace={workspace} subName={subName} title={agentTitle(rosterEntry)} rpc={rpc} actorId={rosterEntry.actorId} />;
+  if (subName.includes("/")) {
+    column = <NestedAgentColumn workspace={workspace} path={subName} rpc={rpc} />;
+  } else if (rosterEntry?.status === "dismissed") {
+    // A dismissed agent has no socket; its kept chat is paged over this workspace's.
+    column = <KeptChatColumn workspace={workspace} subName={subName} title={agentTitle(rosterEntry)} rpc={rpc} actorId={rosterEntry.actorId} />;
   }
 
-  return <SubordinateChatColumn workspace={workspace} subName={subName} title={rosterEntry ? agentTitle(rosterEntry) : subName} />;
+  // A helper this agent asked opens below it.
+  return <HelperChatBase.Provider value={`/workspace/${workspace}/agents/${subName.split("/").map(encodeURIComponent).join("/")}/`}>{column}</HelperChatBase.Provider>;
 }
 
 /** One subordinate's chat over its own facet socket; Work Surface and Timeline stay on
@@ -927,7 +930,7 @@ export default function WorkspacePage() {
         ref={workbench}
         workspace={agentId}
         contents={state}
-        chat={(inspectorControl) => <ChatSlates shownInPanel={panelSlate(inspectorControl)}>
+        chat={(inspectorControl) => <HelperChatBase.Provider value={`/workspace/${agentId}/agents/`}><ChatSlates shownInPanel={panelSlate(inspectorControl)}>
             <SubordinateTabs
               workspace={agentId}
               subordinates={state.subordinates}
@@ -1085,7 +1088,7 @@ export default function WorkspacePage() {
             </div>
             </div>
             )}
-        </ChatSlates>}
+        </ChatSlates></HelperChatBase.Provider>}
         inspector={(
           // `planOwner` is the actor's registered name, as the work read reports it; the root's is the workspace's.
           <WorkSurface
