@@ -22,23 +22,11 @@ import type { RunEvent } from '../../packages/core/src/index';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
+import { TREE_ASK as ASK, TREE_DEEP_WORD as DEEP, TREE_SHALLOW_WORD as SHALLOW } from './asks';
 
 const SUITE = 'First-run · delegation-tree';
 
 const CASE = 'delegation-tree' as const;
-
-/** The word the deep helper says, two levels below the root. */
-const DEEP = 'emberfall';
-
-/** The word the shallow helper says, one level below the root. */
-const SHALLOW = 'tidewater';
-
-const ASK = 'Use your agents tool to hire two helpers, each with action hire, lifetime task and role task. '
-  + 'The first helper\'s mission: "Use your agents tool to hire one helper with action hire, lifetime task '
-  + `and role task, whose mission is: Reply with exactly the word ${DEEP} and nothing else. When it `
-  + 'answers, reply with exactly its answer and nothing else." '
-  + `The second helper's mission: "Reply with exactly the word ${SHALLOW} and nothing else." `
-  + 'When both have answered, reply with one line: TREE <first helper\'s answer> <second helper\'s answer>.';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
 

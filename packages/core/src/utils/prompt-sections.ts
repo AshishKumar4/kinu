@@ -1,4 +1,4 @@
-/** Boundaries of an assembled request. A leaf importing nothing, so builder and meter agree without importing each other (layer gate). */
+/** Request boundaries: a leaf, so builder and meter agree without importing each other. */
 
 export interface PromptSection {
   readonly title: string;
@@ -13,6 +13,8 @@ export const DYNAMIC_CONTEXT_OPEN_TAG = '<dynamic_context';
 /** Workspace instruction files the owner has not approved (KINU-N028). */
 export const WORKSPACE_INSTRUCTIONS_TAG = 'workspace_instructions';
 
+export const SYSTEM_REMINDER_TAG = 'system-reminder';
+
 export const DYNAMIC_CONTEXT_DELIMITER = /<(\/?)dynamic_context/g;
 
 export const WORKSPACE_INSTRUCTIONS_DELIMITER = /<(\/?)workspace_instructions/g;
@@ -26,7 +28,7 @@ export function sealDelimiters(body: string, delimiter: RegExp, tag: string): st
   return body.replace(delimiter, `&lt;$1${tag}`);
 }
 
-/** Split an assembled prompt on line-start `## ` headings; the per-section budget test and the context meter depend on these boundaries. */
+/** Splits on line-start `## `; the section budget and context meter rely on these boundaries. */
 export function splitPromptSections(prompt: string): PromptSection[] {
   if (prompt === '') return [];
 

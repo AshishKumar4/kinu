@@ -106,7 +106,7 @@ export default defineConfig({
     // checkpoint engine under `$KINU_HOME`, and the device cases install real
     // daemons — none of that may reach the developer's own `~/.kinu`.
     setupFiles: ['./scripts/test-preload-vitest.ts'],
-    // A case is a deployed episode: a real model, two real daemons, a real pty.
+    // A case is a deployed episode: the scripted model, two real daemons, a real pty.
     // Its completion is decided by the episode, never by elapsed wall time. `0`
     // is Vitest's documented disabled-timeout value.
     testTimeout: 0,

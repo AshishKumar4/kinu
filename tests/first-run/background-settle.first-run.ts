@@ -4,15 +4,12 @@ import type { EvalObservation } from '@kinu.run/test-utils';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
+import { SETTLE_ASK, SETTLE_MARKER as MARKER } from './asks';
 import { firstRunReplyText } from './turn-settlement';
 
 const SUITE = 'First-run · background-settle';
 
 const CASE = 'background-settle' as const;
-
-/** The word the detached command prints after its sleep — what a settled wake
- *  must carry back to the assistant's transcript. */
-const MARKER = 'KINU_SETTLED_AFTER_DETACH';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
 
@@ -53,11 +50,7 @@ describe(SUITE, () => {
       modelCalls: 'expected',
       budgetMs: 10 * 60_000,
       async run({ session, budget }) {
-        const first = await session.prompt(
-          `Use your shell tool with runtime 'sandbox' to execute exactly: sleep 45 && echo ${MARKER}. `
-          + 'The command sleeps before it prints — let it run to completion, do not kill it. '
-          + 'When it has finished, tell me the marker it printed.',
-        );
+        const first = await session.prompt(SETTLE_ASK);
 
         // The answer to THIS prompt, wherever it landed: a send that spliced
         // into the genesis turn has no turn result of its own, and its reply

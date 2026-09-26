@@ -20,7 +20,9 @@ import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 import { withDevServer } from './live-app-harness';
 import { launchTestChrome } from './test-chrome';
-import { registerScriptedModel, SCRIPTED_MODEL_SPEC, startScriptedModel, type ScriptedAnswer, type ScriptedRequest } from './scripted-model';
+import { registerScriptedModel, startScriptedModel } from './scripted-model';
+import type { ScriptedAnswer, ScriptedRequest } from './scripted-protocol';
+import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { HEADER_WEBSOCKET, webHeaders, type PublicWebIdentity } from '../evals/src/session';
 
@@ -449,7 +451,7 @@ if (TARGET === 'local') {
 
   try {
     await withDevServer(async ({ origin }) => {
-      await registerScriptedModel(origin, model.port);
+      await registerScriptedModel(origin, model.baseURL);
       await run(origin, { kind: 'loopback' }, SCRIPTED_MODEL_SPEC);
     });
   } finally {

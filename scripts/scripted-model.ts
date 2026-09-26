@@ -7,69 +7,23 @@
  * A script reads the request, not a counter: the same server answers a
  * workspace's titling call, a row's throwaway turn and the plan walkthrough's
  * four steps, and each is decided by what the request carries. Counters break
- * the moment two rows share the server, which they do.
- *
- * The streamed shapes are the ones `@ai-sdk/openai-compatible` parses:
- * a `delta.content` chunk finished with `stop`, or a `delta.tool_calls` chunk
- * carrying the complete argument JSON, finished with `tool_calls` (the parser
- * emits the tool call as soon as the arguments parse — see
- * openai-compatible-chat-language-model.ts:605, `isParsableJson`). A request
- * that asks for no stream, as a workspace's titling does, gets one completion.
+ * the moment two rows share the server, which they do. The wire is
+ * `scripted-protocol.ts`'s; this server adds the paced answers a row holds.
  */
 import { createServer as createHttpServer, type ServerResponse } from 'node:http';
+import { setTimeout as sleep } from 'node:timers/promises';
 import * as v from 'valibot';
-import { DYNAMIC_CONTEXT_OPEN_TAG, SLATES_ROOT, WORKSPACE_INSTRUCTIONS_TAG, parseJsonValue, workspacePath } from '@kinu.run/core';
+import { SLATES_ROOT, workspacePath } from '@kinu.run/core';
+import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
 import { apiJson } from './live-app-harness';
+import {
+  FALLBACK_ANSWER, SCRIPTED_MODELS_BODY, pacedStream, readScriptedRequest, scriptedBody,
+  type ScriptedAnswer, type ScriptedModel, type ScriptedPace, type ScriptedRequest,
+} from './scripted-protocol';
 
-/** The model spec a scripted workspace runs on, and the credential that serves it. */
-export const SCRIPTED_MODEL_SPEC = 'openai-compat/fake-live';
-
-const SCRIPTED_MODEL_ID = 'fake-live';
-
-const SCRIPTED_CREDENTIAL = 'openai-compat.default';
-
-/** What an unscripted request gets. One string, so a row that waits for the
- *  answer waits for the words this server actually sends. */
-export const FALLBACK_ANSWER = 'Live answer from the fake model.';
-
-/** A paced answer's silences, in the order a thinking model leaves them: before its first token, and after
- *  `lead`, a first token that opens the answer's text with nothing to draw, as a blank lead line does. */
-export interface ScriptedPace {
-  readonly firstTokenMs: number;
-  readonly lead: string;
-  readonly leadMs: number;
-  /** A first silence of unknown length, ended by the row that holds it ({@link heldCall}). */
-  readonly hold?: Promise<void>;
-  /** A silence after the lead, ended the same way: the text stops mid-way until the row lets it finish. */
-  readonly rest?: Promise<void>;
-}
-
-/** One answer: prose, or a tool call with its complete arguments. Unpaced, it is written in one piece. */
-export interface ScriptedAnswer {
-  readonly text?: string;
-  readonly toolCall?: { readonly name: string; readonly arguments: unknown };
-  readonly pace?: ScriptedPace;
-}
-
-/** The request as a script reads it. `available` is what this turn may call —
- *  a titling call carries no tools at all, and a script that ignored that
- *  would answer it with a tool call the request never offered. */
-export interface ScriptedRequest {
-  /** What was said to the agent, oldest first: every user-role message's text but the runtime state the
-   *  product sends in that role (a `<dynamic_context>` block, the unapproved workspace files), so the last
-   *  entry is the latest ask. */
-  readonly userTexts: readonly string[];
-  /** What the agent said, oldest first: every assistant-role message's text. */
-  readonly assistantTexts: readonly string[];
-  /** The system messages' text: where a workspace's mission reaches its model. */
-  readonly system: string;
-  /** Tool names already called in this conversation, in order. */
-  readonly called: readonly string[];
-  readonly available: readonly string[];
-}
-
-export type ScriptedModel = (request: ScriptedRequest) => ScriptedAnswer;
+/** The account credential a scripted run's workspaces are served through. */
+export const SCRIPTED_CREDENTIAL = 'openai-compat.default';
 
 /** Wrap a script so the run's FIRST request gets `first` — the caller knows
  *  by construction which turn opens the run (a fresh workspace's create
@@ -85,131 +39,17 @@ export function countingScript(script: ScriptedModel, first: ScriptedAnswer): Sc
   };
 }
 
-const TextPartSchema = v.object({ type: v.optional(v.string()), text: v.optional(v.string()) });
-
-/** A message's text, whatever shape the provider serialized it in: a plain
- *  string, or the parts array the SDK sends for a multi-part message. */
-const ContentSchema = v.pipe(
-  v.union([v.string(), v.array(TextPartSchema), v.null()]),
-  v.transform((content) => (
-    Array.isArray(content) ? content.map((part) => part.text ?? '').join('') : content ?? ''
-  )),
-);
-
-const OutboundMessageSchema = v.object({
-  role: v.optional(v.string()),
-  content: v.optional(ContentSchema),
-  tool_calls: v.optional(v.array(v.object({
-    function: v.optional(v.object({ name: v.optional(v.string()) })),
-  }))),
-});
-
-const OutboundBodySchema = v.object({
-  messages: v.optional(v.array(OutboundMessageSchema)),
-  tools: v.optional(v.array(v.object({
-    function: v.optional(v.object({ name: v.optional(v.string()) })),
-  }))),
-  stream: v.optional(v.boolean()),
-});
-
-/** A user-role message the product wrote: its live state or the unapproved workspace files
- *  (`prompting/volatile-context.ts`). */
-function isRuntimeState(text: string): boolean {
-  return text.startsWith(DYNAMIC_CONTEXT_OPEN_TAG) || text.startsWith(`<${WORKSPACE_INSTRUCTIONS_TAG}>`);
-}
-
-/** The request body as a script reads it. */
-export function readScriptedRequest(body: string): ScriptedRequest {
-  const parsed = v.parse(OutboundBodySchema, parseJsonValue(body));
-  const messages = parsed.messages ?? [];
-
-  return {
-    userTexts: messages.flatMap((message) => {
-      const text = message.content ?? '';
-
-      return message.role === 'user' && !isRuntimeState(text) ? [text] : [];
-    }),
-    assistantTexts: messages.flatMap((message) => message.role === 'assistant' && message.content ? [message.content] : []),
-    system: messages.flatMap((message) => message.role === 'system' ? [message.content ?? ''] : []).join('\n'),
-    called: messages.flatMap((message) => (message.tool_calls ?? []).flatMap(
-      (call) => call.function?.name === undefined ? [] : [call.function.name],
-    )),
-    available: (parsed.tools ?? []).flatMap((tool) => tool.function?.name === undefined ? [] : [tool.function.name]),
-  };
-}
-
-const CHUNK = { id: 'chatcmpl-scripted', object: 'chat.completion.chunk', created: 1, model: SCRIPTED_MODEL_ID };
-
-/** The answer's tool call as the wire carries it, with its own id per `step`. */
-function wireCall(call: NonNullable<ScriptedAnswer['toolCall']>, step: number) {
-  return { id: `call-${call.name}-${String(step)}`, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } };
-}
-
-/** The answer to a request that asked for no stream, as one completion: a workspace's title is asked this way. */
-function completionOf(answer: ScriptedAnswer, step: number): string {
-  const call = answer.toolCall;
-  const content = answer.text ?? null;
-
-  const message = call === undefined
-    ? { role: 'assistant', content }
-    : { role: 'assistant', content, tool_calls: [wireCall(call, step)] };
-
-  return JSON.stringify({
-    ...CHUNK,
-    object: 'chat.completion',
-    choices: [{ index: 0, message, finish_reason: call === undefined ? 'stop' : 'tool_calls' }],
-    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-  });
-}
-
-/** `step`: the calls the request already holds, so each call a turn makes has its own id, as a provider gives it. */
-function streamOf(answer: ScriptedAnswer, step: number): string {
-  const events: unknown[] = [];
-  const call = answer.toolCall;
-
-  if (answer.text !== undefined) {
-    events.push({ ...CHUNK, choices: [{ index: 0, delta: { role: 'assistant', content: answer.text }, finish_reason: null }] });
-  }
-
-  if (call !== undefined) {
-    events.push({
-      ...CHUNK,
-      choices: [{
-        index: 0,
-        delta: {
-          role: 'assistant',
-          tool_calls: [{ index: 0, ...wireCall(call, step) }],
-        },
-        finish_reason: null,
-      }],
-    });
-  }
-
-  events.push({ ...CHUNK, choices: [{ index: 0, delta: {}, finish_reason: call === undefined ? 'stop' : 'tool_calls' }] });
-
-  return `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`;
-}
-
-/** Write a paced answer the way a slow provider streams one: the role chunk at once, then each silence as a real
- *  wait on the socket, then the answer. */
-function writePaced(response: ServerResponse, answer: ScriptedAnswer, pace: ScriptedPace, step: number): void {
-  const frame = (delta: Record<string, string>): string =>
-    `data: ${JSON.stringify({ ...CHUNK, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
-
-  response.write(frame({ role: 'assistant' }));
-  // A hold that fails cuts the call, as a provider that drops the socket does.
-  (pace.hold ?? Promise.resolve()).then(() => {
-    setTimeout(() => {
-      response.write(frame({ content: pace.lead }));
-      (pace.rest ?? Promise.resolve()).then(() => {
-        setTimeout(() => { response.end(streamOf(answer, step)); }, pace.leadMs);
-      }, () => { response.destroy(); });
-    }, pace.firstTokenMs);
-  }, () => { response.destroy(); });
+/** Write a paced answer onto the socket; a hold that fails cuts the call, as a provider that drops the socket does. */
+function writePaced(response: ServerResponse, answer: ScriptedAnswer, pace: ScriptedPace, request: ScriptedRequest): void {
+  void (async () => {
+    for await (const chunk of pacedStream(answer, pace, request, sleep)) response.write(chunk);
+    response.end();
+  })().catch(() => { response.destroy(); });
 }
 
 export interface ScriptedModelServer {
-  readonly port: number;
+  /** Where the server answers, as an account's `openai-compat` credential names it. */
+  readonly baseURL: string;
   /** Every answer this server gave, in order — what a failing row reads first. */
   readonly answers: readonly ScriptedAnswer[];
   stop(): Promise<void>;
@@ -228,7 +68,7 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
 
       if (url.pathname === '/models' && request.method === 'GET') {
         response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ object: 'list', data: [{ id: SCRIPTED_MODEL_ID, name: 'Fake Live' }] }));
+        response.end(SCRIPTED_MODELS_BODY);
 
         return;
       }
@@ -236,23 +76,21 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
       if (url.pathname === '/chat/completions' && request.method === 'POST') {
         const asked = readScriptedRequest(body);
         const answer = script(asked);
-        const streamed = v.parse(OutboundBodySchema, parseJsonValue(body)).stream === true;
         // Every request's surface, on the run's own log: a script that answered
         // prose where a tool call was meant is read here first.
         process.stderr.write(`scripted-model: tools=${asked.available.join(',')} called=${asked.called.join(',')} users=${JSON.stringify(asked.userTexts)}\n`);
         answers.push(answer);
 
-        if (!streamed) {
-          response.setHeader('content-type', 'application/json');
-          response.end(completionOf(answer, asked.called.length));
+        if (asked.streamed && answer.pace !== undefined) {
+          response.setHeader('content-type', 'text/event-stream');
+          writePaced(response, answer, answer.pace, asked);
 
           return;
         }
 
-        response.setHeader('content-type', 'text/event-stream');
-
-        if (answer.pace === undefined) response.end(streamOf(answer, asked.called.length));
-        else writePaced(response, answer, answer.pace, asked.called.length);
+        const { contentType, body: answered } = scriptedBody(answer, asked);
+        response.setHeader('content-type', contentType);
+        response.end(answered);
 
         return;
       }
@@ -271,7 +109,7 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
   const address = v.parse(v.object({ port: v.number() }), http.address());
 
   return {
-    port: address.port,
+    baseURL: `http://127.0.0.1:${String(address.port)}`,
     answers,
     stop: async () => {
       const closed = Promise.withResolvers<void>();
@@ -281,16 +119,13 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
   };
 }
 
-/** Point the `openai-compat` credential of the account `headers` name at this server. */
-export async function registerScriptedModel(origin: string, port: number, headers: Record<string, string> = {}): Promise<void> {
+/** Point the `openai-compat` credential of the account `headers` name at the scripted model at `baseURL`: a local
+ *  server's, or the deployed tiers' Worker. */
+export async function registerScriptedModel(origin: string, baseURL: string, headers: Record<string, string> = {}): Promise<void> {
   await apiJson(origin, `/api/user/credentials/${SCRIPTED_CREDENTIAL}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({
-      kind: 'openai-compat',
-      baseURL: `http://127.0.0.1:${String(port)}`,
-      apiKey: 'fake-key',
-    }),
+    body: JSON.stringify({ kind: 'openai-compat', baseURL, apiKey: 'fake-key' }),
   });
 }
 

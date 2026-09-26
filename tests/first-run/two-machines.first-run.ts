@@ -39,6 +39,7 @@ import { afterAll, describe, test } from 'vitest';
 import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import type { DeviceAccount } from './device-session';
+import { FLEET_ALPHA as ALPHA, FLEET_BETA as BETA, NAMED_MACHINE_ASK, UNNAMED_MACHINE_ASK } from './asks';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
@@ -46,17 +47,6 @@ import {
 const SUITE = 'First-run · two-machines';
 
 const CASE = 'two-machines' as const;
-
-/**
- * The two machines, by the names a person would type.
- *
- * Deliberately unlike each other and unlike any hostname on the box: the reply
- * has to carry ONE of them, and two names that share a prefix would let a
- * substring check pass on the wrong machine.
- */
-const ALPHA = 'kinu-first-run-alpha';
-
-const BETA = 'kinu-first-run-beta';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
 
@@ -119,11 +109,7 @@ describe(SUITE, () => {
           // alpha behind a consent prompt). The trailing sentence closes the
           // fan-out hatch; the executor's own refusal names both machines, so
           // a model that asks on its own cannot reach both names any other way.
-          const unnamed = await session.prompt(
-            'Run hostname on my device and reply with exactly what it printed. '
-            + 'Do not run it on more than one machine: if my words do not settle which one, '
-            + 'ask me which one.',
-          );
+          const unnamed = await session.prompt(UNNAMED_MACHINE_ASK);
 
           const unnamedReply = await lastAnswer(session, unnamed.landed === 'turn' ? unnamed.text : '');
           // The ask the executor is required to raise, by its own words
@@ -138,10 +124,7 @@ describe(SUITE, () => {
           // Plain words. The prompt names the MACHINE and the COMMAND, and
           // nothing about how the tool takes a device: writing `device:` here
           // would test whether the model can copy an argument name.
-          const named = await session.prompt(
-            `Run the command hostname on my machine called ${ALPHA}, and reply with exactly what `
-            + 'it printed and nothing else.',
-          );
+          const named = await session.prompt(NAMED_MACHINE_ASK);
 
           const namedReply = await lastAnswer(session, named.landed === 'turn' ? named.text : '');
           const alphaLog = alpha.execLog();

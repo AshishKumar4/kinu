@@ -860,6 +860,24 @@ if [ "$SMOKE_FAIL" -ne 0 ]; then
   exit 1
 fi
 
+# ── Step 4a: The tiers' scripted model ────────────────────────────────────
+#
+# The product tiers below check the product, not a model's choices: their
+# workspaces run on the scripted model (scripts/tier-model.ts), which the
+# deployment reaches at its own Worker on a Custom Domain. That is the one way a
+# Worker of this account is fetchable from ours without a service binding or a
+# compatibility flag in production's own config (Workers fetch docs: anything
+# else answers error 1042). Published every run, from this tree, because its
+# script is what the tiers' assertions were written against. That the deployment
+# reaches it is proven by the tier itself, through the deployment's own proxy
+# (scripts/scripted-tier.ts). A check from here cannot: production's
+# `*.kinu.run/*` route answers an outside request for this host before the
+# Custom Domain does.
+echo ""
+echo -e "${BOLD}Step 4a: Publishing the tiers' scripted model${NC}"
+npx wrangler deploy -c scripts/scripted-model-worker.jsonc \
+  || { echo -e "${RED}❌ publishing the scripted model Worker failed${NC}"; exit 1; }
+
 # ── Step 4b: The post-publish tiers ─────────────────────────────────────────
 #
 # AGAINST THE DEPLOYED PRODUCT, every deploy. There is one environment, so the
@@ -880,9 +898,9 @@ fi
 # it four times in one day. It is unconditional now.
 #
 # So this tier drives the DEPLOYED product the way a person does: a fresh
-# workspace per case over the public REST, the real model, a real click in
-# Chrome, two real daemons, real pty bytes. One case per defect, hard assertions
-# only, red on any of them.
+# workspace per case over the public REST, the scripted model (Step 4a) on the
+# deployment's own provider path, a real click in Chrome, two real daemons, real
+# pty bytes. One case per defect, hard assertions only, red on any of them.
 #
 # AFTER THE SMOKE GATE, because the smoke gate answers a cheaper question first:
 # did the deploy land at all. Running this against an origin that is not serving

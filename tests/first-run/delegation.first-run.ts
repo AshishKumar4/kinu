@@ -31,6 +31,9 @@
 import { afterAll, describe, test } from 'vitest';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import type { KinuPublicSession } from '../../evals/src/session';
+import {
+  DELEGATION_ROSTER_ASK as ROSTER_ASK, DELEGATION_TASK_ASK as TASK_ASK, DELEGATION_WORD as WORD, delegationDismissAsk,
+} from './asks';
 import { observeDelegationHires, observeDelegationRetirement } from './delegation-observation';
 import { firstRunReplyText, firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 import {
@@ -40,19 +43,6 @@ import {
 const SUITE = 'First-run · delegation';
 
 const CASE = 'delegation' as const;
-
-/** The one word the task helper is told to say and the root is told to relay. */
-const WORD = 'bramblelight';
-
-const TASK_ASK = 'Use your agents tool to hire one helper: action hire, lifetime task, role task, '
-  + `mission "Reply with exactly the word ${WORD} and nothing else." `
-  + 'The hire waits for its single answer and returns it in the call result. '
-  + 'When it answers, reply with one line: HIRED <its answer>.';
-
-const ROSTER_ASK = 'Use your agents tool to hire one durable helper: action hire, role task, '
-  + 'mission "Stand by for one question." A durable hire omits the lifetime field and stays '
-  + 'in the roster. Then list the roster (agents action list) and reply with one line: '
-  + 'ROSTER <every name the roster shows>.';
 
 /** The exact bound the card subgoal holds: delegation may drain at most this many cards. */
 const SYSTEM_CARD_CEILING = 2;
@@ -144,10 +134,7 @@ describe(SUITE, () => {
 
         const retirement = durableName === null
           ? { retired: false, dismisses: 0 }
-          : observeDelegationRetirement((await promptEvidence(session,
-            `Dismiss the durable helper with your agents tool: action dismiss, agent ${JSON.stringify(durableName)}. `
-            + 'Then list the roster (agents action list) and reply with one line: RETIRED.',
-          )).events, durableName);
+          : observeDelegationRetirement((await promptEvidence(session, delegationDismissAsk(durableName))).events, durableName);
 
         subgoals.push({
           what: 'roster-shows-and-retires',

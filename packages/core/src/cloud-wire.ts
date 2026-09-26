@@ -15,7 +15,8 @@ export const DEV_IDENTITY_HEADER = 'x-kinu-dev-identity-secret' satisfies Platfo
 
 export const DEV_IDENTITY_ACCOUNT_HEADER = 'x-kinu-dev-identity-account';
 
-export const EVAL_ACCOUNTS = ['devices'] as const;
+/** Each its own user: `devices` (the fleet), `scripted` (scripted-model tiers). */
+export const EVAL_ACCOUNTS = ['devices', 'scripted'] as const;
 
 export type EvalAccount = (typeof EVAL_ACCOUNTS)[number];
 

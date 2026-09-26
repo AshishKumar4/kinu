@@ -2220,7 +2220,7 @@ export const LADDER: readonly Gate[] = [
       + 'Each row drives real Chrome through the product\'s own controls against `vite dev` '
       + '(the real Worker and Durable Objects, no fixtures) and asserts only what the page '
       + 'shows. The rows are the same file the deployment runs after the publish, here on the '
-      + 'flows\' scripted model (`flowsModel`), so a flow red here is red before it ships.',
+      + 'product tiers\' scripted model (`tierModel`), so a flow red here is red before it ships.',
     blind: 'what `vite dev` is not: the production isolate, the edge and its preview zone (a '
       + 'slate\'s frame loads through vite-preview-zone.ts on loopback), the deployed assets and '
       + 'the real identity, which are the post-publish row\'s. One viewport, one theme. The '
@@ -2281,7 +2281,7 @@ export const LADDER: readonly Gate[] = [
     phase: 'post-publish',
     deadline: {
       seconds: 1_800,
-      why: 'covers six deployed episodes. Three use a real model over a socket. '
+      why: 'covers the deployed episodes, on the scripted model over a socket. '
         + 'Two attach real daemons; one drives Chrome against the deployed app. '
         + 'The six-case deployed wall is unmeasured. This configured bound stays unchanged '
         + 'until a deployed run measures it and the cost in LADDER.',
@@ -2310,7 +2310,8 @@ export const LADDER: readonly Gate[] = [
       + 'because each test supplied an `async (args) =>` body, a fixture queue, ONE fake daemon '
       + 'and a CR byte. The model, the click, the second machine and the LF byte are what a '
       + 'user brings. This tier brings them: a fresh workspace per case over the public REST, '
-      + 'the real model, a real click in Chrome, two real daemons under their own homes, and '
+      + 'the scripted model making the calls each ask names through the deployment\'s own '
+      + 'provider path, a real click in Chrome, two real daemons under their own homes, and '
       + 'real pty bytes into the shipped TUI against a deployed workspace. Hard assertions '
       + 'only — a `tool_outcome` row that closed clean, a decided row GONE from the queue, the '
       + 'other machine\'s exec log EMPTY, a user turn durable in the deployment\'s own '
@@ -2324,10 +2325,10 @@ export const LADDER: readonly Gate[] = [
       + 'cross-platform fleet is unmeasured. It runs AFTER the upload, so its red is a '
       + 'deployed red: the bad build is already serving when this fails, and the tier reports '
       + 'rather than prevents. It is not a regression net either — a green here says these '
-      + 'six mechanisms work, never that the deploy is good. And its model cases depend on a '
-      + 'model choosing to use the capability it was asked for, so a refusal is red and reads '
-      + 'identically to a broken one until somebody reads the transcript the record keeps.',
-    inputs: { kind: 'live', why: 'drives the DEPLOYED build with real machines, a real browser and live model turns.' },
+      + 'six mechanisms work, never that the deploy is good. And it cannot see whether a real '
+      + 'model makes the calls a case names when asked in plain words: that is the evals\' '
+      + 'question, a pass rate per model.',
+    inputs: { kind: 'live', why: 'drives the DEPLOYED build with real machines, a real browser and the scripted model\'s Worker.' },
   },
   {
     run: 'bash scripts/product-flows-tier.sh',

@@ -18,15 +18,11 @@ import type { JsonValue, RunEvent } from '../../packages/core/src/index';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
+import { SEARCH_ASK as ASK } from './asks';
 
 const SUITE = 'First-run · web-search';
 
 const CASE = 'web-search' as const;
-
-const QUERY = 'Cloudflare Durable Objects documentation';
-
-const ASK = `With the web tool, search the web for "${QUERY}". Then reply with ONE line: `
-  + 'the URL of the FIRST result, exactly as the search gave it.';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
 
