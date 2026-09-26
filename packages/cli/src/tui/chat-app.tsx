@@ -955,10 +955,24 @@ function ChatScene({
     }
   }, [addError, client]);
 
+  const openWorkspaces = useCallback(() => {
+    setNavigationOpen(true);
+    updatePreferences((current) => ({ ...current, wideSidebarOpen: true }));
+  }, [updatePreferences]);
+
   const applySlashOutcome = useCallback(async (outcome: SlashOutcome) => {
     switch (outcome.kind) {
       case 'text':
         if (outcome.cleared) setMessages([]);
+
+        if (outcome.copy !== undefined) rendererInstance?.copyToClipboardOSC52(outcome.copy);
+
+        if (outcome.workspaces) {
+          openWorkspaces();
+
+          return;
+        }
+
         addMessage({ role: 'system', content: outcome.text });
 
         return;
@@ -1057,6 +1071,7 @@ function ChatScene({
     deviceConnect.open,
     onExit,
     openModelPicker,
+    openWorkspaces,
   ]);
 
   const runInputEffects = useCallback((effects: InputEffect[]) => {
@@ -1589,7 +1604,6 @@ function ChatScene({
     pendingConsent, shellApproval: shellApproval.pending, deviceConnect: deviceConnect.state,
   });
 
-  // Auto-copy selected text to clipboard (OSC 52) on mouse release.
   useEffect(() => {
     if (!rendererInstance?.root) return;
     let copied = false;
@@ -2029,7 +2043,6 @@ function composerPlaceholderFor(ready: boolean, isProcessing: boolean): string {
   return isProcessing ? TUI_COMPOSER_STEERING_PLACEHOLDER : TUI_COMPOSER_PLACEHOLDER;
 }
 
-/** Writes a live message's streamed text into the message `ref` names. */
 function writeLiveMessage(
   ref: { readonly current: string | null },
   setMessages: (update: (prev: DisplayMessage[]) => DisplayMessage[]) => void,

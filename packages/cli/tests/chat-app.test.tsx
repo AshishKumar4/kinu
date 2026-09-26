@@ -1,13 +1,16 @@
 /** @jsxImportSource @opentui/react */
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { basename } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { scratchDir } from '@kinu.run/test-utils';
 
-import type { AgentClient, AgentClientStatus } from '../src/agent-client';
+import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
 import { missingSubordinateHistory, type AgentModelMenu, type SubordinateRosterEntry } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat, type FixtureWorkspace } from './helpers/chat-app-fixture';
+import { executeSlashCommand } from '../src/slash-commands';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
 import { SelectRenderable, TextareaRenderable } from '@opentui/core';
 import { flushSync } from '@opentui/react';
@@ -390,6 +393,30 @@ describe('ChatApp terminal interaction', () => {
     expect(candidate.state.closed).toBe(1);
   });
 
+  test('/resume opens the workspace picker, where a workspace is picked with the keys', async () => {
+    const alpha = fakeClient({ name: 'alpha' });
+    const beta = fakeClient({ name: 'beta' });
+    const picked: string[] = [];
+
+    const screen = await mountChat(alpha.client, {
+      listWorkspaces: () => [ALPHA_LOCAL, BETA_LOCAL],
+      onWorkspaceSelect: async (name) => {
+        picked.push(name);
+
+        return beta.client;
+      },
+      width: 80,
+    });
+
+    await screen.mockInput.typeText('/resume');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the workspace picker', () => screen.frame().includes('Beta'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the picked workspace', () => picked.length === 1);
+    expect(picked).toEqual(['beta']);
+  });
+
   test('workspace selection is single-flight while the candidate connects', async () => {
     const alpha = fakeClient({ name: 'alpha' });
     const beta = fakeClient({ name: 'beta', mode: 'cloud' });
@@ -568,6 +595,36 @@ test('!command runs in this directory and shows its output; the agent is sent no
   screen.mockInput.pressEnter();
   await screen.waitFor('the command output', () => screen.frame().includes(`from ${basename(process.cwd())}`));
   expect(sent).toEqual([]);
+});
+
+const EXPORTED_HISTORY = async (): Promise<AgentTranscriptMessage[]> => [
+  { id: '1', role: 'user', content: 'Which table keeps its rows?' },
+  { id: '2', role: 'tool_call', content: '', toolName: 'shell', toolCallId: 't', args: '{"command":"ls"}' },
+  { id: '3', role: 'tool_result', content: 'schema.sql', toolName: 'shell', toolCallId: 't', success: true },
+  { id: '4', role: 'assistant', content: 'The old table keeps its rows.' },
+];
+
+test('/copy hands the last answer to the clipboard, and says when there is none', async () => {
+  const answered = fakeClient({ name: 'copies', history: EXPORTED_HISTORY });
+  const silent = fakeClient({ name: 'silent' });
+
+  expect(await executeSlashCommand(answered.client, '/copy')).toMatchObject({ copy: 'The old table keeps its rows.' });
+  expect(await executeSlashCommand(silent.client, '/copy')).not.toHaveProperty('copy');
+});
+
+test('/export writes the conversation to a Markdown file in its order, and names the file', async () => {
+  const agent = fakeClient({ name: 'exports', history: EXPORTED_HISTORY });
+  const screen = await mountChat(agent.client);
+  const file = join(scratchDir('export'), 'conversation.md');
+
+  await screen.mockInput.typeText(`/export ${file}`);
+  screen.mockInput.pressEnter();
+  await screen.waitFor('the export', () => existsSync(file) && screen.frame().includes('conversation.md'));
+  const written = readFileSync(file, 'utf8');
+  const order = ['Which table keeps its rows?', 'schema.sql', 'The old table keeps its rows.'].map((text) => written.indexOf(text));
+
+  expect(order.every((at) => at >= 0)).toBeTrue();
+  expect(order).toEqual([...order].sort((x, y) => x - y));
 });
 
 test('a turn waiting on a rate limit names the provider, not thinking', async () => {

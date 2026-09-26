@@ -8,6 +8,10 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { loadActiveProfile, updateDefaultAccount } from './default-model';
 import { readAllAccountUsage } from './account-usage';
 import { plural, renderAccountSpendLines, renderSearchTreeLines } from './display';
+import { conversationMarkdown, lastAnswer } from './conversation-export';
+import { listLocalAgentNames } from './agent-list';
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 export interface SlashCommandInfo {
   name: string;
@@ -58,6 +62,9 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/jobs', description: 'List background jobs', run: jobsCommand },
   { name: '/connect', description: 'Connect this computer so the agent can run commands on it', requires: 'consents', run: connectCommand },
   { name: '/stop', description: 'Stop the running turn', run: stopCommand },
+  { name: '/copy', description: 'Copy the last answer to the clipboard', run: copyCommand },
+  { name: '/export', description: 'Write this conversation to a Markdown file', usage: '/export [path]', run: exportCommand },
+  { name: '/resume', description: 'Open another workspace and continue its conversation', run: resumeCommand },
   { name: '/clear', description: 'Start a new conversation in this workspace; files and memory stay', aliases: ['/new'], requires: 'localControls', run: clearCommand },
   { name: '/queue', description: 'Send a message after the running turn ends', usage: '/queue <text>', run: queueCommand },
   { name: '/branch', description: 'Try another direction alongside the running turn', usage: '/branch <text>', run: branchCommand },
@@ -167,7 +174,7 @@ export function resolveCommandDraft(commands: readonly SlashCommandInfo[], draft
 }
 
 export type SlashOutcome =
-  | { kind: 'text'; text: string; cleared?: true }
+  | { kind: 'text'; text: string; cleared?: true; copy?: string; workspaces?: true }
   | { kind: 'status'; status: AgentClientStatus }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
@@ -483,6 +490,32 @@ async function clearCommand({ client, command }: SlashContext): Promise<SlashOut
   await client.localControls.clearConversation();
 
   return { kind: 'text', text: 'A new conversation starts with the next message.', cleared: true };
+}
+
+async function copyCommand({ client }: SlashContext): Promise<SlashOutcome> {
+  const answer = lastAnswer(await client.history());
+
+  if (answer === undefined) return { kind: 'text', text: 'There is no answer to copy yet.' };
+
+  return { kind: 'text', text: `Copied the last answer (${plural(answer.length, 'character')}).`, copy: answer };
+}
+
+async function exportCommand({ client, arg }: SlashContext): Promise<SlashOutcome> {
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/gu, '-');
+  const path = resolve(arg || `kinu-${client.agentName}-${stamp}.md`);
+  writeFileSync(path, conversationMarkdown(client.agentName, await client.history()));
+
+  return { kind: 'text', text: `Wrote this conversation to ${path}` };
+}
+
+function resumeCommand(): SlashOutcome {
+  const names = listLocalAgentNames();
+
+  return {
+    kind: 'text',
+    text: names.length === 0 ? 'No other workspace here.' : `Workspaces here: ${names.join(', ')}. Open one with kinu chat <name>.`,
+    workspaces: true,
+  };
 }
 
 function stopCommand({ client }: SlashContext): SlashOutcome {
