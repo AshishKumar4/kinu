@@ -93,6 +93,13 @@ describe('a throwing host-background check holds the box', () => {
   });
 });
 
+/** Idle host; the container's process list fails every read. */
+class UnreadableProcessesBox extends IdleHostBox {
+  override listProcesses(): Promise<never> {
+    return Promise.reject(new Error('the sandbox /processes endpoint answered 500'));
+  }
+}
+
 /** Busy, and counts how often the beat asks: each ask wakes the owning workspace. */
 class CountingHostBox extends TestBox {
   asks = 0;
@@ -155,6 +162,34 @@ describe('a box rests only once no command it ran is still running', () => {
       await box.devboxHeartbeat();
 
       expect((await box.devboxState()).lastTick?.decision).toBe('quiesce');
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('a process list that never reads holds for one quiet-confirm window, then lets the box rest', async () => {
+    const start = Date.now();
+    const { box, rows } = harness(UnreadableProcessesBox);
+
+    try {
+      await box.devboxStartup();
+      rows.set(LAST_INTERACTION_KEY, start - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
+      const beats = [];
+
+      for (let beat = 1; beat <= 40; beat++) {
+        setSystemTime(start + DEFAULT_DEVBOX_POLICY.idleMs + beat * 60_000);
+        await box.devboxHeartbeat();
+        const tick = (await box.devboxState()).lastTick;
+        beats.push(tick?.decision);
+
+        if (tick?.decision === 'quiesce') {
+          expect(tick.note).toContain('process list');
+          break;
+        }
+      }
+
+      expect(beats.slice(0, 9).every((decision) => decision === 'hold')).toBe(true);
+      expect(beats.at(-1)).toBe('quiesce');
     } finally {
       setSystemTime();
     }

@@ -1393,7 +1393,11 @@ A box now holds for three reasons, checked in this order:
   spec names it. This covers a command an earlier activation left running: a
   detached `npm test` whose caller was evicted is work, and resting would
   kill it. A supervised server does not hold, because the next start restores
-  it.
+  it. A process list that cannot be read holds for one `quietConfirmMs` window
+  of beats, counted durably (`devbox:unreadable-process-beats`, reset by a good
+  read). After that the tick records the reason in `note` and the idle gate
+  decides, so a failing `/processes` cannot keep a box up forever (Review2,
+  2026-09-26).
 - The root's `sandboxInUse` answers yes: a live turn of any actor, or a job
   this activation's `BackgroundJobRunner` drives, re-drives included. The
   runner, not the row: recovery writes the next attempt's wait before the
@@ -1410,6 +1414,8 @@ Tests:
 - `devbox/tests/terminal-activity.test.ts`: five beats in one window ask once
   (red at 5). An earlier activation's live command holds, and the box rests
   once the command exits (red: it quiesced). A supervised server does not hold.
+  A process list that always throws holds 9 beats, then quiesces with the
+  reason in `note` (red: it held for 40 beats).
 - `core/tests/unit-background-job-runner.test.ts`: a re-driven job is in
   flight for its whole drive while its row reads deferred.
 

@@ -115,6 +115,8 @@ const ATTACH_RECOVERY_KEY = 'devbox:attach-recovery';
 
 const LAST_TICK_KEY = 'devbox:last-tick';
 
+const UNREADABLE_PROCESS_BEATS_KEY = 'devbox:unreadable-process-beats';
+
 const BOOT_ID_KEY = 'devbox:boot-id';
 
 /** Persisted so a mid-restore object reset is survivable; a stored `restoring` phase needs recovery.
@@ -2126,7 +2128,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         || this.#startup !== undefined
         || this.#gateRestore !== undefined;
 
-      if (!backgroundWork) backgroundWork = await this.#commandRunning();
+      let note: string | undefined;
+
+      if (!backgroundWork) ({ running: backgroundWork, note } = await this.#commandRunning());
 
       if (!backgroundWork) backgroundWork = await this.#hostBackgroundWork(now);
 
@@ -2153,6 +2157,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         // A quiesce deliberately arms nothing: see `quiesce`.
         armedNext: decision.action !== 'quiesce',
         decision: decision.action,
+        ...(note !== undefined && { note }),
       });
 
       if (decision.action !== 'quiesce') return beat;
@@ -2163,17 +2168,30 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     });
   }
 
-  /** A live process no supervised spec names (D35). */
-  async #commandRunning(): Promise<boolean> {
+  /** See D35. */
+  async #commandRunning(): Promise<{ readonly running: boolean; readonly note?: string }> {
+    let processes: Awaited<ReturnType<typeof this.listProcesses>>;
+
     try {
-      const supervised = new Set((await this.#procSpecs()).map((spec) => spec.processId));
-
-      return (await this.listProcesses()).some((live) => isProcessLive(live.status) && !supervised.has(live.id));
+      processes = await this.listProcesses();
     } catch (error) {
-      console.error(`[devbox] process list unreadable, holding: ${describe({ cause: error })}`);
+      const beats = (await this.ctx.storage.get<number>(UNREADABLE_PROCESS_BEATS_KEY) ?? 0) + 1;
+      await this.ctx.storage.put(UNREADABLE_PROCESS_BEATS_KEY, beats);
+      const reason = describe({ cause: error });
 
-      return true;
+      if (beats < Math.ceil(this.policy.quietConfirmMs / (this.policy.heartbeatSeconds * 1000))) {
+        console.error(`[devbox] process list unreadable (beat ${String(beats)}), holding: ${reason}`);
+
+        return { running: true };
+      }
+
+      return { running: false, note: `the process list was unreadable for ${String(beats)} beats (${reason}); the idle gate decides` };
     }
+
+    await this.ctx.storage.delete(UNREADABLE_PROCESS_BEATS_KEY);
+    const supervised = new Set((await this.#procSpecs()).map((spec) => spec.processId));
+
+    return { running: processes.some((live) => isProcessLive(live.status) && !supervised.has(live.id)) };
   }
 
   /** Reused for a quiet-confirm window: each ask wakes the workspace. */
