@@ -1,11 +1,18 @@
 import { describe, expect, test } from 'bun:test';
 import { compareEvalResults, fisherExact, renderEvalComparison, validateEvalResults } from './comparison';
 
-/** `infra`: the deployment ended the turn in error. `refused`: it answered the turn's request with this failure. */
-type Trial = { pass: boolean; infra?: boolean; refused?: string; productSha?: string; taskVersion?: string; failed?: string; trial?: number };
+/**
+ * `infra`: the deployment ended the turn in error. `refused`: it answered the turn's request with this failure.
+ * `reset`: it answered that the workspace's isolate was reset for memory.
+ */
+type Trial = {
+  pass: boolean; infra?: boolean; refused?: string; reset?: string; productSha?: string; taskVersion?: string; failed?: string; trial?: number;
+};
 
 function outcomeOf(trial: Trial) {
   if (trial.infra === true) return { status: 'error' };
+
+  if (trial.reset !== undefined) return { status: 'reset', message: trial.reset };
 
   return trial.refused === undefined ? { status: 'completed' } : { status: 'refused', message: trial.refused };
 }
@@ -30,7 +37,7 @@ function report(taskId: string, trials: readonly Trial[], side: { productSha: st
             metrics: { modelTurns: 4, toolCalls: 6, toolErrors: 0, providerWaits: 2, providerWaitMs: 30_000 },
             turns: [{
               outcome: outcomeOf(trial),
-              checks: trial.refused === undefined
+              checks: trial.refused === undefined && trial.reset === undefined
                 ? [{ id: trial.failed ?? 'builds', pass: trial.pass, evidence: trial.pass ? { calls: 3 } : { answered: 1 } }]
                 : [],
             }],
@@ -97,6 +104,18 @@ describe('compareEvalResults', () => {
     expect(validateEvalResults(refused, 10)).toHaveLength(1);
     expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
     expect(renderEvalComparison(comparison)).toContain('`t1 deployment.refused` | 0 | 1 |');
+  });
+
+  // A reset may be the build's own regression: never infrastructure, and a build that resets more is red even when
+  // its pass rate held.
+  test('workspaces reset for memory more often is a regression, compared by its own rate, never infrastructure', () => {
+    const reset = 'could not read the events of run: 500 \u2014 Durable Object\'s isolate exceeded its memory limit and was reset.';
+    const resetting = report('t', [...trialsOf(5, 5), ...Array.from({ length: 5 }, () => ({ pass: false, reset }))], NEXT);
+    const comparison = compareEvalResults(report('t', trialsOf(5, 10), BASE), resetting);
+
+    expect(validateEvalResults(resetting, 10)).toHaveLength(1);
+    expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
+    expect(renderEvalComparison(comparison)).toContain('Reset for memory more often: t 0/10 \u2192 5/10');
   });
 
   test('a report that mixes two builds is refused rather than compared', () => {

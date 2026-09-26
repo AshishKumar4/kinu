@@ -1,11 +1,8 @@
 // Both rails pick a UserDO by name: refuse malformed ids and over-budget sources before any
 // idFromName, so a random user id never wakes a Durable Object.
 import { describe, expect, test } from "bun:test";
-import {
-  handlePcRequest,
-  type PcIngressEnv,
-  type PcUserNamespace,
-} from "@kinu.run/core";
+import { type PcIngressEnv, type PcUserNamespace } from "@kinu.run/core";
+import { pcRoutes } from "../src/pc-routes";
 import type { UserCaller } from "@kinu.run/core";
 import { makeKv } from "./helpers/kv";
 import * as v from "valibot";
@@ -86,7 +83,7 @@ function ticketPost(body: string): Request {
 describe("/pc/connect-ticket", () => {
   test("a valid token exchanges for a ticket, and names exactly one DO", async () => {
     const userDO = makeUserDO();
-    const response = await handlePcRequest(ticketPost(JSON.stringify({ user: GOOD_USER, token: GOOD_TOKEN })), makeEnv(userDO));
+    const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ user: GOOD_USER, token: GOOD_TOKEN })), makeEnv(userDO));
     expect(response.status).toBe(200);
     const body = v.parse(TicketReplySchema, await response.json());
     expect(body.ticket).toBe(GOOD_TICKET);
@@ -98,7 +95,7 @@ describe("/pc/connect-ticket", () => {
   test("a malformed user is refused before any namespace lookup", async () => {
     for (const user of ["not-a-user", GOOD_USER.slice(1), GOOD_USER.toUpperCase(), `${GOOD_USER}0`]) {
       const userDO = makeUserDO();
-      const response = await handlePcRequest(ticketPost(JSON.stringify({ user, token: GOOD_TOKEN })), makeEnv(userDO));
+      const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ user, token: GOOD_TOKEN })), makeEnv(userDO));
       expect(response.status).toBe(400);
       expect(userDO.idNames).toEqual([]);
     }
@@ -107,7 +104,7 @@ describe("/pc/connect-ticket", () => {
   test("a malformed token is refused before any namespace lookup", async () => {
     for (const token of ["garbage", "pdt_short", `${GOOD_TOKEN}/no`, "pdt_"]) {
       const userDO = makeUserDO();
-      const response = await handlePcRequest(ticketPost(JSON.stringify({ user: GOOD_USER, token })), makeEnv(userDO));
+      const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ user: GOOD_USER, token })), makeEnv(userDO));
       expect(response.status).toBe(401);
       expect(userDO.idNames).toEqual([]);
       expect(userDO.tokens).toEqual([]);
@@ -117,14 +114,14 @@ describe("/pc/connect-ticket", () => {
   test("an oversized body is a 413 that never reaches parsing or the namespace", async () => {
     const userDO = makeUserDO();
     const bloated = JSON.stringify({ user: GOOD_USER, token: GOOD_TOKEN, padding: "z".repeat(8192) });
-    const response = await handlePcRequest(ticketPost(bloated), makeEnv(userDO));
+    const response = await pcRoutes.fetch(ticketPost(bloated), makeEnv(userDO));
     expect(response.status).toBe(413);
     expect(userDO.idNames).toEqual([]);
   });
 
   test("malformed JSON is a 400", async () => {
     const userDO = makeUserDO();
-    const response = await handlePcRequest(ticketPost("{not json"), makeEnv(userDO));
+    const response = await pcRoutes.fetch(ticketPost("{not json"), makeEnv(userDO));
     expect(response.status).toBe(400);
     expect(userDO.idNames).toEqual([]);
   });
@@ -135,7 +132,7 @@ describe("/pc/connect-ticket", () => {
 
     for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
       const user = knock.toString(16).padStart(32, "0");
-      const response = await handlePcRequest(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
+      const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
       expect(response.status).toBe(401);
     }
 
@@ -143,7 +140,7 @@ describe("/pc/connect-ticket", () => {
 
     for (let knock = 0; knock < 5; knock++) {
       const user = (1000 + knock).toString(16).padStart(32, "f");
-      const response = await handlePcRequest(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
+      const response = await pcRoutes.fetch(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
       expect(response.status).toBe(429);
     }
 
@@ -158,7 +155,7 @@ describe("/pc/connect upgrade", () => {
 
   test("a valid ticket shape forwards the upgrade to the named DO", async () => {
     const userDO = makeUserDO();
-    const response = await handlePcRequest(connectRequest(CONNECT_URL), makeEnv(userDO));
+    const response = await pcRoutes.fetch(connectRequest(CONNECT_URL), makeEnv(userDO));
     expect(await response.text()).toBe("socket accepted");
     expect(userDO.fetched.length).toBe(1);
     expect(userDO.fetched[0].url).toBe(CONNECT_URL);
@@ -174,7 +171,7 @@ describe("/pc/connect upgrade", () => {
 
     for (const url of cases) {
       const userDO = makeUserDO();
-      const response = await handlePcRequest(connectRequest(url), makeEnv(userDO));
+      const response = await pcRoutes.fetch(connectRequest(url), makeEnv(userDO));
       expect(response.status).toBe(400);
       expect(userDO.fetched).toEqual([]);
       expect(userDO.idNames).toEqual([]);
@@ -186,11 +183,11 @@ describe("/pc/connect upgrade", () => {
     const env = makeEnv(userDO);
 
     for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
-      const response = await handlePcRequest(connectRequest(CONNECT_URL), env);
+      const response = await pcRoutes.fetch(connectRequest(CONNECT_URL), env);
       expect(response.status).toBe(200);
     }
 
-    const denied = await handlePcRequest(connectRequest(CONNECT_URL), env);
+    const denied = await pcRoutes.fetch(connectRequest(CONNECT_URL), env);
     expect(denied.status).toBe(429);
     expect(userDO.fetched.length).toBe(KNOCKS_PER_WINDOW);
   });
@@ -201,7 +198,7 @@ describe("the removed daemon-download rails", () => {
   test("/pc/daemon.js and /pc/install are 404, and neither wakes a Durable Object", async () => {
     for (const url of ["https://kinu.test/pc/daemon.js", "https://kinu.test/pc/install"]) {
       const userDO = makeUserDO();
-      const response = await handlePcRequest(new Request(url), makeEnv(userDO));
+      const response = await pcRoutes.fetch(new Request(url), makeEnv(userDO));
       expect(response.status).toBe(404);
       expect(response.headers.get("x-kinu-daemon-sha256")).toBeNull();
       const body = await response.text();
@@ -215,7 +212,7 @@ describe("no route answers with a script", () => {
   test("every /pc path except the two tunnel rails is a 404 without a body to execute", async () => {
     for (const path of ["/pc/daemon.js", "/pc/install", "/pc/agent.js", "/pc/"]) {
       const userDO = makeUserDO();
-      const response = await handlePcRequest(new Request(`https://kinu.test${path}`), makeEnv(userDO));
+      const response = await pcRoutes.fetch(new Request(`https://kinu.test${path}`), makeEnv(userDO));
       expect(response.status).toBe(404);
       expect(response.headers.get("content-type")).not.toBe("application/javascript; charset=utf-8");
       expect(response.headers.get("content-type")).not.toBe("text/x-shellscript; charset=utf-8");

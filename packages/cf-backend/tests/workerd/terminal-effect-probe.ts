@@ -29,6 +29,9 @@ export const HELD_EFFECT: TerminalEffectName = 'event_reply';
 /** A wake armed in the past re-enters immediately; this floor stops it spinning on a row a millisecond short of due. */
 const WAKE_FLOOR_MS = 250;
 
+/** How far out a held wake is armed: past every step of any test, so no delivery lands between them. */
+const HELD_WAKE_MS = 3_600_000;
+
 const ProbeInputSchema = v.object({ answer: v.string() });
 
 export interface ProbeCut {
@@ -127,6 +130,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
     )`);
     this.execRaw(`CREATE TABLE IF NOT EXISTS probe_held_scope (scope TEXT PRIMARY KEY)`);
     this.execRaw(`CREATE TABLE IF NOT EXISTS probe_alarm_runs (at INTEGER NOT NULL)`);
+    this.execRaw(`CREATE TABLE IF NOT EXISTS probe_wakes_held (held INTEGER NOT NULL)`);
     this.initialized = true;
   }
 
@@ -154,7 +158,8 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
       // Arms before replaying: a one-shot alarm must not be consumed with the suffix uncarried.
       // Soonest wins: core arms again after the pass at a later instant, which would push the wake past a due row.
       scheduleRetry: async (atMs) => {
-        const at = Math.max(atMs, Date.now() + WAKE_FLOOR_MS);
+        const held = this.sql`SELECT held FROM probe_wakes_held LIMIT 1`.length > 0;
+        const at = held ? Date.now() + HELD_WAKE_MS : Math.max(atMs, Date.now() + WAKE_FLOOR_MS);
         const armed = await this.ctx.storage.getAlarm();
 
         if (armed !== null && armed <= at) return;
@@ -256,6 +261,16 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
     return this.sql<{ runs: number }>`
       SELECT COUNT(*) AS runs FROM probe_effect_runs
       WHERE effect_key = ${terminalEffectKey(PROBE_SEQUENCE[0], messageId)}`[0]?.runs ?? 0;
+  }
+
+  /**
+   * Arms every later wake of this object an hour out, across evictions. A test that drives recovery with `resume`
+   * holds its wakes, so what it reads is what its own last step stored: a wake at the 250 ms floor was delivered
+   * between an eviction and the next read whenever a loaded box took longer than that to make the read.
+   */
+  holdWakes(): void {
+    this.ensureInit();
+    void this.sql`INSERT INTO probe_wakes_held (held) VALUES (1)`;
   }
 
   /** `jump` advances the injected clock: an owed row is not attempted before its retry instant. */

@@ -1,4 +1,5 @@
 import { codenameFor } from '../identity/naming';
+import { revealMisrepresenting } from '../safety/untrusted-text';
 
 const NARROW_ONLY = /^[\x20-\x7e]*$/;
 
@@ -153,9 +154,9 @@ export function terminalText(value: string): string {
     .replace(CONTROL_CHARACTER, visible);
 }
 
-/** For approval: nothing dropped, so what shows is what runs. */
+/** For approval: nothing dropped or reordered, so what shows is what runs. */
 export function literalText(value: string): string {
-  return value.replace(CONTROL_CHARACTER, visible);
+  return revealMisrepresenting(value.replace(CONTROL_CHARACTER, visible));
 }
 
 /** Blank label means a pre-codename row: show the codename its slug would get (same rule as web `agentTitle`). */

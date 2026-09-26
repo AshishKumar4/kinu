@@ -2,7 +2,6 @@
  * `GET /downloads/kinu-worker-<version>.tar.gz`, served from a bucket because the artifact exceeds the
  * static-asset per-file limit (held in `scripts/deploy.test.ts`). Public, like the rest of `/downloads/*`.
  */
-import { RELEASE_ARTIFACT_ROUTE } from '../deploy/manifest';
 import { err } from './http';
 
 /** Structural slice of an R2 bucket, so the handler compiles in either backend. */
@@ -27,19 +26,12 @@ function metadata(object: ReleaseArtifactObject): Headers {
   });
 }
 
-export async function handleReleaseArtifactRequest(
+export async function serveReleaseArtifact(
   request: Request,
   store: ReleaseArtifactStore | undefined,
-): Promise<Response | null> {
-  const match = RELEASE_ARTIFACT_ROUTE.exec(new URL(request.url).pathname);
-
-  if (match === null) return null;
-
-  if (request.method !== 'GET' && request.method !== 'HEAD') return err(405, 'Method not allowed.');
-
+  key: string,
+): Promise<Response> {
   if (store === undefined) return err(404, 'This deployment publishes no worker release artifacts.');
-
-  const key = match[1] ?? '';
 
   if (request.method === 'HEAD') {
     const head = await store.head(key);

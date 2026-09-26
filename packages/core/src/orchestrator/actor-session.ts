@@ -8,7 +8,7 @@ import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile
 import { promptCacheWarm, PromptCacheRouteSchema, type CachedRequest } from '../prompting/cache-breakpoints';
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
-import { KinuError, renderThrownChain } from '../obs/index';
+import { KinuError, renderThrownChain, type TracedInvocation, type TurnTracing } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
 import { describeLandedSteers, type AcceptedSteer, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
@@ -38,6 +38,7 @@ import { contextWindowForModel } from '../context-window';
 import { SessionHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
+import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
 
 /** A hosted actor shares workspace priorities, but delivers feedback to itself. */
@@ -55,9 +56,11 @@ export interface ActorSessionOptions {
   readonly history: SessionHistory;
   /** Null is recorded and read back as unknown, never filled in from a placeholder version or descriptor. */
   readonly installedBuild: string | null;
+  readonly workspace?: string;
   /** Optional: the revision rows are the durable record; no recorder means no event, never a fabricated one. */
   readonly events?: ContextEventRecorder | null;
   readonly advisor?: ActorAdvisorContext;
+  readonly turns?: () => TurnTracing;
 }
 
 /** Live-instance execution token, not a replacement for a durable turn/run claim. */
@@ -82,6 +85,9 @@ export interface ActorExecutionInput {
   readonly scaffoldStreamOptions?: ScaffoldBridgeOpts['streamOptions'];
   /** A warming lane's cover. */
   readonly cacheKeptAliveUntil?: number | null;
+  /** Steps a resumed turn keeps from its dead activation's run. */
+  readonly resumedSteps?: number;
+  readonly resumedMidStep?: boolean;
 }
 
 const RequestCacheSchema = v.looseObject({ cache: v.optional(PromptCacheRouteSchema) });
@@ -123,7 +129,23 @@ interface ActiveTurn {
   claimSettled: boolean;
 }
 
+interface TurnTally {
+  text: string;
+  answer: string | null;
+  steps: number;
+  completed: boolean;
+  failure: Error | null;
+  admittedMessages: readonly ModelMessage[];
+  readonly pending: Array<Extract<ChatEvent, { type: 'tool-call' }>>;
+}
+
+function newTurnTally(): TurnTally {
+  return { text: '', answer: null, steps: 0, completed: false, failure: null, admittedMessages: [], pending: [] };
+}
+
 export const REVERT_NEEDS_IDLE = 'Stop the turn that is running before you revert the conversation.';
+
+export const CLEAR_NEEDS_IDLE = 'Stop the turn that is running before you start a new conversation.';
 
 /** An actor's mutable execution state, apart from its host, which keeps admission, queueing and settlement and
  *  may share immutable catalogs, never this context, orchestrator or abort. */
@@ -151,7 +173,7 @@ export class ActorSession {
     });
   }
 
-  /** Called once, when the owning session is built. `landed` is recorded only after `onDrain` returns, so a failed write leaves no unseen row. */
+  /** Once, at session build; `landed` is recorded after `onDrain` returns, so a failed write leaves no unseen row. */
   bindSteerPersistence(deps: {
     readonly onAccept?: (steer: AcceptedSteer) => void;
     readonly prepareDrain?: (rows: readonly LandedSteerRow[], atStep: number, reference: MessageReference) => Promise<(selection: ContextSelection) => void>;
@@ -204,6 +226,8 @@ export class ActorSession {
   }
   get landedSteers(): readonly LandedSteerRow[] { return this.landed; }
   get inFlight(): boolean { return this.active !== null && this.active.phase !== 'settling'; }
+  /** Until `finishTurn`, a settling turn owns its claim. */
+  get turnOpen(): boolean { return this.active !== null; }
 
   lastRequestAt(): number | null {
     return this.canonical.requests.lastStep()?.recordedAt ?? null;
@@ -291,6 +315,15 @@ export class ActorSession {
     await this.restoreWorkingHistory();
   }
 
+  async clearConversation(sessionId: string, assertIdle: () => void): Promise<void> {
+    this.canonical.clearConversation(sessionId, () => {
+      if (this.inFlight) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
+      assertIdle();
+    });
+    this.dynamic.unload();
+    await this.restoreWorkingHistory();
+  }
+
   restoreWorkingHistory(): Promise<boolean> {
     return this.restoreAfterPending(async () => {
       const current = await this.canonical.materialize();
@@ -343,7 +376,7 @@ export class ActorSession {
     this.messages.splice(0, this.messages.length, ...opened.messages);
   }
 
-  /** The one rule for where a turn's conversation comes from: a delivery turn (`metadata.drainTurnId`) opens on the settled working revision; others append. */
+  /** A delivery turn (`metadata.drainTurnId`) opens on the settled working revision; others append. */
   async openTurnInput(lease: ActorTurnLease, input: {
     readonly item: Pick<ChatTurnInput, 'metadata'>;
     readonly message: ModelMessage;
@@ -458,47 +491,45 @@ export class ActorSession {
 
   /** Prepare, claim durably, then consume: `startActorTurn` runs nothing until the first `next()`, so a crash
    *  before the claim leaves a turn that provably did nothing. */
-  async execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void | Promise<void>): Promise<ActorExecutionResult> {
+  execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void | Promise<void>): Promise<ActorExecutionResult> {
+    const turns = this.options.turns;
+
+    if (turns === undefined) return this.run(lease, input, emit, undefined);
+
+    return turns().turn(async (trace, span) => {
+      span.setAttribute('kinu.turn.mode', this.mode);
+      const result = await this.run(lease, input, emit, trace);
+      span.setAttribute('kinu.turn.steps', result.steps);
+      span.setAttribute('kinu.turn.interrupted', result.interrupted);
+
+      if (result.failure !== null && !result.interrupted) span.fail(result.failure);
+
+      return result;
+    });
+  }
+
+  private async run(
+    lease: ActorTurnLease,
+    input: ActorExecutionInput,
+    emit: (event: ChatEvent) => void | Promise<void>,
+    trace: TracedInvocation | undefined,
+  ): Promise<ActorExecutionResult> {
     const active = this.requireTurn(lease);
 
     if (active.phase !== 'preparing' || active.profile === null) throw new KinuError('denied', 'a profiled actor turn executes once');
     const profile = active.profile;
-    const allowedTools = new Set(profile.allowedTools);
-    const tools = Object.fromEntries(Object.entries(input.chat.tools ?? {}).filter(([name]) => allowedTools.has(name)));
-    const extensions = new ExtensionHost();
-
-    for (const extension of input.extensions) extensions.register(extension);
-    extensions.register(this.orchestrator.turnExtension);
-    const pending: Array<Extract<ChatEvent, { type: 'tool-call' }>> = [];
-    let text = '';
-    let answer: string | null = null;
-    let steps = 0;
-    let completed = false;
+    const tally = newTurnTally();
     let program: ActorTurnProgram | null = null;
-    let failure: Error | null = null;
     let durableOutput: SessionStream | null = null;
-    let admittedMessages: readonly ModelMessage[] = [];
 
     try {
       active.phase = 'running';
       active.abort.signal.throwIfAborted();
-      const control = { signal: active.abort.signal };
-      program = await prepareActorProgram({
-        ...control, runtime: this.runtime, mode: this.mode, version: input.loopVersion,
-      });
-      const admitted = await this.canonical.materialize();
-      this.messages.splice(0, this.messages.length, ...admitted.messages);
-
-      const claim = await this.options.claims.admit({
-        runId: lease.runId,
-        turnId: lease.turnId,
-        workMode: this.mode,
-        program: programIdentityOf(program, this.options.installedBuild),
-        context: admitted.selection,
-      });
-
+      const prepared = await this.prepareProgram(input.loopVersion, active.abort.signal);
+      program = prepared.program;
+      const claim = await this.admitClaim(lease, program, prepared.selection, input);
       active.claim = claim;
-      admittedMessages = admitted.messages;
+      tally.admittedMessages = prepared.messages;
 
       if (profile.tier.replaced !== null) {
         await emit({ type: 'model-fallback', from: profile.tier.replaced, to: profile.tier.model, reason: 'its provider no longer lists it' });
@@ -506,132 +537,204 @@ export class ActorSession {
 
       durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
       const stream = durableOutput;
-      // Activation names the input's entry after its message; an edit keeps the entry.
-      const turnInput = this.canonical.admittedInput(claim.turnId);
-      const assertClaim = () => this.canonical.assertEpoch(claim.turnId, claim.epoch);
-      let stepEntries: readonly ContextEntry[] = [];
-      let turnOpened = false;
-
-      const events = operationProfileStream(startActorTurn({
-        runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
-        program, scaffoldSpend: input.scaffoldSpend,
-        assertActive: input.assertActive,
-        scaffoldStreamOptions: input.scaffoldStreamOptions,
-        chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
-          measureContext: true,
-          persistStreamPart: part => stream.nativePart(part),
-          persistStep: messages => stream.nativeStep(messages),
-          dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
-          stepContext: {
-            base: async () => {
-              const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null);
-              this.messages.splice(0, this.messages.length, ...base.messages);
-              stepEntries = base.entries;
-
-              // A cold cache makes rewriting free: the stored blocks collapse into one.
-              if (!turnOpened) {
-                turnOpened = true;
-                const last = this.canonical.requests.lastStep();
-
-                if (!promptCacheWarm(last === null ? null : cachedRequestOf(last), Date.now(), input.cacheKeptAliveUntil ?? null)) this.dynamic.reset();
-              }
-
-              this.dynamic.adopt(base.rendered.map(render => ({ text: v.parse(v.string(), render.message.content), before: render.before, after: render.after })));
-              const turnStart = turnInput === null ? -1 : base.entries.findIndex(entry => entry.entryId === turnInput.messageId);
-
-              return { messages: base.messages, changed: base.changed, ...(turnStart >= 0 && { turnStart }) };
-            },
-            consume: async ({ stepNumber, messages, cache }) => {
-              for (const birth of this.dynamic.takeBirths()) {
-                const entry = birth.before === null ? undefined : stepEntries[this.messages.indexOf(birth.before)];
-                await this.canonical.recordRender({ role: 'user', content: birth.text }, { before: entry?.entryId ?? null, replaces: birth.replaces }, claim.turnId, assertClaim);
-              }
-
-              const consumed = await this.options.claims.consume(claim, { index: stepNumber, messages, cache });
-
-              if (stepNumber === 0) admittedMessages = [...messages];
-              stream.beginRequest(consumed.requestId, stepNumber);
-            },
-          } } satisfies ChatOptions,
-      }), captureOperationProfile({
-        actor: this.runtime.actor, profile: active.profile,
-        inputs: active.profileInputs, runId: lease.runId, turnId: lease.turnId,
-      }));
+      const events = this.turnEvents({ lease, active, profile, input, trace, program, claim, stream, tally });
 
       for await (const event of events) {
         this.requireTurn(lease);
         await stream.observe(event);
-
-        switch (event.type) {
-          case 'text-delta': this.orchestrator.acc.onFirstChunk(); text += event.delta; break;
-          case 'tool-call': pending.push(event); break;
-          case 'tool-result': this.recordToolResult(pending, event); break;
-
-          // Reasoning is never the turn's answer.
-          case 'reasoning-delta':
-          case 'model-fallback':
-            break;
-
-          case 'step-finish':
-            steps += 1;
-            this.orchestrator.acc.recordStep({
-              text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
-              response: { messages: event.responseMessages, modelId: event.modelId }, usage: event.usage,
-              request: event.request, context: event.context, account: event.account, fallback: event.fallback,
-            });
-            break;
-          case 'error': {
-            this.orchestrator.acc.hadError = true;
-
-            // The scaffold loop pushes an `error` event rather than throwing, so an empty turn never settles `completed`.
-            // First failure wins; an abort is not one.
-            if (failure === null
-              && !active.abort.signal.aborted
-              && event.message !== INTERRUPTED_TURN) {
-              failure = new Error(event.message);
-            }
-
-            break;
-          }
-
-          case 'done':
-            this.messages.push(...this.orchestrator.inbox.replayInto(event.responseMessages));
-
-            // The runner's `done` answer wins over the concatenated deltas; deltas are the fallback when there is no `done`.
-            if (event.text.trim()) text = event.text;
-
-            if (event.answer !== undefined && event.answer.trim()) answer = event.answer;
-            completed = true;
-            break;
-        }
-
+        this.tallyEvent(tally, event, active.abort.signal);
         await emit(event);
       }
     } catch (cause) {
-      if (!completed) this.messages.push(...this.orchestrator.inbox.recordedMessages());
-      failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
+      if (!tally.completed) this.messages.push(...this.orchestrator.inbox.recordedMessages());
+      tally.failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
 
-      if (failure.message !== INTERRUPTED_TURN && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
+      if (tally.failure.message !== INTERRUPTED_TURN && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
       await emit({ type: 'error', message: renderThrownChain({ cause }) });
     } finally {
       active.phase = 'settling';
-
-      if (active.claim !== null) {
-        await durableOutput?.settle();
-        const settled = await this.canonical.materialize();
-        this.messages.splice(0, this.messages.length, ...settled.messages);
-      }
+      await this.settleOutput(active, durableOutput);
     }
 
+    return this.turnResult(lease, active, tally, program);
+  }
+
+  private async prepareProgram(version: number, signal: AbortSignal): Promise<{
+    readonly program: ActorTurnProgram;
+    readonly selection: ContextSelection;
+    readonly messages: readonly ModelMessage[];
+  }> {
+    const program = await prepareActorProgram({ signal, runtime: this.runtime, mode: this.mode, version });
+    const admitted = await this.canonical.materialize();
+    this.messages.splice(0, this.messages.length, ...admitted.messages);
+
+    return { program, selection: admitted.selection, messages: admitted.messages };
+  }
+
+  /** An unsettled claim: a dead activation left this turn open. */
+  private async admitClaim(
+    lease: ActorTurnLease, program: ActorTurnProgram, context: ContextSelection, input: ActorExecutionInput,
+  ): Promise<ActorTurnClaim> {
+    const previous = this.options.claims.read(lease.turnId);
+
+    const claim = await this.options.claims.admit({
+      runId: lease.runId,
+      turnId: lease.turnId,
+      workMode: this.mode,
+      program: programIdentityOf(program, this.options.installedBuild),
+      context,
+      installedBuild: this.options.installedBuild,
+    });
+
+    if (previous?.status === 'admitted') {
+      recordTurnResumed({
+        workspace: this.options.workspace ?? '',
+        actor: this.runtime.identity.name,
+        stepsKept: input.resumedSteps ?? 0,
+        midStep: input.resumedMidStep ?? false,
+        sameBuild: sameBuildOf(previous.program.build, this.options.installedBuild),
+      });
+    }
+
+    return claim;
+  }
+
+  private turnEvents(turn: {
+    readonly lease: ActorTurnLease;
+    readonly active: ActiveTurn;
+    readonly profile: ResolvedTurnProfile;
+    readonly input: ActorExecutionInput;
+    readonly trace: TracedInvocation | undefined;
+    readonly program: ActorTurnProgram;
+    readonly claim: ActorTurnClaim;
+    readonly stream: SessionStream;
+    readonly tally: TurnTally;
+  }): AsyncIterable<ChatEvent> {
+    const { lease, active, profile, input, program, claim, stream, tally } = turn;
+    const allowedTools = new Set(profile.allowedTools);
+    const tools = Object.fromEntries(Object.entries(input.chat.tools ?? {}).filter(([name]) => allowedTools.has(name)));
+    const extensions = new ExtensionHost();
+
+    for (const extension of input.extensions) extensions.register(extension);
+    extensions.register(this.orchestrator.turnExtension);
+    // Activation names the input's entry after its message; an edit keeps the entry.
+    const turnInput = this.canonical.admittedInput(claim.turnId);
+    const assertClaim = () => this.canonical.assertEpoch(claim.turnId, claim.epoch);
+    let stepEntries: readonly ContextEntry[] = [];
+    let turnOpened = false;
+
+    return operationProfileStream(startActorTurn({
+      runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
+      program, scaffoldSpend: input.scaffoldSpend,
+      assertActive: input.assertActive,
+      scaffoldStreamOptions: input.scaffoldStreamOptions,
+      chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
+        measureContext: true, trace: turn.trace,
+        persistStreamPart: part => stream.nativePart(part),
+        persistStep: messages => stream.nativeStep(messages),
+        dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
+        stepContext: {
+          base: async () => {
+            const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null);
+            this.messages.splice(0, this.messages.length, ...base.messages);
+            stepEntries = base.entries;
+
+            // A cold cache makes rewriting free: the stored blocks collapse into one.
+            if (!turnOpened) {
+              turnOpened = true;
+              const last = this.canonical.requests.lastStep();
+
+              if (!promptCacheWarm(last === null ? null : cachedRequestOf(last), Date.now(), input.cacheKeptAliveUntil ?? null)) this.dynamic.reset();
+            }
+
+            this.dynamic.adopt(base.rendered.map(render => ({ text: v.parse(v.string(), render.message.content), before: render.before, after: render.after })));
+            const turnStart = turnInput === null ? -1 : base.entries.findIndex(entry => entry.entryId === turnInput.messageId);
+
+            return { messages: base.messages, changed: base.changed, ...(turnStart >= 0 && { turnStart }) };
+          },
+          consume: async ({ stepNumber, messages, cache }) => {
+            for (const birth of this.dynamic.takeBirths()) {
+              const entry = birth.before === null ? undefined : stepEntries[this.messages.indexOf(birth.before)];
+              await this.canonical.recordRender({ role: 'user', content: birth.text }, { before: entry?.entryId ?? null, replaces: birth.replaces }, claim.turnId, assertClaim);
+            }
+
+            const consumed = await this.options.claims.consume(claim, { index: stepNumber, messages, cache });
+
+            if (stepNumber === 0) tally.admittedMessages = [...messages];
+            stream.beginRequest(consumed.requestId, stepNumber);
+          },
+        } } satisfies ChatOptions,
+    }), captureOperationProfile({
+      actor: this.runtime.actor, profile,
+      inputs: active.profileInputs, runId: lease.runId, turnId: lease.turnId,
+    }));
+  }
+
+  private tallyEvent(tally: TurnTally, event: ChatEvent, abort: AbortSignal): void {
+    switch (event.type) {
+      case 'text-delta': this.orchestrator.acc.onFirstChunk(); tally.text += event.delta; break;
+      case 'tool-call': tally.pending.push(event); break;
+      case 'tool-result': this.recordToolResult(tally.pending, event); break;
+
+      // Reasoning is never the turn's answer.
+      case 'reasoning-delta':
+      case 'model-fallback':
+      case 'context-admitted':
+        break;
+
+      case 'step-finish':
+        tally.steps += 1;
+        this.orchestrator.acc.recordStep({
+          text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
+          response: { messages: event.responseMessages, modelId: event.modelId }, usage: event.usage,
+          request: event.request, context: event.context, account: event.account, fallback: event.fallback,
+        });
+        break;
+      case 'error': {
+        this.orchestrator.acc.hadError = true;
+
+        // The scaffold loop pushes an `error` event rather than throwing, so an empty turn never settles `completed`.
+        // First failure wins; an abort is not one.
+        if (tally.failure === null && !abort.aborted && event.message !== INTERRUPTED_TURN) {
+          tally.failure = new Error(event.message);
+        }
+
+        break;
+      }
+
+      case 'done':
+        this.messages.push(...this.orchestrator.inbox.replayInto(event.responseMessages));
+
+        // The runner's `done` answer wins; the concatenated deltas are the fallback.
+        if (event.text.trim()) tally.text = event.text;
+
+        if (event.answer !== undefined && event.answer.trim()) tally.answer = event.answer;
+        tally.completed = true;
+        break;
+    }
+  }
+
+  private async settleOutput(active: ActiveTurn, stream: SessionStream | null): Promise<void> {
+    if (active.claim === null) return;
+    await stream?.settle();
+    const settled = await this.canonical.materialize();
+    this.messages.splice(0, this.messages.length, ...settled.messages);
+  }
+
+  private async turnResult(
+    lease: ActorTurnLease,
+    active: ActiveTurn,
+    tally: TurnTally,
+    program: ActorTurnProgram | null,
+  ): Promise<ActorExecutionResult> {
     const output = await this.canonical.outputForTurn(lease.turnId);
-    const outputReferences = output.messages;
-    const said = await this.saidText(outputReferences, text, answer);
+    const said = await this.saidText(output.messages, tally.text, tally.answer);
 
     return {
-      text: said.text, answer, steps, failure, program, claim: active.claim,
-      interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
-      admittedMessages,
-      outputReferences, finalTextReference: said.reference,
+      text: said.text, answer: tally.answer, steps: tally.steps, failure: tally.failure, program, claim: active.claim,
+      interrupted: active.abort.signal.aborted || tally.failure?.message === INTERRUPTED_TURN,
+      admittedMessages: tally.admittedMessages,
+      outputReferences: output.messages, finalTextReference: said.reference,
       outputPartReferences: output.parts,
     };
   }

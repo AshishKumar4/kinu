@@ -1,6 +1,6 @@
 // One flow, four doors (docs/SELF-DEPLOY.md); page, DO, CLI and local installer are adapters.
 export {
-  RELEASE_ARTIFACT_ROUTE, RELEASE_MANIFEST_PATH, ReleaseManifestSchema, parseReleaseManifest,
+  RELEASE_ARTIFACT_NAME, RELEASE_MANIFEST_PATH, ReleaseManifestSchema, parseReleaseManifest,
   workerArtifactPath,
   type BindingKind, type ReleaseBinding, type ReleaseFile, type ReleaseManifest,
   type ReleaseMigration, type ReleaseSecret, type ReleaseSeed, type ReleaseVar,
@@ -10,7 +10,7 @@ export {
 export { HeldBytes, TarArtifact, type ArtifactMember } from './artifact';
 
 export {
-  DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH, isDeployPath,
+  DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH,
 } from './paths';
 
 export { fetchReleaseArtifact, fetchReleaseManifest } from './channel';

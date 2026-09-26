@@ -40,10 +40,11 @@ import {
   KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_SILENCE_MS, PACED_TURN_ANSWER,
   ANSWERED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLATE_TITLE,
   SLEPT_TURN_ASK, TOLD_BACK_ASK, WATCHED_SLEPT_TURN_ASK, toldBackTurn,
-  heldCall, keptTabProbe, pacedFirstTurn, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
+  heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
   startScriptedModel, type HeldCall,
 } from './scripted-model';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
+import { openPublicSocket } from '../tests/first-run/public-socket';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
 
 /** Screenshots land beside the other lanes' evidence, outside the worktree. */
@@ -334,6 +335,8 @@ interface TierVerdicts {
   stamped: StampedCardVerdict | null;
   walkthrough: WalkthroughVerdict | null;
   keptTab: KeptTabVerdict | null;
+  chatScroll: ChatScrollVerdict | null;
+  midThought: MidThoughtVerdict | null;
   state: StateVerdict | null;
 }
 
@@ -346,7 +349,7 @@ const StripGeometrySchema = v.object({
 const observed: TierVerdicts = {
   liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
   bootFailure: null, panel: null, planTabs: null, geometry: null,
-  controls: null, stamped: null, walkthrough: null, keptTab: null, state: null,
+  controls: null, stamped: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, state: null,
 };
 
 /** The lane the rail occupies, measured as the space left of the content
@@ -1553,6 +1556,172 @@ async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Prom
   }
 }
 
+/** Older history pages each chat asked for, and where its view sat: the owner's 2026-09-26 report was a
+ *  chat that paged through its history while he sat still, and did not open at its newest message. */
+interface ChatScrollVerdict {
+  readonly pagesIdleAfterOpen: number;
+  readonly openFromBottom: number;
+  readonly pagesOnScrollToTop: number;
+  readonly pagesIdleAfterReturn: number;
+  readonly returnFromBottom: number;
+}
+
+/** Enough turns that the transcript overruns the socket's newest window by more than one older page. */
+const LONG_CHAT_TURNS = 70;
+
+const HISTORY_PAGE_METHOD = 'getChatHistoryPage';
+
+const CHAT_SCROLLER = `[...document.querySelectorAll('#chat, #chat *')].find((el) => getComputedStyle(el).overflowY === 'auto' && el.scrollHeight > el.clientHeight)`;
+
+const FROM_BOTTOM = `(() => { const el = ${CHAT_SCROLLER}; return el === undefined ? -1 : Math.round(el.scrollHeight - el.scrollTop - el.clientHeight); })()`;
+
+const SCROLL_METRICS = `(() => { const el = ${CHAT_SCROLLER}; return el === undefined ? '' : String(el.scrollHeight) + ':' + String(el.scrollTop); })()`;
+
+/** History pages asked for between two reads, the second taken once the view has stopped growing: a
+ *  runaway walk keeps it growing, so it cannot read settled early. */
+async function pagesUntilSettled(page: Page, counter: RpcCounter): Promise<number> {
+  const before = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
+
+  await painted(page);
+  await settled(page, SCROLL_METRICS);
+
+  return (counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) - before;
+}
+
+async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): Promise<ChatScrollVerdict> {
+  const long = await createWorkspace(origin, { name: `live-row-long-${RUN_ID}`, purpose: 'long chat', model: SCRIPTED_MODEL_SPEC });
+  const other = await createWorkspace(origin, { name: `live-row-short-${RUN_ID}`, purpose: 'short chat', model: SCRIPTED_MODEL_SPEC });
+  const socket = openPublicSocket(origin, { kind: 'loopback' }, `/agents/orchestrator-agent/${long}`, new AbortController().signal);
+
+  if (!(await socket.opened)) throw new Error('the seeding socket did not open');
+
+  for (let turn = 1; turn <= LONG_CHAT_TURNS; turn += 1) await socket.chat(`Long chat turn ${String(turn)}.`);
+  socket.close('seeded');
+
+  const page = await openWorkspace(newPage, origin, long);
+  const counter = await countRpc(page);
+
+  try {
+    await until(page, 'the newest turn to render', `(document.querySelector('#chat')?.textContent ?? '').includes('Long chat turn ${String(LONG_CHAT_TURNS)}.')`);
+
+    // Counted from the socket's first frame: an eager page the pane asks for on its own is the defect.
+    await painted(page);
+    await settled(page, SCROLL_METRICS);
+
+    const pagesIdleAfterOpen = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
+    const openFromBottom = v.parse(v.number(), await page.evaluate(FROM_BOTTOM));
+
+    const beforeTop = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
+
+    await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = 0; })()`);
+    await until(page, 'the older page to land', `(${CHAT_SCROLLER})?.scrollTop > 0`);
+    await settled(page, SCROLL_METRICS);
+
+    const pagesOnScrollToTop = (counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) - beforeTop;
+
+    // A second page further up, then a spot just above the live edge: an offset from the top the reopened chat,
+    // which holds only its newest window, is too short to reach.
+    await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = 0; })()`);
+    await until(page, 'the second older page to land', `(${CHAT_SCROLLER})?.scrollTop > 0`);
+    await settled(page, SCROLL_METRICS);
+    await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = el.scrollHeight - el.clientHeight - 600; })()`);
+    await painted(page);
+    await page.evaluate(`document.querySelector('a[href="/workspace/${other}"]')?.click()`);
+    await until(page, 'the other chat to open', `location.pathname === '/workspace/${other}' && document.querySelector('textarea') !== null`);
+    await page.evaluate(`document.querySelector('a[href="/workspace/${long}"]')?.click()`);
+    await until(page, 'the long chat to reopen', `(document.querySelector('#chat')?.textContent ?? '').includes('Long chat turn ${String(LONG_CHAT_TURNS)}.')`);
+
+    const pagesIdleAfterReturn = await pagesUntilSettled(page, counter);
+    const returnFromBottom = v.parse(v.number(), await page.evaluate(FROM_BOTTOM));
+
+    return { pagesIdleAfterOpen, openFromBottom, pagesOnScrollToTop, pagesIdleAfterReturn, returnFromBottom };
+  } finally {
+    await counter.stop();
+    await page.close();
+  }
+}
+
+/** What each page of a thinking turn showed as a stream error, and what the page reported to the server for it. */
+interface MidThoughtVerdict {
+  readonly reconnectedErrors: readonly string[];
+  readonly joinedErrors: readonly string[];
+  /** Each `POST /api/client-errors` a page made: its status and the event it named. */
+  readonly reports: readonly { readonly status: number; readonly event: string; readonly refusal: string }[];
+  /** A well-formed report posted the way the reporter posts one, and the route's answer. */
+  readonly probe: string;
+}
+
+/** The chat's stream-error card text, if the page shows one. */
+const STREAM_ERROR_TEXT = `[...document.querySelectorAll('[data-chat-error]')].map((node) => (node.textContent ?? '').trim()).filter(Boolean)`;
+
+const ReportBodySchema = v.looseObject({ event: v.string() });
+
+/** Every client error report the page posts, with the server's answer. */
+function recordReports(page: Page, into: { status: number; event: string; refusal: string }[]): void {
+  page.on('response', async (response) => {
+    const request = response.request();
+
+    if (request.method() !== 'POST' || !request.url().endsWith('/api/client-errors')) return;
+    const body = v.safeParse(ReportBodySchema, tolerate<unknown>(() => JSON.parse(request.postData() ?? ''), 'malformed-input'));
+    const refusal = response.status() < 300 ? '' : (await response.text()).slice(0, 200);
+
+    into.push({ status: response.status(), event: body.success ? body.output.event : '?', refusal });
+  });
+}
+
+/** Owner report 2026-09-26: "Received reasoning-delta for missing reasoning part". A page whose socket drops while the
+ *  model reasons, and a page opened on a slow link while it reasons, each join the stream part-way through a
+ *  reasoning part; each must read the whole turn without a stream error. */
+async function measureMidThought(newPage: LiveApp['newPage'], origin: string): Promise<MidThoughtVerdict> {
+  const workspace = await createWorkspace(origin, { name: `live-row-thought-${RUN_ID}`, purpose: 'reasoning probe', model: SCRIPTED_MODEL_SPEC });
+  const reports: { status: number; event: string; refusal: string }[] = [];
+  const sender = await openRecorded(newPage, origin, workspace);
+  const joiner = await newPage();
+
+  recordReports(sender, reports);
+  recordReports(joiner, reports);
+
+  try {
+    await sendInChat(sender, THINKING_TURN_ASK);
+    await until(sender, 'the reasoning to stream', STOP_OFFERED);
+
+    if (v.parse(v.number(), await sender.evaluate(DROP_SOCKETS)) === 0) throw new Error('the page held no open socket to drop');
+
+    // The joining page's acknowledgement takes a round trip while the reasoning keeps streaming.
+    const link = await joiner.createCDPSession();
+
+    await link.send('Network.enable');
+    await link.send('Network.emulateNetworkConditions', { offline: false, latency: 150, downloadThroughput: -1, uploadThroughput: -1 });
+    await joiner.setViewport(DESKTOP);
+    await joiner.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
+
+    const answered = `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(THINKING_TURN_ANSWER)}) || (${STREAM_ERROR_TEXT}).length > 0`;
+
+    await until(joiner, 'the turn to answer or fail', answered);
+    await painted(joiner);
+    // A hidden tab never paints, so the sender is read in front.
+    await sender.bringToFront();
+    await until(sender, 'the turn to answer or fail', answered);
+    await painted(sender);
+
+    const probe = v.parse(v.string(), await sender.evaluate(`fetch('/api/client-errors', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, keepalive: true,
+      body: JSON.stringify({ event: 'client.chat_stream_failed', errorName: 'AI_UIMessageStreamError', route: '/workspace/:agentId',
+        pane: 'root', stack: '', part: { type: 'reasoning-delta', id: 'reasoning-0' } }),
+    }).then(async (answer) => String(answer.status) + ' ' + (await answer.text()).slice(0, 160))`));
+
+    return {
+      probe,
+      reconnectedErrors: v.parse(v.array(v.string()), await sender.evaluate(STREAM_ERROR_TEXT)),
+      joinedErrors: v.parse(v.array(v.string()), await joiner.evaluate(STREAM_ERROR_TEXT)),
+      reports,
+    };
+  } finally {
+    await sender.close();
+    await joiner.close();
+  }
+}
+
 /** Row 7: the run's own state directory, measured on the LOCAL server in both
  *  modes — the question is what the harness booted on, not what a deployment
  *  holds. The roster read goes through UserDO, so its namespace directory is
@@ -1587,7 +1756,7 @@ async function run(): Promise<void> {
     ?? pacedFirstTurn(request, firstTurn) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
     ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
     ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
-    ?? keptTabProbe(request) ?? planWalkthrough(request));
+    ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planWalkthrough(request));
 
   await withLiveApp(async (app) => {
     const { newPage, origin } = app;
@@ -1607,6 +1776,8 @@ async function run(): Promise<void> {
     observed.stamped = await attempt('stamped', () => measureStampedCard(newPage, origin));
     observed.walkthrough = await attempt('walkthrough', () => measureWalkthrough(newPage, origin));
     observed.keptTab = await attempt('kept-tab', () => measureKeptTab(newPage, origin));
+    observed.chatScroll = await attempt('chat-scroll', () => measureChatScroll(newPage, origin));
+    observed.midThought = await attempt('mid-thought', () => measureMidThought(newPage, origin));
     observed.state = await attempt('state', () => measureState(app));
   });
 
@@ -1646,6 +1817,43 @@ describe('the right panel keeps its Work, Files and Env state when the chat tab 
 
   test("the '+' tab's own actor socket answered its pane", () => {
     expect(verdictOf(observed.panel, 'panel').agentSocketFrames).toBeGreaterThan(0);
+  });
+});
+
+describe('a long chat pages older history only when the reader scrolls for it', () => {
+  test('it opens at its newest message and asks for no older page while the reader sits still', () => {
+    const scroll = verdictOf(observed.chatScroll, 'chat-scroll');
+
+    expect(scroll.openFromBottom).toBeLessThan(60);
+    expect(scroll.pagesIdleAfterOpen).toBe(0);
+  });
+
+  test('a scroll to the top asks for exactly one page', () => {
+    expect(verdictOf(observed.chatScroll, 'chat-scroll').pagesOnScrollToTop).toBe(1);
+  });
+
+  test('a return to a spot the reopened chat does not hold opens at the newest message, fetching nothing', () => {
+    const scroll = verdictOf(observed.chatScroll, 'chat-scroll');
+
+    expect(scroll.pagesIdleAfterReturn).toBe(0);
+    expect(scroll.returnFromBottom).toBeLessThan(60);
+  });
+});
+
+describe('a page that joins a reasoning turn part-way reads it whole', () => {
+  test('after its socket drops mid-thought', () => {
+    expect(verdictOf(observed.midThought, 'mid-thought').reconnectedErrors).toEqual([]);
+  });
+
+  test('when it opens on a slow link mid-thought', () => {
+    expect(verdictOf(observed.midThought, 'mid-thought').joinedErrors).toEqual([]);
+  });
+
+  test('a stream-error report the page posts is accepted, not refused in silence', () => {
+    const thought = verdictOf(observed.midThought, 'mid-thought');
+
+    expect(thought.probe).toMatch(/^202 /u);
+    expect(thought.reports.filter((report) => report.status >= 300)).toEqual([]);
   });
 });
 

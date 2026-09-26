@@ -81,14 +81,15 @@ export class ActorClaimStore {
     return () => { this.listeners.delete(listener); };
   }
 
-  async admit(input: { readonly runId: string; readonly turnId: string; readonly workMode: WorkMode; readonly program: ActorProgramIdentity; readonly context: ContextSelection }): Promise<ActorTurnClaim> {
+  async admit(input: { readonly runId: string; readonly turnId: string; readonly workMode: WorkMode; readonly program: ActorProgramIdentity; readonly context: ContextSelection; readonly installedBuild?: string | null }): Promise<ActorTurnClaim> {
     this.actor.assertCurrent();
     const previous = this.read(input.turnId);
     const epoch = (previous?.epoch ?? 0) + 1;
 
     const admission = await this.history.requests.prepare({
       id: `${input.turnId}:${epoch}:admission`, turnId: input.turnId, runId: input.runId, epoch, revision: 0, step: null,
-      source: input.context, metadata: { program: { ...input.program }, workMode: input.workMode },
+      source: input.context,
+      metadata: { program: { ...input.program }, workMode: input.workMode, ...(input.installedBuild !== undefined && { installedBuild: input.installedBuild }) },
     });
 
     const claim = this.transactionSync(() => {

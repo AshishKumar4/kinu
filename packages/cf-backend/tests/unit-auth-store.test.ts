@@ -1,5 +1,8 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, setSystemTime, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as v from 'valibot';
 import {
   consumeOAuthState, createOAuthState, createSession, deriveUserId, revokeSession, verifySession,
   type AuthStoreEnv, type OAuthProfile, type OAuthStateInput, type SessionAuthority,
@@ -302,3 +305,76 @@ describe('the synthetic development identity', () => {
     })).toEqual({ granted: false, status: 400 });
   });
 });
+
+/**
+ * KINU-001, the owner's hardening audit (P0): an unauthenticated request to a public staging route once got the
+ * synthetic identity, with every ordinary authority, because `DEV_USER_EMAIL` alone granted it. Every route that
+ * authenticates a request (the user API, MCP, the CLI routes, the landing) goes through `authenticateRequest`, so it
+ * is asked here of each deployment as `wrangler.jsonc` configures it, on each public host its routes claim, each
+ * deployment holding its own secret.
+ */
+describe('each deployment\'s synthetic identity, as wrangler.jsonc configures it', () => {
+  const DeploymentSchema = v.object({
+    vars: v.object({ DEV_USER_EMAIL: v.string(), CLI_PUBLIC_ORIGIN: v.string() }),
+    routes: v.array(v.object({ pattern: v.string() })),
+  });
+
+  const config = v.parse(
+    v.object({ ...DeploymentSchema.entries, env: v.object({ staging: DeploymentSchema }) }),
+    Bun.JSONC.parse(readFileSync(join(import.meta.dirname, '..', 'wrangler.jsonc'), 'utf8')),
+  );
+
+  /** Every host a deployment's routes answer on, a preview label standing in for the wildcard. */
+  const hosts = (deployment: v.InferOutput<typeof DeploymentSchema>): string[] =>
+    [...new Set(deployment.routes.map((route) => route.pattern.replace(/\/\*$/u, '').replace(/^\*\./u, 'p-1234.')))];
+
+  const SECRETS = { production: 'production-own-secret', staging: 'staging-own-secret' } as const;
+
+  const deployments = {
+    production: { hosts: hosts(config), env: { AUTH_KV: makeKv(), DEV_USER_EMAIL: config.vars.DEV_USER_EMAIL, DEV_IDENTITY_SECRET: SECRETS.production } },
+    staging: { hosts: hosts(config.env.staging), env: { AUTH_KV: makeKv(), DEV_USER_EMAIL: config.env.staging.vars.DEV_USER_EMAIL, DEV_IDENTITY_SECRET: SECRETS.staging } },
+  };
+
+  async function identityOn(host: string, env: Parameters<typeof authenticateRequest>[1], headers: HeadersInit): Promise<string | number> {
+    try {
+      return (await authenticateRequest(new Request(`https://${host}/api/user/workspaces`, { headers }), env)).email;
+    } catch (error) {
+      if (error instanceof AuthError) return error.status;
+      throw error;
+    }
+  }
+
+  test('no public staging host grants it without staging\'s own secret, installed or not', async () => {
+    const { DEV_IDENTITY_SECRET: _installed, ...uninstalled } = deployments.staging.env;
+
+    const requests: HeadersInit[] = [
+      {},
+      { [DEV_IDENTITY_HEADER]: 'guess' },
+      { [DEV_IDENTITY_HEADER]: '' },
+      { [DEV_IDENTITY_ACCOUNT_HEADER]: 'devices' },
+      { [DEV_IDENTITY_HEADER]: SECRETS.production },
+    ];
+
+    // Staging's app host and a preview host are both asked: the routes claim both.
+    const app = new URL(config.env.staging.vars.CLI_PUBLIC_ORIGIN).host;
+
+    expect(deployments.staging.hosts).toContain(app);
+    expect(deployments.staging.hosts).toContain(`p-1234.${app}`);
+
+    for (const host of deployments.staging.hosts) {
+      for (const headers of requests) expect(await identityOn(host, deployments.staging.env, headers)).toBe(401);
+
+      expect(await identityOn(host, uninstalled, { [DEV_IDENTITY_HEADER]: SECRETS.staging })).toBe(401);
+    }
+  });
+
+  test('staging\'s secret acts on staging and on no production host', async () => {
+    const staging = { [DEV_IDENTITY_HEADER]: SECRETS.staging };
+
+    expect(await identityOn(new URL(config.env.staging.vars.CLI_PUBLIC_ORIGIN).host, deployments.staging.env, staging))
+      .toBe(config.env.staging.vars.DEV_USER_EMAIL);
+
+    for (const host of deployments.production.hosts) expect(await identityOn(host, deployments.production.env, staging)).toBe(401);
+  });
+});
+

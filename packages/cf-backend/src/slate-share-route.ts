@@ -8,7 +8,9 @@ import {
   buildSlateShareHost, parseSlateShareLabel, previewHostSuffix, previewPortSuffix, workspaceAddressRefusal,
   ingressAdmitted, labelSigner, reoriginateRequest, SHARE_VIEWER_REQUESTS_PER_MINUTE, type ShareViewerClaim, VIEWER_EXCHANGE_PATH,
 } from '@kinu.run/core';
+import { Hono } from 'hono';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
+import { rawPath, routeError, type FamilyEnv } from './api/context';
 import { VIEWER_COOKIE_NAME } from './auth/session';
 
 const shareSigner = labelSigner('kinu.slate-share.salt', 'kinu.slate-share.v1');
@@ -128,6 +130,86 @@ async function viewerSource(env: Env, request: Request): Promise<string> {
   return viewerSigner.token(secret, `kinu:viewer-source:v1:${request.headers.get('cf-connecting-ip') ?? ''}`);
 }
 
+interface VerifiedShare {
+  readonly env: Env;
+  readonly handle: string;
+  readonly workspace: string;
+}
+
+const shareHostRoutes = new Hono<FamilyEnv<VerifiedShare, object>>({ getPath: rawPath });
+
+// A ticket mints the identity cookie; the consent button mints the consent cookie over the already-proven subject.
+shareHostRoutes.all(VIEWER_EXCHANGE_PATH, async (c) => {
+  const { env, handle, workspace } = c.env;
+  const request = c.req.raw;
+  const url = new URL(request.url);
+  const source = await viewerSource(env, request);
+  const consent = url.searchParams.has('consent');
+  const ticket = consent ? null : await ticketUser(env, workspace, handle, url.searchParams.get('ticket') ?? '');
+
+  const subject = consent
+    ? (await viewerCookie(env, workspace, handle, request.headers.get('cookie')))?.subject ?? source
+    : ticket?.userId;
+
+  if (subject === undefined) {
+    return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+  }
+
+  if (env.AUTH_KV !== undefined
+    && !await ingressAdmitted(env.AUTH_KV, 'slate-share', `${handle}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) {
+    return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
+  }
+
+  const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
+
+  const secret = viewerSigner.secrets(env)[0];
+
+  if (secret === undefined) {
+    return new Response('Share authentication is unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } });
+  }
+
+  const sig = await viewerSigner.token(secret,
+    (consent ? consentMessage : cookieMessage)(workspace, handle, subject, expiresAt));
+
+  return new Response(null, {
+    status: 303,
+    headers: {
+      location: '/',
+      'set-cookie': `${VIEWER_COOKIE_NAME}=${subject}.${expiresAt}.${sig}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=43200`,
+      'cache-control': 'no-store',
+    },
+  });
+});
+
+shareHostRoutes.all('*', async (c) => {
+  const { env, handle, workspace } = c.env;
+  const request = c.req.raw;
+  const url = new URL(request.url);
+  // Read the claim before the sanitizer strips the cookie.
+  const cookie = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
+  const claim: ShareViewerClaim = { userId: cookie?.userId ?? null, source: await viewerSource(env, request), consented: cookie?.consented === true };
+  const headers = sanitizePreviewRequestHeaders(request.headers);
+  headers.delete('x-nimbus-base');
+  const stub: SlateShareHost = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspace));
+
+  // A WebSocket upgrade uses `fetch`: a 101 cannot cross a Durable Object RPC boundary.
+  if (headers.get('upgrade')?.toLowerCase() === 'websocket') {
+    const target = new URL(request.url);
+    target.pathname = `${SLATE_SHARE_PATH}/${handle}/${encodeURIComponent(JSON.stringify(claim))}${url.pathname}`;
+
+    return await stub.fetch(reoriginateRequest(request, target.toString(), { headers, redirect: request.redirect }));
+  }
+
+  return await stub.routeSlateShare(
+    handle,
+    claim,
+    reoriginateRequest(request, request.url, { headers, redirect: request.redirect }),
+    url.pathname,
+  );
+});
+
+shareHostRoutes.onError(routeError);
+
 /** Runs before app authentication; `null` hands the request to the preview parser. */
 export async function handleSlateShareHostRequest(request: Request, env: Env): Promise<Response | null> {
   const suffix = previewHostSuffix(env);
@@ -151,65 +233,5 @@ export async function handleSlateShareHostRequest(request: Request, env: Env): P
     return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   }
 
-  // A ticket mints the identity cookie; the consent button mints the consent cookie over the already-proven subject.
-  if (url.pathname === VIEWER_EXCHANGE_PATH) {
-    const source = await viewerSource(env, request);
-    const consent = url.searchParams.has('consent');
-    const ticket = consent ? null : await ticketUser(env, workspace, handle, url.searchParams.get('ticket') ?? '');
-
-    const subject = consent
-      ? (await viewerCookie(env, workspace, handle, request.headers.get('cookie')))?.subject ?? source
-      : ticket?.userId;
-
-    if (subject === undefined) {
-      return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
-    }
-
-    if (env.AUTH_KV !== undefined
-      && !await ingressAdmitted(env.AUTH_KV, 'slate-share', `${handle}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) {
-      return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
-    }
-
-    const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
-
-    const secret = viewerSigner.secrets(env)[0];
-
-    if (secret === undefined) {
-      return new Response('Share authentication is unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } });
-    }
-
-    const sig = await viewerSigner.token(secret,
-      (consent ? consentMessage : cookieMessage)(workspace, handle, subject, expiresAt));
-
-    return new Response(null, {
-      status: 303,
-      headers: {
-        location: '/',
-        'set-cookie': `${VIEWER_COOKIE_NAME}=${subject}.${expiresAt}.${sig}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=43200`,
-        'cache-control': 'no-store',
-      },
-    });
-  }
-
-  // Read the claim before the sanitizer strips the cookie.
-  const cookie = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
-  const claim: ShareViewerClaim = { userId: cookie?.userId ?? null, source: await viewerSource(env, request), consented: cookie?.consented === true };
-  const headers = sanitizePreviewRequestHeaders(request.headers);
-  headers.delete('x-nimbus-base');
-  const stub: SlateShareHost = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspace));
-
-  // A WebSocket upgrade uses `fetch`: a 101 cannot cross a Durable Object RPC boundary.
-  if (headers.get('upgrade')?.toLowerCase() === 'websocket') {
-    const target = new URL(request.url);
-    target.pathname = `${SLATE_SHARE_PATH}/${handle}/${encodeURIComponent(JSON.stringify(claim))}${url.pathname}`;
-
-    return await stub.fetch(reoriginateRequest(request, target.toString(), { headers, redirect: request.redirect }));
-  }
-
-  return await stub.routeSlateShare(
-    handle,
-    claim,
-    reoriginateRequest(request, request.url, { headers, redirect: request.redirect }),
-    url.pathname,
-  );
+  return await shareHostRoutes.fetch(request, { env, handle, workspace });
 }

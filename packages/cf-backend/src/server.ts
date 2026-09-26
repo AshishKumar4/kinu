@@ -3,28 +3,30 @@
  * (api/app.ts), /pc, Access (/control*), public routes, auth, CSRF, agent sockets.
  */
 
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { routeAgentRequest } from "agents";
 import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
-import { diagnostics, renderThrownChain, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath, hostedActorRoute,
 } from "@kinu.run/core";
-import { firstResponse, handlePcRequest } from "@kinu.run/core";
+import { serveReleaseArtifact } from "@kinu.run/core";
+import { DEPLOY_PAGE_PATH, RELEASE_ARTIFACT_NAME } from "@kinu.run/core/deploy";
 import { servePreviewRequest } from "./preview-proxy";
-import { handleMcpRequest, mcpAgentResolver } from "./mcp-server";
-import { handleCliRequest } from "./cli/routes";
-import { handleReleaseArtifactRequest } from "@kinu.run/core";
-import { handleDeployCallback } from "./deploy/routes";
-import { handleAuthRequest } from "./auth/routes";
-import { handleLandingRequest } from "./landing-route";
+import { mcpAgentResolver, mcpRoutes } from "./mcp-server";
+import { cliPageRoutes } from "./cli/routes";
+import { deployCallbackRoutes } from "./deploy/routes";
+import { authPageRoutes } from "./auth/routes";
+import { landingRoutes } from "./landing-route";
+import { pcRoutes } from "./pc-routes";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
 import { handleNimbusPreviewHostRequest } from "./nimbus-route";
 import {
-  authenticateRequest, AuthError, crossSiteRejection, isPublicPath,
+  authenticateRequest, AuthError, crossSiteRejection,
   type AuthIdentity,
 } from "./auth/session";
 import { containPreviewResponse, hostOf, isPreviewHostRequest, serveApp } from "@kinu.run/core";
@@ -33,13 +35,14 @@ import { ownerCaller } from "@kinu.run/core";
 import { appendIdentityHeaders } from "./cli/rpc-gate";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { err } from "@kinu.run/core";
-import { isControlPlaneSurface, verifyControlPlaneAccess } from "./control-plane/access-gate";
-import {
-  adminDenialAnswer, reportAdminDenial,
-} from "./control-plane/admin-caller";
+import { controlPlaneAccess } from "./control-plane/admin-caller";
+import { CONTROL_PLANE_UI_ROUTE } from "./control-plane/access-gate";
 import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { api } from "./api/app";
+import { beneath, rawParam, rawPath, routeError, type ApiVariables, type FamilyEnv } from "./api/context";
+
+const RELEASE_ARTIFACT_PATH = `/downloads/:artifact{${RELEASE_ARTIFACT_NAME}}`;
 
 // The one actor-bearing DO class: every actor in a workspace shares its SQLite.
 export { OrchestratorAgent } from "./orchestrator";
@@ -158,11 +161,8 @@ async function authenticateCliAgentTicketRequest(
       request: new Request(url.toString(), request),
     };
   } catch (cause) {
-    // A throw here is infrastructure, not a bad ticket: 500, not 401.
-    return new Response(JSON.stringify({ error: renderThrownChain({ cause }) }), {
-      status: 500,
-      headers: { 'content-type': 'application/json' },
-    });
+    // A throw here is infrastructure, not a bad ticket: the router's `onError` answers its class, not 401.
+    throw toKinuError({ doing: 'verifying a CLI agent connect ticket', cause, otherwise: 'io' });
   }
 }
 
@@ -175,7 +175,10 @@ export default {
 
     if (upgrade) return upgrade;
 
-    return withTransportSecurity(await route(request, env, ctx, url), url, env);
+    // Preview hosts serve only previews: no session is ever minted there (core preview/preview-origin.ts).
+    const response = isPreviewHostRequest(url, env) ? await routePreviewHost(request, env) : await worker.fetch(request, env, ctx);
+
+    return withTransportSecurity(response, url, env);
   },
 
   // Cloudflare Email Routing catch-all on EMAIL_DOMAIN.
@@ -212,11 +215,7 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 function wantsHtml(request: Request): boolean {
-  const url = new URL(request.url);
-
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/agents/')) {
-    return false;
-  }
+  if (new URL(request.url).pathname.startsWith('/agents/')) return false;
 
   const accept = request.headers.get('accept') ?? '';
 
@@ -228,16 +227,6 @@ function isPublishedHost(url: URL, env: Env): boolean {
   if (isPreviewHostRequest(url, env)) return true;
 
   return url.hostname.toLowerCase() === hostOf(env.CLI_PUBLIC_ORIGIN);
-}
-
-/** Vite dev paths must never bypass auth on a published host. */
-function isViteDevAssetPath(url: URL, env: Env): boolean {
-  if (isPublishedHost(url, env)) return false;
-
-  return ['/src/', '/@vite/', '/@fs/', '/node_modules/', '/.vite/']
-    .some((prefix) => url.pathname.startsWith(prefix))
-    || url.pathname === '/@react-refresh'
-    || url.pathname === '/client-node-stubs.ts';
 }
 
 /** Nothing upstream redirects: measured 2026-08-16, plain HTTP reached the Worker
@@ -286,84 +275,80 @@ const HOSTED_ACTOR_ROUTE_STATUS: Partial<Readonly<Record<ErrorCode, number>>> = 
   denied: 403,
 };
 
-async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
-  // Preview hosts serve only previews: no session is ever minted there
-  // (core preview/preview-origin.ts).
-  if (isPreviewHostRequest(url, env)) return await routePreviewHost(request, env);
+/** `request`: a CLI ticket stripped. */
+interface WorkerVariables extends ApiVariables {
+  request: Request;
+}
 
-  if (url.pathname.startsWith("/api/")) return await api.fetch(request, env, ctx);
+type WorkerEnv = FamilyEnv<Env, WorkerVariables>;
 
-  if (url.pathname.startsWith("/pc/")) {
-    return handlePcRequest(request, env);
-  }
+/** Registration order is dispatch order. */
+const worker = new Hono<WorkerEnv>({ getPath: rawPath });
 
-  // Cloudflare Access must run before every bypass (auth, public list, ASSETS)
-  // and only on `isControlPlaneSurface` paths, never previews or the app.
-  if (isControlPlaneSurface(url.pathname)) {
-    const access = await verifyControlPlaneAccess(request, env);
+function mount<Bindings extends object, Variables extends object>(
+  family: Hono<FamilyEnv<Bindings, Variables>> & (Env extends Bindings ? unknown : never),
+): void {
+  worker.route('/', family);
+}
 
-    if (!access.ok) {
-      reportAdminDenial(access.denial, url.pathname, request.method);
+const appShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env);
 
-      const answer = adminDenialAnswer(access.denial);
+worker.all('/api/*', beneath<WorkerEnv>('/api', async (c) => api.fetch(c.req.raw, c.env, c.executionCtx)));
 
-      return err(answer.status, answer.message);
-    }
-  }
+mount(pcRoutes);
 
-  const appAuthResp = await handleAuthRequest(request, env, ctx);
+// Access before every bypass.
+worker.use(CONTROL_PLANE_UI_ROUTE, controlPlaneAccess);
 
-  if (appAuthResp) return appAuthResp;
+mount(authPageRoutes);
 
-  const landingResp = await handleLandingRequest(request, env);
+mount(landingRoutes);
 
-  if (landingResp) return landingResp;
+mount(cliPageRoutes);
 
-  const cliResp = await handleCliRequest(request, env);
+// Public: release artifacts, and the deploy door's OAuth return, which its state cookie authorizes.
+worker.get(RELEASE_ARTIFACT_PATH, async (c) => serveReleaseArtifact(c.req.raw, c.env.RELEASES_BUCKET, rawParam(c, 'artifact')));
 
-  if (cliResp) return cliResp;
+worker.all(RELEASE_ARTIFACT_PATH, async () => err(405, 'Method not allowed.'));
 
-  // Public: release artifacts, and the deploy door's OAuth return, which its state cookie authorizes.
-  const publicResp = await firstResponse(request, [
-    (req) => handleReleaseArtifactRequest(req, env.RELEASES_BUCKET),
-    (req) => handleDeployCallback(req, env),
-  ]);
+mount(deployCallbackRoutes);
 
-  if (publicResp) return publicResp;
+// MCP does its own auth: external clients cannot pass the browser-session gate.
+mount(mcpRoutes(mcpAgentResolver));
 
-  // MCP does its own auth: external clients cannot pass the browser-session gate.
-  if (url.pathname.startsWith("/mcp/v1/")) {
-    const mcpResp = await handleMcpRequest(request, env, mcpAgentResolver(env));
+/** Vite dev paths never bypass auth on a published host. */
+const viteDevAsset: MiddlewareHandler<WorkerEnv> = async (c, next) =>
+  (isPublishedHost(new URL(c.req.url), c.env) ? next() : serveApp(c.req.raw, c.env));
 
-    if (mcpResp) return mcpResp;
-  }
+for (const prefix of ['/src', '/@vite', '/@fs', '/node_modules', '/.vite']) {
+  worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, viteDevAsset));
+}
 
-  if (isViteDevAssetPath(url, env)) {
-    return serveApp(request, env);
-  }
+worker.all('/@react-refresh', viteDevAsset);
 
-  if (isPublicPath(url.pathname)) {
-    return serveApp(request, env);
-  }
+worker.all('/client-node-stubs.ts', viteDevAsset);
 
+// Public: the blueprint page's data is signature-checked; the deploy page's run key is its authority.
+for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH]) worker.all(path, appShell);
+
+for (const prefix of ['/auth', '/assets', '/shared/blueprint']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
+
+worker.use('*', async (c, next) => {
+  const request = c.req.raw;
   let identity: AuthIdentity;
-  let authenticatedRequest = request;
-  const cliAgentTicket = await authenticateCliAgentTicketRequest(request, env);
+  let routed = request;
+  const cliAgentTicket = await authenticateCliAgentTicketRequest(request, c.env);
 
   if (cliAgentTicket instanceof Response) return cliAgentTicket;
 
   if (cliAgentTicket) {
     identity = cliAgentTicket.identity;
-    authenticatedRequest = cliAgentTicket.request;
+    routed = cliAgentTicket.request;
   } else {
-    try { identity = await authenticateRequest(request, env); }
+    try { identity = await authenticateRequest(request, c.env); }
     catch (e) {
       if (e instanceof AuthError) return authError(request, e);
-      const message = renderThrownChain({ cause: e });
-
-      return new Response(JSON.stringify({ error: message }), {
-        status: 500, headers: { 'content-type': 'application/json' },
-      });
+      throw e;
     }
   }
 
@@ -373,44 +358,47 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
   // After CSRF so cross-site requests never feed the index; workspaces are
   // indexed only after the ownership check below.
-  observeIdentity(env, identity, { retain: ctx });
+  observeIdentity(c.env, identity, { retain: c.executionCtx });
+  c.set('identity', identity);
+  c.set('request', routed);
+  await next();
+});
 
+worker.all('/agents/*', async (c, next) => {
   // Refuse any namespace/facet path outside the public actor grammar before SDK routing.
-  if (isForeignAgentNamespacePath(url.pathname)) {
-    return err(404, 'Not found');
-  }
+  if (isForeignAgentNamespacePath(c.req.path)) return err(404, 'Not found');
 
-  const agentName = extractOrchestratorAgentName(url.pathname);
+  const agentName = extractOrchestratorAgentName(c.req.path);
 
-  if (agentName) {
-    // routeAgentRequest maps every DO binding by slug; the rejection above keeps
-    // UserDO and KinuSandbox unreachable.
-    const claim = await claimOwnedWorkspace(env, identity.userId, agentName);
+  if (!agentName) return next();
 
-    if (!claim.ok) return err(claim.status, claim.error);
+  // routeAgentRequest maps every DO binding by slug; the rejection above keeps
+  // UserDO and KinuSandbox unreachable.
+  const identity = c.get('identity');
+  const claim = await claimOwnedWorkspace(c.env, identity.userId, agentName);
 
-    observeWorkspaceUse(env, identity, agentName, { retain: ctx });
+  if (!claim.ok) return err(claim.status, claim.error);
 
-    const reqWithId = new Request(authenticatedRequest, {
-      headers: appendIdentityHeaders(authenticatedRequest.headers, identity),
-    });
+  observeWorkspaceUse(c.env, identity, agentName, { retain: c.executionCtx });
 
-    // Routed unchanged; only refuse names this workspace does not host.
-    const hosted = hostedActorRoute(url.pathname);
+  const routed = c.get('request');
+  const reqWithId = new Request(routed, { headers: appendIdentityHeaders(routed.headers, identity) });
 
-    if (hosted) {
-      const root = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(agentName));
-      const target = await root.resolveHostedActorRoute(hosted.name);
+  // Routed unchanged; only refuse names this workspace does not host.
+  const hosted = hostedActorRoute(c.req.path);
 
-      if ('reason' in target) {
-        return Response.json(target, { status: HOSTED_ACTOR_ROUTE_STATUS[target.reason] ?? 500 });
-      }
+  if (hosted) {
+    const root = c.env.OrchestratorAgent.get(c.env.OrchestratorAgent.idFromName(agentName));
+    const target = await root.resolveHostedActorRoute(hosted.name);
+
+    if ('reason' in target) {
+      return Response.json(target, { status: HOSTED_ACTOR_ROUTE_STATUS[target.reason] ?? 500 });
     }
-
-    const agentResp = await routeAgentRequest(reqWithId, env);
-
-    if (agentResp) return agentResp;
   }
 
-  return serveApp(request, env);
-}
+  return (await routeAgentRequest(reqWithId, c.env)) ?? next();
+});
+
+worker.notFound(appShell);
+
+worker.onError(routeError);

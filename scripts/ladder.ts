@@ -1098,16 +1098,32 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/deploy.test.ts',
+    run: 'bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
     // predates the archive unpack-and-install tests; the suite really installs.
-    // Replaces 1s.
+    // Replaces 1s. promote.test.ts joined 2026-09-26 at 0.4 s (13 tests).
     seconds: 87,
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
-      + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails.',
-    blind: 'whether the gates it enumerates pass.',
+      + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails. And a promotion '
+      + 'that ships bytes staging never verified or that production cannot return from: each '
+      + 'promote guard removed in turn fails its own test.',
+    blind: 'whether the gates it enumerates pass, and whether Cloudflare serves what a '
+      + 'promotion uploaded: that is its smoke test\'s, against the deployment.',
+    inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun test --timeout=0 scripts/wake-loops.test.ts',
+    label: 'Wake-loop detection over production telemetry',
+    tier: 'push',
+    // 0.14 s, 5 tests, measured 2026-09-26 on the 24-thread box.
+    seconds: 0.2,
+    catches: 'a wake loop `prod-logs.ts wakes` misses or invents: startups summed per object and hour '
+      + 'before the threshold is read, the threshold hour counted and the hour under it not, a loop '
+      + 'sustained only over consecutive hours, and the longest loop ranked first.',
+    blind: 'the telemetry query and whether production writes the startup rows it counts; the '
+      + 'threshold is one week\'s measurement (2026-09-26).',
     inputs: AMBIENT_BY_NAME,
   },
   {
@@ -2123,6 +2139,25 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'measures the Cloudflare suite under deliberate CPU contention; its subject is the box\'s load at the moment it runs.' },
   },
   {
+    run: 'bun test --timeout=0 scripts/deadline-capability.test.ts',
+    label: 'The runner beside a process holding a capability',
+    tier: 'deploy',
+    seconds: 0.4,
+    catches: 'a runner that crashes on a process it may not read. The leftover scan reads the environment of every '
+      + 'process this user started after the run began, and the kernel refuses that read (EACCES) for one that '
+      + 'holds a capability its reader lacks, as a unit the user manager grants one does; a commit tier crashed on '
+      + 'one. The suite starts such a unit, asserts it runs and its process holds CAP_WAKE_ALARM before claiming '
+      + 'anything, and requires a run beside it to end 0 with the unit left running.',
+    blind: 'a machine whose user manager cannot grant a unit an ambient capability, which fails this suite rather '
+      + 'than passing it on nothing; CI is one, so CI never schedules it (CI_EXEMPT). Other unreadable processes, '
+      + 'another user\'s, are the uid check\'s.',
+    inputs: {
+      kind: 'live',
+      why: 'needs a user systemd manager that grants a unit an ambient capability (CAP_WAKE_ALARM): its subject is '
+        + 'a process of this machine\'s user manager, which no hash over the tree stands for.',
+    },
+  },
+  {
     run: 'bun run verify:lean',
     label: 'Lean proofs, consistency, and traceability',
     tier: 'deploy',
@@ -2625,7 +2660,7 @@ export function liveTierTargets(source = readFileSync(resolve(root, LIVE_TIER_SC
  * This map is the whole CI-vs-deploy delta, so "a green CI badge means
  * everything a deploy checks except these" is a sentence someone can check.
  *
- * One entry. That is the point: on 2026-08-17 the undeclared delta was five
+ * Each entry is a reason. On 2026-08-17 the undeclared delta was five
  * packages, 41 of 42 CLI files, the root suites and both Layergate runs.
  */
 export const CI_EXEMPT = {
@@ -2670,6 +2705,10 @@ export const CI_EXEMPT = {
     + 'every pull request is the objection `gate:infra` already carries. It also holds '
     + 'workerd, Chrome and a scripted model server at once, so it runs at deploy on a machine '
     + 'whose load is known.',
+  'bun test --timeout=0 scripts/deadline-capability.test.ts':
+    'needs a user systemd manager that grants a unit an ambient capability. The GitHub runner\'s starts the unit '
+    + 'and loses it at once (run 36216870343, 2026-09-26: ActiveState inactive), so there the suite fails for '
+    + 'the machine, never the code. It runs at deploy, on the box whose user manager holds CAP_WAKE_ALARM.',
 } satisfies Record<string, string>;
 
 /** Every gate at or below `tier`. */

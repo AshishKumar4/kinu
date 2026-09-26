@@ -1,6 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawnKinuScript } from '../self-spawn';
 import type { Database } from 'bun:sqlite';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import type { HostedAgentRef } from '@kinu.run/core';
@@ -162,7 +162,7 @@ function startDaemon(opts: { quiet?: boolean } = {}): number | null {
   const logFd = openSync(LOG_PATH, 'a');
 
   try {
-    const child = spawn(process.execPath, [entry, 'daemon', 'shell'], {
+    const child = spawnKinuScript(entry, ['daemon', 'shell'], {
       detached: true,
       stdio: ['ignore', logFd, logFd],
       env: process.env,

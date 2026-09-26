@@ -11,7 +11,9 @@ export {
   SPAN_ATTR_INVOCATION,
   type AgentTracing,
   type InvocationKind,
+  type SpanActor,
   type TracedInvocation,
+  type TurnTracing,
 } from './agent-tracing';
 
 export {
@@ -34,6 +36,8 @@ export {
   CODE_WORK_DID_NOT_START,
   ERROR_CODES,
   KinuError,
+  publicMessage,
+  authoredRefusal,
   refusalOf,
   refusedInput,
   renderCauseChain,

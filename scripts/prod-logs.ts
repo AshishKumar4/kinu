@@ -5,34 +5,65 @@
  *  - `live` spawns `wrangler tail` (the OAuth session can do this) and filters
  *    the stream to typed events / substrings. Live-only: Workers keeps no
  *    scrollback for a tail.
- *  - `query` reads HISTORY through the Workers Observability telemetry API,
- *    which refuses the wrangler OAuth token (measured 2026-08-21: HTTP 403,
- *    code 10000). It needs a real API token in KINU_OBS_TOKEN with
- *    "Account > Workers Observability > Read". Mint once: dash.cloudflare.com
- *    -> My Profile -> API Tokens -> Create Token.
+ *  - Everything else reads HISTORY through the Workers Observability telemetry
+ *    API, which refuses the wrangler OAuth token (measured 2026-08-21: HTTP
+ *    403, code 10000). It needs a real API token in KINU_OBS_TOKEN (or
+ *    ~/.config/kinu/obs-token) with "Account > Workers Observability > Read".
+ *    Mint once: dash.cloudflare.com -> My Profile -> API Tokens -> Create Token.
+ *    Retention is about 7 days.
+ *
+ * History commands:
+ *  - `query`: raw events, optionally filtered by a message substring.
+ *  - `timeline <workspace-name|do-id>`: one object's startups by hour, its
+ *    invocation outcomes, top events, failures with a sample cause, and the gaps
+ *    between its startups and between its alarms.
+ *  - `errors`: fleet failures by event and code, with the objects each touched,
+ *    and invocations that did not end `ok`.
+ *  - `wakes`: objects ranked by startups per hour; `findWakeLoops` flags loops.
+ *
+ * A startup is counted by `actor.startup` (one per workspace object
+ * activation). Hours before that event shipped fall back to
+ * `vector.store_registered`, logged once per runtime build: on 2026-09-26
+ * 03:00-03:40Z warm-forge-4d6acc02 logged 78 of them against 74 of the SDK's
+ * "during startup" warnings, so the fallback overcounts by a hosted actor's
+ * build now and then.
  *
  * `--worker` is the SERVICE name the account files events under, not the
  * project's name. It defaults to the top-level `name` in
- * `packages/cf-backend/wrangler.jsonc`, and the
- * account id is read from the same file rather than restated here. A
- * service the account holds no events for is indistinguishable from a name
- * asked wrongly, so the census is worth re-reading before concluding a window
+ * `packages/cf-backend/wrangler.jsonc`, and the account id is read from the
+ * same file rather than restated here.
  *
- * Grouping and percentiles, for anyone extending this: the operator set is
- * `count`, `avg`, `min`, `max`, `sum`, `stddev`, `uniq`, `median`, `p25`,
- * `p75`, `p90`, `p95`, `p99`. There is no `p50` — it answers HTTP 400, and
- * `median` is its name. `$workers.wallTimeMs` mixes request duration with
- * WebSocket lifetime (measured median 119,960 ms on this account), so a
- * latency question has to exclude the upgrades before it means anything.
+ * Telemetry API facts, measured 2026-09-26 unless dated otherwise:
+ *  - The operator set is `count`, `avg`, `min`, `max`, `sum`, `stddev`, `uniq`,
+ *    `median`, `p25`, `p75`, `p90`, `p95`, `p99`. There is no `p50` (HTTP 400).
+ *  - `limit` for grouped results goes inside `parameters`; at the top level
+ *    it is ignored and a grouped query answers 10 groups.
+ *  - A top-level `granularity` in ms sets the series bucket (3,600,000 for
+ *    hours); without it the API picks about 60 buckets.
+ *  - A 7-day grouped query came back sampled (`abr_level` 10, counts in
+ *    multiples of 10); 24-hour windows came back unsampled. Sampled output
+ *    says so.
+ *  - Grouping by a field drops the rows that lack it. `level` is `error` on
+ *    ordinary diagnostics events too, so a failure is a row with a `code`.
+ *  - `$workers.wallTimeMs` mixes request duration with WebSocket lifetime
+ *    (measured median 119,960 ms, 2026-08-21), so a latency question has to
+ *    exclude the upgrades before it means anything.
  *
  * Usage:
- *   bun scripts/prod-logs.ts live [--worker kinu] [--seconds 120] [--grep swarm]
- *   bun scripts/prod-logs.ts query [--worker kinu] [--since 6h] [--grep head.]
+ *   bun scripts/prod-logs.ts live [--seconds 120] [--grep swarm]
+ *   bun scripts/prod-logs.ts query [--since 6h] [--grep head.]
+ *   bun scripts/prod-logs.ts timeline <name|do-id> [--since 24h] [--until ISO] [--json]
+ *   bun scripts/prod-logs.ts errors [--since 24h] [--until ISO] [--json]
+ *   bun scripts/prod-logs.ts wakes [--since 24h] [--until ISO] [--json]
+ * `--since` takes 30m / 6h / 7d or an ISO instant; `--worker` works everywhere.
  */
 import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { parseJsonc } from './jsonc';
+import {
+  WAKE_LOOP_STARTUPS_PER_HOUR, findWakeLoops, type StartupHour, type WakeLoop,
+} from './wake-loops';
 
 /** The account this queries and the default worker, read off the manifest this
  *  inspects rather than restated beside it: a second spelling of the id is how
@@ -45,20 +76,38 @@ const WRANGLER = parseJsonc(readFileSync(WRANGLER_CONFIG, 'utf8'), WranglerRef, 
 
 const ACCOUNT = WRANGLER.account_id;
 
+const HOUR_MS = 3_600_000;
+
+const MODES = ['live', 'query', 'timeline', 'errors', 'wakes'] as const;
+
+type Mode = (typeof MODES)[number];
+
 interface Args {
-  readonly mode: 'live' | 'query';
+  readonly mode: Mode;
+  readonly target: string | null;
   readonly worker: string;
   readonly seconds: number;
-  readonly since: number;
+  readonly from: number;
+  readonly to: number;
   readonly grep: string | null;
+  readonly json: boolean;
+}
+
+const USAGE = 'usage: prod-logs.ts <live|query|timeline <name|do-id>|errors|wakes> '
+  + '[--worker kinu] [--seconds 120] [--since 6h|7d|ISO] [--until ISO] [--grep text] [--json]';
+
+function instant(raw: string, flag: string): number {
+  const at = Date.parse(raw);
+
+  if (Number.isNaN(at)) throw new Error(`${flag} takes an ISO instant, got ${raw}`);
+
+  return at;
 }
 
 function parseArgs(argv: readonly string[]): Args {
-  const mode = argv[0];
+  const mode = MODES.find((m) => m === argv[0]);
 
-  if (mode !== 'live' && mode !== 'query') {
-    throw new Error('usage: prod-logs.ts <live|query> [--worker kinu] [--seconds 120] [--since 6h] [--grep text]');
-  }
+  if (mode === undefined) throw new Error(USAGE);
 
   const opt = (name: string): string | null => {
     const at = argv.indexOf(`--${name}`);
@@ -66,18 +115,29 @@ function parseArgs(argv: readonly string[]): Args {
     return at >= 0 && argv[at + 1] !== undefined ? argv[at + 1] : null;
   };
 
-  const sinceRaw = opt('since') ?? '6h';
-  const sinceMatch = /^(\d+)([hm])$/.exec(sinceRaw);
+  const target = mode === 'timeline' ? argv[1] ?? null : null;
 
-  if (sinceMatch === null) throw new Error(`--since takes 30m / 6h shapes, got ${sinceRaw}`);
-  const sinceMs = Number(sinceMatch[1]) * (sinceMatch[2] === 'h' ? 3_600_000 : 60_000);
+  if (mode === 'timeline' && (target === null || target.startsWith('--'))) throw new Error(USAGE);
+  const to = opt('until') === null ? Date.now() : instant(opt('until') ?? '', '--until');
+  const sinceRaw = opt('since') ?? (mode === 'query' ? '6h' : '24h');
+  const relative = /^(\d+)([mhd])$/.exec(sinceRaw);
+  const unitMs = { m: 60_000, h: HOUR_MS, d: 24 * HOUR_MS };
+
+  const from = relative === null
+    ? instant(sinceRaw, '--since')
+    : to - Number(relative[1]) * unitMs[v.parse(v.picklist(['m', 'h', 'd']), relative[2])];
+
+  if (from >= to) throw new Error(`--since ${sinceRaw} is not before --until`);
 
   return {
     mode,
+    target,
     worker: opt('worker') ?? WRANGLER.name,
     seconds: Number(opt('seconds') ?? '120'),
-    since: sinceMs,
+    from,
+    to,
     grep: opt('grep'),
+    json: argv.includes('--json'),
   };
 }
 
@@ -143,7 +203,87 @@ async function live(args: Args): Promise<void> {
   await new Promise<void>((resolve) => child.on('exit', () => { clearTimeout(stop); resolve(); }));
 }
 
-async function query(args: Args): Promise<void> {
+// ---- telemetry client ------------------------------------------------------
+
+interface Filter {
+  readonly key: string;
+  readonly operation: 'eq' | 'neq' | 'includes' | 'exists';
+  readonly value?: string;
+  readonly type: 'string';
+}
+
+const eq = (key: string, value: string): Filter => ({ key, operation: 'eq', value, type: 'string' });
+
+const HAS_CODE: Filter = { key: 'code', operation: 'exists', type: 'string' };
+
+interface Calculation {
+  readonly operator: 'count' | 'uniq';
+  readonly alias: string;
+  readonly key?: string;
+  readonly keyType?: 'string';
+}
+
+interface QueryBody {
+  readonly view: 'events' | 'calculations';
+  /** Rows of the events view; grouped results take theirs in `parameters`. */
+  readonly limit?: number;
+  readonly granularity?: number;
+  readonly timeframe?: { readonly from: number; readonly to: number };
+  readonly parameters: {
+    readonly datasets: readonly string[];
+    readonly filters: readonly Filter[];
+    readonly calculations?: readonly Calculation[];
+    readonly groupBys?: readonly { readonly type: 'string'; readonly value: string }[];
+    readonly orderBy?: { readonly value: string; readonly order: 'desc' };
+    readonly limit?: number;
+  };
+}
+
+const GroupValue = v.pipe(v.union([v.string(), v.number(), v.boolean()]), v.transform(String));
+
+const Aggregate = v.looseObject({
+  groups: v.optional(v.array(v.looseObject({ key: v.string(), value: GroupValue })), []),
+  value: v.number(),
+  sampleInterval: v.optional(v.number(), 1),
+});
+
+const Calculation = v.looseObject({
+  alias: v.optional(v.string(), ''),
+  aggregates: v.optional(v.array(Aggregate), []),
+  series: v.optional(v.array(v.looseObject({ time: v.string(), data: v.array(Aggregate) })), []),
+});
+
+const TelemetryEvent = v.looseObject({
+  timestamp: v.number(),
+  // A plain log line's source is a string; only a structured line has these keys.
+  source: v.fallback(v.looseObject({
+    event: v.optional(v.string(), ''),
+    code: v.optional(v.string(), ''),
+    cause: v.optional(v.string(), ''),
+    // Only boolean fields are read (`wake.unfinished_arms`); any other value reads false.
+    fields: v.fallback(v.record(v.string(), v.fallback(v.boolean(), false)), {}),
+  }), { event: '', code: '', cause: '', fields: {} }),
+  $workers: v.optional(v.looseObject({
+    durableObjectId: v.optional(v.string()),
+    eventType: v.optional(v.string()),
+    outcome: v.optional(v.string()),
+  }), {}),
+  $metadata: v.optional(v.looseObject({ type: v.optional(v.string()), message: v.optional(v.string()) }), {}),
+});
+
+const TelemetryResult = v.looseObject({
+  result: v.looseObject({
+    calculations: v.optional(v.array(Calculation), []),
+    events: v.optional(v.looseObject({ events: v.optional(v.array(TelemetryEvent), []) }), { events: [] }),
+    statistics: v.optional(v.looseObject({ abr_level: v.optional(v.number(), 1) }), { abr_level: 1 }),
+  }),
+});
+
+type Aggregate = v.InferOutput<typeof Aggregate>;
+
+type TelemetryEvent = v.InferOutput<typeof TelemetryEvent>;
+
+async function readToken(): Promise<string> {
   const tokenFile = `${process.env['HOME']}/.config/kinu/obs-token`;
 
   const token = process.env['KINU_OBS_TOKEN']
@@ -157,44 +297,421 @@ async function query(args: Args): Promise<void> {
     );
   }
 
-  const now = Date.now();
+  return token;
+}
 
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/observability/telemetry/query`,
-    {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        // REQUIRED, and its absence is why this half of the tool had never
-        // answered anything: the endpoint validates the envelope before the
-        // query and rejects a body without it as
-        // `ZodError … path: ["queryId"] … Invalid input` under HTTP 400.
-        // Measured against the live account 2026-08-21. It names the saved
-        // query the run is filed under, so it is a constant rather than a flag.
-        queryId: 'kinu-prod-logs',
-        timeframe: { from: now - args.since, to: now },
-        view: 'events',
-        limit: 500,
-        parameters: {
-          datasets: ['cloudflare-workers'],
-          filters: [
-            { key: '$metadata.service', operation: 'eq', value: args.worker, type: 'string' },
-            ...(args.grep === null ? [] : [{ key: '$metadata.message', operation: 'includes', value: args.grep, type: 'string' }]),
-          ],
-        },
-      }),
-    },
-  );
+class Telemetry {
+  /** Largest sampling level any answer carried; above 1 the counts are estimates. */
+  sampling = 1;
 
-  const body: unknown = await response.json();
+  constructor(
+    private readonly token: string,
+    private readonly args: Args,
+  ) {}
 
-  if (!response.ok) {
-    throw new Error(`telemetry query answered ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
+  /** The answer's JSON text; `result` parses it. */
+  async raw(body: QueryBody): Promise<string> {
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/observability/telemetry/query`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${this.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          // REQUIRED: the endpoint rejects a body without it as `ZodError … path:
+          // ["queryId"]` under HTTP 400 (measured 2026-08-21). It names the saved
+          // query the run is filed under, so it is a constant rather than a flag.
+          queryId: 'kinu-prod-logs',
+          timeframe: { from: this.args.from, to: this.args.to },
+          ...body,
+        }),
+      },
+    );
+
+    const answer = await response.text();
+
+    if (!response.ok) throw new Error(`telemetry query answered ${response.status}: ${answer.slice(0, 300)}`);
+
+    return answer;
   }
 
-  console.log(JSON.stringify(body, null, 1));
+  private filters(filters: readonly Filter[]): Filter[] {
+    return [eq('$metadata.service', this.args.worker), ...filters];
+  }
+
+  private async result(body: QueryBody): Promise<v.InferOutput<typeof TelemetryResult>['result']> {
+    const { result } = v.parse(TelemetryResult, JSON.parse(await this.raw(body)));
+    this.sampling = Math.max(this.sampling, result.statistics.abr_level);
+
+    return result;
+  }
+
+  /** One count per group (plus `uniq` of `distinct` when asked), largest first. */
+  async count(opts: {
+    filters: readonly Filter[];
+    groupBy: readonly string[];
+    distinct?: string;
+    limit?: number;
+  }): Promise<{ groups: string[]; count: number; distinct: number }[]> {
+    const calculations: Calculation[] = [{ operator: 'count', alias: 'count' }];
+
+    if (opts.distinct !== undefined) {
+      calculations.push({ operator: 'uniq', key: opts.distinct, keyType: 'string', alias: 'distinct' });
+    }
+
+    const result = await this.result({
+      view: 'calculations',
+      parameters: {
+        datasets: ['cloudflare-workers'],
+        filters: this.filters(opts.filters),
+        calculations,
+        groupBys: opts.groupBy.map((value) => ({ type: 'string', value })),
+        orderBy: { value: 'count', order: 'desc' },
+        limit: opts.limit ?? 50,
+      },
+    });
+
+    const valueOf = (alias: string, groupKey: string): number => {
+      const calc = result.calculations.find((c) => c.alias === alias);
+
+      return calc?.aggregates.find((a) => keyOf(a) === groupKey)?.value ?? 0;
+    };
+
+    const counted = result.calculations.find((c) => c.alias === 'count')?.aggregates ?? [];
+
+    return counted
+      .map((a) => ({ groups: a.groups.map((g) => g.value), count: a.value, distinct: valueOf('distinct', keyOf(a)) }))
+      .sort((a, b) => b.count - a.count);
+  }
+
+  /** Counts per group per hour. */
+  async hourly(opts: { filters: readonly Filter[]; groupBy: readonly string[]; limit?: number }): Promise<{ groups: string[]; hour: number; count: number }[]> {
+    const result = await this.result({
+      view: 'calculations',
+      granularity: HOUR_MS,
+      parameters: {
+        datasets: ['cloudflare-workers'],
+        filters: this.filters(opts.filters),
+        calculations: [{ operator: 'count', alias: 'count' }],
+        groupBys: opts.groupBy.map((value) => ({ type: 'string', value })),
+        orderBy: { value: 'count', order: 'desc' },
+        limit: opts.limit ?? 200,
+      },
+    });
+
+    return (result.calculations[0]?.series ?? []).flatMap((bucket) => bucket.data.map((a) => ({
+      groups: a.groups.map((g) => g.value),
+      // The API writes UTC bucket starts as `YYYY-MM-DD HH:MM:SS`.
+      hour: Math.floor(Date.parse(`${bucket.time.replace(' ', 'T')}Z`) / HOUR_MS) * HOUR_MS,
+      count: a.value,
+    })));
+  }
+
+  /** `from` narrows the window: a sampled events view drops rows, and gaps between kept rows are fiction. */
+  async events(filters: readonly Filter[], limit: number, from = this.args.from): Promise<TelemetryEvent[]> {
+    const result = await this.result({
+      view: 'events',
+      limit,
+      timeframe: { from, to: this.args.to },
+      parameters: { datasets: ['cloudflare-workers'], filters: this.filters(filters) },
+    });
+
+    return [...result.events.events].sort((a, b) => a.timestamp - b.timestamp);
+  }
+}
+
+function keyOf(a: Aggregate): string {
+  return a.groups.map((g) => g.value).join('\u0000');
+}
+
+// ---- shared readings -------------------------------------------------------
+
+/** Newest first: `actor.startup` counts an activation exactly; the fallback covers older hours. */
+const STARTUP_MARKERS = [
+  { event: 'actor.startup', nameField: 'fields.workspace' },
+  { event: 'vector.store_registered', nameField: 'fields.namespace' },
+] as const;
+
+const DO_ID = '$workers.durableObjectId';
+
+const HEX_ID = /^[0-9a-f]{64}$/;
+
+interface ObjectHour extends StartupHour {
+  readonly name: string;
+  readonly marker: string;
+}
+
+/** Per object and hour, the first marker that counted anything there. */
+async function startupHours(t: Telemetry, extra: readonly Filter[]): Promise<ObjectHour[]> {
+  const chosen = new Map<string, ObjectHour>();
+  const names = new Map<string, string>();
+
+  for (const marker of STARTUP_MARKERS) {
+    const rows = await t.hourly({ filters: [eq('event', marker.event), ...extra], groupBy: [DO_ID, marker.nameField], limit: 500 });
+
+    for (const row of rows) {
+      const [object = '', name = ''] = row.groups;
+
+      if (name !== '') names.set(object, name);
+      const key = `${object}@${row.hour}`;
+
+      if (chosen.has(key) || row.count === 0) continue;
+      chosen.set(key, { object, hour: row.hour, startups: row.count, name: '', marker: marker.event });
+    }
+  }
+
+  return [...chosen.values()].map((row) => ({ ...row, name: names.get(row.object) ?? '' }));
+}
+
+function iso(ms: number): string {
+  return new Date(ms).toISOString().replace('.000Z', 'Z');
+}
+
+function hourLabel(ms: number): string {
+  return new Date(ms).toISOString().slice(5, 13).replace('T', ' ') + 'Z';
+}
+
+interface GapStats {
+  readonly count: number;
+  readonly medianSec: number | null;
+  readonly p10Sec: number | null;
+  readonly p90Sec: number | null;
+  readonly buckets: Record<string, number>;
+}
+
+const GAP_BUCKETS: readonly [string, number][] = [
+  ['<10s', 10], ['10-60s', 60], ['1-5m', 300], ['5-60m', 3600], ['>1h', Number.POSITIVE_INFINITY],
+];
+
+function gapStats(timestamps: readonly number[]): GapStats {
+  const gaps = timestamps.slice(1).map((t, i) => (t - timestamps[i]) / 1000).sort((a, b) => a - b);
+  const pick = (p: number): number | null => gaps.length === 0 ? null : Math.round(gaps[Math.floor(p * (gaps.length - 1))]);
+  const buckets: Record<string, number> = {};
+
+  for (const gap of gaps) {
+    const [label] = GAP_BUCKETS.find(([, upper]) => gap < upper) ?? GAP_BUCKETS[GAP_BUCKETS.length - 1];
+    buckets[label] = (buckets[label] ?? 0) + 1;
+  }
+
+  return { count: timestamps.length, medianSec: pick(0.5), p10Sec: pick(0.1), p90Sec: pick(0.9), buckets };
+}
+
+function renderGaps(label: string, gaps: GapStats, capped: boolean): string {
+  if (gaps.count < 2) return `  ${label}: ${gaps.count} seen, no gaps to measure`;
+
+  const spread = GAP_BUCKETS.map(([b]) => `${b} ${gaps.buckets[b] ?? 0}`).join(', ');
+
+  return `  ${label}: ${gaps.count}${capped ? ' (event cap reached: the oldest are missing)' : ''}; `
+    + `gap median ${gaps.medianSec}s, p10 ${gaps.p10Sec}s, p90 ${gaps.p90Sec}s; ${spread}`;
+}
+
+function samplingNote(t: Telemetry): string[] {
+  return t.sampling > 1
+    ? [`note: the API sampled this window (level ${t.sampling}); counts are estimates. Narrow --since for exact counts.`]
+    : [];
+}
+
+// ---- commands --------------------------------------------------------------
+
+async function query(t: Telemetry, args: Args): Promise<void> {
+  const filters: Filter[] = args.grep === null ? [] : [{ key: '$metadata.message', operation: 'includes', value: args.grep, type: 'string' }];
+
+  console.log(await t.raw({ view: 'events', limit: 500, parameters: { datasets: ['cloudflare-workers'], filters: [eq('$metadata.service', args.worker), ...filters] } }));
+}
+
+/** Name -> object id through the startup markers, which log the workspace name. */
+async function resolveObject(t: Telemetry, target: string): Promise<{ id: string; name: string; others: string[] }> {
+  if (HEX_ID.test(target)) return { id: target, name: '', others: [] };
+
+  for (const marker of STARTUP_MARKERS) {
+    const rows = await t.count({ filters: [eq('event', marker.event), eq(marker.nameField, target)], groupBy: [DO_ID], limit: 10 });
+
+    if (rows.length > 0) {
+      return { id: rows[0].groups[0], name: target, others: rows.slice(1).map((r) => r.groups[0]) };
+    }
+  }
+
+  throw new Error(`no startup in the window names "${target}"; widen --since (telemetry keeps about 7 days) or pass the object id`);
+}
+
+const EVENT_CAP = 2000;
+
+/** Gaps are read over the window's last 6 hours: 24-hour windows came back unsampled, 7-day ones did not. */
+const CADENCE_WINDOW_MS = 6 * HOUR_MS;
+
+async function timeline(t: Telemetry, args: Args): Promise<void> {
+  const target = await resolveObject(t, args.target ?? '');
+  const scope = [eq(DO_ID, target.id)];
+  const hours = await startupHours(t, scope);
+  const name = target.name || (hours.find((h) => h.name !== '')?.name ?? '');
+  const outcomes = await t.count({ filters: [...scope, eq('$metadata.type', 'cf-worker-event')], groupBy: ['$workers.eventType', '$workers.outcome'] });
+  const events = await t.count({ filters: scope, groupBy: ['event'], limit: 15 });
+  const failures = await t.count({ filters: [...scope, HAS_CODE], groupBy: ['event', 'code'], limit: 20 });
+  const failureSamples = await t.events([...scope, HAS_CODE], 200);
+
+  const causes = failures.map((f) => {
+    const sample = failureSamples.filter((e) => e.source.event === f.groups[0] && e.source.code === f.groups[1]).at(-1);
+
+    return { event: f.groups[0], code: f.groups[1], count: f.count, cause: sample?.source.cause ?? '', at: sample?.timestamp ?? null };
+  });
+
+  const cadenceFrom = Math.max(args.from, args.to - CADENCE_WINDOW_MS);
+  const startupEvents: number[] = [];
+
+  for (const marker of STARTUP_MARKERS) {
+    const seen = await t.events([...scope, eq('event', marker.event)], EVENT_CAP, cadenceFrom);
+
+    if (seen.length > 0) {
+      startupEvents.push(...seen.map((e) => e.timestamp));
+      break;
+    }
+  }
+
+  const alarms = await t.events([...scope, eq('$workers.eventType', 'alarm'), eq('$metadata.type', 'cf-worker-event')], EVENT_CAP, cadenceFrom);
+  const arms = await t.events([...scope, eq('event', 'wake.unfinished_arms')], 50);
+
+  const report = {
+    object: target.id,
+    name,
+    otherObjectsWithThisName: target.others,
+    window: { from: iso(args.from), to: iso(args.to) },
+    startupsByHour: hours.sort((a, b) => a.hour - b.hour).map((h) => ({ hour: iso(h.hour), startups: h.startups, marker: h.marker })),
+    outcomes: outcomes.map((o) => ({ eventType: o.groups[0], outcome: o.groups[1], count: o.count })),
+    topEvents: events.map((e) => ({ event: e.groups[0], count: e.count })),
+    failures: causes,
+    cadence: {
+      from: iso(cadenceFrom),
+      startups: gapStats(startupEvents),
+      startupsCapped: startupEvents.length >= EVENT_CAP,
+      alarms: gapStats(alarms.map((e) => e.timestamp)),
+      alarmsCapped: alarms.length >= EVENT_CAP,
+    },
+    unfinishedArms: arms.map((e) => ({ at: iso(e.timestamp), arms: Object.entries(e.source.fields).filter(([, on]) => on).map(([arm]) => arm) })),
+    sampling: t.sampling,
+  };
+
+  if (args.json) {
+    console.log(JSON.stringify(report, null, 1));
+
+    return;
+  }
+
+  const nonOk = report.outcomes.filter((o) => o.outcome !== 'ok');
+
+  const lines = [
+    `${name || '(unnamed)'} ${target.id}`,
+    `window ${report.window.from} .. ${report.window.to}`,
+    ...(target.others.length > 0 ? [`other objects logging this name: ${target.others.join(', ')}`] : []),
+    '',
+    'startups by hour:',
+    ...(report.startupsByHour.length === 0 ? ['  none'] : report.startupsByHour.map((h) => `  ${hourLabel(Date.parse(h.hour))}  ${String(h.startups).padStart(5)}${h.marker === 'actor.startup' ? '' : '  (by vector.store_registered)'}`)),
+    '',
+    'invocation outcomes:',
+    ...report.outcomes.map((o) => `  ${o.eventType.padEnd(12)} ${o.outcome.padEnd(18)} ${o.count}`),
+    ...(nonOk.length > 0 ? [`  not ok: ${nonOk.reduce((s, o) => s + o.count, 0)} of ${report.outcomes.reduce((s, o) => s + o.count, 0)}`] : []),
+    '',
+    'top events:',
+    ...report.topEvents.map((e) => `  ${String(e.count).padStart(6)}  ${e.event}`),
+    '',
+    'failures (event / code, newest cause):',
+    ...(causes.length === 0 ? ['  none'] : causes.flatMap((c) => [
+      `  ${String(c.count).padStart(6)}  ${c.event} / ${c.code}${c.at === null ? '' : `  last ${iso(c.at)}`}`,
+      ...(c.cause === '' ? [] : [`          ${c.cause.replace(/\s+/g, ' ').slice(0, 300)}`]),
+    ])),
+    '',
+    `wake cadence since ${report.cadence.from}:`,
+    renderGaps('startups', report.cadence.startups, report.cadence.startupsCapped),
+    renderGaps('alarm invocations', report.cadence.alarms, report.cadence.alarmsCapped),
+    ...(arms.length === 0 ? [] : ['  unfinished arms (once per streak or change):', ...report.unfinishedArms.map((a) => `    ${a.at}  ${a.arms.join(',')}`)]),
+    ...samplingNote(t),
+  ];
+
+  console.log(lines.join('\n'));
+}
+
+async function errors(t: Telemetry, args: Args): Promise<void> {
+  const failures = await t.count({ filters: [HAS_CODE], groupBy: ['event', 'code'], distinct: DO_ID, limit: 40 });
+
+  const outcomes = await t.count({
+    filters: [eq('$metadata.type', 'cf-worker-event'), { key: '$workers.outcome', operation: 'neq', value: 'ok', type: 'string' }],
+    groupBy: ['$workers.outcome', '$workers.eventType', '$workers.entrypoint'],
+    distinct: DO_ID,
+  });
+
+  const report = {
+    window: { from: iso(args.from), to: iso(args.to) },
+    failures: failures.map((f) => ({ event: f.groups[0], code: f.groups[1], count: f.count, objects: f.distinct })),
+    invocations: outcomes.map((o) => ({ outcome: o.groups[0], eventType: o.groups[1], entrypoint: o.groups[2], count: o.count, objects: o.distinct })),
+    sampling: t.sampling,
+  };
+
+  if (args.json) {
+    console.log(JSON.stringify(report, null, 1));
+
+    return;
+  }
+
+  console.log([
+    `window ${report.window.from} .. ${report.window.to}`,
+    '',
+    'failures by event / code (count, objects):',
+    ...report.failures.map((f) => `  ${String(f.count).padStart(7)}  ${String(f.objects).padStart(5)}  ${f.event} / ${f.code}`),
+    '',
+    'invocations not ok (count, objects):',
+    ...(report.invocations.length === 0 ? ['  none'] : report.invocations.map((o) => `  ${String(o.count).padStart(7)}  ${String(o.objects).padStart(5)}  ${o.outcome} ${o.eventType} ${o.entrypoint}`)),
+    ...samplingNote(t),
+  ].join('\n'));
+}
+
+async function wakes(t: Telemetry, args: Args): Promise<void> {
+  const hours = await startupHours(t, []);
+  const names = new Map(hours.map((h) => [h.object, h.name] as const));
+  const loops = findWakeLoops(hours);
+  const byObject = new Map<string, { startups: number; peak: number }>();
+
+  for (const h of hours) {
+    const seen = byObject.get(h.object) ?? { startups: 0, peak: 0 };
+    byObject.set(h.object, { startups: seen.startups + h.startups, peak: Math.max(seen.peak, h.startups) });
+  }
+
+  const quiet = [...byObject.entries()]
+    .filter(([object]) => !loops.some((l) => l.object === object))
+    .sort(([, a], [, b]) => b.peak - a.peak)
+    .slice(0, 10);
+
+  const render = (loop: WakeLoop) => ({ ...loop, name: names.get(loop.object) ?? '', firstLoopHour: iso(loop.firstLoopHour), lastLoopHour: iso(loop.lastLoopHour) });
+
+  const report = {
+    window: { from: iso(args.from), to: iso(args.to) },
+    objects: byObject.size,
+    loops: loops.map(render),
+    nextBusiest: quiet.map(([object, s]) => ({ object, name: names.get(object) ?? '', startups: s.startups, peakPerHour: s.peak })),
+    sampling: t.sampling,
+  };
+
+  if (args.json) {
+    console.log(JSON.stringify(report, null, 1));
+
+    return;
+  }
+
+  console.log([
+    `window ${report.window.from} .. ${report.window.to}; ${report.objects} objects started`,
+    '',
+    `loops (an hour at ${WAKE_LOOP_STARTUPS_PER_HOUR}+ startups; SUSTAINED = 2+ consecutive hours):`,
+    ...(loops.length === 0 ? ['  none'] : report.loops.map((l) => `  ${l.sustained ? 'SUSTAINED' : 'burst    '}  peak ${String(l.peakPerHour).padStart(4)}/h  ${String(l.loopHours).padStart(3)} loop h (run ${l.longestRunHours})  ${hourLabel(Date.parse(l.firstLoopHour))} .. ${hourLabel(Date.parse(l.lastLoopHour))}  ${l.object.slice(0, 16)}  ${l.name}`)),
+    '',
+    'busiest others:',
+    ...report.nextBusiest.map((o) => `  peak ${String(o.peakPerHour).padStart(4)}/h  total ${String(o.startups).padStart(5)}  ${o.object.slice(0, 16)}  ${o.name}`),
+    ...samplingNote(t),
+  ].join('\n'));
 }
 
 const args = parseArgs(process.argv.slice(2));
 
-await (args.mode === 'live' ? live(args) : query(args));
+if (args.mode === 'live') {
+  await live(args);
+} else {
+  const t = new Telemetry(await readToken(), args);
+  const run = { query, timeline, errors, wakes }[args.mode];
+  await run(t, args);
+}

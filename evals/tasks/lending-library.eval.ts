@@ -362,6 +362,7 @@ already out keep their due dates.`,
       });
     },
   }],
+  evidence: (call) => listLoans((method, input) => call('library', method, input)),
 });
 
 defineTaskEval(task);

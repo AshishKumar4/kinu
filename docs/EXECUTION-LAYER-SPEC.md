@@ -197,7 +197,7 @@ is durable. `packages/devbox/README.md` specifies the chain;
 instruments validate against.
 
 `KinuSandbox` names `BACKUP_BUCKET` and `PREVIEW_HOST_SUFFIX`, supplies
-`hasSandboxBackgroundWork` and `acceptSandboxLifecycleFailure` through the
+`sandboxInUse` and `acceptSandboxLifecycleFailure` through the
 root-agent stub, and installs egress interception. `enableInternet` false plus
 `interceptHttps` true means only HTTP/S and DNS leave, through the
 vault-substituting handler (`cf-backend/src/egress/outbound.ts`). `/workspace`

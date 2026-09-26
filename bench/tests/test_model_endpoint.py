@@ -10,6 +10,7 @@ endpoint WAS production and its credential fallback WAS his signed-in session.
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,7 +34,7 @@ WRANGLER = (REPO_ROOT / "packages/cf-backend/wrangler.jsonc").read_text(encoding
 
 class ModelEndpointTest(unittest.TestCase):
     def test_the_default_endpoint_is_the_deployment(self) -> None:
-        """Single environment: the default names the deployment itself."""
+        """The default names production, the eval target a run gets unless it names staging."""
         self.assertEqual(
             DEFAULT_WORKERS_AI_MODEL_ID,
             "@cf/zai-org/glm-5.3",
@@ -55,12 +56,14 @@ class ModelEndpointTest(unittest.TestCase):
         )
 
     def test_product_proxy_uses_the_eval_service_token(self) -> None:
-        token = resolve_bearer_token(
-            DEFAULT_KINU_AI_BASE_URL,
-            "workers-ai",
-            environ={"KINU_EVAL_TOKEN": " pta_eval "},
-        )
-        self.assertEqual(token, "pta_eval")
+        for url in (DEFAULT_KINU_AI_BASE_URL, f"{EVAL_STAGING_ORIGIN}/api/user/ai/v1"):
+            with self.subTest(url=url):
+                token = resolve_bearer_token(
+                    url,
+                    "workers-ai",
+                    environ={"KINU_EVAL_TOKEN": " pta_eval "},
+                )
+                self.assertEqual(token, "pta_eval")
 
     def test_product_proxy_never_reads_the_operators_signed_in_session(self) -> None:
         """The defect this whole module exists to prevent.
@@ -195,9 +198,10 @@ class EvalTargetTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     assert_eval_target(url, env)
 
-    def test_deployment_and_loopback_are_the_allowlist(self) -> None:
+    def test_the_deployments_and_loopback_are_the_allowlist(self) -> None:
         for url in (
             f"{EVAL_DEPLOYMENT_ORIGIN}/api/user/ai/v1",
+            f"{EVAL_STAGING_ORIGIN}/api/user/ai/v1",
             "http://localhost:5173/api/user/ai/v1",
             "http://127.0.0.1:8787/api/user/ai/v1",
         ):
@@ -219,8 +223,10 @@ class EvalTargetTest(unittest.TestCase):
         for url in (
             "https://kinu.run.evil.example/api/user/ai/v1",
             "https://evil.kinu.run/api/user/ai/v1",
-            "https://staging.kinu.run/api/user/ai/v1",
             f"http://{EVAL_DEPLOYMENT_ORIGIN.removeprefix('https://')}/api/user/ai/v1",
+            "https://staging.kinu.run.evil.example/api/user/ai/v1",
+            "https://evil.staging.kinu.run/api/user/ai/v1",
+            f"http://{EVAL_STAGING_ORIGIN.removeprefix('https://')}/api/user/ai/v1",
         ):
             with self.subTest(url=url):
                 with self.assertRaises(ValueError):
@@ -235,20 +241,22 @@ class SourceOfTruthTest(unittest.TestCase):
     """These origins are copies of facts in ``wrangler.jsonc``.
 
     Read out of the deployment rather than restated, so a rename there fails here
-    instead of silently pointing every benchmark at a host that is gone. Single
-    environment since 2026-09-10: there is no staging block, and the one
-    deployment origin is the eval target.
+    instead of silently pointing every benchmark at a host that is gone.
+    Production is the top level and staging its one named environment.
     """
 
-    def test_production_origin_is_the_one_wrangler_serves_users_from(self) -> None:
-        self.assertNotIn('"staging": {', WRANGLER)
-        self.assertIn(f'"CLI_PUBLIC_ORIGIN": "{PRODUCTION_ORIGIN}"', WRANGLER)
+    def test_the_origins_are_the_ones_wrangler_serves_from(self) -> None:
+        self.assertEqual(
+            re.findall(r'"CLI_PUBLIC_ORIGIN":\s*"([^"]+)"', WRANGLER),
+            [PRODUCTION_ORIGIN, EVAL_STAGING_ORIGIN],
+        )
 
-    def test_the_two_languages_agree_on_the_deployment_origin(self) -> None:
+    def test_the_two_languages_agree_on_the_deployment_origins(self) -> None:
         source = (
             REPO_ROOT / "packages/test-utils/src/eval-identity.ts"
         ).read_text(encoding="utf-8")
         self.assertIn(f"EVAL_DEPLOYMENT_ORIGIN = '{EVAL_DEPLOYMENT_ORIGIN}'", source)
+        self.assertIn(f"EVAL_STAGING_ORIGIN = '{EVAL_STAGING_ORIGIN}'", source)
 
 
 if __name__ == "__main__":

@@ -13,11 +13,11 @@ import {
   withCloudflareAccount,
 } from '@kinu.run/core';
 import { buildCliInstallCommand } from '@kinu.run/core';
-import { cliRoutes, handleCliRequest } from '../src/cli/routes';
+import { cliPageRoutes, cliRoutes } from '../src/cli/routes';
 import { serveFamily } from './helpers/api';
 import { escapeHtml } from '@kinu.run/core';
 import { sanitizeReturnTo } from '../src/auth/store';
-import { handleAuthRequest, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
+import { authPageRoutes, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
 import {
   bootstrappedProfile, cliAccount, staticRouteCliEnv, unreachableAssets, unreachableNamespace, userAccount,
   workerContext,
@@ -39,6 +39,10 @@ import { present } from '@kinu.run/test-utils';
 const { default: worker } = await import('../src/server');
 
 const APP = 'https://kinu.example.com';
+
+const authPages = serveFamily(authPageRoutes, { ctx: workerContext() });
+
+const cliPages = serveFamily(cliPageRoutes);
 
 const ORIGIN = APP;
 
@@ -144,7 +148,7 @@ describe('auth and desktop security invariants', () => {
     });
 
     const link = new Request(`${LOCAL}/cli/auth?code=${encodeURIComponent(started.userCode)}`);
-    const page = present(await handleCliRequest(link, env), 'the approval page');
+    const page = present(await cliPages(link, env), 'the approval page');
 
     expect(page.status).toBe(200);
     expect(await poll(started.deviceToken)).toMatchObject({ status: 'pending' });
@@ -154,7 +158,7 @@ describe('auth and desktop security invariants', () => {
     form.set('userCode', started.userCode);
     form.set('csrf', present((await formFields(page)).get('csrf'), 'the approval form\'s csrf field'));
 
-    const approved = await handleCliRequest(new Request(`${LOCAL}/cli/auth`, {
+    const approved = await cliPages(new Request(`${LOCAL}/cli/auth`, {
       method: 'POST', headers: { origin: LOCAL, cookie: cookie ?? '' }, body: form,
     }), env);
 
@@ -565,7 +569,7 @@ async function cloudflareSignInSteps(
     const startUrl = new URL(`${origin}/auth/cloudflare/start`);
 
     if (options.returnTo !== undefined) startUrl.searchParams.set('return_to', options.returnTo);
-    const start = await handleAuthRequest(new Request(startUrl), env);
+    const start = await authPages(new Request(startUrl), env);
 
     if (!start) throw new Error('auth route did not handle the sign-in start');
     const state = new URL(start.headers.get('location') ?? '').searchParams.get('state');
@@ -580,7 +584,7 @@ async function cloudflareSignInSteps(
     callbackUrl.searchParams.set('code', 'auth-code-1');
     const redeem = () => new Request(callbackUrl.toString(), { headers: { cookie: setCookie.split(';')[0] } });
     const callback = redeem();
-    const done = await handleAuthRequest(redeem(), env);
+    const done = await authPages(redeem(), env);
 
     if (!done) throw new Error('auth route did not handle the callback');
 
@@ -656,7 +660,7 @@ async function cloudflareSignInSteps(
     expect(new URL(plain.headers.get('location') ?? '', ORIGIN).pathname).toBe('/');
 
     const logout = new Request(`${ORIGIN}/logout`, { headers: { cookie: sessionCookie(done) } });
-    const out = present(await handleAuthRequest(logout, env), 'logout');
+    const out = present(await authPages(logout, env), 'logout');
 
     expect(setCookieNamed(out, SESSION_COOKIE_NAME)).toContain('Max-Age=0');
     expect(sessions.size).toBe(0);
@@ -701,7 +705,7 @@ async function cloudflareSignInSteps(
     expect(done.status).toBe(302);
     expect(kv.keys()).not.toContain(`oauth-state:${await sha256Hex(raw)}`);
     // A second use of the same state and cookie finds nothing to redeem.
-    expect((await handleAuthRequest(callback, env))?.status).not.toBe(302);
+    expect((await authPages(callback, env))?.status).not.toBe(302);
   });
 
 
@@ -774,7 +778,7 @@ async function cloudflareSignInSteps(
 
 
   test('browser install page is HTML while the terminal installer stays raw shell', async () => {
-    const installPage = await handleCliRequest(new Request('https://kinu.example.com/install'), PUBLIC_ROUTE_ENV);
+    const installPage = await cliPages(new Request('https://kinu.example.com/install'), PUBLIC_ROUTE_ENV);
     expect(installPage?.status).toBe(200);
     expect(installPage?.headers.get('content-type')).toContain('text/html');
     expect(installPage?.headers.get('content-security-policy')).toContain('https://static.cloudflareinsights.com');
@@ -788,7 +792,7 @@ async function cloudflareSignInSteps(
     expect(html).not.toContain('View the raw installer');
     expect(html).not.toContain('href="/install.sh"');
 
-    const installScript = await handleCliRequest(new Request('https://kinu.example.com/install.sh'), PUBLIC_ROUTE_ENV);
+    const installScript = await cliPages(new Request('https://kinu.example.com/install.sh'), PUBLIC_ROUTE_ENV);
     expect(installScript?.status).toBe(200);
     expect(installScript?.headers.get('content-type')).toContain('text/x-shellscript');
     const script = await present(installScript, 'the /install.sh response').text();
@@ -796,7 +800,7 @@ async function cloudflareSignInSteps(
     expect(script).toContain('setup --origin "$KINU_ORIGIN" --account-only');
     expect(script).toContain("grep -F '$HOME/.kinu/bin'");
 
-    const installScriptHead = await handleCliRequest(
+    const installScriptHead = await cliPages(
       new Request('https://kinu.example.com/install.sh', { method: 'HEAD' }),
       PUBLIC_ROUTE_ENV,
     );
@@ -807,7 +811,7 @@ async function cloudflareSignInSteps(
   });
 
   test('the CLI launcher takes the deployed build artifacts and verifies both checksums', async () => {
-    const shim = await handleCliRequest(new Request('https://kinu.example.com/downloads/kinu'), PUBLIC_ROUTE_ENV);
+    const shim = await cliPages(new Request('https://kinu.example.com/downloads/kinu'), PUBLIC_ROUTE_ENV);
     expect(shim?.status).toBe(200);
     const script = await present(shim, 'the /downloads/kinu response').text();
     expect(script).toContain('CLI_DIR="$CLI_ROOT/current"');
@@ -824,7 +828,7 @@ async function cloudflareSignInSteps(
     const syntaxCheck = Bun.spawnSync(['bash', '-n'], { stdin: Buffer.from(script) });
     expect(syntaxCheck.exitCode).toBe(0);
 
-    const shimHead = await handleCliRequest(
+    const shimHead = await cliPages(
       new Request('https://kinu.example.com/downloads/kinu', { method: 'HEAD' }),
       PUBLIC_ROUTE_ENV,
     );

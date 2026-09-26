@@ -236,6 +236,24 @@ floor, because fabric kept `prev`. The guard now compares the counter read
 before the adopt with the value after it (`before + 1`, which fabric takes
 only once its put resolved); measured by "a bump that did not persist refuses
 the open, on a boot that is not the first" in the same suite.
+Reversed 2026-09-25 (bc405ef307): Kinu takes the generation again, as one
+upsert and read inside `transactionSync` (`takeWorkspaceGeneration`), and
+fabric's `adoptGeneration` is no longer called. Fabric's adopt reads the row
+and writes it in two steps, so two openers of one database file (the CLI's
+daemon and its chat, on a workspace's first open) can take the same
+generation, and so the same pid floor. `unit-workspace-generation`'s "two
+openers booting one workspace at once take different generations, and both
+boot" was red under fabric's adopt (both took 1) and is green with the
+transaction. The same commit sets `busy_timeout` on the CLI runtime; without
+it the second opener's write failed with "database is locked" at once.
+Re-measured under both shapes by review (job 143): 6 concurrent `bun`
+processes × 3 rounds on one WAL file, plus 3 behind a 1.5 s `BEGIN
+IMMEDIATE` holder, took 21 distinct generations with no failure under
+busy_timeout 30000; with busy_timeout 0, 5 of 18 openers failed. The row, the
+table and the floor are unchanged, so the counter continues across the switch.
+The read-back guard of the 2026-09-16 amendment is gone: the transaction
+either commits the bump or throws, and "a generation write that fails refuses
+the open and leaves the counter where it was" pins that.
 
 ## Chat loop
 
@@ -409,6 +427,32 @@ The CLI host needs nothing. It folds only trigger times into its process timer
 `reconcileDurableWake`, so its next wake is its own next start, and the drain
 debounce lives as long as the process that owns the workspace. Two
 mechanisms, one rule each; nothing to reconcile.
+
+D7. The terminal wake starts a delegated turn; a fiber runs it. Amends D3's
+cloud arm, and the rule that everything owed rides the one durable terminal
+wake (in force since 2026-08-31, not logged here). Decided 2026-09-25, commit
+9359ce96e. History, for the reader who asks "weren't we on fibers once?": lanes
+ran on fibers before 2026-08-31, moved onto the wake from 2026-08-31 and
+2026-09-17 (D3), and delegation went back to a fiber here.
+What stays: the wake arms and recovers, `drainAssignments` is still the one
+runner, and admission never runs a turn. What changes: `maintenanceWork` calls
+`startDelegationDrain`, which opens one `runFiber('delegation:drain')` and
+returns. An evicted fiber needs no re-drive, because its turn claim re-pends
+through the next wake.
+Why: run inside the wake, a delegated turn held the alarm until its 15-minute
+wall. On warm-forge-4d6acc02 (2026-09-25, 14:00-19:57 UTC), task-j7gjjr slept
+on an 8-day Retry-After inside the alarm. Telemetry shows 20 consecutive
+`alarm exceededWallTime` events of about 900,000 ms, and each reset closed every
+socket. Measured in the workerd pool, `tests/workerd/hire.test.ts`, "the wake
+that starts a delegated turn returns while that turn is still running": at
+f41eb85615 it hung until killed at 180 s, with no wake return while the child
+was parked; at 9359ce96e it passed, with two wake returns while one delegated
+turn was in flight. D3's own rows (hire cases 1-6) re-ran under the new shape,
+green with the rest of hire.test and two-turn.test (26 of 26). Per-case times
+were not recorded.
+Hypothesis until production shows it: `alarm exceededWallTime` stops for
+delegated turns once this shape is deployed. miniflare enforces no alarm wall,
+so only Workers Logs can confirm it.
 
 
 ## Deploy ladder

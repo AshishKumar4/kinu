@@ -21,6 +21,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 ### Changed
 
 - **A plan waiting for review no longer locks the conversation.** The composer no longer switches to Plan when a plan arrives, and Auto stays available: a message sent in Auto runs as a build turn, and the plan waits for its own decision. Background turns (event drains, jobs) keep their own mode. A plan can now be dismissed beside Approve and Request changes on the web, or with `/plan dismiss` in the CLI; a dismissed plan starts no turn. In the TUI, where a message names no mode, a pending plan still holds messages in Plan until it is decided or dismissed.
+- **An error answer no longer quotes its internal cause.** Every HTTP route, the MCP door and the terminal routes answer a failure with its class and a message written for you (`{ error, code }`); the platform wording, file paths and tokens a cause chain can hold go to the logs only. A refusal of your input still names the field and what was wrong; an internal failure that used to answer 400 now answers with its own class (usually 500).
+- **Every page and socket outside `/api` is routed by one Hono app, and each Durable Object's forwarded paths by its own.** Same paths, methods, gates and answers; a path with a malformed escape (`/agents/orchestrator-agent/%ZZ`) now gets a JSON 500 instead of the platform error page.
 - **A malformed tool call is refused before the tool runs.** Each built-in tool but `agents` now declares its input once, as a zod schema, which the model's call is checked against and which the same tool in eval reuses. Before, most tools handed the AI SDK an unchecked JSON Schema literal, so a call missing a field (an edit without `new_text`) could reach the tool. A refusal reaches the model as `bad_input` in one readable line that names the field, and for a choice lists the allowed values and what arrived. Every call that ran before still runs: limits the old schemas only advertised stay unenforced, a memory confidence above 1 is clamped as before, and `tasks.mode(null)` still reads the role. Each model now gets every tool's schema in its own dialect, so a Gemini turn no longer receives keys it rejects.
 - **Slate previews in the chat fold, and opening one always shows it.** A slate shown again later in the chat folds
   its earlier previews ("Updated below"), and a slate open in the work surface beside the chat folds its preview
@@ -711,6 +713,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A refusal from your account or workspace keeps its reason.** Creating a workspace whose name is still being deleted, and the other refusals the account and workspace objects raise, answer 400 with what was wrong again, instead of a generic 500.
+- **A command you approve reads as the command that runs.** Shell approvals, parked commands and device-consent cards in the web, the control plane and the TUI show bidi overrides and zero-width characters as a visible �, so no hidden character can make the text read as something else.
+- **An MCP server's tool description can no longer pass for something else.** Bidi overrides, zero-width characters and controls show as a visible �, and HTML tags, headings, rules and strikethrough in the server's text stay plain text, before the description reaches the model or your screen.
 - **A hovered sidebar row or chat tab no longer looks like the open one.** The open row in the sidebar reads as
   "here": its icon and label in the accent, over a soft accent wash. A row under the pointer takes a neutral lift,
   and rows sit 4 px apart, so the two never merge into one block. A closed chat tab under the pointer brightens

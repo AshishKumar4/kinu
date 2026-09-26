@@ -25,10 +25,18 @@
 import { spawnSync } from 'node:child_process';
 import { resolve as resolveHostname } from 'node:dns/promises';
 import { existsSync, readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { join } from 'node:path';
+import { connect } from 'node:tls';
 import * as v from 'valibot';
 import { parseJsonc } from './jsonc';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import type { InfraEnvironment } from './infra-manifest';
+
+/** The argv that points a Worker-scoped wrangler command at `environment`'s Worker; production is the top level. */
+export function environmentArgs(environment: InfraEnvironment): readonly string[] {
+  return environment === 'production' ? [] : ['--env', environment];
+}
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -323,8 +331,8 @@ export type Deployment =
  * typed as a `string`. The active deployment names a version and the version
  * carries the complete binding set, both through wrangler's own commands.
  */
-export function deployment(): Deployment {
-  const status = wrangler(['deployments', 'status', '--json']);
+export function deployment(environment: InfraEnvironment): Deployment {
+  const status = wrangler(['deployments', 'status', '--json', ...environmentArgs(environment)]);
 
   if (!status.ok) {
     const complaint = why(status);
@@ -355,7 +363,7 @@ export function deployment(): Deployment {
 
   if (versionId.length === 0) return { state: 'absent' };
 
-  const view = wrangler(['versions', 'view', versionId, '--json']);
+  const view = wrangler(['versions', 'view', versionId, '--json', ...environmentArgs(environment)]);
 
   if (!view.ok) {
     return { state: 'unknown', reason: `\`wrangler versions view\` failed: ${why(view)}` };
@@ -395,8 +403,8 @@ export function deployment(): Deployment {
  * Cloudflare does not return them, which is also why provisioning displays a
  * generated root secret exactly once.
  */
-export function secretNames(): Observation & { readonly names?: readonly string[] } {
-  const run = wrangler(['secret', 'list', '--format', 'json']);
+export function secretNames(environment: InfraEnvironment): Observation & { readonly names?: readonly string[] } {
+  const run = wrangler(['secret', 'list', '--format', 'json', ...environmentArgs(environment)]);
 
   if (!run.ok) {
     const complaint = why(run);
@@ -535,6 +543,38 @@ export async function hostResolves(hostname: string): Promise<Observation> {
 export const wildcardDns = async (suffix: string): Promise<Observation> =>
   hostResolves(`${PROBE_LABEL}.${suffix}`);
 
+/** How Bun's fetch reports EVERY failed TLS handshake alike, a name the edge refused and a connection cut
+ *  mid-handshake both (measured 2026-09-26), so it is a question for the handshake itself, never an answer. */
+const FETCH_HANDSHAKE_FAILED = 'UNKNOWN_CERTIFICATE_VERIFICATION_ERROR';
+
+/** How `node:tls` names the alert Cloudflare's edge ends a handshake with for a name it holds no certificate for:
+ *  measured 2026-09-26 on infra-verify-probe.staging.kinu.run, before staging's Custom Domain existed. */
+const NO_CERTIFICATE_ALERT = 'ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE';
+
+/** How a TLS handshake with `authority` (`host` or `host:port`) ends: `undefined` once it completes, else the
+ *  error's code. */
+async function handshakeEnd(authority: string): Promise<string | undefined> {
+  const { hostname, port } = new URL(`https://${authority}/`);
+  const ended = Promise.withResolvers<string | undefined>();
+
+  const socket = connect({
+    host: hostname,
+    port: port === '' ? 443 : Number(port),
+    servername: isIP(hostname) === 0 ? hostname : undefined,
+    timeout: 20_000,
+  });
+
+  socket.once('secureConnect', () => { ended.resolve(undefined); });
+  socket.once('error', (error: Error & { readonly code?: string }) => { ended.resolve(error.code ?? error.message); });
+  socket.once('timeout', () => { ended.resolve('ETIMEDOUT'); });
+
+  try {
+    return await ended.promise;
+  } finally {
+    socket.destroy();
+  }
+}
+
 /**
  * Whether anything at all answers on a hostname under the preview suffix.
  *
@@ -544,6 +584,11 @@ export const wildcardDns = async (suffix: string): Promise<Observation> =>
  * counts as present — a preview host with no live preview answers 404 on
  * purpose, and demanding a 200 here would report the route missing whenever no
  * sandbox happens to be running.
+ *
+ * A handshake the edge REFUSED is an answer, and it says nothing is served over
+ * HTTPS there: the edge was reached and holds no certificate for the name. That
+ * is `absent`, like a name that does not resolve, never a lookup that failed. A
+ * connection cut before any answer stays `unknown`.
  */
 export async function edgeResponds(hostname: string): Promise<Observation> {
   try {
@@ -554,6 +599,20 @@ export async function edgeResponds(hostname: string): Promise<Observation> {
     const code = error instanceof Error && 'code' in error ? String(error.code) : '';
 
     if (code === 'ENOTFOUND' || code === 'ECONNREFUSED') return absent;
+
+    if (code === FETCH_HANDSHAKE_FAILED) {
+      const end = await handshakeEnd(hostname);
+
+      if (end === NO_CERTIFICATE_ALERT) {
+        return {
+          state: 'absent',
+          detail: `the edge refused the TLS handshake for ${hostname} with handshake_failure, its answer for a name `
+            + 'it holds no certificate for, so nothing answers HTTPS under this route',
+        };
+      }
+
+      return unknown(`https://${hostname}/: the TLS handshake failed, and asked again it ended ${end ?? 'complete'}`);
+    }
 
     return unknown(`https://${hostname}/: ${error instanceof Error ? error.message : String(error)}`);
   }

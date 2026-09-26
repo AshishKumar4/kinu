@@ -1,5 +1,6 @@
 import * as v from 'valibot';
 import { decodeModelMessageValues, JsonValueSchema, projectJsonValue, TOOL_CALLS_PENDING, type RunEvent } from '@kinu.run/core';
+import type { ModelMessage } from 'ai';
 import type { TranscriptEvent } from 'vitest-evals';
 import { redact, redactJson } from './redact';
 import type { EvalMetrics } from './task';
@@ -10,20 +11,43 @@ const ArgumentsSchema = v.record(v.string(), JsonValueSchema);
 
 const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
+const ToolCallPartSchema = v.object({ type: v.literal('tool-call'), toolCallId: v.string(), input: v.unknown() });
+
 /** A call the deployment recorded as failed: an error string, or a producer outcome that says so. */
 function failed(call: ToolCallEnd): boolean {
   return call.error !== undefined || call.outcome?.success === false;
 }
 
 /** What the model said in one step: the text parts of its assistant messages, joined. */
-function stepText(step: Extract<RunEvent, { type: 'step_finish' }>): string {
-  return decodeModelMessageValues(step.messages ?? [])
+function stepText(messages: readonly ModelMessage[]): string {
+  return messages
     .filter((message) => message.role === 'assistant')
     .flatMap((message) => v.is(v.string(), message.content)
       ? [message.content]
       : message.content.flatMap((part) => v.is(TextPartSchema, part) ? [part.text] : []))
     .join('')
     .trim();
+}
+
+/**
+ * Each tool call of one step as the model sent it, by call id. The ledger's own row keeps a digest of
+ * a large call's arguments, which is where the code an agent writes lives; the step's messages keep
+ * all of it.
+ */
+function inputsOf(messages: readonly ModelMessage[]): Map<string, unknown> {
+  const inputs = new Map<string, unknown>();
+
+  for (const message of messages) {
+    if (message.role !== 'assistant' || v.is(v.string(), message.content)) continue;
+
+    for (const part of message.content) {
+      const call = v.safeParse(ToolCallPartSchema, part);
+
+      if (call.success) inputs.set(call.output.toolCallId, call.output.input);
+    }
+  }
+
+  return inputs;
 }
 
 /**
@@ -43,12 +67,15 @@ export function toTranscript(events: readonly RunEvent[]): TranscriptEvent[] {
     } else if (event.type === 'tool_call_end') {
       calls.push(event);
     } else if (event.type === 'step_finish') {
-      const text = stepText(event);
+      const messages = decodeModelMessageValues(event.messages ?? []);
+      const inputs = inputsOf(messages);
+      const text = stepText(messages);
 
       if (text !== '') transcript.push({ type: 'message', role: 'assistant', content: redact(text), metadata });
 
       for (const call of calls) {
-        const args = v.safeParse(ArgumentsSchema, redactJson(projectJsonValue({ value: call.args ?? {} })));
+        const input = inputs.has(call.toolCallId) ? inputs.get(call.toolCallId) : call.args;
+        const args = v.safeParse(ArgumentsSchema, redactJson(projectJsonValue({ value: input ?? {} })));
         const invoked: TranscriptEvent = { type: 'tool_call', id: call.toolCallId, name: call.name, metadata };
 
         if (args.success) invoked.arguments = args.output;

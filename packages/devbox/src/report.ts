@@ -27,6 +27,8 @@ export interface HeartbeatTick {
   readonly armedNext: boolean;
   readonly decision?: QuiesceAction;
   readonly replaced?: boolean;
+  /** D35. */
+  readonly note?: string;
 }
 
 /** `restartable` means a durable spec exists: only such a process comes back after a recycle. */

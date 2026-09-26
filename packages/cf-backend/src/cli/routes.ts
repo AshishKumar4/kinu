@@ -12,8 +12,8 @@ import { approvalDocument, installDocument } from '@kinu.run/core';
 import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset, type AssetFetcher,
 } from '@kinu.run/core';
-import { RELEASE_ARTIFACT_ROUTE, RELEASE_MANIFEST_PATH } from '@kinu.run/core/deploy';
-import { err, escapeHtml, json, safeJson } from '@kinu.run/core';
+import { RELEASE_ARTIFACT_NAME, RELEASE_MANIFEST_PATH } from '@kinu.run/core/deploy';
+import { err, escapeHtml, json, publicText, safeJson } from '@kinu.run/core';
 import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE, type WebhookRouteEnv } from '@kinu.run/core';
@@ -27,7 +27,7 @@ import {
 } from '@kinu.run/core';
 import type { AgentRpcDispatch } from './rpc-gate';
 import { buildCliInstallCommand } from '@kinu.run/core';
-import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
+import { bunResolutionShell, cliPlatformShell, ISOLATED_BUN_FLAGS } from '@kinu.run/core';
 import { listAvailableModels, testAvailableModel } from '../user/available-models';
 import { readUserAccountUsage, type AccountLedgerTarget } from '../user/account-usage';
 import { answerCatalogPut } from '../user/routes';
@@ -42,24 +42,11 @@ import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from
 import type { UserAIProxyEnv } from '../user/ai-proxy';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
-import { rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
+import { noHead, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
-import { classify, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { authoredRefusal, classify, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) });
-
-/** Content-type for a published download path, or null. Public: a fresh install and a
- *  self-updating deployment have no session here. */
-function publishedDownloadType(pathname: string): string | null {
-  if (CLI_DIST_PATHS.includes(pathname)) return 'application/gzip';
-
-  if (pathname === CLI_VERSION_PATH || pathname === RELEASE_MANIFEST_PATH) return 'application/json; charset=utf-8';
-
-  if (!pathname.endsWith('.sha256')) return null;
-  const artifact = pathname.slice(0, -'.sha256'.length);
-
-  return CLI_DIST_PATHS.includes(artifact) || RELEASE_ARTIFACT_ROUTE.test(artifact) ? 'text/plain; charset=utf-8' : null;
-}
 
 export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWorkspaceRegistry & Pick<
   UserDO,
@@ -97,42 +84,35 @@ export type CliEnv = FamilyEnv<CliRoutesEnv<unknown>, CliVariables>;
 type CliContext = Context<CliEnv>;
 
 /** Public pages, downloads and the browser approval; `/api/cli` is `cliRoutes`. */
-export async function handleCliRequest<Id>(
-  request: Request, env: CliRoutesEnv<Id>,
-): Promise<Response | null> {
-  const url = new URL(request.url);
-  const method = request.method;
+type CliPagesEnv = FamilyEnv<CliRoutesEnv<unknown>, object>;
 
-  if (url.pathname === '/install' && (method === 'GET' || method === 'HEAD')) {
-    return method === 'HEAD' ? new Response(null, installPageInit()) : installPageResponse(url.origin);
-  }
+export const cliPageRoutes = new Hono<CliPagesEnv>();
 
-  if (url.pathname === '/install.sh' && (method === 'GET' || method === 'HEAD')) {
-    return installScriptResponse(url.origin, method === 'HEAD');
-  }
+cliPageRoutes.get('/install', async (c) =>
+  c.req.method === 'HEAD' ? new Response(null, installPageInit()) : installPageResponse(new URL(c.req.url).origin));
 
-  if (url.pathname === '/downloads/kinu' && (method === 'GET' || method === 'HEAD')) {
-    return cliShimResponse(url.origin, method === 'HEAD');
-  }
+cliPageRoutes.get('/install.sh', async (c) => installScriptResponse(new URL(c.req.url).origin, c.req.method === 'HEAD'));
 
-  if (method === 'GET' || method === 'HEAD') {
-    const contentType = publishedDownloadType(url.pathname);
+cliPageRoutes.get('/downloads/kinu', async (c) => cliShimResponse(new URL(c.req.url).origin, c.req.method === 'HEAD'));
 
-    if (contentType !== null) {
-      return cliDownloadAssetResponse({ request, env, pathname: url.pathname, contentType, head: method === 'HEAD' });
-    }
-  }
+/** Public: a fresh install and a self-updating deployment have no session here. */
+const PUBLISHED_DOWNLOADS: readonly (readonly [path: string, contentType: string])[] = [
+  ...CLI_DIST_PATHS.map((path) => [path, 'application/gzip'] as const),
+  [CLI_VERSION_PATH, 'application/json; charset=utf-8'],
+  [RELEASE_MANIFEST_PATH, 'application/json; charset=utf-8'],
+  ...CLI_DIST_PATHS.map((path) => [`${path}.sha256`, 'text/plain; charset=utf-8'] as const),
+  [`/downloads/:checksum{${RELEASE_ARTIFACT_NAME}\\.sha256}`, 'text/plain; charset=utf-8'],
+];
 
-  if (url.pathname === '/cli/auth' && method === 'GET') {
-    return renderBrowserApproval(request, env);
-  }
-
-  if (url.pathname === '/cli/auth' && method === 'POST') {
-    return approveFromBrowser(request, env);
-  }
-
-  return null;
+for (const [path, contentType] of PUBLISHED_DOWNLOADS) {
+  cliPageRoutes.get(path, async (c) => cliDownloadAssetResponse({
+    request: c.req.raw, env: c.env, pathname: new URL(c.req.url).pathname, contentType, head: c.req.method === 'HEAD',
+  }));
 }
+
+cliPageRoutes.get('/cli/auth', noHead<CliPagesEnv>(async (c) => renderBrowserApproval(c.req.raw, c.env)));
+
+cliPageRoutes.post('/cli/auth', async (c) => approveFromBrowser(c.req.raw, c.env));
 
 async function authenticateCli(c: CliContext): Promise<CliIdentity | Response> {
   try {
@@ -203,13 +183,13 @@ cliRoutes.post('/api/cli/auth/poll', async (c) => {
 
 // No JSON approval: this family runs ahead of the CSRF check, so a cookie-only POST could mint a token.
 
-// `/api/cli*`: every path starting with the text.
-cliRoutes.use('/api/cli*', cliBearer);
+// Not `/api/cli*`: that took `/api/client-errors`.
+cliRoutes.use('/api/cli/*', cliBearer);
 
 // The agent RPC endpoint has its own per-method policy (AGENT_RPC_ACCESS), so it precedes the access-token gate.
 cliRoutes.post('/api/cli/workspaces/:name/rpc', async (c) => handleAgentRpc(c, decodeURIComponent(rawParam(c, 'name'))));
 
-cliRoutes.use('/api/cli*', async (c, next) => {
+cliRoutes.use('/api/cli/*', async (c, next) => {
   const denied = accessTokenDenial(c.get('cli'), c.req.method, cliPath(c));
 
   if (denied) return denied;
@@ -338,8 +318,8 @@ cliRoutes.delete('/api/cli/workspaces/:name', async (c) => {
     await cli.userDO.removeWorkspace(await ownerCaller(c.env), name, cli.userId);
 
     return json({ body: { ok: true } });
-  } catch (e) {
-    return err(400, renderThrownChain({ cause: e }));
+  } catch (cause) {
+    throw authoredRefusal({ doing: 'deleting this workspace', cause });
   }
 });
 
@@ -389,8 +369,8 @@ cliRoutes.post('/api/cli/workspaces/:name/triggers/webhook', async (c) => {
         rate_limit_per_min: body.rate_limit_per_min,
       }),
     }, { status: 201 });
-  } catch (e) {
-    return err(400, renderThrownChain({ cause: e }));
+  } catch (cause) {
+    throw authoredRefusal({ doing: 'creating this webhook', cause });
   }
 });
 
@@ -418,7 +398,7 @@ cliRoutes.post('/api/cli/credentials/:key', async (c) => {
   const body = await safeJson(c.req.raw, JsonValueSchema);
 
   try { await cli.userDO.setCredential(await ownerCaller(c.env), c.get('key'), body); }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause }); }
 
   // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
   notifyWorkspacesCredentialsChanged(c.env, cli.userDO, c.executionCtx);
@@ -430,14 +410,14 @@ cliRoutes.delete('/api/cli/credentials/:key', async (c) => {
   const cli = c.get('cli');
 
   try { await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key')); }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause }); }
 
   notifyWorkspacesCredentialsChanged(c.env, cli.userDO, c.executionCtx);
 
   return json({ body: { ok: true } });
 });
 
-cliRoutes.all('/api/cli*', async (c) => err(404, `No such CLI route: ${c.req.method} ${cliPath(c)}`));
+cliRoutes.all('/api/cli/*', async (c) => err(404, `No such CLI route: ${c.req.method} ${cliPath(c)}`));
 
 async function cliAgent<Id>(
   env: CliRoutesEnv<Id>, cli: CliIdentity, name: string,
@@ -491,9 +471,8 @@ async function handleAgentRpc(c: CliContext, name: string): Promise<Response> {
   try {
     const invoke = v.parse(v.function(), agent[rpcMethod]);
     result = await invoke(...args);
-  } catch (e) {
-    // Same contract as a websocket rpc-error frame.
-    return err(400, renderThrownChain({ cause: e }));
+  } catch (cause) {
+    throw authoredRefusal({ doing: `calling ${rpcMethod}`, cause });
   }
 
   // A failed fold leaves the write answered.
@@ -647,8 +626,11 @@ async function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): 
         'cache-control': 'no-store',
       },
     });
-  } catch (e) {
-    return html('Connect the Kinu CLI', `<p>${escapeHtml(toError({ cause: e }).message)}</p>`, 400);
+  } catch (cause) {
+    const error = authoredRefusal({ doing: 'approving this sign-in', cause });
+    diagnostics.failure('cli.approval_failed', error);
+
+    return html('Connect the Kinu CLI', `<p>${escapeHtml(publicText(error))}</p>`, 400);
   }
 }
 
@@ -947,6 +929,10 @@ RUNTIME_URL="\${KINU_ORIGIN}${CLI_RUNTIME_PATH}"
 
 ${bunResolutionShell()}
 
+# Every Bun that runs code runs in the caller's directory, which may be a cloned repo: its bunfig.toml preload
+# and .env stay out. The CLI's own Bun children take the same flags from core.
+KINU_BUN_ISOLATED=(${ISOLATED_BUN_FLAGS.join(' ')})
+
 die() {
   echo "Kinu update error: $*" >&2
   exit 1
@@ -1004,7 +990,7 @@ DOWNLOADS=""
 verify_release() {
   manifest="$1"
   wait "$2" || die "Could not download the release manifest from $MANIFEST_URL."
-  "$KINU_BUN" -e '
+  "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" -e '
     const [file, publicKeyHex] = process.argv.slice(1);
     const manifest = JSON.parse(require("fs").readFileSync(file, "utf8"));
     const checksums = manifest.checksums, signature = manifest.signature, version = manifest.version;
@@ -1020,7 +1006,7 @@ verify_release() {
   ' "$manifest" "$RELEASE_SIGNING_PUBLIC_KEY" || die "The release is not one this launcher trusts."
 }
 signed_checksum() {
-  "$KINU_BUN" -e '
+  "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" -e '
     const [file, artifact] = process.argv.slice(1);
     const manifest = JSON.parse(require("fs").readFileSync(file, "utf8"));
     const digest = manifest.checksums && manifest.checksums[artifact];
@@ -1080,7 +1066,7 @@ refresh_cli() {
   [ -f "$tmp/extract/kinu/cli.js" ] || die "The Kinu build archive carries no cli.js."
   rm -rf "$next"
   mv "$tmp/extract/kinu" "$next"
-  "$KINU_BUN" run "$next/cli.js" --version >/dev/null 2>&1 || die "The downloaded Kinu build does not launch."
+  "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$next/cli.js" --version >/dev/null 2>&1 || die "The downloaded Kinu build does not launch."
   adopt_tree "$next"
   rm -rf "$tmp"
 }
@@ -1109,7 +1095,7 @@ recover_current() {
   [ -f "$CLI_DIR/cli.js" ] && return 0
   for candidate in "$CLI_ROOT"/next-*; do
     [ -f "$candidate/cli.js" ] || continue
-    if "$KINU_BUN" run "$candidate/cli.js" --version >/dev/null 2>&1; then
+    if "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$candidate/cli.js" --version >/dev/null 2>&1; then
       rm -rf "$CLI_DIR"
       adopt_tree "$candidate"
       return 0
@@ -1131,7 +1117,7 @@ recover_current() {
 # build that just landed, and prev comes back. Nothing here downloads.
 check_launch() {
   [ -d "$CLI_ROOT/prev" ] || return 0
-  if "$KINU_BUN" run "$CLI_DIR/cli.js" --version >/dev/null 2>&1; then
+  if "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$CLI_DIR/cli.js" --version >/dev/null 2>&1; then
     rm -rf "$CLI_ROOT/prev"
   else
     echo "Kinu: the installed build does not launch; restoring the previous one." >&2
@@ -1171,8 +1157,8 @@ if [ "\${KINU_REFRESH_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
-cd "$CLI_DIR"
-exec "$KINU_BUN" run "$CLI_DIR/cli.js" "$@"
+# In the caller's directory, which is the session's project.
+exec "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$CLI_DIR/cli.js" "$@"
 `;
 
   return new Response(head ? null : script, {
@@ -1191,7 +1177,7 @@ function cliAuthError(e: Error): Response {
 
   if (e instanceof CliAuthCodeError) return err(400, e.message);
 
-  return err(500, renderThrownChain({ cause: e }));
+  throw toKinuError({ doing: 'answering a CLI sign-in request', cause: e, otherwise: 'io' });
 }
 
 function accessError(e: Error, request?: Request): Response {
@@ -1210,7 +1196,7 @@ function accessError(e: Error, request?: Request): Response {
     return err(e.status, e.message);
   }
 
-  return err(500, renderThrownChain({ cause: e }));
+  throw toKinuError({ doing: 'approving a CLI sign-in', cause: e, otherwise: 'io' });
 }
 
 function html(title: string, body: string, status = 200, init: ResponseInit = {}): Response {

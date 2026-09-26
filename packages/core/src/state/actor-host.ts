@@ -1,9 +1,9 @@
-// Runtime objects for every logical actor of one workspace database. Actor rows live in the
-// workspace (the SQL port is synchronous, so they cannot sit behind RPC). Mutable state and
-// serialization are per actor; actor-scoped stores key on `actor_id` and re-validate the handle.
-// Release invalidates the handle's fence; rows survive until `retire` with `destroy: true`.
-// Recovery reads unsettled claims from durable rows: no timer, no in-memory registry.
+// Runtime objects for each logical actor of one workspace database; its rows live in the workspace because the
+// SQL port is synchronous. State, serialization and `actor_id`-keyed stores are per actor and re-validate the
+// handle. Release invalidates the fence; rows survive until `retire` with `destroy: true`. Recovery reads
+// unsettled claims from durable rows, with no timer or in-memory registry.
 
+import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import type { SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -11,6 +11,7 @@ import { ActorSession } from '../orchestrator/actor-session';
 import type { AgentOrchestratorDeps } from '../orchestrator/agent-orchestrator';
 import type { ContextRevision, StoredActorClaim } from '../orchestrator/actor-claims';
 import type { SessionFilePlane } from '../session/payload';
+import type { PreparedRequest } from '../session/requests';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
 import type { WorkspaceActor, WorkspaceActorDirectory } from '../identity/workspace-actors';
@@ -18,9 +19,10 @@ import type { ActorContextStores, ChildContextResolver } from '../vfs/context-pl
 import type { ContextEventRecorder } from '../types/context-plane';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { verifyClaimedProgram } from '../orchestrator/actor-claims';
+import { recordRecoverySettled, sameBuildOf } from '../orchestrator/turn-recovery-events';
 import { readVersionedScaffoldSource } from '../scaffold/shadow';
 import { sha256Hex } from '../safety/argument-digest';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError, type AgentTracing } from '../obs/index';
 
 /** The runtime must be built over this same handle, never a second binding. */
 export interface BoundActor {
@@ -63,6 +65,7 @@ export interface ActorHostDeps {
   readonly storage: Pick<Storage, 'sql' | 'transactionSync'> & SqlExec;
   readonly directory: WorkspaceActorDirectory;
   readonly installedBuild: string | null;
+  readonly workspace?: string;
   runtimeFor(bound: BoundActor): AgentRuntime | Promise<AgentRuntime>;
   filesFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<SessionFilePlane>;
   /** Asked by the host so no hosted actor silently runs the shipped bootstrap loop. */
@@ -73,6 +76,7 @@ export interface ActorHostDeps {
   contextEvents(bound: BoundActor): ContextEventRecorder | null;
   /** Called after the rows are gone, so a failed reclaim leaves no half-removed readable actor. */
   discardBytes?(record: WorkspaceActor): Promise<void>;
+  readonly tracing: (() => AgentTracing) | undefined;
 }
 
 export interface ActorHost {
@@ -91,6 +95,8 @@ export interface ActorHost {
   releaseAll(): void;
   retire(parent: ActorReference, retirement: ActorRetirement): Promise<void>;
   resumable(limit?: number): readonly ResumableActorTurn[];
+  readonly installedBuild: string | null;
+  readonly workspace?: string;
 }
 
 /** The parent reference the directory row records; the row is the only authority on it. */
@@ -190,8 +196,8 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
   const build = async (reference: ActorReference): Promise<{ actor: HostedActor; fence: ReleaseFence }> => {
     const { bound, fence } = bind(reference);
     const runtime = await deps.runtimeFor(bound);
-    // Children need handle identity so release revokes every statement. The root's runtime
-    // belongs to its opener and is never released individually, so same actor id suffices.
+    // Children need handle identity so release revokes every statement; the root's runtime is its
+    // opener's and never released alone, so the same actor id suffices.
     const rootBinding = reference.parentActorId === null;
 
     if (runtime.actor !== bound.handle
@@ -204,8 +210,13 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     await seedActorLoop(runtime, seed.parent, seed.origin);
     const orchestration = await deps.orchestrationFor({ ...bound, runtime });
 
+    const tracing = deps.tracing;
+    const actor = { id: bound.record.actorId, kind: bound.record.kind };
+
     const session = new ActorSession({
       runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
+      ...(deps.workspace !== undefined && { workspace: deps.workspace }),
+      turns: tracing && (() => tracing().turns(actor)),
       history: bound.stores.history,
       events: deps.contextEvents(bound),
       advisor: reference.parentActorId === null ? undefined : {
@@ -367,6 +378,8 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         action: 'release', name: retirement.name, reference: retirement.reference,
       });
     },
+    installedBuild: deps.installedBuild,
+    ...(deps.workspace !== undefined && { workspace: deps.workspace }),
     resumable: (limit = 50) => {
       const resumable: ResumableActorTurn[] = [];
 
@@ -464,14 +477,39 @@ async function consumedEvidence(stores: AgentStores, claim: StoredActorClaim): P
   }
 }
 
+function furthestStep(requests: readonly { readonly epoch: number; readonly step: number | null }[], epoch: number): number {
+  return requests.reduce((far, request) => (request.epoch === epoch && request.step !== null ? Math.max(far, request.step) : far), -1);
+}
+
+const AdmittedBuildSchema = v.looseObject({ installedBuild: v.nullable(v.string()) });
+
+/** Undefined: none recorded. */
+async function admittedBuild(stores: Pick<AgentStores, 'history'>, admission: PreparedRequest | undefined): Promise<string | null | undefined> {
+  if (admission === undefined) return undefined;
+  const recorded = v.safeParse(AdmittedBuildSchema, await stores.history.messages.payloads.read(admission.metadata));
+
+  return recorded.success ? recorded.output.installedBuild : undefined;
+}
+
+async function stalledRun(stores: Pick<AgentStores, 'history'>, claim: StoredActorClaim, installedBuild: string | null): Promise<boolean> {
+  if (claim.epoch < 2 || installedBuild === null) return false;
+  const requests = stores.history.requests.forTurn(claim.turnId);
+  const admission = (epoch: number) => requests.find((request) => request.epoch === epoch && request.step === null);
+  const builds = await Promise.all([admittedBuild(stores, admission(claim.epoch - 1)), admittedBuild(stores, admission(claim.epoch))]);
+
+  if (builds.some((build) => build !== installedBuild)) return false;
+
+  return furthestStep(requests, claim.epoch) <= furthestStep(requests, claim.epoch - 1);
+}
+
 /**
- * Call only with recovery authority. Verified claims stay owed: bytes alone do not prove the turn finished. A claim whose
- * record fails to read settles `error` once; an actor that cannot be opened stays owed.
+ * Call only with recovery authority. Verified claims stay owed: bytes alone do not prove the turn finished. An
+ * unreadable claim record settles `error` once; an actor that cannot be opened stays owed.
  */
 export async function recoverActorTurns(
-  host: Pick<ActorHost, 'resumable'> & {
+  host: Pick<ActorHost, 'resumable' | 'installedBuild' | 'workspace'> & {
     acquire(reference: ActorReference): Promise<Pick<HostedActor, 'runtime' | 'stores'> & {
-      readonly session: Pick<ActorSession, 'inFlight'>;
+      readonly session: Pick<ActorSession, 'turnOpen'>;
     }>;
   },
   limit?: number,
@@ -481,25 +519,27 @@ export async function recoverActorTurns(
   readonly failed: readonly string[];
   readonly unreadable: readonly string[];
   readonly active: readonly string[];
+  readonly stalled: readonly ResumableActorTurn[];
 }> {
   const verified: string[] = [];
   const refused: string[] = [];
   const failed: string[] = [];
   const unreadable: string[] = [];
   const active: string[] = [];
+  const stalled: ResumableActorTurn[] = [];
 
   for (const turn of host.resumable(limit)) {
     try {
       const actor = await host.acquire(turn.reference);
 
-      if (actor.session.inFlight) {
+      if (actor.session.turnOpen) {
         active.push(turn.claim.turnId);
         continue;
       }
 
       const evidence = await consumedEvidence(actor.stores, turn.claim);
 
-      if (actor.session.inFlight) {
+      if (actor.session.turnOpen) {
         active.push(turn.claim.turnId);
         continue;
       }
@@ -508,6 +548,7 @@ export async function recoverActorTurns(
         actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
         failed.push(turn.claim.turnId);
         diagnostics.failure('actor.turn_record_unreadable', evidence.failure, { actor: turn.record.name, turn: turn.claim.turnId });
+        recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'record_unreadable', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
         continue;
       }
 
@@ -518,8 +559,18 @@ export async function recoverActorTurns(
         evidence.context,
       );
 
-      if (actor.session.inFlight) {
+      const stalledTurn = verdict.kind === 'verified' && await stalledRun(actor.stores, turn.claim, host.installedBuild);
+
+      if (actor.session.turnOpen) {
         active.push(turn.claim.turnId);
+        continue;
+      }
+
+      if (stalledTurn) {
+        actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
+        stalled.push(turn);
+        diagnostics.event('actor.turn_stalled', { actor: turn.record.name, turn: turn.claim.turnId, runs: turn.claim.epoch });
+        recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'stalled', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
         continue;
       }
 
@@ -530,6 +581,7 @@ export async function recoverActorTurns(
 
       actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'indeterminate');
       refused.push(turn.claim.turnId);
+      recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'unverified', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
     }
     catch (cause) {
       // One unreadable actor must not end the sweep; this turn stays owed.
@@ -540,5 +592,5 @@ export async function recoverActorTurns(
     }
   }
 
-  return { verified, refused, failed, unreadable, active };
+  return { verified, refused, failed, unreadable, active, stalled };
 }

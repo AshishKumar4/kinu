@@ -2,15 +2,18 @@
  * Pins the launcher's `cli/current`/`cli/prev` swap by running it as bash;
  * each home carries the running Bun at `runtime/bin/bun`, and no origin is contacted.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { scratchDir } from '@kinu.run/test-utils';
-import { handleCliRequest } from '../src/cli/routes';
+import { cliPageRoutes } from '../src/cli/routes';
+import { serveFamily } from './helpers/api';
 import { staticRouteCliEnv } from './helpers/bindings';
 
+const cliPages = serveFamily(cliPageRoutes);
+
 async function launcherScript(): Promise<string> {
-  const shim = await handleCliRequest(
+  const shim = await cliPages(
     new Request('https://kinu.example.com/downloads/kinu'), staticRouteCliEnv(),
   );
 
@@ -44,8 +47,13 @@ function cliTree(home: string, name: string, stamp: string, broken = false): str
 }
 
 async function launch(home: string, launcher: string, ...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return launchIn(home, home, launcher, ...args);
+}
+
+async function launchIn(cwd: string, home: string, launcher: string, ...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = Bun.spawn({
     cmd: ['bash', launcher, ...args],
+    cwd,
     env: { HOME: home, KINU_HOME: home, PATH: '/usr/bin:/bin', KINU_ORIGIN: 'http://127.0.0.1:9' },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -136,5 +144,65 @@ describe('the launcher launch check', () => {
 
     const run = await launch(home, launcher, 'update', '--force');
     expect(run).toEqual({ stdout: 'ran 2.0.0+new update --force', stderr: '', exitCode: 0 });
+  });
+
+  test('the CLI runs in the directory it was typed in, and that project\'s bunfig and .env stay out of it', async () => {
+    // It ran in the install tree, so a session saw the install as its project: its shell, files and AGENTS.md.
+    const { home, launcher } = await launcherHome();
+    const tree = cliTree(home, 'current', '2.0.0+new');
+    writeFileSync(join(tree, 'cli.js'), 'console.log(JSON.stringify({ cwd: process.cwd(), leak: process.env.KINU_PROJECT_LEAK ?? null }));\n');
+    const project = scratchDir('launcher-project');
+    writeFileSync(join(project, 'preload.ts'), 'console.log("project preload ran");\n');
+    writeFileSync(join(project, 'bunfig.toml'), 'preload = ["./preload.ts"]\n');
+    writeFileSync(join(project, '.env'), 'KINU_PROJECT_LEAK=1\n');
+
+    const run = await launchIn(project, home, launcher, 'chat');
+
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toBe(JSON.stringify({ cwd: realpathSync(project), leak: null }));
+  });
+
+  test('a Bun process the CLI starts (its daemon, a refresh) keeps the project\'s bunfig and .env out too', async () => {
+    // The daemon holds every workspace and its provider keys; a cloned repo's preload must not run inside it.
+    const { home, launcher } = await launcherHome();
+    const tree = cliTree(home, 'current', '2.0.0+new');
+    const helper = join(import.meta.dir, '../../cli/src/self-spawn.ts');
+    writeFileSync(join(tree, 'child.js'), 'console.log(JSON.stringify({ cwd: process.cwd(), leak: process.env.KINU_PROJECT_LEAK ?? null }));\n');
+    writeFileSync(join(tree, 'cli.js'), [
+      `const { spawnKinuScript } = require(${JSON.stringify(helper)});`,
+      `spawnKinuScript(${JSON.stringify(join(tree, 'child.js'))}, [], { stdio: 'inherit' });`,
+    ].join('\n'));
+    const project = scratchDir('launcher-child-project');
+    writeFileSync(join(project, 'preload.ts'), 'console.log("project preload ran");\n');
+    writeFileSync(join(project, 'bunfig.toml'), 'preload = ["./preload.ts"]\n');
+    writeFileSync(join(project, '.env'), 'KINU_PROJECT_LEAK=1\n');
+
+    const run = await launchIn(project, home, launcher, 'chat');
+
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toBe(JSON.stringify({ cwd: realpathSync(tree), leak: null }));
+  });
+
+  test('the launcher\'s own checks of a build keep the project\'s bunfig and .env out, as its exec does', async () => {
+    // check_launch runs the build's --version in the caller's directory, before the isolated exec.
+    const { home, launcher } = await launcherHome();
+    const tree = cliTree(home, 'current', '2.0.0+new');
+    cliTree(home, 'prev', '1.0.0+old');
+    const seen = join(home, 'version-saw.json');
+    writeFileSync(join(tree, 'cli.js'), [
+      `if (process.argv[2] === '--version') require('node:fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ leak: process.env.KINU_PROJECT_LEAK ?? null }));`,
+      "console.log('2.0.0+new');",
+    ].join('\n'));
+    const project = scratchDir('launcher-check-project');
+    writeFileSync(join(project, 'preload.ts'), `require('node:fs').writeFileSync(${JSON.stringify(join(project, 'PRELOAD-RAN'))}, '');\n`);
+    writeFileSync(join(project, 'bunfig.toml'), 'preload = ["./preload.ts"]\n');
+    writeFileSync(join(project, '.env'), 'KINU_PROJECT_LEAK=1\n');
+
+    const run = await launchIn(project, home, launcher, 'chat');
+
+    expect(run.exitCode).toBe(0);
+    expect(existsSync(join(home, 'cli', 'prev'))).toBe(false);
+    expect(JSON.parse(readFileSync(seen, 'utf8'))).toEqual({ leak: null });
+    expect(existsSync(join(project, 'PRELOAD-RAN'))).toBe(false);
   });
 });

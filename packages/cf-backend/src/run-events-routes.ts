@@ -10,21 +10,18 @@ import type { OrchestratorAgent } from "./orchestrator";
 import { boundRunEventQuery, RUN_EVENT_LIMIT_MAX, type RunEventType, type StoredRunEvent } from "@kinu.run/core";
 import * as v from 'valibot';
 import { resumeIndexFromLastEventId } from '@kinu.run/core';
-import { waitOn, type Clock } from "@kinu.run/core";
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { PUBLIC_MESSAGE, waitOn, type Clock } from "@kinu.run/core";
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { rawParam, type FamilyEnv } from './api/context';
 import type { WorkspaceVariables } from './api/workspace';
 
 /** Record each 500 as a fleet signal. The workspace name is user text, so the row names the surface instead. */
 function reportRouteFailure(input: { surface: string; cause: unknown }): Response {
   const { surface, cause } = input;
-  diagnostics.failure('http.run_events_failed', toKinuError({
-    doing: `answering a ${surface} request for the durable run-event log`,
-    cause,
-    otherwise: 'unavailable',
-  }), { source: surface });
+  const error = toKinuError({ doing: `answering a ${surface} request for the durable run-event log`, cause, otherwise: 'unavailable' });
+  diagnostics.failure('http.run_events_failed', error, { source: surface });
 
-  return Response.json({ error: renderThrownChain({ cause }) }, { status: 500 });
+  return Response.json({ error: PUBLIC_MESSAGE[error.code] }, { status: 500 });
 }
 
 const SSE_POLL_MS = 500;
@@ -214,8 +211,10 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
         if (!cancelled) controller.close();
       } catch (cause) {
         if (!cancelled) {
+          const error = toKinuError({ doing: 'streaming the durable run-event log', cause, otherwise: 'unavailable' });
+          diagnostics.failure('http.run_events_failed', error, { source: 'stream' });
           controller.enqueue(encoder.encode(
-            `event: error\ndata: ${JSON.stringify({ error: renderThrownChain({ cause }) })}\n\n`,
+            `event: error\ndata: ${JSON.stringify({ error: PUBLIC_MESSAGE[error.code] })}\n\n`,
           ));
           controller.close();
         }

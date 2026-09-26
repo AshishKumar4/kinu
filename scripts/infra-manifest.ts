@@ -23,10 +23,10 @@
  *     band. That is a judgement about a secret and it must not be guessed, so it
  *     is written down and PINNED BY EQUALITY against the derived census — a new
  *     field in `Env` fails the gate until somebody classifies it.
- *   - `UNOBSERVABLE`. Resources no CLI path can confirm. Also pinned: an
- *     unobservable resource missing from this map fails the gate, and an entry
- *     here that turns out to be observable fails it too, so the list can only
- *     shrink.
+ *   - `UNOBSERVABLE`. Kinds of resource no CLI path can confirm. Also pinned: an
+ *     unobservable resource whose kind is missing from this map fails the gate,
+ *     and an entry here whose kind turns out to be observable fails it too, so
+ *     the list can only shrink.
  *
  * REQUIREDNESS is derived where it can be. `env.d.ts` marks the bindings the
  * Worker tolerates the absence of with a `?`, and that is the Worker's own
@@ -40,11 +40,24 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import * as v from 'valibot';
 import { parseJsonc } from './jsonc';
 
 const REPO = new URL('..', import.meta.url).pathname;
+
+/** The deployments one config describes: the top level, and the one named environment staging deploys. */
+export const INFRA_ENVIRONMENTS = ['production', 'staging'] as const;
+
+export type InfraEnvironment = (typeof INFRA_ENVIRONMENTS)[number];
+
+/** The environment a command line names: none is production, one named environment is itself, anything else is
+ *  refused as undefined. */
+export function environmentFrom(positional: readonly string[]): InfraEnvironment | undefined {
+  if (positional.length === 0) return 'production';
+
+  return positional.length === 1 ? INFRA_ENVIRONMENTS.find((environment) => environment === positional[0]) : undefined;
+}
 
 export const WRANGLER_CONFIG = 'packages/cf-backend/wrangler.jsonc';
 
@@ -100,15 +113,42 @@ const WorkerSchema = v.object({
   }))),
 });
 
-/** One environment (AGENTS.md § Deploy). A named `env` section would be a
- *  second deployment nothing here derives, verifies or tears down, so it fails
- *  the parse instead of being ignored like an unread key. */
+/** Production at the top level, and staging as its one named environment. Any other named environment would be
+ *  a deployment nothing here derives, verifies or tears down, so it fails the parse instead of being ignored like
+ *  an unread key. */
 const WranglerConfigSchema = v.object({
   ...WorkerSchema.entries,
-  env: v.optional(v.never('wrangler.jsonc declares a named `env` section; Kinu has one environment')),
+  env: v.optional(v.strictObject({ staging: v.optional(WorkerSchema) }, 'wrangler.jsonc names an environment other than `staging`')),
 });
 
 type WorkerConfig = v.InferOutput<typeof WorkerSchema>;
+
+/**
+ * What `environment` deploys, read the way Wrangler reads it: an environment inherits the top level's inheritable
+ * keys unless it names its own, and declares every binding and var itself (Wrangler configuration docs, "Inheritable
+ * keys" and "Non-inheritable keys"). An environment with no name of its own deploys as `<name>-<environment>`.
+ * Routes are inheritable, and staging inheriting production's would claim kinu.run, so staging must name its own.
+ */
+function environmentConfig(config: v.InferOutput<typeof WranglerConfigSchema>, environment: InfraEnvironment): WorkerConfig {
+  const { env, ...production } = config;
+
+  if (environment === 'production') return production;
+
+  const staging = env?.staging;
+
+  if (staging === undefined) throw new Error(`${WRANGLER_CONFIG} declares no env.staging, so there is no staging deployment`);
+
+  if (staging.routes === undefined) {
+    throw new Error(`${WRANGLER_CONFIG} env.staging names no routes of its own, so it would inherit production's`);
+  }
+
+  const { name, account_id: accountId, assets, migrations, triggers } = production;
+
+  const inherited = Object.fromEntries(Object.entries({ account_id: accountId, assets, migrations, triggers })
+    .filter(([, value]) => value !== undefined));
+
+  return { ...inherited, name: `${name ?? 'worker'}-staging`, ...staging };
+}
 
 /* ── The shapes ───────────────────────────────────────────────────────── */
 
@@ -179,6 +219,8 @@ export interface InfraWorker {
    *  are ours — two spellings of that question is how a negative assertion
    *  silently stops covering one of them. */
   readonly routes: readonly string[];
+  /** Each container class's image, by class name: the code a container runs. */
+  readonly images: ReadonlyMap<string, string>;
 }
 
 /**
@@ -222,6 +264,7 @@ export function claimedHosts(worker: InfraWorker): ClaimedHosts {
 }
 
 export interface Infrastructure {
+  readonly environment: InfraEnvironment;
   readonly accountId: string;
   readonly worker: InfraWorker;
   readonly resources: readonly Resource[];
@@ -450,29 +493,30 @@ export const UNCAPTURED: readonly Uncaptured[] = [
 /* ── What no CLI path can confirm ─────────────────────────────────────── */
 
 /**
- * Resources verification cannot observe, by resource id, each with the manual
- * check. PINNED BY EQUALITY: an unobservable resource absent from this map fails
- * the gate, and an entry that becomes observable fails it too. A blind spot that
- * is not in a list is indistinguishable from a pass.
+ * The kinds of resource verification cannot observe, each with the manual
+ * check. Keyed by kind because the reason is the kind's, in every environment.
+ * PINNED BY EQUALITY: an unobservable resource whose kind is absent from this map
+ * fails the gate, and an entry whose kind becomes observable fails it too. A
+ * blind spot that is not in a list is indistinguishable from a pass.
  */
-export const UNOBSERVABLE = new Map<string, string>([
-  ['ai-gateway.kinu-ai-gateway',
+export const UNOBSERVABLE = new Map<ResourceKind, string>([
+  ['ai-gateway',
     'wrangler 4.97 exposes no `ai-gateway` command and the wrangler OAuth session has no `aig` '
     + 'scope (403 code 10000 against the REST API, measured 2026-08-18). Check it in the '
     + 'dashboard: https://dash.cloudflare.com/?to=/:account/ai/ai-gateway'],
-  ['cron.kinu */15 * * * *',
+  ['cron',
     'Wrangler writes cron triggers from config but exposes no command that reads them back. '
-    + 'Check Workers & Pages > kinu > Triggers in the Cloudflare dashboard.'],
+    + 'Check the Worker\'s Triggers under Workers & Pages in the Cloudflare dashboard.'],
 ]);
 
 /* ── Supplying what the manifest does not ─────────────────────────────── */
 
 /**
- * There is deliberately no `generate` arm. The only value this repository could
- * mint unattended is CREDENTIAL_ENCRYPTION_KEY, and a root secret the program
- * invents and never shows anyone is a secret nobody can restore from — losing it
- * means every user reconnects every provider. So minting it is a `prompt`: the
- * operator is present, and the value is displayed exactly once.
+ * There is deliberately no `generate` arm. The values this repository could mint
+ * unattended are random keys (`Supply.minted`), and one the program invents and
+ * never shows anyone is a secret nobody can restore from — losing
+ * CREDENTIAL_ENCRYPTION_KEY means every user reconnects every provider. So minting
+ * is a `prompt`: the operator is present, and the value is displayed exactly once.
  */
 export type Handling =
   /** provision must ask a human, at a terminal, and cannot proceed without one. */
@@ -497,6 +541,9 @@ export interface Supply {
   readonly absent: string;
   /** Where the value comes from, for `prompt` and `out-of-band`. */
   readonly source?: string;
+  /** The prompt mints it, 32 random bytes shown exactly once, when the operator presses enter. `paste` says whether
+   *  it also installs a value the operator already holds; `keep` is where the shown value must go. */
+  readonly minted?: { readonly paste: boolean; readonly keep: string };
 }
 
 /**
@@ -553,6 +600,7 @@ export const SUPPLY = new Map<string, Supply>([
     source: 'generated at the prompt (32 random bytes, base64) or pasted from the operator\'s '
       + 'password manager. It is displayed exactly once, because Cloudflare cannot show it '
       + 'again and losing it means every user reconnects every provider.',
+    minted: { paste: true, keep: 'in the password manager: losing it means every user reconnects every provider' },
   }],
   ['ANALYTICS_SQL_API_TOKEN', {
     handling: 'prompt',
@@ -603,9 +651,14 @@ export const SUPPLY = new Map<string, Supply>([
       + '`authenticateRequest()` (auth/session.ts) resolves DEV_USER_EMAIL only for a request '
       + 'presenting this secret in core\'s `DEV_IDENTITY_HEADER`, so every eval arm and the first-run '
       + 'tier fail to authenticate.',
-    source: 'generated by the operator (32 random bytes) and installed with '
-      + '`wrangler secret put DEV_IDENTITY_SECRET`. It is the whole authority for the synthetic '
-      + 'identity, so it is never shared with another deployment.',
+    source: 'minted at the prompt (32 random bytes), and never pasted: it is the whole authority for the '
+      + 'synthetic identity, and a pasted value could be another deployment\'s, whose holder would then act '
+      + 'as the eval identity on both.',
+    minted: {
+      paste: false,
+      keep: 'in .dev.vars, as the variable the eval tooling reads for this deployment (`evalWebIdentityEnv`): '
+        + 'KINU_EVAL_WEB_IDENTITY for production, KINU_EVAL_STAGING_WEB_IDENTITY for staging',
+    },
   }],
   ['GOOGLE_OAUTH_CLIENT_SECRET', {
     handling: 'prompt',
@@ -803,7 +856,76 @@ function workerRow(config: WorkerConfig): InfraWorker {
     migrationTags: (config.migrations ?? []).map((m) => m.tag),
     bindings,
     routes: (config.routes ?? []).map((route) => route.pattern),
+    images: new Map((config.containers ?? []).map((container) => [container.class_name, container.image])),
   };
+}
+
+/** The resources a config's routes declare: each Custom Domain, and each zone route with the DNS record it needs. */
+function routeDrafts(routes: NonNullable<WorkerConfig['routes']>): Draft[] {
+  const drafts: Draft[] = [];
+  const customDomains = new Set(routes.flatMap((route) => (route.custom_domain === true ? [route.pattern] : [])));
+
+  for (const route of routes) {
+    if (route.custom_domain === true) {
+      drafts.push({
+        kind: 'custom-domain',
+        name: route.pattern,
+        origin: 'wrangler-deploy',
+        required: true,
+        purpose: 'the public origin. `custom_domain: true` makes wrangler create the DNS record '
+          + 'on deploy.',
+      });
+      continue;
+    }
+
+    const host = route.pattern.replace(/^\*\./u, '').replace(/\/.*$/u, '');
+    const wildcard = route.pattern.startsWith('*.');
+    drafts.push({
+      kind: 'zone-route',
+      name: route.pattern,
+      origin: 'wrangler-deploy',
+      required: true,
+      purpose: wildcard
+        ? 'preview capability hostnames — one per exposed Workspace or Sandbox port'
+        : `the ${host} origin, taken as a route rather than a custom domain so that an exact `
+          + 'hostname outranks the wildcard route covering it',
+    });
+
+    // The route matches; it does not resolve. The record it needs is the single
+    // most invisible prerequisite production has.
+    if (wildcard) {
+      drafts.push({
+        kind: 'wildcard-dns',
+        name: `*.${host}`,
+        origin: 'manual',
+        required: true,
+        purpose: `the proxied wildcard record the ${route.pattern} route needs to resolve`,
+        manual: `create a proxied wildcard DNS record for *.${host} on the zone. wrangler has no `
+          + 'DNS command and cannot read the zone either — see UNCAPTURED.',
+      });
+      continue;
+    }
+
+    // A host this config also makes a Custom Domain gets its record from the deploy: wrangler creates the Custom
+    // Domain's record, and refuses one already there (docs/DEPLOYMENT.md, staging's prerequisites). The
+    // custom-domain row asks for that host, so the account is asked for no record of its own.
+    if (customDomains.has(host)) continue;
+
+    drafts.push({
+      kind: 'dns-record',
+      name: host,
+      origin: 'manual',
+      required: true,
+      purpose: `the proxied record the ${route.pattern} route needs to resolve`,
+      manual: `create a proxied DNS record for ${host} on the zone — any target, orange cloud `
+        + 'on, because the route is what answers. `custom_domain: true` would create it and is '
+        + 'deliberately not used: it would put this claim and the wildcard route on two '
+        + 'mechanisms whose relative precedence Cloudflare documents only for identical '
+        + 'hostnames. wrangler has no DNS command — see UNCAPTURED.',
+    });
+  }
+
+  return drafts;
 }
 
 /** Everything the Worker's config declares, as resources before requiredness
@@ -902,60 +1024,7 @@ function draftsFor(
     });
   }
 
-  for (const route of config.routes ?? []) {
-    if (route.custom_domain === true) {
-      drafts.push({
-        kind: 'custom-domain',
-        name: route.pattern,
-        origin: 'wrangler-deploy',
-        required: true,
-        purpose: 'the public origin. `custom_domain: true` makes wrangler create the DNS record '
-          + 'on deploy.',
-      });
-      continue;
-    }
-
-    const host = route.pattern.replace(/^\*\./u, '').replace(/\/.*$/u, '');
-    const wildcard = route.pattern.startsWith('*.');
-    drafts.push({
-      kind: 'zone-route',
-      name: route.pattern,
-      origin: 'wrangler-deploy',
-      required: true,
-      purpose: wildcard
-        ? 'preview capability hostnames — one per exposed Workspace or Sandbox port'
-        : `the ${host} origin, taken as a route rather than a custom domain so that an exact `
-          + 'hostname outranks the wildcard route covering it',
-    });
-
-    // The route matches; it does not resolve. The record it needs is the single
-    // most invisible prerequisite production has.
-    if (wildcard) {
-      drafts.push({
-        kind: 'wildcard-dns',
-        name: `*.${host}`,
-        origin: 'manual',
-        required: true,
-        purpose: `the proxied wildcard record the ${route.pattern} route needs to resolve`,
-        manual: `create a proxied wildcard DNS record for *.${host} on the zone. wrangler has no `
-          + 'DNS command and cannot read the zone either — see UNCAPTURED.',
-      });
-      continue;
-    }
-
-    drafts.push({
-      kind: 'dns-record',
-      name: host,
-      origin: 'manual',
-      required: true,
-      purpose: `the proxied record the ${route.pattern} route needs to resolve`,
-      manual: `create a proxied DNS record for ${host} on the zone — any target, orange cloud `
-        + 'on, because the route is what answers. `custom_domain: true` would create it and is '
-        + 'deliberately not used: it would put this claim and the wildcard route on two '
-        + 'mechanisms whose relative precedence Cloudflare documents only for identical '
-        + 'hostnames. wrangler has no DNS command — see UNCAPTURED.',
-    });
-  }
+  drafts.push(...routeDrafts(config.routes ?? []));
 
   for (const cron of config.triggers?.crons ?? []) {
     drafts.push({
@@ -1117,16 +1186,17 @@ function draftsFor(
   return drafts;
 }
 
-/** The whole inventory of the one Worker wrangler.jsonc declares. */
+/** The whole inventory of the Worker wrangler.jsonc declares for `environment`. */
 export function deriveInfrastructure(
+  environment: InfraEnvironment = 'production',
   configPath = WRANGLER_CONFIG,
   geometry = vectorizeGeometry(),
 ): Infrastructure {
-  const config = parseJsonc(
-    readFileSync(join(REPO, configPath), 'utf8'),
+  const config = environmentConfig(parseJsonc(
+    readFileSync(isAbsolute(configPath) ? configPath : join(REPO, configPath), 'utf8'),
     WranglerConfigSchema,
     configPath,
-  );
+  ), environment);
 
   const worker = workerRow(config);
   const optionality = new Map(envFields().map((field) => [field.name, field.optional]));
@@ -1153,6 +1223,7 @@ export function deriveInfrastructure(
   }
 
   return {
+    environment,
     accountId: config.account_id ?? '',
     worker,
     resources: [...resources.values()],

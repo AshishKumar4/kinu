@@ -30,7 +30,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
-import { REVERT_NEEDS_IDLE } from './actor-session';
+import { CLEAR_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
@@ -109,6 +109,8 @@ export type SessionEvent =
       /** A rerun answers every leftover as one turn; a transport closes their requests with it. */
       carried: readonly string[] }
   | { type: 'text-delta'; delta: string }
+  /** Shown live; never the answer, never stored. */
+  | { type: 'reasoning-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
   | { type: 'turn-end'; turn: CompletedTurn }
@@ -137,7 +139,7 @@ interface QueueItem {
   steerIds?: readonly string[];
   /** Placed at the queue front, behind only earlier reruns of the same settle. */
   rerun?: true;
-  /** An offer, not an event: if an operator message is admitted ahead, it settles 'yielded' without running (ProgrammaticTurn.yieldsToUserMessage). */
+  /** An offer: an operator message admitted ahead settles it 'yielded' unrun. */
   yieldsToUserMessage?: boolean;
   /** Re-opened under its own ids, its prior output re-entered ahead of the remaining calls. */
   continuation?: TurnContinuation;
@@ -150,6 +152,7 @@ interface TurnContinuation {
   readonly runId: string;
   readonly messageId: string;
   readonly steps: readonly ModelMessage[];
+  readonly finishedSteps: number;
   readonly partial: { readonly text: string; readonly toolCalls: readonly PartialToolCall[] } | null;
 }
 
@@ -580,13 +583,19 @@ export class ChatSession {
     this.actorSession.stop();
   }
 
-  /** The loop's queue and running turn define "in flight" for both backends. The event's delivery is awaited so the redraw precedes the answer. */
+  /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */
   async revertTo(entryId: string): Promise<void> {
     await this.actorSession.revertConversation(this.sessionId, entryId, () => {
       if (this.turnInFlight()) throw new KinuError('denied', REVERT_NEEDS_IDLE);
     });
     this.emit({ type: 'history-reverted', entryId });
     await this.flushEvents();
+  }
+
+  async clear(): Promise<void> {
+    await this.actorSession.clearConversation(this.sessionId, () => {
+      if (this.turnInFlight()) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
+    });
   }
 
   /** Bypasses the debounce, for a batch tick that ends the session right after. Interactive sessions keep the debounced path. */
@@ -604,7 +613,7 @@ export class ChatSession {
     await this.actorSession.orchestrator.drainPendingEvents();
   }
 
-  /** Call once at startup, before the recovery drain; see {@link NO_STRANDED_DELIVERY_GRACE}. Answered deliveries' leases are already closed. */
+  /** Once at startup, before the recovery drain; see {@link NO_STRANDED_DELIVERY_GRACE}. Answered deliveries' leases are already closed. */
   reclaimStrandedEventDeliveries(): void {
     const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE);
 
@@ -912,6 +921,7 @@ export class ChatSession {
             return;
           case 'reasoning-delta':
           case 'model-fallback':
+          case 'context-admitted':
           case 'done':
           case 'error':
             return;
@@ -946,14 +956,23 @@ export class ChatSession {
       task: item.text,
       ...prepared.execution,
       cacheKeptAliveUntil,
+      ...(item.continuation !== undefined && {
+        resumedSteps: item.continuation.finishedSteps,
+        resumedMidStep: item.continuation.partial !== null,
+      }),
     }, (event) => {
       partial.observe(event);
 
       if (event.type === 'model-fallback') this.recordModelFallback(event);
 
+      if (event.type === 'context-admitted') {
+        this.emit({ type: 'broadcast', event: { type: 'context_admitted', requestTokens: event.tokens, contextWindow: event.contextWindow } });
+      }
+
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
 
-      if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') return this.emit(event);
+      if (event.type === 'text-delta' || event.type === 'reasoning-delta' || event.type === 'tool-call' || event.type === 'tool-result'
+        || event.type === 'error') return this.emit(event);
     });
 
     const fullText = continuedAnswer(item.continuation, execution);
@@ -1136,7 +1155,7 @@ export class ChatSession {
       const status = input.end.reason;
       const turn = this.snapshotTurn(item, input.assistantText, messageId);
 
-      // Decided where the roster is frozen: the decision is the firing. A turn that is the reminder never owes another.
+      // Decided where the roster is frozen; a turn that is the reminder never owes another.
       const taskReminder = input.event === TASK_REMINDER_EVENT
         ? null
         : this.taskReminders.decide({
@@ -1240,7 +1259,7 @@ export class ChatSession {
     return this.queue.find((item) => item.kind === 'user')?.turnId ?? this.turnId;
   }
 
-  /** Re-queues the turn the last process died inside, first, with its output as prior output; its reservation is claimed here so {@link restorePendingSends} skips it. */
+  /** Re-queues first the turn the last process died inside, claiming its reservation so {@link restorePendingSends} skips it. */
   private reopened: string | null = null;
   private reopenedTurnId: string | null = null;
   private reopenedRunId: string | null = null;
@@ -1249,7 +1268,7 @@ export class ChatSession {
     const open = this.eventRecorder.openTurn();
 
     if (open === null) return;
-    const { runId, turn, steps, partial } = open;
+    const { runId, turn, steps, finishedSteps, partial } = open;
 
     const item: QueueItem = {
       text: turn.text,
@@ -1263,6 +1282,7 @@ export class ChatSession {
         runId,
         messageId: turn.messageId,
         steps,
+        finishedSteps,
         partial: partial === null ? null : { text: partial.text, toolCalls: partial.toolCalls },
       },
       settle: () => {},

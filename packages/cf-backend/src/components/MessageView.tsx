@@ -17,7 +17,7 @@ import {
   describeToolCall, rowText, summarizeToolCall,
 } from "@kinu.run/core";
 import type { AdvisorSeverity, DiffAnchor, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
-import { changeNotesCard } from "@kinu.run/core";
+import { changeNotesCard, MAIN_AGENT } from "@kinu.run/core";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
@@ -519,8 +519,8 @@ export function ModelFallbackRows({ notices }: { notices: readonly string[] }) {
   ));
 }
 
-function SystemEventCard({ event, text, state }: {
-  event: string; text: string; state: CardState;
+function SystemEventCard({ label = "System", event, text, state }: {
+  label?: string; event: string; text: string; state: CardState;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -534,7 +534,7 @@ function SystemEventCard({ event, text, state }: {
           aria-expanded={expanded}
         >
           <GearSixIcon size={11} className="shrink-0 p-accent" weight="fill" />
-          <span className="shrink-0 font-semibold p-accent">System</span>
+          <span className="shrink-0 font-semibold p-accent">{label}</span>
           <span className="p-text-4">{event.replace(/_/g, " ")}</span>
           <span className="p-text-3"><ShownCaption state={state} /></span>
           <span className="ml-auto shrink-0 p-text-3">
@@ -595,6 +595,10 @@ export function ProgrammaticTurnCard({ turn, text, state }: {
 
   if (turn.kind === "system_event") {
     return <SystemEventCard event={turn.event} text={text} state={state} />;
+  }
+
+  if (turn.kind === "delegated_task") {
+    return <SystemEventCard label="Task" event={`from ${turn.from === MAIN_AGENT ? "Main" : turn.from}`} text={text} state={state} />;
   }
 
   return <DrainedEventsCard text={text} state={state} />;

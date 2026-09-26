@@ -12,10 +12,12 @@ import type { SqlDatabase, SqlRow, SqlValue } from '@nimbus-sh/core/runtime/os-c
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { programmaticHostOver } from './helpers/programmatic-host';
 import { orchestratorHarness } from './helpers/actor-harness';
-import { ActorAgent } from '../src/actor-agent';
 import { WORKSPACE_TERMINAL_TAG, WorkspaceTerminalOutputSchema } from '@kinu.run/core';
 import type { TerminalSocket, WorkspaceTerminal } from '../src/workspace-host';
 import { socketConnection } from './helpers/bindings';
+
+// After the harness registers the SDK mock: a static import would bind it to the real `agents` Agent.
+const { ActorAgent } = await import('../src/actor-agent');
 
 const databases: Database[] = [];
 

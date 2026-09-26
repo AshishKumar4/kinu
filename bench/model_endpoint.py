@@ -12,9 +12,9 @@ TypeScript is not importable:
    workspaces and a ``settle-probe`` on the owner's PRODUCTION account among
    his own twenty-eight, with nothing on the account able to say which harness
    made them.
-2. TARGET. A run reaches the deployment or a loopback dev server.
-   Single environment since 2026-09-10: there is no staging, and no
-   override flag. A benchmark that names no origin measures the deployment.
+2. TARGET. A run reaches one of the two deployments, production or staging,
+   or a loopback dev server. There is no override flag. A benchmark that
+   names no origin measures production.
 
 The target rule is an allowlist. A denylist of production hostnames permits
 every origin nobody has thought of yet.
@@ -38,13 +38,12 @@ DEFAULT_WORKERS_AI_MODEL_ID = "@cf/zai-org/glm-5.3"
 #: credential — and never as a denylist entry. Mirrors the top-level
 #: CLI_PUBLIC_ORIGIN in wrangler.jsonc, pinned by bench/tests/test_model_endpoint.py.
 PRODUCTION_ORIGIN = "https://kinu.run"
-#: The eval target. Mirrors EVAL_DEPLOYMENT_ORIGIN in eval-identity.ts and
-#: the deployment's CLI_PUBLIC_ORIGIN, pinned by the same test.
-#: Single environment since 2026-09-10: staging is gone, the deployment is
-#: the target.
+#: The default eval target. Mirrors EVAL_DEPLOYMENT_ORIGIN in eval-identity.ts
+#: and production's CLI_PUBLIC_ORIGIN, pinned by the same test.
 EVAL_DEPLOYMENT_ORIGIN = "https://kinu.run"
-#: Backwards-compat alias; new code names the deployment.
-EVAL_STAGING_ORIGIN = EVAL_DEPLOYMENT_ORIGIN
+#: Staging, where every deploy lands first. Mirrors EVAL_STAGING_ORIGIN in
+#: eval-identity.ts and env.staging's CLI_PUBLIC_ORIGIN, pinned by the same test.
+EVAL_STAGING_ORIGIN = "https://staging.kinu.run"
 #: The account every scored run acts as. Mirrors EVAL_SERVICE_ACCOUNT.
 EVAL_SERVICE_ACCOUNT = "eval-service"
 #: The credential variable. Mirrors EVAL_IDENTITY_ENV.token.
@@ -66,7 +65,10 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 #: credential sink, and `https://attacker.example/api/user/ai/v1` would receive
 #: the token. Policy is ``eval_target_allowed``; trust is this set, and no
 #: environment variable widens it.
-_KINU_ORIGINS = frozenset({PRODUCTION_ORIGIN, EVAL_DEPLOYMENT_ORIGIN})
+_KINU_ORIGINS = frozenset({PRODUCTION_ORIGIN, EVAL_DEPLOYMENT_ORIGIN, EVAL_STAGING_ORIGIN})
+
+#: The deployments a scored run may reach. Mirrors EVAL_DEPLOYMENT_ORIGINS.
+_EVAL_DEPLOYMENT_ORIGINS = frozenset({EVAL_DEPLOYMENT_ORIGIN, EVAL_STAGING_ORIGIN})
 
 _PROVIDER_KEY_ENVS = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -79,14 +81,14 @@ _CLOUDFLARE_AI_PATH = re.compile(r"^/client/v4/accounts/[^/]+/ai/v1/?$")
 def eval_target_allowed(origin: str, environ: Mapping[str, str] | None = None) -> bool:
     """Whether a scored run may point at *origin*.
 
-    Single environment since 2026-09-10: the deployment or a loopback dev
-    server. ``environ`` is accepted for call-compat and ignored; there is no
-    override flag, matching eval-identity.ts.
+    Production, staging or a loopback dev server. ``environ`` is accepted for
+    call-compat and ignored; there is no override flag, matching
+    eval-identity.ts.
     """
     parsed = urlsplit(origin.strip().rstrip("/"))
     if parsed.hostname in _LOOPBACK_HOSTS:
         return True
-    return f"{parsed.scheme}://{parsed.netloc}" == EVAL_DEPLOYMENT_ORIGIN
+    return f"{parsed.scheme}://{parsed.netloc}" in _EVAL_DEPLOYMENT_ORIGINS
 
 
 def assert_eval_target(base_url: str, environ: Mapping[str, str] | None = None) -> str:
@@ -104,8 +106,8 @@ def assert_eval_target(base_url: str, environ: Mapping[str, str] | None = None) 
     parsed = urlsplit(raw)
     raise ValueError(
         f"{parsed.scheme}://{parsed.netloc} is not an eval target. Benchmarks run "
-        f"against {EVAL_DEPLOYMENT_ORIGIN}, or a loopback dev server, so they can "
-        f"never write outside the allowlist."
+        f"against {EVAL_DEPLOYMENT_ORIGIN}, {EVAL_STAGING_ORIGIN} or a loopback dev "
+        f"server, so they can never write outside the allowlist."
     )
 
 

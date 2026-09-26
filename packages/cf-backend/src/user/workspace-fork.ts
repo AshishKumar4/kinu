@@ -3,6 +3,7 @@ import type { ForkFrame } from '@kinu.run/core';
 import type { SqlExecutor, ForkFileSource, ActorHandle } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import type { WorkspaceEntry } from './user-do';
+import { KinuError } from '@kinu.run/core/obs';
 
 export interface CloudForkRegistry {
   reserveWorkspace(caller: UserCaller, name: string, displayName?: string): Promise<{
@@ -55,12 +56,12 @@ export async function deliverCloudFork(input: {
 }): Promise<{ workspaceId: string; forkPointMs: number }> {
   const registration = await input.registry.reserveWorkspace(input.caller, input.name, input.name);
 
-  if (!registration.reserved) throw new Error(`agent name already exists: "${input.name}"`);
+  if (!registration.reserved) throw new KinuError('bad_input', `agent name already exists: "${input.name}"`);
 
   const destroy = async (thrown: { cause: unknown }): Promise<never> => {
     try { await input.registry.removeWorkspace(input.caller, input.name, input.ownerUserId); }
     catch (rollback) {
-      throw new AggregateError([thrown.cause, rollback], `fork creation failed and cleanup also failed for "${input.name}"`, { cause: rollback });
+      throw new KinuError('io', `fork creation failed and cleanup also failed for "${input.name}"`, { cause: new AggregateError([thrown.cause, rollback]) });
     }
 
     throw thrown.cause;
@@ -81,8 +82,8 @@ export async function deliverCloudFork(input: {
           input.caller, input.name, registration.entry.createdAt,
         );
 
-        if (!released) throw new Error(`fork target is owned by another user and reservation cleanup failed for "${input.name}"`);
-        throw new Error(`agent name already exists: "${input.name}"`);
+        if (!released) throw new KinuError('io', `fork target is owned by another user and reservation cleanup failed for "${input.name}"`);
+        throw new KinuError('bad_input', `agent name already exists: "${input.name}"`);
       }
 
       if (ack.status === 'published') { landed = ack; break; }
@@ -92,7 +93,7 @@ export async function deliverCloudFork(input: {
         input.caller, input.name, registration.entry.createdAt,
       );
 
-      if (!held) throw new Error(`the reservation for "${input.name}" is no longer held by this transfer`);
+      if (!held) throw new KinuError('unavailable', `the reservation for "${input.name}" is no longer held by this transfer`);
     }
   } catch (cause) { return destroy({ cause }); }
 

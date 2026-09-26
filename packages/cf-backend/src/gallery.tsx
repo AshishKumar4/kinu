@@ -3549,7 +3549,6 @@ function AgentChatsPane({ conversation, transcript, onSend }: {
     grows: "up",
     content: transcript,
     fetched: false,
-    exhausted: true,
     initialScroll: ui.savedScroll,
     onScrollPosition: ui.rememberScroll,
   });
@@ -3594,6 +3593,18 @@ function AgentChatsScene() {
     main: Array.from({ length: AGENTCHATS_ROWS }, (_, i) => `Main turn ${i + 1}: enough rows for the scroller to hold a position.`),
     scout: Array.from({ length: AGENTCHATS_ROWS }, (_, i) => `Scout turn ${i + 1}: an existing conversation with history.`),
   });
+
+  useEffect(() => {
+    const keepNewest = (event: Event) => {
+      const count = v.safeParse(v.number(), event instanceof CustomEvent ? event.detail : null);
+
+      if (count.success) setTranscripts((current) => Object.fromEntries(Object.entries(current).map(([agent, rows]) => [agent, rows.slice(-count.output)])));
+    };
+
+    window.addEventListener("gallery:keep-newest", keepNewest);
+
+    return () => window.removeEventListener("gallery:keep-newest", keepNewest);
+  }, []);
 
   const [sent, setSent] = useState<readonly { agent: string; mode: ChatMode; text: string }[]>([]);
   const [dismissals, setDismissals] = useState<readonly { agent: string; historyKept: boolean }[]>([]);

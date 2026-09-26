@@ -123,7 +123,7 @@ import { TierIdSchema,
   reasoningEffortOptions,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
   changeRoleAsOwner, agentsProfileContext, canonicalConversationId,
-  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile, parentReasoningEffort,
+  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile, ownProfileChoices,
   type PinnedProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
@@ -151,7 +151,7 @@ import { TierIdSchema,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
-  type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
+  type ArmedCompaction, type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
@@ -845,6 +845,10 @@ export class LocalAgentSession {
     return this.effectiveModelSpec();
   }
 
+  nextTurnTier(): Promise<ResolvedTurnProfile['tier']> {
+    return this.profiles().nextTurnTier({ workMode: this.actorSession.workMode, ancestors: this.ancestors?.() });
+  }
+
   getActiveRoleId(): string {
     if (this.actorSession.profile) return this.actorSession.profile.role.id;
 
@@ -1139,9 +1143,13 @@ export class LocalAgentSession {
     return this.chat.revertTo(entryId);
   }
 
-  /** Force compaction on the next turn; one-shot (`takeForceCompaction` consumes it). */
-  armForcedCompaction(): void {
-    this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey);
+  clearConversation(): Promise<void> {
+    return this.chat.clear();
+  }
+
+  /** One-shot: 'user' folds all but the last exchanges (/compact); 'force' folds to the ladder's target. */
+  armCompaction(kind: ArmedCompaction): void {
+    this.compactionState.armCompaction(this.cacheIdentity().sessionKey, kind);
   }
 
   /** Aborted by {@link end}, so an MCP connect that never answers cannot block ending. */
@@ -1353,6 +1361,7 @@ export class LocalAgentSession {
     }
 
     const recovered = await recoverActorTurns({
+      installedBuild: this.actorHost.installedBuild,
       resumable: (limit) => this.actorHost.resumable(limit),
       acquire: async (reference) => reference.actorId === this.rt.actor.actorId
         ? { runtime: this.rt, stores: this.stores, session: this.actorSession }
@@ -1361,7 +1370,7 @@ export class LocalAgentSession {
 
     diagnostics.event('actor.turns_recovered', {
       verified: recovered.verified.length, refused: recovered.refused.length, failed: recovered.failed.length,
-      unreadable: recovered.unreadable.length, active: recovered.active.length,
+      unreadable: recovered.unreadable.length, active: recovered.active.length, stalled: recovered.stalled.length,
     });
     const advisorOrphans: OrphanedFiber[] = [];
 
@@ -1641,12 +1650,9 @@ export class LocalAgentSession {
         ...codemodeCapabilitiesFor(this.codemodeProviders(workMode)),
       ],
       activeSkills: activeSkills?.active.map((skill) => skill.name) ?? [],
+      ...ownProfileChoices(this.config, profileInputs, this.ancestors?.()),
       // This message's tier, then the hire's pinned tier, else the role's own default (not the workspace's).
       explicitTier: tierFromMetadata(item.metadata) ?? this.config.getAssignedTier() ?? undefined,
-      // Without this a setModel pin is accepted but never used.
-      workspaceModel: this.config.getModel(),
-      explicitEffort: this.config.getReasoningEffort(),
-      inheritedEffort: this.ancestors === undefined ? null : parentReasoningEffort(profileInputs, this.ancestors()),
     });
 
     this.actorSession.bindProfile(lease, profile, profileInputs);
@@ -2469,6 +2475,8 @@ export class LocalAgentSession {
     const { directory } = localActorDirectory(this.rt.actor);
 
     return createActorHost({
+      // The CLI has no tracer.
+      tracing: undefined,
       storage: {
         sql: this.rt.storage.sql,
         transactionSync: (write) => this.rt.storage.transactionSync(write),
@@ -2761,7 +2769,7 @@ export class LocalAgentSession {
         jobs: () => this.jobs,
         budget: () => this.budget,
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
-        armCompactNow: () => { this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey); },
+        armCompactNow: () => { this.compactionState.armCompaction(this.cacheIdentity().sessionKey, 'force'); },
       })),
       createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
       createStateCodemodeProvider(this.rt.actor.programState),

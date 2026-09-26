@@ -197,6 +197,12 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'listed `node_modules`, and preparing against Kinu\'s copy of the DDL is the defect class '
     + 'this gate exists to catch.',
   ],
+  [
+    'scripts/promote.ts',
+    'walks the BUILD a staging run published, `dist/kinu/wrangler.json` and every file under '
+    + '`dist/client/downloads/`, to hash each one into the record promotion checks. The build '
+    + 'output is not a repository path and git has never listed it.',
+  ],
 ]);
 
 export type Kind = 'private-enumeration' | 'private-pattern' | 'unmeasured-publication'

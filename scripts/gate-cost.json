@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-09-25",
+  "measuredAt": "2026-09-26",
   "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
   "method": "each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> /usr/bin/time -v bash -c <run>`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)",
   "rows": {
@@ -342,17 +342,6 @@
       "meanThreads": 0.97,
       "samples": 5,
       "loadAtStart": 2.53,
-      "exit": 0
-    },
-    "bun test --timeout=0 scripts/deploy.test.ts": {
-      "wallSeconds": 89.64,
-      "cpuSeconds": 24.65,
-      "peakRssMb": 441.33,
-      "peakRunnable": 10,
-      "peakCpuThreads": 2.1,
-      "meanThreads": 0.28,
-      "samples": 391,
-      "loadAtStart": 2.1,
       "exit": 0
     },
     "bun test --timeout=0 scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts": {
@@ -914,6 +903,39 @@
       "meanThreads": 1.17,
       "samples": 49,
       "loadAtStart": 6.93,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/deadline-capability.test.ts": {
+      "wallSeconds": 0.33,
+      "cpuSeconds": 0.28,
+      "peakRssMb": 67.96,
+      "peakRunnable": 3,
+      "peakCpuThreads": 0,
+      "meanThreads": 0.84,
+      "samples": 5,
+      "loadAtStart": 6.36,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts": {
+      "wallSeconds": 152.68,
+      "cpuSeconds": 60.46,
+      "peakRssMb": 525.13,
+      "peakRunnable": 19,
+      "peakCpuThreads": 2.12,
+      "meanThreads": 0.4,
+      "samples": 618,
+      "loadAtStart": 13.32,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/wake-loops.test.ts": {
+      "wallSeconds": 1.39,
+      "cpuSeconds": 0.1,
+      "peakRssMb": 35.53,
+      "peakRunnable": 0,
+      "peakCpuThreads": 0.23,
+      "meanThreads": 0.07,
+      "samples": 8,
+      "loadAtStart": 17.33,
       "exit": 0
     }
   }

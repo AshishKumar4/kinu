@@ -9,7 +9,7 @@ import {
   PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
   NotePencilIcon, ArrowLeftIcon, DatabaseIcon,
 } from "@phosphor-icons/react";
-import { hasWorkspaceWork, timeAgo } from "@kinu.run/core";
+import { hasWorkspaceWork, revealMisrepresenting, timeAgo } from "@kinu.run/core";
 import type { AgentTaskTree, ChangelogEntry, MemoryEntry, OwnedPlan, PendingAction, PendingActionKind, PlanReview, WorkspaceWork } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
@@ -517,7 +517,7 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
             <input type="checkbox" className="mt-0.5 shrink-0" checked={chosen.has(action.id)}
               onChange={() => flow.toggle(action.id, allIds)} disabled={state.busy} />
             <span className="min-w-0 flex-1">
-              <code className="block p-t-code p-text break-all whitespace-pre-wrap">{action.detail}</code>
+              <code className="block p-t-code p-text break-all whitespace-pre-wrap">{revealMisrepresenting(action.detail ?? "")}</code>
               <span className="block p-meta p-text-3 mt-0.5">{action.title} · queued {timeAgo(action.at)}</span>
             </span>
           </label>

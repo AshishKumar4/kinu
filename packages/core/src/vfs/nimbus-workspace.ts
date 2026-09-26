@@ -11,7 +11,7 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { adoptGeneration, GENERATION_KEY, generation, type GenerationContext } from '@nimbus-sh/fabric/generation.js';
+import { assumeGeneration, generation } from '@nimbus-sh/fabric/generation.js';
 import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
@@ -242,7 +242,7 @@ export interface WorkspaceOptions {
    * Process-id generation storage; must never repeat a value, since boot revokes append capabilities
    * at or below `generation * 1_000_000`. See {@link workspaceGenerationStorage}.
    */
-  generation: GenerationContext;
+  generation: WorkspaceGeneration;
   /** Runtime packages the host can install; supplied by the host because they read `node:fs`. */
   runtimes?: readonly RuntimePackage[];
   /** Absent on workerd, where no wasm interpreter can run. */
@@ -265,14 +265,8 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
       try {
         const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
         // Boot revokes append writers at or below `generation * PID_GEN_STRIDE`, so the pid base must be
-        // this generation. Fabric hides storage failures, so read before adopting and require the bump.
-        const adopted = generation(opts.generation);
-        const before = adopted !== 0 ? null : v.parse(v.optional(v.number()), await opts.generation.storage.get(GENERATION_KEY)) ?? 0;
-        await adoptGeneration(opts.generation);
-        const generationNow = generation(opts.generation);
-        const expected = before === null ? adopted : before + 1;
-
-        if (generationNow !== expected) throw new KinuError('unavailable', 'the workspace generation counter could not be persisted');
+        // this generation.
+        const generationNow = takeWorkspaceGeneration(opts);
 
         processes.setPidBase(generationNow * PID_GEN_STRIDE);
 
@@ -415,23 +409,33 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
 const GENERATION_TABLE = 'kinu_workspace_generation';
 
+/** One past the persisted generation, in one write transaction (ADR W1). */
+function takeWorkspaceGeneration(opts: Pick<WorkspaceOptions, 'sql' | 'transactions' | 'generation'>): number {
+  const adopted = generation(opts.generation);
+
+  if (adopted !== 0) return adopted;
+  const transactions = opts.transactions.storage;
+
+  if (transactions === undefined) throw new KinuError('unsupported', 'a workspace takes its generation in a transaction, and this host has none');
+
+  const next = transactions.transactionSync(() => {
+    opts.sql.exec(`INSERT INTO ${GENERATION_TABLE} (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1`);
+
+    return v.parse(v.pipe(v.number(), v.integer(), v.minValue(1)), Number([...opts.sql.exec(`SELECT value FROM ${GENERATION_TABLE} WHERE id = 1`)][0]?.value));
+  });
+
+  assumeGeneration(opts.generation, next);
+
+  return next;
+}
+
+export interface WorkspaceGeneration {
+  readonly table: typeof GENERATION_TABLE;
+}
+
 /** The generation counter as a single SQLite row, so it survives eviction and restarts. */
-export function workspaceGenerationStorage(sql: SqlDatabase): GenerationContext {
+export function workspaceGenerationStorage(sql: SqlDatabase): WorkspaceGeneration {
   sql.exec(`CREATE TABLE IF NOT EXISTS ${GENERATION_TABLE} (id INTEGER PRIMARY KEY, value INTEGER NOT NULL)`);
 
-  return {
-    storage: {
-      async get() {
-        const [row] = [...sql.exec(`SELECT value FROM ${GENERATION_TABLE} WHERE id = 1`)];
-
-        return row === undefined ? undefined : Number(row.value);
-      },
-      async put(_key, value) {
-        sql.exec(
-          `INSERT INTO ${GENERATION_TABLE} (id, value) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value`,
-          Number(value),
-        );
-      },
-    },
-  };
+  return { table: GENERATION_TABLE };
 }

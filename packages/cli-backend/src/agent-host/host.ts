@@ -13,7 +13,10 @@ import {
   SubordinateRosterStore,
   SubordinateIdentityStore,
   admitSubordinateTask,
+  dismissOrphanedAssignments,
   drainAssignments,
+  delegatedTaskMetadata,
+  MAIN_AGENT,
   type SubordinateInheritedContext,
   actorReferenceOf,
   canonicalConversationId,
@@ -459,6 +462,8 @@ export class LocalAgentHost {
     const orchestrations = new Map<string, LocalOrchestration>();
 
     const host = createActorHost({
+      // The CLI has no tracer.
+      tracing: undefined,
       storage: {
         sql,
         transactionSync: (write) => db.transaction(write)(),
@@ -1406,16 +1411,29 @@ export class LocalAgentHost {
    * reactor digest. `drainTurnId` splices the birth context. Roots have no assignments.
    */
   private async drainAssignedWork(entry: HostEntry): Promise<void> {
-    if (entry.parentKey === null) return;
+    const { parentKey } = entry;
+
+    if (parentKey === null) {
+      const hires = entry.tree.directory.list().filter((record) => record.kind === 'subordinate');
+
+      for (const orphan of dismissOrphanedAssignments(makeSqlExec(entry.tree.db), new Set(hires.map((record) => record.actorId)))) {
+        diagnostics.event('subordinate.assignment_orphaned', { agent: entry.key, actor: orphan.actorId, assignment: orphan.id });
+      }
+
+      return;
+    }
 
     const swept = await drainAssignments(entry.eventLog, {
       now: Date.now(),
       budget: LOCAL_ASSIGNMENT_BUDGET,
       staleMs: LOCAL_ASSIGNMENT_LEASE_GRACE_MS,
       run: async (task) => {
+        const parent = this.entries.get(parentKey);
+        const hirer = parent === undefined || parent.parentKey === null ? MAIN_AGENT : parent.name;
+
         const admitted = await entry.session.enqueueTurn({
           text: task.body,
-          metadata: { kinuEvent: 'subordinate_task', kinuMode: task.mode, drainTurnId: task.turnId },
+          metadata: { ...delegatedTaskMetadata(hirer, task.mode), drainTurnId: task.turnId },
           // The row's id, so a re-delivery lands on the same durable message.
           idempotencyKey: task.sequenceId,
         });

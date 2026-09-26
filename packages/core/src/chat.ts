@@ -30,7 +30,7 @@ import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import { contextWindowForModel, type ResolvedModelWindow } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
-import type { ExtensionHost } from './extension';
+import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
 import { describeProviderError, providerFailureFacts, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
@@ -40,11 +40,12 @@ import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } f
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES, RATE_LIMIT_HANDOVER_HEADER } from './providers/rate-limit-retry';
 import { callAccountOf, type CallAccount } from './providers/quota';
-import { classifyErrorCode, diagnostics, toKinuError } from './obs/index';
+import { classifyErrorCode, diagnostics, renderThrownChain, toKinuError, type TracedInvocation } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 import { invalidToolCallRefusal, toolSchemaDialect, withToolSchemaDialect } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
+import { ModelCallSpan, traceTools } from './turn-trace';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -79,6 +80,7 @@ export type ChatEvent =
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
   | { type: 'error'; message: string }
   | { type: 'model-fallback'; from: string; to: string; reason: string }
+  | { type: 'context-admitted'; tokens: number; contextWindow: number }
   /** `text`: the answer, else what streamed, else a tool-result synthesis. `answer`: only the final step's text
    *  ({@link answerFromSteps}), absent when there is none. */
   | { type: 'done'; text: string; responseMessages: ModelMessage[]; answer?: string };
@@ -125,8 +127,7 @@ export interface ChatOptions {
   credentialOf?: (spec: string) => Promise<string | null>;
   /** Provider-reported prompt tokens of the previous turn's final request, the measured compaction trigger. */
   providerReportedTokens?: number;
-  /** 'force' when the caller consumed an armed force-compaction flag after an overflow. */
-  transformTrigger?: 'auto' | 'force';
+  transformTrigger?: CompactionTrigger;
   /** The provider's own request token count (providers/input-tokens.ts); omitted, the shared estimate gates. */
   countInputTokens?: (request: CountableRequest) => Promise<InputTokenCount>;
   signal?: AbortSignal;
@@ -150,6 +151,7 @@ export interface ChatOptions {
   /** Where each call opens and closes its `model_operation` rows, so one in flight at process death shows in
    *  `RunEventRecorder.unterminatedModelOperations`. */
   operations?: ModelOperationSink;
+  trace?: TracedInvocation;
 }
 
 /**
@@ -550,11 +552,15 @@ function dialectSpec(current: { readonly spec: string; readonly provider: string
 
 /** One chat turn; callers append its response messages to history. A cut turn yields `done`, then throws
  *  {@link INTERRUPTED_TURN}; a dead provider stream throws without `done`. */
+function* admittedEvent(tokens: number | undefined, contextWindow: number): Generator<ChatEvent> {
+  if (tokens !== undefined) yield { type: 'context-admitted', tokens, contextWindow };
+}
+
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const extensions = opts.extensions;
 
   // Extension tools never shadow a caller tool of the same name.
-  const tools: ToolSet = extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools;
+  const tools = traceTools(opts.trace, extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools);
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
 
   let stepCount = 0;
@@ -592,9 +598,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   // Blocks born at the turn's first step ride right before its input, so the request stays the last user-role
   // content.
-  const { messages: turnMessages, turnStart } = await assembleTurnMessages({
+  const { messages: turnMessages, turnStart, admittedTokens } = await assembleTurnMessages({
     ...assembly, history: initialContext?.messages ?? assembly.history, turnStart: initialContext?.turnStart,
   });
+
+  yield* admittedEvent(admittedTokens, contextWindow);
 
   let initialContextAvailable = initialContext !== null;
 
@@ -670,6 +678,30 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     request: readonly ModelMessage[],
     stepOffset: number,
   ): AsyncGenerator<ChatEvent, CallOutcome> {
+    const span = new ModelCallSpan(opts.trace, {
+      spec: current.spec, provider: current.provider, index: calls, fallback: servingFallback !== undefined,
+    });
+
+    try {
+      const outcome = yield* callModelOnce(request, stepOffset, span);
+      span.finish({ steps: outcome.steps.length, interrupted: outcome.interrupted });
+
+      if (outcome.failure !== null) span.fail(outcome.failure.error);
+
+      return outcome;
+    } catch (error) {
+      span.fail(error instanceof Error ? error : new Error(renderThrownChain({ cause: error })));
+      throw error;
+    } finally {
+      await span.close();
+    }
+  };
+
+  const callModelOnce = async function* (
+    request: readonly ModelMessage[],
+    stepOffset: number,
+    span: ModelCallSpan,
+  ): AsyncGenerator<ChatEvent, CallOutcome> {
     const callIndex = calls++;
 
     const operation = beginModelOperation(
@@ -680,7 +712,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     const call = new ProviderCall(servingFallback);
 
-    const result = streamText({
+    const result = span.launch(() => streamText({
       model: current.model,
       system: cache.system,
       // Ours, not the vendor's default: see PROVIDER_SDK_RETRIES.
@@ -740,7 +772,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           call.stepFailure ??= { doing: 'run the step hook', cause };
         }
       },
-    });
+    }));
 
     suppressDeferredRejections(result, () => call.interrupted || (opts.signal?.aborted ?? false));
     // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.

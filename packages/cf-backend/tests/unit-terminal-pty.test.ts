@@ -331,7 +331,7 @@ describe('attaching a terminal', () => {
     const { deps } = harness({ attach: async () => { throw new Error('container is not listening on 3000'); } });
     const response = await terminalRequest(attachRequest('executor=sandbox'), deps);
     expect(response?.status).toBe(503);
-    expect(String((await body(response)).error)).toContain('not listening');
+    expect(String((await body(response)).error)).not.toContain('not listening');
   });
 });
 
@@ -375,7 +375,7 @@ describe('a terminal failure names the workspace and the executor', () => {
     );
 
     expect(response?.status).toBe(503);
-    expect(String((await body(response)).error)).toContain('not answering');
+    expect(String((await body(response)).error)).not.toContain('not answering');
     expect(trace.calls).toEqual(['prepareTerminal:sandbox']);
 
     const preflight = terminalRows(logs, 'terminal.preflight_failed');
@@ -467,7 +467,7 @@ describe('an attached terminal and a container that wants to sleep', () => {
     );
 
     expect(response?.status).toBe(503);
-    expect(String((await body(response)).error)).toContain('snapshot not found');
+    expect(String((await body(response)).error)).not.toContain('snapshot not found');
   });
 
   test('a beat for a lane that has no terminal is refused like an attach', async () => {

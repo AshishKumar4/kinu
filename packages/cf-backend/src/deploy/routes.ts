@@ -61,11 +61,9 @@ interface DeployVariables {
 const RUN_PATH = /^\/api\/deploy\/runs\/([A-Za-z0-9_-]+)(\/[a-z/-]*)?$/u;
 
 /** The OAuth return; the door's API is `deployRoutes`. */
-export async function handleDeployCallback(request: Request, env: Env): Promise<Response | null> {
-  const url = new URL(request.url);
+export const deployCallbackRoutes = new Hono<FamilyEnv<Env, object>>();
 
-  return url.pathname === DEPLOY_CALLBACK_PATH ? callback(request, env, url) : null;
-}
+deployCallbackRoutes.all(DEPLOY_CALLBACK_PATH, async (c) => callback(c.req.raw, c.env, new URL(c.req.url)));
 
 export const deployRoutes = new Hono<FamilyEnv<Env, DeployVariables>>();
 

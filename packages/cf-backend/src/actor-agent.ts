@@ -159,7 +159,7 @@ import {
   reasoningEffortOptions,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
-  resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, createAgentConfigStore, type PinnedProfile,
+  resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
@@ -225,6 +225,8 @@ import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
+import { Hono, type Context } from 'hono';
+import { rawPath, rethrow } from './api/context';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
 interface ModelDimensions {
@@ -439,6 +441,36 @@ const CODEMODE_TOOL_TOOL = 'eval' satisfies BuiltinToolName;
  * `Agent.schedule()` types its callback as `keyof this`, which excludes protected members. */
 export const TERMINAL_RETRY_CALLBACK = '_kinuTerminalRetryTick';
 
+/** A lap wake's streak, in its row so eviction keeps the pace. */
+export interface WakePace {
+  readonly laps: number;
+  /** Comma-joined arms last named; null outside a streak. */
+  readonly arms: string | null;
+}
+
+/** Ledgers that can owe work with no instant. */
+export interface UntimedArms {
+  readonly openDrainLease?: boolean;
+  readonly terminalIncomplete?: boolean;
+  readonly unfinishedHeads?: boolean;
+  readonly runningSwarms?: boolean;
+  readonly untimedJobs?: boolean;
+  readonly retirements?: boolean;
+  readonly pendingBirths?: boolean;
+  readonly pendingDeletions?: boolean;
+  readonly unsettledClaims?: boolean;
+  readonly admittedDelegations?: boolean;
+  readonly chatLoop?: boolean;
+}
+
+const WakePaceSchema = v.object({ laps: v.pipe(v.number(), v.integer(), v.minValue(0)), arms: v.nullable(v.string()) });
+
+function wakePaceOf(row: Pick<Schedule<unknown>, 'payload'>): WakePace | null {
+  const parsed = v.safeParse(WakePaceSchema, row.payload);
+
+  return parsed.success ? parsed.output : null;
+}
+
 export interface ActorDynamicContextExtras {
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
   readonly extraMissingCapabilities?: () => readonly MissingCapability[];
@@ -548,7 +580,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Worker-side DO RPC only, deliberately not `@callable`. `missed` counts failed subtree
    * pushes; the caller reports them to the UserDO so it can arm reconciliation. */
   async installWorkspaceCapability(token: string): Promise<{ ok: true; missed: number }> {
-    if (!token) throw new Error('capability token required');
+    if (!token) throw new KinuError('denied', 'capability token required');
     // A native DO RPC does not route through partyserver, so it can land before `onStart` has run
     // (same race as `OrchestratorAgent.claimOwner`). Flag-gated: a no-op once initialized.
     this.ensureSchema();
@@ -768,7 +800,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected async subordinateView(name: string): Promise<SubordinateView> {
     const entry = this.subordinateRoster.get(name);
 
-    if (entry === null) throw new Error(`Subordinate "${name}" is not in the roster`);
+    if (entry === null) throw new KinuError('missing', `Subordinate "${name}" is not in the roster`);
     const reference = entry.actorReference;
 
     if (reference === null) {
@@ -1128,27 +1160,28 @@ export abstract class ActorAgent extends Agent<Env> {
     };
 
     const dispatchRequest = this.onRequest.bind(this);
+    const requests = new Hono({ getPath: rawPath });
 
-    this.onRequest = async (request) => {
-      const url = new URL(request.url);
+    requests.use('*', async (_c, next) => (this.storageRefusal === undefined
+      ? next()
+      : Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] })));
 
-      if (this.storageRefusal !== undefined) {
-        return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
-      }
+    // The seed is fetched on the same path the pane's socket opens, so each pane gets its own actor's rows.
+    const seed = async (c: Context): Promise<Response> => {
+      const hosted = hostedActorRoute(c.req.path);
+      const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted.name)?.history());
 
-      if (url.pathname === '/get-messages' || url.pathname.endsWith('/get-messages')) {
-        // The seed is fetched on the same path the pane's socket opens, so each pane gets its own
-        // actor's rows.
-        const hosted = hostedActorRoute(url.pathname);
-        const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted.name)?.history());
+      if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
 
-        if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
-
-        return Response.json(history);
-      }
-
-      return await dispatchRequest(request);
+      return Response.json(history);
     };
+
+    requests.all('/get-messages', seed);
+    requests.all('/:prefix{.*}/get-messages', seed);
+    requests.notFound(async (c) => dispatchRequest(c.req.raw));
+    requests.onError(rethrow);
+
+    this.onRequest = async (request) => requests.fetch(request);
   }
   /** Lazy: `actorHandle()` resolves the directory row `ensureSchema` creates, after field init. */
   private _pendingSends: PendingSendStore | null = null;
@@ -1308,18 +1341,18 @@ export abstract class ActorAgent extends Agent<Env> {
    * Soonest-wins arm of one wake row per `callback`. A due row counts (it fires now) unless its tick is
    * running, since the SDK deletes that one. Re-reads after its write so racers converge.
    */
-  protected async armWakeRow(callback: keyof this & string, atMs: number): Promise<string> {
+  protected async armWakeRow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
     const nowSec = Math.floor(Date.now() / 1000);
     // Round up: the SDK stores whole seconds, and waking early would re-arm and busy-spin the alarm.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
 
-    const armed = async (): Promise<{ id: string; time: number }[]> =>
+    const armed = async (): Promise<{ id: string; time: number; pace: WakePace | null }[]> =>
       (await this.listSchedules())
         .filter((row) => row.callback === callback && !this.runningWakeRows.has(row.id))
-        .map((row) => ({ id: row.id, time: row.time }));
+        .map((row) => ({ id: row.id, time: row.time, pace: wakePaceOf(row) }));
 
-    const earliest = (rows: readonly { id: string; time: number }[]): { id: string; time: number } | undefined =>
-      rows.reduce<{ id: string; time: number } | undefined>((best, row) =>
+    const earliest = <Row extends { id: string; time: number }>(rows: readonly Row[]): Row | undefined =>
+      rows.reduce<Row | undefined>((best, row) =>
         best === undefined || row.time < best.time || (row.time === best.time && row.id < best.id) ? row : best, undefined);
 
     const before = await armed();
@@ -1331,6 +1364,14 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (keeper === undefined) throw new KinuError('io', `the ${callback} wake row vanished while it was armed`);
 
+    // A timed retry inherits the streak it replaces.
+    const carried = pace ?? [...before, ...settled].reduce<WakePace | null>(
+      (most, row) => row.pace !== null && (most === null || row.pace.laps > most.laps) ? row.pace : most, null);
+
+    if (carried !== null && JSON.stringify(carried) !== JSON.stringify(keeper.pace)) {
+      this.ctx.storage.sql.exec('UPDATE cf_agents_schedules SET payload = ? WHERE id = ?', JSON.stringify(carried), keeper.id);
+    }
+
     // The keeper is never cancelled, so failure leaves extra wakes, never zero; errors propagate.
     for (const row of settled) {
       if (row.id !== keeper.id) await this.cancelSchedule(row.id);
@@ -1339,7 +1380,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return keeper.id;
   }
 
-  protected async runWakeRow(own: Schedule<undefined>, body: () => Promise<void>): Promise<void> {
+  protected async runWakeRow(own: Schedule<unknown>, body: () => Promise<void>): Promise<void> {
     this.runningWakeRows.add(own.id);
 
     try {
@@ -1350,15 +1391,15 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** One soonest-wins row per actor; returns the surviving row's id so a caller can release it. */
-  protected scheduleTerminalRetry(atMs: number): Promise<string> {
-    return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs);
+  protected scheduleTerminalRetry(atMs: number, pace?: WakePace): Promise<string> {
+    return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs, pace);
   }
 
   /**
    * Public because `Agent.schedule()` types callbacks as `keyof this`. One pass per alarm: the SDK read
    * every due row first, so a row this pass retired still arrives and runs nothing.
    */
-  async _kinuTerminalRetryTick(_payload: undefined, own: Schedule<undefined>): Promise<void> {
+  async _kinuTerminalRetryTick(_payload: WakePace | undefined, own: Schedule<unknown>): Promise<void> {
     const nowSec = Math.floor(Date.now() / 1000);
     const rows = (await this.listSchedules()).filter((row) => row.callback === TERMINAL_RETRY_CALLBACK);
 
@@ -1368,14 +1409,15 @@ export abstract class ActorAgent extends Agent<Env> {
       if (row.time <= nowSec && row.id !== own.id) await this.cancelSchedule(row.id);
     }
 
-    await this.runWakeRow(own, () => this.terminalRetryPass());
+    await this.runWakeRow(own, () => this.terminalRetryPass(wakePaceOf(own) ?? undefined));
   }
 
-  async terminalRetryPass(): Promise<void> {
+  /** `prior`: the firing row's streak. */
+  async terminalRetryPass(prior: WakePace = { laps: 0, arms: null }): Promise<void> {
     // Arm first, drain second: the next-lap wake is durable before any pass runs, so a kill
     // inside this frame leaves a future row. A tick that finds nothing owed releases it at the end.
-    const armedRowId = await this.scheduleTerminalRetry(
-      Date.now() + recoveryBackoffMs(this.#maintenanceLaps + 1));
+    const lapAt = Date.now() + recoveryBackoffMs(prior.laps + 1);
+    const armedRowId = await this.scheduleTerminalRetry(lapAt, { laps: prior.laps + 1, arms: prior.arms });
 
     // Owed deliveries run every tick; unfinished maintenance re-arms at the shared capped backoff,
     // so a pass that keeps answering unfinished settles at the ceiling, not a one-second loop.
@@ -1390,26 +1432,24 @@ export abstract class ActorAgent extends Agent<Env> {
     // an external event). Only timed work: arm at its instant, soonest-wins. Nothing owed: sleep.
     const nextOwed = this.nextOwedAt();
 
-    if (sweepsUnfinished || recoveryUnfinished || this.owedUntimedWork()) {
-      this.#maintenanceLaps = this.#maintenanceLaps + 1;
+    const arms = { sweeps: sweepsUnfinished, recovery: recoveryUnfinished, ...this.owedUntimedArms() };
+    const named = Object.entries(arms).filter(([, owed]) => owed).map(([arm]) => arm).join(',');
+
+    if (named !== '') {
+      if (named !== prior.arms) diagnostics.event('wake.unfinished_arms', { ...arms, workspace: this.name, source: named });
+
+      await this.scheduleTerminalRetry(lapAt, { laps: prior.laps + 1, arms: named });
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
     } else {
-      this.#maintenanceLaps = 0;
       await this.cancelSchedule(armedRowId);
 
-      if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
+      if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed, { laps: 0, arms: null });
     }
 
     // A turn a deploy cut short reads right by the next tick of the wake it armed.
     this.overviewChanged();
   }
-
-  /**
-   * Consecutive unfinished laps; paces the re-arm. In-memory is enough: the delay is baked into
-   * the schedule row, so a restart only resets the ramp and cannot shorten an armed wake.
-   */
-  #maintenanceLaps = 0;
 
   /**
    * Runs every tick regardless of maintenance's answer, so owed replies never queue behind a sweep.
@@ -1425,7 +1465,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** While true, the tick keeps its lap-paced row. Base owns no rosters; subclasses override. */
   protected owedUntimedWork(): boolean {
-    return false;
+    return Object.values(this.owedUntimedArms()).some(Boolean);
+  }
+
+  protected owedUntimedArms(): UntimedArms {
+    return {};
   }
 
   /** Earliest timed obligation instant, or null when only untimed work (or nothing) remains.
@@ -1765,8 +1809,10 @@ export abstract class ActorAgent extends Agent<Env> {
       claims: this.claims,
       history: this.stores.history,
       installedBuild: this.installedBuildIdentity(),
+      workspace: this.workspaceName(),
       events: this.stores.eventRecorder,
       orchestration: this.orchestrationDeps(),
+      turns: () => this.tracing.turns({ id: this.actorHandle().actorId, kind: 'main' }),
     });
 
     return this._actorSession;
@@ -2661,46 +2707,8 @@ export abstract class ActorAgent extends Agent<Env> {
       + unconfirmed.map((o) => `${o.requestId} (${o.detail ?? 'no detail'})`).join('; '));
   }
 
-  /**
-   * Is there work in this actor's SUBTREE that may still touch the container?
-   *
-   * Asked by the sandbox's own Durable Object before it does anything a live
-   * user of the container would notice. It is a question about safety, so it is
-   * answered conservatively in one direction only: a wrong `true` costs a warm
-   * container, a wrong `false` pulls the filesystem out from under running work.
-   * Every source below is therefore admitted on "may use", never on "will use" —
-   * a `shell` and an `eval` reach the container directly, and every other
-   * kind of work can call one.
-   *
-   * Four durable sources plus one in-memory one, and each answers a question
-   * the others cannot:
-   *   • detached tool calls  — `background_jobs` rows still `running`, which is
-   *     the only record of work whose executor may be in another activation;
-   *   • admitted work       — open turns, pending sends and hosted claims the
-   *     workspace's durable wake must finish, even with no connected client;
-   *   • managed fibers       — anything durably accepted through the fiber
-   *     ledger and not yet settled, `interrupted` included: an interrupted row
-   *     is work a recovery is about to re-drive, not work that has stopped;
-   *   • the live turn        — in memory by nature, and the single most likely
-   *     caller of a container tool.
-   *
-   * No subtree walk: every hosted actor shares this workspace's container, and
-   * `countRunningInWorkspace()` is workspace-wide by contract. Asking that
-   * global question once per child would return the same answer N times, not N
-   * answers.
-   */
-  async hasSandboxBackgroundWork(): Promise<boolean> {
-    if (this._inFlight) return true;
-
-    if (this.jobs.countRunningInWorkspace() > 0) return true;
-
-    if (this.owedUntimedWork()) return true;
-    const fibers = await this.listFibers({ status: ['pending', 'running', 'interrupted'] });
-
-    if (fibers.length > 0) return true;
-
-    return false;
-  }
+  /** Asked by the workspace container's box before it may rest. */
+  abstract sandboxInUse(): Promise<boolean>;
   /** Controllers for foreground long tools; once detached, BackgroundJobRunner owns cancellation. */
   protected readonly _activeToolControllers = new Set<AbortController>();
 
@@ -2936,6 +2944,7 @@ export abstract class ActorAgent extends Agent<Env> {
       tracer: createWorkersTracer(),
       isolateGen: this.isolateGeneration,
       selfPath: this.selfPath,
+      actor: { id: this.actorHandle().actorId, kind: 'main' },
     });
 
     return this._tracing;
@@ -3343,7 +3352,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const factory = this._codemodeFactories.get(key);
 
-    if (factory === undefined) throw new Error(`eval profile ${key} was not built`);
+    if (factory === undefined) throw new KinuError('io', `eval profile ${key} was not built`);
 
     return factory;
   }
@@ -3373,7 +3382,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected requireOwnerUserDO(): UserHubClient {
     const stub = this.getOwnerUserDO();
 
-    if (!stub) throw new Error('Agent has no owner yet. Open it through the authenticated app or CLI first.');
+    if (!stub) throw new KinuError('unavailable', 'Agent has no owner yet. Open it through the authenticated app or CLI first.');
 
     return stub;
   }
@@ -3383,7 +3392,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const workspaceToken = this.workspaceCapabilityToken();
 
     if (!workspaceToken) {
-      throw new Error('This workspace has not been issued a capability token yet. Open it through the authenticated app or CLI first.');
+      throw new KinuError('unavailable', 'This workspace has not been issued a capability token yet. Open it through the authenticated app or CLI first.');
     }
 
     return { workspaceToken };
@@ -3461,7 +3470,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.workspaceFileAnswer('', async () => {
       const shell = this.rt.shell;
 
-      if (!shell) throw new Error('this workspace has no shell');
+      if (!shell) throw new KinuError('unsupported', 'this workspace has no shell');
 
       return shell.exec(command);
     });
@@ -4183,13 +4192,9 @@ export abstract class ActorAgent extends Agent<Env> {
       workMode: requestedWorkMode,
       availableTools,
       activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
+      ...ownProfileChoices(this.config, profileInputs),
       // Request tier, then the tier pinned at hire, then the role's own default.
-      // An absent pin must not read as the workspace default.
       explicitTier: readTurnTier(input.body) ?? this.config.getAssignedTier() ?? undefined,
-      // The workspace's pinned model overrides the role's tier model; without it a setModel pin
-      // is accepted but never used.
-      workspaceModel: this.config.getModel(),
-      explicitEffort: this.config.getReasoningEffort(),
     });
 
     const operation = captureOperationProfile({
@@ -4552,7 +4557,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const route = resolveModelRoute(source, await this.routingProfile());
 
     if (!route) {
-      throw new Error(`${source} is platform-routed: it has no model in the turn profile`);
+      throw new KinuError('unsupported', `${source} is platform-routed: it has no model in the turn profile`);
     }
 
     return {
@@ -4671,7 +4676,7 @@ export abstract class ActorAgent extends Agent<Env> {
       await Promise.all([...this._backgroundTasks].map((task) => task.promise ?? Promise.resolve()));
     }
 
-    throw new Error(
+    throw new KinuError('io', 
       `settleBackgroundTasks: ${String(this._backgroundTasks.size)} task(s) still detached after 32 `
       + 'laps — something keeps enqueuing work; join a narrower seam instead',
     );

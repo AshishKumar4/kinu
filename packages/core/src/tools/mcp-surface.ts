@@ -11,6 +11,7 @@ import { permitInPlan } from '../execution/work-mode';
 import { withClampedToolResults, type ClampToolResultOptions } from './clamp';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 import { mcpToolKey, suffixedMcpToolKey } from './mcp-naming';
+import { quoteUntrusted } from '../safety/untrusted-text';
 
 /** An MCP tool after crossing the RPC seam, with namespacing context for dispatch. */
 export interface SerializableToolDescriptor {
@@ -158,37 +159,15 @@ function nonBlank(value: string | undefined): string | undefined {
   return value !== undefined && value.trim() !== '' ? value : undefined;
 }
 
-/** Line-start `## ` headings (utils/prompt-sections.ts splits on them) and `<word>` blocks. */
-const HEADING_LINE = /^#{1,6}[ \t]+/gm;
-
-const TAG_LINE = /^<(?=\/?[a-zA-Z])/gm;
-
-/** C0 except \t and \n, then DEL and C1; a loop because lint forbids control bytes in regex classes. */
-function dropControlChars(text: string): string {
-  let out = '';
-
-  for (const ch of text) {
-    const code = ch.codePointAt(0) ?? 0;
-    const kept = code === 0x09 || code === 0x0a || (code > 0x1f && !(code >= 0x7f && code <= 0x9f));
-
-    if (kept) out += ch;
-  }
-
-  return out;
-}
-
-/** Normalizes third-party prose: drops control chars, collapses whitespace, neutralizes line-start
- *  directive shapes. Not a prompt-injection filter. */
 function sanitizeRemoteProse(text: string | undefined): string | undefined {
   if (text === undefined) return undefined;
 
-  return dropControlChars(text)
+  return quoteUntrusted(text
+    .replace(/\r\n?/g, '\n')
     .replace(/[ \t]+/g, ' ')
     .replace(/\n[ \t]+|[ \t]+\n/g, '\n')
     .replace(/\n{2,}/g, '\n')
-    .trim()
-    .replace(HEADING_LINE, '')
-    .replace(TAG_LINE, '&lt;');
+    .trim());
 }
 
 /** Drops `""` only for keys that the admitted `inputSchema` declares optional; required keys pass through. */

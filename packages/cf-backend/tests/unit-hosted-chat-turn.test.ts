@@ -10,7 +10,8 @@ import { expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import { terminalChatError } from '@kinu.run/core';
 import * as v from 'valibot';
-import { gatewayWorkspace, runDelegatedTask } from './helpers/actor-harness';
+import { gatewayWorkspace, runDelegatedTask, wakeForDelegatedTask } from './helpers/actor-harness';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, stubAiBinding, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 const ChatResponseSchema = v.looseObject({
@@ -92,4 +93,37 @@ test("a hosted agent's failed turn ends on one error, its reason, before its tit
 
   expect(seen).toEqual([expect.stringMatching(/^turn failed: .*the provider refused the request/u), 'title model']);
   expect(shown).toEqual([expect.stringContaining('the provider refused the request')]);
+});
+
+test('a task admitted while the drain runs another is run by that drain', async () => {
+  const parked = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const answered: string[] = [];
+
+  const workspace = gatewayWorkspace(stubAiBinding(async (run) => {
+    const opening = JSON.stringify(run);
+
+    if (opening.includes('First task.') && !opening.includes('Second task.')) {
+      parked.resolve();
+      await release.promise;
+    }
+
+    answered.push(opening.includes('Second task.') ? 'second' : 'first');
+
+    return chatCompletion(run, 'Done.');
+  }));
+
+  await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
+  const { subordinate } = await workspace.agent.createSubordinateAgent();
+
+  if (subordinate.actorId === null) throw new Error('the added agent has no actor');
+
+  await wakeForDelegatedTask(workspace, subordinate.actorId, 'First task.');
+  await parked.promise;
+  // The wake for the second task finds the drain running the first.
+  await wakeForDelegatedTask(workspace, subordinate.actorId, 'Second task.');
+  release.resolve();
+  await joinHarnessFibers();
+
+  expect(answered).toContain('second');
 });

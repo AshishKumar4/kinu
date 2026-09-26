@@ -4,11 +4,17 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { mcpAccount, unreachableKv } from './helpers/bindings';
-import type { McpAgentClient, McpEnv } from '../src/mcp-server';
+import type { McpAgentClient, McpEnv, McpResolver } from '../src/mcp-server';
+import { serveFamily } from './helpers/api';
 
 mockAgentsSdk();
 
-const { handleMcpRequest } = await import('../src/mcp-server');
+const { mcpRoutes } = await import('../src/mcp-server');
+
+/** The family as the Worker mounts it, resolving through this test's agents. */
+async function serveMcp(request: Request, env: McpEnv<unknown>, resolveAgent: McpResolver): Promise<Response | null> {
+  return await serveFamily(mcpRoutes<McpEnv<unknown>>(() => resolveAgent))(request, env);
+}
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -78,7 +84,7 @@ function initializeRequest(agentName: string, token?: string) {
 describe('MCP server auth gate', () => {
   test('valid CLI bearer token + owned agent → MCP initialize succeeds', async () => {
     const { env, calls, resolveAgent } = mcpWorkspace();
-    const res = await handleMcpRequest(initializeRequest('jarvis', TOKEN), env, resolveAgent);
+    const res = await serveMcp(initializeRequest('jarvis', TOKEN), env, resolveAgent);
     expect(res?.status).toBe(200);
     expect(calls).toContain(`claim:${USER_ID}`);
     expect(await res?.text()).toContain('"serverInfo"');
@@ -86,14 +92,14 @@ describe('MCP server auth gate', () => {
 
   test('no credentials at all → 401', async () => {
     const { env, resolveAgent } = mcpWorkspace();
-    const res = await handleMcpRequest(initializeRequest('jarvis'), env, resolveAgent);
+    const res = await serveMcp(initializeRequest('jarvis'), env, resolveAgent);
     expect(res?.status).toBe(401);
   });
 
   test('invalid bearer token → 401', async () => {
     const { env, calls, resolveAgent } = mcpWorkspace();
 
-    const res = await handleMcpRequest(
+    const res = await serveMcp(
       initializeRequest('jarvis', `ptc_${USER_ID}_zzzzzzzzzzzzzzzzzzzzzzzzzz`), env, resolveAgent,
     );
 
@@ -103,13 +109,13 @@ describe('MCP server auth gate', () => {
 
   test('valid token but agent not in caller registry → 404', async () => {
     const { env, resolveAgent } = mcpWorkspace();
-    const res = await handleMcpRequest(initializeRequest('not-mine', TOKEN), env, resolveAgent);
+    const res = await serveMcp(initializeRequest('not-mine', TOKEN), env, resolveAgent);
     expect(res?.status).toBe(404);
   });
 
   test('non-MCP paths are ignored', async () => {
     const { env, resolveAgent } = mcpWorkspace();
-    const res = await handleMcpRequest(new Request('https://kinu.example.com/api/health'), env, resolveAgent);
+    const res = await serveMcp(new Request('https://kinu.example.com/api/health'), env, resolveAgent);
     expect(res).toBeNull();
   });
 });
