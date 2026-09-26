@@ -1098,16 +1098,32 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/deploy.test.ts',
+    run: 'bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
     // predates the archive unpack-and-install tests; the suite really installs.
-    // Replaces 1s.
+    // Replaces 1s. promote.test.ts joined 2026-09-26 at 0.4 s (13 tests).
     seconds: 87,
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
-      + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails.',
-    blind: 'whether the gates it enumerates pass.',
+      + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails. And a promotion '
+      + 'that ships bytes staging never verified or that production cannot return from: each '
+      + 'promote guard removed in turn fails its own test.',
+    blind: 'whether the gates it enumerates pass, and whether Cloudflare serves what a '
+      + 'promotion uploaded: that is its smoke test\'s, against the deployment.',
+    inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun test --timeout=0 scripts/wake-loops.test.ts',
+    label: 'Wake-loop detection over production telemetry',
+    tier: 'push',
+    // 0.14 s, 5 tests, measured 2026-09-26 on the 24-thread box.
+    seconds: 0.2,
+    catches: 'a wake loop `prod-logs.ts wakes` misses or invents: startups summed per object and hour '
+      + 'before the threshold is read, the threshold hour counted and the hour under it not, a loop '
+      + 'sustained only over consecutive hours, and the longest loop ranked first.',
+    blind: 'the telemetry query and whether production writes the startup rows it counts; the '
+      + 'threshold is one week\'s measurement (2026-09-26).',
     inputs: AMBIENT_BY_NAME,
   },
   {
