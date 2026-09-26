@@ -271,8 +271,11 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return;
     }
 
+    // A message that opens a turn hands the request to it: that turn's `turn-end` closes it. Every other
+    // taken message, a splice or the one that failed, gives its mapping back.
+    let opener: string | null = null;
     const taken: string[] = [];
-    let opened = false;
+    const release = (): void => { for (const id of taken) if (id !== opener) this.requests.delete(id); };
 
     try {
       // The client resends only its window, so reconcile against the window.
@@ -285,14 +288,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         this.requests.set(message.id, requestId);
         taken.push(message.id);
 
-        // A message that opens a turn hands the request to it: that turn's `turn-end` closes it.
-        if (await this.wire.send({ ...chatInput(message), id: message.id }) === 'turn') opened = true;
+        if (await this.wire.send({ ...chatInput(message), id: message.id }) === 'turn') opener = message.id;
       }
     } catch (cause) {
-      // The message that failed was never taken; a turn this request opened still owes its own frame.
-      for (const id of opened ? taken.slice(-1) : taken) this.requests.delete(id);
+      release();
 
-      if (!opened) this.done(requestId, { error: refusalOf(cause instanceof KinuError ? cause : toKinuError({ doing: 'taking a chat message', cause, otherwise: 'io' })).error });
+      if (opener === null) this.done(requestId, { error: refusalOf(cause instanceof KinuError ? cause : toKinuError({ doing: 'taking a chat message', cause, otherwise: 'io' })).error });
 
       // The loop refused and wrote nothing; anything else is a fault its caller must see.
       if (!(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
@@ -300,10 +301,9 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return;
     }
 
-    if (!opened) {
-      for (const id of taken) this.requests.delete(id);
-      this.done(requestId, taken.length === 0 ? {} : { landed: 'mid-turn' });
-    }
+    release();
+
+    if (opener === null) this.done(requestId, taken.length === 0 ? {} : { landed: 'mid-turn' });
   }
 
   private done(requestId: string, extra: { landed?: SendLanding; error?: string } = {}): void {

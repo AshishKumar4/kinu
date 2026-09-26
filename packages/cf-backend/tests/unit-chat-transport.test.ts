@@ -22,7 +22,8 @@ function isRefusal(landing: HarnessLanding): landing is HarnessRefusal {
   return v.is(v.object({ refuse: v.string() }), landing);
 }
 
-type HarnessLanding = SendLanding | HarnessRefusal | Promise<SendLanding>;
+/** One landing for every send, or one per send in order. */
+type HarnessLanding = SendLanding | HarnessRefusal | Promise<SendLanding> | readonly SendLanding[];
 
 function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<UIMessage[]>) {
   const { sql, db } = createTestSql();
@@ -64,6 +65,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
       if (isRefusal(landing)) return Promise.reject(landing.fault === true ? new Error(landing.refuse) : new KinuError('bad_input', landing.refuse));
       sent.push(input);
       reserved.add(input.id);
+
+      if (Array.isArray(landing)) return Promise.resolve(landing[sent.items.length - 1] ?? 'mid-turn');
 
       return landing instanceof Promise ? landing : Promise.resolve(landing);
     },
@@ -235,6 +238,30 @@ describe('ChatWireTransport', () => {
     expect(h.responses()).toEqual([{ type: 'cf_agent_use_chat_response', id: 'req-1', body: 'send requires the message text', done: true, error: true }]);
     expect(h.history).toEqual([]);
     expect(h.broadcasts.filter((b) => b.frame.type === 'cf_agent_chat_messages')).toEqual([]);
+  });
+
+  // Review job 163: a splice ahead of the message that opened the turn kept its mapping, so when that splice was
+  // later handed back as its own turn, the turn streamed under the closed request and its tab heard nothing.
+  test('a message spliced ahead of the one that opened the turn answers under its own id if it later runs alone', async () => {
+    const h = harness(['mid-turn', 'turn']);
+    const conn = h.connection('c1');
+
+    const request = JSON.stringify({
+      type: 'cf_agent_use_chat_request', id: 'req-1',
+      init: { method: 'POST', body: JSON.stringify({ trigger: 'submit-message', messages: [
+        { id: 'input-a', role: 'user', parts: [{ type: 'text', text: 'first' }] },
+        { id: 'input-b', role: 'user', parts: [{ type: 'text', text: 'second' }] },
+      ] }) },
+    });
+
+    await h.transport.onMessage(conn, request);
+    await h.transport.deliver(turnStart('input-b', 'msg-b'));
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'second', assistantResponse: '', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.transport.deliver(turnStart('input-a', 'msg-a'));
+    await h.transport.observe(chunks([{ type: 'start' }]), { index: 0 });
+
+    const streamed = h.broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response' && b.frame.done === false).map((b) => b.frame.id);
+    expect(streamed).not.toContain('req-1');
   });
 
   test('a send that faults underneath the loop still closes the request, once, as a failure, and propagates', async () => {
@@ -507,12 +534,15 @@ describe('ChatWireTransport', () => {
 
     const opened = new Set<string>();
     const orphans: string[] = [];
+    let thought = '';
 
     for (const text of h.received('c2')) {
       const frame = v.parse(FrameSchema, JSON.parse(text));
 
       if (frame.type !== 'cf_agent_use_chat_response' || frame.id !== 'req-1' || !frame.body) continue;
-      const chunk = v.parse(v.looseObject({ type: v.string(), id: v.optional(v.string()) }), JSON.parse(frame.body));
+      const chunk = v.parse(v.looseObject({ type: v.string(), id: v.optional(v.string()), delta: v.optional(v.string()) }), JSON.parse(frame.body));
+
+      if (chunk.type === 'reasoning-delta' && chunk.id === 'reasoning-0') thought += chunk.delta ?? '';
 
       if (chunk.type.endsWith('-start') && chunk.id !== undefined) opened.add(chunk.id);
       else if ((chunk.type.endsWith('-delta') || chunk.type.endsWith('-end')) && chunk.id !== undefined && !opened.has(chunk.id)) orphans.push(chunk.type);
@@ -520,6 +550,8 @@ describe('ChatWireTransport', () => {
 
     expect(orphans).toEqual([]);
     expect(opened.has('reasoning-0')).toBe(true);
+    // Every frame of the thought, once: a replay that dropped or repeated one reads wrong.
+    expect(thought).toBe('weighing it');
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
   });
