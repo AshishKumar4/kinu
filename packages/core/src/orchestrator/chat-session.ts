@@ -41,7 +41,7 @@ import {
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, persistMeasuredPromptTokens, snapshotCompletedTurn,
   type CompactionTriggerState, type RunEndClassification, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
-import type { SessionTranscript, PreparedConversationEntry } from '../session/transcript';
+import { answerParts, type SessionTranscript, type PreparedConversationEntry } from '../session/transcript';
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
@@ -229,11 +229,20 @@ export interface OwedTerminalEffectsInput {
   readonly taskReminder: { readonly text: string } | null;
 }
 
+async function answerMetadata(
+  ports: ChatSessionPorts, turnId: string, texts: () => Promise<readonly string[]>, ending: string,
+): Promise<JsonObject | null> {
+  const metadata: JsonObject = { ...await ports.answerMetadata?.(turnId, texts), ...(ending === 'incomplete' && { [TURN_END_METADATA_KEY]: ending }) };
+
+  return Object.keys(metadata).length === 0 ? null : metadata;
+}
+
 /** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
   prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
+  answerMetadata?(turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
   /** Asked per call: the bodies close over stores built after this session. */
@@ -1006,10 +1015,12 @@ export class ChatSession {
     const finalText = execution.claim === null ? execution.finalTextReference
       : await this.actorSession.recordTranscriptText(execution.claim, 'answer', fullText, execution.outputReferences);
 
+    const metadata = await answerMetadata(this.ports, lease.turnId, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), end.reason);
+
     const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
       id: this.messageId, parentId: this.actorSession.landedSteers.at(-1)?.id ?? lease.turnId,
       turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
-      ...(end.reason === 'incomplete' && { metadata: { [TURN_END_METADATA_KEY]: end.reason } }),
+      ...(metadata !== null && { metadata }),
     }) : null;
 
     const owedReport = await this.ports.owedReport?.(

@@ -30,9 +30,14 @@ it('two workspaces each log three ways, and every line is filed under its own wo
   const lines = await probe.written(workspaces[0] ?? '', EVENTS.length * workspaces.length);
 
   for (const name of workspaces) {
-    const own = lines.filter((line) => line.index === analyticsDigest(name)).map((line) => line.event).sort();
+    const own = lines.filter((line) => line.index === analyticsDigest(name) && line.event.startsWith('probe.')).map((line) => line.event).sort();
     expect(own).toEqual(EVENTS);
   }
+
+  // Each activation's install line names the workspace it was installed for, not the empty index.
+  const installs = lines.filter((line) => line.event === 'analytics.sink_installed');
+  expect(installs.length).toBeGreaterThan(0);
+  expect(new Set(installs.map((line) => line.index))).toEqual(new Set(workspaces.map((name) => analyticsDigest(name))));
 
   expect(lines.filter((line) => line.index === '')).toEqual([]);
 });

@@ -25,6 +25,16 @@ export type Restoration =
    *  arming write cannot leave a box refusing on a retry nothing holds. */
   | { readonly phase: 'unattached'; readonly reason: string; readonly retry: boolean };
 
+export interface RestoreStatus {
+  readonly restoring: boolean;
+  readonly refused: string | undefined;
+}
+
+export function terminalRefusal(reason: string): string {
+  return `this devbox has no attached work directory: ${reason}. `
+    + 'That recovery class is terminal: call attachNow() to attempt the attach again.';
+}
+
 /** Adopted only beside a container boot id that still names this instance, so a row never
  *  settles a box onto a container it did not restore; deleted on every generation turnover. */
 export type SettledRestoration = Extract<Restoration, { readonly phase: 'attached' | 'repair' | 'unattached' }>;

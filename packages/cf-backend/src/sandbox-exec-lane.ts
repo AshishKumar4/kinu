@@ -149,6 +149,7 @@ export function adaptCloudflareSandbox(
   handle: KinuSandbox,
   configureEgress: () => Promise<void>,
   previews: SandboxPreviewExposures | null,
+  portsMoved?: () => void,
 ): SandboxHandle {
   // Memoized on the promise so concurrent first calls share it; failures are not cached.
   let inFlight: Promise<void> | null = null;
@@ -210,6 +211,7 @@ export function adaptCloudflareSandbox(
       }
 
       await previews.publish(port, label.token);
+      portsMoved?.();
 
       if (!await previews.exposed(port, label.token)) {
         return { ...exposed, route: { reached: false, gate: 'published', detail: 'the edge holds no published record for this URL' } };
@@ -224,13 +226,16 @@ export function adaptCloudflareSandbox(
     // Withdrawn first: a live unreachable port is safe; a revoked port the edge still admits is not.
     unexposePort: async (port) => {
       await previews?.withdraw(port);
+      const removed = await onContainer(() => jsonResultOrVoid(handle.unexposePort(port)));
+      portsMoved?.();
 
-      return await onContainer(() => jsonResultOrVoid(handle.unexposePort(port)));
+      return removed;
     },
     // Re-publishing keeps long-lived previews from ageing out. A failed refresh is reported and the
     // listing stands: the record is already correct, unlike an unpublished URL in `exposePort`.
+    // Not `onContainer`: a read never starts a container.
     getExposedPorts: async (hostname) => {
-      const rows = await onContainer(() => handle.getExposedPorts(hostname));
+      const rows = await handle.getExposedPorts(hostname);
 
       if (previews !== null) {
         const index = previews;

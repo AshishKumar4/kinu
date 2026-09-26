@@ -310,6 +310,10 @@
     // packages/test-utils/src/eval-identity.ts.
     "DEV_USER_EMAIL": "eval-service@kinu.run",
     "CLOUDFLARE_OAUTH_CLIENT_ID": "edb106782fc08e60480306cf39411d90",
+    // The sign-in providers this deployment must offer. The monitor's login probe
+    // fails when one is not configured or not on /login, and infra-verify refuses
+    // one whose client id or secret is missing, so a lost secret is red twice.
+    "SIGN_IN_PROVIDERS": "cloudflare",
     // Scopes default to CLOUDFLARE_WORKERS_AI_SCOPES (lib/cloudflare-oauth.ts);
     // set CLOUDFLARE_OAUTH_SCOPES here only to override that one source.
     "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
@@ -581,6 +585,7 @@
         "CLI_APPROVAL_ORIGIN": "https://staging.kinu.run",
         "DEV_USER_EMAIL": "eval-service@kinu.run",
         "CLOUDFLARE_OAUTH_CLIENT_ID": "",
+        "SIGN_IN_PROVIDERS": "",
         "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
         "CLOUDFLARE_AI_GATEWAY_ID": "default",
         "EMAIL_DOMAIN": "",
