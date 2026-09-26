@@ -617,7 +617,7 @@ export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self'
 export { agentSelfHost } from './orchestrator/agent-self-host';
 
 // Platform-neutral: a backend supplies only SubordinateRuntime.
-export { SubordinateRosterStore } from './subordinates/roster';
+export { SubordinateRosterStore, initSubordinateRosterTable } from './subordinates/roster';
 
 export {
   SubordinateIdentityStore,

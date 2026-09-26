@@ -460,7 +460,7 @@ stated reason. The conformance suite compares that declaration with the real
 
 `initWorkspaceSchema()` (`core/src/state/workspace-schema.ts`) is the one
 answer to which tables a workspace has. Every workspace root calls it: the
-orchestrator DO's `ensureSchema()`, `openWorkspaceCLI`, the local session
+orchestrator DO's constructor, `openWorkspaceCLI`, the local session
 constructor, and `kinu create`. A local facet session calls only the actor
 half, `initActorStateSchema()`. One list, because parallel lists drift
 apart and each drift is a bug: a table created only by `kinu create` is

@@ -3,7 +3,8 @@
  * Every privileged method takes a `UserCaller` first and gates on `requireTier` before anything else.
  */
 import { Agent, type AgentContext } from "agents";
-import { USER_DO_RPC_SURFACE, sealRpcSurface } from "../rpc-surface";
+import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from "../rpc-surface";
+import { ActivationGate, startBeforeRpc } from "../activation-gate";
 import { parseCliTokenUserId } from "../cli/auth-store";
 import {
   getActiveAccessTokenScopes,
@@ -633,16 +634,19 @@ export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, USER_DO_RPC_SURFACE);
+    const gate = new ActivationGate();
+    this.lifecycle.use(gate);
+    startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
+    // Every event, a native RPC included, reaches whole tables: native RPCs run no `onStart`.
+    this.initTables();
   }
 
   /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key. */
   override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
     return new DurableObjectOAuthClientProvider(this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl);
   }
-
-  private _initialized = false;
 
   private readonly restoreUserMcp = retireActivationRestore(this.mcp);
 
@@ -655,18 +659,15 @@ export class UserDO extends Agent<Env> {
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
 
-  /** Once per activation. Claims live in isolate memory, so any claim in storage at activation start
-   * was abandoned; the activation boundary is the expiry. */
-  private ensureInit(): void {
-    if (this._initialized) return;
+  /** Once per activation, from the constructor. Claims live in isolate memory, so any claim in storage
+   * at activation start was abandoned; the activation boundary is the expiry. */
+  private initTables(): void {
     initUserTables(this.ctx.storage.sql);
     initAccessTokenTable(this.ctx.storage.sql);
     this._inflight.releaseAbandonedClaims();
-    this._initialized = true;
   }
 
   private sqlx<T extends SqlRow = SqlRow>(query: string, ...bindings: SqlStorageValue[]): T[] {
-    this.ensureInit();
 
     return this.ctx.storage.sql.exec<T>(query, ...bindings).toArray();
   }
@@ -676,7 +677,6 @@ export class UserDO extends Agent<Env> {
    * Also reopens the analytics window, since the 250-point budget is per invocation.
    */
   private requireTier(caller: UserCaller, capability: WorkspaceCapability): Promise<ResolvedCaller> {
-    this.ensureInit();
     openAnalyticsWindow(this.env);
 
     return requireTier(this.ctx.storage.sql, this.env, { caller }, capability);
@@ -691,7 +691,6 @@ export class UserDO extends Agent<Env> {
    * The only ungated method (it bootstraps identity), so it opens the analytics window itself.
    */
   async ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
-    this.ensureInit();
     openAnalyticsWindow(this.env);
     validateWorkspaceName(workspaceName);
 
@@ -2004,7 +2003,6 @@ export class UserDO extends Agent<Env> {
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
-      this.ensureInit();
       this._terminals.fromPane(terminal.session, terminal.device, message);
 
       return;
@@ -2013,7 +2011,6 @@ export class UserDO extends Agent<Env> {
     const deviceId = deviceIdFromSocket(ws);
 
     if (!deviceId) return this.lifecycle.webSocketMessage(ws, message);
-    this.ensureInit();
     let data: string;
 
     if (isTextWebSocketMessage(message)) {
@@ -2226,7 +2223,6 @@ export class UserDO extends Agent<Env> {
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
-      this.ensureInit();
       this.closeDeviceTerminal(terminal.session, terminal.device);
 
       return;
@@ -2235,7 +2231,6 @@ export class UserDO extends Agent<Env> {
     const deviceId = deviceIdFromSocket(ws);
 
     if (!deviceId) return this.lifecycle.webSocketClose(ws, code, reason, wasClean);
-    this.ensureInit();
     this._devices.handleClose(deviceId, ws);
 
     // The daemon hangs up its shells when the socket drops, so tell the panes.
@@ -2559,7 +2554,6 @@ export class UserDO extends Agent<Env> {
         throw new KinuError('bad_input', 'A background job id must name a job.');
       }
 
-      this.ensureInit();
       this._inflight.insert({
         requestId,
         deviceId,
@@ -2602,7 +2596,6 @@ export class UserDO extends Agent<Env> {
 
     if (!requestId.success) return;
     const answer = parseDeviceCancelAnswer(requestId.output, result);
-    this.ensureInit();
     this._inflight.settleUnclaimed(requestId.output, answer.cancelled);
   }
 
@@ -3229,7 +3222,6 @@ export class UserDO extends Agent<Env> {
   }
 
   private experienceLibrary() {
-    this.ensureInit();
 
     return createExperienceLibrary(this.ctx.storage.sql);
   }
@@ -4444,9 +4436,9 @@ export class UserDO extends Agent<Env> {
     }
 
     await this.destroy();
-    // The isolate abort is a tick away; a request in that tick meets emptied storage, so reset the
-    // latch to re-run schema init and answer as the empty account.
-    this._initialized = false;
+    // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
+    // again, empty, and answers as the new account.
+    this.initTables();
 
     return { ok: true, workspaces: workspaces.length };
   }
@@ -4454,7 +4446,6 @@ export class UserDO extends Agent<Env> {
   /** The SDK's manager, with activation restore retired (see {@link retireActivationRestore}).
    *  Its config is `user_mcp_servers`; the SDK rows are derived from it. */
   private userMcp(): MCPClientManager {
-    this.ensureInit();
 
     return this.mcp;
   }
@@ -4899,7 +4890,6 @@ export class UserDO extends Agent<Env> {
   /** Claim `name` for `serverId` and run `write` atomically; the transaction is the check and holds
    *  without the UNIQUE index (see `schema.ts`). `write` must not await. */
   private claimMcpServerName(name: string, serverId: string, write: () => void): void {
-    this.ensureInit();
 
     try {
       this.ctx.storage.transactionSync(() => {

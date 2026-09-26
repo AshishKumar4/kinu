@@ -89,7 +89,7 @@ full-loop actor needs: the Cloudflare runtime assembly, the `BackendHost`, the
 shared `AgentOrchestrator`, `ExtensionHost` plus compaction, prompt, model, and
 tool caches, and the ports `ChatSession` calls. A subclass supplies the abstract
 members (`getOwnerUserId`, `actorHandle`, `actorDirectory`, `actorKind`,
-`workspaceBox`, `ensureSchema`, `actorToolDeps`, `engine`, `notifyOwner`,
+`workspaceBox`, `actorToolDeps`, `engine`, `notifyOwner`,
 `delegationBudget`, `actorHost`, `actorDirectoryStore`, `explorationSeams`,
 `subordinateSeams`, `hostedChatWire`, `owedTerminalEffects`, `ownMission`,
 `persistAutoTitle`, `promptIdentity`, `transcriptFor`) and may override three

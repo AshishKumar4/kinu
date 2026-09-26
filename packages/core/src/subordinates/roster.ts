@@ -83,6 +83,25 @@ function reportedRosterStatus(status: SubordinateReportStatus, currentTask: stri
   return currentTask === null || currentTask === '' ? 'idle' : 'working';
 }
 
+export function initSubordinateRosterTable(sql: SqlExec): void {
+  sql.exec(`CREATE TABLE IF NOT EXISTS actor_subordinates (
+    actor_id      TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user')),
+    status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
+    current_task  TEXT,
+    created_at    INTEGER NOT NULL,
+    dismissed_at INTEGER,
+    lifetime      TEXT NOT NULL DEFAULT 'durable' CHECK (lifetime IN ('durable','task')),
+    task_event_id TEXT,
+    actor_reference TEXT,
+    birth_request TEXT, delete_requested INTEGER NOT NULL DEFAULT 0 CHECK (delete_requested IN (0,1)),
+    PRIMARY KEY (actor_id, name)
+  )`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_actor_subordinates_order
+    ON actor_subordinates(actor_id, created_at, name)`);
+}
+
 /** Parent-actor roster; owns all subordinate status policy. */
 export class SubordinateRosterStore {
   private readonly actorId: string;
@@ -94,22 +113,7 @@ export class SubordinateRosterStore {
 
   ensureSchema(): void {
     this.actor.assertCurrent();
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS actor_subordinates (
-      actor_id      TEXT NOT NULL,
-      name          TEXT NOT NULL,
-      created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user')),
-      status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
-      current_task  TEXT,
-      created_at    INTEGER NOT NULL,
-      dismissed_at INTEGER,
-      lifetime      TEXT NOT NULL DEFAULT 'durable' CHECK (lifetime IN ('durable','task')),
-      task_event_id TEXT,
-      actor_reference TEXT,
-      birth_request TEXT, delete_requested INTEGER NOT NULL DEFAULT 0 CHECK (delete_requested IN (0,1)),
-      PRIMARY KEY (actor_id, name)
-    )`);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_actor_subordinates_order
-      ON actor_subordinates(actor_id, created_at, name)`);
+    initSubordinateRosterTable(this.sql);
   }
 
   /** `onConflict` is empty for a first insert and the upsert clause for a compensating restore. */
