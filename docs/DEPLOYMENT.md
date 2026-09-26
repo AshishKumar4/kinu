@@ -91,6 +91,7 @@ Universal SSL on `kinu.run` covers both app hosts and production's previews. Sta
 | No DNS record of its own for `staging.kinu.run` | `kinu-staging`'s first deploy makes `staging.kinu.run` a Custom Domain, and wrangler creates its record then; one already there refuses it. The Custom Domain's certificate covers `staging.kinu.run` and `*.staging.kinu.run`, which a staging preview needs: it is two labels below `kinu.run`, where Universal SSL stops, and `kinu.run` sends HSTS with `includeSubDomains`. |
 | A proxied wildcard DNS record `*.staging` (A `192.0.2.1`, like the zone's `*`) | A wildcard does not answer below a name that exists, so `*.kinu.run` stops short of staging's previews. |
 | A **KV namespace** `kinu-auth-staging` | The same reason as `kinu-auth`. Its id is in `env.staging`. |
+| An **AI Gateway** `kinu-ai-gateway-staging`, with `default`'s settings | The same reason as production's: staging's gateway logs are its own. |
 
 ### What each command does
 

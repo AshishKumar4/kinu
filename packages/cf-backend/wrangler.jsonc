@@ -572,10 +572,9 @@
       // (CLOUDFLARE_OAUTH_CLIENT_ID), and no operators, so the admin plane
       // answers 404 and needs no Access application (CONTROL_PLANE_*). Staging is
       // driven by the eval identity alone: DEV_USER_EMAIL names it, and the
-      // `DEV_IDENTITY_SECRET` secret, staging's own, is its whole authority. Its AI
-      // Gateway is production's until staging is given one of its own.
+      // `DEV_IDENTITY_SECRET` secret, staging's own, is its whole authority.
       "vars": {
-        "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",
+        "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway-staging/workers-ai/v1",
         "SANDBOX_TRANSPORT": "rpc",
         "PREVIEW_HOST_SUFFIX": "staging.kinu.run",
         "CLI_PUBLIC_ORIGIN": "https://staging.kinu.run",
