@@ -3,7 +3,8 @@
  * THE FLAKE GATE. A test that passes and fails on one tree is a flake, and only running it more than once shows
  * one: every other row runs each suite once and reads its exit code.
  *
- * ITS SUBJECT IS THE COMMIT BEING MADE: every test file the index adds or changes against HEAD. Each runnable suite
+ * ITS SUBJECT IS THE COMMIT BEING MADE: every test file the index adds or changes against HEAD, and in a merge
+ * against every parent, since a file the merge takes whole from a side was that side's commits'. Each runnable suite
  * runs REPEATS times, BROWSER_REPEATS for one that drives Chrome, the way the ladder row that claims it runs it
  * (`narrowedTo`: its runner and its flags, the file its only target). Suites run beside each other, a suite never
  * beside itself, and one browser and one workers pool at a time. One red run fails the commit, and the report says
@@ -21,7 +22,7 @@
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
 import { runUnderDeadline } from './deadline';
@@ -63,16 +64,34 @@ export type Plan =
   | { readonly kind: 'elsewhere'; readonly file: string; readonly why: string }
   | { readonly kind: 'unrunnable'; readonly file: string; readonly why: string };
 
-/** The test files the commit being made adds or changes: the index against HEAD. In a hook `git` reads the index
- *  the commit takes, including the temporary one `git commit -a` names in GIT_INDEX_FILE. */
-export function stagedTestFiles(): string[] {
-  const run = Bun.spawnSync(['git', 'diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z', 'HEAD'], {
-    cwd: root, stdout: 'pipe', stderr: 'pipe',
-  });
+/** A repository, and the environment its `git` reads: in a hook, the index the commit takes and where it lives. */
+export interface Repository {
+  readonly cwd: string;
+  readonly env: Record<string, string | undefined>;
+}
 
-  if (run.exitCode !== 0) throw new Error(`git diff --cached exited ${String(run.exitCode)}: ${run.stderr.toString().trim()}`);
+function git(repository: Repository, args: readonly string[]): string {
+  const run = Bun.spawnSync(['git', ...args], { cwd: repository.cwd, env: repository.env, stdout: 'pipe', stderr: 'pipe' });
 
-  return run.stdout.toString().split('\0')
+  if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')} exited ${String(run.exitCode)}: ${run.stderr.toString().trim()}`);
+
+  return run.stdout.toString();
+}
+
+/**
+ * The test files the commit being made adds or changes: the index against HEAD. A merge's are those that differ
+ * from every parent, as `git diff --cc` reads one: a resolution, or an edit made in the merge. In a hook `git`
+ * reads the index the commit takes, including the temporary one `git commit -a` names in GIT_INDEX_FILE.
+ */
+export function stagedTestFiles(repository: Repository = { cwd: root, env: process.env }): string[] {
+  const merging = resolve(repository.cwd, git(repository, ['rev-parse', '--git-path', 'MERGE_HEAD']).trim());
+  const heads = tolerate(() => readFileSync(merging, 'utf8'), 'enoent')?.split('\n').filter((head) => head !== '') ?? [];
+
+  const [changed = new Set<string>(), ...others] = ['HEAD', ...heads]
+    .map((parent) => new Set(git(repository, ['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z', parent]).split('\0')));
+
+  return [...changed]
+    .filter((file) => others.every((other) => other.has(file)))
     .filter((file) => isRunnableSuite(file) || isPythonSuite(file) || isFirstRunSuite(file));
 }
 
@@ -189,7 +208,7 @@ function slots(size: number): <T>(work: () => Promise<T>) => Promise<T> {
 
   return async (work) => {
     if (free > 0) free -= 1;
-    else await new Promise<void>((resolve) => { waiting.push(resolve); });
+    else await new Promise<void>((wake) => { waiting.push(wake); });
 
     try {
       return await work();
@@ -249,6 +268,8 @@ export async function repeatAll(
 /* ── The verdict ──────────────────────────────────────────────────────── */
 
 const BLIND_SPOTS = [
+  'a merge repeats only the test files it changes itself: one it takes whole from a side was that side\'s own '
+    + 'commits\' subject, and the sweep\'s',
   'a flake that a changed helper or product file puts into a suite this commit does not change: the nightly sweep '
     + '(`bun scripts/flake-gate.ts --sweep`) repeats every suite the CI tier runs',
   'N runs sample N interleavings: greens raise confidence and prove nothing about absence',
@@ -445,7 +466,7 @@ async function sweep(only: string | undefined): Promise<number> {
 
   const directory = join(root, 'bench-artifacts', 'flake-sweep');
   const artifact = join(directory, `${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
-  const tree = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim();
+  const tree = git({ cwd: root, env: process.env }, ['rev-parse', 'HEAD']).trim();
 
   mkdirSync(directory, { recursive: true });
   writeFileSync(artifact, `${JSON.stringify({ ranAt: new Date().toISOString(), tree, ci, results }, null, 2)}\n`);

@@ -3,8 +3,10 @@
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
-import { REPEATS, planFor, repeatAll, sweepRun, sweepVerdict, verdictOf, type Plan, type RunOutcome } from './flake-gate';
+import { childEnv, scratchDir } from '@kinu.run/test-utils';
+import {
+  REPEATS, planFor, repeatAll, stagedTestFiles, sweepRun, sweepVerdict, verdictOf, type Plan, type RunOutcome,
+} from './flake-gate';
 import { isFirstRunSuite, isPythonSuite, isRunnableSuite, trackedFiles } from './sources';
 import { writtenSkips } from './test-census';
 
@@ -44,6 +46,48 @@ test('passes on odd runs and fails on even ones', () => {
 
     expect(verdictOf([run({ total: 0, failed: [], skipped: 0 })]).kind).toBe('red');
     expect(verdictOf([run({ total: 3, failed: [], skipped: 3 })]).kind).toBe('skipped');
+  });
+});
+
+describe('the commit a hook gates', () => {
+  test('a merge repeats the test files it changes itself, never one it takes whole from a side', () => {
+    const cwd = scratchDir('flake-gate-merge');
+    // Its own environment: a hook's GIT_DIR and GIT_INDEX_FILE name the commit the hook is gating.
+    const env = childEnv({ GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@example.com' });
+
+    const git = (...args: string[]): void => {
+      const run = Bun.spawnSync(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], { cwd, env, stderr: 'pipe' });
+
+      if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${run.stderr.toString()}`);
+    };
+
+    const write = (file: string, text: string): void => { writeFileSync(join(cwd, file), text); };
+
+    git('init', '-q', '-b', 'main');
+    write('a.test.ts', 'base\n');
+    write('b.test.ts', 'base\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'base');
+    git('checkout', '-q', '-b', 'side');
+    write('a.test.ts', 'side\n');
+    git('commit', '-q', '-a', '-m', 'side');
+    git('checkout', '-q', 'main');
+    write('b.test.ts', 'main\n');
+    git('commit', '-q', '-a', '-m', 'main');
+    git('merge', '-q', '--no-commit', 'side');
+
+    expect(stagedTestFiles({ cwd, env })).toEqual([]);
+
+    write('a.test.ts', 'side, edited in the merge\n');
+    git('add', 'a.test.ts');
+
+    expect(stagedTestFiles({ cwd, env })).toEqual(['a.test.ts']);
+
+    git('commit', '-q', '-m', 'merge');
+    write('b.test.ts', 'after the merge\n');
+    git('add', 'b.test.ts');
+
+    expect(stagedTestFiles({ cwd, env })).toEqual(['b.test.ts']);
   });
 });
 
