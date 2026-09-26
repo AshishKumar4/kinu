@@ -97,6 +97,41 @@ test("a hire's slate edit is previewed on the hire's answer, and nowhere else", 
   expect(rootAnswers.flatMap((message) => slatesChanged({ metadata: message.metadata }))).toEqual([]);
 });
 
+// Review job 186: a detached job writing a slate after its turn answered joins the actor's next answer, not an entry
+// nothing takes.
+test("a write under an answered turn is previewed on the actor's next answer", async () => {
+  const harness = orchestratorHarness();
+  const { agent } = harness;
+  const files = workspaceFiles(agent);
+
+  await files.mkdir('/slates/notes', { recursive: true });
+  agent.harnessDrivingUserMessage('Start the notes job.', { kinuMode: 'build' });
+  let turns = chatSessionTurns(agent);
+
+  await turns.prepare({ messages: [{ role: 'user', content: 'Start the notes job.' }] });
+  await turns.settle({ messageId: 'a-first', text: 'Started it.' });
+
+  // A job the first turn detached keeps that turn's operation after its answer went out.
+  const answered = harness.db.query<{ turn_id: string }, []>("SELECT turn_id FROM conversation_entries WHERE role = 'assistant'").get();
+
+  if (answered === null) throw new Error('the first answer was not recorded');
+
+  const job = captureOperationProfile({
+    actor: workspaceMainActor(harness.db), profile: mergePolicyProfile(), inputs: null, runId: 'run-job', turnId: answered.turn_id,
+  });
+
+  await runOperationProfile(job, () => files.writeFile('/slates/notes/client.tsx', 'the job finished'));
+
+  agent.harnessDrivingUserMessage('Anything new?', { kinuMode: 'build' });
+  turns = chatSessionTurns(agent);
+  await turns.prepare({ messages: [{ role: 'user', content: 'Anything new?' }] });
+  await turns.settle({ messageId: 'a-second', text: 'The job finished.' });
+
+  const answers = (await storedChat(harness)).filter((message) => message.role === 'assistant');
+
+  expect(answers.map((message) => slatesChanged({ metadata: message.metadata }))).toEqual([[], ['notes']]);
+});
+
 test('a slate the turn wrote and then removed is not previewed', async () => {
   const harness = orchestratorHarness();
   const { agent } = harness;

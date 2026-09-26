@@ -278,6 +278,8 @@ const SLEEP_TIME_SETTLED_AT = 'sleep_time_settled_at';
 
 const SLEEP_TIME_CLOSED_AT = 'sleep_time_closed_at';
 
+const ANSWERED_TURNS_KEPT = 32;
+
 /** Covers one more answer than `SLEEP_TIME_CADENCE.everyTurns` plus steers, so the
  *  window decides every trigger as the whole transcript would. */
 const SLEEP_TIME_READ_ROWS = (SLEEP_TIME_CADENCE.everyTurns + 1) * 8;
@@ -2043,11 +2045,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private readonly turnSlates = new Map<string, { readonly changed: Set<string>; readonly shown: Set<string> }>();
 
+  private readonly answeredTurns = new Map<string, string[]>();
+
   private noteTurnSlates(kind: 'changed' | 'shown', ids: readonly string[]): void {
     const actor = activeOperationProfile();
 
     if (actor === undefined || actor.turnId === WORKSPACE_RUN_ID) return;
-    const key = `${actor.actor.actorId}:${actor.turnId}`;
+    const actorId = actor.actor.actorId;
+    const key = this.answeredTurns.get(actorId)?.includes(actor.turnId) === true ? `${actorId}:carried` : `${actorId}:${actor.turnId}`;
     let held = this.turnSlates.get(key);
 
     if (held === undefined) {
@@ -2059,15 +2064,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async takeTurnSlates(actorId: string, turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null> {
-    const key = `${actorId}:${turnId}`;
-    const held = this.turnSlates.get(key);
+    const taken = [`${actorId}:${turnId}`, `${actorId}:carried`].map((key) => {
+      const held = this.turnSlates.get(key);
 
-    if (held === undefined) return null;
-    this.turnSlates.delete(key);
+      this.turnSlates.delete(key);
+
+      return held;
+    });
+
+    this.answeredTurns.set(actorId, [...(this.answeredTurns.get(actorId) ?? []).slice(-(ANSWERED_TURNS_KEPT - 1)), turnId]);
+    const changed = taken.flatMap((held) => [...held?.changed ?? []]);
+    const shown = new Set(taken.flatMap((held) => [...held?.shown ?? []]));
     const vfs = this.hostedWorkspace().bundle.vfs;
     const kept = [];
 
-    for (const id of slatesToPreview(held.changed, held.shown, await texts())) if (await vfs.exists(`${SLATES_ROOT}/${id}`)) kept.push(id);
+    for (const id of slatesToPreview(new Set(changed), shown, await texts())) if (await vfs.exists(`${SLATES_ROOT}/${id}`)) kept.push(id);
 
     return kept.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: kept };
   }
