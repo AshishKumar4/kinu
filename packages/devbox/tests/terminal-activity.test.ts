@@ -192,9 +192,25 @@ describe('a box rests only once no command it ran is still running', () => {
       expect(beats.at(-1)).toBe('quiesce');
       // The stop itself reads the list to kill processes; it must not refuse on the same failure.
       expect(container.running.running).toBe(false);
+      // On record, not only on the console: the streak's start, the give-way, and the stop's fallback.
+      expect((await box.devboxState()).incidents.total).toBe(3);
     } finally {
       setSystemTime();
     }
+  });
+
+  test('an unreadable supervised-spec store counts as an unreadable list: the beat holds, it does not throw', async () => {
+    const { box, rows, storage } = harness(IdleHostBox);
+    await box.devboxStartup();
+    const now = Date.now();
+    rows.set(LAST_INTERACTION_KEY, now - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
+    rows.set(QUIET_SINCE_KEY, now - DEFAULT_DEVBOX_POLICY.quietConfirmMs - 60_000);
+    storage.failListOn('devbox:proc:', new Error('storage read failed'));
+
+    await box.devboxHeartbeat();
+    storage.failListOn('devbox:proc:', undefined);
+
+    expect((await box.devboxState()).lastTick?.decision).toBe('hold');
   });
 
   test('a supervised server does not hold the box: the next start restores it', async () => {

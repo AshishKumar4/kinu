@@ -1395,9 +1395,11 @@ A box now holds for three reasons, checked in this order:
   kill it. A supervised server does not hold, because the next start restores
   it. A process list that cannot be read holds for one `quietConfirmMs` window
   of beats, counted durably (`devbox:unreadable-process-beats`, reset by a good
-  read). After that the tick records the reason in `note` and the idle gate
-  decides, so a failing `/processes` cannot keep a box up forever (Review2,
-  2026-09-26).
+  read). An unreadable supervised-spec store counts the same. After that the
+  tick records the reason in `note` and the idle gate decides, so a failing
+  `/processes` cannot keep a box up forever (Review2, 2026-09-26). The streak's
+  start, the give-way and a stop that could not list processes are incidents
+  of stage `quiesce`, delivered to the agent like any other stage.
 - The root's `sandboxInUse` answers yes: a live turn of any actor, or a job
   this activation's `BackgroundJobRunner` drives, re-drives included. The
   runner, not the row: recovery writes the next attempt's wait before the

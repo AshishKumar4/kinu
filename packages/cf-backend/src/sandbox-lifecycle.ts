@@ -36,6 +36,9 @@ const STAGE_CONSEQUENCE = {
     + 'Do not wait for it. Re-run it if you still need it, and say what is missing.',
   port: 'An exposed port is no longer reachable, so any preview URL for it is dead. '
     + 'Re-expose it if you still need it, and do not hand out the old URL.',
+  quiesce: 'The container could not read its own process list, so it may rest without knowing '
+    + 'whether a command you started is still running. If a command matters, check its result '
+    + 'before you rely on it, and re-run it if it is missing.',
 } satisfies Record<IncidentStage, string>;
 
 function isIncidentStage(name: string): name is IncidentStage {

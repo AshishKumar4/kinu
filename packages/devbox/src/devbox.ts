@@ -1631,7 +1631,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       listed = await this.listProcesses();
     } catch (error) {
       // As a failed kill: the pid scan below still finds them.
-      console.error(`[devbox] process list unreadable before the stop: ${describe({ cause: error })}`);
+      await this.#record('quiesce', `the stop could not list processes; releasing holders by pid: ${describe({ cause: error })}`);
     }
 
     for (const live of listed) {
@@ -2179,28 +2179,30 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** See D35. */
   async #commandRunning(): Promise<{ readonly running: boolean; readonly note?: string }> {
-    let processes: Awaited<ReturnType<typeof this.listProcesses>>;
+    let running: boolean;
 
     try {
-      processes = await this.listProcesses();
+      const supervised = new Set((await this.#procSpecs()).map((spec) => spec.processId));
+      running = (await this.listProcesses()).some((live) => isProcessLive(live.status) && !supervised.has(live.id));
     } catch (error) {
       const beats = (await this.ctx.storage.get<number>(UNREADABLE_PROCESS_BEATS_KEY) ?? 0) + 1;
       await this.ctx.storage.put(UNREADABLE_PROCESS_BEATS_KEY, beats);
       const reason = describe({ cause: error });
+      const cap = Math.ceil(this.policy.quietConfirmMs / (this.policy.heartbeatSeconds * 1000));
 
-      if (beats < Math.ceil(this.policy.quietConfirmMs / (this.policy.heartbeatSeconds * 1000))) {
-        console.error(`[devbox] process list unreadable (beat ${String(beats)}), holding: ${reason}`);
+      if (beats === 1) await this.#record('quiesce', `process list unreadable; holding up to ${String(cap)} beats: ${reason}`);
 
-        return { running: true };
-      }
+      if (beats < cap) return { running: true };
+      const note = `process list unreadable for ${String(beats)} beats; the idle gate decides: ${reason}`;
 
-      return { running: false, note: `the process list was unreadable for ${String(beats)} beats (${reason}); the idle gate decides` };
+      if (beats === cap) await this.#record('quiesce', note);
+
+      return { running: false, note };
     }
 
     await this.ctx.storage.delete(UNREADABLE_PROCESS_BEATS_KEY);
-    const supervised = new Set((await this.#procSpecs()).map((spec) => spec.processId));
 
-    return { running: processes.some((live) => isProcessLive(live.status) && !supervised.has(live.id)) };
+    return { running };
   }
 
   /** Reused for a quiet-confirm window: each ask wakes the workspace. */
