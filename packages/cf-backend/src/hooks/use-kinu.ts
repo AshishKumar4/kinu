@@ -1241,6 +1241,10 @@ export function useKinu(target?: string | KinuActorAddress) {
     setBackgroundJobs,
   ), [refreshCurrentLiveResource, rpc, subordinate]);
 
+  const refreshPendingConsents = useCallback(() => refreshCurrentLiveResource(
+    "consents", () => rpc<PendingConsent[]>("listPendingConsents", []), setPendingConsents,
+  ), [refreshCurrentLiveResource, rpc]);
+
   // One call feeds the queue and the sidebar dot's unseen count so they cannot disagree.
   const refreshPendingActions = useCallback(() => refreshCurrentLiveResource(
     "pendingActions",
@@ -1567,10 +1571,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   }, [liveReads]);
 
   const refreshLiveData = useCallback((): void => {
-    rereadLive(LIVE_READS, [
-      () => refreshCurrentLiveResource("consents", () => rpc<PendingConsent[]>("listPendingConsents", []), setPendingConsents),
-    ]);
-  }, [refreshCurrentLiveResource, rereadLive, rpc]);
+    rereadLive(LIVE_READS, [refreshPendingConsents]);
+  }, [refreshPendingConsents, rereadLive]);
 
   const lastMoves = useRef<ReadMoves>({});
 
@@ -1674,7 +1676,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     setTurnClaim(snap.turnClaim);
 
     try {
-      await Promise.all([refreshExposedPorts(), refreshPendingActions(), refreshRoster()]);
+      await Promise.all([
+        refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshPendingConsents(),
+      ]);
     } catch (cause) {
       diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
         doing: 'refreshing live workspace data',

@@ -1502,12 +1502,16 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   }),
   getActivePlanReview: () => galleryAgentPlan,
   // The Work tab draws this read, not `getActivePlanReview`. The owner is the workspace's name: `createMain({ name: this.name })` registers it, never "main".
+  // `dataset.workMoved`: a task written while the page's socket was down.
   listWorkspaceWork: () => ({
     plans: [{
       owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false },
       plan: galleryAgentPlan, tasks: [],
     }],
-    tasks: [],
+    tasks: document.documentElement.dataset.workMoved === "1" ? [{
+      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
+      tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", createdAt: 1, updatedAt: 1, note: null, subtasks: [] }],
+    }] : [],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   // Without an answer the strip hides Work on first paint.
@@ -1516,7 +1520,10 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   previewSlate: (args?: unknown[]) => ({
     ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
   }),
-  listPendingConsents: () => [],
+  // `&consent=waiting`: a device command already waiting on the owner when the page opens.
+  listPendingConsents: () => (new URLSearchParams(location.search).get("consent") === "waiting"
+    ? [{ consentId: "c-1", deviceLabel: "studio", method: "exec", command: "git push origin main", createdAt: 1 }]
+    : []),
   // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
   listFileCheckpoints: () => REVERT_LISTING,
