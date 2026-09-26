@@ -538,7 +538,14 @@ export abstract class ActorAgent extends Agent<Env> {
     }
   }
 
+  /** False for a Nimbus sibling, whose alarm is the SDK's. */
+  protected hostsActor(): boolean {
+    return true;
+  }
+
   override async alarm(): Promise<void> {
+    if (!this.hostsActor()) return super.alarm();
+
     // Returned, not thrown: the platform retries a thrown alarm.
     if (this.storageRefusal !== undefined) return;
     const refusal = this.actorRuntimeRefusal();

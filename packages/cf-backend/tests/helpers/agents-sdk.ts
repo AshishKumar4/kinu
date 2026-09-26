@@ -211,6 +211,8 @@ export function mockAgentsSdk(): void {
       readonly lifecycle = new HarnessLifecycle(this);
       /** The SDK base's default: nothing to start. */
       onStart(): void | Promise<void> {}
+      /** The SDK's alarm runs due schedule rows; workerd's is `tests/workerd/do-alarm.test.ts`. */
+      async alarm(): Promise<void> {}
       /** `callable` below records nothing, so no method reads as callable. */
       getCallableMethods(): Map<string, object> {
         return new Map();

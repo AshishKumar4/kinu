@@ -103,6 +103,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     else await chatSessionTurns(this).settle({ messageId: 'a live turn', text: 'done' });
   }
   get harnessChatLoop(): ChatSession { return this.chatLoop; }
+  harnessBear(ownerUserId: string): void { this.bearWorkspace(this.name, ownerUserId); }
   /** The conversation a stated turn is admitted over. Applies only while the actor
    *  holds no working history of its own. */
   async harnessSeedHistory(messages: readonly ModelMessage[]): Promise<void> {
@@ -1499,10 +1500,9 @@ export function orchestratorHarness(
   },
 ): ActorHarness<HarnessOrchestratorAgent> {
   const harness = instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), userPlane, world, env });
+  // Born as a first claim bears it, then started.
+  harness.agent.harnessBear(world?.ownerUserId ?? 'harness-owner');
   startActivation(harness.agent);
-  harness.db.prepare(
-    'UPDATE workspace_identity SET owner_user_id = ? WHERE id = ?',
-  ).run(world?.ownerUserId ?? 'harness-owner', 'harness-actor');
   // Without the capability this root cannot reach its title registry, so every settle
   // would owe an auto title forever.
   harness.agent.harnessHoldsCapability('harness-capability');
@@ -1525,8 +1525,10 @@ export function orchestratorHarness(
 export function unstartedOrchestratorHarness(
   world?: HarnessActorWorld,
   objectName?: string,
+  /** Storage a prior activation left; absent, a new object. */
+  db: Database = new Database(':memory:'),
 ): ActorHarness<HarnessOrchestratorAgent> {
-  return instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), world, ...(objectName !== undefined && { objectName }) });
+  return instantiate(HarnessOrchestratorAgent, { db, world, ...(objectName !== undefined && { objectName }) });
 }
 
 /** A fresh actor instance over surviving storage: the isolate reset, with every

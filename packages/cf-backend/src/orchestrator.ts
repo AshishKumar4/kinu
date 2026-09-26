@@ -149,7 +149,7 @@ import {
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
   acceptContainerEvent, type ContainerEventResult,
-  initWebhookIngressTables,
+  initWebhookIngressTables, initSubordinateRosterTable,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
   type TriggerView,
@@ -391,8 +391,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.addressedName = name;
     sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
 
-    // A native RPC runs no `onStart`.
-    if (!this.nimbusSibling && this.storageRefusal === undefined) this.initSchema();
+    // Tables only, so a call after `destroyAgent` makes no workspace. Native RPC runs no `onStart`.
+    if (!this.nimbusSibling && this.storageRefusal === undefined) {
+      this.initTables();
+
+      if (this.workspaceBorn()) this.registerCompactionExtension();
+    }
 
     this.installClientMessageGate();
     const gate = new ActivationGate();
@@ -403,6 +407,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** A Nimbus sibling (docs/NIMBUS-INTEGRATION.md); no workspace name holds `:`. */
   private get nimbusSibling(): boolean {
     return this.addressedName.startsWith('nbf:');
+  }
+
+  protected override hostsActor(): boolean {
+    return !this.nimbusSibling;
   }
 
   /** Nimbus enters by `idFromString`, and the platform fixes `ctx.id` for the activation, so it has no name. */
@@ -1788,18 +1796,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  private bootstrapWorkspaceActor(): void {
-    this.ctx.storage.transactionSync(() => {
-      const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
-
-      if (identity.length === 0) {
-        void this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
-      }
-
-      this.workspaceActors().createMain({ name: this.name });
-      this.actorHandle();
-    });
-  }
 
   /**
    * Answers whether this workspace hosts a chat-reachable actor under this logical name; never a
@@ -2007,11 +2003,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
 
       if (exists.length === 0) {
-        void this.sql`
-          INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
-          VALUES (${this.ctx.id.toString()}, ${this.name}, ${userId}, ${Date.now()})
-        `;
-        this.workspaceActors().createMain({ name: this.name });
+        this.bearWorkspace(this.name, userId);
       } else {
         this.actorHandle();
         void this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
@@ -2654,11 +2646,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // Device connection is user-level: UserDO owns the tunnel socket and tokens; nothing
   // per-agent verifies, attaches, issues or lists a device token.
 
-  /**
-   * Once per activation, from the constructor; no persisted schema version.
-   * Order is the contract: DDL, then identity/main-actor rows, then anything resolving a handle.
-   */
-  private initSchema(): void {
+  /** DDL only; no persisted schema version. */
+  private initTables(): void {
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
     initWorkspaceSchema({
@@ -2671,9 +2660,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Planes only this root carries (declared in core/conformance/manifest.ts).
     initWebhookIngressTables(this.ctx.storage.sql);
-    // The workspace's own rows, before anything that needs a handle over them.
-    this.bootstrapWorkspaceActor();
-    this.subordinateRoster.ensureSchema();
+    initSubordinateRosterTable(this.ctx.storage.sql);
 
     // Keyed (actor_id, message_id): message ids are minted per actor, so a bare message_id
     // key would let two actors' thumbs silently overwrite each other.
@@ -2701,8 +2688,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     )`);
     // Owned by this root: the container is the workspace's; subordinates ride their parent's.
     initSandboxLifecycleTable(execRaw);
+  }
 
-    // Must follow the rows above: the extension's ports resolve this actor's handle.
+  /** Written by the first claim or a fork, never by a start. */
+  private workspaceBorn(): boolean {
+    return this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`.length > 0;
+  }
+
+  /** The first claim or fork. */
+  protected bearWorkspace(identityName: string, ownerUserId: string): void {
+    this.ctx.storage.transactionSync(() => {
+      void this.sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
+        VALUES (${this.ctx.id.toString()}, ${identityName}, ${ownerUserId}, ${Date.now()})`;
+      this.workspaceActors().createMain({ name: this.name });
+    });
     this.registerCompactionExtension();
   }
 
@@ -2711,7 +2710,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async onStart(): Promise<void> {
     diagnostics.event('actor.startup', { workspace: this.name });
 
-    if (this.storageRefusal !== undefined || this.nimbusSibling) return;
+    // An unborn workspace owes nothing: its first claim writes it.
+    if (this.storageRefusal !== undefined || this.nimbusSibling || !this.workspaceBorn()) return;
     // Every budgeted sweep via the alarm-frame seam; row-budgeted because this is the init gate,
     // and a truncated pass is drained by the wake below in alarm frames.
     const sweepsTruncated = this.maintenanceSweeps();
@@ -5083,8 +5083,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const identity = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
 
     if (identity.length === 0) {
-      void this.sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
-        VALUES (${this.ctx.id.toString()}, ${forkName}, ${ownerUserId}, ${Date.now()})`;
+      this.bearWorkspace(forkName, ownerUserId);
     } else {
       void this.sql`UPDATE workspace_identity SET owner_user_id = ${ownerUserId}`;
     }
