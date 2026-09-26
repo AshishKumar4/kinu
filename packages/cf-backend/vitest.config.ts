@@ -209,6 +209,84 @@ const deployRunProbe = buildSync({
 
 let forbiddenEgressHits = 0;
 
+/**
+ * `https://hold.test` for the attribution probe: holds one workspace's request until another's
+ * releases it, answers the release only once the held workspace has logged, and keeps the order.
+ */
+interface AttributionHold {
+  readonly released: PromiseWithResolvers<void>;
+  readonly logged: PromiseWithResolvers<void>;
+}
+
+interface AttributionLedger {
+  readonly order: string[];
+  readonly held: Map<string, AttributionHold>;
+  logged: number;
+  readonly waiters: { readonly count: number; readonly arrived: () => void }[];
+}
+
+const attribution: AttributionLedger = { order: [], held: new Map(), logged: 0, waiters: [] };
+
+function attributionHold(name: string): AttributionHold {
+  const hold = attribution.held.get(name) ?? { released: Promise.withResolvers<void>(), logged: Promise.withResolvers<void>() };
+  attribution.held.set(name, hold);
+
+  return hold;
+}
+
+async function attributionOutbound(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const [verb = '', first = '', second = ''] = url.pathname.split('/').slice(1);
+
+  if (url.origin !== 'https://hold.test') throw new Error('Unmatched test egress is disabled: ' + request.url);
+
+  switch (verb) {
+    case 'returned':
+      attribution.order.push(`${first} returned`);
+
+      return new Response('ok');
+    case 'hold':
+      await attributionHold(first).released.promise;
+
+      return new Response('released');
+    case 'release':
+      attribution.order.push(`release ${first}`);
+      attributionHold(first).released.resolve();
+      await attributionHold(first).logged.promise;
+      attribution.order.push(`release ${first} answered`);
+
+      return new Response('logged');
+    case 'logged':
+      attribution.order.push(`${second} logged ${first}`);
+      attribution.logged += 1;
+
+      if (first === 'detached') attributionHold(second).logged.resolve();
+
+      for (const waiter of attribution.waiters.filter((entry) => entry.count <= attribution.logged)) {
+        attribution.waiters.splice(attribution.waiters.indexOf(waiter), 1);
+        waiter.arrived();
+      }
+
+      return new Response('ok');
+    case 'await': {
+      const count = Number(first);
+
+      if (attribution.logged < count) {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        attribution.waiters.push({ count, arrived: resolve });
+        await promise;
+      }
+
+      return new Response('ok');
+    }
+
+    case 'order':
+      return Response.json(attribution.order);
+    default:
+      throw new Error('Unmatched hold.test path: ' + request.url);
+  }
+}
+
 export default defineConfig({
   plugins: [
     promptText(),
@@ -376,9 +454,7 @@ export default defineConfig({
           name: 'attribution-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
           modules: probeModules(attributionProbe),
           bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YXR0cmlidXRpb24tcHJvYmUtY3JlZC1rZXktMzJieXQ=' },
-          outboundService: async (request) => {
-            throw new Error('Unmatched test egress is disabled: ' + request.url);
-          },
+          outboundService: attributionOutbound,
           durableObjects: {
             ATTRIBUTION_PROBE: { className: 'AttributionProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },

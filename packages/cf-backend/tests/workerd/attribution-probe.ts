@@ -1,8 +1,12 @@
 /**
  * A diagnostics line that names no workspace lands under the workspace of the invocation it ran in
  * (`attributeWorkspace`, read off the Agents SDK's per-invocation context). Only workerd runs the
- * SDK's real wrapping of an RPC method, an alarm and a detached task, so only here does a change
- * in that wrapping show.
+ * SDK's real wrapping of an RPC method, an alarm, and I/O that completes after its call returned,
+ * so only here does a change in that wrapping show.
+ *
+ * `https://hold.test` is the pool's outbound service (vitest.config.ts): it holds a workspace's
+ * request until another workspace releases it and records the order. A promise cannot carry the
+ * release: workerd refuses to resume one object's promise from another object's request.
  */
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
@@ -28,32 +32,23 @@ interface AnalyticsDataPoint {
 /** The sink writes the event name at blob 3 and the workspace digest at index 1, both strings. */
 const WrittenLine = v.object({ event: v.string(), index: v.string() });
 
+const HOLD = 'https://hold.test';
+
 /** Every data point any workspace object in this isolate wrote. */
 const written: AnalyticsDataPoint[] = [];
 
-/** Callers waiting for the dataset to hold a number of probe lines; resolved by the write that reaches it. */
-const waiters: { readonly count: number; readonly arrived: () => void }[] = [];
+const recorder = { writeDataPoint: (point?: AnalyticsDataPoint): void => { if (point !== undefined) written.push(point); } };
 
-function probeLines(): AttributedLine[] {
-  return written
-    .map((point) => v.parse(WrittenLine, { event: point.blobs?.[2], index: point.indexes?.[0] }))
-    .filter((line) => line.event.startsWith('probe.'));
+/** Held lines, kept so their promises are owned rather than floating. */
+const owed = new Map<string, Promise<void>>();
+
+async function reached(path: string): Promise<void> {
+  const answer = await fetch(`${HOLD}${path}`);
+
+  if (!answer.ok) throw new Error(`${path} answered ${String(answer.status)}`);
 }
 
-const recorder = {
-  writeDataPoint: (point?: AnalyticsDataPoint): void => {
-    if (point === undefined) return;
-    written.push(point);
-    const held = probeLines().length;
-
-    for (const waiter of waiters.filter((entry) => entry.count <= held)) {
-      waiters.splice(waiters.indexOf(waiter), 1);
-      waiter.arrived();
-    }
-  },
-};
-
-const PROBE_METHODS = ['lineFromRpc', 'lineLater', 'lineFromAlarm', 'written'] as const;
+const PROBE_METHODS = ['lineFromRpc', 'lineAfterReturn', 'releaseLineOf', 'lineFromAlarm', 'written'] as const;
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
@@ -68,11 +63,20 @@ export class OrchestratorAgent extends ProductionOrchestrator {
 
   async lineFromRpc(): Promise<void> {
     diagnostics.event('probe.rpc_line');
+    await reached(`/logged/rpc/${this.name}`);
   }
 
-  /** Nothing awaits the line: it runs in a task the call queued and left behind. */
-  async lineLater(): Promise<void> {
-    queueMicrotask(() => { diagnostics.event('probe.detached_line'); });
+  /** Returns at once; the line is logged when the held request answers, after this call has returned. */
+  async lineAfterReturn(): Promise<void> {
+    owed.set(this.name, reached(`/hold/${this.name}`).then(async () => {
+      diagnostics.event('probe.detached_line');
+      await reached(`/logged/detached/${this.name}`);
+    }));
+  }
+
+  /** Releases another workspace's held request; the answer waits until that workspace has logged. */
+  async releaseLineOf(other: string): Promise<void> {
+    await reached(`/release/${other}`);
   }
 
   async lineFromAlarm(): Promise<void> {
@@ -81,17 +85,13 @@ export class OrchestratorAgent extends ProductionOrchestrator {
 
   async probeAlarmLine(): Promise<void> {
     diagnostics.event('probe.alarm_line');
+    await reached(`/logged/alarm/${this.name}`);
   }
 
-  /** Answers once the isolate's dataset holds `count` probe lines, the alarm's and the timer's included. */
-  async written(count: number): Promise<AttributedLine[]> {
-    if (probeLines().length < count) {
-      const { promise, resolve } = Promise.withResolvers<void>();
-      waiters.push({ count, arrived: resolve });
-      await promise;
-    }
-
-    return probeLines();
+  async written(): Promise<AttributedLine[]> {
+    return written
+      .map((point) => v.parse(WrittenLine, { event: point.blobs?.[2], index: point.indexes?.[0] }))
+      .filter((line) => line.event.startsWith('probe.'));
   }
 }
 
@@ -116,11 +116,22 @@ export class AttributionProbeRoot extends DurableObject<ProbeRootEnv> {
     const claim = await target.claimOwner(PROBE_OWNER_ID);
     await userDO.ensureWorkspaceCapability(name, claim.capabilityHash);
     await target.lineFromRpc();
-    await target.lineLater();
+    await target.lineAfterReturn();
+    await reached(`/returned/${name}`);
     await target.lineFromAlarm();
   }
 
+  /** `name`'s open call releases `other`'s held request; answers the outbound service's record of the order. */
+  async releaseLineOf(name: string, other: string): Promise<string[]> {
+    await (await this.workspace(name)).releaseLineOf(other);
+
+    return v.parse(v.array(v.string()), await (await fetch(`${HOLD}/order`)).json());
+  }
+
+  /** Answers once `count` probe lines have been logged, the alarms' included. */
   async written(name: string, count: number): Promise<AttributedLine[]> {
-    return (await this.workspace(name)).written(count);
+    await reached(`/await/${String(count)}`);
+
+    return (await this.workspace(name)).written();
   }
 }

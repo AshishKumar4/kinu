@@ -156,6 +156,7 @@ interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
 
 interface AttributionProbeRpc extends Rpc.DurableObjectBranded {
   logThreeWays(workspace: string): Promise<void>;
+  releaseLineOf(workspace: string, other: string): Promise<string[]>;
   written(workspace: string, count: number): Promise<AttributedLine[]>;
 }
 
