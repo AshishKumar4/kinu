@@ -140,6 +140,11 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
   /** A born workspace (the identity row exists), opened fresh on each call: a new object boots it. */
   function bornWorkspace(actor: ActorObject): () => HostedWorkspace {
     actor.database.exec(WORKSPACE_IDENTITY_DDL);
+    actor.database.exec(`CREATE TABLE IF NOT EXISTS activity_log (
+      actor_id TEXT NOT NULL, id TEXT NOT NULL DEFAULT (lower(hex(randomblob(9)))),
+      event TEXT NOT NULL, detail TEXT, elapsed_ms INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (actor_id, id))`);
+    initWorkspaceActorTable((ddl: string) => { actor.database.exec(ddl); });
     actor.database.run(`INSERT INTO workspace_identity (id, name, mission) VALUES ('w', 'Atlas', 'Help with testing.')`);
 
     return () => createHostedWorkspace({
@@ -200,32 +205,38 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
   ] as const;
 
   for (const [label, tamper] of TAMPERINGS) {
-    test(`a SOUL.md ${label} is the owner's again after a boot`, async () => {
-      const open = await ownedSoul(actorObject());
+    test(`a SOUL.md ${label} is the owner's again after a boot, and no adopt note invites the forge`, async () => {
+      const actor = actorObject();
+      const open = await ownedSoul(actor);
       tamper((await open().bundle.session()).vfs.as(CRED_KERNEL));
 
       const restarted = open();
 
       expect(await soulFile(restarted)).toMatchObject(SEALED);
       expect(await restarted.bundle.vfs.readFile('SOUL.md', { encoding: 'utf8' })).toBe(OWNER_SOUL);
+      expect(await restarted.bundle.vfs.exists('SOUL.md.unverified')).toBe(false);
+      expect(actor.database.query('SELECT event FROM activity_log WHERE event = \'soul.unverified_moved\'').all())
+        .toEqual([]);
     });
 
-    test(`a SOUL.md ${label} mid-life is the owner's at the next turn start`, async () => {
-      const workspace = (await ownedSoul(actorObject()))();
+    test(`a SOUL.md ${label} mid-life is the owner's at the next turn start, and no adopt note invites the forge`, async () => {
+      const actor = actorObject();
+      const workspace = (await ownedSoul(actor))();
       tamper((await workspace.bundle.session()).vfs.as(CRED_KERNEL));
 
       expect(await settledWorkspaceSoul(workspace.bundle)).toBe(OWNER_SOUL);
       expect(await soulFile(workspace)).toMatchObject(SEALED);
+      expect(await workspace.bundle.vfs.exists('SOUL.md.unverified')).toBe(false);
+      expect(actor.database.query('SELECT event FROM activity_log WHERE event = \'soul.unverified_moved\'').all())
+        .toEqual([]);
     });
   }
 
   test('a pre-kernel soul is set aside as SOUL.md.unverified, the birth render sealed, and the owner told once', async () => {
     const actor = actorObject();
-    actor.database.exec(`CREATE TABLE IF NOT EXISTS activity_log (
-      actor_id TEXT NOT NULL, id TEXT NOT NULL DEFAULT (lower(hex(randomblob(9)))),
-      event TEXT NOT NULL, detail TEXT, elapsed_ms INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (actor_id, id))`);
-    initWorkspaceActorTable((ddl: string) => { actor.database.exec(ddl); });
+    const open0 = bornWorkspace(actor);
+
+    open0();
     actor.database.run(
       `INSERT INTO workspace_actors (actor_id, workspace_id, name, storage_key, kind, lifetime, created_at, creation_id)
        VALUES ('main-actor', 'w', 'Atlas', 'agent:main', 'main', 'durable', 1, 'c1')`,

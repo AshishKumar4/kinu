@@ -10,7 +10,7 @@ import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import * as v from 'valibot';
 import { ownerSoulDb, SOUL_PATH, UNVERIFIED_SOUL_PATH } from '../identity/soul';
-import { diagnostics } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
@@ -261,31 +261,36 @@ function kernelHeldSoul(kernel: SoulVfs): string | null {
 
 /** SOUL.md as the row's view; written only on a mismatch. */
 export function resealWorkspaceSoul(kernel: SoulVfs, sql: SqlDatabase): string | null {
-  const soul = ownerSoulDb(sql, kernelHeldSoul(kernel));
+  const owned = ownerSoulDb(sql, kernelHeldSoul(kernel));
 
-  if (soul === null) return null;
+  if (owned === null) return null;
+
+  const { soul, seeded } = owned;
 
   const intact = sealedSoul(kernel)
     && (kernel.lstat(SOUL_FILE).mode & 0o7777) === 0o444
     && new TextDecoder().decode(kernel.readFile(SOUL_FILE)) === soul;
 
-  if (!intact && soulPresent(kernel) && !sealedSoul(kernel)) {
-    const stale = `${WORKSPACE_ROOT}/${UNVERIFIED_SOUL_PATH}`;
+  if (intact) return soul;
 
-    if (kernel.lstat(SOUL_FILE).type === 'directory') kernel.removeRecursive(SOUL_FILE);
-    else if (kernel.lstat(SOUL_FILE).type === 'symlink') kernel.unlink(SOUL_FILE);
-    else {
+  if (soulPresent(kernel) && !sealedSoul(kernel)) {
+    const forged = kernel.lstat(SOUL_FILE).type;
+
+    if (forged === 'directory') kernel.removeRecursive(SOUL_FILE);
+    else if (forged === 'symlink') kernel.unlink(SOUL_FILE);
+    else if (seeded) {
+      const stale = `${WORKSPACE_ROOT}/${UNVERIFIED_SOUL_PATH}`;
+
       if (soulPresentName(kernel, UNVERIFIED_SOUL_PATH)) kernel.unlink(stale);
       kernel.rename(SOUL_FILE, stale);
       writeUnverifiedNote(sql);
+    } else {
+      kernel.unlink(SOUL_FILE);
+      diagnostics.event('soul.forge_discarded', { kind: forged });
     }
-
-    sealWorkspaceSoul(kernel, soul);
-
-    return soul;
   }
 
-  if (!intact) sealWorkspaceSoul(kernel, soul);
+  sealWorkspaceSoul(kernel, soul);
 
   return soul;
 }
@@ -302,8 +307,10 @@ function writeUnverifiedNote(sql: SqlDatabase): void {
       `INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at) VALUES (?, 'soul.unverified_moved', 'An older SOUL.md was moved to SOUL.md.unverified and is no longer read; set SOUL.md to adopt it.', 0, ?)`,
       workspace, Date.now(),
     );
-  } catch {
-    diagnostics.event('soul.unverified_moved', { path: UNVERIFIED_SOUL_PATH });
+  } catch (cause) {
+    diagnostics.failure('soul.unverified_note_failed', toKinuError({
+      doing: 'recording that an older SOUL.md was set aside', cause, otherwise: 'io',
+    }));
   }
 }
 

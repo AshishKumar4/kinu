@@ -341,26 +341,24 @@ export function soulReadsSql(sql: SqlExecutor): SoulReads {
   };
 }
 
-export function ownerSoulDb(db: SqlDatabase, kernelHeld: string | null): string | null {
+export function ownerSoulDb(db: SqlDatabase, kernelHeld: string | null): { soul: string; seeded: boolean } | null {
   const reads = soulReadsDb(db);
 
-  if (reads.soul !== null) return reads.soul;
+  if (reads.soul !== null) return { soul: reads.soul, seeded: false };
 
   if (reads.identity === null) return null;
 
   if (kernelHeld !== null) {
     recordKernelSoul(db, kernelHeld);
 
-    return kernelHeld;
+    return { soul: kernelHeld, seeded: true };
   }
 
   const seed = renderSoulMarkdown(reads.identity);
   db.exec(WORKSPACE_SOUL_DDL);
   db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, seed);
 
-  return seed;
-
-
+  return { soul: seed, seeded: true };
 }
 
 function recordKernelSoul(db: SqlDatabase, markdown: string): void {

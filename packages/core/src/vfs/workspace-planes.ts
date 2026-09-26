@@ -161,9 +161,13 @@ export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveFileTarg
 }
 
 export function workspaceArchiveFiles(bundle: WorkspaceBundle): ArchiveFileSource {
+  // One reseal per export: the walk calls back per entry, and each must see the same sealed soul.
+  let plane: Promise<CredentialedVfs> | null = null;
+  const sealed = (): Promise<CredentialedVfs> => (plane ??= soulPlane(bundle));
+
   return archiveFileTree({
-    readdir: async (path) => [...(await soulPlane(bundle)).readdir(workspacePath(path))],
-    readFile: async (path) => (await soulPlane(bundle)).readFile(workspacePath(path)),
+    readdir: async (path) => [...(await sealed()).readdir(workspacePath(path))],
+    readFile: async (path) => (await sealed()).readFile(workspacePath(path)),
   });
 }
 
