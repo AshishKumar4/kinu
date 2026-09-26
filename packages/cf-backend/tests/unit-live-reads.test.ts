@@ -9,7 +9,8 @@ import {
   appendMemoryNote, LIVE_READS, READS_CHANGED_EVENT, readsWrittenBy, type LiveRead,
 } from '@kinu.run/core';
 import {
-  chatSessionTurns, hostedSubordinateHarness, orchestratorHarness, type HarnessOrchestratorAgent,
+  chatSessionTurns, hostedSubordinateHarness, orchestratorHarness, reactivateOrchestratorHarness,
+  type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 
 const ReadsFrame = v.object({ type: v.literal(READS_CHANGED_EVENT), reads: v.array(v.picklist(LIVE_READS)) });
@@ -89,6 +90,23 @@ test('every table a live read selects from is one whose writes name that read', 
   }
 
   expect([...new Set(unwatched)]).toEqual([]);
+});
+
+// 2026-09-26: each wake of an idle workspace re-chowned its agent's home, whose file events told every open page
+// its Changes moved.
+test('a wake over surviving storage tells an open page nothing', async () => {
+  const first = orchestratorHarness();
+  await first.agent.getWorkspaceSnapshot();
+  const heard: string[] = [];
+
+  const woken = await reactivateOrchestratorHarness(first.db, undefined, {
+    beforeStart: (agent) => { Reflect.set(agent, 'broadcast', (payload: string) => { heard.push(payload); }); },
+  });
+
+  await woken.agent.getWorkspaceSnapshot();
+  endTick(woken.agent);
+
+  expect(heard).toEqual([]);
 });
 
 test('reading every live read names none, so a page that re-reads on a frame never loops', async () => {

@@ -1202,6 +1202,7 @@ export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
     waitUntil: () => {},
     blockConcurrencyWhile: <Result>(fn: () => Promise<Result>): Promise<Result> => fn(),
     getWebSockets: () => [],
+    setWebSocketAutoResponse: () => {},
     abort: () => {},
     // The script's exports, whose supervisor entrypoint the hosted runtime requires.
     exports: SCRIPT_EXPORTS,

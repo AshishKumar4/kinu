@@ -1916,7 +1916,7 @@ export {
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
 
 export {
-  LIVE_READS, LiveReadsNotice, READS_CHANGED_EVENT, readsMovedByFiles, readsWrittenBy,
+  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, readsMovedByFiles, readsWrittenBy,
   type LiveRead, type ReadsChangedFrame,
 } from './read-models/live-reads';
 

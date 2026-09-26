@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction 
 import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
-  branchHeadId, CHANGES_MOVED_EVENT, LIVE_READS, ORCHESTRATOR_AGENT_SLUG, READS_CHANGED_EVENT, SLATES_CHANGED_EVENT,
+  branchHeadId, CHANGES_MOVED_EVENT, LIVE_READS, ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE, READS_CHANGED_EVENT, SLATES_CHANGED_EVENT,
   hostedActorSocketPath, type LiveRead, type PendingAction, type PlanReview, type ReasoningEffort, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
@@ -1175,7 +1175,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       if (agent.readyState !== WebSocket.OPEN) return;
 
       if (!isSubordinate) {
-        agent.send(JSON.stringify({ type: "ping" }));
+        agent.send(PAGE_KEEPALIVE.ping);
 
         return;
       }

@@ -61,7 +61,9 @@ describe('createHubDeviceTransport', () => {
     expect(transport.status().connected).toBe(true);
   });
 
-  test('status() never asks the hub; a refresh that answers differently says so, one that does not stays quiet', async () => {
+  // 2026-09-26: every wake of an idle workspace re-read its page's executors, since a fresh object's first answer
+  // differed from the empty one it starts with, though no page had read that one.
+  test('status() never asks the hub; a refresh says so only when it changes what a reader was told', async () => {
     let listCalls = 0;
     let connected = false;
     let moved = 0;
@@ -81,18 +83,19 @@ describe('createHubDeviceTransport', () => {
       onStatusChanged: () => { moved += 1; },
     });
 
+    connected = true;
     await transport.refreshStatus();
-    expect(moved).toBe(1);
+    expect(moved).toBe(0);
     transport.status();
     transport.status();
     expect(listCalls).toBe(1);
 
     await transport.refreshStatus();
-    expect(moved).toBe(1);
-    connected = true;
+    expect(moved).toBe(0);
+    connected = false;
     await transport.refreshStatus();
-    expect(moved).toBe(2);
-    expect(transport.status().connected).toBe(true);
+    expect(moved).toBe(1);
+    expect(transport.status().connected).toBe(false);
   });
 
   test('no owner hub → the workspace is unattached, which is not an unlinked machine', async () => {

@@ -275,6 +275,7 @@ adoptCtxExports(v.parse(CtxExportsSchema, SCRIPT_EXPORTS));
 export function actorObjectState(built: StandInFor<ActorObjectState>): ActorObjectState {
   const refuse = refusing('DurableObjectState');
   const facet = refusing('DurableObjectFacets');
+  let autoResponse: WebSocketRequestResponsePair | null = null;
 
   return Object.assign({
     // `undefined` on the platform too: no startup props bound, no container attached.
@@ -287,8 +288,8 @@ export function actorObjectState(built: StandInFor<ActorObjectState>): ActorObje
     blockConcurrencyWhile: refuse('blockConcurrencyWhile'),
     acceptWebSocket: refuse('acceptWebSocket'),
     getWebSockets: refuse('getWebSockets'),
-    setWebSocketAutoResponse: refuse('setWebSocketAutoResponse'),
-    getWebSocketAutoResponse: refuse('getWebSocketAutoResponse'),
+    setWebSocketAutoResponse: (pair?: WebSocketRequestResponsePair) => { autoResponse = pair ?? null; },
+    getWebSocketAutoResponse: () => autoResponse,
     getWebSocketAutoResponseTimestamp: refuse('getWebSocketAutoResponseTimestamp'),
     setHibernatableWebSocketEventTimeout: refuse('setHibernatableWebSocketEventTimeout'),
     getHibernatableWebSocketEventTimeout: refuse('getHibernatableWebSocketEventTimeout'),

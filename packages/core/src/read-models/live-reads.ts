@@ -11,6 +11,8 @@ export type LiveRead = typeof LIVE_READS[number];
 
 export const READS_CHANGED_EVENT = 'reads_changed';
 
+export const PAGE_KEEPALIVE = { ping: '{"type":"ping"}', pong: '{"type":"pong"}' } as const;
+
 export interface ReadsChangedFrame {
   readonly type: typeof READS_CHANGED_EVENT;
   readonly reads: readonly LiveRead[];

@@ -60,13 +60,13 @@ interface StatusRefresh {
 
 export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTransport {
   let snapshot: DeviceStatus = DISCONNECTED;
+  let served: string | null = null;
   let inFlight: StatusRefresh | null = null;
 
   const adopt = (next: DeviceStatus): void => {
-    const moved = JSON.stringify(next) !== JSON.stringify(snapshot);
     snapshot = next;
 
-    if (moved) opts.onStatusChanged?.();
+    if (served !== null && served !== JSON.stringify(next)) opts.onStatusChanged?.();
   };
 
   /** Authoritative hub check, deduped. Failure keeps the last snapshot; the slot is released only by its owner. */
@@ -87,7 +87,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         const status = await opts.caller().then((caller) => hub.deviceRuntimeStatus(caller));
         adopt(status);
       } catch (cause) {
-        // Transient hub error: keep the last snapshot, but record it.
+        // Transient hub error: keep the last snapshot, record it.
         diagnostics.failure(STATUS_RECHECK_FAILED, toKinuError({
           doing: 'refreshing the device status from the hub',
           cause,
@@ -109,7 +109,11 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
 
   return {
     /** Never asks the hub: a read of the executors must not cost a cross-object call. */
-    status: (): DeviceStatus => snapshot,
+    status: (): DeviceStatus => {
+      served = JSON.stringify(snapshot);
+
+      return snapshot;
+    },
     refreshStatus,
     rpc: async (method, params, rpcOpts) => {
       const hub = opts.hub();
