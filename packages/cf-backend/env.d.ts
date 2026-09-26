@@ -134,6 +134,7 @@ declare global {
       mainModule: {
         CodemodeEgress: typeof CodemodeEgress;
         SlateBinding: typeof SlateBinding;
+        default: ExportedHandler<Env>;
       };
     }
   }

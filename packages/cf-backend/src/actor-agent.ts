@@ -3203,7 +3203,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(), rt,
+      loader: this.env.LOADER, egress: codemodeEgress(this.workspaceName()), rt,
       sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
     });
@@ -3298,7 +3298,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this._codemodeFactories.has(key)) {
       this._codemodeFactories.set(key, createCodemodeToolFactory({
         loader: this.env.LOADER,
-        egress: codemodeEgress(),
+        egress: codemodeEgress(this.workspaceName()),
         rt: this.rt,
         reach: narrowing,
         sql: this.boundSql,

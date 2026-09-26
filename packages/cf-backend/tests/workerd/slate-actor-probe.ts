@@ -40,7 +40,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     };
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(), sql, workspace: 'binding-probe',
+      loader: this.env.LOADER, egress: codemodeEgress('binding-probe'), sql, workspace: 'binding-probe',
       webSearch: createDefaultWebSearchProvider({ fetch }), reach: slateToolReach(narrowToolSurface(undefined)),
       rt: {
         actor: bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => {}),
@@ -95,7 +95,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(), sql, workspace: 'mode-probe',
+      loader: this.env.LOADER, egress: codemodeEgress('mode-probe'), sql, workspace: 'mode-probe',
       webSearch: createDefaultWebSearchProvider({ fetch }),
       rt: {
         actor: bindActorHandle(sql, {

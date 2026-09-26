@@ -53,7 +53,8 @@ const DEFAULT_SLATE_SOURCE = [
 ].join('\n');
 
 interface SlateStart {
-  readonly source?: string;
+  /** The module at `project.main`; null writes none. */
+  readonly source?: string | null;
   readonly bindChain?: boolean;
   readonly cred?: VfsCred;
   readonly browser?: string;
@@ -127,7 +128,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     const root = '/slates/notes';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
-    files.writeFile(`${root}/${v.parse(v.string(), project.main ?? 'server.ts')}`, source);
+
+    if (source !== null) files.writeFile(`${root}/${v.parse(v.string(), project.main ?? 'server.ts')}`, source);
 
     if (browser !== undefined) files.writeFile(`${root}/${v.parse(v.string(), project.browser ?? 'browser.ts')}`, browser);
 
@@ -140,7 +142,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
 
     const boot = {
       key: crypto.randomUUID(), owner, root, app, cred,
-      globalOutbound: codemodeEgress(),
+      globalOutbound: codemodeEgress(null),
       project: parseSlateProject(project),
     };
 
@@ -173,8 +175,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     catch (cause) { return { error: renderThrownChain({ cause }) }; }
   }
 
-  async compileProbe(source: string, cred: VfsCred = CRED_SESSION_USER) {
-    try { await this.start({ source, bindChain: false, cred }); }
+  async compileProbe(source: string | null, cred: VfsCred = CRED_SESSION_USER, project?: Record<string, JsonValue>) {
+    try { await this.start(project === undefined ? { source, bindChain: false, cred } : { source, bindChain: false, cred, project }); }
     catch (cause) {
       if (!(cause instanceof KinuError)) throw cause;
 
