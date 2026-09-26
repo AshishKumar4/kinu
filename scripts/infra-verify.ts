@@ -73,7 +73,7 @@
 import { assertMeasured, blocked, finding } from './gate-ratchet';
 import {
   type Deployment, type Observation, PROBE_LABEL, accessApplication, accessOrganization,
-  accessPolicies, accessScope, authenticated, container, deployment, edgeResponds,
+  accessPolicies, accessScope, authenticated, container, containerNamespace, deployment, edgeResponds,
   emailRoutingToWorker, hostResolves, kvNamespace, r2, secretNames, servesWorker, vectorize,
   wildcardDns,
 } from './infra-cloudflare';
@@ -213,6 +213,21 @@ function unobservableRow(resource: Resource): Row {
 const routeHost = (pattern: string): string =>
   pattern.replace(/^\*\./u, '').replace(/\/.*$/u, '');
 
+/** A container application, or the namespace its class's live binding names and the application holding it. */
+function observedContainer(resource: Resource, live: Deployment): Observation {
+  if (resource.kind === 'container') return container(resource.name, /image (\S+)$/u.exec(resource.purpose)?.[1] ?? '');
+
+  if (live.state === 'unknown') return { state: 'unknown', reason: live.reason };
+  const binding = live.state === 'deployed' ? live.bindings.find((entry) => entry.name === resource.binding) : undefined;
+
+  // Never deployed, or a class the live version does not bind yet: no namespace exists until this deploy creates one.
+  if (binding === undefined) return containerNamespace(undefined, resource.name);
+
+  if (binding.namespace === undefined) return { state: 'unknown', reason: `the live ${binding.name} binding names no namespace id` };
+
+  return containerNamespace(binding.namespace, resource.name);
+}
+
 /**
  * One resource, observed.
  *
@@ -255,11 +270,9 @@ async function observe(
       return observedRow(resource, vectorize(resource.name, geometry.dimensions, geometry.metric));
     }
 
-    case 'container': {
-      const image = /image (\S+)$/u.exec(resource.purpose)?.[1] ?? '';
-
-      return observedRow(resource, container(resource.name, image));
-    }
+    case 'container':
+    case 'container-namespace':
+      return observedRow(resource, observedContainer(resource, live));
 
     case 'worker':
       if (live.state === 'deployed') return observedRow(resource, { state: 'present', detail: `version ${live.versionId}` });

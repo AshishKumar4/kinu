@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-26",
-  "files": 2739,
-  "functions": 67611,
+  "files": 2756,
+  "functions": 68061,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -110,10 +110,6 @@
       "complexity": 37
     },
     {
-      "key": "scripts/infra-manifest.ts#draftsFor",
-      "complexity": 37
-    },
-    {
       "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
       "complexity": 36
     },
@@ -135,6 +131,10 @@
     },
     {
       "key": "scripts/fixtures/payload-transport/worker.ts#fetch",
+      "complexity": 35
+    },
+    {
+      "key": "scripts/infra-manifest.ts#draftsFor",
       "complexity": 35
     },
     {
@@ -315,10 +315,6 @@
     },
     {
       "key": "scripts/fixtures/kinu-durability/worker.ts#fetch",
-      "complexity": 30
-    },
-    {
-      "key": "scripts/infra-verify.ts#observe",
       "complexity": 30
     },
     {

@@ -2304,7 +2304,9 @@ export const LADDER: readonly Gate[] = [
       + 'application 404s its own operators and looks like an allowlist typo, while an '
       + 'over-broad one leaves the admin plane working perfectly and puts an interactive '
       + 'corporate login in front of every preview URL an agent hands out, the landing page and '
-      + '/api/feedback.',
+      + '/api/feedback. And a container class\'s namespace held by an application other than the one the deploy '
+      + 'names, in every phase: the deploy uploads the Worker and is then refused with '
+      + 'DURABLE_OBJECT_ALREADY_HAS_APPLICATION, which is how staging\'s bring-up of 2026-09-26 stopped.',
     blind: 'anything no CLI can observe, which it refuses to hide: the AI Gateway (wrangler 4.97 '
       + 'has no `ai-gateway` command and the OAuth session has no `aig` scope) and the cron '
       + 'trigger (writable, never readable) are DECLARED blind spots pinned by equality, so the '
