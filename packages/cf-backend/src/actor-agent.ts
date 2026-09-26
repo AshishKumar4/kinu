@@ -741,7 +741,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   @callable()
   async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
-    return this.planActions.dismiss(id, revision);
+    return this.planActions.dismiss(id, revision, (prefix) => { this.chatLoop.stopIfRunning(prefix); });
   }
 
   @callable()

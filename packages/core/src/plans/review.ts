@@ -52,16 +52,12 @@ export const PlanReviewSchema = v.object({
   createdAt: v.number(), updatedAt: v.number(), decidedAt: v.nullable(v.number()),
 });
 
-function planReviewAwaitingDecision(
+export function planReviewAwaitingDecision(
   review: Pick<PlanReview, 'status' | 'handoffAccepted'> | null | undefined,
 ): boolean {
   return review?.status === 'pending'
     || review?.status === 'changes_requested'
     || (review?.status === 'approved' && !review.handoffAccepted);
-}
-
-export function planDismissable(review: Pick<PlanReview, 'status' | 'handoffAccepted'>): boolean {
-  return review.status === 'pending' || (planReviewAwaitingDecision(review) && !review.handoffAccepted);
 }
 
 export function workModeUnderReview(
@@ -685,7 +681,7 @@ export class PlanReviewStore {
       return { ok: false, error: `stale plan revision ${id}/${revision}`, plan: latest };
     }
 
-    if (!planDismissable(current)) return { ok: false, error: `plan revision ${id}/${revision} already handed off its turn`, plan: current };
+    if (!planReviewAwaitingDecision(current)) return { ok: false, error: `plan revision is already ${current.status}`, plan: current };
     const now = this.now();
     void this.sql`UPDATE plan_reviews SET status='dismissed', updated_at=${now}, decided_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status=${current.status}`;
@@ -761,6 +757,10 @@ export class PlanReviewActions {
       };
     }
 
+    if (driving?.kinuEvent === 'plan_feedback' && !planHandoffStillOwed(driving, this.store)) {
+      return { ok: false, error: 'the plan this revision answers was dismissed', plan: this.store.getActive(CHAT_SESSION_ID) };
+    }
+
     return this.announced(this.store.submit(CHAT_SESSION_ID, edits));
   }
 
@@ -776,8 +776,12 @@ export class PlanReviewActions {
     return this.announced(this.store.decide(id, revision, decision, feedback));
   }
 
-  dismiss(id: string, revision: number): PlanReviewResult {
-    return this.announced(this.store.dismiss(id, revision));
+  dismiss(id: string, revision: number, stopRunning?: (keyPrefix: string) => void): PlanReviewResult {
+    const result = this.announced(this.store.dismiss(id, revision));
+
+    if (result.ok) stopRunning?.(`plan:${id}:${String(revision)}:`);
+
+    return result;
   }
 
   markHandoffAccepted(id: string, revision: number): PlanReviewResult {

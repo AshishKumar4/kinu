@@ -1386,7 +1386,7 @@ export {
   listPendingPlanReviews,
   workModeUnderReview,
   planHandoffStillOwed,
-  planDismissable,
+  planReviewAwaitingDecision,
   planTitle,
   validatePlanEdits,
   type PlanDecisionOutcome,

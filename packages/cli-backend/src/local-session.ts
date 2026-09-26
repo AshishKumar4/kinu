@@ -1048,7 +1048,7 @@ export class LocalAgentSession {
   }
 
   async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
-    return this.planActions.dismiss(id, revision);
+    return this.planActions.dismiss(id, revision, (prefix) => { this.chat.stopIfRunning(prefix); });
   }
 
   logActivity(event: string, detail?: string): void {
