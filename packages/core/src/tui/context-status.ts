@@ -1,10 +1,6 @@
 import { contextWindowForModel } from '../context-window';
 import { parseModelSpec, specWithoutAccount } from '../providers/types';
 
-export interface TextForContextEstimate {
-  content: string;
-}
-
 export function modelDisplayName(spec: string | null | undefined): string {
   const raw = (spec ?? '').trim();
 
@@ -22,16 +18,10 @@ export function modelDisplayName(spec: string | null | undefined): string {
   return listed === raw ? name : `${name} · ${parseModelSpec(raw).account ?? ''}`;
 }
 
-export function estimateContextTokens(messages: readonly TextForContextEstimate[]): number {
-  const chars = messages.reduce((sum, msg) => sum + msg.content.length, 0);
-
-  return Math.max(0, Math.ceil(chars / 4));
-}
-
-export function formatContextUsage(modelSpec: string | null | undefined, usedTokens: number, reportedContextWindow?: number): string {
+export function formatContextUsage(modelSpec: string | null | undefined, usedTokens: number | null, reportedContextWindow?: number): string {
   const window = reportedContextWindow ?? contextWindowForModel(modelSpec ?? '').window;
 
-  return `ctx ~${formatTokenCount(usedTokens)}/${formatTokenCount(window)}`;
+  return `ctx ${usedTokens === null ? '—' : `~${formatTokenCount(usedTokens)}`}/${formatTokenCount(window)}`;
 }
 
 function formatTokenCount(tokens: number): string {

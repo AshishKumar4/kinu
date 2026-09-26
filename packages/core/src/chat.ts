@@ -79,6 +79,7 @@ export type ChatEvent =
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
   | { type: 'error'; message: string }
   | { type: 'model-fallback'; from: string; to: string; reason: string }
+  | { type: 'context-admitted'; tokens: number; contextWindow: number }
   /** `text`: the answer, else what streamed, else a tool-result synthesis. `answer`: only the final step's text
    *  ({@link answerFromSteps}), absent when there is none. */
   | { type: 'done'; text: string; responseMessages: ModelMessage[]; answer?: string };
@@ -550,6 +551,10 @@ function dialectSpec(current: { readonly spec: string; readonly provider: string
 
 /** One chat turn; callers append its response messages to history. A cut turn yields `done`, then throws
  *  {@link INTERRUPTED_TURN}; a dead provider stream throws without `done`. */
+function* admittedEvent(tokens: number | undefined, contextWindow: number): Generator<ChatEvent> {
+  if (tokens !== undefined) yield { type: 'context-admitted', tokens, contextWindow };
+}
+
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const extensions = opts.extensions;
 
@@ -592,9 +597,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   // Blocks born at the turn's first step ride right before its input, so the request stays the last user-role
   // content.
-  const { messages: turnMessages, turnStart } = await assembleTurnMessages({
+  const { messages: turnMessages, turnStart, admittedTokens } = await assembleTurnMessages({
     ...assembly, history: initialContext?.messages ?? assembly.history, turnStart: initialContext?.turnStart,
   });
+
+  yield* admittedEvent(admittedTokens, contextWindow);
 
   let initialContextAvailable = initialContext !== null;
 

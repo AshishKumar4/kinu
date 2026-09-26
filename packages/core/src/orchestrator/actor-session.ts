@@ -129,6 +129,10 @@ export const CLEAR_NEEDS_IDLE = 'Stop the turn that is running before you start 
 
 /** An actor's mutable execution state, apart from its host, which keeps admission, queueing and settlement and
  *  may share immutable catalogs, never this context, orchestrator or abort. */
+function turnFailure(message: string, abort: AbortSignal): Error | null {
+  return abort.aborted || message === INTERRUPTED_TURN ? null : new Error(message);
+}
+
 export class ActorSession {
   readonly actorId: string;
   readonly runtime: AgentRuntime;
@@ -582,6 +586,7 @@ export class ActorSession {
           // Reasoning is never the turn's answer.
           case 'reasoning-delta':
           case 'model-fallback':
+          case 'context-admitted':
             break;
 
           case 'step-finish':
@@ -592,19 +597,11 @@ export class ActorSession {
               request: event.request, context: event.context, account: event.account, fallback: event.fallback,
             });
             break;
-          case 'error': {
+          case 'error':
             this.orchestrator.acc.hadError = true;
-
             // The scaffold loop pushes an `error` event rather than throwing, so an empty turn never settles `completed`.
-            // First failure wins; an abort is not one.
-            if (failure === null
-              && !active.abort.signal.aborted
-              && event.message !== INTERRUPTED_TURN) {
-              failure = new Error(event.message);
-            }
-
+            failure ??= turnFailure(event.message, active.abort.signal);
             break;
-          }
 
           case 'done':
             this.messages.push(...this.orchestrator.inbox.replayInto(event.responseMessages));

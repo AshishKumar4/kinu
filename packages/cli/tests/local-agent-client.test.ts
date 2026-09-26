@@ -580,6 +580,35 @@ describe('LocalAgentClient', () => {
     expect(await turnsSentAsMessages(true)).toEqual(['turn 4']);
   });
 
+  test('each turn reports the size the admission gate measured its request at, and /compact shrinks the next one', async () => {
+    // Short asks and long answers, as a working session reads: the fold keeps each ask and summarizes the answers.
+    const admittedSizes = async (compact: boolean): Promise<number[]> => {
+      const { client } = setup(fakeModel('findings '.repeat(600)));
+      const sizes: number[] = [];
+
+      client.subscribe((event) => {
+        if (event.type === 'broadcast' && event.event.type === 'context_admitted') sizes.push(event.event.requestTokens ?? -1);
+      });
+
+      await client.connect();
+
+      for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+      if (compact) client.localControls.compactNow();
+      await client.send('what came first?', { cwd: '/work' });
+      await client.close();
+
+      return sizes;
+    };
+
+    const whole = await admittedSizes(false);
+    const folded = await admittedSizes(true);
+
+    expect(whole).toHaveLength(6);
+    expect(whole.every((size, index) => index === 0 || size > (whole[index - 1] ?? 0))).toBeTrue();
+    expect(folded.at(-1)).toBeLessThan(whole.at(-1) ?? 0);
+  });
+
   test('status and tools reflect the live session', async () => {
     const { client } = setup(fakeModel('ok'));
     await client.connect();

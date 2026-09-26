@@ -36,6 +36,7 @@ export interface TurnContextInput {
 export interface AssembledTurn {
   readonly messages: ModelMessage[];
   readonly turnStart: number;
+  readonly admittedTokens?: number;
 }
 
 /**
@@ -159,7 +160,7 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Ass
 
   const tokens = await measure(assembled);
 
-  if (tokens <= limit) return assembled;
+  if (tokens <= limit) return { ...assembled, admittedTokens: tokens };
 
   // An unmeasured window neither refuses nor spends the forced compaction; the provider answers.
   if (!admission.limits.windowMeasured) {
@@ -167,7 +168,7 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Ass
       sessionKey: input.sessionKey, tokens, limit, contextWindow: admission.limits.contextWindow,
     });
 
-    return assembled;
+    return { ...assembled, admittedTokens: tokens };
   }
 
   // An armed compaction already rewrote this assembly.
@@ -178,5 +179,5 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Ass
 
   if (recounted > limit) throw refuseOversizedRequest(recounted, limit);
 
-  return compacted;
+  return { ...compacted, admittedTokens: recounted };
 }

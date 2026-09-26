@@ -2414,9 +2414,7 @@ export {
 } from './providers/model-menu';
 
 export {
-  type TextForContextEstimate,
   modelDisplayName,
-  estimateContextTokens,
   formatContextUsage,
 } from './tui/context-status';
 

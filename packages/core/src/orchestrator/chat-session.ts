@@ -911,6 +911,7 @@ export class ChatSession {
             return;
           case 'reasoning-delta':
           case 'model-fallback':
+          case 'context-admitted':
           case 'done':
           case 'error':
             return;
@@ -949,6 +950,10 @@ export class ChatSession {
       partial.observe(event);
 
       if (event.type === 'model-fallback') this.recordModelFallback(event);
+
+      if (event.type === 'context-admitted') {
+        this.emit({ type: 'broadcast', event: { type: 'context_admitted', requestTokens: event.tokens, contextWindow: event.contextWindow } });
+      }
 
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
 

@@ -175,7 +175,7 @@ export function resolveCommandDraft(commands: readonly SlashCommandInfo[], draft
 }
 
 export type SlashOutcome =
-  | { kind: 'text'; text: string; cleared?: true; copy?: string; workspaces?: true }
+  | { kind: 'text'; text: string; cleared?: true; contextChanged?: true; copy?: string; workspaces?: true }
   | { kind: 'status'; status: AgentClientStatus }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
@@ -490,7 +490,7 @@ async function clearCommand({ client, command }: SlashContext): Promise<SlashOut
   if (!client.localControls) return { kind: 'unknown', command };
   await client.localControls.clearConversation();
 
-  return { kind: 'text', text: 'A new conversation starts with the next message.', cleared: true };
+  return { kind: 'text', text: 'A new conversation starts with the next message.', cleared: true, contextChanged: true };
 }
 
 async function copyCommand({ client }: SlashContext): Promise<SlashOutcome> {
@@ -523,7 +523,7 @@ function compactCommand({ client, command }: SlashContext): SlashOutcome {
   if (!client.localControls) return { kind: 'unknown', command };
   client.localControls.compactNow();
 
-  return { kind: 'text', text: 'The next turn starts from a summary of this conversation and its last exchanges.' };
+  return { kind: 'text', text: 'The next turn starts from a summary of this conversation and its last exchanges.', contextChanged: true };
 }
 
 function stopCommand({ client }: SlashContext): SlashOutcome {

@@ -72,7 +72,7 @@ import {
 } from './overlays';
 import { useDeviceConnectPrompt, type DeviceConnectPromptState } from './use-device-connect';
 import { useShellApproval } from './use-shell-approval';
-import type { ShellApprovalRequest, WorkMode } from '@kinu.run/core';
+import type { BroadcastEvent, ShellApprovalRequest, WorkMode } from '@kinu.run/core';
 import { useComposerPaste } from './use-composer-paste';
 import { useDraftEditing } from './use-draft-editing';
 import { composerHelp } from './help-view';
@@ -81,7 +81,6 @@ import { composerKeyHandlers } from './draft-keys';
 import { modalKeyHandlers, sceneKeyHandlers } from './surface-keys';
 import type { ComposerKeyDeps } from './draft-keys';
 import type { SurfaceKeyDeps } from './surface-keys';
-import { estimateContextTokens } from '@kinu.run/core';
 import { useStreamingBuffer } from './streaming-buffer';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from '@kinu.run/core';
 import { agentDisplayLabel, clipText } from '@kinu.run/core';
@@ -235,6 +234,7 @@ function ChatScene({
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
   const [modelSpec, setModelSpec] = useState<string>('');
   const [nextTier, setNextTier] = useState<TierId | null>(null);
+  const [admittedContext, setAdmittedContext] = useState<AdmittedContext | null>(null);
   const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>(null);
   const [pendingConsent, setPendingConsent] = useState<PendingDeviceConsent | null>(null);
@@ -496,6 +496,7 @@ function ChatScene({
   // Held command output must reach no other agent.
   const forgetSessionTurn = useCallback(() => {
     localOutputsRef.current = [];
+    setAdmittedContext(null);
     turnMeterRef.current = null;
     activeThinkingRef.current = null;
     thinkingStream.clear();
@@ -982,6 +983,8 @@ function ChatScene({
       case 'text':
         if (outcome.cleared) setMessages([]);
 
+        if (outcome.contextChanged) setAdmittedContext(null);
+
         if (outcome.workspaces) {
           openWorkspaces();
 
@@ -1313,6 +1316,14 @@ function ChatScene({
   }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, sealThinking, setTurnPhase, stream]);
 
   const handleBroadcast = useCallback((event: Extract<AgentClientEvent, { type: 'broadcast' }>) => {
+    const admitted = admittedContextOf(event.event);
+
+    if (admitted !== null) {
+      setAdmittedContext(admitted);
+
+      return;
+    }
+
     if (event.event.type === 'plan_updated' && event.event.plan) {
       addMessage({ role: 'system', content: renderPlanReview(event.event.plan) });
 
@@ -1801,8 +1812,7 @@ function ChatScene({
   const commandHints = !overlayOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
 
   const inputFocused = composerTakesKeys(ready, connectFailed, overlayOpen);
-  const contextTokens = estimateContextTokens(messages);
-  const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
+  const meter = headerMeter(admittedContext, contextWindowForSpec(modelCatalog, modelSpec));
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
 
   const surfaceTitle = surfaceTitleFor(activeSurface, inputState.walkbackOpen);
@@ -1983,8 +1993,8 @@ function ChatScene({
         scaffoldVersion={status?.scaffoldVersion}
         toolCount={status?.toolCount}
         autoEvolve={status?.autoEvolve}
-        contextTokens={contextTokens}
-        contextWindow={contextWindow}
+        contextTokens={meter.tokens}
+        contextWindow={meter.window}
         branchCount={Object.keys(branchTasks).length}
         profile={hub?.data.profile.resolved}
       />
@@ -2076,6 +2086,23 @@ function copyRefused(outcome: Extract<SlashOutcome, { kind: 'text' }>, renderer:
   if (outcome.copy === undefined || renderer.copyToClipboardOSC52(outcome.copy)) return null;
 
   return 'This terminal does not accept clipboard writes (OSC 52), so nothing was copied.';
+}
+
+interface AdmittedContext {
+  readonly tokens: number;
+  readonly window: number;
+}
+
+function admittedContextOf(event: BroadcastEvent): AdmittedContext | null {
+  const { type, requestTokens, contextWindow } = event;
+
+  return type === 'context_admitted' && requestTokens !== undefined && contextWindow !== undefined
+    ? { tokens: requestTokens, window: contextWindow }
+    : null;
+}
+
+function headerMeter(admitted: AdmittedContext | null, catalogWindow: number | undefined): { tokens: number | null; window: number | undefined } {
+  return admitted ?? { tokens: null, window: catalogWindow };
 }
 
 function composerTakesKeys(ready: boolean, connectFailed: boolean, overlayOpen: boolean): boolean {

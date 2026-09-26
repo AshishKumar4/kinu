@@ -737,6 +737,21 @@ test('/export writes the conversation to a Markdown file in its order, and names
   expect(order).toEqual([...order].sort((x, y) => x - y));
 });
 
+test('the header shows the size the gate measured the last request at, not the size of the transcript on screen', async () => {
+  // It summed the transcript's characters, so after /compact it still showed the whole conversation.
+  const agent = fakeClient({ name: 'meter' });
+
+  const screen = await mountChat(agent.client);
+  await screen.waitFor('an unmeasured context', () => screen.frame().includes('ctx —/'));
+
+  agent.emit({ type: 'turn-start', kind: 'user', text: 'long' });
+  agent.emit({ type: 'broadcast', event: { type: 'context_admitted', requestTokens: 1_500, contextWindow: 200_000 } });
+  agent.emit({ type: 'text-delta', delta: 'word '.repeat(40_000) });
+  agent.emit({ type: 'turn-end', turn: TURN });
+
+  await screen.waitFor('the measured size', () => screen.frame().includes('ctx ~1.5k/200k'));
+});
+
 test('a turn waiting on a rate limit names the provider, not thinking', async () => {
   const agent = fakeClient({ name: 'wait-visible' });
 

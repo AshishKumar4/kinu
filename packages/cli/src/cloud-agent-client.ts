@@ -275,6 +275,7 @@ const BranchStatusEventSchema = v.variant('status', [
 const BroadcastFrameSchema = v.union([
   BranchStatusEventSchema,
   v.object({ type: v.literal('model_fallback'), message: v.string() }),
+  v.object({ type: v.literal('context_admitted'), requestTokens: v.number(), contextWindow: v.number() }),
 ]);
 
 interface CloudAgentClientOptions {
