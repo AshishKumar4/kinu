@@ -11,7 +11,7 @@ import {
 } from './workspace-create';
 import { err, json, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
-import { authoredRefusal, diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { authoredRefusal, diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { AccountLedgerTarget } from './account-usage';
 
@@ -87,7 +87,7 @@ export function notifyWorkspacesCredentialsChanged<Id>(
   ctx?: Pick<ExecutionContext, 'waitUntil'>,
 ): void {
   if (ctx === undefined) {
-    throw new Error('Credential fanout requires the request ExecutionContext owner');
+    throw new KinuError('io', 'Credential fanout requires the request ExecutionContext owner');
   }
 
   ctx.waitUntil((async (): Promise<void> => {

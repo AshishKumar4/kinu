@@ -695,7 +695,7 @@ export class UserDO extends Agent<Env> {
     validateWorkspaceName(workspaceName);
 
     if (!this.workspaceRegistered(workspaceName)) {
-      throw new Error(`Workspace ${workspaceName} is not in your registry.`);
+      throw new KinuError('missing', `Workspace ${workspaceName} is not in your registry.`);
     }
 
     return this.reconcileWorkspaceCapability(workspaceName, presentedHash);
@@ -734,7 +734,7 @@ export class UserDO extends Agent<Env> {
       const { token, tokenHash } = await freshWorkspaceCapability();
 
       if (!this.workspaceMintable(workspaceName)) {
-        throw new Error(`Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
+        throw new KinuError('unavailable', `Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
       }
 
       commitWorkspaceCapability(this.ctx.storage.sql, workspaceName, tokenHash);
@@ -842,7 +842,7 @@ export class UserDO extends Agent<Env> {
 
     const stamped = this.onboardingCompletedAt();
 
-    if (stamped === null) throw new Error('user_onboarding has no row after the insert');
+    if (stamped === null) throw new KinuError('io', 'user_onboarding has no row after the insert');
 
     return { onboardedAt: stamped };
   }
@@ -852,13 +852,13 @@ export class UserDO extends Agent<Env> {
     const name = displayName.trim();
     const problem = displayNameProblem(name);
 
-    if (problem !== null) throw new Error(problem);
+    if (problem !== null) throw new KinuError('bad_input', problem);
 
     this.sqlx(`UPDATE user_profile SET display_name = ? WHERE id = 1`, name);
 
     const profile = await this.getProfile(caller);
 
-    if (!profile) throw new Error('No profile row to rename');
+    if (!profile) throw new KinuError('missing', 'No profile row to rename');
 
     return profile;
   }
@@ -931,7 +931,7 @@ export class UserDO extends Agent<Env> {
     validateWorkspaceName(name);
 
     if (resolved.kind === 'workspace' && resolved.workspace !== name) {
-      throw new Error(`Workspace "${resolved.workspace}" may only push its own overview.`);
+      throw new KinuError('denied', `Workspace "${resolved.workspace}" may only push its own overview.`);
     }
 
     const parsed = v.parse(WorkspaceOverviewSchema, overview);
@@ -1116,7 +1116,7 @@ export class UserDO extends Agent<Env> {
         cause: new Error('this user object has no user id to authorize the destroy with'),
         otherwise: 'denied',
       }), { workspace: name });
-      throw new Error(`Workspace "${name}" holds an abandoned fork reservation that cannot be reclaimed.`);
+      throw new KinuError('unavailable', `Workspace "${name}" holds an abandoned fork reservation that cannot be reclaimed.`);
     }
 
     await this.tearDownWorkspace(name, ownerUserId);
@@ -1227,7 +1227,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
     await this.tearDownWorkspace(name, ownerUserId);
   }
 
@@ -1305,7 +1305,7 @@ export class UserDO extends Agent<Env> {
     await this.resumePendingDeletions();
 
     if (this.sqlx(marked, name).length === 0) return;
-    throw new Error(`Workspace "${name}" is still being deleted; its teardown has not finished.`);
+    throw new KinuError('unavailable', `Workspace "${name}" is still being deleted; its teardown has not finished.`);
   }
 
   /**
@@ -1320,7 +1320,7 @@ export class UserDO extends Agent<Env> {
 
     // An agent renames only itself; this is what makes rename safe at the `shared` tier.
     if (resolved.kind === 'workspace' && resolved.workspace !== name) {
-      throw new Error(`Workspace "${resolved.workspace}" may only rename itself.`);
+      throw new KinuError('denied', `Workspace "${resolved.workspace}" may only rename itself.`);
     }
 
     const current = this.sqlx<{ name_origin: string }>(
@@ -1501,9 +1501,9 @@ export class UserDO extends Agent<Env> {
   ): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
     await this.requireTier(caller, 'auth_tokens');
 
-    if (!/^[a-f0-9]{32}$/.test(userId)) throw new Error('invalid user id');
+    if (!/^[a-f0-9]{32}$/.test(userId)) throw new KinuError('bad_input', 'invalid user id');
 
-    if (!/^[a-f0-9]{64}$/.test(authorizationHash)) throw new Error('invalid authorization hash');
+    if (!/^[a-f0-9]{64}$/.test(authorizationHash)) throw new KinuError('bad_input', 'invalid authorization hash');
     const token = `ptc_${userId}_${nanoid(44)}`;
     const tokenHash = await sha256Hex(token);
     const now = Date.now();
@@ -3190,7 +3190,7 @@ export class UserDO extends Agent<Env> {
     const resolved = await this.requireTier(caller, 'experience.write');
 
     if (resolved.kind !== 'workspace') {
-      throw new Error('Only a workspace can publish experience; it publishes under its own name.');
+      throw new KinuError('denied', 'Only a workspace can publish experience; it publishes under its own name.');
     }
 
     return this.experienceLibrary().publish(candidate, resolved.workspace);
@@ -4013,7 +4013,7 @@ export class UserDO extends Agent<Env> {
     try {
       json = decodeJsonValue({ value: JSON.parse(value) });
     } catch (error) {
-      throw new Error(
+      throw new KinuError('io', 
         'The stored account profile catalog cannot be decoded as JSON.',
         { cause: error },
       );
@@ -4022,7 +4022,7 @@ export class UserDO extends Agent<Env> {
     try {
       return validateProfileCatalog({ value: json });
     } catch (error) {
-      throw new Error(
+      throw new KinuError('io', 
         'The stored account profile catalog violates the profile catalog contract.',
         { cause: error },
       );
@@ -4051,7 +4051,7 @@ export class UserDO extends Agent<Env> {
     try {
       row = v.parse(StoredProfileCatalogRowSchema, rawRow);
     } catch (error) {
-      throw new Error('The stored account profile catalog state is malformed.', { cause: error });
+      throw new KinuError('io', 'The stored account profile catalog state is malformed.', { cause: error });
     }
 
     return { version: row.version, catalog: this.parseStoredProfileCatalog(row.value) };
@@ -4313,7 +4313,7 @@ export class UserDO extends Agent<Env> {
   async deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
     await this.requireTier(caller, 'account');
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
 
     const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`);
 
@@ -4681,7 +4681,7 @@ export class UserDO extends Agent<Env> {
       const result = await mgr.connectToServer(id);
 
       if (result.state === 'failed') {
-        throw new Error(result.error ?? 'connection failed');
+        throw new KinuError('unavailable', result.error ?? 'connection failed');
       }
 
       if (result.state === 'authenticating') {

@@ -3383,7 +3383,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const factory = this._codemodeFactories.get(key);
 
-    if (factory === undefined) throw new Error(`eval profile ${key} was not built`);
+    if (factory === undefined) throw new KinuError('io', `eval profile ${key} was not built`);
 
     return factory;
   }
@@ -4703,7 +4703,7 @@ export abstract class ActorAgent extends Agent<Env> {
       await Promise.all([...this._backgroundTasks].map((task) => task.promise ?? Promise.resolve()));
     }
 
-    throw new Error(
+    throw new KinuError('io', 
       `settleBackgroundTasks: ${String(this._backgroundTasks.size)} task(s) still detached after 32 `
       + 'laps — something keeps enqueuing work; join a narrower seam instead',
     );

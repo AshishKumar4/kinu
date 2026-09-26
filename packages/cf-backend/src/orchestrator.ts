@@ -383,7 +383,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const name = ctx.id.name ?? this.recordedName();
 
     if (name === undefined) {
-      throw new Error('This workspace object was reached by id before any named start recorded its name; address it by name.');
+      throw new KinuError('unsupported', 'This workspace object was reached by id before any named start recorded its name; address it by name.');
     }
 
     this.addressedName = name;
