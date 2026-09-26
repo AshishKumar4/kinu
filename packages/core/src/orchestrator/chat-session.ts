@@ -250,6 +250,8 @@ export interface ChatSessionPorts {
   steerSkills(text: string): Promise<string | null>;
   /** A backend with no review surface refuses a plan turn at admission. */
   planTurnRefusal(): string | null;
+  /** Asked at dequeue; false drops the turn. */
+  stillOwed(metadata: JsonObject | undefined): boolean;
   /** The session drives it because both instants it needs are the session's; the policy is the lane's. */
   readonly cacheWarming?: CacheWarmingLane;
 }
@@ -671,6 +673,14 @@ export class ChatSession {
         if (refusal) {
           diagnostics.event('driver.turn_deferred', { kind: item.kind, reason: refusal.reason });
           item.settle(refusal);
+          continue;
+        }
+
+        if (!this.ports.stillOwed(item.metadata)) {
+          diagnostics.event('turn.no_longer_owed', {
+            signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
+          });
+          item.settle(null, true);
           continue;
         }
 

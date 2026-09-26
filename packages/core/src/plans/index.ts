@@ -12,6 +12,7 @@ export {
   listPendingPlanReviews,
   planReviewAwaitingDecision,
   workModeUnderReview,
+  planHandoffStillOwed,
   planTitle,
   validatePlanEdits,
   type PlanDecisionOutcome,
