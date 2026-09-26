@@ -9,7 +9,6 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import type { ModelMessage } from 'ai';
-import * as v from 'valibot';
 import { SlateId } from '@agent-core/core/slates';
 import {
   ChangeSetCache, DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory,
@@ -27,214 +26,9 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 // The writer `ActorSession` hands a turn's steps to; core keeps it internal.
 import { SessionStream } from '../../../../core/src/orchestrator/session-stream';
+import { SqlMeter, type OperationCost, type TableChange, type TableCost } from '../sql-meter';
 
-/** One table's share of an operation: the rows its statements read and wrote, how many ran, and the
- *  rows they read beyond those they returned. A statement that seeks reads what it returns; one that
- *  scans reads the rest as well, and that surplus is `rowsScanned`. */
-export interface TableCost {
-  readonly rowsRead: number;
-  readonly rowsWritten: number;
-  readonly statements: number;
-  readonly rowsScanned: number;
-}
-
-/** One figure per table, after minus before, nonzero only. */
-export type TableChange = Readonly<Record<string, number>>;
-
-/** An operation's whole cost. `storedRows` and `storedBytes` are each table's row count and payload
- *  bytes; `dbBytes` is the database file's, by the page. */
-export interface OperationCost {
-  readonly tables: Readonly<Record<string, TableCost>>;
-  readonly dbBytes: number;
-  readonly storedRows: TableChange;
-  readonly storedBytes: TableChange;
-  /** The model request bytes the operation prepared, where it prepares any. */
-  readonly requestBytes: number | null;
-}
-
-/** A table a statement names; an upsert's `DO UPDATE SET` names none. */
-const NAMED = /\b(?:FROM|JOIN|INTO|UPDATE(?:\s+OR\s+[A-Za-z]+)?)\s+(?!SET\b)["`[]?([A-Za-z_]\w*)/giu;
-
-const SCHEMA = /^\s*(?:CREATE|DROP|ALTER|PRAGMA)\b/iu;
-
-/**
- * What a statement is charged to: every table it names, jointly (`a+b`). A cursor counts the rows
- * the whole statement read, subqueries and joins included, and nothing says which table each came
- * from, so charging the first name would pin one table's rows on another.
- */
-function tableOf(query: string): string {
-  if (SCHEMA.test(query)) return '(schema)';
-
-  const names = new Set([...query.matchAll(NAMED)].flatMap((match) => (match[1] === undefined ? [] : [match[1]])));
-
-  return names.size === 0 ? '(no table)' : [...names].sort().join('+');
-}
-
-const TableName = v.object({ name: v.string() });
-
-const RowCount = v.object({ rows: v.number() });
-
-const ColumnName = v.object({ name: v.string() });
-
-const PayloadBytes = v.object({ bytes: v.nullable(v.number()) });
-
-/** The two counts a cursor keeps as it runs; read once the operation has settled. */
-interface CursorCounts {
-  readonly rowsRead: number;
-  readonly rowsWritten: number;
-}
-
-interface MeteredStatement {
-  readonly table: string;
-  readonly cursor: CursorCounts;
-  /** Rows the caller took out of the cursor, by any of its reads. */
-  readonly returned: { rows: number };
-}
-
-/** `cursor`, counting every row its caller takes out of it. */
-function countingCursor<T extends Record<string, SqlStorageValue>>(cursor: SqlStorageCursor<T>, returned: { rows: number }): SqlStorageCursor<T> {
-  const counted = <Row,>(rows: IterableIterator<Row>): IterableIterator<Row> => {
-    const iterator: IterableIterator<Row> = {
-      next: () => {
-        const step = rows.next();
-
-        if (step.done !== true) returned.rows += 1;
-
-        return step;
-      },
-      [Symbol.iterator]: () => iterator,
-    };
-
-    return iterator;
-  };
-
-  return {
-    next: () => {
-      const step = cursor.next();
-
-      if (step.done !== true) returned.rows += 1;
-
-      return step;
-    },
-    toArray: () => {
-      const rows = cursor.toArray();
-
-      returned.rows += rows.length;
-
-      return rows;
-    },
-    one: () => {
-      const row = cursor.one();
-
-      returned.rows += 1;
-
-      return row;
-    },
-    raw: <U extends SqlStorageValue[]>() => counted(cursor.raw<U>()),
-    columnNames: cursor.columnNames,
-    get rowsRead() { return cursor.rowsRead; },
-    get rowsWritten() { return cursor.rowsWritten; },
-    get reusedCachedQueryForTest() { return cursor.reusedCachedQueryForTest; },
-    [Symbol.iterator]: () => counted(cursor[Symbol.iterator]()),
-  };
-}
-
-/** Every statement run through `sql` while an operation is measured, with the cursor that ran it. */
-class SqlMeter {
-  private open: MeteredStatement[] | null = null;
-
-  readonly sql: SqlStorage;
-
-  constructor(private readonly real: SqlStorage) {
-    const record = (query: string, cursor: CursorCounts) => {
-      const returned = { rows: 0 };
-
-      this.open?.push({ table: tableOf(query), cursor, returned });
-
-      return returned;
-    };
-
-    this.sql = {
-      exec<T extends Record<string, SqlStorageValue>>(query: string, ...bindings: unknown[]): SqlStorageCursor<T> {
-        const cursor = real.exec<T>(query, ...bindings);
-
-        return countingCursor(cursor, record(query, cursor));
-      },
-      prepare: (query) => real.prepare(query),
-      ingest: (query) => real.ingest(query),
-      setMaxPageCountForTest: (count) => { real.setMaxPageCountForTest(count); },
-      get databaseSize() { return real.databaseSize; },
-      Cursor: real.Cursor,
-      Statement: real.Statement,
-    };
-  }
-
-  private tableNames(): string[] {
-    return this.real.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite%' AND substr(name, 1, 4) <> '_cf_'`)
-      .toArray().map((row) => v.parse(TableName, row).name);
-  }
-
-  private rowsByTable(): Map<string, number> {
-    return new Map(this.tableNames().map((name) => [name, v.parse(RowCount, this.real.exec(`SELECT count(*) AS rows FROM "${name}"`).one()).rows]));
-  }
-
-  /** Each table's stored payload, exactly: every column's encoded bytes (`octet_length`, which
-   *  reads a blob's size without its content), where the page count moves 4 KiB at a time. */
-  private bytesByTable(): Map<string, number> {
-    return new Map(this.tableNames().map((name) => {
-      const columns = this.real.exec(`SELECT name FROM pragma_table_info('${name}')`).toArray().map((row) => v.parse(ColumnName, row).name);
-      const sum = columns.map((column) => `coalesce(sum(octet_length("${column}")), 0)`).join(' + ');
-
-      return [name, v.parse(PayloadBytes, this.real.exec(`SELECT ${sum || '0'} AS bytes FROM "${name}"`).one()).bytes ?? 0];
-    }));
-  }
-
-  private static grown(before: ReadonlyMap<string, number>, after: ReadonlyMap<string, number>): TableChange {
-    return Object.fromEntries([...after].flatMap(([table, value]) => {
-      const change = value - (before.get(table) ?? 0);
-
-      return change === 0 ? [] : [[table, change]];
-    }));
-  }
-
-  /** Runs `operation` with every statement counted; cursors are read after it settles, so a cursor it
-   *  left half-read counts the rows it actually read. */
-  async measure(operation: () => Promise<number | null>): Promise<OperationCost> {
-    const rowsBefore = this.rowsByTable();
-    const payloadBefore = this.bytesByTable();
-    const bytesBefore = this.real.databaseSize;
-
-    const ran: MeteredStatement[] = [];
-    let prepared: number | null;
-
-    this.open = ran;
-
-    try {
-      prepared = await operation();
-    } finally {
-      // A cursor stays readable after its statement; statements after the operation go uncounted.
-      this.open = null;
-    }
-
-    const tables: Record<string, { rowsRead: number; rowsWritten: number; statements: number; rowsScanned: number }> = {};
-
-    for (const { table, cursor, returned } of ran) {
-      const entry = tables[table] ??= { rowsRead: 0, rowsWritten: 0, statements: 0, rowsScanned: 0 };
-      entry.rowsRead += cursor.rowsRead;
-      entry.rowsWritten += cursor.rowsWritten;
-      entry.statements += 1;
-      entry.rowsScanned += Math.max(0, cursor.rowsRead - returned.rows);
-    }
-
-    return {
-      tables,
-      dbBytes: this.real.databaseSize - bytesBefore,
-      storedRows: SqlMeter.grown(rowsBefore, this.rowsByTable()),
-      storedBytes: SqlMeter.grown(payloadBefore, this.bytesByTable()),
-      requestBytes: prepared,
-    };
-  }
-}
+export type { OperationCost } from '../sql-meter';
 
 function addChanges(a: TableChange, b: TableChange): TableChange {
   const tables = new Set([...Object.keys(a), ...Object.keys(b)]);
@@ -314,18 +108,33 @@ const PIPELINE = {
 /** A woven block, as `ActorSession`'s dynamic snapshot supplies one. */
 const DYNAMIC = { recoveries: ['a finding proven by execution'] };
 
+function meteredStorage(real: SqlStorage, meter: SqlMeter): SqlStorage {
+  return {
+    exec: (query, ...bindings) => meter.exec(query, ...bindings),
+    prepare: (query) => real.prepare(query),
+    ingest: (query) => real.ingest(query),
+    setMaxPageCountForTest: (count) => { real.setMaxPageCountForTest(count); },
+    get databaseSize() { return real.databaseSize; },
+    Cursor: real.Cursor,
+    Statement: real.Statement,
+  };
+}
+
 export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly meter = new SqlMeter(this.ctx.storage.sql);
 
-  private readonly executor: SqlExecutor = <Row,>(strings: TemplateStringsArray, ...values: SqlValue[]): Row[] =>
-    this.meter.sql.exec<Row & Record<string, SqlStorageValue>>(strings.join('?'), ...values).toArray();
+  /** This object's database with every statement through the meter, for the stores under test. */
+  private readonly sql: SqlStorage = meteredStorage(this.ctx.storage.sql, this.meter);
 
-  private readonly execRaw = (ddl: string): void => { this.meter.sql.exec(ddl); };
+  private readonly executor: SqlExecutor = <Row,>(strings: TemplateStringsArray, ...values: SqlValue[]): Row[] =>
+    this.sql.exec<Row & Record<string, SqlStorageValue>>(strings.join('?'), ...values).toArray();
+
+  private readonly execRaw = (ddl: string): void => { this.sql.exec(ddl); };
 
   private opened: Promise<SqliteVFS> | undefined;
 
   private workspace(): Promise<SqliteVFS> {
-    this.opened ??= NimbusWorkspace.create({ sql: this.meter.sql, transactions: { storage: this.ctx.storage } })
+    this.opened ??= NimbusWorkspace.create({ sql: this.sql, transactions: { storage: this.ctx.storage } })
       .then((workspace) => workspace.vfs);
 
     return this.opened;
@@ -526,10 +335,10 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     const tree = vfs.as(CRED_SESSION_USER);
 
     initWorkspaceSchema({
-      execRaw: this.execRaw, sql: this.executor, exec: this.meter.sql,
+      execRaw: this.execRaw, sql: this.executor, exec: this.sql,
       transactionSync: (write) => this.ctx.storage.transactionSync(write),
     });
-    const files = new SlateFiles(tree, new WorkspaceSlateContentStore(vfs.as(CRED_KERNEL)), this.meter.sql, (body) => vfs.withTransaction(body));
+    const files = new SlateFiles(tree, new WorkspaceSlateContentStore(vfs.as(CRED_KERNEL)), this.sql, (body) => vfs.withTransaction(body));
 
     return { files, tree };
   }

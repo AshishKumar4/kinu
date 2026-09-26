@@ -23,6 +23,7 @@ import {
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { SqlMeter, type OperationCost } from './sql-meter';
 import type {
   AgentLogEvent,
   CallRecord,
@@ -64,7 +65,7 @@ import {
   type WakeHoldPlacement,
   type WakeRows,
 } from './two-turn-shapes';
-import { ownerCaller, type PeerMessage, type WorkMode } from '@kinu.run/core';
+import { ownerCaller, type PeerMessage, type SessionTranscript, type WorkMode } from '@kinu.run/core';
 import type { ToolSet } from 'ai';
 
 // Re-exported under production names so the auxiliary worker binds the shipped
@@ -76,12 +77,26 @@ const textColumn = (value: SqlStorageValue): string => v.parse(v.string(), value
 
 /** The production orchestrator plus fixture reads; adds no production method or state,
  *  only retains DurableObjectState to observe the durable send ledger. */
+/** Meters `sql` in place: the platform refuses a wrapped state object, and a patched `exec` counts every caller. */
+function meterInPlace(sql: SqlStorage): SqlMeter {
+  const exec = sql.exec.bind(sql);
+  const meter = new SqlMeter({ exec, get databaseSize() { return sql.databaseSize; } });
+
+  sql.exec = (query, ...bindings) => meter.exec(query, ...bindings);
+
+  return meter;
+}
+
 export class ObservedOrchestrator extends ProductionOrchestrator {
   private readonly actorState: AgentContext;
+  private readonly meter: SqlMeter;
+  /** Transcript reads the chat transport made while the meter runs. */
+  private historyReads: number | null = null;
 
   constructor(ctx: AgentContext, env: ProbeEnv) {
     super(ctx, env);
     this.actorState = ctx;
+    this.meter = meterInPlace(ctx.storage.sql);
     Reflect.deleteProperty(this, 'chatHistoryPage');
     Reflect.deleteProperty(this, 'pendingSteers');
     Reflect.deleteProperty(this, 'pendingSteerFileRows');
@@ -96,7 +111,43 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'timerTickFinished');
     Reflect.deleteProperty(this, 'runCauses');
     Reflect.deleteProperty(this, 'drainRunClosed');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed']);
+    Reflect.deleteProperty(this, 'meterBegin');
+    Reflect.deleteProperty(this, 'meterEnd');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed']);
+  }
+
+  async meterBegin(): Promise<void> {
+    this.meter.begin();
+    this.historyReads = 0;
+  }
+
+  async meterEnd(): Promise<{ cost: OperationCost; historyReads: number }> {
+    const historyReads = this.historyReads ?? 0;
+
+    this.historyReads = null;
+
+    return { cost: this.meter.end(null), historyReads };
+  }
+
+  private countedTranscript: SessionTranscript | null = null;
+
+  /** The production transcript, each whole-history read counted while the meter runs. */
+  protected override get chatTranscript(): SessionTranscript {
+    const transcript = super.chatTranscript;
+
+    if (this.countedTranscript !== transcript) {
+      const history = transcript.history.bind(transcript);
+
+      transcript.history = async (leafId, limit) => {
+        if (this.historyReads !== null) this.historyReads += 1;
+
+        return await history(leafId, limit);
+      };
+
+      this.countedTranscript = transcript;
+    }
+
+    return transcript;
   }
 
   /** Parks a turn-end extension over `/wake/wait`, holding the settle window open
@@ -528,7 +579,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent'>
   & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
-  | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed'>;
+  | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
 const WAKE_RUN_SLEEP_MS = 40_000;
@@ -723,6 +774,40 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     } finally {
       restore();
     }
+  }
+
+  /** A 500-delta turn after twenty answers of `priorDeltas` deltas, counted in the production orchestrator's own
+   *  SQLite and transcript reads, from enqueue to its sleep-time settle. */
+  async longTurnCost(priorDeltas: number): Promise<{ cost: OperationCost; historyReads: number }> {
+    const workspace = `long-cost-${String(priorDeltas)}-${crypto.randomUUID()}`;
+    const target: QueueTarget = await this.queueTarget(workspace);
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('long-owner'));
+    await userDO.registerWorkspace(caller, workspace, 'Long');
+    const claim = await target.claimOwner('long-owner');
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-long');
+    await this.httpReset();
+    const recording = createRecordingLogger();
+    setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+
+    for (let i = 0; i < 20; i += 1) {
+      const queued = await target.runTaskFromMcp(`long:${String(priorDeltas)}`);
+
+      if (queued.status !== 'queued') throw new Error(`long cost: prior turn ${JSON.stringify(queued)}`);
+      await awaitSleepTimeSettled(recording, i + 1);
+    }
+
+    await target.meterBegin();
+    const queued = await target.runTaskFromMcp('long:500');
+
+    if (queued.status !== 'queued') throw new Error(`long cost: measured turn ${JSON.stringify(queued)}`);
+    await awaitSleepTimeSettled(recording, 21);
+
+    return await target.meterEnd();
   }
 
   /** Only this worker's outbound handler routes to the control host, so no new Worker or binding. */
