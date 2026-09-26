@@ -225,6 +225,8 @@ import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
+import { Hono, type Context } from 'hono';
+import { rawPath, rethrow } from './api/context';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
 interface ModelDimensions {
@@ -1153,27 +1155,28 @@ export abstract class ActorAgent extends Agent<Env> {
     };
 
     const dispatchRequest = this.onRequest.bind(this);
+    const requests = new Hono({ getPath: rawPath });
 
-    this.onRequest = async (request) => {
-      const url = new URL(request.url);
+    requests.use('*', async (_c, next) => (this.storageRefusal === undefined
+      ? next()
+      : Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] })));
 
-      if (this.storageRefusal !== undefined) {
-        return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
-      }
+    // The seed is fetched on the same path the pane's socket opens, so each pane gets its own actor's rows.
+    const seed = async (c: Context): Promise<Response> => {
+      const hosted = hostedActorRoute(c.req.path);
+      const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted.name)?.history());
 
-      if (url.pathname === '/get-messages' || url.pathname.endsWith('/get-messages')) {
-        // The seed is fetched on the same path the pane's socket opens, so each pane gets its own
-        // actor's rows.
-        const hosted = hostedActorRoute(url.pathname);
-        const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted.name)?.history());
+      if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
 
-        if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
-
-        return Response.json(history);
-      }
-
-      return await dispatchRequest(request);
+      return Response.json(history);
     };
+
+    requests.all('/get-messages', seed);
+    requests.all('/:prefix{.*}/get-messages', seed);
+    requests.notFound(async (c) => dispatchRequest(c.req.raw));
+    requests.onError(rethrow);
+
+    this.onRequest = async (request) => requests.fetch(request);
   }
   /** Lazy: `actorHandle()` resolves the directory row `ensureSchema` creates, after field init. */
   private _pendingSends: PendingSendStore | null = null;

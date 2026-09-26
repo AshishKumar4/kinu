@@ -34,20 +34,6 @@ export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
   io: 500,
 };
 
-/** First-match dispatch over a route family's handlers; null when none matches. */
-export async function firstResponse(
-  request: Request,
-  handlers: readonly ((request: Request) => Promise<Response | null>)[],
-): Promise<Response | null> {
-  for (const handler of handlers) {
-    const response = await handler(request);
-
-    if (response !== null) return response;
-  }
-
-  return null;
-}
-
 export async function safeJson<Schema extends v.GenericSchema>(
   request: Request,
   schema: Schema,

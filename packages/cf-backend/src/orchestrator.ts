@@ -200,6 +200,8 @@ import {
   type AgentSignal,
 } from "@kinu.run/core";
 import * as v from 'valibot';
+import { Hono } from 'hono';
+import { beneath, rawPath, rethrow } from './api/context';
 import { experienceLibraryOver } from './user/experience-library';
 import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
@@ -919,28 +921,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Partyserver owns `fetch` for chat, so preview upgrades are answered first; the capability
-   * handle is rechecked inside `routePreview`.
+   * handle is rechecked inside `routePreview`. Share sockets likewise; `routeShare` admits by the share row.
    */
-  override async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname.startsWith(`${WORKSPACE_PREVIEW_PATH}/`)) {
-      const [port, handle, ...rest] = url.pathname.slice(WORKSPACE_PREVIEW_PATH.length + 1).split('/');
+  private readonly _forwarded = new Hono({ getPath: rawPath })
+    .all(`${WORKSPACE_PREVIEW_PATH}/*`, beneath(WORKSPACE_PREVIEW_PATH, async (c) => {
+      const [port, handle, ...rest] = c.req.path.slice(WORKSPACE_PREVIEW_PATH.length + 1).split('/');
       const parsed = Number(port);
 
       if (!Number.isInteger(parsed) || !handle) {
         return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
       }
 
-      return await this.routeWorkspacePreview(parsed, handle, request, `/${rest.join('/')}`);
-    }
+      return await this.routeWorkspacePreview(parsed, handle, c.req.raw, `/${rest.join('/')}`);
+    }))
+    .all(`${SLATE_SHARE_PATH}/*`, beneath(SLATE_SHARE_PATH, async (c) => {
+      const [handle, claimText, ...rest] = c.req.path.slice(SLATE_SHARE_PATH.length + 1).split('/');
 
-    // A share socket cannot cross a DO RPC boundary, so the share route forwards it by `fetch` here;
-    // the label was verified at the edge and `routeShare` admits by the share row.
-    if (url.pathname.startsWith(`${SLATE_SHARE_PATH}/`)) {
-      const [handle, claimText, ...rest] = url.pathname.slice(SLATE_SHARE_PATH.length + 1).split('/');
       // The claim segment is JSON the edge wrote; a parse failure yields the same 404 as a bad shape.
-
       const claim = v.safeParse(
         v.pipe(v.string(), v.parseJson(), ShareViewerClaimSchema),
         claimText ? decodeURIComponent(claimText) : '',
@@ -950,10 +947,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
       }
 
-      return await this.routeSlateShare(handle, claim.output, request, `/${rest.join('/')}`);
-    }
+      return await this.routeSlateShare(handle, claim.output, c.req.raw, `/${rest.join('/')}`);
+    }))
+    .notFound(async (c) => super.fetch(c.req.raw))
+    .onError(rethrow);
 
-    return await super.fetch(request);
+  override async fetch(request: Request): Promise<Response> {
+    return await this._forwarded.fetch(request);
   }
 
   /** A socket forwarded by the terminal route is tagged as the workspace shell, ahead of identity tags. */

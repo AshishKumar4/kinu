@@ -78,6 +78,8 @@ import {
   toKinuError,
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import { Hono } from 'hono';
+import { rawPath, rethrow } from '../api/context';
 import {
   initUserTables, PROFILE_CATALOG_CONFIG_KEY,
   CapabilityDeniedError,
@@ -1828,16 +1830,16 @@ export class UserDO extends Agent<Env> {
   /** Durable record of commands running on devices (see ./device-inflight.ts); the ledger owns the table. */
   private readonly _inflight = new DeviceRequestLedger(this.ctx.storage.sql);
 
+  /** A WebSocket cannot cross RPC; the Worker forwards these upgrades. */
+  private readonly _sockets = new Hono({ getPath: rawPath })
+    .all(DEVICE_CONNECT_PATH, async (c) => this.acceptDeviceSocket(c.req.raw, new URL(c.req.url)))
+    .all(DEVICE_TERMINAL_PATH, async (c) => this.acceptTerminalSocket(c.req.raw, new URL(c.req.url)))
+    .all(ROSTER_SOCKET_PATH, async (c) => acceptRosterSocket(this.ctx, c.req.raw))
+    .notFound(async (c) => super.fetch(c.req.raw))
+    .onError(rethrow);
+
   override async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === DEVICE_CONNECT_PATH) return this.acceptDeviceSocket(request, url);
-
-    if (url.pathname === DEVICE_TERMINAL_PATH) return this.acceptTerminalSocket(request, url);
-
-    if (url.pathname === ROSTER_SOCKET_PATH) return acceptRosterSocket(this.ctx, request);
-
-    return super.fetch(request);
+    return await this._sockets.fetch(request);
   }
 
   /**

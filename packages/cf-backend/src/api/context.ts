@@ -18,11 +18,21 @@ export interface FamilyEnv<Bindings extends object, Variables extends object = A
   Variables: Variables;
 }
 
-/** The raw path: Hono's default decodes first (`/api/user/%70rofile` would reach `profile`). Control collapses `//`, as its split did. */
+/** The path as spelled: Hono's default decodes first (`/%6Cogin` would reach `/login`). */
+export function rawPath(request: Request): string {
+  return new URL(request.url).pathname;
+}
+
+/** {@link rawPath}; control collapses `//`, as its split did. */
 export function apiPath(request: Request): string {
-  const { pathname } = new URL(request.url);
+  const pathname = rawPath(request);
 
   return pathname.startsWith('/api/control/') ? pathname.replace(/\/{2,}/g, '/') : pathname;
+}
+
+/** Hono sends HEAD to GET routes; a GET-only route passes it on. */
+export function noHead<E extends HonoEnv>(handler: MiddlewareHandler<E>): MiddlewareHandler<E> {
+  return async (c, next) => (c.req.method === 'HEAD' ? next() : handler(c, next));
 }
 
 /** A segment as spelled; routes decode it with `decodeURIComponent`, which throws on a bad escape, as before. */
@@ -94,10 +104,15 @@ const UNCAUGHT_MESSAGE: Readonly<Record<ErrorCode, string>> = {
   io: 'Internal error.',
 };
 
-/** An uncaught throw: the chain goes to `http.api_failed` by route pattern (the path is caller text); the client gets its class. */
-export function apiError(cause: Error, c: Context): Response {
-  const error = toKinuError({ doing: 'answering an /api request', cause, otherwise: 'io' });
-  diagnostics.failure('http.api_failed', error, { route: routePath(c) });
+/** Every router's `onError`: the chain goes to `http.request_failed` by route pattern; the client gets its class. */
+export function routeError(cause: Error, c: Context): Response {
+  const error = toKinuError({ doing: 'answering an HTTP request', cause, otherwise: 'io' });
+  diagnostics.failure('http.request_failed', error, { route: routePath(c) });
 
   return err(ERROR_STATUS[error.code], UNCAUGHT_MESSAGE[error.code]);
+}
+
+/** A Durable Object router's `onError`: the caller sees the throw. */
+export function rethrow(error: Error): never {
+  throw error;
 }

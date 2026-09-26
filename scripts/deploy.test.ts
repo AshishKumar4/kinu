@@ -11,7 +11,7 @@ import {
 } from "./ladder";
 import { costRssMb, costThreads, readCosts } from "./gate-cost";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
-import { isControlPlaneSurface } from "../packages/cf-backend/src/control-plane/access-gate";
+import { CONTROL_PLANE_API_ROUTE, CONTROL_PLANE_UI_ROUTE } from "../packages/cf-backend/src/control-plane/access-gate";
 import { isDocument, readRepositoryFile, trackedFiles } from "./sources";
 import * as v from "valibot";
 import { inkBefore, runTuiInPty, type PtyRun } from "../packages/cli/tests/helpers/pty-screen";
@@ -963,21 +963,16 @@ describe("deploy gate", () => {
     const covered = (path: string): boolean => CONTROL_PLANE_ACCESS_PATHS.some((pattern) =>
       path.startsWith(pattern.slice(0, -1)));
 
-    for (const path of [
-      '/control', '/control/', '/control/users', '/api/control', '/api/control/overview',
-    ]) {
-      expect(isControlPlaneSurface(path)).toBe(true);
-      expect(covered(path)).toBe(true);
+    // Each Worker route is a Hono pattern (`/x/*`), which matches the bare `/x` and everything beneath it.
+    for (const route of [CONTROL_PLANE_UI_ROUTE, CONTROL_PLANE_API_ROUTE]) {
+      const prefix = route.slice(0, -'/*'.length);
+
+      for (const path of [prefix, `${prefix}/`, `${prefix}/users`]) expect(covered(path)).toBe(true);
     }
 
-    // The routes that must NOT be behind Access, and are not: the public product,
-    // the two authenticated write endpoints any signed-in user reaches, and the
-    // asset paths a preview app loads.
-    for (const path of [
-      '/', '/login', '/api/health', '/api/feedback', '/api/client-errors', '/api/user/profile',
-      '/assets/index-abc123.js', '/downloads/kinu', '/controlpanel', '/api/controllers/list',
-    ]) {
-      expect(isControlPlaneSurface(path)).toBe(false);
+    // Access over the public product would put a login in front of it.
+    for (const path of ['/', '/login', '/api/health', '/api/feedback', '/api/user/profile', '/assets/index-abc123.js', '/downloads/kinu']) {
+      expect(covered(path)).toBe(false);
     }
   });
 });

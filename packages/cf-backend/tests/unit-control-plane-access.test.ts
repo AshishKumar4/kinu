@@ -1,13 +1,13 @@
 /**
  * The admin control plane's outer gate, Cloudflare Access: real RS256 tokens against a real JWKS, with only
- * the certs fetch stubbed. Each forgery below is a real attack; the negative surface test pins that Access
- * covers `/control*` and `/api/control*` and nothing else, from both directions.
+ * the certs fetch stubbed. Each forgery below is a real attack. Which paths Access gates is served in
+ * `unit-worker-routes.test.ts`.
  */
 import { beforeAll, afterAll, describe, expect, test } from 'bun:test';
 import { SignJWT, exportJWK, generateKeyPair, type JWK } from 'jose';
-import { isPublicPath, type AuthIdentity } from '../src/auth/session';
+import type { AuthIdentity } from '../src/auth/session';
 import {
-  isControlPlaneSurface, verifyControlPlaneAccess,
+  verifyControlPlaneAccess,
   type ControlPlaneAccessEnv,
 } from '../src/control-plane/access-gate';
 import {
@@ -508,61 +508,5 @@ describe('the two gates are joined by the email, and both still apply', () => {
     expect(isControlPlaneOperator(ADMIN_ENV, identity({ provider: 'dev' }))).toBe(false);
     expect(isControlPlaneOperator(ADMIN_ENV, identity({ cliScopes: [] }))).toBe(false);
     expect(isControlPlaneOperator({ ...ADMIN_ENV, CONTROL_PLANE_ADMINS: '' }, identity())).toBe(false);
-  });
-});
-
-describe('Access is scoped to the control plane and to nothing else', () => {
-  test('the UI entry and everything under it need an assertion', () => {
-    for (const path of ['/control', '/control/', '/control/users', '/control/workspaces/alpha']) {
-      expect(isControlPlaneSurface(path)).toBe(true);
-    }
-  });
-
-  test('the admin API and everything under it need an assertion', () => {
-    for (const path of ['/api/control', '/api/control/overview', '/api/control/users/abc']) {
-      expect(isControlPlaneSurface(path)).toBe(true);
-    }
-  });
-
-  test('NOTHING ELSE on this deployment needs an assertion', () => {
-    // Each must keep working without Zero Trust: Access over any would gate the public product.
-    const outside = [
-      '/',
-      '/login',
-      '/api/health',
-      '/api/feedback',
-      '/api/client-errors',
-      '/api/user/profile',
-      '/api/workspaces/alpha/files',
-      '/agents/orchestrator-agent/alpha',
-      '/mcp/v1/sse',
-      '/downloads/kinu',
-      '/assets/index-abc123.js',
-      '/workspace/alpha',
-      // Access destinations are `kinu.run/control*`; a `startsWith` gate would 404 paths Access does not cover.
-      '/controlpanel',
-      '/control-plane',
-      '/api/controlx',
-      '/api/controllers/list',
-    ];
-
-    for (const path of outside) {
-      expect(isControlPlaneSurface(path)).toBe(false);
-    }
-  });
-
-  test('no path on the public bypass list is a control-plane surface', () => {
-    // The Access check runs above `isPublicPath`; the two lists stay disjoint.
-    for (const path of [
-      '/api/health', '/login', '/logout', '/auth/github/callback', '/api/auth/session',
-      '/pc/connect', '/pc/connect-ticket', '/assets/index-abc123.js',
-    ]) {
-      expect(isPublicPath(path)).toBe(true);
-      expect(isControlPlaneSurface(path)).toBe(false);
-    }
-
-    for (const path of ['/control', '/control/users', '/api/control', '/api/control/overview']) {
-      expect(isPublicPath(path)).toBe(false);
-    }
   });
 });

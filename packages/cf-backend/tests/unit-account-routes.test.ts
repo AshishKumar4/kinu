@@ -116,7 +116,7 @@ describe('DELETE /api/user/account', () => {
 
     expect(response?.status).toBe(500);
     expect(v.parse(v.object({ error: v.string() }), await response?.json())).toEqual({ error: 'Internal error.' });
-    expect(recording.emitted.filter((line) => line.event === 'http.api_failed').map((line) => line.cause))
+    expect(recording.emitted.filter((line) => line.event === 'http.request_failed').map((line) => line.cause))
       .toEqual([expect.stringContaining('storage unavailable')]);
   });
 

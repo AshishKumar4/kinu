@@ -8,6 +8,8 @@
 
 import { getAgentByName } from 'agents';
 import * as v from 'valibot';
+import { Hono } from 'hono';
+import { rawPath, rethrow, type FamilyEnv } from '../api/context';
 import type { OutboundHandlerContext } from '@cloudflare/containers';
 import {
   createScrubStream,
@@ -228,24 +230,44 @@ function upstreamFailure(
   );
 }
 
-/**
- * Addressed by `ctx.params.workspaceName`, never the request, so a container cannot post into another workspace.
- * Awaited, not deferred: `waitUntil` is a no-op in a DO; on eviction mid-write the container retries.
- */
+interface EventChannel {
+  readonly resolveAgent: ContainerEventResolver;
+  readonly params: KinuEgressParams | undefined;
+}
+
+const eventHost = new Hono<FamilyEnv<EventChannel, { params: KinuEgressParams }>>({ getPath: rawPath });
+
+eventHost.use('*', async (c, next) => {
+  if (!c.env.params) return refusal(503, 'The event channel is not configured for this container yet.');
+  c.set('params', c.env.params);
+  await next();
+});
+
+eventHost.post(CONTAINER_EVENT_PATH, async (c) => acceptContainerEvent(c.req.raw, c.env.resolveAgent, c.get('params')));
+
+eventHost.post('*', async () => refusal(404, `The only route on ${CONTAINER_EVENT_HOST} is POST ${CONTAINER_EVENT_PATH}.`));
+
+eventHost.all('*', async () => refusal(405, `Use POST ${CONTAINER_EVENT_PATH}.`));
+
+eventHost.onError(rethrow);
+
 export async function handleContainerEvent(
   request: Request,
   resolveAgent: ContainerEventResolver,
   params: KinuEgressParams | undefined,
 ): Promise<Response> {
-  if (!params) return refusal(503, 'The event channel is not configured for this container yet.');
-  const url = new URL(request.url);
+  return await eventHost.fetch(request, { resolveAgent, params });
+}
 
-  if (request.method !== 'POST') return refusal(405, `Use POST ${CONTAINER_EVENT_PATH}.`);
-
-  if (url.pathname !== CONTAINER_EVENT_PATH) {
-    return refusal(404, `The only route on ${CONTAINER_EVENT_HOST} is POST ${CONTAINER_EVENT_PATH}.`);
-  }
-
+/**
+ * Addressed by `ctx.params.workspaceName`, never the request, so a container cannot post into another workspace.
+ * Awaited, not deferred: `waitUntil` is a no-op in a DO; on eviction mid-write the container retries.
+ */
+async function acceptContainerEvent(
+  request: Request,
+  resolveAgent: ContainerEventResolver,
+  params: KinuEgressParams,
+): Promise<Response> {
   let body: JsonValue;
 
   try {

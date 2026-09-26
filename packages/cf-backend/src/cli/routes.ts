@@ -12,7 +12,7 @@ import { approvalDocument, installDocument } from '@kinu.run/core';
 import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset, type AssetFetcher,
 } from '@kinu.run/core';
-import { RELEASE_ARTIFACT_ROUTE, RELEASE_MANIFEST_PATH } from '@kinu.run/core/deploy';
+import { RELEASE_ARTIFACT_NAME, RELEASE_MANIFEST_PATH } from '@kinu.run/core/deploy';
 import { err, escapeHtml, json, safeJson } from '@kinu.run/core';
 import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
@@ -42,24 +42,11 @@ import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from
 import type { UserAIProxyEnv } from '../user/ai-proxy';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
-import { rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
+import { noHead, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
 import { classify, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) });
-
-/** Content-type for a published download path, or null. Public: a fresh install and a
- *  self-updating deployment have no session here. */
-function publishedDownloadType(pathname: string): string | null {
-  if (CLI_DIST_PATHS.includes(pathname)) return 'application/gzip';
-
-  if (pathname === CLI_VERSION_PATH || pathname === RELEASE_MANIFEST_PATH) return 'application/json; charset=utf-8';
-
-  if (!pathname.endsWith('.sha256')) return null;
-  const artifact = pathname.slice(0, -'.sha256'.length);
-
-  return CLI_DIST_PATHS.includes(artifact) || RELEASE_ARTIFACT_ROUTE.test(artifact) ? 'text/plain; charset=utf-8' : null;
-}
 
 export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWorkspaceRegistry & Pick<
   UserDO,
@@ -97,42 +84,35 @@ export type CliEnv = FamilyEnv<CliRoutesEnv<unknown>, CliVariables>;
 type CliContext = Context<CliEnv>;
 
 /** Public pages, downloads and the browser approval; `/api/cli` is `cliRoutes`. */
-export async function handleCliRequest<Id>(
-  request: Request, env: CliRoutesEnv<Id>,
-): Promise<Response | null> {
-  const url = new URL(request.url);
-  const method = request.method;
+type CliPagesEnv = FamilyEnv<CliRoutesEnv<unknown>, object>;
 
-  if (url.pathname === '/install' && (method === 'GET' || method === 'HEAD')) {
-    return method === 'HEAD' ? new Response(null, installPageInit()) : installPageResponse(url.origin);
-  }
+export const cliPageRoutes = new Hono<CliPagesEnv>();
 
-  if (url.pathname === '/install.sh' && (method === 'GET' || method === 'HEAD')) {
-    return installScriptResponse(url.origin, method === 'HEAD');
-  }
+cliPageRoutes.get('/install', async (c) =>
+  c.req.method === 'HEAD' ? new Response(null, installPageInit()) : installPageResponse(new URL(c.req.url).origin));
 
-  if (url.pathname === '/downloads/kinu' && (method === 'GET' || method === 'HEAD')) {
-    return cliShimResponse(url.origin, method === 'HEAD');
-  }
+cliPageRoutes.get('/install.sh', async (c) => installScriptResponse(new URL(c.req.url).origin, c.req.method === 'HEAD'));
 
-  if (method === 'GET' || method === 'HEAD') {
-    const contentType = publishedDownloadType(url.pathname);
+cliPageRoutes.get('/downloads/kinu', async (c) => cliShimResponse(new URL(c.req.url).origin, c.req.method === 'HEAD'));
 
-    if (contentType !== null) {
-      return cliDownloadAssetResponse({ request, env, pathname: url.pathname, contentType, head: method === 'HEAD' });
-    }
-  }
+/** Public: a fresh install and a self-updating deployment have no session here. */
+const PUBLISHED_DOWNLOADS: readonly (readonly [path: string, contentType: string])[] = [
+  ...CLI_DIST_PATHS.map((path) => [path, 'application/gzip'] as const),
+  [CLI_VERSION_PATH, 'application/json; charset=utf-8'],
+  [RELEASE_MANIFEST_PATH, 'application/json; charset=utf-8'],
+  ...CLI_DIST_PATHS.map((path) => [`${path}.sha256`, 'text/plain; charset=utf-8'] as const),
+  [`/downloads/:checksum{${RELEASE_ARTIFACT_NAME}\\.sha256}`, 'text/plain; charset=utf-8'],
+];
 
-  if (url.pathname === '/cli/auth' && method === 'GET') {
-    return renderBrowserApproval(request, env);
-  }
-
-  if (url.pathname === '/cli/auth' && method === 'POST') {
-    return approveFromBrowser(request, env);
-  }
-
-  return null;
+for (const [path, contentType] of PUBLISHED_DOWNLOADS) {
+  cliPageRoutes.get(path, async (c) => cliDownloadAssetResponse({
+    request: c.req.raw, env: c.env, pathname: new URL(c.req.url).pathname, contentType, head: c.req.method === 'HEAD',
+  }));
 }
+
+cliPageRoutes.get('/cli/auth', noHead<CliPagesEnv>(async (c) => renderBrowserApproval(c.req.raw, c.env)));
+
+cliPageRoutes.post('/cli/auth', async (c) => approveFromBrowser(c.req.raw, c.env));
 
 async function authenticateCli(c: CliContext): Promise<CliIdentity | Response> {
   try {

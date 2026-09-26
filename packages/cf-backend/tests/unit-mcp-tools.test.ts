@@ -6,11 +6,17 @@ import * as v from 'valibot';
 import type { JsonObject, JsonValue } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { mcpAccount, unreachableKv } from './helpers/bindings';
-import type { McpAgentClient, McpEnv } from '../src/mcp-server';
+import type { McpAgentClient, McpEnv, McpResolver } from '../src/mcp-server';
+import { serveFamily } from './helpers/api';
 
 mockAgentsSdk();
 
-const { handleMcpRequest } = await import('../src/mcp-server');
+const { mcpRoutes } = await import('../src/mcp-server');
+
+/** The family as the Worker mounts it, resolving through this test's agents. */
+async function serveMcp(request: Request, env: McpEnv<unknown>, resolveAgent: McpResolver): Promise<Response | null> {
+  return await serveFamily(mcpRoutes<McpEnv<unknown>>(() => resolveAgent))(request, env);
+}
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -123,7 +129,7 @@ describe('MCP write tools → real @callables', () => {
   test('run_task invokes runTaskFromMcp and reports queued', async () => {
     const { env, calls, resolveAgent } = mcpWorkspace();
 
-    const res = await handleMcpRequest(
+    const res = await serveMcp(
       toolCall('jarvis', 'run_task', { text: '  ship it  ' }, SESSION_TOKEN), env, resolveAgent,
     );
 
@@ -135,7 +141,7 @@ describe('MCP write tools → real @callables', () => {
   test('send_peer invokes sendPeerFromMcp and reports delivery', async () => {
     const { env, calls, resolveAgent } = mcpWorkspace();
 
-    const res = await handleMcpRequest(
+    const res = await serveMcp(
       toolCall('jarvis', 'send_peer', { agent: 'atlas', message: 'hi', topic: 'sync' }, SESSION_TOKEN),
       env, resolveAgent,
     );
@@ -148,7 +154,7 @@ describe('MCP write tools → real @callables', () => {
   test('send_peer surfaces the DO roster/ownership rejection honestly', async () => {
     const { env, resolveAgent } = mcpWorkspace();
 
-    const res = await handleMcpRequest(
+    const res = await serveMcp(
       toolCall('jarvis', 'send_peer', { agent: 'stranger', message: 'hi' }, SESSION_TOKEN), env, resolveAgent,
     );
 
@@ -159,7 +165,7 @@ describe('MCP write tools → real @callables', () => {
   test('list_peers invokes listPeersFromMcp', async () => {
     const { env, calls, resolveAgent } = mcpWorkspace();
 
-    const res = await handleMcpRequest(
+    const res = await serveMcp(
       toolCall('jarvis', 'list_peers', {}, SESSION_TOKEN), env, resolveAgent,
     );
 
@@ -173,7 +179,7 @@ describe('MCP write tools — auth + ownership gate (a scoped token cannot excee
   test('scoped pta_ access token is refused before any write tool runs', async () => {
     const { env, calls, resolveAgent } = mcpWorkspace();
 
-    const res = await handleMcpRequest(
+    const res = await serveMcp(
       toolCall('jarvis', 'run_task', { text: 'go' }, ACCESS_TOKEN), env, resolveAgent,
     );
 
@@ -184,7 +190,7 @@ describe('MCP write tools — auth + ownership gate (a scoped token cannot excee
   test('unowned agent is refused (404) before any write tool runs', async () => {
     const { env, calls, resolveAgent } = mcpWorkspace();
 
-    const res = await handleMcpRequest(
+    const res = await serveMcp(
       toolCall('not-mine', 'run_task', { text: 'go' }, SESSION_TOKEN), env, resolveAgent,
     );
 
@@ -195,7 +201,7 @@ describe('MCP write tools — auth + ownership gate (a scoped token cannot excee
   test('no credentials → 401, no tool runs', async () => {
     const { env, calls, resolveAgent } = mcpWorkspace();
 
-    const res = await handleMcpRequest(
+    const res = await serveMcp(
       toolCall('jarvis', 'run_task', { text: 'go' }), env, resolveAgent,
     );
 

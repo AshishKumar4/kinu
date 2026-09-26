@@ -1,13 +1,13 @@
 /** `/api/*` as one Hono app: registration order is dispatch order, so this file's order is the gate order. */
-import { Hono } from 'hono';
+import { Hono, type ExecutionContext as HonoExecutionContext } from 'hono';
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
-import { err, healthResponse, REAL_CLOCK, serveApp } from '@kinu.run/core';
+import { healthResponse, REAL_CLOCK, serveApp } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { AuthError, authenticateRequest, crossSiteRejection } from '../auth/session';
 import { authApiRoutes } from '../auth/routes';
-import { verifyControlPlaneAccess } from '../control-plane/access-gate';
-import { adminDenialAnswer, reportAdminDenial } from '../control-plane/admin-caller';
+import { CONTROL_PLANE_API_ROUTE } from '../control-plane/access-gate';
+import { controlPlaneAccess } from '../control-plane/admin-caller';
 import { observeIdentity } from '../control-plane/index-feed';
 import { controlRoutes } from '../control-plane/routes';
 import { cliRoutes } from '../cli/routes';
@@ -26,7 +26,7 @@ import { runEventsRoutes } from '../run-events-routes';
 import { evalAbortRoutes } from '../eval/abort-route';
 import { filesRoutes } from '../files-routes';
 import { terminalRouteDeps, terminalRoutes } from '../terminal-route';
-import { apiError, apiPath, beneath, type FamilyEnv } from './context';
+import { routeError, apiPath, beneath, type FamilyEnv } from './context';
 import { workspaceGate } from './workspace';
 
 const app = new Hono<FamilyEnv<Env>>({ getPath: apiPath });
@@ -42,20 +42,7 @@ function mount<Bindings extends object, Variables extends object>(
 }
 
 // Access before every bypass on the admin API.
-app.use('/api/control/*', async (c, next) => {
-  const access = await verifyControlPlaneAccess(c.req.raw, c.env);
-
-  if (!access.ok) {
-    reportAdminDenial(access.denial, new URL(c.req.url).pathname, c.req.method);
-
-    const answer = adminDenialAnswer(access.denial);
-
-    return err(answer.status, answer.message);
-  }
-
-  c.set('access', access.access);
-  await next();
-});
+app.use(CONTROL_PLANE_API_ROUTE, controlPlaneAccess);
 
 mount(authApiRoutes);
 
@@ -134,7 +121,7 @@ mount(terminalRoutes(terminalRouteDeps));
 
 app.notFound(async (c) => serveApp(c.req.raw, c.env));
 
-app.onError(apiError);
+app.onError(routeError);
 
 /** A GET route here never answered HEAD (Hono's does), so HEAD dispatches on the table without GET routes. */
 const headless = new Hono<FamilyEnv<Env>>({ getPath: apiPath });
@@ -145,12 +132,12 @@ for (const route of app.routes) {
 
 headless.notFound(async (c) => serveApp(c.req.raw, c.env));
 
-headless.onError(apiError);
+headless.onError(routeError);
 
 export const api = {
   /** The route table, middleware included, in dispatch order. */
   routes: app.routes,
-  fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
+  fetch(request: Request, env: Env, ctx: HonoExecutionContext): Response | Promise<Response> {
     return (request.method === 'HEAD' ? headless : app).fetch(request, env, ctx);
   },
 };

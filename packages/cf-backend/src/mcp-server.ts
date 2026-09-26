@@ -10,6 +10,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { getAgentByName } from "agents";
+import { Hono } from "hono";
 import type {
   EnqueueTurnResult,
   HybridHit,
@@ -32,6 +33,7 @@ import type { SessionAuthority } from "./auth/store";
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { beneath, type FamilyEnv } from './api/context';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -422,20 +424,22 @@ async function authenticateMcpCaller<Id>(
   }
 }
 
-export async function handleMcpRequest<Id>(
-  request: Request,
-  env: McpEnv<Id>,
-  resolveAgent: McpResolver,
-): Promise<Response | null> {
-  const url = new URL(request.url);
+const MCP_PREFIX = '/mcp/v1';
 
-  if (!url.pathname.startsWith("/mcp/v1/")) return null;
+export function mcpRoutes<Bindings extends McpEnv<unknown>>(
+  resolveAgent: (env: Bindings) => McpResolver,
+): Hono<FamilyEnv<Bindings, object>> {
+  const routes = new Hono<FamilyEnv<Bindings, object>>();
 
-  if (request.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
+  routes.options('/mcp/v1/*', beneath<FamilyEnv<Bindings, object>>(MCP_PREFIX, async () => new Response(null, { headers: corsHeaders })));
 
-  const segments = url.pathname.replace(/^\/mcp\/v1\//, "").split("/").filter(Boolean);
+  routes.all('/mcp/v1/*', beneath<FamilyEnv<Bindings, object>>(MCP_PREFIX, async (c) => serveMcp(c.req.raw, c.env, resolveAgent(c.env))));
+
+  return routes;
+}
+
+async function serveMcp<Id>(request: Request, env: McpEnv<Id>, resolveAgent: McpResolver): Promise<Response> {
+  const segments = new URL(request.url).pathname.slice(`${MCP_PREFIX}/`.length).split("/").filter(Boolean);
   const agentName = segments[0] ? decodeURIComponent(segments[0]) : '';
 
   if (!agentName) {

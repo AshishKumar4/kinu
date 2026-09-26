@@ -20,6 +20,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **Every page and socket outside `/api` is routed by one Hono app, and each Durable Object's forwarded paths by its own.** Same paths, methods, gates and answers; a path with a malformed escape (`/agents/orchestrator-agent/%ZZ`) now gets a JSON 500 instead of the platform error page.
 - **A malformed tool call is refused before the tool runs.** Each built-in tool but `agents` now declares its input once, as a zod schema, which the model's call is checked against and which the same tool in eval reuses. Before, most tools handed the AI SDK an unchecked JSON Schema literal, so a call missing a field (an edit without `new_text`) could reach the tool. A refusal reaches the model as `bad_input` in one readable line that names the field, and for a choice lists the allowed values and what arrived. Every call that ran before still runs: limits the old schemas only advertised stay unenforced, a memory confidence above 1 is clamped as before, and `tasks.mode(null)` still reads the role. Each model now gets every tool's schema in its own dialect, so a Gemini turn no longer receives keys it rejects.
 - **Slate previews in the chat fold, and opening one always shows it.** A slate shown again later in the chat folds
   its earlier previews ("Updated below"), and a slate open in the work surface beside the chat folds its preview
