@@ -945,11 +945,13 @@ packages or more is sharded across sibling objects of the composed namespace
 `supervisorOp({ op: 'fanoutExecute' })` on an object of our class opened under
 `nbf:npm-resolve-fanout:<doId>:<shard>`. `createHostedWorkspace` composes over
 whatever storage the object holds, so a sibling is a runtime with its own
-empty filesystem, with no genesis, owner or transcript. Kinu's `ensureSchema`
-runs from `onStart`, and the Agents SDK starts that lifecycle from `fetch`,
-`alarm` and its own internal RPCs only (`agents/dist/src-5W6JNKVb.js:459-460`
-and `durable-object-lifecycle-D6nNQJJd.js:824-836`), never from a plain RPC
-method such as this one.
+empty filesystem, with no genesis, owner or transcript. Kinu makes a
+workspace's tables in the constructor, which skips an object whose name starts
+with `nbf:` (no workspace name can hold a `:`), and the Agents SDK starts the
+`onStart` lifecycle from `fetch`, `alarm` and its own internal RPCs only
+(`agents/dist/src-5W6JNKVb.js:459-460` and
+`durable-object-lifecycle-D6nNQJJd.js:824-836`), never from a plain RPC method
+such as this one.
 
 Measured 2026-09-21 in `/home/mrwhite0racle/Kinu-wt-nimbus-0922` with
 `bunx vitest run tests/workerd/nimbus-git-npm.test.ts` from

@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { EmailOutbox, type OutboundEmailMessage } from '@kinu.run/core';
-import { recordProbeRun, listIncidents, type MonitorDeps } from '../src/monitor/incidents';
+import { ensureMonitorSchema, recordProbeRun, listIncidents, type MonitorDeps } from '../src/monitor/incidents';
 import { runSyntheticProbes, type ProbeDeps, type ProbeOutcome } from '@kinu.run/core';
 import { CLI_DIST_PATHS } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
@@ -174,6 +174,8 @@ describe('synthetic probes', () => {
 function ledger(alertEmail: string | null = 'owner@example.com') {
   const db = new Database(':memory:');
   const sql = sqlExec(db);
+  // As `MonitorDO`'s constructor does.
+  ensureMonitorSchema(sql);
   const sent: OutboundEmailMessage[] = [];
   let failSends = false;
 

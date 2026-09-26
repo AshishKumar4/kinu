@@ -55,14 +55,14 @@ credential.
 ## Adding a new actor kind
 
 `ActorAgent` (`cf-backend/src/actor-agent.ts`) is the base class. Extend
-it and supply its abstract members:
+it and supply its abstract members. Make your tables in your constructor: a native RPC
+can be an object's first event, and it runs no `onStart`.
 
 ```ts
 export class MyAgent extends ActorAgent {
   protected getOwnerUserId(): string | null { /* identity bootstrap */ }
   protected actorKind(): AgentKind { /* which kind you are, for the roster */ }
   protected workspaceBox(shellId: string): NimbusSandboxHandle { /* the box behind a shell id */ }
-  protected ensureSchema(): void { /* your tables */ }
   protected actorToolDeps(): ActorToolDeps { /* which gated tools you get */ }
   protected get engine(): EvolutionEngine { /* your evolution engine */ }
   protected notifyOwner(subject: string, body: string): void { /* … */ }

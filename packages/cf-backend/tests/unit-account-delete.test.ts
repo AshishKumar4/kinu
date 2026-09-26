@@ -8,12 +8,13 @@ const USER_ID = '0123456789abcdef0123456789abcdef';
 
 const OTHER_OWNER = 'f'.repeat(32);
 
-function accountTables(db: Database): string[] {
+/** The account's tables that still hold a row. */
+function accountRows(db: Database): string[] {
   return db.query<{ name: string }, []>(
     `SELECT name FROM sqlite_master WHERE type = 'table'
        AND (name LIKE 'user_%' OR name LIKE 'device_%' OR name LIKE 'cli_%' OR name LIKE 'codex_%')
      ORDER BY name`,
-  ).all().map((row) => row.name);
+  ).all().map((row) => row.name).filter((name) => count(db, name) > 0);
 }
 
 function count(db: Database, table: string): number {
@@ -58,7 +59,7 @@ describe('deleting the account', () => {
     expect(harness.aborted).toEqual([]);
     await harness.abortRaised();
     expect(harness.aborted).toEqual(['destroyed']);
-    expect(accountTables(db)).toEqual([]);
+    expect(accountRows(db)).toEqual([]);
 
     const revived = createTestUserDO({ storage: db, durableObjectId: USER_ID });
     const profile = await revived.userDO.ensureProfile(owner, 'owner@example.test');

@@ -713,6 +713,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A workspace answers whatever reaches it first.** Its tables are made when the workspace object starts, not on its first web request, so a read that arrives first from another part of Kinu (the account's spend total, an owner's inspection of a helper) no longer fails on a workspace that has not been opened since it last slept.
 - **A refusal from your account or workspace keeps its reason.** Creating a workspace whose name is still being deleted, and the other refusals the account and workspace objects raise, answer 400 with what was wrong again, instead of a generic 500.
 - **A command you approve reads as the command that runs.** Shell approvals, parked commands and device-consent cards in the web, the control plane and the TUI show bidi overrides and zero-width characters as a visible �, so no hidden character can make the text read as something else.
 - **An MCP server's tool description can no longer pass for something else.** Bidi overrides, zero-width characters and controls show as a visible �, and HTML tags, headings, rules and strikethrough in the server's text stay plain text, before the description reaches the model or your screen.

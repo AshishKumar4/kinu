@@ -109,7 +109,7 @@ import {
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
   type FactsStore,
-  createAgentStores, type AgentConfigStore, collectDynamicContext, subordinateDelegatesOf,
+  createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, subordinateDelegatesOf,
   nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
   CHAT_SESSION_ID, type SessionTranscript,
   type SqlExecutor,
@@ -581,9 +581,6 @@ export abstract class ActorAgent extends Agent<Env> {
    * pushes; the caller reports them to the UserDO so it can arm reconciliation. */
   async installWorkspaceCapability(token: string): Promise<{ ok: true; missed: number }> {
     if (!token) throw new KinuError('denied', 'capability token required');
-    // A native DO RPC does not route through partyserver, so it can land before `onStart` has run
-    // (same race as `OrchestratorAgent.claimOwner`). Flag-gated: a no-op once initialized.
-    this.ensureSchema();
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
     this.invalidateModelCaches();
@@ -622,7 +619,7 @@ export abstract class ActorAgent extends Agent<Env> {
     initPendingSendTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
 
     // Per-actor admission ledger (one workspace-wide pointer cannot distinguish concurrent actors).
-    // Initialized here because onStart recovery can read it before a root's ensureSchema runs.
+    // In the base constructor: the SDK's fiber recovery reads it before any subclass constructor body.
     try {
       initActorClaimTables(resetGuardedExec((ddl: string) => this.ctx.storage.sql.exec(ddl), this.ctx.storage.sql));
     } catch (cause) {
@@ -633,11 +630,9 @@ export abstract class ActorAgent extends Agent<Env> {
       return;
     }
 
-    // Same reason: the onStart recovery sweep can read it before a root's `ensureSchema`.
+    // Same reason.
     initTerminalEffectTable((ddl: string) => this.ctx.storage.sql.exec(ddl));
   }
-  /** Declared here because `installWorkspaceCapability`, reachable before `onStart`, must demand it. */
-  protected abstract ensureSchema(): void;
 
   /** Structural absence is the gating: an actor returning {} has no roster/peer actions. */
   protected abstract actorToolDeps(): ActorToolDeps;
@@ -931,7 +926,6 @@ export abstract class ActorAgent extends Agent<Env> {
     name: string,
     displayName: string,
   ): Promise<{ ok: true }> {
-    this.ensureSchema();
     await this.getTeamToolDeps().recordTitle({ name, displayName });
 
     return { ok: true };
@@ -956,7 +950,6 @@ export abstract class ActorAgent extends Agent<Env> {
     creationId: string;
   } | Refusal> {
     try {
-      this.ensureSchema();
       const child = await this.actorDirectory({ action: 'validate', name: input.name, reference: input.reference });
       const ownerUserId = this.getOwnerUserId();
 
@@ -990,7 +983,6 @@ export abstract class ActorAgent extends Agent<Env> {
     /** Ingress dedupe key: a replayed report is one the parent already holds. */
     sequenceId: string;
   }): Promise<SubordinateEventResult> {
-    this.ensureSchema();
 
     return receiveSubordinateEvent({
       log: this.eventLog,
@@ -1191,7 +1183,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     this.onRequest = async (request) => requests.fetch(request);
   }
-  /** Lazy: `actorHandle()` resolves the directory row `ensureSchema` creates, after field init. */
+  /** Lazy: `actorHandle()` resolves the directory row the constructor creates, after field init. */
   private _pendingSends: PendingSendStore | null = null;
   private get pendingSends(): PendingSendStore {
     return this._pendingSends ??= new PendingSendStore(this.boundSql, this.actorHandle().actorId);
@@ -1586,8 +1578,8 @@ export abstract class ActorAgent extends Agent<Env> {
     return pricing ? priceCall(usage, pricing) : undefined;
   }
 
-  /** Lazy: resolves this actor's handle, whose directory row does not exist until `ensureSchema`
-   *  runs; resolving in the constructor throws on a fresh database. */
+  /** Lazy: resolves this actor's handle, whose directory row the subclass constructor creates after
+   *  this field initializes. */
   private _compactionState: CompactionStateStore | null = null;
   protected get compactionState(): CompactionStateStore {
     return (this._compactionState ??= createCompactionStateStore(this.boundSql, this.actorHandle()));
@@ -1611,8 +1603,8 @@ export abstract class ActorAgent extends Agent<Env> {
     this.logActivity(activity, compactionLogDetail(message, detail));
   }
 
-  /** Registered from `ensureSchema`, not the constructor: its plan port resolves this actor's
-   *  handle, which needs the directory row `ensureSchema` creates. */
+  /** Registered from the root's schema init: its plan port resolves this actor's handle, which needs the
+   *  directory row that init creates. */
   /** Handed to every turn; core adds the inbox's own turn extension itself. */
   private _compactionExtension: KinuExtension | null = null;
 
@@ -3489,8 +3481,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.config.getModel();
   }
 
-  // `ensureSchema()` first on each: a native DO RPC does not route through partyserver and can
-  // land before `onStart` (see `installWorkspaceCapability`). It is flag-gated and idempotent.
 
   /** Native owner inspection. Does not initialize the SDK or application tables. */
   async inspectSubordinateStorage(request: SubordinateInspectionRequest, authority: SubordinateInspectionAuthority): Promise<SubordinateInspectionResult> {
@@ -3509,7 +3499,6 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   @callable()
   async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<Page<ChatHistoryEntry>> {
-    this.ensureSchema();
     const { actor, ...page } = request ?? {};
 
     return getChatHistoryPage(actor === undefined ? this.chatTranscript : this.subordinateChat(actor), page);
@@ -3549,13 +3538,12 @@ export abstract class ActorAgent extends Agent<Env> {
   }
   @callable()
   async setModel(spec: string) {
-    this.ensureSchema();
+    return setModel(this.modelSetting(this.config, () => this.invalidateModelCaches()), spec);
+  }
 
-    return setModel({
-      config: this.config,
-      normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
-      onChanged: () => this.invalidateModelCaches(),
-    }, spec);
+  /** How a model pin is set on `config`: this workspace's registry normalizes the spec. */
+  protected modelSetting(config: AgentConfigStore, onChanged: () => void): SetModelDeps {
+    return { config, normalize: (s) => this.providerRegistry().normalizeSpecSync(s), onChanged };
   }
 
   /** Held as a row once landed, or as a reservation from acceptance until then. */
@@ -3567,7 +3555,6 @@ export abstract class ActorAgent extends Agent<Env> {
    * under the same id. Unrecognized mode runs as build. */
   @callable()
   async send(text: string, id: string, files: readonly PromptFile[] = [], mode?: WorkMode): Promise<void> {
-    this.ensureSchema();
     const attachments = v.parse(v.array(PromptFileSchema), files);
     const workMode = isWorkMode(mode) ? mode : 'build';
     const window = this.addressedActor();
@@ -3588,7 +3575,6 @@ export abstract class ActorAgent extends Agent<Env> {
    * Foreground only: detached jobs are stopped via `cancelBackgroundJob`. */
   @callable()
   async cancelCurrentWork(): Promise<CancelWorkOutcome> {
-    this.ensureSchema();
     const window = this.addressedActor();
 
     if (window !== null) {

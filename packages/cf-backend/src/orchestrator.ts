@@ -389,6 +389,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     this.addressedName = name;
     sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
+
+    // Every event reaches a whole workspace: a native RPC runs no `onStart`, so the tables are made here.
+    if (!this.nimbusSibling && this.storageRefusal === undefined) this.initSchema();
+  }
+
+  /** A Nimbus sibling (`nbf:…`, docs/NIMBUS-INTEGRATION.md) is an ordinary instance of this class that serves
+   *  `supervisorOp` over its own storage; it has no genesis, owner or transcript. User workspace names cannot
+   *  contain `:` (`validateWorkspaceName`), so the prefix names only these. */
+  private get nimbusSibling(): boolean {
+    return this.addressedName.startsWith('nbf:');
   }
 
   /** Nimbus enters by `idFromString`, and the platform fixes `ctx.id` for the activation, so it has no name. */
@@ -495,7 +505,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   @callable()
   async experienceAction(input: ExperienceActionInput) {
-    this.ensureSchema();
     const deps = this.getExperienceDeps();
 
     if (!deps) {
@@ -1339,9 +1348,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.cacheWarming;
   }
 
-  /** Per-activation guard; resets on eviction so a cold start re-creates newly added tables. */
-  private _schemaReady = false;
-
   protected get triggerRegistry(): TriggerRegistry {
     if (!this._triggerRegistry) {
       const alarmScheduler: AlarmScheduler = {
@@ -1985,20 +1991,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.emailOwnerNotification(subject, body);
   }
 
-  /** Called by the Worker on every authenticated request before any other RPC; 403s on cross-user collision.
-   *  May run before onStart() completes, so ensureSchema() runs here first. */
+  /** Called by the Worker on every authenticated request before any other RPC; 403s on cross-user collision. */
   async claimOwner(userId: string): Promise<{ owner: string; capabilityHash: string | null }> {
     if (!userId) throw new KinuError('bad_input', 'userId required');
-
-    try {
-      this.ensureSchema();
-    } catch (err) {
-      diagnostics.failure('workspace.schema_ensure_failed', toKinuError({
-        doing: 'creating the workspace tables before an owner claim',
-        cause: err,
-        otherwise: 'io',
-      }), { workspace: this.name });
-    }
 
     // A hash, not a boolean: the UserDO compares it to its registration so any mismatch gets repaired.
     const capabilityHash = await this.workspaceCapabilityHash();
@@ -2534,41 +2529,36 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.logActivity('work_cancelled', `${abortedTools} foreground aborted`);
   }
 
-  // Lazy like `deferrals`: the store needs the schema, and field initializers run before
-  // ensureSchema can. "Always" is persisted on the UserDO hub, not here.
+  // Lazy like `deferrals`: field initializers run before the constructor makes the schema.
+  // "Always" is persisted on the UserDO hub, not here.
   private _consents: DeviceConsentRegistry | null = null;
   private get consents(): DeviceConsentRegistry {
-    if (!this._consents) {
-      this.ensureSchema();
-      this._consents = new DeviceConsentRegistry({
-        store: new DeviceConsentStore(this.boundSql),
-        newId: () => `cons-${nanoid(10)}`,
-        // Wire shapes stay inline: the broadcast-wiring gate reads `broadcast({ type: … })` off source.
-        announce: (notice) => {
-          this.overviewChanged();
+    return this._consents ??= new DeviceConsentRegistry({
+      store: new DeviceConsentStore(this.boundSql),
+      newId: () => `cons-${nanoid(10)}`,
+      // Wire shapes stay inline: the broadcast-wiring gate reads `broadcast({ type: … })` off source.
+      announce: (notice) => {
+        this.overviewChanged();
 
-          if (notice.kind === 'raised') {
-            const { consent } = notice;
-            this.logActivity('device_consent_requested', `${consent.deviceLabel}: ${consent.command.slice(0, 80)}`);
-            this.broadcast(JSON.stringify({
-              type: 'device_consent',
-              consentId: consent.consentId,
-              deviceId: consent.deviceId,
-              deviceLabel: consent.deviceLabel,
-              method: consent.method,
-              command: consent.command,
-              workspaceName: consent.workspaceName ?? null,
-            }));
+        if (notice.kind === 'raised') {
+          const { consent } = notice;
+          this.logActivity('device_consent_requested', `${consent.deviceLabel}: ${consent.command.slice(0, 80)}`);
+          this.broadcast(JSON.stringify({
+            type: 'device_consent',
+            consentId: consent.consentId,
+            deviceId: consent.deviceId,
+            deviceLabel: consent.deviceLabel,
+            method: consent.method,
+            command: consent.command,
+            workspaceName: consent.workspaceName ?? null,
+          }));
 
-            return;
-          }
+          return;
+        }
 
-          this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId: notice.consentId }));
-        },
-      });
-    }
-
-    return this._consents;
+        this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId: notice.consentId }));
+      },
+    });
   }
 
   /** Called by the UserDO over DO RPC. Resolves on decision or `timeout`; `timeout` is not
@@ -2661,13 +2651,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // per-agent verifies, attaches, issues or lists a device token.
 
   /**
-   * Idempotent; flag-gated to run once per activation, no persisted schema version.
+   * Once per activation, from the constructor; no persisted schema version.
    * Order is the contract: DDL, then identity/main-actor rows, then anything resolving a handle.
    */
-  protected ensureSchema(): void {
-    if (this.storageRefusal !== undefined) throw this.storageRefusal;
-
-    if (this._schemaReady) return;
+  private initSchema(): void {
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
     initWorkspaceSchema({
@@ -2713,8 +2700,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Must follow the rows above: the extension's ports resolve this actor's handle.
     this.registerCompactionExtension();
-
-    this._schemaReady = true;
   }
 
   /** Synchronous by contract: runs inside blockConcurrencyWhile, which gates every request and
@@ -2723,8 +2708,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     diagnostics.event('actor.startup', { workspace: this.name });
     this.installClientMessageGate();
 
-    if (this.storageRefusal !== undefined) return;
-    this.ensureSchema();
+    if (this.storageRefusal !== undefined || this.nimbusSibling) return;
     // Every budgeted sweep via the alarm-frame seam; row-budgeted because this is the init gate,
     // and a truncated pass is drained by the wake below in alarm frames.
     const sweepsTruncated = this.maintenanceSweeps();
@@ -3785,13 +3769,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
     if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new KinuError('bad_input', 'invalid expected owner user id');
 
-    // A workspace whose creation died before `ensureSchema` has no `workspace_identity` table; the
-    // caller `removeWorkspace` already verified ownership via the user's roster.
-    if (tableExists(this.boundSql, 'workspace_identity')) {
-      const ownerUserId = this.getOwnerUserId();
+    // No owner: a creation that died before its claim, or storage from before a reset. The caller
+    // `removeWorkspace` already verified ownership through the user's roster.
+    const ownerUserId = this.storageRefusal === undefined ? this.getOwnerUserId() : null;
 
-      if (ownerUserId !== expectedOwnerUserId) throw new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
-    }
+    if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) throw new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
 
     // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
     // The watermark outranks every earlier record (core preview/preview-exposures.ts).
@@ -3856,7 +3838,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private turnRequestSources(actorId: string | undefined): AgentStores {
-    this.ensureSchema();
 
     if (actorId === undefined) return this.stores;
     const host = this.actorHost();
@@ -4915,11 +4896,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** A hosted actor's own model pin, over the workspace's for its turns. */
   @callable() async setActorModel(actor: string, spec: string) {
-    return setModel({
-      config: this.hostedChild(actor).child.stores.config,
-      normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
-      onChanged: () => {},
-    }, spec);
+    return setModel(this.modelSetting(this.hostedChild(actor).child.stores.config, () => {}), spec);
   }
 
   @callable() async proposeCurriculumTasks(count?: number) {
@@ -5092,7 +5069,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     | { ok: false; reason: 'owned_by_another_user' }
   > {
     if (!ownerUserId) throw new KinuError('bad_input', 'fork owner is required');
-    this.ensureSchema();
     const currentOwner = this.getOwnerUserId();
 
     if (currentOwner && currentOwner !== ownerUserId) return { ok: false, reason: 'owned_by_another_user' };
@@ -5349,7 +5325,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * happens in this invocation; the incident id makes caller retries safe.
    */
   async acceptSandboxLifecycleFailure(body: JsonValue): Promise<SandboxLifecycleFailureResult> {
-    this.ensureSchema();
 
     return acceptSandboxLifecycleFailure({
       sql: this.boundSql,
@@ -5370,7 +5345,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Peer-agent ingress via cross-DO RPC; ownership/grant checks run receiver-side. */
   async receivePeerMessage(msg: PeerMessage): Promise<ReceiveResult> {
-    this.ensureSchema();
 
     return this.peerHub.receive(msg);
   }

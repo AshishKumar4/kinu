@@ -1126,7 +1126,7 @@ export interface ActorHarness<T> {
 
 /** The Durable Object state every fixture here constructs; shared with
  *  `helpers/hosted-workspace.ts` so the platform surface cannot drift. */
-export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
+export function makeCtx(db: Database, id = 'harness-actor', objectName = id): AgentContext {
   const canonicalSql = makeSqlExec(db);
 
   const sqlExec = (query: string, ...bindings: SqlValue[]) => {
@@ -1173,14 +1173,15 @@ export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
           `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
         ).all();
 
-        for (const { name } of tables) db.exec(`DROP TABLE "${name}"`);
+        // IF EXISTS: dropping an FTS table drops its shadow tables with it.
+        for (const { name } of tables) db.exec(`DROP TABLE IF EXISTS "${name}"`);
         kv.clear();
       },
       setAlarm: async () => {},
       getAlarm: async () => null,
       deleteAlarm: async () => {},
     },
-    id: { toString: () => id, name: id },
+    id: { toString: () => id, name: objectName },
     waitUntil: () => {},
     blockConcurrencyWhile: <Result>(fn: () => Promise<Result>): Promise<Result> => fn(),
     getWebSockets: () => [],
@@ -1433,14 +1434,18 @@ interface ActorInstantiation {
   readonly world?: HarnessActorWorld;
   readonly parentNamespace?: HarnessParentNamespace;
   readonly env?: Env;
+  /** `ctx.id.name`; a Nimbus sibling's starts with `nbf:`. */
+  readonly objectName?: string;
 }
 
 function instantiate<T extends WorkspaceHostTarget>(
   Actor: new (ctx: AgentContext, env: Env) => T,
-  { db, parent, userPlane, world, parentNamespace, env }: ActorInstantiation,
+  { db, parent, userPlane, world, parentNamespace, env, objectName }: ActorInstantiation,
 ): ActorHarness<T> {
   const builtEnv = env ?? makeEnv(parent, userPlane, world, parentNamespace);
-  const ctx = makeCtx(db);
+  // The platform fixes the name before the constructor runs, and the constructor records it.
+  const name = objectName ?? world?.workspace ?? 'harness-parent';
+  const ctx = makeCtx(db, 'harness-actor', name);
 
   if (world !== undefined) activationWorlds.set(ctx, world);
   const agent = new Actor(ctx, builtEnv);
@@ -1460,7 +1465,7 @@ function instantiate<T extends WorkspaceHostTarget>(
     });
   }
 
-  Object.defineProperty(agent, 'name', { value: world?.workspace ?? 'harness-parent', configurable: true });
+  Object.defineProperty(agent, 'name', { value: name, configurable: true });
 
   return {
     agent,
@@ -1514,12 +1519,13 @@ export function orchestratorHarness(
   return harness;
 }
 
-/** A half-born workspace: constructed, but `ensureSchema` never ran, so
- *  `workspace_identity` is absent and owner reads throw. */
-export function halfBornOrchestratorHarness(
+/** Constructed, and nothing else: no start ran, no owner claimed it. What a native RPC meets when it is an
+ *  object's first event. */
+export function unstartedOrchestratorHarness(
   world?: HarnessActorWorld,
+  objectName?: string,
 ): ActorHarness<HarnessOrchestratorAgent> {
-  return instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), world });
+  return instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), world, ...(objectName !== undefined && { objectName }) });
 }
 
 /** A fresh actor instance over surviving storage: the isolate reset, with every
