@@ -169,7 +169,7 @@ describe('a box rests only once no command it ran is still running', () => {
 
   test('a process list that never reads holds for one quiet-confirm window, then lets the box rest', async () => {
     const start = Date.now();
-    const { box, rows } = harness(UnreadableProcessesBox);
+    const { box, container, rows } = harness(UnreadableProcessesBox);
 
     try {
       await box.devboxStartup();
@@ -190,6 +190,8 @@ describe('a box rests only once no command it ran is still running', () => {
 
       expect(beats.slice(0, 9).every((decision) => decision === 'hold')).toBe(true);
       expect(beats.at(-1)).toBe('quiesce');
+      // The stop itself reads the list to kill processes; it must not refuse on the same failure.
+      expect(container.running.running).toBe(false);
     } finally {
       setSystemTime();
     }

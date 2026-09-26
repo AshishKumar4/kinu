@@ -1625,7 +1625,16 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   async #releaseWorkdirHolders(): Promise<void> {
     if (this.ctx.container?.running !== true) return;
 
-    for (const live of await this.listProcesses()) {
+    let listed: Awaited<ReturnType<typeof this.listProcesses>> = [];
+
+    try {
+      listed = await this.listProcesses();
+    } catch (error) {
+      // As a failed kill: the pid scan below still finds them.
+      console.error(`[devbox] process list unreadable before the stop: ${describe({ cause: error })}`);
+    }
+
+    for (const live of listed) {
       if (!isProcessLive(live.status)) continue;
 
       try {
