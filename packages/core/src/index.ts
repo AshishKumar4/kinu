@@ -2194,7 +2194,7 @@ export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './h
 
 export { serveApp } from './http/app-shell';
 
-export { ingressAdmitted, ingressDenied, peerIp } from './http/ingress-budget';
+export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp, type IngressAdmission } from './http/ingress-budget';
 
 export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
@@ -2230,7 +2230,7 @@ export {
 } from './read-models/alternate-takes';
 
 export {
-  classifyProgrammaticTurn, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, applySignalCard,
+  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, applySignalCard,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,

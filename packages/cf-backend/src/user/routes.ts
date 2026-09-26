@@ -131,8 +131,7 @@ function mcpRead<Body>(read: (stub: UserRoutesAuthority, owner: UserCaller) => P
 
 export const userRoutes = new Hono<FamilyEnv<UserRoutesEnv<unknown>, UserVariables>>();
 
-// `/api/user*`: every path starting with the text.
-userRoutes.use('/api/user*', ownerGate(), async (c, next) => {
+userRoutes.use('/api/user/*', ownerGate(), async (c, next) => {
   const identity = c.get('identity');
   const owner = c.get('owner');
   const stub = c.env.UserDO.get(c.env.UserDO.idFromName(identity.userId));
@@ -512,5 +511,5 @@ userRoutes.get('/api/user/mcp/callback', async (c) => {
   return new Response(null, { status: 302, headers: { Location: settingsUrl.toString() } });
 });
 
-userRoutes.all('/api/user*', async (c) =>
+userRoutes.all('/api/user/*', async (c) =>
   err(404, `No such user route: ${c.req.method} ${c.req.path.slice('/api/user'.length)}`));

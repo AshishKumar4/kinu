@@ -183,13 +183,13 @@ cliRoutes.post('/api/cli/auth/poll', async (c) => {
 
 // No JSON approval: this family runs ahead of the CSRF check, so a cookie-only POST could mint a token.
 
-// `/api/cli*`: every path starting with the text.
-cliRoutes.use('/api/cli*', cliBearer);
+// Not `/api/cli*`: that took `/api/client-errors`.
+cliRoutes.use('/api/cli/*', cliBearer);
 
 // The agent RPC endpoint has its own per-method policy (AGENT_RPC_ACCESS), so it precedes the access-token gate.
 cliRoutes.post('/api/cli/workspaces/:name/rpc', async (c) => handleAgentRpc(c, decodeURIComponent(rawParam(c, 'name'))));
 
-cliRoutes.use('/api/cli*', async (c, next) => {
+cliRoutes.use('/api/cli/*', async (c, next) => {
   const denied = accessTokenDenial(c.get('cli'), c.req.method, cliPath(c));
 
   if (denied) return denied;
@@ -417,7 +417,7 @@ cliRoutes.delete('/api/cli/credentials/:key', async (c) => {
   return json({ body: { ok: true } });
 });
 
-cliRoutes.all('/api/cli*', async (c) => err(404, `No such CLI route: ${c.req.method} ${cliPath(c)}`));
+cliRoutes.all('/api/cli/*', async (c) => err(404, `No such CLI route: ${c.req.method} ${cliPath(c)}`));
 
 async function cliAgent<Id>(
   env: CliRoutesEnv<Id>, cli: CliIdentity, name: string,

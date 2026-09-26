@@ -29,6 +29,8 @@ export interface ScriptedPace {
   readonly hold?: Promise<void>;
   /** A silence after the lead, ended the same way: the text stops mid-way until the row lets it finish. */
   readonly rest?: Promise<void>;
+  /** Reasoning streamed before the answer, `deltas` words `everyMs` apart: a thinking model's steady trickle. */
+  readonly reasoning?: { readonly deltas: number; readonly everyMs: number };
 }
 
 /** One answer: prose, or a tool call with its complete arguments. Unpaced, it is written in one piece. */
@@ -258,6 +260,12 @@ export async function* pacedStream(
 ): AsyncGenerator<string> {
   yield streamFrame({ role: 'assistant' });
   await pace.hold;
+
+  for (let word = 0; word < (pace.reasoning?.deltas ?? 0); word += 1) {
+    yield streamFrame({ reasoning_content: `thought${String(word)} ` });
+    await wait(pace.reasoning?.everyMs ?? 0);
+  }
+
   await wait(pace.firstTokenMs);
   yield streamFrame({ content: pace.lead });
   await pace.rest;

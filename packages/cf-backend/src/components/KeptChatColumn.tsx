@@ -32,7 +32,6 @@ export function KeptChatColumn({ workspace, subName, title, rpc, actorId }: {
     fetched: history.fetched,
     loading: history.loading,
     onReachEdge: history.loadMore,
-    exhausted: history.exhausted,
   });
 
   return (
