@@ -713,6 +713,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A workspace answers whatever reaches it first.** Its tables are made when the workspace object is created, and it finishes starting before it answers any call, not only a web request. So a read that arrives first from another part of Kinu (the account's spend total, an owner's inspection of a helper) no longer fails, or answers from a half-started workspace, when the workspace has not been opened since it last slept.
 - **An agent can no longer rewrite its own SOUL.md.** Only you set a workspace's soul (settings, a Drive save of SOUL.md, an import); the agent always reads the soul you set, even if a shell command swaps or deletes the file, which is put back at the next turn. The soul's text can't pass itself off as other parts of the prompt.
 - **Disconnecting ChatGPT or Cloudflare now revokes the login at the provider too.** Before, the login only left Kinu and its tokens kept working at OpenAI or Cloudflare. The login leaves Kinu first; if the provider refuses the revoke, your Providers settings say so until you dismiss it.
 - **A refusal from your account or workspace keeps its reason.** Creating a workspace whose name is still being deleted, and the other refusals the account and workspace objects raise, answer 400 with what was wrong again, instead of a generic 500.

@@ -392,7 +392,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
   /** `consumed_at = 0` is older than any grace, so the next wake's unbindStale must re-pend it. */
   async seedStaleDrainEvent(marker: string): Promise<void> {
-    this.ensureSchema();
     this.actorState.storage.sql.exec(
       `INSERT INTO agent_log
          (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
