@@ -126,10 +126,7 @@ export function renderCauseChain(error: Error): string {
   return parts.join(': ');
 }
 
-/**
- * {@link renderCauseChain} for an unnarrowed value (`catch` binding, rejection, RPC payload).
- * Prefer `renderCauseChain(toKinuError(...))` where a `doing` frame and fallback class exist.
- */
+/** {@link renderCauseChain} for an unnarrowed value; for diagnostics, never a response body. */
 export function renderThrownChain(input: { cause: unknown }): string {
   return input.cause instanceof Error ? renderCauseChain(input.cause) : String(input.cause);
 }
@@ -225,6 +222,42 @@ export function toKinuError(
   const code = classifyErrorCode({ cause: input.cause }) ?? input.otherwise;
 
   return new KinuError(code, input.doing, { cause: input.cause });
+}
+
+/** A remote `KinuError` (compat 2025-12-01). */
+const REMOTE_KINU_ERROR = 'KinuError: ';
+
+function authoredMessage(link: Error): string | null {
+  if (link instanceof KinuError) return link.message;
+  const remote = 'remote' in link && link.remote === true && link.message.startsWith(REMOTE_KINU_ERROR);
+
+  return remote ? link.message.slice(REMOTE_KINU_ERROR.length) : null;
+}
+
+/** A caught `KinuError`, here or across RPC, as `code` with its message; anything else classified as `doing`. */
+export function authoredRefusal(input: { doing: string; cause: unknown; code: ErrorCode }): KinuError {
+  const { cause } = input;
+  const authored = cause instanceof Error ? authoredMessage(cause) : null;
+
+  return authored === null ? toKinuError({ doing: input.doing, cause, otherwise: 'io' }) : new KinuError(input.code, authored, { cause });
+}
+
+function unauthoredText(link: Error): string {
+  return authoredMessage(link) === null ? link.message : '';
+}
+
+/** `error.message`, or null when it quotes a cause no `KinuError` authored. */
+export function publicMessage(error: KinuError): string | null {
+  const seen = new Set<unknown>();
+
+  for (let link: unknown = error.cause; link !== undefined && link !== null && !seen.has(link); link = link instanceof Error ? link.cause : null) {
+    seen.add(link);
+    const text = link instanceof Error ? unauthoredText(link) : scalarText({ value: link }) ?? '';
+
+    if (text.length > 0 && error.message.includes(text)) return null;
+  }
+
+  return error.message.length > 0 ? error.message : null;
 }
 
 /** The zod refusal under the SDK's wrappers. */

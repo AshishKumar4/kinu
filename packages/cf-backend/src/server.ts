@@ -6,7 +6,7 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { routeAgentRequest } from "agents";
 import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
-import { diagnostics, renderThrownChain, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
@@ -161,11 +161,8 @@ async function authenticateCliAgentTicketRequest(
       request: new Request(url.toString(), request),
     };
   } catch (cause) {
-    // A throw here is infrastructure, not a bad ticket: 500, not 401.
-    return new Response(JSON.stringify({ error: renderThrownChain({ cause }) }), {
-      status: 500,
-      headers: { 'content-type': 'application/json' },
-    });
+    // A throw here is infrastructure, not a bad ticket: the router's `onError` answers its class, not 401.
+    throw toKinuError({ doing: 'verifying a CLI agent connect ticket', cause, otherwise: 'io' });
   }
 }
 
@@ -351,11 +348,7 @@ worker.use('*', async (c, next) => {
     try { identity = await authenticateRequest(request, c.env); }
     catch (e) {
       if (e instanceof AuthError) return authError(request, e);
-      const message = renderThrownChain({ cause: e });
-
-      return new Response(JSON.stringify({ error: message }), {
-        status: 500, headers: { 'content-type': 'application/json' },
-      });
+      throw e;
     }
   }
 

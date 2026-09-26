@@ -8,6 +8,7 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 import { mcpAccount, unreachableKv } from './helpers/bindings';
 import type { McpAgentClient, McpEnv, McpResolver } from '../src/mcp-server';
 import { serveFamily } from './helpers/api';
+import { KinuError } from '@kinu.run/core/obs';
 
 mockAgentsSdk();
 
@@ -75,7 +76,7 @@ function mcpWorkspace() {
     async sendPeerFromMcp(input) {
       record('sendPeerFromMcp', { ...input });
 
-      if (input.agent === 'stranger') throw new Error('unknown peer "stranger" — list your team with action:"list"');
+      if (input.agent === 'stranger') throw new KinuError('missing', 'unknown peer "stranger" — list your team with action:"list"');
 
       return { status: 'delivered', message_id: 'evt_123' };
     },

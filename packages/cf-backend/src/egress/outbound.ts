@@ -28,7 +28,7 @@ import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run
 import type { EgressInjection, EgressInjectionResult } from '@kinu.run/core';
 import { kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 import {
-  classifyErrorCode, diagnostics, renderThrownChain, toKinuError, KinuError,
+  classifyErrorCode, diagnostics, renderThrownChain, toKinuError, tolerateAsync, KinuError,
   type Refusal,
 } from '@kinu.run/core/obs';
 
@@ -268,13 +268,9 @@ async function acceptContainerEvent(
   resolveAgent: ContainerEventResolver,
   params: KinuEgressParams,
 ): Promise<Response> {
-  let body: JsonValue;
+  const body = v.safeParse(JsonValueSchema, await tolerateAsync(() => request.json(), 'malformed-input'));
 
-  try {
-    body = v.parse(JsonValueSchema, await request.json());
-  } catch (error) {
-    return refusal(400, `Body is not JSON: ${renderThrownChain({ cause: error })}`);
-  }
+  if (!body.success) return refusal(400, 'Body is not JSON.');
 
   // Used, not copied (see `handleContainerEgress`). Classified because a throw here gives the container an empty reply;
   // 503 says the event was not recorded and retry recovers.
@@ -283,7 +279,7 @@ async function acceptContainerEvent(
   try {
     const agent = await resolveAgent(params.workspaceName);
 
-    result = await agent.acceptContainerEvent(body);
+    result = await agent.acceptContainerEvent(body.output);
   } catch (cause) {
     const error = toKinuError({
       doing: 'delivering a container event to its workspace object',

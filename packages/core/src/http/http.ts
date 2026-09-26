@@ -1,7 +1,7 @@
 // Shared HTTP helpers for backend route modules, plus the policy for rebuilding a request for an upstream.
 import { inlineFileType } from '../read-models/file-types';
 import { projectJsonValue } from '../utils/json';
-import { KinuError, toKinuError, tolerateAsync, type ErrorCode } from '../obs/index';
+import { KinuError, publicMessage, toKinuError, tolerateAsync, type ErrorCode } from '../obs/index';
 import { PRIVATE_NO_STORE } from './security-headers';
 import { copyHeaders } from '../providers/fetch-shim';
 import * as v from 'valibot';
@@ -33,6 +33,27 @@ export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
   oom: 507,
   io: 500,
 };
+
+export const PUBLIC_MESSAGE: Readonly<Record<ErrorCode, string>> = {
+  bad_input: 'The request is not valid.',
+  denied: 'Not allowed.',
+  missing: 'Not found.',
+  unsupported: 'Not supported.',
+  budget: 'Over a limit.',
+  unavailable: 'Unavailable; try again.',
+  timeout: 'Timed out.',
+  cancelled: 'Cancelled.',
+  oom: 'Out of memory.',
+  io: 'Internal error.',
+};
+
+export function publicText(error: KinuError): string {
+  return publicMessage(error) ?? PUBLIC_MESSAGE[error.code];
+}
+
+export function publicError(error: KinuError): Response {
+  return json({ body: { error: publicText(error), code: error.code } }, { status: ERROR_STATUS[error.code] });
+}
 
 export async function safeJson<Schema extends v.GenericSchema>(
   request: Request,

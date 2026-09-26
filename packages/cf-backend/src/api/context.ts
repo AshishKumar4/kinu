@@ -1,9 +1,9 @@
 import type { Context, Env as HonoEnv, MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
 import {
-  err, ERROR_STATUS, OwnerCapabilityUnavailableError, ownerCaller, type OwnerCapabilityEnv, type UserCaller,
+  err, OwnerCapabilityUnavailableError, ownerCaller, PUBLIC_MESSAGE, publicError, type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
 import type { AccessIdentity } from '../control-plane/access-gate';
 
@@ -91,25 +91,12 @@ export function ownerGate<E extends FamilyEnv<OwnerCapabilityEnv, { owner: UserC
   };
 }
 
-const UNCAUGHT_MESSAGE: Readonly<Record<ErrorCode, string>> = {
-  bad_input: 'The request is not valid.',
-  denied: 'Not allowed.',
-  missing: 'Not found.',
-  unsupported: 'Not supported.',
-  budget: 'Over a limit.',
-  unavailable: 'Unavailable; try again.',
-  timeout: 'Timed out.',
-  cancelled: 'Cancelled.',
-  oom: 'Out of memory.',
-  io: 'Internal error.',
-};
-
 /** Every router's `onError`: the chain goes to `http.request_failed` by route pattern; the client gets its class. */
 export function routeError(cause: Error, c: Context): Response {
-  const error = toKinuError({ doing: 'answering an HTTP request', cause, otherwise: 'io' });
+  const error = cause instanceof KinuError ? cause : toKinuError({ doing: 'answering an HTTP request', cause, otherwise: 'io' });
   diagnostics.failure('http.request_failed', error, { route: routePath(c) });
 
-  return err(ERROR_STATUS[error.code], UNCAUGHT_MESSAGE[error.code]);
+  return publicError(cause instanceof KinuError ? cause : new KinuError(error.code, PUBLIC_MESSAGE[error.code]));
 }
 
 /** A Durable Object router's `onError`: the caller sees the throw. */

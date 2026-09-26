@@ -14,6 +14,7 @@ import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
+import { KinuError } from '../obs/index';
 import {
   BUILTIN_ROLE_IDS, RoleIdSchema, TIER_IDS, TierIdSchema,
   type BuiltinRoleId, type ProfileCatalog, type RoleCatalog, type RoleId,
@@ -134,7 +135,7 @@ export function parseProfileValue<T>(schema: v.GenericSchema<unknown, T>, what: 
     return `${path}: ${issue.message}`;
   }).join('; ');
 
-  throw new Error(`invalid ${what}: ${issues}`);
+  throw new KinuError('bad_input', `invalid ${what}: ${issues}`);
 }
 
 export function validateProfileCatalog(input: { value: unknown }): ProfileCatalog {

@@ -13,7 +13,7 @@ import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset, type AssetFetcher,
 } from '@kinu.run/core';
 import { RELEASE_ARTIFACT_NAME, RELEASE_MANIFEST_PATH } from '@kinu.run/core/deploy';
-import { err, escapeHtml, json, safeJson } from '@kinu.run/core';
+import { err, escapeHtml, json, publicText, safeJson } from '@kinu.run/core';
 import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE, type WebhookRouteEnv } from '@kinu.run/core';
@@ -44,7 +44,7 @@ import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
 import { noHead, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
-import { classify, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { authoredRefusal, classify, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) });
 
@@ -318,8 +318,8 @@ cliRoutes.delete('/api/cli/workspaces/:name', async (c) => {
     await cli.userDO.removeWorkspace(await ownerCaller(c.env), name, cli.userId);
 
     return json({ body: { ok: true } });
-  } catch (e) {
-    return err(400, renderThrownChain({ cause: e }));
+  } catch (cause) {
+    throw authoredRefusal({ doing: 'deleting this workspace', cause, code: 'bad_input' });
   }
 });
 
@@ -369,8 +369,8 @@ cliRoutes.post('/api/cli/workspaces/:name/triggers/webhook', async (c) => {
         rate_limit_per_min: body.rate_limit_per_min,
       }),
     }, { status: 201 });
-  } catch (e) {
-    return err(400, renderThrownChain({ cause: e }));
+  } catch (cause) {
+    throw authoredRefusal({ doing: 'creating this webhook', cause, code: 'bad_input' });
   }
 });
 
@@ -398,7 +398,7 @@ cliRoutes.post('/api/cli/credentials/:key', async (c) => {
   const body = await safeJson(c.req.raw, JsonValueSchema);
 
   try { await cli.userDO.setCredential(await ownerCaller(c.env), c.get('key'), body); }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause, code: 'bad_input' }); }
 
   // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
   notifyWorkspacesCredentialsChanged(c.env, cli.userDO, c.executionCtx);
@@ -410,7 +410,7 @@ cliRoutes.delete('/api/cli/credentials/:key', async (c) => {
   const cli = c.get('cli');
 
   try { await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key')); }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause, code: 'bad_input' }); }
 
   notifyWorkspacesCredentialsChanged(c.env, cli.userDO, c.executionCtx);
 
@@ -471,9 +471,8 @@ async function handleAgentRpc(c: CliContext, name: string): Promise<Response> {
   try {
     const invoke = v.parse(v.function(), agent[rpcMethod]);
     result = await invoke(...args);
-  } catch (e) {
-    // Same contract as a websocket rpc-error frame.
-    return err(400, renderThrownChain({ cause: e }));
+  } catch (cause) {
+    throw authoredRefusal({ doing: `calling ${rpcMethod}`, cause, code: 'bad_input' });
   }
 
   // A failed fold leaves the write answered.
@@ -627,8 +626,11 @@ async function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): 
         'cache-control': 'no-store',
       },
     });
-  } catch (e) {
-    return html('Connect the Kinu CLI', `<p>${escapeHtml(toError({ cause: e }).message)}</p>`, 400);
+  } catch (cause) {
+    const error = authoredRefusal({ doing: 'approving this sign-in', cause, code: 'bad_input' });
+    diagnostics.failure('cli.approval_failed', error);
+
+    return html('Connect the Kinu CLI', `<p>${escapeHtml(publicText(error))}</p>`, 400);
   }
 }
 
@@ -1175,7 +1177,7 @@ function cliAuthError(e: Error): Response {
 
   if (e instanceof CliAuthCodeError) return err(400, e.message);
 
-  return err(500, renderThrownChain({ cause: e }));
+  throw toKinuError({ doing: 'answering a CLI sign-in request', cause: e, otherwise: 'io' });
 }
 
 function accessError(e: Error, request?: Request): Response {
@@ -1194,7 +1196,7 @@ function accessError(e: Error, request?: Request): Response {
     return err(e.status, e.message);
   }
 
-  return err(500, renderThrownChain({ cause: e }));
+  throw toKinuError({ doing: 'approving a CLI sign-in', cause: e, otherwise: 'io' });
 }
 
 function html(title: string, body: string, status = 200, init: ResponseInit = {}): Response {

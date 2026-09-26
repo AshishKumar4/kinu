@@ -745,7 +745,7 @@ describe('cross-user isolation', () => {
     const answer = await control(get(`/users/${USER_ID}`), h.env, identity());
     const detail = await bodyOf(answer);
     expect(detail).toMatchObject({
-      reconcile: { status: 'failed', reason: expect.stringContaining('the user object is evicted') },
+      reconcile: { status: 'failed', reason: expect.not.stringContaining('the user object is evicted') },
     });
     // Nothing tombstoned on a failed read: a failure must not empty the list an operator acts on.
     expect(store.listWorkspaces(h.sql, {}, { userId: USER_ID }).items.map((r) => r.name)).toEqual(['kept']);
@@ -929,8 +929,8 @@ describe('paging over HTTP', () => {
     const h = harness();
     store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
     const answer = await control(get('/users?cursor=forged'), h.env, identity());
-    // A 500, not a silent first page: restarting a walk looks like success and repeats rows.
-    expect(answer?.status).toBe(500);
+    // Refused, not a silent first page: restarting a walk looks like success and repeats rows.
+    expect(answer?.status).toBe(400);
     expect(JSON.stringify(await bodyOf(answer))).toContain('cursor');
     h.close();
   });

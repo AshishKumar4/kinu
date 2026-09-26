@@ -11,7 +11,7 @@ import {
 } from './workspace-create';
 import { err, json, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
-import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { authoredRefusal, diagnostics, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { AccountLedgerTarget } from './account-usage';
 
@@ -60,15 +60,16 @@ export async function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequ
     });
 
     return json({ body: entry }, { status: 201 });
-  } catch (e) {
-    const message = renderThrownChain({ cause: e });
+  } catch (cause) {
+    const error = authoredRefusal({ doing: 'creating this workspace', cause, code: 'bad_input' });
 
-    // workspace-create.ts throws plain Errors; these two messages are conflicts (409), not bad
-    // requests: an unserved provider, and a name held by an unfinished transfer.
-    const conflict = message.startsWith('Cloudflare Workers AI is not connected')
-      || message.startsWith('Workspace name conflict');
+    // Two of workspace-create.ts's refusals are conflicts (409): an unserved provider, and a name held by an unfinished transfer.
+    const conflict = error.message.startsWith('Cloudflare Workers AI is not connected')
+      || error.message.startsWith('Workspace name conflict');
 
-    return err(conflict ? 409 : 400, message);
+    if (conflict) return err(409, error.message);
+
+    throw error;
   }
 }
 

@@ -580,7 +580,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Worker-side DO RPC only, deliberately not `@callable`. `missed` counts failed subtree
    * pushes; the caller reports them to the UserDO so it can arm reconciliation. */
   async installWorkspaceCapability(token: string): Promise<{ ok: true; missed: number }> {
-    if (!token) throw new Error('capability token required');
+    if (!token) throw new KinuError('denied', 'capability token required');
     // A native DO RPC does not route through partyserver, so it can land before `onStart` has run
     // (same race as `OrchestratorAgent.claimOwner`). Flag-gated: a no-op once initialized.
     this.ensureSchema();
@@ -795,7 +795,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected async subordinateView(name: string): Promise<SubordinateView> {
     const entry = this.subordinateRoster.get(name);
 
-    if (entry === null) throw new Error(`Subordinate "${name}" is not in the roster`);
+    if (entry === null) throw new KinuError('missing', `Subordinate "${name}" is not in the roster`);
     const reference = entry.actorReference;
 
     if (reference === null) {
@@ -3413,7 +3413,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected requireOwnerUserDO(): UserHubClient {
     const stub = this.getOwnerUserDO();
 
-    if (!stub) throw new Error('Agent has no owner yet. Open it through the authenticated app or CLI first.');
+    if (!stub) throw new KinuError('unavailable', 'Agent has no owner yet. Open it through the authenticated app or CLI first.');
 
     return stub;
   }
@@ -3423,7 +3423,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const workspaceToken = this.workspaceCapabilityToken();
 
     if (!workspaceToken) {
-      throw new Error('This workspace has not been issued a capability token yet. Open it through the authenticated app or CLI first.');
+      throw new KinuError('unavailable', 'This workspace has not been issued a capability token yet. Open it through the authenticated app or CLI first.');
     }
 
     return { workspaceToken };
@@ -3501,7 +3501,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.workspaceFileAnswer('', async () => {
       const shell = this.rt.shell;
 
-      if (!shell) throw new Error('this workspace has no shell');
+      if (!shell) throw new KinuError('unsupported', 'this workspace has no shell');
 
       return shell.exec(command);
     });
@@ -4584,7 +4584,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const route = resolveModelRoute(source, await this.routingProfile());
 
     if (!route) {
-      throw new Error(`${source} is platform-routed: it has no model in the turn profile`);
+      throw new KinuError('unsupported', `${source} is platform-routed: it has no model in the turn profile`);
     }
 
     return {

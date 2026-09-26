@@ -5,6 +5,7 @@
  */
 import { tolerate } from '../obs/expected-failure';
 import { diagnostics } from '../obs/log';
+import { KinuError } from '../obs/error';
 import * as v from 'valibot';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
 import { WS_OPEN } from './device-hub';
@@ -91,9 +92,9 @@ export class DeviceTerminalHub {
   attach(session: string, server: DeviceSocket): TerminalHolder {
     const pending = this.unattached.get(session);
 
-    if (!pending) throw new Error(TERMINAL_SESSION_UNKNOWN);
+    if (!pending) throw new KinuError('missing', TERMINAL_SESSION_UNKNOWN);
 
-    if (this.paneSocket(session)) throw new Error(TERMINAL_ALREADY_ATTACHED);
+    if (this.paneSocket(session)) throw new KinuError('denied', TERMINAL_ALREADY_ATTACHED);
     this.unattached.delete(session);
     this.ctx.acceptWebSocket(server, [terminalTag(session)]);
     server.serializeAttachment({ terminal: session, device: pending.device, workspace: pending.workspace });

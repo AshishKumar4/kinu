@@ -15,7 +15,7 @@ import {
   WEBHOOK_ROUTE_UNAVAILABLE, type SignedWebhookRoute,
 } from '@kinu.run/core';
 import * as v from 'valibot';
-import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { authoredRefusal, diagnostics, KinuError } from '@kinu.run/core/obs';
 import { rawParam, type FamilyEnv } from '../api/context';
 import { LITERAL_WORKSPACE, type WorkspaceVariables } from '../api/workspace';
 
@@ -180,8 +180,8 @@ async function createTrigger<Bindings extends HubEnv>(c: HubContext<Bindings>): 
 
   try {
     rateLimit = normalizeWebhookRateLimitPerMin(body.rate_limit_per_min);
-  } catch (e) {
-    return err(400, renderThrownChain({ cause: e }));
+  } catch (cause) {
+    throw authoredRefusal({ doing: 'reading rate_limit_per_min', cause, code: 'bad_input' });
   }
 
   try {
@@ -194,8 +194,8 @@ async function createTrigger<Bindings extends HubEnv>(c: HubContext<Bindings>): 
         rate_limit_per_min: rateLimit,
       }),
     }, { status: 201 });
-  } catch (e) {
-    return err(500, renderThrownChain({ cause: e }));
+  } catch (cause) {
+    throw authoredRefusal({ doing: 'creating this webhook', cause, code: 'bad_input' });
   }
 }
 

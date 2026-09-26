@@ -8,6 +8,10 @@ import {
 } from '@kinu.run/core';
 import { handleCreateWorkspaceRequest, type CreateWorkspaceEnv } from '../src/user/workspace-access';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { Hono } from 'hono';
+import type { FamilyEnv } from '../src/api/context';
+import { serveFamily } from './helpers/api';
+import { present } from '@kinu.run/test-utils';
 import { userAccount, workspaceObject } from './helpers/bindings';
 import type { NameOrigin, ReasoningEffort, UserCaller } from '@kinu.run/core';
 
@@ -104,16 +108,15 @@ async function postCreate(
   globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
   try {
-    const response = await handleCreateWorkspaceRequest({
-      request: new Request('https://kinu.run/api/user/workspaces', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      }),
-      env,
-      userId: USER_ID,
-      userDO,
-    });
+    // Served as the app serves it, so a refusal thrown past the handler is answered by the router.
+    const family = new Hono<FamilyEnv<CreateWorkspaceEnv<string>, object>>()
+      .post('/api/user/workspaces', async (c) => handleCreateWorkspaceRequest({ request: c.req.raw, env: c.env, userId: USER_ID, userDO }));
+
+    const response = present(await serveFamily(family)(new Request('https://kinu.run/api/user/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }), env), 'an answer');
 
     const error = response.ok ? null : v.parse(v.object({ error: v.string() }), await response.json()).error;
 

@@ -3,7 +3,6 @@ import { Hono, type ExecutionContext as HonoExecutionContext } from 'hono';
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
 import { healthResponse, REAL_CLOCK, serveApp } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
 import { AuthError, authenticateRequest, crossSiteRejection } from '../auth/session';
 import { authApiRoutes } from '../auth/routes';
 import { CONTROL_PLANE_API_ROUTE } from '../control-plane/access-gate';
@@ -71,10 +70,9 @@ app.use('/api/*', async (c, next) => {
   try {
     identity = await authenticateRequest(c.req.raw, c.env);
   } catch (e) {
-    const status = e instanceof AuthError ? e.status : 500;
-    const message = e instanceof AuthError ? e.message : renderThrownChain({ cause: e });
+    if (!(e instanceof AuthError)) throw e;
 
-    return new Response(JSON.stringify({ error: message }), { status, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify({ error: e.message }), { status: e.status, headers: { 'content-type': 'application/json' } });
   }
 
   const crossSite = crossSiteRejection(c.req.raw);

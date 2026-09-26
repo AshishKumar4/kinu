@@ -384,6 +384,23 @@ browser and workerd engines; no identifier in this repository spells them.
 Classification keys on the names, which are stable. The numeric codes are not
 used.
 
+## What a client reads of a failure
+
+A response body carries a failure's class and a message written for its reader, `{ error, code }`
+(`publicError`, `core/src/http/http.ts`), never its cause chain: a chain holds platform wording, file
+paths and, through a substituted URL or a stored header, secrets. The chain goes to `diagnostics`.
+
+- Every Hono router answers an uncaught throw through `routeError` (`cf-backend/src/api/context.ts`),
+  logged as `http.request_failed`. A thrown `KinuError` keeps its message; anything else gets its
+  class's fixed text (`PUBLIC_MESSAGE`).
+- A `KinuError` whose message repeats the text of a cause no `KinuError` authored gets the fixed text
+  instead (`publicMessage`, `obs/error.ts`). An authored message may name a path or a name; it may not
+  quote a caught error.
+- Across Durable Object RPC a thrown `KinuError` keeps only its message, prefixed `KinuError: `
+  (compat 2025-12-01, measured 2026-09-23). `authoredRefusal({ doing, cause, code })` reads it back as
+  `code`; any other failure there is classified as `doing`. So an object refuses input with a
+  `KinuError`, and a plain `Error` it throws reaches the client as the route's `doing` text.
+
 ## `ReservedLogField`: the compile-time ban
 
 ```ts

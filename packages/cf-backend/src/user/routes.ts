@@ -6,7 +6,7 @@ import { pictureKey, type PictureBucket } from '../slates/pictures';
 import { SlateDirectoryName } from '@kinu.run/core/slates';
 import { PROFILE_CATALOG_CONFIG_KEY } from '@kinu.run/core';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, authoredRefusal, toKinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listAvailableModels, listProviderCatalog, testAvailableModel } from './available-models';
 import { readUserAccountUsage } from './account-usage';
@@ -78,13 +78,8 @@ async function listWorkspaceRoster(c: UserContext): Promise<Response> {
 
   try {
     return json({ body: await c.get('stub').listWorkspaces(c.get('owner'), { cursor, limit, bucket: bucket.output, query }) });
-  } catch (e) {
-    const message = renderThrownChain({ cause: e });
-
-    // Matched by message because the DO RPC boundary carries no error class.
-    // User-do holds this string verbatim as wire contract.
-    if (message.startsWith('Invalid workspace roster cursor')) return err(400, message);
-    throw e;
+  } catch (cause) {
+    throw authoredRefusal({ doing: 'listing your workspaces', cause, code: 'bad_input' });
   }
 }
 
@@ -130,12 +125,8 @@ export async function answerCatalogPut(request: Request, write: CatalogWrite): P
   return err(400, result.reason);
 }
 
-/** A failed MCP read is a 500 naming it. */
 function mcpRead<Body>(read: (stub: UserRoutesAuthority, owner: UserCaller) => Promise<Body>) {
-  return async (c: UserContext): Promise<Response> => {
-    try { return json({ body: await read(c.get('stub'), c.get('owner')) }); }
-    catch (e) { return err(500, renderThrownChain({ cause: e })); }
-  };
+  return async (c: UserContext): Promise<Response> => json({ body: await read(c.get('stub'), c.get('owner')) });
 }
 
 export const userRoutes = new Hono<FamilyEnv<UserRoutesEnv<unknown>, UserVariables>>();
@@ -240,7 +231,7 @@ userRoutes.post('/api/user/workspaces/:name/touch', async (c) => {
 
     return json({ body: { ok: true } });
   }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'recording this workspace visit', cause, code: 'bad_input' }); }
 });
 
 userRoutes.delete('/api/user/workspaces/:name', async (c) => {
@@ -249,7 +240,7 @@ userRoutes.delete('/api/user/workspaces/:name', async (c) => {
 
     return json({ body: { ok: true } });
   }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'deleting this workspace', cause, code: 'bad_input' }); }
 });
 
 userRoutes.get('/api/user/devices', async (c) => json({ body: await c.get('stub').listDevices(c.get('owner')) }));
@@ -275,8 +266,8 @@ userRoutes.delete('/api/user/devices/:id/unstopped', async (c) => {
     if (!result.ok) return err(404, 'No incident matched this revoked device');
 
     return json({ body: { ok: true } });
-  } catch (e) {
-    return err(400, renderThrownChain({ cause: e }));
+  } catch (cause) {
+    throw authoredRefusal({ doing: 'acknowledging this device', cause, code: 'bad_input' });
   }
 });
 
@@ -286,8 +277,8 @@ userRoutes.delete('/api/user/devices/:id', async (c) => {
     const result = await c.get('stub').revokeDevice(c.get('owner'), decodeURIComponent(rawParam(c, 'id')));
 
     return json({ body: result });
-  } catch (e) {
-    return err(400, renderThrownChain({ cause: e }));
+  } catch (cause) {
+    throw authoredRefusal({ doing: 'revoking this device', cause, code: 'bad_input' });
   }
 });
 
@@ -345,7 +336,7 @@ userRoutes.post('/api/user/credentials/:key', async (c) => {
   if (body === null) return err(400, 'Body must be JSON');
 
   try { await c.get('stub').setCredential(c.get('owner'), c.get('key'), body); }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause, code: 'bad_input' }); }
 
   credentialsChanged(c);
 
@@ -354,7 +345,7 @@ userRoutes.post('/api/user/credentials/:key', async (c) => {
 
 userRoutes.delete('/api/user/credentials/:key', async (c) => {
   try { await c.get('stub').deleteCredential(c.get('owner'), c.get('key')); }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause, code: 'bad_input' }); }
 
   credentialsChanged(c);
 
@@ -372,7 +363,7 @@ userRoutes.delete('/api/user/codex', async (c) => {
 
 userRoutes.post('/api/user/codex/start', async (c) => {
   try { return json({ body: await c.get('stub').startCodexDeviceFlow(c.get('owner')) }); }
-  catch (e) { return err(502, renderThrownChain({ cause: e })); }
+  catch (cause) { throw toKinuError({ doing: 'starting the Codex sign-in', cause, otherwise: 'unavailable' }); }
 });
 
 userRoutes.post('/api/user/codex/poll', async (c) => {
@@ -382,7 +373,7 @@ userRoutes.post('/api/user/codex/poll', async (c) => {
     if (status.connected) credentialsChanged(c);
 
     return json({ body: status });
-  } catch (e) { return err(502, renderThrownChain({ cause: e })); }
+  } catch (cause) { throw toKinuError({ doing: 'checking the Codex sign-in', cause, otherwise: 'unavailable' }); }
 });
 
 userRoutes.get('/api/user/config', async (c) => json({ body: await c.get('stub').listConfig(c.get('owner')) }));
@@ -443,7 +434,7 @@ userRoutes.put('/api/user/cloudflare/account', async (c) => {
   if (!body) return err(400, 'id (string) required');
 
   try { await c.get('stub').selectCloudflareAccount(c.get('owner'), body.id); }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'selecting this Cloudflare account', cause, code: 'bad_input' }); }
 
   credentialsChanged(c);
 
@@ -460,7 +451,7 @@ userRoutes.put('/api/user/cloudflare/gateway', async (c) => {
   }
 
   try { await c.get('stub').selectAIGateway(c.get('owner'), body.id); }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'selecting this AI Gateway', cause, code: 'bad_input' }); }
 
   credentialsChanged(c);
 
@@ -477,7 +468,7 @@ userRoutes.post('/api/user/mcp/servers', async (c) => {
   if (body === null) return err(400, 'Body must be JSON');
 
   try { return json({ body: await c.get('stub').userMcp_add(c.get('owner'), body, publicOrigin(c)) }, { status: 201 }); }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'adding this MCP server', cause, code: 'bad_input' }); }
 });
 
 userRoutes.all('/api/user/mcp/servers/:id', async (c, next) => {
@@ -491,7 +482,7 @@ userRoutes.delete('/api/user/mcp/servers/:id', async (c) => {
 
     return json({ body: { ok: true } });
   }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'removing this MCP server', cause, code: 'bad_input' }); }
 });
 
 userRoutes.patch('/api/user/mcp/servers/:id', async (c) => {
@@ -504,7 +495,7 @@ userRoutes.patch('/api/user/mcp/servers/:id', async (c) => {
 
     return json({ body: { ok: true } });
   }
-  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+  catch (cause) { throw authoredRefusal({ doing: 'updating this MCP server', cause, code: 'bad_input' }); }
 });
 
 userRoutes.get('/api/user/mcp/callback', async (c) => {

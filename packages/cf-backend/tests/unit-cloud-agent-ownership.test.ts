@@ -709,7 +709,7 @@ describe('cloud agent ownership safety', () => {
 
       expect(result).toMatchObject({ ok: false, status: 500 });
 
-      if (!result.ok) expect(result.error).toContain('storage unavailable');
+      if (!result.ok) expect(result.error).not.toContain('storage unavailable');
     });
   });
 

@@ -32,8 +32,9 @@ import { claimOwnedWorkspace, type WorkspaceOwnerClaim, type WorkspaceRegistry }
 import type { SessionAuthority } from "./auth/store";
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { renderThrownChain } from '@kinu.run/core/obs';
-import { beneath, type FamilyEnv } from './api/context';
+import { authoredRefusal, diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { publicText } from '@kinu.run/core';
+import { beneath, routeError, type FamilyEnv } from './api/context';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -95,6 +96,15 @@ async function mcpClient(resolveAgent: McpResolver, agentName: string): Promise<
   };
 }
 
+/** A tool's failure as the MCP client reads it: logged with its chain, answered with its class's text. */
+function mcpToolFailure(failure: { tool: string; cause: unknown }): string {
+  const { tool, cause } = failure;
+  const error = authoredRefusal({ doing: `running the MCP tool ${tool}`, cause, code: 'bad_input' });
+  diagnostics.failure('mcp.tool_failed', error, { tool });
+
+  return publicText(error);
+}
+
 function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
   const server = new McpServer({
     name: `kinu-${agentName}`,
@@ -127,7 +137,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
 
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `search_memory error: ${renderThrownChain({ cause: err })}` }] };
+        return { content: [{ type: "text", text: `search_memory error: ${mcpToolFailure({ tool: "search_memory", cause: err })}` }] };
       }
     },
   );
@@ -145,7 +155,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
 
         return { content: [{ type: "text", text: "Note saved." }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `save_note error: ${renderThrownChain({ cause: err })}` }] };
+        return { content: [{ type: "text", text: `save_note error: ${mcpToolFailure({ tool: "save_note", cause: err })}` }] };
       }
     },
   );
@@ -173,7 +183,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
 
         return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_skills error: ${renderThrownChain({ cause: err })}` }] };
+        return { content: [{ type: "text", text: `list_skills error: ${mcpToolFailure({ tool: "list_skills", cause: err })}` }] };
       }
     },
   );
@@ -203,7 +213,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
 
         return { content: [{ type: "text", text: summary }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `run_scaffold_once error: ${renderThrownChain({ cause: err })}` }] };
+        return { content: [{ type: "text", text: `run_scaffold_once error: ${mcpToolFailure({ tool: "run_scaffold_once", cause: err })}` }] };
       }
     },
   );
@@ -221,7 +231,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
 
         return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `get_shadow_status error: ${renderThrownChain({ cause: err })}` }] };
+        return { content: [{ type: "text", text: `get_shadow_status error: ${mcpToolFailure({ tool: "get_shadow_status", cause: err })}` }] };
       }
     },
   );
@@ -249,7 +259,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
 
         return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_runs error: ${renderThrownChain({ cause: err })}` }] };
+        return { content: [{ type: "text", text: `list_runs error: ${mcpToolFailure({ tool: "list_runs", cause: err })}` }] };
       }
     },
   );
@@ -276,7 +286,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
 
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_run_events error: ${renderThrownChain({ cause: err })}` }] };
+        return { content: [{ type: "text", text: `list_run_events error: ${mcpToolFailure({ tool: "list_run_events", cause: err })}` }] };
       }
     },
   );
@@ -304,7 +314,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
 
         return { content: [{ type: "text", text: msg }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `run_task error: ${renderThrownChain({ cause: err })}` }] };
+        return { content: [{ type: "text", text: `run_task error: ${mcpToolFailure({ tool: "run_task", cause: err })}` }] };
       }
     },
   );
@@ -335,7 +345,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
 
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `send_peer error: ${renderThrownChain({ cause: err })}` }] };
+        return { content: [{ type: "text", text: `send_peer error: ${mcpToolFailure({ tool: "send_peer", cause: err })}` }] };
       }
     },
   );
@@ -357,7 +367,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
 
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_peers error: ${renderThrownChain({ cause: err })}` }] };
+        return { content: [{ type: "text", text: `list_peers error: ${mcpToolFailure({ tool: "list_peers", cause: err })}` }] };
       }
     },
   );
@@ -377,7 +387,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
 
         return { contents: [{ uri: uri.href, text: content, mimeType: "text/markdown" }] };
       } catch (err) {
-        return { contents: [{ uri: uri.href, text: `(error: ${renderThrownChain({ cause: err })})`, mimeType: "text/plain" }] };
+        return { contents: [{ uri: uri.href, text: `(error: ${mcpToolFailure({ tool: "memory", cause: err })})`, mimeType: "text/plain" }] };
       }
     },
   );
@@ -417,10 +427,9 @@ async function authenticateMcpCaller<Id>(
   try {
     return { userId: (await authenticateRequest(request, env)).userId };
   } catch (e) {
-    const status = e instanceof AuthError ? e.status : 500;
-    const message = renderThrownChain({ cause: e });
+    if (!(e instanceof AuthError)) throw e;
 
-    return withCors(Response.json({ error: message }, { status }));
+    return withCors(Response.json({ error: e.message }, { status: e.status }));
   }
 }
 
@@ -434,6 +443,8 @@ export function mcpRoutes<Bindings extends McpEnv<unknown>>(
   routes.options('/mcp/v1/*', beneath<FamilyEnv<Bindings, object>>(MCP_PREFIX, async () => new Response(null, { headers: corsHeaders })));
 
   routes.all('/mcp/v1/*', beneath<FamilyEnv<Bindings, object>>(MCP_PREFIX, async (c) => serveMcp(c.req.raw, c.env, resolveAgent(c.env))));
+
+  routes.onError((cause, c) => withCors(routeError(cause, c)));
 
   return routes;
 }
@@ -465,8 +476,8 @@ async function serveMcp<Id>(request: Request, env: McpEnv<Id>, resolveAgent: Mcp
     const resp = await transport.handleRequest(request);
 
     return withCors(resp);
-  } catch (err) {
-    return withCors(Response.json({ error: renderThrownChain({ cause: err }) }, { status: 500 }));
+  } catch (cause) {
+    throw toKinuError({ doing: 'serving an MCP request', cause, otherwise: 'io' });
   }
 }
 

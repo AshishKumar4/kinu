@@ -2178,7 +2178,7 @@ export {
 } from './preview/preview-exposures';
 
 export {
-  err, ERROR_STATUS, escapeHtml, fileResponseHeaders, json,
+  err, ERROR_STATUS, escapeHtml, fileResponseHeaders, json, PUBLIC_MESSAGE, publicError, publicText,
   readBounded, readBoundedStream, reoriginateRequest, requestUrl, safeJson,
 } from './http/http';
 
