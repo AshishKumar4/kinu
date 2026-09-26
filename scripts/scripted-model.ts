@@ -22,7 +22,8 @@ import {
   type ScriptedAnswer, type ScriptedModel, type ScriptedPace, type ScriptedRequest,
 } from './scripted-protocol';
 
-const SCRIPTED_CREDENTIAL = 'openai-compat.default';
+/** The account credential a scripted run's workspaces are served through. */
+export const SCRIPTED_CREDENTIAL = 'openai-compat.default';
 
 /** Wrap a script so the run's FIRST request gets `first` — the caller knows
  *  by construction which turn opens the run (a fresh workspace's create

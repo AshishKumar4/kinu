@@ -868,17 +868,15 @@ fi
 # Worker of this account is fetchable from ours without a service binding or a
 # compatibility flag in production's own config (Workers fetch docs: anything
 # else answers error 1042). Published every run, from this tree, because its
-# script is what the tiers' assertions were written against.
+# script is what the tiers' assertions were written against. That the deployment
+# reaches it is proven by the tier itself, through the deployment's own proxy
+# (scripts/scripted-tier.ts). A check from here cannot: production's
+# `*.kinu.run/*` route answers an outside request for this host before the
+# Custom Domain does.
 echo ""
 echo -e "${BOLD}Step 4a: Publishing the tiers' scripted model${NC}"
 npx wrangler deploy -c scripts/scripted-model-worker.jsonc \
   || { echo -e "${RED}❌ publishing the scripted model Worker failed${NC}"; exit 1; }
-SCRIPTED_MODEL_ORIGIN="$(bun -e "console.log((await import('./packages/test-utils/src/scripted-model-spec')).SCRIPTED_MODEL_ORIGIN)")"
-if ! curl -fsS --max-time 30 "$SCRIPTED_MODEL_ORIGIN/models" | grep -q '"fake-live"'; then
-  echo -e "${RED}❌ $SCRIPTED_MODEL_ORIGIN/models does not list the scripted model${NC}"
-  exit 1
-fi
-echo -e "${GREEN}✅ The scripted model answers at $SCRIPTED_MODEL_ORIGIN${NC}"
 
 # ── Step 4b: The post-publish tiers ─────────────────────────────────────────
 #

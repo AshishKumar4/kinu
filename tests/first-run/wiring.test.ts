@@ -45,7 +45,7 @@ case "$1" in
   scripts/bench-retention.ts) mkdir -p "$REPORT_FIXTURE"; printf '%s\\n' "$REPORT_FIXTURE" ;;
   scripts/eval-session-mint.ts) ;;
   scripts/eval-credentials.ts) printf '%s\\n' 'https://kinu.run' 'fixture-token' ;;
-  scripts/scripted-tier.ts) shift; printf '%s\\n' "$*" >> "$REPORT_FIXTURE/scripted" ;;
+  scripts/scripted-tier.ts) shift; printf '%s %s\\n' "$*" "$KINU_TOKEN" >> "$REPORT_FIXTURE/scripted" ;;
   --bun) project="$(printf '%s\\n' "$@" | grep -A1 -x -- --project | tail -1)"
     printf '%s\\n' "$project" >> "$REPORT_FIXTURE/projects"
     printf 'measured-spend\\n' >> "$KINU_EVAL_SPEND_FILE"
@@ -62,8 +62,9 @@ esac
   });
 
   expect(run.status).toBe(42);
-  // Both accounts the cases act as run on the scripted model.
-  expect(readFileSync(join(reports, 'scripted'), 'utf8')).toBe('https://kinu.run scripted devices\n');
+  // Both accounts the cases act as run on the scripted model, each put there with its own bearer.
+  expect(readFileSync(join(reports, 'scripted'), 'utf8').trim().split('\n').sort())
+    .toEqual(['https://kinu.run devices fixture-token', 'https://kinu.run scripted fixture-token']);
   expect(readFileSync(join(reports, 'projects'), 'utf8').trim().split('\n').sort()).toEqual(['first-run-cases', 'first-run-fleet']);
   expect(readFileSync(join(reports, 'spend-first-run.jsonl'), 'utf8')).toBe('measured-spend\nmeasured-spend\n');
   expect(readFileSync(join(reports, 'spend-reported'), 'utf8')).toBe('reported\n');

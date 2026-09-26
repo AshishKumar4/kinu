@@ -123,7 +123,8 @@ if [[ ${#CASES_RESOLVED[@]} -ne 2 || "${CASES_RESOLVED[0]}" != "$KINU_ORIGIN" ]]
   exit 1
 fi
 CASES_TOKEN="${CASES_RESOLVED[1]}"
-bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$CASES_ACCOUNT" "$FLEET_ACCOUNT" || exit 1
+KINU_TOKEN=$CASES_TOKEN bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$CASES_ACCOUNT" || exit 1
+KINU_TOKEN=$FLEET_TOKEN bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$FLEET_ACCOUNT" || exit 1
 
 echo "── first-run tier ────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN"

@@ -106,14 +106,16 @@ const backgroundSettle: Script = (request) => latest(request) !== SETTLE_ASK ? n
     : `The command is still running in the background as ${job}; I will report what it prints when it finishes.`;
 });
 
-/** A background job's wake: its result read with `agent.jobResult`, then reported. */
+/** A background job's wake: the `result` it stored, read with `agent.jobResult`, then reported. Only that field: the
+ *  record's `label` repeats the command, marker and all, so a reply built from the whole record would carry the marker
+ *  even when the product had lost the command's output. */
 const jobWake: Script = (request) => {
   const job = /^Background \w+ job (bgjob-[\w-]+) completed/.exec(latest(request))?.[1];
 
   if (job === undefined) return null;
 
   return steps(request, [
-    call('eval', { code: `// Read the finished job's result\nreturn await agent.jobResult('${job}');` }),
+    call('eval', { code: `// Read the finished job's stored result\nreturn (await agent.jobResult('${job}'))?.result ?? null;` }),
   ], ([read]) => `The job finished: ${oneLine(read?.result)}`);
 };
 
