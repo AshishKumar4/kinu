@@ -34,9 +34,10 @@ export const GATE = 'worker-heap';
 /** 48.9 MB measured (header), plus room for the product to grow before this row asks why. */
 export const HEAP_AFTER_SETUP_BOUND_BYTES = 56_000_000;
 
-/** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step, 7.3 MB once the Workers AI
- *  fetch read the request text in place of a Request copy and a validating parse of the whole tree. */
-export const STEP_LIVE_BOUND_BYTES = 8_000_000;
+/** Measured 2026-09-26 at {@link STEP} (2.4 MB of answers): 9.8 MB live in the parked step; 7.3 MB once the Workers
+ *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8
+ *  keeps the request JSON one byte per character. */
+export const STEP_LIVE_BOUND_BYTES = 5_500_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request. */
 export const IDLE_RETAINED_BOUND_BYTES = 14_500_000;
@@ -214,6 +215,8 @@ export interface HeapMeasurement {
   readonly stepLive: number;
   /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup. */
   readonly idleRetained: number;
+  /** Each character above U+00FF in the requests, with the text before it; the scripted turns write none. */
+  readonly wide: readonly string[];
 }
 
 export async function measure(): Promise<HeapMeasurement> {
@@ -269,7 +272,7 @@ export async function measure(): Promise<HeapMeasurement> {
       const idle = await inspector.liveHeap();
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`);
       const parked = ask('/turn?workspace=heap&text=parked');
-      const waiting = v.object({ parked: v.number() });
+      const waiting = v.object({ parked: v.number(), wide: v.array(v.string()) });
 
       // Each poll is a request to the driver, which answers only once the product's model call is parked.
       while (v.parse(waiting, JSON.parse(await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`))).parked === 0) {
@@ -277,10 +280,11 @@ export async function measure(): Promise<HeapMeasurement> {
       }
 
       const during = await inspector.liveHeap();
+      const { wide } = v.parse(waiting, JSON.parse(await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`)));
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
       await parked;
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp };
+      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, wide };
     } finally {
       inspector.close();
     }
@@ -329,6 +333,9 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`a parked step holds ${mb(measured.stepLive)} live at ${transcript()}, over ${mb(STEP_LIVE_BOUND_BYTES)}`);
   }
 
+  // Our own prompt, tool and skill text: the owner's and the model's text may still carry such characters.
+  for (const context of measured.wide) findings.push(`the request carries a character above U+00FF, so V8 keeps it two bytes each: ${JSON.stringify(context)}`);
+
   if (measured.idleRetained > IDLE_RETAINED_BOUND_BYTES) {
     findings.push(`the idle workspace holds ${mb(measured.idleRetained)} after ${transcript()}, over ${mb(IDLE_RETAINED_BOUND_BYTES)}`);
   }
@@ -342,7 +349,7 @@ async function main(args: readonly string[]): Promise<number> {
   }
 
   console.log(`${GATE}: ok — ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
-    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them; no wasm on the static graph, every module ASCII`);
+    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them; no wasm on the static graph, every module ASCII, every request Latin-1`);
   console.log('  blind: copies made and dropped within a step (garbage between collections), transcripts shaped unlike this one, and memory outside V8 (compiled wasm, SQLite pages)');
 
   return 0;

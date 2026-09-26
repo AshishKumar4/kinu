@@ -47,14 +47,18 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0 };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>() };
 
 /** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
 export class ScriptedAI extends WorkerEntrypoint {
-  async run(_model: string, inputs: { readonly stream?: boolean }): Promise<Response> {
+  async run(_model: string, inputs: { readonly stream?: boolean; readonly messages?: readonly object[] }): Promise<Response> {
     model.calls += 1;
 
     if (inputs.stream !== true) return Response.json({ response: '{"upserts":[],"decay":[]}' });
+    const request = JSON.stringify(inputs);
+
+    // Each character above U+00FF, with the text before it: one of them stores the whole request two bytes each.
+    for (const match of request.matchAll(/[\u{100}-\u{10ffff}]/gu)) model.wide.add(request.slice(Math.max(0, match.index - 48), match.index + 1));
     model.parked += 1;
 
     // A timer is I/O to the runtime; a bare pending promise would be cancelled as a hung request.
@@ -81,7 +85,7 @@ export default {
       model.answerBytes = Number(url.searchParams.get('answerBytes') ?? model.answerBytes);
       model.holding = url.searchParams.get('holding') === '1';
 
-      return Response.json({ parked: model.parked, calls: model.calls });
+      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide] });
     }
 
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');

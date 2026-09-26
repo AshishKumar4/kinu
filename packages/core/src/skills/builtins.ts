@@ -8,7 +8,7 @@ import type { ParsedSkill } from './types';
 
 const AUDIT_IMPLEMENTATION_SRC = `---
 name: audit-implementation
-description: Multi-head audit of your own recent implementation — correctness, security, ergonomics.
+description: Multi-head audit of your own recent implementation: correctness, security, ergonomics.
 allowed-tools:
   - agents
   - memory
@@ -16,7 +16,7 @@ allowed-tools:
 
 # Audit your implementation
 
-You just shipped something — code, a refactor, a design — and want a
+You just shipped something (code, a refactor, a design) and want a
 second opinion using the same search you use to explore problems. This
 skill runs that audit.
 
@@ -30,30 +30,30 @@ skill runs that audit.
    \`ideate\` returns; the nodes write their own angles from \`task\`, so name the
    angles you want covered IN the task rather than as per-node briefs:
 
-   - **correctness** — does the implementation match the stated
+   - **correctness**: does the implementation match the stated
      intent? Bugs, missing edge cases, unhandled errors, broken
      invariants? Walk every changed function.
-   - **security** — threat-model anything that crosses a trust boundary
+   - **security**: threat-model anything that crosses a trust boundary
      in the change (user input, external API responses, file paths,
      shell args, deserialized payloads). Name attacks, then check
      whether the change prevents them.
-   - **ergonomics / UX** — does the change leave the user with an
+   - **ergonomics / UX**: does the change leave the user with an
      interface that's discoverable and hard to misuse? For backend
      work: is the error path as good as the happy path? Does logging
      surface what the operator needs?
-   - **simplicity** (optional, fourth angle) — is there code that doesn't
+   - **simplicity** (optional, fourth angle): is there code that doesn't
      earn its keep? Parallel paths? Compatibility shims? Apply the
      deletion test: would removing this and inlining the callsites
      produce clearer code?
 
-3. Each node reports as evidence + a graded finding (P0–P3 or none-found), and
+3. Each node reports as evidence + a graded finding (P0 to P3 or none-found), and
    the settled set comes back unranked. Synthesise it yourself into:
 
    - the top three findings ranked by severity
    - a one-line "ship / fix-first / abort" verdict
    - the smallest concrete change list that addresses every P0 + P1
 
-4. If any P0 surfaces, do not claim the work is done — fix it before
+4. If any P0 surfaces, do not claim the work is done; fix it before
    the next step. If everything is P2 or below, note them and proceed.
 
 ## Output
@@ -65,7 +65,7 @@ a recap of what you implemented.
 
 const SLATES_SRC = `---
 name: slates
-description: Build a slate — a small live app with a server class and a React client — for any app, game, dashboard, form or other interface a user asks for. Read this before writing one.
+description: Build a slate, a small live app with a server class and a React client, for any app, game, dashboard, form or other interface a user asks for. Read this before writing one.
 ---
 
 # Slates
@@ -154,9 +154,9 @@ Neither side reaches the network. The server reaches the world only through bind
 
 A binding is a capability of YOURS handed to the slate under a name in \`slate.bindings\`; the server calls it as \`this.env.NAME.member(...)\`. Each call runs with your reach at that moment, gated as your own call would be. Call bindings from inside methods: a binding called from the constructor or from module top level is refused, because there is no request to run it under. \`this.storage\` has no such rule.
 
-- \`{ "kind": "agent" }\` — \`env.agent.send({ text, data? })\` puts a message in your inbox as an event of kind \`slate\`. This is the one way a slate reaches you; use it when a user acts and you should react.
-- \`{ "kind": "ai", "tier"?: "<tier>" }\` — \`env.ai.run({ prompt, system?, tier? })\` runs one model call through your catalog and tiers and answers \`{ text, model, tier, usage }\`. A binding that declares a tier is pinned to it.
-- \`{ "kind": "namespace", "namespace": "workspace", "paths": ["/home/main/data"] }\` — \`readFile\`, \`writeFile\`, \`editFile\`, \`readdir\`, \`exists\` under those prefixes only. Without \`paths\`, the whole namespace with all its members.
+- \`{ "kind": "agent" }\`: \`env.agent.send({ text, data? })\` puts a message in your inbox as an event of kind \`slate\`. This is the one way a slate reaches you; use it when a user acts and you should react.
+- \`{ "kind": "ai", "tier"?: "<tier>" }\`: \`env.ai.run({ prompt, system?, tier? })\` runs one model call through your catalog and tiers and answers \`{ text, model, tier, usage }\`. A binding that declares a tier is pinned to it.
+- \`{ "kind": "namespace", "namespace": "workspace", "paths": ["/home/main/data"] }\`: \`readFile\`, \`writeFile\`, \`editFile\`, \`readdir\`, \`exists\` under those prefixes only. Without \`paths\`, the whole namespace with all its members.
 - \`{ "kind": "memory" | "tasks" | "web" }\`, \`{ "kind": "tool", "name": "file" }\`, \`{ "kind": "mcp", "server": "..." }\`, \`{ "kind": "rpc", "methods": [...] }\` for read models, \`{ "kind": "app", "id": "<other slate>" }\` to call another slate's methods.
 
 A slate cannot bind \`agents\` or \`eval\`; it never delegates or steers you.

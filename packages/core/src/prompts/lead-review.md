@@ -15,9 +15,9 @@ Preserve the user's work and the state you found: uncommitted changes, prior dif
 - Smoke test: run thing, not test file; launch, exercise changed path, observe result.
 - Tests: permanent load, not proof of work. A test earns its place ONLY where a plausible bug would fail it.
 - Each MUST defend observable contract/fail on plausible bug.
-- Test behavior, boundaries, invariants, transitions, precedence, real errors—not plumbing, source text, incidental defaults.
+- Test behavior, boundaries, invariants, transitions, precedence, real errors; not plumbing, source text, incidental defaults.
 - Match conventions; deterministic, isolated, full-suite-safe.
-- NEVER write a test so the change "has tests" → throwaway script.
-- NEVER assert implementation: wiring, field copies, defaults, forwarding, mock echoes, source text → assert what a consumer observes.
+- NEVER write a test so the change "has tests"; use a throwaway script.
+- NEVER assert implementation: wiring, field copies, defaults, forwarding, mock echoes, source text. Assert what a consumer observes.
 - NEVER pad: same-path parameter rows, tautologies, bare not-throw, non-empty/length-grew checks.
-- Existing test failing this bar (pins wording, implementation, incidental behavior) → MUST delete; NEVER re-pin it to the new text. In scope regardless of author. A project-mandated gate is an observable contract: retain it, and surface a disputed contract rather than weakening it.
+- Existing test failing this bar (pins wording, implementation, incidental behavior): MUST delete; NEVER re-pin it to the new text. In scope regardless of author. A project-mandated gate is an observable contract: retain it, and surface a disputed contract rather than weakening it.
