@@ -34,7 +34,7 @@ WRANGLER = (REPO_ROOT / "packages/cf-backend/wrangler.jsonc").read_text(encoding
 
 class ModelEndpointTest(unittest.TestCase):
     def test_the_default_endpoint_is_the_deployment(self) -> None:
-        """Single environment: the default names the deployment itself."""
+        """The default names production, the eval target a run gets unless it names staging."""
         self.assertEqual(
             DEFAULT_WORKERS_AI_MODEL_ID,
             "@cf/zai-org/glm-5.3",
