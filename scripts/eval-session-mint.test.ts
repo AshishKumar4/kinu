@@ -2,7 +2,7 @@ import { scratchDir } from '../packages/test-utils/src/scratch';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER } from '@kinu.run/core';
 
 /** A deployment that runs the device flow and approves it only for one secret. `honorsAccount`: it resolves a
@@ -81,10 +81,14 @@ async function runScript(script: string, env: Record<string, string>, home: stri
 
 const mint = async (env: Record<string, string>, home: string) => runScript('scripts/eval-session-mint.ts', env, home);
 
+/** Where the mint keeps `origin`'s bearer for `account` under `home`. */
+const sessionPath = (home: string, origin: string, account?: string): string =>
+  join(home, '.config/kinu/eval-session', new URL(origin).host, ...(account === undefined ? [] : [account]), 'config.json');
+
 /** The `devices` eval account's bearer, as a mint that did not check its user kept it. */
 function keptDevicesBearer(home: string, origin: string, email: string): string {
-  const dir = join(home, '.config/kinu/eval-session/devices');
-  const path = join(dir, 'config.json');
+  const path = sessionPath(home, origin, 'devices');
+  const dir = dirname(path);
 
   mkdirSync(dir, { recursive: true });
   writeFileSync(path, JSON.stringify({ origin, accessToken: 'pta_shared', user: { id: 'u', email } }), { mode: 0o600 });
@@ -104,7 +108,7 @@ describe('the eval-session mint', () => {
     const home = scratchDir('mint');
     const run = await mint({ KINU_EVAL_ORIGIN: d.origin, KINU_EVAL_WEB_IDENTITY: 's3cret' }, home);
     expect(run.exitCode).toBe(0);
-    const path = join(home, '.config/kinu/eval-session/config.json');
+    const path = sessionPath(home, d.origin);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ origin: d.origin, accessToken: 'pta_minted' });
     expect(d.seen).toEqual(['POST /api/cli/auth/start', 'GET /cli/auth', 'POST /cli/auth', 'POST /api/cli/auth/poll']);
@@ -117,21 +121,23 @@ describe('the eval-session mint', () => {
     const run = await mint({ KINU_EVAL_ORIGIN: d.origin, KINU_EVAL_WEB_IDENTITY: 'guess' }, home);
     expect(run.exitCode).toBe(1);
     expect(run.stderr).toContain('refused the approval page (401)');
-    expect(existsSync(join(home, '.config/kinu/eval-session/config.json'))).toBe(false);
+    expect(existsSync(sessionPath(home, d.origin))).toBe(false);
   });
 
-  test('a persisted session for another deployment is never overwritten', async () => {
-    const d = deployment('s3cret');
-    stops.push(d.stop);
+  test('each deployment keeps its own session: minting a second leaves the first\'s in place', async () => {
+    // A staging deployment beside production: with one file for both, the second mint was refused.
+    const [first, second] = [deployment('s3cret'), deployment('s3cret')];
+    stops.push(first.stop, second.stop);
     const home = scratchDir('mint');
-    const path = join(home, '.config/kinu/eval-session/config.json');
-    mkdirSync(join(home, '.config/kinu/eval-session'), { recursive: true });
-    writeFileSync(path, JSON.stringify({ origin: 'http://127.0.0.1:9', accessToken: 'pta_other' }));
-    const run = await mint({ KINU_EVAL_ORIGIN: d.origin, KINU_EVAL_WEB_IDENTITY: 's3cret' }, home);
-    expect(run.exitCode).toBe(1);
-    expect(run.stderr).toContain('move it aside');
-    expect(JSON.parse(readFileSync(path, 'utf8')).accessToken).toBe('pta_other');
-    expect(d.seen).toEqual([]);
+
+    for (const d of [first, second]) {
+      expect((await mint({ KINU_EVAL_ORIGIN: d.origin, KINU_EVAL_WEB_IDENTITY: 's3cret' }, home)).exitCode).toBe(0);
+    }
+
+    for (const d of [first, second]) {
+      expect((await runScript('scripts/eval-credentials.ts', { KINU_EVAL_ORIGIN: d.origin }, home)).stdout)
+        .toBe(`${d.origin}\npta_minted\n`);
+    }
   });
 
   // 2026-09-24: a build older than the account header resolves the devices account's secret to the eval service
@@ -144,7 +150,7 @@ describe('the eval-session mint', () => {
 
     expect(run.exitCode).toBe(1);
     expect(run.stderr).toContain("eval-service@kinu.run's, not the devices eval account's");
-    expect(existsSync(join(home, '.config/kinu/eval-session/devices/config.json'))).toBe(false);
+    expect(existsSync(sessionPath(home, d.origin, 'devices'))).toBe(false);
     expect(d.seen).not.toContain('POST /api/user/onboarding/complete');
   });
 
@@ -155,7 +161,7 @@ describe('the eval-session mint', () => {
     const run = await mint({ KINU_EVAL_ORIGIN: d.origin, KINU_EVAL_WEB_IDENTITY: 's3cret', KINU_EVAL_ACCOUNT: 'devices' }, home);
 
     expect(run.exitCode).toBe(0);
-    expect(JSON.parse(readFileSync(join(home, '.config/kinu/eval-session/devices/config.json'), 'utf8')))
+    expect(JSON.parse(readFileSync(sessionPath(home, d.origin, 'devices'), 'utf8')))
       .toMatchObject({ accessToken: 'pta_minted', user: { email: 'eval-service+devices@kinu.run' } });
     expect(d.seen).toContain('POST /api/user/onboarding/complete');
   });

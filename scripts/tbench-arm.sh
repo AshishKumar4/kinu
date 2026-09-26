@@ -86,7 +86,7 @@ if [ ! -r "$EVAL_TOKEN_FILE" ]; then
   echo "REFUSING: no eval-service credential at $EVAL_TOKEN_FILE." >&2
   echo "Mint one and write its accessToken there:" >&2
   echo "  KINU_EVAL_WEB_IDENTITY=... bun scripts/eval-session-mint.ts" >&2
-  echo "  (writes ~/.config/kinu/eval-session/config.json)" >&2
+  echo "  (writes ~/.config/kinu/eval-session/kinu.run/config.json)" >&2
   exit 2
 fi
 KINU_EVAL_TOKEN="$(cat "$EVAL_TOKEN_FILE")"

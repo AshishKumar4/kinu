@@ -35,6 +35,12 @@ describe('redact', () => {
     expect(redact(`${encodeURIComponent(BASE64_SECRET)}`, heldSecrets({ KINU_EVAL_WEB_IDENTITY: BASE64_SECRET }))).toBe('<secret>');
   });
 
+  test('both deployments\' credentials are held, so a staging run scrubs staging\'s', () => {
+    const held = heldSecrets({ KINU_EVAL_WEB_IDENTITY: SHORT_SECRET, KINU_EVAL_STAGING_WEB_IDENTITY: BASE64_SECRET });
+
+    expect(redact(`${SHORT_SECRET} then ${BASE64_SECRET}`, held)).toBe('<secret> then <secret>');
+  });
+
   test('no credential held, or one too short to be one, scrubs nothing by value', () => {
     expect(heldSecrets({})).toEqual([]);
     expect(heldSecrets({ KINU_EVAL_WEB_IDENTITY: 'abc' })).toEqual([]);

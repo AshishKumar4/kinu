@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Kinu deploy pipeline — THE deploy path. One environment, https://kinu.run.
-#   bun run deploy
+# Kinu deploy pipeline — THE deploy path. Every deploy lands on staging,
+# https://staging.kinu.run, and production, https://kinu.run, gets only a build
+# staging verified.
+#   bun run deploy              staging: every gate, the build, the tiers, the record
+#   bun run deploy --promote    production: HEAD's build, as staging verified it
+#   bun run deploy --rollback   production: back to the build it took before
 #
 # Deploying any other way is how production once shipped without the CLI
 # download assets: the site was fine, but /downloads/* answered with the SPA
@@ -8,10 +12,12 @@
 # optional. The gate below is what makes the difference between "the Worker
 # uploaded" and "the product works".
 #
-# Deploys the cf-backend Worker (name "kinu") with the @cloudflare/sandbox
-# Sandbox DO + Container binding and the local-device executor routes.
-# Pipeline: strict repository gates → vite build → CLI source archive →
-# wrangler deploy → smoke test.
+# Deploys the cf-backend Worker (`kinu-staging`, or `kinu` under `--promote`)
+# with the @cloudflare/sandbox Sandbox DO + Container binding and the
+# local-device executor routes. Pipeline: strict repository gates → vite build
+# → CLI source archive → wrangler deploy → smoke test → post-deploy tiers → the
+# record. Promotion: the record → vite build → staging's downloads → wrangler
+# deploy → smoke test → post-deploy tiers.
 #
 # Where the static assets come from (settled by reading wrangler 4.97 source +
 # `wrangler deploy --dry-run`, 2026-08-07):
@@ -27,8 +33,24 @@
 # Step 3 asserts this from wrangler's own output rather than trusting it.
 #
 # Usage:
-#   bun run deploy
-#   bash scripts/deploy.sh [--bootstrap] [--gates-only] [--all]
+#   bun run deploy [--promote | --rollback]
+#   bash scripts/deploy.sh [--promote] [--bootstrap] [--gates-only] [--all]
+#   bash scripts/deploy.sh --rollback
+#
+# `--promote` deploys production, and only the build staging verified: the
+# record staging's green deploy of HEAD wrote (scripts/promote.ts) stands for
+# the source gates, so none runs. It builds production's config at HEAD,
+# refuses a build whose artifact is not the one staging ran, and publishes
+# the downloads and worker release tarball that green run published, each
+# checked by its hash. The account gate still runs first, for production's
+# resources, and so does everything after the upload. A staging deploy
+# withdraws HEAD's record before it builds, so a promotion never takes what a
+# staging deploy under way, or red, left there.
+#
+# `--rollback` returns production to the newest build it took before the one it
+# serves, a build a rollback left never again, and proves production then serves
+# that build's downloads byte for byte. It runs no gate and builds nothing: it
+# undoes a promotion whatever the tree holds.
 #
 # `--bootstrap` is for the deploy that DECLARES something only a deploy can
 # create — a Durable Object class new to `migrations`, a new container, a new
@@ -52,14 +74,9 @@ cd "$KINU_ROOT" || { echo -e "${RED}Cannot cd to Kinu root${NC}"; exit 1; }
 
 export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-f44999d1ddda7012e9a87729eba250f1}"
 
-# ── The one environment ──────────────────────────────────────────────────────
-#
-# There is no staging. The product has no external users, so the deployed
-# worker IS the test target: every gate below, the first-run tier included,
-# drives https://kinu.run. The landing carries the app behind auth, so the
-# smoke marker is one value.
+# The landing carries the app behind auth in both environments, so the smoke
+# marker is one value.
 KINU_APP_ROOT="landing-root"
-KINU_URL="https://kinu.run/"
 KINU_WRANGLER_ARGS=()
 
 # ── Bootstrap, or not ─────────────────────────────────────────
@@ -95,18 +112,32 @@ KINU_GATES_ONLY=0
 # finding — and still lets every running gate finish and report. Neither
 # changes what a red means: a deploy with any red gate publishes nothing.
 KINU_GATES_ALL=0
+# `--promote` is on the argv only, like `--gates-only`: no ambient variable can
+# turn a staging deploy into a production one.
+KINU_PROMOTE=0
+KINU_ROLLBACK=0
 for option in "$@"; do
   case "$option" in
+    --promote) KINU_PROMOTE=1 ;;
+    --rollback) KINU_ROLLBACK=1 ;;
     --bootstrap) KINU_BOOTSTRAP=1 ;;
     --gates-only) KINU_GATES_ONLY=1 ;;
     --all) KINU_GATES_ALL=1 ;;
     *)
       echo -e "${RED}Unknown option '$option'.${NC}"
-      echo "Usage: scripts/deploy.sh [--bootstrap] [--gates-only] [--all]"
+      echo "Usage: scripts/deploy.sh [--promote] [--bootstrap] [--gates-only] [--all] | --rollback"
       exit 2
       ;;
   esac
 done
+unset CLOUDFLARE_ENV
+if [ "$KINU_ROLLBACK" = "1" ]; then
+  if [ "$#" -ne 1 ]; then
+    echo -e "${RED}--rollback takes no other option.${NC}"
+    exit 2
+  fi
+  exec bun "$KINU_ROOT/scripts/promote.ts" rollback
+fi
 # The pre-deploy phase, read by scripts/infra-verify.ts, travels in the
 # environment so the `bun run gate:infra` line below stays one string for
 # scripts/ladder.ts to parse.
@@ -119,7 +150,29 @@ if [ "$KINU_BOOTSTRAP" = "1" ]; then
 else
   export KINU_INFRA_PHASE="full"
 fi
-unset CLOUDFLARE_ENV
+
+# ── The two environments ─────────────────────────────────────────────────────
+#
+# STAGING is where a deploy lands: `kinu-staging`, wrangler.jsonc's
+# `env.staging`, with its own Durable Objects, stores and secrets, so the tiers
+# below write nothing a user owns. PRODUCTION takes a build only through
+# `--promote`. The Vite plugin fixes the environment into the build
+# (`CLOUDFLARE_ENV`; Cloudflare Vite plugin docs, "Cloudflare Environments"),
+# and `wrangler deploy` publishes the Worker that build names. So the Worker
+# and origin below are READ from the build, and step 2 refuses a build of any
+# other environment.
+if [ "$KINU_PROMOTE" = "1" ]; then
+  KINU_ENV="production"
+else
+  KINU_ENV="staging"
+fi
+# The environment `gate:infra` checks before the upload and step 5 after it,
+# beside the command like the phase, and ALWAYS ASSIGNED for the same reason:
+# an ambient value must never point a staging deploy's account check at
+# production's resources.
+export KINU_INFRA_ENVIRONMENT="$KINU_ENV"
+KINU_WORKER=""
+KINU_URL=""
 
 # Captured during deploy for final summary
 KINU_VERSION=""
@@ -137,12 +190,17 @@ KINU_SHA="$(git -C "$KINU_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
 # produced it is somebody's terminal scrollback. Afterwards the pair is readable
 # from `npx wrangler versions list`, and /api/health reports the same sha back out
 # of the asset bundle — which is the other half of the same join.
-KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu production $KINU_SHA")
+KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu $KINU_ENV $KINU_SHA")
 
-# Temp log file — trap cleans up on any exit.
+# Temp log file — trap cleans up on any exit. A promotion that fails after its
+# upload leaves production serving the red build, and says how to undo it.
 KINU_DEPLOY_LOG=""
 cleanup() {
+  local status=$?
   [ -n "$KINU_DEPLOY_LOG" ] && rm -f "$KINU_DEPLOY_LOG"
+  if [ "$status" -ne 0 ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ "$KINU_PROMOTE" = "1" ]; then
+    echo -e "${RED}Production serves this red promotion. Return it to the build it took before: bun run deploy --rollback${NC}"
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -521,8 +579,7 @@ flush_gates() {
 
 echo -e "${BOLD}Kinu Deploy Pipeline${NC}"
 echo "========================"
-echo "Environment:  production"
-echo "Target:       $KINU_URL"
+echo "Environment:  $KINU_ENV"
 echo "Kinu root: $KINU_ROOT"
 echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
 echo "Build sha:    $KINU_SHA"
@@ -580,22 +637,29 @@ if [ "$KINU_BOOTSTRAP" = "1" ]; then
   echo "            anything deferred did not appear."
 fi
 
-# The source wave: every gate the plan marks `source`, concurrent under the
-# thread budget, unconditional. No environment variable may skip one when this
-# production deploy path is running; a gate that should not be here leaves the
-# ladder, never this script.
-run_phase source
+if [ "$KINU_PROMOTE" = "1" ]; then
+  # THE RECORD IS THE SOURCE GATE. Staging's deploy of HEAD wrote it after every
+  # gate, the upload and every post-deploy tier passed there, and staging must
+  # still be serving that build. Without both, nothing is built.
+  bun "$KINU_ROOT/scripts/promote.ts" check \
+    || { echo -e "${RED}❌ staging has not verified $KINU_SHA; deploy it to staging first.${NC}"; exit 1; }
+else
+  # The source wave: every gate the plan marks `source`, concurrent under the
+  # thread budget, unconditional. No environment variable may skip one; a gate
+  # that should not be here leaves the ladder, never this script.
+  run_phase source
 
-# ALONE, and deliberately so: the hammer's SUBJECT is contention. It saturates
-# half the machine's threads on purpose, so a gate running beside it would fail
-# for a reason unrelated to the change under test. Its row says so.
-run_phase hammer
-
+  # ALONE, and deliberately so: the hammer's SUBJECT is contention. It saturates
+  # half the machine's threads on purpose, so a gate running beside it would fail
+  # for a reason unrelated to the change under test. Its row says so.
+  run_phase hammer
+fi
 
 # Alone, and last before the build. Everything above proves the SOURCE is
-# deployable; this proves the ACCOUNT is, in the phase KINU_INFRA_PHASE names
-# (`full` normally, `bootstrap` under `--bootstrap`), travelling in the
-# environment so the gate's command stays one string in the plan.
+# deployable; this proves the ACCOUNT is, for the environment and in the phase
+# KINU_INFRA_ENVIRONMENT and KINU_INFRA_PHASE name (`full` normally,
+# `bootstrap` under `--bootstrap`), travelling in the environment so the gate's
+# command stays one string in the plan.
 run_phase infra
 
 # The agent tiers run AFTER the publish, in Step 4b — where first-run already
@@ -612,35 +676,78 @@ fi
 
 # ── Step 2: Build Kinu ────────────────────────────────────────
 echo ""
-echo -e "${BOLD}Step 2: Building Kinu${NC}"
-cd "$KINU_ROOT/packages/cf-backend" || { echo -e "${RED}cannot cd to cf-backend${NC}"; exit 1; }
+echo -e "${BOLD}Step 2: Building Kinu for $KINU_ENV${NC}"
 
-# Build the client bundle into dist/client (used by wrangler's assets directive).
-if [ -f ./node_modules/.bin/vite ]; then
-  echo "Running: vite build"
-  ./node_modules/.bin/vite build || { echo -e "${RED}vite build failed${NC}"; exit 1; }
-else
-  echo "Running: bunx vite build"
-  bunx vite build || { echo -e "${RED}vite build failed${NC}"; exit 1; }
+# A staging deploy is about to replace what staging serves for HEAD, so HEAD's
+# record goes first: until this run's tiers pass and write it again, nothing it
+# publishes, and nothing a red run of it leaves behind, can be promoted.
+if [ "$KINU_ENV" = "staging" ]; then
+  bun "$KINU_ROOT/scripts/promote.ts" forget \
+    || { echo -e "${RED}❌ $KINU_SHA's record on staging could not be withdrawn, so this deploy will not replace what it verified${NC}"; exit 1; }
 fi
 
-# The worker release artifact, BEFORE the CLI distribution: `build-cli-dist.sh`
-# signs every artifact it finds in the downloads directory, so writing this one
-# first is what puts its checksum in `kinu-version.json` beside the CLI's. The
-# self-deploy flow reads `release.json` and verifies the tarball against the
-# `.sha256` published beside it, which is integrity and not a signature; the
-# smoke check below is where that sidecar is held against the signed manifest,
-# so a drift between them fails this deploy (docs/SELF-DEPLOY.md).
+cd "$KINU_ROOT/packages/cf-backend" || { echo -e "${RED}cannot cd to cf-backend${NC}"; exit 1; }
+
+# Build the client bundle into dist/client (used by wrangler's assets directive),
+# for this deploy's environment. Production is the config's top level, so its
+# build names none.
+KINU_BUILD_ENV=()
+if [ "$KINU_ENV" = "staging" ]; then KINU_BUILD_ENV=(CLOUDFLARE_ENV=staging); fi
+if [ -f ./node_modules/.bin/vite ]; then
+  echo "Running: vite build"
+  env "${KINU_BUILD_ENV[@]}" ./node_modules/.bin/vite build || { echo -e "${RED}vite build failed${NC}"; exit 1; }
+else
+  echo "Running: bunx vite build"
+  env "${KINU_BUILD_ENV[@]}" bunx vite build || { echo -e "${RED}vite build failed${NC}"; exit 1; }
+fi
+
+# The Worker and origin this build is FOR, read from the config the Vite plugin
+# flattened for it, which is the one `wrangler deploy` publishes (see header).
+# A build of the other environment is refused before anything leaves this box.
+KINU_BUILT_CONFIG="$KINU_ROOT/packages/cf-backend/dist/kinu/wrangler.json"
+if [ ! -s "$KINU_BUILT_CONFIG" ]; then
+  echo -e "${RED}❌ Missing build output: $KINU_BUILT_CONFIG${NC}"
+  exit 1
+fi
+KINU_BUILT_ENV="$(json_field targetEnvironment < "$KINU_BUILT_CONFIG")"
+KINU_WORKER="$(json_field name < "$KINU_BUILT_CONFIG")"
+KINU_URL="$(json_field vars.CLI_PUBLIC_ORIGIN < "$KINU_BUILT_CONFIG")/"
+if [ "${KINU_BUILT_ENV:-production}" != "$KINU_ENV" ] || [ -z "$KINU_WORKER" ] || [ "$KINU_URL" = "/" ]; then
+  echo -e "${RED}❌ $KINU_BUILT_CONFIG is ${KINU_WORKER:-no Worker} for ${KINU_BUILT_ENV:-production} at '${KINU_URL%/}', not a $KINU_ENV build.${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✅ Built $KINU_WORKER, served at $KINU_URL${NC}"
+
 KINU_RELEASE_VERSION="$(bun -e '
   const manifest = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
   process.stdout.write(manifest.version.split("+")[0]);
 ' "$KINU_ROOT/packages/cli/package.json")+$KINU_SHA"
-echo "Building the worker release artifact ($KINU_RELEASE_VERSION)"
-bun "$KINU_ROOT/scripts/build-worker-release.ts" "$KINU_RELEASE_VERSION" "$KINU_SHA" \
-  || { echo -e "${RED}worker release artifact build failed${NC}"; exit 1; }
+KINU_WORKER_ARTIFACT="kinu-worker-$KINU_RELEASE_VERSION.tar.gz"
+KINU_WORKER_ARTIFACT_PATH="$KINU_ROOT/packages/cf-backend/dist/worker-release/$KINU_WORKER_ARTIFACT"
+if [ "$KINU_PROMOTE" = "1" ]; then
+  # STAGING'S DOWNLOADS, NOT A REBUILD. promote.ts proves this build is the
+  # artifact staging verified, then writes staging's signed stamp, release
+  # manifest and every download the stamp signs into the downloads directory,
+  # each checked against the stamp, and copies the worker release tarball into
+  # production's bucket: what a user downloads is what staging's tiers ran.
+  echo "Adopting staging's downloads and worker release artifact"
+  bun "$KINU_ROOT/scripts/promote.ts" adopt \
+    || { echo -e "${RED}❌ this build is not the one staging verified, or its downloads did not check out${NC}"; exit 1; }
+else
+  # The worker release artifact, BEFORE the CLI distribution: `build-cli-dist.sh`
+  # signs every artifact it finds in the downloads directory, so writing this one
+  # first is what puts its checksum in `kinu-version.json` beside the CLI's. The
+  # self-deploy flow reads `release.json` and verifies the tarball against the
+  # `.sha256` published beside it, which is integrity and not a signature; the
+  # smoke check below is where that sidecar is held against the signed manifest,
+  # so a drift between them fails this deploy (docs/SELF-DEPLOY.md).
+  echo "Building the worker release artifact ($KINU_RELEASE_VERSION)"
+  bun "$KINU_ROOT/scripts/build-worker-release.ts" "$KINU_RELEASE_VERSION" "$KINU_SHA" \
+    || { echo -e "${RED}worker release artifact build failed${NC}"; exit 1; }
 
-echo "Building the CLI distribution"
-bash "$KINU_ROOT/scripts/build-cli-dist.sh" || { echo -e "${RED}CLI distribution build failed${NC}"; exit 1; }
+  echo "Building the CLI distribution"
+  bash "$KINU_ROOT/scripts/build-cli-dist.sh" || { echo -e "${RED}CLI distribution build failed${NC}"; exit 1; }
+fi
 
 # No deploy may ship without every CLI download asset sitting in the
 # directory wrangler publishes. A deploy missing one bricks every fresh install
@@ -649,8 +756,6 @@ KINU_CLI_ARTIFACTS=(kinu-runtime-cpython.tar.gz)
 for platform in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
   KINU_CLI_ARTIFACTS+=("kinu-cli-$platform.tar.gz")
 done
-KINU_WORKER_ARTIFACT="kinu-worker-$KINU_RELEASE_VERSION.tar.gz"
-KINU_WORKER_ARTIFACT_PATH="$KINU_ROOT/packages/cf-backend/dist/worker-release/$KINU_WORKER_ARTIFACT"
 for file in kinu-version.json release.json "$KINU_WORKER_ARTIFACT.sha256" \
   "${KINU_CLI_ARTIFACTS[@]}" "${KINU_CLI_ARTIFACTS[@]/%/.sha256}"; do
   if [ ! -s "$KINU_ASSETS_DIR/downloads/$file" ]; then
@@ -658,29 +763,40 @@ for file in kinu-version.json release.json "$KINU_WORKER_ARTIFACT.sha256" \
     exit 1
   fi
 done
-if [ ! -s "$KINU_WORKER_ARTIFACT_PATH" ]; then
-  echo -e "${RED}❌ Missing build output: $KINU_WORKER_ARTIFACT_PATH${NC}"
-  exit 1
-fi
 echo -e "${GREEN}✅ CLI and worker release assets staged in $KINU_ASSETS_DIR/downloads${NC}"
 
 # The worker artifact is larger than Cloudflare's 25 MiB per-file asset limit,
 # so it is published into R2 and streamed by the Worker instead. BEFORE the
 # deploy, never after: the release.json this deploy publishes names this
 # artifact, and a manifest that names an object nobody uploaded yet sends every
-# self-deploy run at a 404.
-echo "Publishing $KINU_WORKER_ARTIFACT to r2://kinu-releases"
-npx wrangler r2 object put "kinu-releases/$KINU_WORKER_ARTIFACT" \
-  --file "$KINU_WORKER_ARTIFACT_PATH" --content-type application/gzip --remote \
-  || { echo -e "${RED}❌ uploading the worker release artifact failed${NC}"; exit 1; }
-npx wrangler r2 object put "kinu-releases/$KINU_WORKER_ARTIFACT.sha256" \
-  --file "$KINU_ASSETS_DIR/downloads/$KINU_WORKER_ARTIFACT.sha256" --content-type text/plain --remote \
-  || { echo -e "${RED}❌ uploading the worker release checksum failed${NC}"; exit 1; }
-echo -e "${GREEN}✅ Worker release artifact published to R2${NC}"
+# self-deploy run at a 404. Into this build's own releases bucket; a promotion
+# copied staging's there above.
+if [ "$KINU_PROMOTE" != "1" ]; then
+  if [ ! -s "$KINU_WORKER_ARTIFACT_PATH" ]; then
+    echo -e "${RED}❌ Missing build output: $KINU_WORKER_ARTIFACT_PATH${NC}"
+    exit 1
+  fi
+  KINU_RELEASES_BUCKET="$(bun -e '
+    const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(config.r2_buckets?.find((bucket) => bucket.binding === "RELEASES_BUCKET")?.bucket_name ?? "");
+  ' "$KINU_BUILT_CONFIG")"
+  if [ -z "$KINU_RELEASES_BUCKET" ]; then
+    echo -e "${RED}❌ $KINU_BUILT_CONFIG binds no RELEASES_BUCKET${NC}"
+    exit 1
+  fi
+  echo "Publishing $KINU_WORKER_ARTIFACT to r2://$KINU_RELEASES_BUCKET"
+  npx wrangler r2 object put "$KINU_RELEASES_BUCKET/$KINU_WORKER_ARTIFACT" \
+    --file "$KINU_WORKER_ARTIFACT_PATH" --content-type application/gzip --remote \
+    || { echo -e "${RED}❌ uploading the worker release artifact failed${NC}"; exit 1; }
+  npx wrangler r2 object put "$KINU_RELEASES_BUCKET/$KINU_WORKER_ARTIFACT.sha256" \
+    --file "$KINU_ASSETS_DIR/downloads/$KINU_WORKER_ARTIFACT.sha256" --content-type text/plain --remote \
+    || { echo -e "${RED}❌ uploading the worker release checksum failed${NC}"; exit 1; }
+  echo -e "${GREEN}✅ Worker release artifact published to R2${NC}"
+fi
 
 # ── Step 3: Deploy Kinu ───────────────────────────────────────
 echo ""
-echo -e "${BOLD}Step 3: Deploying Kinu${NC}"
+echo -e "${BOLD}Step 3: Deploying $KINU_WORKER${NC}"
 KINU_DEPLOY_LOG="$(mktemp -t kinu-deploy.XXXXXX.log)"
 echo ""
 echo "Running: npx wrangler deploy ${KINU_WRANGLER_ARGS[*]} (log → $KINU_DEPLOY_LOG)"
@@ -733,7 +849,7 @@ sleep 10
 
 SMOKE_FAIL=0
 
-# The production route.
+# The deployment's own route.
 LIVE_STATUS=$(curl -so /dev/null -w '%{http_code}' --max-time 15 "$KINU_URL" 2>/dev/null || echo "000")
 if [ "$LIVE_STATUS" = "200" ]; then
   echo -e "${GREEN}✅ Kinu live site returns 200${NC} ($KINU_URL)"
@@ -885,12 +1001,13 @@ bunx wrangler deploy -c scripts/scripted-model-worker.jsonc \
 
 # ── Step 4b: The post-publish tiers ─────────────────────────────────────────
 #
-# AGAINST THE DEPLOYED PRODUCT, every deploy. There is one environment, so the
-# worker this tier drives is the one a user meets. It acts as the eval service
-# identity: `DEV_USER_EMAIL` names it in wrangler.jsonc and `DEV_IDENTITY_SECRET`
-# is its whole authority, honoured only for a request presenting the secret and
-# refused by the admin gate regardless (control-plane/admin-caller.ts). Every
-# workspace a case creates carries the eval prefix and is torn down by the run.
+# AGAINST THE DEPLOYMENT THIS RUN PUBLISHED, every deploy: staging's, and
+# production's again when a build is promoted. It acts as the eval service
+# identity: `DEV_USER_EMAIL` names it in wrangler.jsonc and that deployment's
+# own `DEV_IDENTITY_SECRET` is its whole authority, honoured only for a request
+# presenting the secret and refused by the admin gate regardless
+# (control-plane/admin-caller.ts). Every workspace a case creates carries the
+# eval prefix and is torn down by the run.
 #
 # WHY IT EXISTS. Every gate above this line ran BEFORE the upload, on this tree,
 # over inputs their authors wrote. The owner found product defects by hand that
@@ -916,7 +1033,13 @@ bunx wrangler deploy -c scripts/scripted-model-worker.jsonc \
 # `gate:infra` authenticates with — real machines, a real browser, live model
 # turns). They share a wave because they measure the same thing — the build
 # that just shipped — and none perturbs what another asserts. A red here is a
-# red on what users have NOW, and the runner says so.
+# red on what that deployment serves NOW, and the runner says so.
+#
+# The tiers take the deployment from these two, and its secret from the
+# variable `evalWebIdentityEnv` names for its origin
+# (packages/test-utils/src/eval-identity.ts): each deployment has its own.
+export KINU_EVAL_ORIGIN="${KINU_URL%/}"
+export KINU_ORIGIN="${KINU_URL%/}"
 run_phase post-publish
 
 # ── Step 5: Post-deploy infrastructure verification ──────────────
@@ -943,29 +1066,36 @@ if bun scripts/infra-verify.ts --phase=post-deploy; then
   echo -e "${GREEN}✅ Every declared resource exists and is bound${NC}"
 else
   echo ""
-  echo -e "${RED}❌ Post-deploy infrastructure verification failed for production.${NC}"
+  echo -e "${RED}❌ Post-deploy infrastructure verification failed for $KINU_ENV.${NC}"
   echo "   The Worker uploaded and the smoke test passed, and a resource the deployed version"
   echo "   declares is not in this account. The findings above name each one. Whatever the"
   echo "   public route answers, this deployment is not good."
   exit 1
 fi
 
-# ── Step 6: Summary ──────────────────────────────────────────────
+# ── Step 6: The record, or the history and the evals ─────────────
+#
+# ON STAGING, THE RECORD: every step above passed for this commit, so promotion
+# may take it (scripts/promote.ts). It lists every download this run published
+# by its hash, and promotion takes those bytes and no others. Written last, so a
+# red anywhere above leaves none, and a record that could not be written fails
+# the deploy: without it this build can never be promoted.
+#
+# ON PRODUCTION, THE HISTORY: the build it took, which a later rollback may
+# return to. Then the evals: .github/workflows/evals.yml runs every eval task
+# against the build kinu.run now serves and posts the results on the pull
+# request that merged it. It checks the deployed commit out on GitHub, so an
+# unpushed commit cannot be measured. Non-blocking: the deploy is done whatever
+# this prints.
 echo ""
-echo -e "${BOLD}Deploy complete — production.${NC}"
-echo "================================="
-echo "Kinu:  $KINU_URL"
-echo "          version ${KINU_VERSION:-unknown}"
-echo "          build   $KINU_SHA"
-echo ""
-echo -e "${GREEN}✅ Kinu Worker deployed and verified.${NC}"
-
-# ── Step 7: Measure the build ────────────────────────────────────
-# .github/workflows/evals.yml runs every eval task against the build kinu.run now serves and posts
-# the results on the pull request that merged it. It checks the deployed commit out on GitHub, so an
-# unpushed commit cannot be measured. Non-blocking: the deploy is done whatever this prints.
-echo ""
-if ! command -v gh >/dev/null 2>&1; then
+if [ "$KINU_ENV" = "staging" ]; then
+  echo -e "${BOLD}Step 6: Recording $KINU_SHA as verified on staging${NC}"
+  bun "$KINU_ROOT/scripts/promote.ts" record "${KINU_VERSION:-unknown}" \
+    || { echo -e "${RED}❌ the record was not written, so this build cannot be promoted${NC}"; exit 1; }
+elif ! bun "$KINU_ROOT/scripts/promote.ts" promoted "${KINU_VERSION:-}"; then
+  echo -e "${RED}❌ production serves $KINU_SHA, and its history does not hold it, so no rollback can return to it${NC}"
+  exit 1
+elif ! command -v gh >/dev/null 2>&1; then
   echo "⚠ Evals not dispatched: gh is not installed. Once build $KINU_SHA is on GitHub: gh workflow run evals.yml"
 elif ! gh api "repos/{owner}/{repo}/commits/$KINU_SHA" --silent >/dev/null 2>&1; then
   echo "⚠ Evals not dispatched: build $KINU_SHA is not on GitHub. Push it, then run: gh workflow run evals.yml"
@@ -973,4 +1103,19 @@ elif gh workflow run evals.yml >/dev/null 2>&1; then
   echo "Evals dispatched for build $KINU_SHA: gh run list --workflow=evals.yml"
 else
   echo "⚠ Evals not dispatched: gh workflow run evals.yml failed; evals.yml must be on the default branch on GitHub."
+fi
+
+# ── Step 7: Summary ──────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}Deploy complete — $KINU_ENV.${NC}"
+echo "================================="
+echo "Kinu:  $KINU_URL ($KINU_WORKER)"
+echo "          version ${KINU_VERSION:-unknown}"
+echo "          build   $KINU_SHA"
+echo ""
+echo -e "${GREEN}✅ Kinu Worker deployed and verified.${NC}"
+if [ "$KINU_ENV" = "staging" ]; then
+  echo "Promote it to production with: bun run deploy --promote"
+else
+  echo "Return production to the build it took before with: bun run deploy --rollback"
 fi

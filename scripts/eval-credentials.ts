@@ -15,8 +15,8 @@
 // could say which harness had made any of them.
 //
 // The credential belongs to the `eval-service` account. It comes from the
-// environment or the isolated `~/.config/kinu/eval-session/config.json`, never
-// from the person's normal Kinu config. The endpoint allowlist remains in
+// environment or the isolated `~/.config/kinu/eval-session/<host>/config.json`,
+// never from the person's normal Kinu config. The endpoint allowlist remains in
 // `packages/test-utils/src/eval-identity.ts`.
 //
 // WHY A SEPARATE PROCESS, still. `scripts/test-scratch-home.ts` strips the
@@ -36,9 +36,11 @@
 // here, by the same allowlist, before an origin is printed.
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import {
+  EVAL_DEPLOYMENT_ORIGIN,
   EVAL_IDENTITY_ENV,
   evalAccount,
   evalSessionPath,
+  evalTargetVerdict,
   isEvalAccountEmail,
   refusedEvalEndpoint,
   resolveEvalIdentity,
@@ -53,14 +55,20 @@ const PersistedEvalIdentitySchema = v.object({
 
 const account = evalAccount();
 
-const persistedPath = evalSessionPath(account);
+// The deployment the bearer is for; an origin set to blank names none, so it reads as absent, as the mint reads it.
+const namedOrigin = process.env[EVAL_IDENTITY_ENV.origin]?.trim();
+
+const target = evalTargetVerdict(namedOrigin === undefined || namedOrigin === '' ? EVAL_DEPLOYMENT_ORIGIN : namedOrigin);
+
+// A refused target has no session to read; `resolveEvalIdentity` names the refusal below.
+const persistedPath = target.kind === 'allowed' ? evalSessionPath(target.origin, account) : undefined;
 
 const identityEnv: NodeJS.ProcessEnv = { ...process.env };
 
 // KINU_EVAL_TOKEN is the eval service's own bearer; a named account's is only the one minted for it.
 if (account !== undefined) delete identityEnv[EVAL_IDENTITY_ENV.token];
 
-if (!identityEnv[EVAL_IDENTITY_ENV.token] && existsSync(persistedPath)) {
+if (!identityEnv[EVAL_IDENTITY_ENV.token] && persistedPath !== undefined && existsSync(persistedPath)) {
   const permissions = statSync(persistedPath).mode & 0o077;
 
   if (permissions !== 0) {
@@ -74,6 +82,12 @@ if (!identityEnv[EVAL_IDENTITY_ENV.token] && existsSync(persistedPath)) {
   );
 
   const email = persisted.user?.email;
+
+  // The file for this deployment holding another's bearer would send it where it was not minted.
+  if (persisted.origin !== target.origin) {
+    console.error(`eval-credentials: REFUSED — ${persistedPath} holds a bearer for ${persisted.origin}, not ${target.origin}`);
+    process.exit(1);
+  }
 
   // A named account's bearer that is not that account's user would act as the eval service itself.
   if (account !== undefined && (email === undefined || !isEvalAccountEmail(email, account))) {
