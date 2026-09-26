@@ -4,7 +4,8 @@
  */
 
 import { callable, type AgentContext, type Connection, type ConnectionContext, type Schedule } from "agents";
-import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
+import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } from "./rpc-surface";
+import { ActivationGate, startBeforeRpc } from "./activation-gate";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
@@ -392,6 +393,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Every event reaches a whole workspace: a native RPC runs no `onStart`, so the tables are made here.
     if (!this.nimbusSibling && this.storageRefusal === undefined) this.initSchema();
+
+    this.installClientMessageGate();
+    // A sibling serves `supervisorOp` over its own storage and never runs the workspace's start.
+    const gate = new ActivationGate();
+    this.lifecycle.use(gate);
+    startBeforeRpc(this, ORCHESTRATOR_STARTED_RPC, () => (this.nimbusSibling ? Promise.resolve() : gate.ready()));
   }
 
   /** A Nimbus sibling (`nbf:…`, docs/NIMBUS-INTEGRATION.md) is an ordinary instance of this class that serves
@@ -2706,7 +2713,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  resets the object at 30s (`do.block_concurrency.cancel_ms`); `scripts/do-init-gate.ts` enforces. */
   async onStart(): Promise<void> {
     diagnostics.event('actor.startup', { workspace: this.name });
-    this.installClientMessageGate();
 
     if (this.storageRefusal !== undefined || this.nimbusSibling) return;
     // Every budgeted sweep via the alarm-frame seam; row-budgeted because this is the init gate,

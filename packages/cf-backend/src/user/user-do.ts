@@ -3,7 +3,8 @@
  * Every privileged method takes a `UserCaller` first and gates on `requireTier` before anything else.
  */
 import { Agent, type AgentContext } from "agents";
-import { USER_DO_RPC_SURFACE, sealRpcSurface } from "../rpc-surface";
+import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from "../rpc-surface";
+import { ActivationGate, startBeforeRpc } from "../activation-gate";
 import { parseCliTokenUserId } from "../cli/auth-store";
 import {
   getActiveAccessTokenScopes,
@@ -632,6 +633,9 @@ export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, USER_DO_RPC_SURFACE);
+    const gate = new ActivationGate();
+    this.lifecycle.use(gate);
+    startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
     // Every event, a native RPC included, reaches whole tables: native RPCs run no `onStart`.

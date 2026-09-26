@@ -50,7 +50,7 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
   '_cf_unregisterFacetRun',
 ] as const;
 
-interface RpcSurfaceSubject {
+export interface RpcSurfaceSubject {
   readonly constructor: Function;
 }
 
@@ -86,7 +86,7 @@ export function sealRpcSurface(instance: RpcSurfaceSubject, surface: readonly st
   }
 }
 
-function inheritedDescriptor(instance: RpcSurfaceSubject, name: string): PropertyDescriptor | undefined {
+export function inheritedDescriptor(instance: RpcSurfaceSubject, name: string): PropertyDescriptor | undefined {
   for (let proto: object | null = Object.getPrototypeOf(instance);
        proto !== null && proto !== Object.prototype;
        proto = Object.getPrototypeOf(proto)) {
@@ -215,6 +215,9 @@ export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];
 
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
 
+/** Deleting the account must work on an object whose start throws: it wipes the storage start reads. */
+export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((name) => name !== 'deleteAccount');
+
 /** Members every actor exposes; entries a facet reaches on its parent stub must be listed or nested
  * trees fail closed at depth 2. `protected` members stay unreachable. */
 const ACTOR_AGENT_RPC_SURFACE = [
@@ -321,3 +324,12 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...Object.keys(AGENT_RPC_ACCESS),
   ...ORCHESTRATOR_METHODS,
 ];
+
+/** Never gated: `destroyAgent` must delete an object whose start throws. Platform and facet names the SDK starts. */
+const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'evalAbortActivation']);
+
+export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [
+  ...ACTOR_AGENT_RPC_SURFACE,
+  ...Object.keys(AGENT_RPC_ACCESS),
+  ...ORCHESTRATOR_METHODS,
+].filter((name) => !ORCHESTRATOR_STARTLESS.has(name));

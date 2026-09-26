@@ -1477,11 +1477,11 @@ function instantiate<T extends WorkspaceHostTarget>(
   };
 }
 
-/** The actor's schema half of an activation. Schema is in place synchronously on
- *  return; the async boot's promise is dropped (a failed boot classifies inside `onStart`). */
-function ensureActorSchema(agent: InstanceType<typeof OrchestratorAgent>): void {
-  const gate: unknown = OrchestratorAgent.prototype.onStart.call(agent);
-  void gate;
+/** Starts the activation as the SDK's first fetch would. Its synchronous part has run on return; the async
+ *  boot's promise is dropped (a failed boot classifies inside `onStart`). */
+function startActivation(agent: InstanceType<typeof OrchestratorAgent>): void {
+  const started: unknown = agent.lifecycle.start();
+  void started;
 }
 
 
@@ -1498,7 +1498,7 @@ export function orchestratorHarness(
   },
 ): ActorHarness<HarnessOrchestratorAgent> {
   const harness = instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), userPlane, world, env });
-  ensureActorSchema(harness.agent);
+  startActivation(harness.agent);
   harness.db.prepare(
     'UPDATE workspace_identity SET owner_user_id = ? WHERE id = ?',
   ).run(world?.ownerUserId ?? 'harness-owner', 'harness-actor');
@@ -1558,7 +1558,7 @@ export async function reactivateOrchestratorHarness(
 
   const harness = instantiate(HarnessOrchestratorAgent, { db, userPlane, world: opts?.world, env: opts?.env });
   opts?.beforeStart?.(harness.agent);
-  ensureActorSchema(harness.agent);
+  startActivation(harness.agent);
 
   if (opts?.world?.freshScaffold !== true) harness.agent.declareScaffoldPresent();
 

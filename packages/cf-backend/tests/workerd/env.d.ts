@@ -152,6 +152,9 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
 interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
   claimAndEvict(workspace: string): Promise<string>;
   idThenNamed(workspace: string): Promise<AddressedAnswers>;
+  rpcFirst(workspace: string): Promise<{ before: number; spend: string; after: number }>;
+  destroyAfterFailedStart(workspace: string): Promise<{ evicted: string; spend: string; destroyed: string }>;
+  siblingStarts(): Promise<{ spend: string; starts: number }>;
 }
 
 interface AttributionProbeRpc extends Rpc.DurableObjectBranded {
