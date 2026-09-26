@@ -111,12 +111,15 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     walk(parsed.root, (node) => {
       const { raw } = node;
 
-      if (raw.type !== 'ReturnStatement' || raw.argument === null) return;
-      const call = raw.argument.type === 'AwaitExpression' ? raw.argument.argument : raw.argument;
+      // `return settle(…)`, or an arrow whose whole body is the call: the same edge, spelled short.
+      const returned = raw.type === 'ReturnStatement' ? raw.argument : arrowBody(raw);
+
+      if (returned === null) return;
+      const call = returned.type === 'AwaitExpression' ? returned.argument : returned;
 
       if (call.type !== 'CallExpression' || call.callee.type !== 'Identifier' || !runners.has(call.callee.name)) return;
       const site = `${file}:${String(parsed.lineAt(node.start))}`;
-      const owner = bridgeOwner(node);
+      const owner = bridgeOwner(raw.type === 'ReturnStatement' ? node : { ...node, parent: node });
 
       if (owner === null) findings.push(`${site}: a runner returned outside an exported function or public member`);
       else bridges.push(site);
@@ -132,7 +135,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
  * a runner returned there (a seam method on the object it builds) counts; one inside a private helper
  * or a local function does not.
  */
-function bridgeOwner(statement: SyntaxNode): SyntaxNode | null {
+function bridgeOwner(statement: Pick<SyntaxNode, 'parent'>): SyntaxNode | null {
   let node: SyntaxNode | undefined = statement.parent;
 
   while (node !== undefined && !isFunctionLike(node)) node = node.parent;
@@ -141,11 +144,14 @@ function bridgeOwner(statement: SyntaxNode): SyntaxNode | null {
   const owner = functionOwner(node);
   const { raw } = owner;
 
-  if (raw.type === 'MethodDefinition') {
-    return raw.accessibility === 'private' || raw.accessibility === 'protected' || raw.key.type === 'PrivateIdentifier' ? null : owner;
-  }
+  if (raw.type === 'MethodDefinition') return isPublicMember(raw) ? owner : null;
 
   if (raw.type === 'FunctionDeclaration') return owner.parent?.raw.type === 'ExportNamedDeclaration' ? owner : null;
+
+  // An object held by a class field (a seam table) is that field's surface.
+  const field = owner.parent?.raw.type === 'Property' ? owner.parent.parent?.parent : owner.parent?.parent;
+
+  if (field?.raw.type === 'PropertyDefinition') return isPublicMember(field.raw) ? owner : null;
 
   // A variable-bound function is exported with its declaration; anything else (a callback, an object
   // method, a function expression) belongs to the function that encloses it.
@@ -157,6 +163,12 @@ function bridgeOwner(statement: SyntaxNode): SyntaxNode | null {
 
   return owner.parent === undefined ? null : bridgeOwner(owner);
 }
+
+const arrowBody = (raw: SyntaxNode['raw']): SyntaxNode['raw'] | null =>
+  raw.type === 'ArrowFunctionExpression' && raw.body.type !== 'BlockStatement' ? raw.body : null;
+
+const isPublicMember = (member: { accessibility?: string | null; key: { type: string } }): boolean =>
+  member.accessibility !== 'private' && member.accessibility !== 'protected' && member.key.type !== 'PrivateIdentifier';
 
 /** Built-in error constructors a class can extend; `KinuError` extends `Data.TaggedError(...)`. */
 const ERROR_BASES: readonly string[] = ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'AggregateError', 'DOMException', 'KinuError'];

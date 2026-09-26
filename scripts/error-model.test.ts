@@ -107,6 +107,8 @@ function local(): number { return run(localEffect()); }
 export function seam(): { open(): number } { return { open() { return run(openEffect()); } }; }
 function hidden(): { open(): number } { return { open() { return run(openEffect()); } }; }
 export function mapped(): Promise<{ open(): number }> { return settle(Effect.map(keyEffect(), () => ({ open() { return run(openEffect()); } }))); }
+export class Seams { readonly seam = { deploy: (r: number) => settle(deployEffect(r)) }; }
+const hiddenSeam = { deploy: (r: number) => settle(deployEffect(r)) };
 export function inner(): Effect.Effect<number, KinuError> { return Effect.succeed(1); }
 `;
 
@@ -117,10 +119,11 @@ export function done(): number { return settle(1); }
 `;
 
   expect(bridgeSites(new Map([[FILE, bridged], ['packages/fixture/src/b.ts', local]]))).toEqual({
-    bridges: [`${FILE}:11`, `${FILE}:13`, `${FILE}:13`, `${FILE}:3`, `${FILE}:4`, `${FILE}:5`, `${FILE}:7`],
+    bridges: [`${FILE}:11`, `${FILE}:13`, `${FILE}:13`, `${FILE}:14`, `${FILE}:3`, `${FILE}:4`, `${FILE}:5`, `${FILE}:7`],
     findings: [
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:12: a runner returned outside an exported function or public member`,
+      `${FILE}:15: a runner returned outside an exported function or public member`,
       `${FILE}:8: a runner returned outside an exported function or public member`,
     ],
   });
