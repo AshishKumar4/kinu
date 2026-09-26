@@ -262,6 +262,74 @@ describe('TUI transcript rendering', () => {
 
   // The markdown renderable reads its block hook once at construction and React updates it in place, so
   // the theme switch goes through state; re-rendering the root would rebuild it and prove nothing.
+  test('a tool result and a reply draw what an escape sequence says, never the sequence', async () => {
+    // Text a program or a model wrote reached the terminal raw: its colour codes, a title change or a screen clear
+    // acted on the TUI.
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
+          <MessageList
+            toolDetailsExpanded
+            messages={[
+              { id: 't1', role: 'tool_call', content: '', toolName: 'bash', args: 'make \u001b[2J' },
+              { id: 'r1', role: 'tool_result', content: '\u001b[31mbuild red\u001b[0m\u001b]0;pwned\u0007\n50%\r100% done\u0007', success: true },
+              { id: 'a1', role: 'assistant', content: 'reply \u001b[1mbold\u001b[0m\u001b[H' },
+            ]}
+          />
+        </box>,
+      );
+      const frame = await renderSettled(renderOnce, captureCharFrame, ['build red', '100% done', 'reply bold']);
+
+      expect(frame).toContain('build red');
+      expect(frame).toContain('100% done\u2407');
+      expect(frame).not.toContain('50%');
+      expect(frame).not.toContain('pwned');
+      expect(frame).toContain('reply bold');
+      expect(frame.replaceAll('\n', '')).not.toMatch(/\p{Cc}/u);
+    } finally {
+      flushSync(() => { root.unmount(); });
+      renderer.destroy();
+    }
+  });
+
+  test('a collapsed tool result stays on one row whatever its characters\' width', async () => {
+    // One cell per character (ASCII), two (CJK, emoji), and an emoji that is two UTF-16 units: the preview is cut
+    // to the row's columns, never past them, and never through a character.
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 60, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+    const root = createRoot(renderer);
+    const results = { narrow: 'n'.repeat(200), wide: '表'.repeat(200), emoji: '😀'.repeat(200) };
+
+    try {
+      root.render(
+        <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
+          <MessageList
+            messages={Object.entries(results).flatMap(([name, content]) => [
+              { id: `c-${name}`, role: 'tool_call' as const, content: '', toolName: name, args: name },
+              { id: `r-${name}`, role: 'tool_result' as const, content, success: true },
+            ])}
+          />
+        </box>,
+      );
+      const frame = await renderSettled(renderOnce, captureCharFrame, ['nnn', '表表', '😀']);
+      const rows = frame.split('\n');
+
+      for (const glyph of ['n', '表', '😀']) {
+        const holding = rows.filter((row) => row.includes(glyph.repeat(2)));
+        expect(holding).toHaveLength(1);
+        expect(holding[0]).toContain('…');
+      }
+
+      expect(frame).not.toContain('\ufffd');
+      expect(frame).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u);
+    } finally {
+      flushSync(() => { root.unmount(); });
+      renderer.destroy();
+    }
+  });
+
   test('the code well follows a live theme switch', async () => {
     const contrast = present(BUILTIN_TUI_THEMES.find((candidate) => candidate.id === 'high-contrast'), 'the high-contrast theme');
     const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 16, useThread: false, maxFps: Number.POSITIVE_INFINITY });

@@ -2418,6 +2418,8 @@ export {
 
 export {
   clipText,
+  terminalText,
+  literalText,
   agentDisplayLabel,
 } from './tui/format';
 

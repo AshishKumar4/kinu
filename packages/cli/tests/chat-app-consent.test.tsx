@@ -183,6 +183,35 @@ describe('ChatApp consent ownership', () => {
     expect(decisions).toEqual(['deny']);
   });
 
+  test('an approval shows a command\'s control characters as marks, never obeys them', async () => {
+    // A carriage return, an erase or a conceal would make the prompt show a command other than the one that runs.
+    const command = 'rm -rf ~\rsafe \u001b[2K\u001b[8mhidden\u001b[0m';
+    const shown = ['rm -rf ~', '␍safe', '␛[2K', '␛[8mhidden'];
+
+    const agent = fakeClient({
+      name: 'shell',
+      consents: {
+        listPending: async () => [{ consentId: 'consent-raw', deviceLabel: 'Workstation', method: 'shell', command }],
+        resolve: async () => ({ ok: true }),
+      },
+    });
+
+    const screen = await mountChat(agent.client);
+    const answer = agent.requestShellApproval({ ...shellRequest, command });
+    await screen.waitFor('shell approval', () => screen.frame().includes('Run this command?'));
+
+    for (const part of shown) expect(screen.frame()).toContain(part);
+    expect(screen.frame().replaceAll('\n', '')).not.toMatch(/\p{Cc}/u);
+    screen.mockInput.pressKey('n');
+    expect(await answer).toBe('deny');
+
+    agent.emit({ type: 'turn-start', kind: 'user', text: 'run it' });
+    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your computer?'));
+
+    for (const part of shown) expect(screen.frame()).toContain(part);
+    expect(screen.frame().replaceAll('\n', '')).not.toMatch(/\p{Cc}/u);
+  });
+
   test('a wide glyph is budgeted two columns, not four', () => {
     // Counting UTF-16 units would read 39 emoji as four rows and refuse.
     expect(deviceConsentCanApprove({ command: '😀'.repeat(39) }, { width: 100, height: 11 })).toBe(true);
