@@ -151,7 +151,7 @@ import { TierIdSchema,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
-  type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
+  type ArmedCompaction, type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
@@ -1142,9 +1142,9 @@ export class LocalAgentSession {
     return this.chat.clear();
   }
 
-  /** Force compaction on the next turn; one-shot (`takeForceCompaction` consumes it). */
-  armForcedCompaction(): void {
-    this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey);
+  /** One-shot: 'user' folds all but the last exchanges (/compact); 'force' folds to the ladder's target. */
+  armCompaction(kind: ArmedCompaction): void {
+    this.compactionState.armCompaction(this.cacheIdentity().sessionKey, kind);
   }
 
   /** Aborted by {@link end}, so an MCP connect that never answers cannot block ending. */
@@ -2762,7 +2762,7 @@ export class LocalAgentSession {
         jobs: () => this.jobs,
         budget: () => this.budget,
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
-        armCompactNow: () => { this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey); },
+        armCompactNow: () => { this.compactionState.armCompaction(this.cacheIdentity().sessionKey, 'force'); },
       })),
       createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
       createStateCodemodeProvider(this.rt.actor.programState),

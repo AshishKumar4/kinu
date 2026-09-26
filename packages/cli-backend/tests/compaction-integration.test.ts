@@ -13,6 +13,7 @@ import {
   ExtensionHost,
   initWorkspaceSchema,
   runChat,
+  type ArmedCompaction,
   type ChatOptions,
 } from '@kinu.run/core';
 import {
@@ -162,7 +163,7 @@ describe('default compaction over the real storage plane', () => {
 
     const { model, prompts } = capturingModel();
 
-    const drive = async (messages: ModelMessage[], transformTrigger?: 'force') => {
+    const drive = async (messages: ModelMessage[], transformTrigger?: ArmedCompaction) => {
       const options: ChatOptions = {
         model,
         modelContext: { id: 'fake/fake-model', contextWindow: 10_000 },
@@ -181,7 +182,7 @@ describe('default compaction over the real storage plane', () => {
     };
 
     const driveForced = (messages: ModelMessage[]) =>
-      drive(messages, state.takeForceCompaction(SESSION) ? 'force' : undefined);
+      drive(messages, state.takeArmedCompaction(SESSION) ?? undefined);
 
     const small = history(2, 100);
     await drive(small);
@@ -251,10 +252,10 @@ describe('default compaction over the real storage plane', () => {
 
     // Turn 3: `agent.compactNow` only arms the one-shot force flag; turn assembly consumes it and folds early.
     const grown = [...overflowing, ...history(8, 3_000)];
-    state.armForceCompaction(SESSION);
+    state.armCompaction(SESSION, 'force');
     await driveForced(grown);
     expect(outcomes.at(-1)?.outcome).toBe('planned');
-    expect(state.takeForceCompaction(SESSION)).toBe(false);
+    expect(state.takeArmedCompaction(SESSION)).toBeNull();
 
     const ranges = state.archive.list(SESSION);
     expect(ranges).toHaveLength(2);
@@ -266,10 +267,64 @@ describe('default compaction over the real storage plane', () => {
     expect(foldedJson).toContain(ranges[1].path);
 
     // Turn 4: refolding with nothing new rebuilds the same range; the index stays idempotent.
-    state.armForceCompaction(SESSION);
+    state.armCompaction(SESSION, 'force');
     await driveForced(grown);
     expect(state.archive.list(SESSION)).toEqual(ranges);
     expect(JSON.stringify(prompts.at(-1))).toBe(foldedJson);
+  });
+
+  test('an owner\'s /compact folds all but the last exchanges; overflow recovery keeps down to the ladder target', async () => {
+    // Forced compaction folded only down to the ladder's target (35% of the window), so on a long-window model
+    // /compact changed nothing until the conversation was already near full.
+    const prompted = async (kind: 'force' | 'user'): Promise<string> => {
+      const db = new Database(scratchPath(`compaction-${kind}`, 'agent.db'), { create: true });
+
+      const rt = createCLIRuntime(db, {
+        dbPath: db.filename,
+        llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
+      });
+
+      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+      const state = createCompactionStateStore(rt.storage.sql, rt.actor);
+
+      const extension = createCompactionExtension({
+        ports: { transcripts: createVfsTranscriptStore(() => rt.storage.vfs), plans: state.plans, logger: silentLogger },
+        archive: state.archive,
+        ephemeral: new DynamicContextLedger(),
+        summarize: async () => '## Decisions\n- the plan runs in order',
+      });
+
+      const { model, prompts } = capturingModel();
+      state.armCompaction(SESSION, kind);
+      const trigger = state.takeArmedCompaction(SESSION);
+
+      const options: ChatOptions = {
+        model,
+        modelContext: { id: 'fake/fake-model', contextWindow: 100_000 },
+        system: 'system prompt',
+        history: history(12, 2_000),
+        tools: {},
+        stopWhen: stepCountIs(1),
+        extensions: new ExtensionHost().register(extension),
+        cache: { sessionKey: SESSION },
+      };
+
+      if (trigger !== null) options.transformTrigger = trigger;
+
+      for await (const _ of runChat(options)) { /* drain */ }
+
+      expect(state.takeArmedCompaction(SESSION)).toBeNull();
+
+      return JSON.stringify(prompts.at(-1));
+    };
+
+    // About 6k tokens of a 100k window: under the ladder target, so recovery has nothing to fold.
+    expect(await prompted('force')).toContain('output-0 ');
+
+    const folded = await prompted('user');
+    expect(folded).not.toContain('output-0 ');
+    expect(folded).not.toContain('output-9 ');
+    expect(folded).toContain('Task 11: please run step 11');
   });
 
   test('the first rung: superseded ephemeral blocks survive every unpressured turn and go first under pressure', async () => {

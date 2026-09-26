@@ -558,6 +558,28 @@ describe('LocalAgentClient', () => {
     await client.close();
   });
 
+  test('/compact folds all but the last exchange out of the next prompt; without it every turn is sent', async () => {
+    // Folded turns survive only inside the summary; as messages of their own, only the kept tail is sent.
+    const turnsSentAsMessages = async (compact: boolean): Promise<string[]> => {
+      const prompts: LanguageModelV2Prompt[] = [];
+      const { client } = setup(fakeModel('noted', (prompt) => prompts.push(prompt)));
+      await client.connect();
+
+      for (let turn = 0; turn < 5; turn++) await client.send(`turn ${String(turn)}: ${'context '.repeat(200)}`, { cwd: '/work' });
+
+      if (compact) client.localControls.compactNow();
+      await client.send('what came first?', { cwd: '/work' });
+      await client.close();
+      const asked = prompts.filter((prompt) => JSON.stringify(prompt.at(-1)).includes('what came first?')).at(-1) ?? [];
+
+      return asked.flatMap((message) => (message.role === 'user' ? message.content : []))
+        .flatMap((part) => (part.type === 'text' && part.text.startsWith('turn ') ? [part.text.slice(0, 6)] : []));
+    };
+
+    expect(await turnsSentAsMessages(false)).toEqual(['turn 0', 'turn 1', 'turn 2', 'turn 3', 'turn 4']);
+    expect(await turnsSentAsMessages(true)).toEqual(['turn 4']);
+  });
+
   test('status and tools reflect the live session', async () => {
     const { client } = setup(fakeModel('ok'));
     await client.connect();

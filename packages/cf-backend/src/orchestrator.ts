@@ -1902,7 +1902,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         budget: () => this.budget,
         // Owner's revoke path; drops the webhook secret with the row.
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
-        armCompactNow: () => { this.compactionState.armForceCompaction(this.name); },
+        armCompactNow: () => { this.compactionState.armCompaction(this.name, 'force'); },
       })),
     ];
   }

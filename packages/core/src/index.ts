@@ -378,6 +378,8 @@ export {
   type TurnEndContext,
   type PrepareStepContext,
   type TransformContext,
+  type CompactionTrigger,
+  type ArmedCompaction,
 } from './extension';
 
 export {

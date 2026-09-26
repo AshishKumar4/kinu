@@ -30,7 +30,7 @@ import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import { contextWindowForModel, type ResolvedModelWindow } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
-import type { ExtensionHost } from './extension';
+import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
 import { describeProviderError, providerFailureFacts, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
@@ -125,8 +125,8 @@ export interface ChatOptions {
   credentialOf?: (spec: string) => Promise<string | null>;
   /** Provider-reported prompt tokens of the previous turn's final request, the measured compaction trigger. */
   providerReportedTokens?: number;
-  /** 'force' when the caller consumed an armed force-compaction flag after an overflow. */
-  transformTrigger?: 'auto' | 'force';
+  /** The armed compaction the caller consumed, if any. */
+  transformTrigger?: CompactionTrigger;
   /** The provider's own request token count (providers/input-tokens.ts); omitted, the shared estimate gates. */
   countInputTokens?: (request: CountableRequest) => Promise<InputTokenCount>;
   signal?: AbortSignal;

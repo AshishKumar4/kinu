@@ -258,6 +258,7 @@ export class LocalAgentClient implements AgentClient {
       approveInstruction: (path, digest) => this.session.approveInstruction(path, digest),
       revokeInstruction: (path) => this.session.revokeInstruction(path),
       clearConversation: () => this.session.clearConversation(),
+      compactNow: () => { this.session.armCompaction('user'); },
       listModelProviders: async () => (await this.session.listModelProviders()).map((provider) => ({
         id: provider.id,
         available: provider.available,
