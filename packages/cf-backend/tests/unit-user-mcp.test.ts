@@ -215,6 +215,13 @@ describe('describeMcpTool', () => {
     expect(descriptor.description).toContain('\uFFFD');
   });
 
+  test('each invisible or reordering character shows as a mark: Arabic letter mark, soft hyphen, word joiner and invisible operators', () => {
+    for (const hidden of ['\u061C', '\u00AD', '\u2060', '\u2061', '\u2062', '\u2063', '\u2064']) {
+      const descriptor = admitted({ name: 't', description: `rm${hidden} -rf`, inputSchema: {} });
+      expect(descriptor.description).toBe('rm\uFFFD -rf');
+    }
+  });
+
   test('ordinary prose survives sanitization byte-for-byte', () => {
     const descriptor = admitted({
       name: 't',

@@ -1,9 +1,9 @@
 /** Third-party text shown as a quotation (an MCP server's prose, an approval's command) reads as what it is. */
 
-/** C0 but tab, LF and CR; DEL and C1; directional marks, zero-width, bidi controls; BOM. */
+/** C0 but tab, LF and CR; DEL, C1, soft hyphen; Arabic letter mark; marks, zero-width, bidi, joiners; BOM. */
 const MISREPRESENTING_RANGES: ReadonlyArray<readonly [number, number]> = [
-  [0x00, 0x08], [0x0b, 0x0c], [0x0e, 0x1f], [0x7f, 0x9f],
-  [0x200b, 0x200f], [0x202a, 0x202e], [0x2066, 0x2069], [0xfeff, 0xfeff],
+  [0x00, 0x08], [0x0b, 0x0c], [0x0e, 0x1f], [0x7f, 0x9f], [0xad, 0xad], [0x61c, 0x61c],
+  [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x2064], [0x2066, 0x2069], [0xfeff, 0xfeff],
 ];
 
 const MISREPRESENTING = new RegExp(
