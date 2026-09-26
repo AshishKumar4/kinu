@@ -88,6 +88,15 @@ describe('the installed tree is the one bun.lock names', () => {
     expect(installDrift(root)).toEqual([`${join(root, 'node_modules/vendored')} holds 9.9.9 where bun.lock names 1.0.0`]);
   });
 
+  test('a scope linked to a checkout that removed it is drift, named, and never a crash', () => {
+    // A linked worktree after its donor dropped a package bun.lock no longer names: the scope's link dangles.
+    const root = checkout('install-parity-scope');
+
+    symlinkSync(join(root, 'donor/node_modules/@gone'), join(root, 'node_modules/@gone'), 'dir');
+
+    expect(installDrift(root)).toEqual([`${join(root, 'node_modules/@gone')} holds no readable package where bun.lock installs nothing`]);
+  });
+
   test('a nested package the lock places, missing under its installed parent, is drift', () => {
     const root = checkout('install-parity-missing');
 

@@ -36,6 +36,26 @@ describe('a box that is not attached is either visibly working or re-armable', (
     expect((await box.devboxState()).ready).toBe(true);
   });
 
+  // A page asks this on open, so the read must not start, adopt or arm anything.
+  test('the restore status a page reads names the attempt in flight, and starts nothing', async () => {
+    const { box, container } = harness(TestBox);
+    const idle = await box.restoreStatus();
+
+    expect(idle).toEqual({ restoring: false, refused: undefined });
+    expect(container.starts).toEqual([]);
+    expect(container.schedules).toEqual([]);
+
+    const stamp = gate();
+    container.stampGate = stamp;
+    const restoring = box.devboxStartup();
+    await stamp.reached;
+    expect(await box.restoreStatus()).toEqual({ restoring: true, refused: undefined });
+
+    stamp.release();
+    await restoring;
+    expect(await box.restoreStatus()).toEqual({ restoring: false, refused: undefined });
+  });
+
   test('a restoration nobody started still says so', async () => {
     const { box } = harness(TestBox);
 

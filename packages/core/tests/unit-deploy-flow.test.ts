@@ -55,6 +55,7 @@ const MANIFEST: ReleaseManifest = {
   vars: [
     { name: 'SANDBOX_TRANSPORT', policy: 'carried', value: 'rpc' },
     { name: 'CLI_PUBLIC_ORIGIN', policy: 'derived' },
+    { name: 'SIGN_IN_PROVIDERS', policy: 'derived' },
     { name: 'DEV_USER_EMAIL', policy: 'ours' },
   ],
   files: [
@@ -587,6 +588,8 @@ describe('a guided run', () => {
     const plain = bindings.filter((binding) => binding.type === 'plain_text');
 
     expect(plain.find((binding) => binding.name === 'SANDBOX_TRANSPORT')?.text).toBe('rpc');
+    // The flow configures no OAuth client (every client id is kinu.run's), so the self-host declares none.
+    expect(plain.find((binding) => binding.name === 'SIGN_IN_PROVIDERS')?.text).toBe('');
     expect(plain.map((binding) => binding.name)).not.toContain('DEV_USER_EMAIL');
     expect(bindings.filter((binding) => binding.type === 'secret_text').map((binding) => binding.name).sort())
       .toEqual([...MINTED_SECRETS].sort());

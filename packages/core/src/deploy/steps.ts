@@ -970,6 +970,7 @@ function derivedVar(context: DeployContext, name: string): string | null {
     case 'CONTROL_PLANE_ADMINS':
       return context.inputs.ownerEmail;
     case 'PREVIEW_HOST_SUFFIX':
+    case 'SIGN_IN_PROVIDERS':
       return '';
     default:
       return null;

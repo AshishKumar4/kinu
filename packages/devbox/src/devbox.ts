@@ -45,8 +45,8 @@ import {
 import { shellPath } from './chunked-delta';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
 import {
-  admissionOf, isSettledRestoration, recoveryRow, settledRestoration, unreadyOf,
-  type RecoveryClaim, type RestoreAdmission, type RestoreClockPhase, type RestoreReadiness,
+  admissionOf, isSettledRestoration, recoveryRow, settledRestoration, terminalRefusal, unreadyOf,
+  type RecoveryClaim, type RestoreAdmission, type RestoreClockPhase, type RestoreReadiness, type RestoreStatus,
   type Restoration, type SettledRestoration, type StampOutcome,
 } from './restoration';
 import type { DevboxReport, HeartbeatTick, IncidentReasonRow, SupervisedProcessRow } from './report';
@@ -1436,16 +1436,22 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     await this.kickStartup();
 
     if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
-      throw new Error(
-        `this devbox has no attached work directory: ${this.#restoration.reason}. `
-        + 'That recovery class is terminal: call attachNow() to attempt the attach again.',
-      );
+      throw new Error(terminalRefusal(this.#restoration.reason));
     }
 
     return {
       kind: 'pending',
       reason: `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}. `
         + 'A startup is armed, so ask again.',
+    };
+  }
+
+  async restoreStatus(): Promise<RestoreStatus> {
+    const held = this.#restoration;
+
+    return {
+      restoring: held.phase === 'restoring',
+      refused: held.phase === 'unattached' && !held.retry ? terminalRefusal(held.reason) : undefined,
     };
   }
 

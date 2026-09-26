@@ -9,8 +9,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { AgentTaskTree, ChangelogEntry, MemoryEntry, PendingAction, Rpc } from '@kinu.run/core';
 import type { BackgroundJob } from '@kinu.run/core/protocol';
 import { buildJournal, WorkTab } from '../src/components/surfaces/WorkTab';
-import { CHANGELOG_REVALIDATE_MS } from '../src/components/surfaces/changelog-entries';
-import { LIVE_DATA_REFRESH_MS } from '../src/hooks/use-kinu';
 
 function job(over: Partial<BackgroundJob> & { id: string }): BackgroundJob {
   return {
@@ -80,21 +78,13 @@ describe('the work journal', () => {
   });
 });
 
-/** Queue and journal render the same ledger, so the digest revalidates on the live-data tick, not once at mount. */
-describe('the journal reads on the same clock as the queue above it', () => {
-  test('the digest revalidates, and no slower than the queue that announces it', () => {
-    expect(CHANGELOG_REVALIDATE_MS).toBeGreaterThan(0);
-    expect(CHANGELOG_REVALIDATE_MS).toBeLessThanOrEqual(LIVE_DATA_REFRESH_MS);
-  });
-});
-
 const UNREAD: Rpc = () => Promise.withResolvers<never>().promise;
 
 /** `renderToStaticMarkup` discards effects, so both ledger reads are still out: the opening state. */
 function workTabMarkup(jobs: BackgroundJob[], queue: PendingAction[] = [], memory: MemoryEntry[] = []): string {
   return renderToStaticMarkup(createElement(WorkTab, {
     plan: null, planRpc: UNREAD, rpc: UNREAD, pendingActions: queue, backgroundJobs: jobs,
-    onRefreshJobs: () => {}, onOpenSurface: () => {}, isStreaming: false, memory,
+    onRefreshJobs: () => {}, onOpenSurface: () => {}, memory,
   }));
 }
 

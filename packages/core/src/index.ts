@@ -1062,7 +1062,7 @@ export {
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   deviceToolchainAnswer, freshDeviceToolchain,
-  connectedDevices, deviceByName, deviceFleetAsk,
+  connectedDevices, deviceByName, deviceFleetAsk, sameDeviceStatus,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
   sandboxReasonFix, sandboxCause, describeGpuNodes,
   DEVICE_TOOLCHAIN_TTL_MS,
@@ -1225,7 +1225,7 @@ export {
 // Memory writes
 export { memoryBytes } from './memory/note';
 
-export { appendMemoryNote, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
+export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
 
 export {
   ConversationSearchStore, invalidateConversationSearchIndex,
@@ -1916,6 +1916,11 @@ export {
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
 
 export {
+  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, readsMovedByFiles, readsWrittenBy,
+  type LiveRead, type ReadsChangedFrame,
+} from './read-models/live-reads';
+
+export {
   anchoredText, changeBlocks, changeBody, changeTotals, changeTree, comparePaths, inReadingOrder, keepUnchanged, sideBySide,
 } from './read-models/change-view';
 
@@ -2543,6 +2548,7 @@ export {
 export {
   type ProbeOutcome,
   type ProbeDeps,
+  declaredSignInProviders,
   runSyntheticProbes,
 } from './http/synthetic-probes';
 

@@ -96,6 +96,8 @@ declare global {
     WEBHOOK_ROUTE_SECRET?: string;
     /** Cloudflare account OAuth client settings. Client secret must be a Wrangler secret. */
     CLOUDFLARE_OAUTH_CLIENT_ID?: string;
+    /** Comma-separated provider ids /login must offer (`cloudflare`, `google`, `github`); empty on staging. */
+    SIGN_IN_PROVIDERS: string;
     CLOUDFLARE_OAUTH_CLIENT_SECRET?: string;
     CLOUDFLARE_OAUTH_SCOPES?: string;
     CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD?: string;

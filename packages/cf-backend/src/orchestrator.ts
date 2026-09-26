@@ -169,6 +169,7 @@ import {
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
+  LiveReadsNotice, readsMovedByFiles, readsWrittenBy, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
   restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
@@ -246,15 +247,18 @@ import {
   type SandboxLifecycleFailureResult,
 } from "./sandbox-lifecycle";
 import { openSandbox } from "./sandbox-exec-lane";
+import type { RestoreStatus } from "@kinu.run/devbox";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
-import { SandboxPending, type ExposedPortList } from "@kinu.run/core";
+import type { ExposedPortList } from "@kinu.run/core";
 import {
   terminalEffect, keyedScope, declareTerminalRoster, owesShadowTrial,
   takesTerminalEffect, branchesTerminalEffect,
   type OwedEffect, type OwedTerminalEffectsInput, type TerminalEffectTable, type TerminalTurnFacts,
   type TerminalTurnParts,
 } from "@kinu.run/core";
+
+const READS_BY_STATEMENT = new WeakMap<TemplateStringsArray, readonly LiveRead[]>();
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 
@@ -279,6 +283,10 @@ const SLEEP_TIME_SETTLED_AT = 'sleep_time_settled_at';
 const SLEEP_TIME_CLOSED_AT = 'sleep_time_closed_at';
 
 const ANSWERED_TURNS_KEPT = 32;
+
+const SANDBOX_STARTING = 'sandbox_starting';
+
+const SANDBOX_REFUSED = 'sandbox_refused';
 
 /** Covers one more answer than `SLEEP_TIME_CADENCE.everyTurns` plus steers, so the
  *  window decides every trigger as the whole transcript would. */
@@ -421,6 +429,41 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.broadcastToActor(null, JSON.stringify({ type: CHANGES_MOVED_EVENT }));
   });
 
+  private _liveReads: LiveReadsNotice | undefined;
+
+  /** Lazy: the base constructor writes through `sql` before any field of this class exists. */
+  private get liveReads(): LiveReadsNotice {
+    this._liveReads ??= new LiveReadsNotice((frame) => { this.broadcastToActor(null, frame); }, (flush) => { this.deferLiveReads(flush); });
+
+    return this._liveReads;
+  }
+
+  protected deferLiveReads(flush: () => void): void {
+    setTimeout(flush, 0);
+  }
+
+  protected override liveReadsMoved(reads: readonly LiveRead[]): void {
+    this.liveReads.moved(reads);
+  }
+
+  /** Every actor of this object writes through here. */
+  override sql<T = Record<string, string | number | boolean | null>>(
+    strings: TemplateStringsArray,
+    ...values: (string | number | boolean | null)[]
+  ): T[] {
+    const rows = super.sql<T>(strings, ...values);
+    let reads = READS_BY_STATEMENT.get(strings);
+
+    if (reads === undefined) {
+      reads = readsWrittenBy(strings.join('?'));
+      READS_BY_STATEMENT.set(strings, reads);
+    }
+
+    this.liveReads.moved(reads);
+
+    return rows;
+  }
+
   private hostedWorkspace(): HostedWorkspace {
     this._workspace ??= createHostedWorkspace({
       ctx: this.ctx,
@@ -428,6 +471,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       onFilesChanged: (paths) => {
         this.changes.touched(paths);
+        this.liveReadsMoved(readsMovedByFiles(paths));
         const ids = this.slates.filesChanged(paths);
 
         if (ids.length === 0) return;
@@ -436,6 +480,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
         this.overviewChanged();
       },
+      onPortsChanged: () => { this.liveReadsMoved(['getExposedPorts', 'listSlates']); },
       ensureSlate: (owner) => this.slates.ensureDurable(owner),
       slateInvocation: (port, socket) => this.slates.slateInvocation(port, socket),
       ...(this.pictureCapture() !== null && {
@@ -581,6 +626,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // a chat and a head identically; branches under an unresolved profile are unreproducible.
       resolveProfile: (input) => this.hostedActorProfile(input),
       reportModelCall: (report) => { this.reportModelCall(report); },
+      liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
       modelOperations: this.modelOperations,
       pricing: (spec) => this.modelCatalog.pricing(spec),
       hostedModel: (actor) => this.hostedModelOf(actor),
@@ -2327,11 +2373,76 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override lastConnectionClosed(): void {
     this.config.set(SLEEP_TIME_CLOSED_AT, String(Date.now()));
     this.armDurableWake();
+    this.watchDeviceStatus(false);
   }
 
   protected override connectionOpened(): void {
     this.config.delete(SLEEP_TIME_CLOSED_AT);
     this.overviewChanged();
+    this.watchDeviceStatus(true);
+    this.recheckSandboxRestore();
+  }
+
+  /** A sandbox that died mid-restore sends no settle. */
+  private recheckSandboxRestore(): void {
+    const namespace = this.env.Sandbox;
+
+    if (namespace === undefined) return;
+
+    if (this.config.get(SANDBOX_STARTING) == null && this.config.get(SANDBOX_REFUSED) == null) return;
+    this.detachOwned(async () => {
+      try {
+        await this.sandboxRestore(await openSandbox(namespace, sandboxIdForWorkspace(this.name), { normalizeId: true }).restoreStatus());
+      } catch (cause) {
+        diagnostics.failure('sandbox.restore_recheck_failed', toKinuError({
+          doing: "reading the sandbox's restore state", cause, otherwise: 'unavailable',
+        }), { workspace: this.name });
+      }
+    });
+  }
+
+  /** Every open re-registers, so an object that hibernated or lost its row is told again. */
+  private watchDeviceStatus(watching: boolean): void {
+    if (this.getOwnerUserId() === null) return;
+    this.detachOwned(async () => {
+      try {
+        const { stub, caller } = await this.userHub();
+        await stub.watchDeviceStatus(caller, watching);
+
+        if (!watching) return;
+        const opened = this.rt.deviceTransport.status();
+
+        if (!sameDeviceStatus(await this.rt.deviceTransport.refreshStatus(), opened)) {
+          this.liveReadsMoved(['getExecutors', 'getToolDescriptions']);
+        }
+      } catch (cause) {
+        diagnostics.failure('device.watch_failed', toKinuError({
+          doing: watching ? 'asking to hear device changes' : 'leaving the device-change list', cause, otherwise: 'unavailable',
+        }), { workspace: this.name });
+      }
+    });
+  }
+
+  async sandboxStopped(): Promise<void> {
+    await this.sandboxRestore({ restoring: false, refused: undefined });
+  }
+
+  async sandboxRestore(status: RestoreStatus): Promise<void> {
+    if (status.restoring) this.config.set(SANDBOX_STARTING, String(Date.now()));
+    else this.config.delete(SANDBOX_STARTING);
+
+    if (status.refused !== undefined) this.config.set(SANDBOX_REFUSED, status.refused);
+    else this.config.delete(SANDBOX_REFUSED);
+
+    this.liveReadsMoved(['getExposedPorts']);
+  }
+
+  /** Detached: the re-read calls back into a UserDO that may be mid socket handler. */
+  async devicesMoved(): Promise<{ watching: boolean }> {
+    if ([...this.getConnections()].length === 0) return { watching: false };
+    this.detachOwned(async () => { await this.rt.deviceTransport.refreshStatus(); });
+
+    return { watching: true };
   }
 
   private async runSleepTimeCompute(window: SleepTimeWindow): Promise<void> {
@@ -2687,8 +2798,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.logActivity('approval_decided', `${notice.actions.length} ${first?.status ?? 'decided'}`);
     }
 
-    // The needs-you queue is polled, not pushed; this frame tells clients to re-read it.
-    this.broadcastToActor(null, JSON.stringify({ type: 'pending_actions_changed' }));
     this.overviewChanged();
   }
 
@@ -3282,7 +3391,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async markChangelogSeen() {
-    return markChangelogSeen(this.config);
+    const seen = markChangelogSeen(this.config);
+    this.liveReadsMoved(['getEvolutionChangelog', 'listPendingActions', 'getWorkspaceTabPresence']);
+
+    return seen;
   }
 
   /** Id-addressed against a fresh digest so a shifted list cannot revert the wrong row. */
@@ -4915,6 +5027,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Workspace port registrations live in Nimbus, so they stay authoritative after a restart. */
   @callable() async getExposedPorts(executorId: string): Promise<ExposedPortList> {
+    const refused = executorId === 'sandbox' ? this.config.get(SANDBOX_REFUSED) : null;
+
+    if (refused != null) return { ports: [], error: refused };
+
+    if (executorId === 'sandbox' && this.config.get(SANDBOX_STARTING) != null) {
+      return { ports: [], pending: "the sandbox's container is still restoring" };
+    }
+
     const provider = this.rt.executionRouter?.getProvider(executorId);
 
     if (!provider) {
@@ -4938,8 +5058,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       return { ports: ports.map(({ port, name, url }) => ({ port, url, name })) };
     } catch (error) {
-      if (error instanceof SandboxPending) return { ports: [], pending: error.message };
-
       return {
         ports: [],
         error: error instanceof Error && error.message

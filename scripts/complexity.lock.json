@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-26",
-  "files": 2756,
-  "functions": 68061,
+  "files": 2764,
+  "functions": 68344,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -218,10 +218,6 @@
       "complexity": 31
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#workspacePageRpc",
-      "complexity": 31
-    },
-    {
       "key": "packages/cf-backend/src/slates/host.ts#SlateHost.operation",
       "complexity": 31
     },
@@ -275,10 +271,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
-      "complexity": 30
-    },
-    {
-      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
       "complexity": 30
     },
     {

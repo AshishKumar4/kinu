@@ -10,7 +10,6 @@ import {
   type DeviceRpcOptions,
 } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
-import { handClock } from '@kinu.run/test-utils';
 
 const FAKE_CALLER = { workspaceToken: 'pwc_test' } as const;
 
@@ -48,10 +47,8 @@ describe('createHubDeviceTransport', () => {
   test('refreshStatus is authoritative: a device that connected mid-session becomes visible', async () => {
     let connected = false;
 
-    const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      clock,
       hub: () => fakeHub(() => ({ connected, registered: true, toolchain: null })),
       caller,
       agentName: 'agent-1',
@@ -64,56 +61,66 @@ describe('createHubDeviceTransport', () => {
     expect(transport.status().connected).toBe(true);
   });
 
-  test('status() serves the cached snapshot inside the TTL without re-querying the hub', async () => {
+  // 2026-09-26: every wake of an idle workspace re-read its page's executors, since a fresh object's first answer
+  // differed from the empty one it starts with, though no page had read that one.
+  test('status() never asks the hub; a refresh says so only when it changes an answer the object had', async () => {
     let listCalls = 0;
+    let connected = false;
+    let moved = 0;
 
     const hub: DeviceHubClient = {
       deviceRuntimeStatus: async () => {
         listCalls += 1;
 
-        return { connected: true, registered: true, toolchain: null };
+        return { connected, registered: true, toolchain: null };
       },
       deviceRpc: async () => 'unused',
       acknowledgeDeviceRequest: async () => {},
     };
 
-    const clock = handClock();
-    // The caller is resolved synchronously in the kick; the hub list comes one await later.
-    let callerCalls = 0;
+    const transport = createHubDeviceTransport({
+      hub: () => hub, agentName: 'agent-1', cliCwd: () => null, caller,
+      onStatusChanged: () => { moved += 1; },
+    });
+
+    connected = true;
+    await transport.refreshStatus();
+    expect(moved).toBe(0);
+    transport.status();
+    transport.status();
+    expect(listCalls).toBe(1);
+
+    await transport.refreshStatus();
+    expect(moved).toBe(0);
+    connected = false;
+    await transport.refreshStatus();
+    expect(moved).toBe(1);
+    expect(transport.status().connected).toBe(false);
+  });
+
+  // 2026-09-26: a workspace answered first without its hub, then by a hub with no machines, told every open page
+  // its executors moved, though "no devices listed" and "no devices" read the same everywhere.
+  test('the hub arriving with no machines changes nothing a reader sees, so it says nothing', async () => {
+    let attached = false;
+    let moved = 0;
 
     const transport = createHubDeviceTransport({
-      clock,
-      hub: () => hub, agentName: 'agent-1', cliCwd: () => null,
-      caller: () => {
-        callerCalls += 1;
-
-        return caller();
-      },
+      hub: () => (attached ? fakeHub(() => ({ connected: false, registered: false, toolchain: null, devices: [] })) : null),
+      agentName: 'agent-1', cliCwd: () => null, caller,
+      onStatusChanged: () => { moved += 1; },
     });
 
     await transport.refreshStatus();
-    expect(listCalls).toBe(1);
-    transport.status();
-    transport.status();
-    expect(callerCalls).toBe(1);        // fresh — no background re-check
-    // Past the status TTL, on the transport's own clock.
-    clock.advance(5_100);
-    transport.status();                 // stale — kicks ONE background re-check
-    transport.status();
-    // Read before `refreshStatus`, which would start its own re-check and hide a missing kick.
-    expect(callerCalls).toBe(2);
-    // `refreshStatus` dedupes against the in-flight re-check.
+    attached = true;
     await transport.refreshStatus();
-    expect(listCalls).toBe(2);
-    expect(callerCalls).toBe(2);
+
+    expect(moved).toBe(0);
   });
 
   test('no owner hub → the workspace is unattached, which is not an unlinked machine', async () => {
     // A null hub means no owner id resolved; `kinu connect` guidance would be wrong.
-    const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      clock,
       hub: () => null, agentName: 'agent-1', cliCwd: () => null,
       caller,
     });
@@ -132,7 +139,6 @@ describe('createHubDeviceTransport', () => {
 
     // A hub that answers with no device must not read as unattached.
     const unlinked = createHubDeviceTransport({
-      clock,
       hub: () => fakeHub(() => NO_DEVICE), agentName: 'agent-1', cliCwd: () => null, caller,
     });
 
@@ -154,10 +160,8 @@ describe('createHubDeviceTransport', () => {
       acknowledgeDeviceRequest: async () => { throw new Error('no device connected'); },
     };
 
-    const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      clock,
       hub: () => (hubUp ? hub : failingHub),
       caller,
       agentName: 'agent-1',
@@ -185,10 +189,8 @@ describe('createHubDeviceTransport', () => {
 
     const hub = fakeHub(() => probed);
 
-    const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      clock,
       hub: () => hub, caller, agentName: 'agent-1', cliCwd: () => null,
     });
 
@@ -203,10 +205,8 @@ describe('createHubDeviceTransport', () => {
     // This seam rewrites `exec` params; a lost id is a command nothing can cancel.
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
 
-    const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      clock,
       hub: () => hub, caller, agentName: 'agent-1', cliCwd: () => '/home/me/project',
     });
 
@@ -226,10 +226,8 @@ describe('createHubDeviceTransport', () => {
   test('mutating methods carry the pre-mutation checkpoint hint; reads do not', async () => {
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
 
-    const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      clock,
       hub: () => hub,
       caller,
       agentName: 'agent-1',
@@ -252,14 +250,12 @@ describe('createHubDeviceTransport', () => {
 
   test('no checkpoint hint outside a turn or when the meta seam is unwired', async () => {
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
-    const unwired = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'a', cliCwd: () => null, clock: handClock() });
+    const unwired = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'a', cliCwd: () => null });
     await unwired.rpc('exec', ['ls']);
     expect(requiredCall(hub.rpcCalls, 0)[2]?.checkpoint).toBeUndefined();
 
-    const clock = handClock();
 
     const outsideTurn = createHubDeviceTransport({
-      clock,
       hub: () => hub, agentName: 'a', cliCwd: () => null, checkpointMeta: () => null,
       caller,
     });
@@ -271,10 +267,8 @@ describe('createHubDeviceTransport', () => {
   test('exec calls are rewritten into the CLI-forwarded working directory', async () => {
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
 
-    const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      clock,
       hub: () => hub, agentName: 'agent-1', cliCwd: () => "/home/u/my proj",
       caller,
     });
@@ -296,10 +290,8 @@ describe('createHubDeviceTransport', () => {
       acknowledgeDeviceRequest: async () => denial(),
     };
 
-    const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      clock,
       hub: () => denying, caller, agentName: 'agent-1', cliCwd: () => null,
     });
 
@@ -309,10 +301,8 @@ describe('createHubDeviceTransport', () => {
   });
 
   test('a workspace with no capability token reads as no device rather than throwing at turn start', async () => {
-    const clock = handClock();
 
     const transport = createHubDeviceTransport({
-      clock,
       hub: () => fakeHub(() => ({ connected: true, registered: true, toolchain: null })),
       caller: async () => { throw new Error('This workspace has not been issued a capability token yet.'); },
       agentName: 'agent-1',

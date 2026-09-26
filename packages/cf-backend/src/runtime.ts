@@ -35,8 +35,8 @@ import {
   type FixedTierSource,
   type VectorStore,
 } from "@kinu.run/core";
-import type { DeviceFileScope, SandboxHandle } from "@kinu.run/core";
-import { withHostedNodeExecution, REAL_CLOCK, WORKSPACE_ROOT } from '@kinu.run/core';
+import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
+import { withHostedNodeExecution, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { HostedNodeHome } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
@@ -206,6 +206,7 @@ export interface CFRuntimeHooks {
   deferrals?: () => DeferredApprovalChannel | undefined;
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
+  liveReadsMoved?: (reads: readonly LiveRead[]) => void;
   /** Where non-turn model seams (judge, fast tier, reflection, embedder) report cost; turn spend arrives
      *  as `step_finish`. */
   reportModelCall: ModelCallSink;
@@ -403,11 +404,13 @@ export function createCFRuntime(
         }));
       },
       // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
-      env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null);
+      env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null,
+      () => hooks.liveReadsMoved?.(['getExposedPorts']));
 
       sandboxHandle = handle;
       // No restore wrapper: KinuSandbox.onStart restores inside blockConcurrencyWhile.
-      executionRouter.register(createSandboxExecutor(handle, previewSuffix));
+      executionRouter.register(createSandboxExecutor(handle, previewSuffix,
+        () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions', 'getExposedPorts'])));
       diagnostics.event('sandbox.executor_registered', {
         sandboxId,
         transport: SANDBOX_TRANSPORT,
@@ -434,7 +437,7 @@ export function createCFRuntime(
     agentName: actor.workspaceName,
     cliCwd: cliCwdForDevice,
     checkpointMeta: () => access.getCheckpointMetaForDevice?.() ?? null,
-    clock: REAL_CLOCK,
+    onStatusChanged: () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions']),
   };
 
   const deviceTransport = createHubDeviceTransport(deviceTransportOptions);

@@ -53,6 +53,8 @@ export const VAR_POLICY = {
   CLI_PUBLIC_ORIGIN: 'derived',
   CLI_APPROVAL_ORIGIN: 'derived',
   CLOUDFLARE_OAUTH_CLIENT_ID: 'ours',
+  // Each deployment declares the providers it configures; a self-host from this flow configures none.
+  SIGN_IN_PROVIDERS: 'derived',
   CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD: 'carried',
   CLOUDFLARE_AI_GATEWAY_ID: 'carried',
   CLOUDFLARE_ACCOUNT_ID: 'derived',
