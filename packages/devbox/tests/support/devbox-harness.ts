@@ -1,6 +1,7 @@
-// The sole substitution of `@cloudflare/sandbox`: a faithful container stand-in for Devbox tests.
-// Shared because `mock.module` is process-wide; a second registration would replace this one.
+// The sole substitution of `@cloudflare/sandbox`: a faithful container stand-in for Devbox tests. It reaches this
+// harness's own instance of the class and nothing else in the process (see the registration below).
 import { mock } from 'bun:test';
+import * as sandboxSdk from '@cloudflare/sandbox';
 
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
@@ -1261,10 +1262,6 @@ export class FakeSandbox {
   }
 }
 
-await mock.module('@cloudflare/sandbox', () => ({
-  Sandbox: FakeSandbox,
-}));
-
 // A real timer on purpose: the probe loop and the stop-transition wait are under test,
 // so faking the clock would replace the property. Assertions never read elapsed time.
 Object.defineProperty(globalThis, 'scheduler', {
@@ -1279,9 +1276,29 @@ Object.defineProperty(globalThis, 'scheduler', {
   },
 });
 
-// Dynamic import: the substitution above must register before the class's module graph
-// resolves `@cloudflare/sandbox`, and a static import would be hoisted above it.
-export const { Devbox } = await import('../../src/devbox');
+/** This harness's own instance of the class module. The query is Bun's form for evaluating `devbox.ts` again, apart
+ *  from the instance every other importer in the process shares (the product's `@kinu.run/devbox` included). */
+const HARNESS_INSTANCE = '../../src/devbox.ts?harness';
+
+// The class extends the SDK's `Sandbox`, and here its base is `FakeSandbox`. `mock.module` is process-wide with no
+// undo, and bun runs every file of one `bun test` in one process and one module registry. Registered for good, the
+// fake reached every later importer of the SDK, which lost every export but `Sandbox` (a later suite's `getSandbox`
+// import failed to link), and a process that had loaded `@kinu.run/devbox` first handed this harness a class built
+// on the real SDK. So the fake base is registered around exactly one import, this harness's own instance, beside
+// every export the SDK has, and the exports the process had are put back once the class is built.
+const exported = { ...sandboxSdk };
+
+await mock.module('@cloudflare/sandbox', () => ({ ...exported, Sandbox: FakeSandbox }));
+
+const instance: typeof import('../../src/devbox') = await import(HARNESS_INSTANCE);
+
+await mock.module('@cloudflare/sandbox', () => exported);
+
+if (Object.getPrototypeOf(instance.Devbox) !== FakeSandbox) {
+  throw new Error(`the harness's Devbox is not built on FakeSandbox: ${HARNESS_INSTANCE} was an instance already evaluated against another \`Sandbox\``);
+}
+
+export const { Devbox } = instance;
 
 /** Derived from the class's constructor signature: the Workers types parameterise it,
  *  and a second spelling here would be a second opinion on the platform. */
