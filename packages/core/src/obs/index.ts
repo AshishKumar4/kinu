@@ -11,7 +11,9 @@ export {
   SPAN_ATTR_INVOCATION,
   type AgentTracing,
   type InvocationKind,
+  type SpanActor,
   type TracedInvocation,
+  type TurnTracing,
 } from './agent-tracing';
 
 export {

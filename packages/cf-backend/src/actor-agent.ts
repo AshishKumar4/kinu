@@ -1807,6 +1807,7 @@ export abstract class ActorAgent extends Agent<Env> {
       installedBuild: this.installedBuildIdentity(),
       events: this.stores.eventRecorder,
       orchestration: this.orchestrationDeps(),
+      turns: () => this.tracing.turns({ id: this.actorHandle().actorId, kind: 'main' }),
     });
 
     return this._actorSession;
@@ -2975,6 +2976,7 @@ export abstract class ActorAgent extends Agent<Env> {
       tracer: createWorkersTracer(),
       isolateGen: this.isolateGeneration,
       selfPath: this.selfPath,
+      actor: { id: this.actorHandle().actorId, kind: 'main' },
     });
 
     return this._tracing;

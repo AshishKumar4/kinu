@@ -10,7 +10,7 @@ spend. `AGENTS.md` § Errors and Logs points here. The source of truth is
 | --- | --- | --- |
 | `tolerate` / `tolerateAsync` / `classify`: the tolerable-failure signatures | built | `obs/expected-failure.ts` |
 | `Tracer` / `ScopedSpan`: the span interface | built | `obs/tracer.ts` |
-| `AgentTracing` / `TracedInvocation`: the scoping rules | built, wired at two production call sites | `obs/agent-tracing.ts`, `cf-backend/src/obs/cf-tracer.ts` |
+| `AgentTracing` / `TracedInvocation`: the scoping rules | built, wired at two invocation sites and every actor turn | `obs/agent-tracing.ts`, `cf-backend/src/obs/cf-tracer.ts` |
 | `ErrorCode` / `KinuError` / `toKinuError` | built | `obs/error.ts` |
 | `renderCauseChain` / `renderThrownChain`: the chain for an unnarrowed value | built; the count of chain-dropping copies it replaced is not measured | `obs/error.ts` |
 | `CommandResult` / `commandResult`: command output or a structured refusal | built, used by all five executors | `execution/exec-result.ts` |
@@ -64,9 +64,9 @@ under `env.staging`. Writes omit it because the binding names its dataset.
 
 ## Where spans are open
 
-Two production call sites, both in `cf-backend/src/orchestrator.ts`, in two of
-the four declared invocation classes. Grep of `this.tracing.invocation` on
-2026-09-22.
+Two invocation sites, both in `cf-backend/src/orchestrator.ts`, in two of the
+four declared invocation classes (grep of `this.tracing.invocation`,
+2026-09-22), and every turn (below).
 
 | Class | Root span | Entry method |
 | --- | --- | --- |
@@ -91,30 +91,48 @@ object (`core/src/state/actor-host.ts`, hosted by
 that asked for it. There is no RPC boundary, so there is no `rpc` span to open,
 and the 120 s cap on an unanswered cross-object request does not apply.
 
-No span attribute names the logical actor. `SPAN_ATTR_SELF_PATH` renders the
-SDK's `[...parentPath, {className, name}]`, which is a Durable Object path, and
-with one object per workspace it is the same for every span the workspace
-emits. `ctx.id` is shared by every hosted actor too.
+Every span carries `kinu.actor` (the digest of the actor id) and
+`kinu.actor_kind` (`main`, `subordinate`, `head`, `branch`). `kinu.self_path`
+cannot tell actors apart: it renders the Durable Object path, which is the same
+for every actor of a workspace, and so is `ctx.id`. An invocation span carries
+the workspace root; a turn span carries the actor whose turn it is.
 
 `ActorAgent`'s `tracing` getter (`cf-backend/src/actor-agent.ts`) builds the
 seam once per construction, with `isolateGen` from
 `AgentConfigStore.countIsolateGeneration` (`core/src/config/store.ts`).
 
-### No span covers a turn
+### One trace per turn
 
-The turn loop (core `ActorSession`/`ChatSession` and `runChat` in
-`core/src/chat.ts`) takes no `Tracer`, so neither a turn nor a tool call is a
-span.
+`ActorSession.execute` runs each turn under root span `turn`, root and hosted
+actors alike (`AgentTracing.turns`). Its children open through the turn's
+handle (`core/src/turn-trace.ts`):
 
-`SpanOpenAttributes` requires `isolateGen` and `selfPath` (`obs/tracer.ts:44`).
-Only CF Agents supply them.
+| Span | Parent | Attributes |
+| --- | --- | --- |
+| `turn` | the invocation running it | `kinu.turn.mode`, `kinu.turn.steps`, `kinu.turn.interrupted` |
+| `turn.model_call` | `turn` | `gen_ai.request.model`, `gen_ai.provider.name`, `kinu.model.call`, `kinu.model.fallback`, `kinu.model.steps` |
+| `turn.tool_call` | `turn.model_call` | `gen_ai.tool.name` |
+| `turn.delegation` | the `agents` tool call | `kinu.delegation.action` (`swarm`, `hire`, `msg`) |
 
-`tracing.invocation` revokes its `TracedInvocation` when the callback settles.
-Work that escapes and opens a span afterwards throws `KinuError('unsupported')`.
-Context ends at `alarm()`: the turn that armed an alarm may be minutes or days
-old, in a reset isolate, so one span across both would claim time nothing
-measured. There is deliberately no `AsyncLocalStorage`: implicit context has no
-revocation point (`obs/agent-tracing.ts:51-55`).
+No attribute holds a message, a tool argument or a result;
+`core/tests/unit-turn-trace.test.ts` plants text in each and reads every
+attribute. Not spanned: scaffold-program turns' model calls, `agents.*` from
+`eval` code, and model calls outside a turn (`model-invocation.ts`). The CLI
+has no tracer, so its turns run unspanned.
+
+The Agents SDK's `wrapAISDK` (`agents/observability/ai`, agents 0.22.0) was
+evaluated for `turn.model_call` and not adopted. It imports
+`cloudflare:workers`, so it cannot sit in the core loop the CLI also runs. Its
+spans bypass `Tracer`, so they would carry no actor and no `kinu.error`, and no
+recording tracer can check them. When traced it also replaces every tool's
+`execute` and wraps the model with `wrapLanguageModel`, on every production
+turn.
+
+A handle is revoked when its invocation or turn settles. Work that escapes and
+opens a span afterwards throws `KinuError('unsupported')`. Context ends at
+`alarm()`: the turn that armed an alarm may be minutes or days old, in a reset
+isolate, so one span across both would claim time nothing measured. There is
+deliberately no `AsyncLocalStorage`: implicit context has no revocation point.
 
 ### A span records one boolean about a failure
 

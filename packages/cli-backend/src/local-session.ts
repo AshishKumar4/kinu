@@ -2465,6 +2465,8 @@ export class LocalAgentSession {
     const { directory } = localActorDirectory(this.rt.actor);
 
     return createActorHost({
+      // The CLI has no tracer.
+      tracing: undefined,
       storage: {
         sql: this.rt.storage.sql,
         transactionSync: (write) => this.rt.storage.transactionSync(write),

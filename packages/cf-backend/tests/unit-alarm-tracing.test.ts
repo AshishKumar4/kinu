@@ -8,6 +8,9 @@ import {
   recordedNativeSpans, renderNativeSpanTree, resetNativeSpans,
 } from './helpers/agents-sdk';
 import { orchestratorHarness } from './helpers/actor-harness';
+import { openWorkspaceMainActor } from '@kinu.run/core';
+import { analyticsDigest } from '@kinu.run/core/analytics';
+import { makeSql } from '../../core/tests/helpers';
 
 import {
   createAgentTracing, createRecordingTracer, KinuError, renderCauseChain,
@@ -50,14 +53,18 @@ describe('alarm tick tracing', () => {
     expect(spans.filter((span) => span.parent !== null && span.parent !== rootIndex)).toEqual([]);
   });
 
-  test('every span carries the two attributes that identify which fork produced it', async () => {
-    const { agent } = orchestratorHarness();
+  test('every span carries the attributes that identify which fork and which actor produced it', async () => {
+    const { agent, db } = orchestratorHarness();
     resetNativeSpans();
     await agent._kinuTimerTick();
     const spans = recordedNativeSpans();
     expect(spans.length).toBeGreaterThan(0);
+    const root = analyticsDigest(openWorkspaceMainActor(makeSql(db)).actorId);
 
     for (const span of spans) {
+      // The wake is the workspace root's: a hosted actor's turn carries its own id instead.
+      expect(span.attributes.get('kinu.actor')).toBe(root);
+      expect(span.attributes.get('kinu.actor_kind')).toBe('main');
       expect(span.attributes.get(SPAN_ATTR_ISOLATE_GEN)).toBe(1);
       // `<className>:<name>`, never `root`: the SDK getter always includes self. Derived from the harness
       // agent: the invariant is the shape, not the value.
@@ -95,21 +102,22 @@ describe('alarm tick tracing', () => {
   });
 
   test('the rendered tree is what a reader gets', async () => {
-    const { agent } = orchestratorHarness();
+    const { agent, db } = orchestratorHarness();
     resetNativeSpans();
     await agent._kinuTimerTick();
+    const base = `isolate_gen=1 actor=${analyticsDigest(openWorkspaceMainActor(makeSql(db)).actorId)} actor_kind=main invocation=1`;
     // Pinned in full: a change to the tree is a change to what an operator sees.
     expect(renderNativeSpanTree()).toBe(
       [
-        'alarm.tick  [isolate_gen=1 invocation=1]',
-        '  alarm.due_triggers  [isolate_gen=1 invocation=1 triggers_fired=0]',
-        '  alarm.event_drain  [isolate_gen=1 invocation=1 drain_due=false]',
-        '  alarm.peer_dispatch  [isolate_gen=1 invocation=1]',
-        '  alarm.email_reconcile  [isolate_gen=1 invocation=1]',
-        '  alarm.cache_warm  [isolate_gen=1 invocation=1 cache_warmed=false]',
-        '  alarm.sleep_time  [isolate_gen=1 invocation=1 sleep_time_ran=false]',
-        '  alarm.timer_rearm  [isolate_gen=1 invocation=1 rearmed=false]',
-        '  alarm.slate_pictures  [isolate_gen=1 invocation=1]',
+        `alarm.tick  [${base}]`,
+        `  alarm.due_triggers  [${base} triggers_fired=0]`,
+        `  alarm.event_drain  [${base} drain_due=false]`,
+        `  alarm.peer_dispatch  [${base}]`,
+        `  alarm.email_reconcile  [${base}]`,
+        `  alarm.cache_warm  [${base} cache_warmed=false]`,
+        `  alarm.sleep_time  [${base} sleep_time_ran=false]`,
+        `  alarm.timer_rearm  [${base} rearmed=false]`,
+        `  alarm.slate_pictures  [${base}]`,
       ].join('\n'),
     );
   });
@@ -128,6 +136,7 @@ describe('invocation handles are revoked, not merely discouraged', () => {
     tracer: createRecordingTracer(),
     isolateGen: 7,
     selfPath: [{ className: 'OrchestratorAgent', name: 'acme' }],
+    actor: { id: 'root-actor', kind: 'main' },
   });
 
   /** A property, not a `let`: narrowing collapses a `let` assigned only inside a callback to `null`. */

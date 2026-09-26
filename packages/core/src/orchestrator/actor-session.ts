@@ -8,7 +8,7 @@ import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile
 import { promptCacheWarm, PromptCacheRouteSchema, type CachedRequest } from '../prompting/cache-breakpoints';
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
-import { KinuError, renderThrownChain } from '../obs/index';
+import { KinuError, renderThrownChain, type TracedInvocation, type TurnTracing } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
 import { describeLandedSteers, type AcceptedSteer, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
@@ -58,6 +58,7 @@ export interface ActorSessionOptions {
   /** Optional: the revision rows are the durable record; no recorder means no event, never a fabricated one. */
   readonly events?: ContextEventRecorder | null;
   readonly advisor?: ActorAdvisorContext;
+  readonly turns?: () => TurnTracing;
 }
 
 /** Live-instance execution token, not a replacement for a durable turn/run claim. */
@@ -460,7 +461,29 @@ export class ActorSession {
 
   /** Prepare, claim durably, then consume: `startActorTurn` runs nothing until the first `next()`, so a crash
    *  before the claim leaves a turn that provably did nothing. */
-  async execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void | Promise<void>): Promise<ActorExecutionResult> {
+  execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void | Promise<void>): Promise<ActorExecutionResult> {
+    const turns = this.options.turns;
+
+    if (turns === undefined) return this.run(lease, input, emit, undefined);
+
+    return turns().turn(async (trace, span) => {
+      span.setAttribute('kinu.turn.mode', this.mode);
+      const result = await this.run(lease, input, emit, trace);
+      span.setAttribute('kinu.turn.steps', result.steps);
+      span.setAttribute('kinu.turn.interrupted', result.interrupted);
+
+      if (result.failure !== null && !result.interrupted) span.fail(result.failure);
+
+      return result;
+    });
+  }
+
+  private async run(
+    lease: ActorTurnLease,
+    input: ActorExecutionInput,
+    emit: (event: ChatEvent) => void | Promise<void>,
+    trace: TracedInvocation | undefined,
+  ): Promise<ActorExecutionResult> {
     const active = this.requireTurn(lease);
 
     if (active.phase !== 'preparing' || active.profile === null) throw new KinuError('denied', 'a profiled actor turn executes once');
@@ -521,7 +544,7 @@ export class ActorSession {
         assertActive: input.assertActive,
         scaffoldStreamOptions: input.scaffoldStreamOptions,
         chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
-          measureContext: true,
+          measureContext: true, trace,
           persistStreamPart: part => stream.nativePart(part),
           persistStep: messages => stream.nativeStep(messages),
           dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
