@@ -609,6 +609,29 @@ describe('ChatWireTransport', () => {
     await h.land(answered);
   });
 
+  // Review job 169: on a failure the joining tab's resume names the failing stream itself, so a synthetic done
+  // there settled it before the turn's own terminal frame, without the error.
+  test('a tab joining a turn that then fails hears one terminal frame, the one carrying the error', async () => {
+    const h = openRequest();
+    const first = h.connection('c1');
+    const { answered } = await h.open(first, 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }]), { index: 0 });
+
+    const second = h.connection('c2');
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
+    await h.transport.onConnect(second);
+    await h.transport.deliver({ type: 'error', message: 'the provider refused the request' });
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 0, durationMs: 0, feedback: null, hadError: true, origin: 'user' } });
+    await h.land(answered);
+
+    const terminal = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
+      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === 'req-1' && frame.done === true);
+
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]?.error).toBe(true);
+  });
+
   test('an interrupted turn closes with the abort chunk and no error frame; a failure still carries one', async () => {
     // A Stop is not a failure: the SDK client reads `error: true` as a stream error, so the abort chunk alone reports the cut.
     const h = openRequest();

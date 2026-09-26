@@ -370,7 +370,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         // A Stop is not a failure: an `error` frame here makes the SDK client paint an error card.
         if (event.message === INTERRUPTED_TURN) return;
 
-        this.releaseWaiters();
+        // Their resume names this stream: its own terminal frame, with the error, settles it.
+        this.pendingResume.clear();
         this.resume?.resumable.markError(live.streamId);
         live.failure = event.message;
 
@@ -470,7 +471,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   private degradeRelay(live: LiveStream, error: KinuError): void {
     diagnostics.failure('chat.stream_observe_failed', error);
     live.broken = true;
-    this.releaseWaiters();
+    this.pendingResume.clear();
     this.resume?.resumable.markError(live.streamId);
     this.wire.broadcast(JSON.stringify({
       type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: refusalOf(error).error, done: false, error: true,
