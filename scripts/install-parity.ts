@@ -110,9 +110,14 @@ function packagesUnder(
   if (!existsSync(modules)) return [];
   const found: InstalledPackage[] = [];
 
-  const entries = readdirSync(modules).filter((name) => !name.startsWith('.')).flatMap((name) => (name.startsWith('@')
-    ? readdirSync(join(modules, name)).map((inner) => `${name}/${inner}`)
-    : [name]));
+  const entries = readdirSync(modules).filter((name) => !name.startsWith('.')).flatMap((name) => {
+    if (!name.startsWith('@')) return [name];
+    // A scope linked to a donor checkout that has since removed it lists nothing: it is an entry of its own, which
+    // the report names and `setup-worktree.sh` prunes.
+    const scoped = tolerate(() => readdirSync(join(modules, name)), 'enoent');
+
+    return scoped === undefined ? [name] : scoped.map((inner) => `${name}/${inner}`);
+  });
 
   for (const name of entries) {
     const path = join(modules, name);
