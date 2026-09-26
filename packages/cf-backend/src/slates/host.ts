@@ -50,6 +50,7 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   ownerUserId?(): string | null;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
+  previewed?(slate: string): void;
 }
 
 interface ViewerAdmission {
@@ -582,6 +583,8 @@ export class SlateHost {
 
   /** The application is the root's, so the URL is the same whoever asks and across launches. */
   async preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
+    this.deps.previewed?.(id);
+
     try {
       requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
       const project = await this.project(caller.cred, id);

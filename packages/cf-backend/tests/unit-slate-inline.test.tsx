@@ -76,16 +76,11 @@ function answer(text: string, slates: string[]): string {
 
 const cards = (html: string): string[] => [...html.matchAll(/data-slate-inline="([^"]+)"/g)].map(([, id]) => id ?? '');
 
-// Owner 2026-09-25 (SLATE-INLINE-0925): a slate the turn changed is previewed after the answer, once.
+// Owner 2026-09-25 (SLATE-INLINE-0925): a slate the turn changed is previewed after the answer. Which ones is the
+// server's rule (`slatesToPreview`); the chat draws what the answer carries.
 describe("an answer's changed slates", () => {
-  test('each is previewed after the answer, once, even where the answer names it', () => {
+  test('each is previewed after the answer, in order', () => {
     expect(cards(answer('Added the column.', ['board', 'notes']))).toEqual(['board', 'notes']);
-    expect(cards(answer('Here it is.\n\nslate://board', ['board']))).toEqual(['board']);
-  });
-
-  // Review job 186: `slate://board2` is another slate; it must not stand in for board's preview.
-  test('a longer id that starts with the same letters does not count as the slate', () => {
-    expect(cards(answer('See slate://board2', ['board']))).toEqual(['board2', 'board']);
   });
 });
 

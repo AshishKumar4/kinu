@@ -5,7 +5,7 @@ import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
-import { MAX_LINES_PER_FILE, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
+import { MAX_LINES_PER_FILE, SLATE_LINK, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -109,20 +109,6 @@ export function SlateLink({ id }: { id: string }) {
 
   // Spans only — this renderer runs inside the markdown <p>.
   return <span className="block my-2"><InlineSlate id={id} rpc={inline.rpc} display="inline" /></span>;
-}
-
-const SLATE_LINK = /slate:\/\/[^\s)\]>"'`]+/g;
-
-export function slateLinkIds(text: string): Set<string> {
-  const ids = new Set<string>();
-
-  for (const [link] of text.matchAll(SLATE_LINK)) {
-    const id = slateLinkId(link);
-
-    if (id !== null) ids.add(id);
-  }
-
-  return ids;
 }
 
 function remarkSlateLinks() {

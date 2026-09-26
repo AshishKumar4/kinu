@@ -88,7 +88,7 @@ import {
   drainAssignments,
   appendMemoryNote,
   parseMemoryNotes,
-  type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY,
+  type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type SlateBindingCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
@@ -430,7 +430,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (ids.length === 0) return;
 
-        this.noteTurnSlates(ids);
+        this.noteTurnSlates('changed', ids);
         this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
         this.overviewChanged();
       },
@@ -1892,7 +1892,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (parentId === null) return;
 
-    const metadata = await this.takeTurnSlates(reference.actorId, completion.turnId);
+    const metadata = await this.takeTurnSlates(reference.actorId, completion.turnId, () => transcript.narration(completion.outputPartReferences));
 
     const entry = await transcript.prepareAssistant({
       id, parentId, turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
@@ -2041,23 +2041,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // The reactor lives on the core AgentOrchestrator. Ingress uses the debounced
   // `this.orch.scheduleDrain()`; the post-turn hook drains via `this.orch.drainPendingEvents()`.
 
-  private readonly turnSlates = new Map<string, { readonly turnId: string; readonly slates: Set<string> }>();
+  private readonly turnSlates = new Map<string, { readonly turnId: string; readonly changed: Set<string>; readonly shown: Set<string> }>();
 
-  private noteTurnSlates(ids: readonly string[]): void {
-    const writer = activeOperationProfile();
+  private noteTurnSlates(kind: 'changed' | 'shown', ids: readonly string[]): void {
+    const actor = activeOperationProfile();
 
-    if (writer === undefined || writer.turnId === WORKSPACE_RUN_ID) return;
-    let held = this.turnSlates.get(writer.actor.actorId);
+    if (actor === undefined || actor.turnId === WORKSPACE_RUN_ID) return;
+    let held = this.turnSlates.get(actor.actor.actorId);
 
-    if (held?.turnId !== writer.turnId) {
-      held = { turnId: writer.turnId, slates: new Set() };
-      this.turnSlates.set(writer.actor.actorId, held);
+    if (held?.turnId !== actor.turnId) {
+      held = { turnId: actor.turnId, changed: new Set(), shown: new Set() };
+      this.turnSlates.set(actor.actor.actorId, held);
     }
 
-    for (const id of ids) held.slates.add(id);
+    for (const id of ids) held[kind].add(id);
   }
 
-  private async takeTurnSlates(actorId: string, turnId: string): Promise<JsonObject | null> {
+  private async takeTurnSlates(actorId: string, turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null> {
     const held = this.turnSlates.get(actorId);
 
     if (held?.turnId !== turnId) return null;
@@ -2065,13 +2065,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const vfs = this.hostedWorkspace().bundle.vfs;
     const kept = [];
 
-    for (const id of [...held.slates].sort()) if (await vfs.exists(`${SLATES_ROOT}/${id}`)) kept.push(id);
+    for (const id of slatesToPreview(held.changed, held.shown, await texts())) if (await vfs.exists(`${SLATES_ROOT}/${id}`)) kept.push(id);
 
     return kept.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: kept };
   }
 
-  protected override answerMetadata(turnId: string): Promise<JsonObject | null> {
-    return this.takeTurnSlates(this.actorHandle().actorId, turnId);
+  protected override answerMetadata(turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null> {
+    return this.takeTurnSlates(this.actorHandle().actorId, turnId, texts);
   }
 
   /**
@@ -4192,6 +4192,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES);
         this.armDurableWake();
       },
+      previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
       sharesChanged: async () => {
         this.overviewChanged(true);
 

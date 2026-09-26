@@ -4,8 +4,13 @@
  * draws their previews after it.
  */
 import { expect, test } from 'bun:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { UIMessage } from 'ai';
 import { toolExecute } from '@kinu.run/test-utils';
 import { CHAT_SESSION_ID, slatesChanged, type JsonValue } from '@kinu.run/core';
+import { SlateInlineContext } from '../src/components/slates/context';
+import { MessageView } from '../src/components/MessageView';
 import {
   chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
 } from './helpers/actor-harness';
@@ -109,4 +114,88 @@ test('a slate the turn wrote and then removed is not previewed', async () => {
   const answer = (await storedChat(harness)).filter((message) => message.role === 'assistant').at(-1);
 
   expect(slatesChanged({ metadata: answer?.metadata })).toEqual([]);
+});
+
+const noRpc = async (): Promise<never> => { throw new Error('no rpc in the static renderer'); };
+
+/** The slate previews an answer draws, however they came: its own `slate://` lines and the ones the product adds. */
+function previewsDrawn(answer: UIMessage | undefined): string[] {
+  if (answer === undefined) return [];
+  const html = renderToStaticMarkup(createElement(SlateInlineContext.Provider, { value: { rpc: noRpc } }, createElement(MessageView, { message: answer })));
+
+  return [...html.matchAll(/data-slate-inline="([^"]+)"/g)].map(([, id]) => id ?? '');
+}
+
+/** One root turn that edits the board, does `also`, and answers `text`. */
+async function boardTurn(also: (tools: Awaited<ReturnType<ReturnType<typeof chatSessionTurns>['prepare']>>['tools']) => Promise<void>, text: string) {
+  const harness = orchestratorHarness();
+  const { agent } = harness;
+
+  await workspaceFiles(agent).mkdir('/slates/board', { recursive: true });
+  agent.harnessDrivingUserMessage('Add an expiry column.', { kinuMode: 'build' });
+  const turns = chatSessionTurns(agent);
+  const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'Add an expiry column.' }] });
+
+  if (tools.file === undefined) throw new Error('Build has no file tool');
+  await toolExecute<JsonValue, JsonValue>(tools.file)({ action: 'write', path: '/slates/board/client.tsx', content: 'x' });
+  await also(tools);
+  await turns.settle({ messageId: 'a-board', text });
+
+  return (await storedChat(harness)).filter((message) => message.role === 'assistant').at(-1);
+}
+
+// Owner 2026-09-26: "if the agent itself also previews it, this doesn't trigger." Each way a turn can show the slate
+// leaves exactly one preview of it.
+test('an answer that writes the slate:// line itself gets no second preview', async () => {
+  const answer = await boardTurn(async () => {}, 'Added it.\n\nslate://board');
+
+  expect(slatesChanged({ metadata: answer?.metadata })).toEqual([]);
+  expect(previewsDrawn(answer)).toEqual(['board']);
+});
+
+test('a turn that asked for the slate\'s preview itself gets no second preview', async () => {
+  const answer = await boardTurn(async (tools) => {
+    if (tools.eval === undefined) throw new Error('Build has no eval tool');
+    // The harness boots no slate, so the preview is refused; the chat still shows the agent's own answer to it.
+    await expect(toolExecute<{ code: string }, JsonValue>(tools.eval)({ code: 'return await workspace.slates.board.$preview()' }))
+      .rejects.toThrow('slate board preview');
+  }, 'Here is the preview above.');
+
+  expect(slatesChanged({ metadata: answer?.metadata })).toEqual([]);
+});
+
+test('a longer id beginning with the same letters does not count as the slate', async () => {
+  const answer = await boardTurn(async () => {}, 'See slate://board2 too.');
+
+  expect(slatesChanged({ metadata: answer?.metadata })).toEqual(['board']);
+});
+
+test("a hire whose report quotes the slate's line gets no second preview", async () => {
+  const gateway = scriptedGateway([
+    { tool: 'file', args: { action: 'write', path: '/slates/board/client.tsx', content: 'x' } },
+  ], 'Updated the board.\n\nslate://board');
+
+  const workspace = gatewayWorkspace(gateway);
+
+  await workspaceFiles(workspace.agent).mkdir('/slates/board', { recursive: true });
+
+  const hire = await hostedSubordinateHarness(workspace, {
+    name: 'board-keeper', displayName: 'Board keeper', nameOrigin: 'user', mission: 'keep the board current',
+  });
+
+  const history = hire.actor.stores.history;
+
+  const opened = await history.append({
+    id: 'u-1', turnId: 'u-1', message: { role: 'user', content: 'Keep the board.' }, origin: 'input', assertOwner: () => hire.actor.handle.assertCurrent(),
+  });
+
+  const transcript = history.transcript(CHAT_SESSION_ID);
+
+  transcript.appendUser(await transcript.prepareUser({ id: 'u-1', turnId: 'u-1', message: opened }));
+  await runDelegatedTask(workspace, hire.actor.handle.actorId, 'Add an expiry column to the board.');
+
+  const answer = (await storedChat(workspace, hire.actor.handle)).filter((message) => message.role === 'assistant').at(-1);
+
+  expect(slatesChanged({ metadata: answer?.metadata })).toEqual([]);
+  expect(previewsDrawn(answer)).toEqual(['board']);
 });
