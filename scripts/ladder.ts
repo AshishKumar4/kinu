@@ -1334,6 +1334,24 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['scripts/security-scanner.ts', 'scripts/security-scanner.bundle.js'] },
   },
   {
+    run: 'bun run gate:worker-heap',
+    label: 'Built Worker heap after setup',
+    tier: 'ci',
+    seconds: 15.3,
+    catches: 'a Worker bundle that spends the Durable Object isolate before it serves. Measured 2026-09-26 on '
+      + 'main abbd2c74b5: the deployed build held 76.4 MB of V8 heap after one workspace\'s setup, of the '
+      + 'isolate\'s 128 MB, because it shipped unminified and one module carried 5,231 characters above '
+      + 'U+00FF, so V8 kept its 10.7 M retained source characters two bytes each (21.4 MB); and a static import '
+      + 'instantiated esbuild\'s 11.9 MB wasm in every isolate at load. The row builds the bundle the deploy '
+      + 'builds, loads it in workerd beside a driver that claims and sets up a workspace through the product\'s '
+      + 'RPC, and fails on used heap over 56 MB (48.9 MB measured after the fix), on a wasm module in the static '
+      + 'import graph of index.js, and on any module of that graph carrying a character outside ASCII.',
+    blind: 'what a turn, a long transcript or many followers add on top of setup; memory outside V8\'s count '
+      + '(compiled wasm, SQLite page cache); and modules reached only by a dynamic import. Miniflare\'s workerd '
+      + 'is not the production runtime, so the bound is a relative guard, not the platform\'s number.',
+    inputs: CLIENT_BUILD,
+  },
+  {
     run: 'bun run gate:dependency-advisories',
     label: 'Dependency advisory policy',
     tier: 'ci',
