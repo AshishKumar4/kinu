@@ -50,12 +50,11 @@ const TurnRequestIndexSchema = v.object({
 
 const TurnRequestPageSchema = v.object({
   request: TurnRequestRowSchema,
-  metadata: JsonValueSchema,
+  head: v.nullable(v.object({ metadata: JsonValueSchema, response: v.nullable(JsonObjectSchema) })),
   messageCount: v.number(),
   from: v.number(),
   messages: v.array(JsonObjectSchema),
   nextFrom: v.nullable(v.number()),
-  response: v.nullable(JsonObjectSchema),
 });
 
 interface TurnStepSummary extends JsonObject {
@@ -601,7 +600,7 @@ async function writeTurnRequests(
       steps.push({
         epoch: request.epoch, revision: request.revision, step: request.step,
         messages: first?.messageCount ?? 0,
-        finish: v.parse(v.optional(v.string(), ''), first?.response?.['reason']),
+        finish: v.parse(v.optional(v.string(), ''), first?.head?.response?.['reason']),
       });
     }
   } finally {

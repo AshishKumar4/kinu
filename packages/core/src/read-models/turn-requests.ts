@@ -22,14 +22,18 @@ export interface TurnRequestIndex {
   readonly requests: readonly TurnRequestRow[];
 }
 
+export interface TurnRequestHead {
+  readonly metadata: JsonValue;
+  readonly response: Extract<RunEvent, { type: 'step_finish' }> | null;
+}
+
 export interface TurnRequestPage {
   readonly request: TurnRequestRow;
-  readonly metadata: JsonValue;
+  readonly head: TurnRequestHead | null;
   readonly messageCount: number;
   readonly from: number;
   readonly messages: readonly JsonObject[];
   readonly nextFrom: number | null;
-  readonly response: Extract<RunEvent, { type: 'step_finish' }> | null;
 }
 
 export type TurnRequestSources = Pick<AgentStores, 'history' | 'claims' | 'eventRecorder'>;
@@ -59,8 +63,9 @@ export async function turnRequestPage(
   if (request === undefined) throw new KinuError('missing', `turn ${at.turnId} has no request ${String(at.epoch)}-${String(at.revision)}`);
   const references = requests.messagesOf(request);
   const from = Math.max(0, Math.min(at.from ?? 0, references.length));
+  const head = from === 0 ? await requestHead(sources, request) : null;
   const page: JsonObject[] = [];
-  let bytes = 0;
+  let bytes = head === null ? 0 : byteLength(head);
   let next = from;
 
   // The first message always ships.
@@ -69,23 +74,33 @@ export async function turnRequestPage(
 
     if (reference === undefined) break;
     const message = await store.projection(reference);
-    const size = new TextEncoder().encode(JSON.stringify(message)).byteLength;
+    const size = byteLength(message);
 
     if (page.length > 0 && bytes + size > PAGE_BYTES) break;
     page.push(message);
     bytes += size;
   }
 
-  // `step_finish` counts from 1; a request's step from 0.
-  const response = request.step === null ? null : sources.eventRecorder.stepFinish(request.runId, request.step + 1);
-
   return {
     request: { requestId: request.id, runId: request.runId, epoch: request.epoch, revision: request.revision, step: request.step },
-    metadata: await store.payloads.read(request.metadata),
+    head,
     messageCount: references.length,
     from,
     messages: page,
     nextFrom: next < references.length ? next : null,
-    response,
   };
+}
+
+type StoredRequest = ReturnType<TurnRequestSources['history']['requests']['forTurn']>[number];
+
+async function requestHead(sources: TurnRequestSources, request: StoredRequest): Promise<TurnRequestHead> {
+  return {
+    metadata: await sources.history.messages.payloads.read(request.metadata),
+    // step_finish counts from 1.
+    response: request.step === null ? null : sources.eventRecorder.stepFinish(request.runId, request.step + 1),
+  };
+}
+
+function byteLength(value: JsonObject | TurnRequestHead): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }

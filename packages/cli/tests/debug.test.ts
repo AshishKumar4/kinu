@@ -446,8 +446,8 @@ describe('kinu debug --turn — one turn as the model received it', () => {
         const message = { role: 'user', content: from === 0 ? `deploy with ${SECRET_TOKEN}` : 'second page' };
 
         return Response.json({ result: {
-          request: row, metadata: { workMode: 'build' }, messageCount: 2, from, messages: [message],
-          nextFrom: from === 0 ? 1 : null, response: from === 0 ? { type: 'step_finish', stepIndex: 1, reason: 'stop' } : null,
+          request: row, messageCount: 2, from, messages: [message], nextFrom: from === 0 ? 1 : null,
+          head: from === 0 ? { metadata: { workMode: 'build' }, response: { type: 'step_finish', stepIndex: 1, reason: 'stop' } } : null,
         } });
       },
     });

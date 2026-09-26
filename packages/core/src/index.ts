@@ -1881,7 +1881,7 @@ export { getRunEvents, getRunEventText, getRunSummaries, listRuns } from './read
 
 export { turnRequestIndex, turnRequestPage } from './read-models/turn-requests';
 
-export type { TurnRequestIndex, TurnRequestPage, TurnRequestRow } from './read-models/turn-requests';
+export type { TurnRequestHead, TurnRequestIndex, TurnRequestPage, TurnRequestRow } from './read-models/turn-requests';
 
 export type { RunListEntry, RunSummary } from './read-models/runs';
 
