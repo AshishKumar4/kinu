@@ -299,8 +299,8 @@
     "CLI_PUBLIC_ORIGIN": "https://kinu.run",
     "CLI_APPROVAL_ORIGIN": "https://kinu.run",
     // The eval service account: the one identity `DEV_IDENTITY_SECRET` buys.
-    // With one environment the first-run tier and the evals drive THIS worker,
-    // so the identity lives here. Two locks keep it from becoming authority:
+    // A promoted build's post-deploy tiers and the evals drive THIS worker as
+    // it, as staging's drive `env.staging`, so the identity lives here. Two locks keep it from becoming authority:
     // `authenticateRequest()` synthesizes it only for a request presenting the
     // secret in core's DEV_IDENTITY_HEADER, and the admin gate refuses every
     // `provider: 'dev'` identity regardless of CONTROL_PLANE_ADMINS
@@ -470,5 +470,127 @@
   // RRF-merged FTS5 + Vectorize hits (384-dim to match the Workers AI embedder).
   "vectorize": [
     { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory" }
-  ]
+  ],
+  // ── Staging ───────────────────────────────────────────────────────────────
+  // Every deploy lands here first (`bun run deploy`), and a build that passed here
+  // is promoted to production (`bun run deploy --promote`). Its own Worker,
+  // `kinu-staging`, so its own Durable Object namespaces, container applications,
+  // secrets and stores: an eval's writes never reach a real user's data.
+  //
+  // EVERY BINDING AND VAR SPELLED OUT. Wrangler inherits none of them into a
+  // named environment (Wrangler configuration docs, "Non-inheritable keys"), so
+  // each is declared again below. The rest comes from the top: the entry, the
+  // compatibility settings, limits, source maps, observability, assets,
+  // migrations and triggers.
+  //
+  // A CUSTOM DOMAIN FOR THE CERTIFICATE, ROUTES FOR THE REQUESTS. A preview host
+  // is two labels below the zone, where Universal SSL stops. A Workers Custom
+  // Domain issues its own certificate, and on this zone that certificate covers
+  // the host and its wildcard: scripted-model.kinu.run's holds
+  // `*.scripted-model.kinu.run`. So `staging.kinu.run` is a Custom Domain for
+  // its certificate. The requests are the routes' job: a route takes precedence
+  // over a Custom Domain on a hostname both match (Workers routing docs), so
+  // production's `*.kinu.run/*` would otherwise answer the Custom Domain. Between
+  // routes the most specific pattern wins, so `staging.kinu.run/*` and
+  // `*.staging.kinu.run/*` beat it. A preview host resolves through the proxied
+  // `*.staging` record: the zone's `*` stops at `staging`, a name that exists
+  // (Cloudflare DNS docs, wildcard records).
+  "env": {
+    "staging": {
+      "routes": [
+        { "pattern": "staging.kinu.run", "custom_domain": true },
+        { "pattern": "staging.kinu.run/*", "zone_name": "kinu.run" },
+        { "pattern": "*.staging.kinu.run/*", "zone_name": "kinu.run" }
+      ],
+      "worker_loaders": [{ "binding": "LOADER" }],
+      "durable_objects": {
+        "bindings": [
+          { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
+          { "class_name": "UserDO", "name": "UserDO" },
+          { "class_name": "MonitorDO", "name": "MonitorDO" },
+          { "class_name": "KinuSandbox", "name": "Sandbox" },
+          { "class_name": "CodexEgress", "name": "CodexEgress" },
+          { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" },
+          { "class_name": "DeployRunDO", "name": "DeployRunDO" },
+          { "class_name": "MossaicUserDO", "name": "MOSSAIC_USER" },
+          { "class_name": "MossaicShardDO", "name": "MOSSAIC_SHARD" }
+        ]
+      },
+      // The images production runs, by the same digests: a staging measured on
+      // other bytes measures another product. Fewer instances.
+      "containers": [
+        {
+          "class_name": "KinuSandbox",
+          "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:d04e2beefa5eaf5486c2c8903eb444ce1499bc7d4e439967b5d48c2c39b14174",
+          "max_instances": 3,
+          "instance_type": {
+            "vcpu": 2,
+            "memory_mib": 6144,
+            "disk_mb": 8000
+          }
+        },
+        {
+          "class_name": "CodexEgress",
+          "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-codex-egress@sha256:6e64016f2d96aafdbe7129181b5579d7222d5d6240c86b7a5da7f40e0e0a5110",
+          "max_instances": 10,
+          "instance_type": "lite"
+        }
+      ],
+      "send_email": [{ "name": "EMAIL" }],
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      "ai": { "binding": "AI" },
+      "browser": { "binding": "BROWSER" },
+      // Staging's own datasets: they are account-scoped, so a shared name would
+      // put eval traffic into the numbers an operator reads.
+      "analytics_engine_datasets": [
+        { "binding": "AGENT_METRICS", "dataset": "kinu_agent_metrics_staging" },
+        { "binding": "FEEDBACK_MARKERS", "dataset": "kinu_feedback_markers_staging" },
+        { "binding": "CONTROL_PLANE_OPS", "dataset": "kinu_control_plane_ops_staging" }
+      ],
+      // Staging's own buckets, but one: `nimbus-runtime-cache` is the seeded
+      // toolchain store, which the Worker only reads (every write in its catalog
+      // reader goes to the zone cache), so reading production's blobs is what
+      // makes a staging `python3` prove the hosted path. An empty copy would
+      // answer every hosted `python3` with 127.
+      "r2_buckets": [
+        { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-backups-staging" },
+        { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" },
+        { "binding": "FEEDBACK_BUCKET", "bucket_name": "kinu-feedback-staging" },
+        { "binding": "RELEASES_BUCKET", "bucket_name": "kinu-releases-staging" },
+        { "binding": "SLATE_PICTURES", "bucket_name": "kinu-slate-pictures-staging" }
+      ],
+      // `kinu-auth-staging`, created by hand like production's (KV titles are not
+      // unique, so provisioning never creates one).
+      "kv_namespaces": [
+        { "binding": "AUTH_KV", "id": "c06cad3d9e2642258e80b4c4700e04be" }
+      ],
+      "vectorize": [
+        { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory-staging" }
+      ],
+      // Production's vars with staging's values. Empty means off: no mail in or
+      // out (EMAIL_DOMAIN, OPS_ALERT_EMAIL), no OAuth provider on /login
+      // (CLOUDFLARE_OAUTH_CLIENT_ID), and no operators, so the admin plane
+      // answers 404 and needs no Access application (CONTROL_PLANE_*). Staging is
+      // driven by the eval identity alone: DEV_USER_EMAIL names it, and the
+      // `DEV_IDENTITY_SECRET` secret, staging's own, is its whole authority. Its AI
+      // Gateway is production's until staging is given one of its own.
+      "vars": {
+        "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",
+        "SANDBOX_TRANSPORT": "rpc",
+        "PREVIEW_HOST_SUFFIX": "staging.kinu.run",
+        "CLI_PUBLIC_ORIGIN": "https://staging.kinu.run",
+        "CLI_APPROVAL_ORIGIN": "https://staging.kinu.run",
+        "DEV_USER_EMAIL": "eval-service@kinu.run",
+        "CLOUDFLARE_OAUTH_CLIENT_ID": "",
+        "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
+        "CLOUDFLARE_AI_GATEWAY_ID": "default",
+        "EMAIL_DOMAIN": "",
+        "OPS_ALERT_EMAIL": "",
+        "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "",
+        "CONTROL_PLANE_ACCESS_AUD": "",
+        "CONTROL_PLANE_ADMINS": "",
+        "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1"
+      }
+    }
+  }
 }

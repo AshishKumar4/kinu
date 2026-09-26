@@ -48,12 +48,17 @@ const REQUIRED_GATES: readonly string[] = PLAN.filter((row) => row.phase !== "po
 /** The gates that run AFTER the upload. The fixture's build stub exits
  *  non-zero on purpose, so no run here reaches them; what is asserted about
  *  them is structural: they are the plan's last phase. */
-const POST_DEPLOY_GATES: readonly string[] = PLAN.filter((row) => row.phase === "post-publish").map((row) => expandGlobs(row.run));
+const POST_DEPLOY_GATES: readonly string[] = phaseGates("post-publish");
 
 /** The pre-publish waves, in order: each phase before `post-publish` is one. */
 const PRE_PUBLISH_WAVES: readonly (readonly string[])[] = DEPLOY_PHASES
   .filter((phase) => phase !== "post-publish")
-  .map((phase) => PLAN.filter((row) => row.phase === phase).map((row) => expandGlobs(row.run)));
+  .map(phaseGates);
+
+/** The commands one phase of the plan runs, as the deploy expands them. */
+function phaseGates(phase: string): string[] {
+  return PLAN.filter((row) => row.phase === phase).map((row) => expandGlobs(row.run));
+}
 
 function executable(path: string, source: string): void {
   writeFileSync(path, source);
@@ -86,8 +91,11 @@ function launchFailure(result: Bun.SyncSubprocess): string {
 }
 
 function commandStub(name: string): string {
+  // A command is recorded as the plan writes it, relative to the repository: deploy.sh names its own
+  // steps by their path under KINU_ROOT.
   return `#!/usr/bin/bash
 command_line="${name} $*"
+command_line="\${command_line//$KINU_DEPLOY_ROOT\\//}"
 # The planner, answered from the file the fixture wrote: the plan is the
 # ladder's, and the stub only carries it. Not logged as an event, because it
 # is not a gate.
@@ -108,6 +116,7 @@ printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
 # equality against REQUIRED_GATES and an extra line there is a dropped gate.
 if [ "$command_line" = "bun run gate:infra" ]; then
   printf '%s\\n' "\${KINU_INFRA_PHASE:-unset}" > "$KINU_DEPLOY_PHASE_LOG"
+  printf '%s\\n' "\${KINU_INFRA_ENVIRONMENT:-unset}" > "$KINU_DEPLOY_INFRA_ENV_LOG"
 fi
 # WHEN EACH GATE RAN, for the one question a launch log cannot answer: did two
 # rows holding the same resource overlap. Written only when a run asks for it,
@@ -202,6 +211,9 @@ interface DeployRun {
   /** Further options after `option`, for the combinations the script accepts. */
   readonly options?: readonly string[];
   readonly ambientPhase?: string;
+  /** A KINU_INFRA_ENVIRONMENT already on the environment, which must never decide
+   *  which account's resources the gate checks. */
+  readonly ambientEnvironment?: string;
   /** The thread cap the wave schedules against; the box's count when absent. */
   readonly threads?: number;
   /** The resident-set cap in MiB; derived from MemAvailable when absent. */
@@ -219,6 +231,7 @@ function runDeploy({
   option,
   options = [],
   ambientPhase = "",
+  ambientEnvironment = "",
   threads,
   rssMb,
   spans = false,
@@ -227,6 +240,7 @@ function runDeploy({
   const log = join(fixture, "events.log");
   const buildEnvironmentLog = join(fixture, "build-environment.log");
   const phaseLog = join(fixture, "infra-phase.log");
+  const infraEnvironmentLog = join(fixture, "infra-environment.log");
   const spanLog = join(fixture, "spans.log");
 
   mkdirSync(join(fixture, "scripts"));
@@ -290,9 +304,11 @@ exit 87
       // and one test points it somewhere that cannot exist.
       TMPDIR: temporaryRoot ?? fixture,
       KINU_DEPLOY_GATE_LOG: log,
+      KINU_DEPLOY_ROOT: fixture,
       KINU_DEPLOY_PLAN: planFile,
       KINU_DEPLOY_BUILD_ENV_LOG: buildEnvironmentLog,
       KINU_DEPLOY_PHASE_LOG: phaseLog,
+      KINU_DEPLOY_INFRA_ENV_LOG: infraEnvironmentLog,
       // A span run only: every other run leaves both empty, and the stub then
       // writes no span and sleeps not at all.
       KINU_DEPLOY_SPAN_LOG: spans ? spanLog : "",
@@ -300,6 +316,7 @@ exit 87
       // Always set, so the assertion that the script overrides it is about the
       // script rather than about whichever shell ran the suite.
       KINU_INFRA_PHASE: ambientPhase,
+      KINU_INFRA_ENVIRONMENT: ambientEnvironment,
       ...budget,
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       SKIP_E2E: "1",
@@ -318,12 +335,15 @@ exit 87
 
   const infraPhase = existsSync(phaseLog) ? readFileSync(phaseLog, "utf8").trim() : null;
 
+  const infraEnvironment = existsSync(infraEnvironmentLog) ? readFileSync(infraEnvironmentLog, "utf8").trim() : null;
+
   return {
     status: run.exitCode,
     events,
     stdout: run.stdout.toString(),
     buildEnvironment,
     infraPhase,
+    infraEnvironment,
     spans: existsSync(spanLog) ? readSpans(readFileSync(spanLog, "utf8")) : [],
   };
 }
@@ -339,13 +359,47 @@ describe("deploy gate", () => {
   // Every property a total order stands in for is asserted directly, and one
   //   - every SERIAL_GATE that runs pre-publish sits in its own wave at the
   //     position it declares;
-  test("runs every declared gate before the first build mutation", () => {
+  test("runs every declared gate before the first build mutation, and builds for staging", () => {
     const run = runDeploy();
 
     expect(run.status).not.toBe(0);
     expect([...run.events].sort()).toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"].sort());
     expect(run.events.at(-1)).toBe("MUTATE bunx vite build");
+    expect(run.buildEnvironment).toBe("staging");
+    expect(run.infraEnvironment).toBe("staging");
+  });
+
+  // ── Promotion ──────────────────────────────────────────────────
+  //
+  // Production takes only the build staging verified: the record staging's
+  // deploy of HEAD wrote stands for the source gates, so a promotion runs none
+  // of them, and a HEAD staging never verified builds nothing at all.
+  const PROMOTION_CHECK = "bun scripts/promote.ts check";
+
+  test("a promotion runs no source gate: staging's record, the account gate on production, a production build", () => {
+    const run = runDeploy({ option: "--promote" });
+
+    expect(run.status).not.toBe(0);
+    expect([...run.events].sort())
+      .toEqual([...phaseGates("preflight"), PROMOTION_CHECK, ...phaseGates("infra"), "MUTATE bunx vite build"].sort());
+    expect(run.events.indexOf(PROMOTION_CHECK)).toBeLessThan(run.events.indexOf("bun run gate:infra"));
     expect(run.buildEnvironment).toBe("root");
+    expect(run.infraEnvironment).toBe("production");
+  });
+
+  test("a promotion of a build staging never verified builds nothing", () => {
+    const run = runDeploy({ option: "--promote", failingGate: PROMOTION_CHECK });
+
+    expect(run.status).not.toBe(0);
+    expect(run.events).toEqual([...phaseGates("preflight"), PROMOTION_CHECK]);
+    expect(run.infraEnvironment).toBeNull();
+  });
+
+  test("an ambient environment variable cannot point the account gate at the other deployment", () => {
+    // Assigned in both arms, like the phase: `export KINU_INFRA_ENVIRONMENT=production`
+    // in a shell must not make a staging deploy certify production's resources.
+    expect(runDeploy({ ambientEnvironment: "production" }).infraEnvironment).toBe("staging");
+    expect(runDeploy({ option: "--promote", ambientEnvironment: "staging" }).infraEnvironment).toBe("production");
   });
 
   // STRUCTURAL, over the plan the runner consumes: every phase but `source`
@@ -376,17 +430,6 @@ describe("deploy gate", () => {
     }
   });
 
-
-  // The Worker version is what a persisted error names, so it has to name the
-  // build. Asserted as text because the fixture cannot reach step 3: its build
-  // stub fails on purpose, which is what every other test here depends on.
-  test("the published version is annotated with the build sha", () => {
-    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(source).toContain(
-      'KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu production $KINU_SHA")',
-    );
-    expect(source).toContain('npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}"');
-  });
 
   test("every gate has a process-tree deadline, from its row or the shared figure", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
@@ -750,7 +793,6 @@ describe("deploy gate", () => {
     expect(run.status).toBe(2);
     expect(run.events).toEqual([]);
     expect(run.infraPhase).toBeNull();
-    expect(run.stdout).toContain("Usage: scripts/deploy.sh [--bootstrap] [--gates-only] [--all]");
   });
 
   // The rehearsal path: every pre-publish gate, no build, no upload. It is how

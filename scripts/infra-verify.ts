@@ -78,7 +78,7 @@ import {
   wildcardDns,
 } from './infra-cloudflare';
 import {
-  CONTROL_PLANE_ACCESS_PATHS, type InfraWorker, type Infrastructure, type Resource, SUPPLY,
+  CONTROL_PLANE_ACCESS_PATHS, type InfraEnvironment, type InfraWorker, type Infrastructure, type Resource, SUPPLY,
   INFRA_ENVIRONMENTS, UNCAPTURED, UNOBSERVABLE, WRANGLER_CONFIG, claimedHosts, deriveInfrastructure, envFields,
   environmentFrom, readSites, requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
@@ -683,13 +683,15 @@ export function supplySummary(worker: InfraWorker, fields = envFields()): string
     + `${String(census.length)}:\n  ${census.map((field) => field.name).join(', ')}`;
 }
 
-/** How a phase is asked for on the command line, and the variable
- *  `scripts/deploy.sh` carries it in. Both spellings exist because the deploy's
+/** How a phase is asked for on the command line, and the variables
+ *  `scripts/deploy.sh` carries the phase and the environment in. Both spellings exist because the deploy's
  *  gate line has to stay ONE string for `scripts/ladder.ts` to parse and match against LADDER, so anything
  *  that varies per run travels beside the command rather than inside it. */
 const PHASE_FLAG = '--phase=';
 
 const PHASE_ENV = 'KINU_INFRA_PHASE';
+
+const ENVIRONMENT_ENV = 'KINU_INFRA_ENVIRONMENT';
 
 /**
  * The phase this run is, from an explicit flag or from the variable the deploy
@@ -713,14 +715,30 @@ export function phaseFrom(
 }
 
 /**
+ * The environment this run verifies, from the one positional argument or from
+ * the variable the deploy script exports. Neither ⇒ production. A NAMED
+ * environment this program does not have is `undefined`, refused like a
+ * mistyped phase: a staging deploy whose gate fell back to production would
+ * certify the wrong account's resources.
+ */
+export function environmentOf(
+  argv: readonly string[],
+  environment: Readonly<Record<string, string | undefined>>,
+): InfraEnvironment | undefined {
+  const positional = argv.filter((argument) => !argument.startsWith('--'));
+  const named = environment[ENVIRONMENT_ENV];
+
+  return environmentFrom(positional.length === 0 && named !== undefined ? [named] : positional);
+}
+
+/**
  * ONE PHASE PER RUN, and it is named in every line this prints: a `bootstrap`
- * run is not the gate and must not be readable as one. The one positional
- * argument names the environment; production when it is absent.
+ * run is not the gate and must not be readable as one. So is the environment.
  */
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const phase = phaseFrom(argv, process.env);
-  const environment = environmentFrom(argv.filter((argument) => !argument.startsWith('--')));
+  const environment = environmentOf(argv, process.env);
 
   if (phase === undefined || environment === undefined) {
     console.error(`${GATE}: usage: bun scripts/infra-verify.ts [${INFRA_ENVIRONMENTS.join('|')}] `

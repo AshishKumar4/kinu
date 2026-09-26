@@ -70,7 +70,7 @@ bun run test:live                        # every suite under tests/live; resolve
 bun run test:live:cloud                  # the one suite with a hosted arm, against the deployment
 ```
 
-The tier acts as the `eval-service` account on the one deployment, `https://kinu.run` (`EVAL_DEPLOYMENT_ORIGIN` in `packages/test-utils/src/eval-identity.ts`). A loopback dev server is the only other origin it accepts. There is no staging. `scripts/eval-credentials.ts` reads `KINU_EVAL_TOKEN` or the target's own `~/.config/kinu/eval-session/<host>/config.json` (mode 0600 or refused), never `~/.kinu/config.json`. `KINU_EVAL_WEB_IDENTITY=… bun scripts/eval-session-mint.ts` mints it; each deployment keeps its own, so one never stands in the way of another's.
+The tier acts as the `eval-service` account on a deployment: production, `https://kinu.run` (`EVAL_DEPLOYMENT_ORIGIN` in `packages/test-utils/src/eval-identity.ts`), unless `KINU_EVAL_ORIGIN` names staging, `https://staging.kinu.run` (`EVAL_STAGING_ORIGIN`). A loopback dev server is the only other origin it accepts. Each deployment has its own `DEV_IDENTITY_SECRET`, in its own variable (`evalWebIdentityEnv`): `KINU_EVAL_WEB_IDENTITY` for production and a loopback dev server, `KINU_EVAL_STAGING_WEB_IDENTITY` for staging, so no run presents one deployment's secret to the other. `scripts/eval-credentials.ts` reads `KINU_EVAL_TOKEN` or the target's own `~/.config/kinu/eval-session/<host>/config.json` (mode 0600 or refused), never `~/.kinu/config.json`. `KINU_EVAL_WEB_IDENTITY=… bun scripts/eval-session-mint.ts` mints it; each deployment keeps its own, so one never stands in the way of another's.
 
 The deployment synthesizes `eval-service@kinu.run` (`DEV_USER_EMAIL`). That session can create and remove throwaway workspaces. A scoped `ai.proxy` token cannot, so it cannot cover the hosted arm.
 
@@ -115,7 +115,7 @@ The cloud arm needs `--backend cloud` on top of the live-tier requirements, so n
 
 | State | What it says |
 |---|---|
-| no eval credential | mint one with `KINU_EVAL_WEB_IDENTITY=... bun scripts/eval-session-mint.ts`, export as `KINU_EVAL_TOKEN`. The local arm needs none |
+| no eval credential | mint one with `KINU_EVAL_WEB_IDENTITY=... bun scripts/eval-session-mint.ts` (staging: `KINU_EVAL_STAGING_WEB_IDENTITY`), export as `KINU_EVAL_TOKEN`. The local arm needs none |
 | the deployment runs another build | both shas and `bun run deploy`. `--allow-stale` measures the deployed build on purpose |
 | the deployment has no build stamp | its asset bundle is incomplete, so its CLI downloads are broken too. Re-run `bun run deploy` |
 | the deployment is unreachable | the transport failure verbatim. The status code is the whole evidence for calling it infrastructure |
@@ -192,7 +192,7 @@ bun run evals:ui                               # the report in the vitest-evals 
 bun evals/scripts/compare.ts --candidate bench-artifacts/evals/results.json --out /tmp/cmp [--baseline <results.json>]
 ```
 
-A run needs `KINU_EVAL_WEB_IDENTITY` (the deployment's `DEV_IDENTITY_SECRET`, in `.dev.vars`), which makes each trial the `eval-service` identity. Every trial deletes its workspace when it ends. Nothing ends a trial on a clock: a turn ends when the deployment says so.
+A run needs `KINU_EVAL_WEB_IDENTITY` (production's `DEV_IDENTITY_SECRET`, in `.dev.vars`; on staging, `KINU_EVAL_STAGING_WEB_IDENTITY`, which `.dev.vars` holds as `STAGING_DEV_IDENTITY_SECRET`), which makes each trial the `eval-service` identity. Every trial deletes its workspace when it ends. Nothing ends a trial on a clock: a turn ends when the deployment says so.
 
 **Cohorts.** A result belongs to (task, model, arm). The model defaults to the product default, `workers-ai/@cf/zai-org/glm-5.3`; `KINU_EVAL_MODELS` adds others. An arm is a named workspace setting applied when a trial's workspace opens (`evals/src/target.ts`); `product` changes nothing and is the only arm today.
 
@@ -202,7 +202,7 @@ A run needs `KINU_EVAL_WEB_IDENTITY` (the deployment's `DEV_IDENTITY_SECRET`, in
 
 **Comparison.** `evals/src/comparison.ts` compares two reports cohort by cohort: pass counts under a two-sided Fisher exact test, a verdict (`regressed` when any comparable task fell with p < 0.05, `improved`, `unchanged`, `inconclusive`), the failed checks with their first evidence, the most common tool error, and how the agent worked per model (steps, tokens, the share of tool calls that were `eval`). Cohorts are not compared across a change to `evals/` itself, a different task version, different trial counts, or infrastructure failures.
 
-**In CI.** `.github/workflows/evals.yml` runs after a deploy (Step 7 of `scripts/deploy.sh` dispatches it): every task against the build kinu.run serves, compared with the latest complete report of an earlier build it descends from. Each task runs as blocks of five trials, one job each, because ten trials of the slowest task at three at a time come near GitHub's six-hour job limit; `KINU_EVAL_FIRST_TRIAL` numbers a block, and the joined report must hold trials 1 to 10 once each before it is stored as a baseline. The results comment and a Kinu workspace's "why the evals failed" go on the pull request that merged the deployed commit, or on the commit; earlier ones are deleted. The deployed commit has to be on GitHub.
+**In CI.** `.github/workflows/evals.yml` runs after production takes a build (`bun run deploy --promote` dispatches it): every task against the build kinu.run serves, compared with the latest complete report of an earlier build it descends from. Each task runs as blocks of five trials, one job each, because ten trials of the slowest task at three at a time come near GitHub's six-hour job limit; `KINU_EVAL_FIRST_TRIAL` numbers a block, and the joined report must hold trials 1 to 10 once each before it is stored as a baseline. The results comment and a Kinu workspace's "why the evals failed" go on the pull request that merged the deployed commit, or on the commit; earlier ones are deleted. The deployed commit has to be on GitHub.
 
 **Adding a task.** Copy the shape of an existing file. Prove the checker before any model runs: build a correct slate by hand and planted-defect variants, run the turn's `verify` against them on the deployment, and see the correct build pass every check and each defect fail exactly its own. Then run a 3-trial pilot and read the failed trajectories (`bun evals/scripts/trajectories.ts <results.json> <out.md> --failed`): change the prompt only where the agent's reading was defensible and the checker rejected it.
 

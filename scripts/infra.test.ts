@@ -25,7 +25,7 @@ import {
   type AccessApplicationView, accessCovering, accessDestinations, accessOverreach, routeAnswer,
 } from './infra-cloudflare';
 import {
-  type AuditRequest, type Phase, type Row, PHASES, audit, observedRow, phaseFrom, supplyDrift,
+  type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observedRow, phaseFrom, supplyDrift,
   supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
 import { confirmationPhrase, partition } from './infra-teardown';
@@ -593,6 +593,14 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     // deploy for a reason no output explains.
     expect(phaseFrom(['--phase=post-deply'], {})).toBeUndefined();
     expect(phaseFrom(['--phase='], { KINU_INFRA_PHASE: 'bootstrap' })).toBeUndefined();
+  });
+
+  test('the environment is the argument, else the deploy script\'s variable, and a mistyped one is refused', () => {
+    expect(environmentOf(['staging', '--phase=post-deploy'], { KINU_INFRA_ENVIRONMENT: 'production' })).toBe('staging');
+    expect(environmentOf([], { KINU_INFRA_ENVIRONMENT: 'staging' })).toBe('staging');
+    expect(environmentOf(['--phase=full'], {})).toBe('production');
+    // A staging gate that fell back to production would certify the wrong account's resources.
+    expect(environmentOf([], { KINU_INFRA_ENVIRONMENT: 'stagin' })).toBeUndefined();
   });
 
   test('a newly declared namespace is deferred before the upload and rejected after', () => {

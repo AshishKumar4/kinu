@@ -28,9 +28,10 @@
 #
 #   KINU_EVAL_TOKEN   the eval-service credential, or the session
 #                        KINU_EVAL_WEB_IDENTITY=... bun scripts/eval-session-mint.ts
-#                     persists under ~/.config/kinu/eval-session/
-#   KINU_EVAL_ORIGIN  optional. Defaults to the deployment origin; a loopback
-#                        dev server is the other accepted value.
+#                     persists under ~/.config/kinu/eval-session/ (staging's
+#                     secret is KINU_EVAL_STAGING_WEB_IDENTITY: evalWebIdentityEnv)
+#   KINU_EVAL_ORIGIN  optional. Defaults to production's origin; staging's, or a
+#                        loopback dev server, are the other accepted values.
 #
 # The resolved pair is exported as KINU_ORIGIN + KINU_TOKEN, which is what
 # `resolveLiveModel` reads. An origin outside that allowlist is REFUSED and this
