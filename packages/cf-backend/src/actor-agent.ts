@@ -36,7 +36,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { hostedWindowMay, requiredRpcAccess, rpcMovesOverview } from "@kinu.run/core";
+import { hostedWindowMay, PAGE_KEEPALIVE, requiredRpcAccess, rpcMovesOverview, type LiveRead } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -1048,6 +1048,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // co-located actor to the first. The SDK's per-invocation context names the running agent.
     installAnalyticsDiagnostics(this.env);
     attributeWorkspace(ActorAgent.invocationWorkspace);
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PAGE_KEEPALIVE.ping, PAGE_KEEPALIVE.pong));
   }
 
   /**
@@ -1967,6 +1968,8 @@ export abstract class ActorAgent extends Agent<Env> {
   protected abstract turnClaimFrame(): string;
 
   protected abstract overviewChanged(): void;
+
+  protected abstract liveReadsMoved(reads: readonly LiveRead[]): void;
 
   protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
 
@@ -2993,6 +2996,7 @@ export abstract class ActorAgent extends Agent<Env> {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
         reportModelCall: (report) => this.reportModelCall(report),
+        liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         resolveProfile: () => this.routingProfile(),
         contextPlane: {
           actorId: this.actorHandle().actorId,

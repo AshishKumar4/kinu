@@ -11,7 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, revealMisrepresenting, timeAgo } from "@kinu.run/core";
 import type { AgentTaskTree, ChangelogEntry, MemoryEntry, OwnedPlan, PendingAction, PendingActionKind, PlanReview, WorkspaceWork } from "@kinu.run/core";
-import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
+import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -66,13 +66,13 @@ export interface WorkTabProps {
   onChangelogSeen?: () => void;
   /** Re-read after a decision so decided rows leave on the click, not the next poll. */
   onRefreshQueue?: () => void;
-  isStreaming: boolean;
   rpc: Rpc;
   memory?: MemoryEntry[];
+  readMoves?: ReadMoves;
 }
 
 export function WorkTab({
-  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, isStreaming, rpc, memory = [],
+  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, rpc, memory = [], readMoves = {},
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
   const [hasPlans, setHasPlans] = useState(plan !== null);
@@ -87,23 +87,21 @@ export function WorkTab({
     [rpc],
   );
 
-  // The server never pushes the plan, so the tab revalidates until everything has settled.
-  const revalidate = useCallback((work: WorkspaceWork | null) => {
-    if (isStreaming) return 4000;
-
-    const stillOpen = (owned: { tasks: AgentTaskTree[] }) => owned.tasks.some((task) => !isClosedTree(task));
-    const open = (work?.plans ?? []).some(stillOpen) || (work?.tasks ?? []).some(stillOpen);
-
-    return open ? 4000 : null;
-  }, [isStreaming]);
-
-  const { resource: taskResource, reload: reloadTasks } = useAsyncResource(loadWork, revalidate);
+  const { resource: taskResource, reload: reloadTasks } = useAsyncResource(loadWork);
   const work = lastValue(taskResource);
+  const workMoves = readMoves.listWorkspaceWork ?? 0;
+  const workMoved = useRef(workMoves);
+
+  useEffect(() => {
+    if (workMoved.current === workMoves) return;
+    workMoved.current = workMoves;
+    reloadTasks();
+  }, [workMoves, reloadTasks]);
 
   const {
     view: changelog, seenAt: changelogSeenAt, seenError: changelogSeenError,
     resource: changelogResource, reload: reloadChangelog,
-  } = useChangelog(rpc, onChangelogSeen);
+  } = useChangelog(rpc, onChangelogSeen, readMoves.getEvolutionChangelog ?? 0);
 
   const taskRows = useMemo(() => {
     const rows = (groups: readonly { owner: { name: string }; tasks: AgentTaskTree[] }[]) =>

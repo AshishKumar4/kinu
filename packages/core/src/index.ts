@@ -1225,7 +1225,7 @@ export {
 // Memory writes
 export { memoryBytes } from './memory/note';
 
-export { appendMemoryNote, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
+export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
 
 export {
   ConversationSearchStore, invalidateConversationSearchIndex,
@@ -1914,6 +1914,11 @@ export {
 } from './read-models/workspace-diff';
 
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
+
+export {
+  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, readsMovedByFiles, readsWrittenBy,
+  type LiveRead, type ReadsChangedFrame,
+} from './read-models/live-reads';
 
 export {
   anchoredText, changeBlocks, changeBody, changeTotals, changeTree, comparePaths, inReadingOrder, keepUnchanged, sideBySide,

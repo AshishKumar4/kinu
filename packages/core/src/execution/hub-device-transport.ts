@@ -1,9 +1,8 @@
 /**
- * DeviceTransport over the user-level device hub (UserDO). `status()` is sync and serves a TTL cache
- * refreshed in the background; `refreshStatus()` awaits the hub and runs at turn start.
+ * DeviceTransport over the user-level device hub (UserDO). `status()` is the last answer; `refreshStatus()`
+ * awaits the hub.
  */
 import { WORKSPACE_HAS_NO_OWNER, isDeviceAmbiguityError, isDeviceNotConnectedError, nextDeviceRequestId } from './device-tunnel';
-import type { Clock } from '../types/clock';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { shellQuote } from '../utils/shell';
 import { type DeviceCheckpointHint } from '../checkpoints/types';
@@ -13,10 +12,7 @@ import { KinuError, diagnostics, renderThrownChain, toKinuError, type LogEventNa
 import * as v from 'valibot';
 import { type UserCaller } from '../safety/workspace-capability';
 
-/** Runtime status cache freshness; independent of DEVICE_ROSTER_POLL_MS. */
-const DEVICE_STATUS_TTL_MS = 5_000;
-
-/** A background re-check failure is recorded, then tolerated: the stale snapshot is kept. */
+/** A failed refresh is recorded, then tolerated: the last snapshot is kept. */
 const STATUS_RECHECK_FAILED: LogEventName = 'device.status_refresh_failed';
 
 /** `toolchain: null` distinguishes "not asked" from "has no toolchain". */
@@ -55,7 +51,7 @@ export interface HubDeviceTransportOpts {
   cliCwd(): string | null;
   /** Turn identity for the daemon's pre-mutation shadow-git snapshot. Null outside turns. */
   checkpointMeta?: () => { turnId: string; sessionId: string } | null;
-  clock: Clock;
+  onStatusChanged?: () => void;
 }
 
 interface StatusRefresh {
@@ -64,8 +60,16 @@ interface StatusRefresh {
 
 export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTransport {
   let snapshot: DeviceStatus = DISCONNECTED;
-  let checkedAt = 0;
+  let answered = false;
   let inFlight: StatusRefresh | null = null;
+
+  const adopt = (next: DeviceStatus): void => {
+    const moved = answered && JSON.stringify(next) !== JSON.stringify(snapshot);
+    answered = true;
+    snapshot = next;
+
+    if (moved) opts.onStatusChanged?.();
+  };
 
   /** Authoritative hub check, deduped. Failure keeps the last snapshot; the slot is released only by its owner. */
   const beginStatusRefresh = (): StatusRefresh => {
@@ -73,8 +77,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
     const hub = opts.hub();
 
     if (!hub) {
-      snapshot = DISCONNECTED;
-      checkedAt = opts.clock.now();
+      adopt(DISCONNECTED);
 
       return { promise: Promise.resolve(snapshot) };
     }
@@ -84,17 +87,15 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
     owner.promise = (async (): Promise<DeviceStatus> => {
       try {
         const status = await opts.caller().then((caller) => hub.deviceRuntimeStatus(caller));
-        snapshot = status;
+        adopt(status);
       } catch (cause) {
-        // Transient hub error: keep the last snapshot, but record it.
+        // Transient hub error: keep the last snapshot, record it.
         diagnostics.failure(STATUS_RECHECK_FAILED, toKinuError({
           doing: 'refreshing the device status from the hub',
           cause,
           otherwise: 'unavailable',
         }));
       } finally {
-        checkedAt = opts.clock.now();
-
         if (inFlight === owner) inFlight = null;
       }
 
@@ -109,20 +110,15 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
   );
 
   return {
-    /** Serves the cache and kicks a re-check when stale; the `inFlight` slot owns it and `refreshStatus` never rejects. */
-    status: (): DeviceStatus => {
-      if (!inFlight && opts.clock.now() - checkedAt >= DEVICE_STATUS_TTL_MS) beginStatusRefresh();
-
-      return snapshot;
-    },
+    /** Never asks the hub: a read of the executors must not cost a cross-object call. */
+    status: (): DeviceStatus => snapshot,
     refreshStatus,
     rpc: async (method, params, rpcOpts) => {
       const hub = opts.hub();
 
       if (!hub) {
         // A null hub means an unattached workspace, not an unlinked machine.
-        snapshot = DISCONNECTED;
-        checkedAt = opts.clock.now();
+        adopt(DISCONNECTED);
         throw new Error(WORKSPACE_HAS_NO_OWNER);
       }
 
@@ -166,16 +162,14 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         }
 
         // A successful call re-proves presence only; keep the toolchain answer.
-        snapshot = { ...snapshot, connected: true, registered: true };
-        checkedAt = opts.clock.now();
+        adopt({ ...snapshot, connected: true, registered: true });
 
         return rawResult === undefined
           ? undefined
           : v.parse(JsonValueSchema, JSON.parse(rawResult));
       } catch (err) {
         if (isDeviceNotConnectedError({ cause: err })) {
-          snapshot = { ...snapshot, connected: false };
-          checkedAt = opts.clock.now();
+          adopt({ ...snapshot, connected: false });
         }
 
         // Several machines live and none named: caller's error class, fixed before the executor's `io` wrap.

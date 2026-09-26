@@ -104,6 +104,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'device.rpc', name: 'cancelDeviceRequestsForTurn', run: (u, c) => u.cancelDeviceRequestsForTurn(c, 'turn-1') },
   { capability: 'device.rpc', name: 'cancelDeviceRequestsForBackgroundJob', run: (u, c) => u.cancelDeviceRequestsForBackgroundJob(c, 'job-1') },
   { capability: 'device.rpc', name: 'deviceRuntimeStatus', run: (u, c) => u.deviceRuntimeStatus(c) },
+  { capability: 'device.rpc', name: 'watchDeviceStatus', run: (u, c) => u.watchDeviceStatus(c, false) },
   { capability: 'device.rpc', name: 'openDeviceTerminal', run: (u, c) => u.openDeviceTerminal(c, WORKSPACE, { cols: 80, rows: 24 }) },
 
   // `device.consent.read_self` narrows the file view's own path scope, so refusing it would widen the scope.

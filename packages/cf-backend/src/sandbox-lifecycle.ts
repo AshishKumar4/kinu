@@ -6,10 +6,10 @@
  */
 
 import * as v from 'valibot';
-import type { IncidentStage } from '@kinu.run/devbox';
+import type { IncidentStage, RestoreClockPhase } from '@kinu.run/devbox';
 // Pure subpath: the barrel loads `cloudflare:workers`, which exists only under workerd.
 import { INCIDENT_REASON_MAX_CHARS } from '@kinu.run/devbox/incidents';
-import { toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { ErrorCode } from '@kinu.run/core/obs';
 import type { RecoveryRowInput, RowOutcome } from '@kinu.run/core/analytics';
 import type {
@@ -259,4 +259,23 @@ function incidentText(incident: SandboxLifecycleFailure): string {
     + `${STAGE_CONSEQUENCE[incident.stage]}\n\n`
     + `Reported cause: ${incident.reason}\n`
     + `Incident id: ${incident.incidentId}`;
+}
+
+/** In order: a quick restore's settle cannot land first. */
+export function restoreNotices(tell: () => Promise<void>): (phase: RestoreClockPhase) => void {
+  let told: Promise<void> = Promise.resolve();
+
+  return (phase) => {
+    if (phase !== 'opened' && phase !== 'settled') return;
+
+    told = told.then(async () => {
+      try {
+        await tell();
+      } catch (cause) {
+        diagnostics.failure('sandbox.starting_notice_failed', toKinuError({
+          doing: 'telling the workspace its sandbox is starting or ready', cause, otherwise: 'unavailable',
+        }));
+      }
+    });
+  };
 }
