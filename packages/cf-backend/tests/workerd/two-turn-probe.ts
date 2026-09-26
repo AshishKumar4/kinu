@@ -96,8 +96,8 @@ export interface SettleState {
 }
 
 /**
- * Waits for the object's own settle signals: no turn in flight, no detached task or terminal close in this isolate,
- * no durable fiber, no alarm due, and the same schedule rows on two reads in a row. 15 s is the failure bound only.
+ * Waits for the object's own settle signals: no turn in flight, no detached task, terminal close, debounced drain or
+ * keepAlive hold in this isolate, no durable fiber, no alarm due, and the same schedule rows on two reads in a row. 15 s is the failure bound only.
  */
 async function awaitSettled(target: { settleState(): Promise<SettleState> }): Promise<void> {
   const started = Date.now();
@@ -163,6 +163,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     if (this._backgroundTasks.size > 0) busy.push(`${String(this._backgroundTasks.size)} detached task(s)`);
 
     if (this.terminalClosing) busy.push('a terminal close');
+
+    if (this._drainTimerTasks.size > 0) busy.push(`${String(this._drainTimerTasks.size)} debounced event drain(s)`);
+
+    // The SDK's holds: `keepAliveWhile` arms its heartbeat alarm in the future, so no alarm is yet due.
+    if (this._keepAliveRefs > 0) busy.push(`${String(this._keepAliveRefs)} keepAlive hold(s)`);
     const fibers = this.unmetered('SELECT id FROM cf_agents_runs').toArray().length;
 
     if (fibers > 0) busy.push(`${String(fibers)} durable fiber(s)`);
