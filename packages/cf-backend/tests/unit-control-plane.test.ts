@@ -15,7 +15,6 @@ import {
 import { requireControl } from '@kinu.run/core/control-plane';
 import * as store from '@kinu.run/core/control-plane';
 import * as feedbackStore from '@kinu.run/core/control-plane';
-import { MalformedCursorError } from '@kinu.run/core/control-plane';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { sqlExec } from './helpers/user-do';
@@ -414,8 +413,11 @@ describe('paging', () => {
   test('a malformed cursor is refused rather than silently restarting the walk', () => {
     const { sql, close } = freshStore();
     store.observeUser(sql, { userId: 'u1', email: 'a@x', at: 1_000 });
-    expect(() => store.listUsers(sql, { cursor: { after: 'nonsense' } })).toThrow(MalformedCursorError);
-    expect(() => store.listUsers(sql, { cursor: { after: 'x\u0000u1' } })).toThrow(MalformedCursorError);
+
+    for (const after of ['nonsense', 'x\u0000u1']) {
+      expect(() => store.listUsers(sql, { cursor: { after } })).toThrow(expect.objectContaining({ code: 'bad_input' }));
+    }
+
     close();
   });
 

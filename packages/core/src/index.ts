@@ -1567,6 +1567,8 @@ export {
   refusedHostname,
 } from './safety/egress-destination';
 
+export { revealMisrepresenting } from './safety/untrusted-text';
+
 // Utils
 export { fnv1a64, Fnv1a64 } from './utils/fnv1a';
 
@@ -2178,7 +2180,7 @@ export {
 } from './preview/preview-exposures';
 
 export {
-  err, ERROR_STATUS, escapeHtml, fileResponseHeaders, firstResponse, json,
+  err, ERROR_STATUS, escapeHtml, fileResponseHeaders, json, PUBLIC_MESSAGE, publicError, publicText,
   readBounded, readBoundedStream, reoriginateRequest, requestUrl, safeJson,
 } from './http/http';
 
@@ -2196,7 +2198,7 @@ export {
 } from './http/deployed-assets';
 
 export {
-  handleReleaseArtifactRequest, type ReleaseArtifactObject, type ReleaseArtifactStore,
+  serveReleaseArtifact, type ReleaseArtifactObject, type ReleaseArtifactStore,
 } from './http/release-artifact';
 
 export {
@@ -2548,7 +2550,8 @@ export {
   type ObjectNamespace,
   type PcUserNamespace,
   type PcIngressEnv,
-  handlePcRequest,
+  handlePcConnect,
+  handlePcConnectTicket,
 } from './http/pc-ingress';
 
 export {

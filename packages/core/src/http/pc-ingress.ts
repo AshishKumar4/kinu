@@ -4,7 +4,6 @@
  * trusted by signature, not by this Worker (`http/release-signing.ts`, SECURITY-devices C1).
  */
 
-import { DEVICE_CONNECT_PATH } from '../cloud-wire';
 import { json, readBounded } from './http';
 import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '../safety/workspace-capability';
 import { diagnostics, KinuError, renderThrownChain } from "../obs/index";
@@ -49,34 +48,15 @@ const DEVICE_TOKEN_PATTERN = /^pdt_[A-Za-z0-9_-]{32,}$/;
 
 const CONNECT_TICKET_PATTERN = /^pct_[A-Za-z0-9_-]{32,}$/;
 
-export async function handlePcRequest<Id>(
-  request: Request,
-  env: PcIngressEnv<Id>,
-): Promise<Response> {
-  const url = new URL(request.url);
-  const path = url.pathname;
-
-  if (path === "/pc/connect-ticket") {
-    return handlePcConnectTicket(request, env);
-  }
-
-  if (path === DEVICE_CONNECT_PATH) {
-    return handlePcConnect(request, env);
-  }
-
-  return new Response("Not found", { status: 404 });
-}
-
 const TICKET_BODY_SCHEMA = v.object({
   user: v.optional(v.string()),
   token: v.optional(v.string()),
 });
 
-async function handlePcConnectTicket<Id>(
+export async function handlePcConnectTicket<Id>(
   request: Request,
   env: PcIngressEnv<Id>,
 ): Promise<Response> {
-  if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
   const kv = env.AUTH_KV;
   const ns = env.UserDO;
 
@@ -128,7 +108,7 @@ async function handlePcConnectTicket<Id>(
   return json({ body: { ticket: issued.ticket, expiresAt: issued.expiresAt } });
 }
 
-async function handlePcConnect<Id>(
+export async function handlePcConnect<Id>(
   request: Request,
   env: PcIngressEnv<Id>,
 ): Promise<Response> {

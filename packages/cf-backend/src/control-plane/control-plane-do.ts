@@ -4,7 +4,7 @@
  * Not an `Agent`: its surface is exactly these methods, each gated before touching storage.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { diagnostics } from '@kinu.run/core/obs';
+import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import type { Page, PageRequest } from '@kinu.run/core';
 import type { FeedbackRecord } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
@@ -162,7 +162,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
     const row = cpStore.settleAudit(this.store, settlement);
 
     if (row === null) {
-      throw new Error(`no pending audit row ${settlement.id} to settle as ${settlement.outcome}`);
+      throw new KinuError('missing', `no pending audit row ${settlement.id} to settle as ${settlement.outcome}`);
     }
 
     this.publish(row, settlement);

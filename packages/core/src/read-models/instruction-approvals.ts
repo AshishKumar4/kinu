@@ -17,6 +17,7 @@ import { compareCodeUnits } from '../utils/text';
 import { seekPage, type Page, type PageRequest } from '../session/page';
 import type { AgentsMdSources } from '../prompting/agents-md';
 import { tolerateAsync } from '../obs/index';
+import { revealMisrepresenting } from '../safety/untrusted-text';
 
 /** An AGENTS.md is project doctrine; a skill can also declare a tool restriction. */
 export type InstructionSourceKind = 'agents_md' | 'skill';
@@ -60,25 +61,10 @@ export interface InstructionSourceView {
 
 const DEFAULT_PREVIEW_CHARS = 2_000;
 
-/** C0 controls and DEL, bidi overrides and isolates, directional marks, zero-width characters
- *  and the BOM: characters that make text display as something it is not. */
-const MISREPRESENTING_RANGES: ReadonlyArray<readonly [number, number]> = [
-  [0x00, 0x08], [0x0b, 0x0c], [0x0e, 0x1f], [0x7f, 0x7f],
-  [0x200b, 0x200f], [0x202a, 0x202e], [0x2066, 0x2069], [0xfeff, 0xfeff],
-];
-
-const MISREPRESENTING = new RegExp(
-  `[${MISREPRESENTING_RANGES.map(([lo, hi]) =>
-    lo === hi
-      ? `\\u{${lo.toString(16)}}`
-      : `\\u{${lo.toString(16)}}-\\u{${hi.toString(16)}}`).join('')}]`,
-  'gu',
-);
-
 /** The text renders in the owner's UI, and an approval is worth only the owner's reading of it,
  *  so misrepresenting characters become a visible U+FFFD. Tabs and newlines stay. */
 export function previewInstruction(content: string, maxChars = DEFAULT_PREVIEW_CHARS): string {
-  const safe = content.replace(MISREPRESENTING, '\uFFFD');
+  const safe = revealMisrepresenting(content);
 
   return safe.length <= maxChars ? safe : `${safe.slice(0, maxChars)}…`;
 }

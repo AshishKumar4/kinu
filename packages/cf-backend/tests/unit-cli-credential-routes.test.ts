@@ -9,6 +9,7 @@ import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from '.
 import type { JsonValue } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
+import { KinuError } from '@kinu.run/core/obs';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -57,7 +58,7 @@ function setupEnv() {
       return [...stored.entries()].map(([key, record]) => ({ key, kind: record.kind, createdAt: 1, updatedAt: 2 }));
     },
     async setCredential(_caller: UserCaller, key: string, credential: JsonValue) {
-      if (key === 'cloudflare.ai-gateway') throw new Error('cloudflare.ai-gateway is derived from your Cloudflare login and cannot be stored directly.');
+      if (key === 'cloudflare.ai-gateway') throw new KinuError('bad_input', 'cloudflare.ai-gateway is derived from your Cloudflare login and cannot be stored directly.');
       const record = v.parse(StoredCredentialSchema, credential);
       stored.set(key, { kind: record.kind ?? 'bearer', value: record });
     },

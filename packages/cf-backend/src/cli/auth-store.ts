@@ -6,16 +6,17 @@ import type { UserDO } from '../user/user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { parseAccessTokenUserId, type AccessTokenScope } from '@kinu.run/core';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import * as v from 'valibot';
 
 /** Routes map this (and only this) to HTTP 429. */
-export class RateLimitError extends Error {
+export class RateLimitError extends KinuError {
+  override readonly name: string = 'RateLimitError';
+
   constructor() {
-    super('Too many CLI auth attempts. Try again later.');
-    this.name = 'RateLimitError';
+    super('budget', 'Too many CLI auth attempts. Try again later.');
   }
 }
 
@@ -23,10 +24,11 @@ export class RateLimitError extends Error {
 const AUTHORIZATION_SPENT = /already been redeemed/i;
 
 /** Caller-correctable (unknown / expired / already used) → 400; infra failures stay plain errors (500). */
-export class CliAuthCodeError extends Error {
+export class CliAuthCodeError extends KinuError {
+  override readonly name: string = 'CliAuthCodeError';
+
   constructor(message: string) {
-    super(message);
-    this.name = 'CliAuthCodeError';
+    super('bad_input', message);
   }
 }
 

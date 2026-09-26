@@ -1,11 +1,11 @@
 /**
- * One `/api` route family served the way `api/app.ts` serves it once the app's gates have passed: the
+ * One route family served the way its app (`api/app.ts`, the Worker entry) serves it once the app's gates have passed: the
  * variables those gates set are preset, a throw is answered by the app's own error mapping, and a path
  * the family does not answer comes back as `null`, the fall-through to the next family. Runtime-neutral:
  * the workerd probes import it, so nothing here may reach a Bun-only helper.
  */
 import { Hono } from 'hono';
-import { apiError, apiPath, type FamilyEnv } from '../../src/api/context';
+import { routeError, apiPath, type FamilyEnv } from '../../src/api/context';
 import type { WorkspaceAgent, WorkspaceVariables } from '../../src/api/workspace';
 import type { AuthIdentity } from '../../src/auth/session';
 import type { AccessIdentity } from '../../src/control-plane/access-gate';
@@ -54,7 +54,7 @@ export function serveFamily<Bindings extends object, Variables extends object>(
 
   app.route('/', family);
   app.notFound(() => fellThrough);
-  app.onError(apiError);
+  app.onError(routeError);
 
   const { ctx } = gates;
 

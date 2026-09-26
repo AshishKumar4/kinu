@@ -11,7 +11,8 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { handleCliRequest } from '../src/cli/routes';
+import { cliPageRoutes } from '../src/cli/routes';
+import { serveFamily } from './helpers/api';
 import { staticRouteCliEnv } from './helpers/bindings';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell } from '@kinu.run/core';
@@ -46,7 +47,7 @@ const PtyResultSchema = v.object({
 });
 
 async function servedScript(path: string): Promise<string> {
-  const response = await handleCliRequest(new Request(`${ORIGIN}${path}`), staticRouteCliEnv());
+  const response = await cliPages(new Request(`${ORIGIN}${path}`), staticRouteCliEnv());
 
   if (!response) throw new Error(`${path} was not handled`);
   expect(response.status).toBe(200);
@@ -711,3 +712,5 @@ print(json.dumps({
     },
 }))
 `;
+
+const cliPages = serveFamily(cliPageRoutes);

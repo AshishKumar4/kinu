@@ -279,7 +279,7 @@ describe('a workspace the caller does not hold', () => {
     const read = await rail.files({ session: rail.strangerSession, workspace: 'authority-own', path: PC_FILE });
 
     expect(read.status).toBe(403);
-    expect(await errorOf(read)).toContain('owned by a different user');
+    expect(await errorOf(read)).not.toContain('owned by a different user');
     expect(rail.fileFrames()).toEqual([]);
   });
 

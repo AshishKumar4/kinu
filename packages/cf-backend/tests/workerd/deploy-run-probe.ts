@@ -6,7 +6,7 @@
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { DeployRunDO } from '../../src/deploy/deploy-do';
-import { deployRoutes, handleDeployCallback } from '../../src/deploy/routes';
+import { deployCallbackRoutes, deployRoutes } from '../../src/deploy/routes';
 import { updatesRoutes } from '../../src/updates/routes';
 import { serveFamily } from '../helpers/api';
 import type { AuthIdentity } from '../../src/auth/session';
@@ -208,7 +208,7 @@ export class DeployDoorProbe extends WorkerEntrypoint<Env> {
     // As the Worker dispatches: every `/api/` path is the app's, the OAuth return is its own.
     const response = path.startsWith('/api/')
       ? await serveFamily(deployRoutes)(request, this.env)
-      : await handleDeployCallback(request, this.env);
+      : await serveFamily(deployCallbackRoutes)(request, this.env);
 
     if (response === null) throw new Error(`the deploy routes do not answer ${method} ${path}`);
 

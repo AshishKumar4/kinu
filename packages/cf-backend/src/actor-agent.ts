@@ -225,6 +225,8 @@ import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
+import { Hono, type Context } from 'hono';
+import { rawPath, rethrow } from './api/context';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
 interface ModelDimensions {
@@ -578,7 +580,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Worker-side DO RPC only, deliberately not `@callable`. `missed` counts failed subtree
    * pushes; the caller reports them to the UserDO so it can arm reconciliation. */
   async installWorkspaceCapability(token: string): Promise<{ ok: true; missed: number }> {
-    if (!token) throw new Error('capability token required');
+    if (!token) throw new KinuError('denied', 'capability token required');
     // A native DO RPC does not route through partyserver, so it can land before `onStart` has run
     // (same race as `OrchestratorAgent.claimOwner`). Flag-gated: a no-op once initialized.
     this.ensureSchema();
@@ -793,7 +795,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected async subordinateView(name: string): Promise<SubordinateView> {
     const entry = this.subordinateRoster.get(name);
 
-    if (entry === null) throw new Error(`Subordinate "${name}" is not in the roster`);
+    if (entry === null) throw new KinuError('missing', `Subordinate "${name}" is not in the roster`);
     const reference = entry.actorReference;
 
     if (reference === null) {
@@ -1153,27 +1155,28 @@ export abstract class ActorAgent extends Agent<Env> {
     };
 
     const dispatchRequest = this.onRequest.bind(this);
+    const requests = new Hono({ getPath: rawPath });
 
-    this.onRequest = async (request) => {
-      const url = new URL(request.url);
+    requests.use('*', async (_c, next) => (this.storageRefusal === undefined
+      ? next()
+      : Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] })));
 
-      if (this.storageRefusal !== undefined) {
-        return Response.json(refusalOf(this.storageRefusal), { status: ERROR_STATUS[this.storageRefusal.code] });
-      }
+    // The seed is fetched on the same path the pane's socket opens, so each pane gets its own actor's rows.
+    const seed = async (c: Context): Promise<Response> => {
+      const hosted = hostedActorRoute(c.req.path);
+      const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted.name)?.history());
 
-      if (url.pathname === '/get-messages' || url.pathname.endsWith('/get-messages')) {
-        // The seed is fetched on the same path the pane's socket opens, so each pane gets its own
-        // actor's rows.
-        const hosted = hostedActorRoute(url.pathname);
-        const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted.name)?.history());
+      if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
 
-        if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
-
-        return Response.json(history);
-      }
-
-      return await dispatchRequest(request);
+      return Response.json(history);
     };
+
+    requests.all('/get-messages', seed);
+    requests.all('/:prefix{.*}/get-messages', seed);
+    requests.notFound(async (c) => dispatchRequest(c.req.raw));
+    requests.onError(rethrow);
+
+    this.onRequest = async (request) => requests.fetch(request);
   }
   /** Lazy: `actorHandle()` resolves the directory row `ensureSchema` creates, after field init. */
   private _pendingSends: PendingSendStore | null = null;
@@ -3342,7 +3345,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const factory = this._codemodeFactories.get(key);
 
-    if (factory === undefined) throw new Error(`eval profile ${key} was not built`);
+    if (factory === undefined) throw new KinuError('io', `eval profile ${key} was not built`);
 
     return factory;
   }
@@ -3372,7 +3375,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected requireOwnerUserDO(): UserHubClient {
     const stub = this.getOwnerUserDO();
 
-    if (!stub) throw new Error('Agent has no owner yet. Open it through the authenticated app or CLI first.');
+    if (!stub) throw new KinuError('unavailable', 'Agent has no owner yet. Open it through the authenticated app or CLI first.');
 
     return stub;
   }
@@ -3382,7 +3385,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const workspaceToken = this.workspaceCapabilityToken();
 
     if (!workspaceToken) {
-      throw new Error('This workspace has not been issued a capability token yet. Open it through the authenticated app or CLI first.');
+      throw new KinuError('unavailable', 'This workspace has not been issued a capability token yet. Open it through the authenticated app or CLI first.');
     }
 
     return { workspaceToken };
@@ -3460,7 +3463,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.workspaceFileAnswer('', async () => {
       const shell = this.rt.shell;
 
-      if (!shell) throw new Error('this workspace has no shell');
+      if (!shell) throw new KinuError('unsupported', 'this workspace has no shell');
 
       return shell.exec(command);
     });
@@ -4543,7 +4546,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const route = resolveModelRoute(source, await this.routingProfile());
 
     if (!route) {
-      throw new Error(`${source} is platform-routed: it has no model in the turn profile`);
+      throw new KinuError('unsupported', `${source} is platform-routed: it has no model in the turn profile`);
     }
 
     return {
@@ -4662,7 +4665,7 @@ export abstract class ActorAgent extends Agent<Env> {
       await Promise.all([...this._backgroundTasks].map((task) => task.promise ?? Promise.resolve()));
     }
 
-    throw new Error(
+    throw new KinuError('io', 
       `settleBackgroundTasks: ${String(this._backgroundTasks.size)} task(s) still detached after 32 `
       + 'laps — something keeps enqueuing work; join a narrower seam instead',
     );

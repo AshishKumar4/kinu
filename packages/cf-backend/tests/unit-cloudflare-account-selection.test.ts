@@ -10,6 +10,7 @@ import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bin
 import type { AuthIdentity } from '../src/auth/session';
 import type { UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
+import { KinuError } from '@kinu.run/core/obs';
 
 const AccountStatusSchema = v.object({
   connected: v.boolean(),
@@ -160,7 +161,7 @@ function routeHarness(selectFails = false) {
       return { connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER] };
     },
     async selectCloudflareAccount(_caller: UserCaller, id: string) {
-      if (selectFails) throw new Error('That Cloudflare account is not one this login can see.');
+      if (selectFails) throw new KinuError('bad_input', 'That Cloudflare account is not one this login can see.');
       selected.push(id);
     },
   });

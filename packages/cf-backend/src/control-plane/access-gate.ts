@@ -39,23 +39,10 @@ export type AccessVerification =
   | { readonly ok: true; readonly access: AccessIdentity }
   | { readonly ok: false; readonly denial: AccessDenial };
 
-/** Two arms, not `startsWith('/control')`, which would also match `/controlpanel` beyond Access coverage. */
-function isControlPlaneUiPath(pathname: string): boolean {
-  return pathname === '/control' || pathname.startsWith('/control/');
-}
+/** Hono patterns (each matches its bare prefix too) the Access application must cover (`scripts/deploy.test.ts`). */
+export const CONTROL_PLANE_UI_ROUTE = '/control/*';
 
-/** Must agree with the prefix test in `routes.ts`, which reads this. */
-function isControlPlaneApiPath(pathname: string): boolean {
-  return pathname === '/api/control' || pathname.startsWith('/api/control/');
-}
-
-/**
- * Exactly `/control*` and `/api/control*`, nothing else: host-wide Access would gate previews and
- * public pages. Pinned by `tests/unit-control-plane.test.ts` and `scripts/infra-verify.ts`.
- */
-export function isControlPlaneSurface(pathname: string): boolean {
-  return isControlPlaneUiPath(pathname) || isControlPlaneApiPath(pathname);
-}
+export const CONTROL_PLANE_API_ROUTE = '/api/control/*';
 
 /**
  * Normalizes a missing scheme or trailing slash (else `iss` never matches); rejects any path,

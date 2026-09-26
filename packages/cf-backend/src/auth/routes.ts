@@ -30,7 +30,7 @@ import type { KvStore } from '@kinu.run/agent-utils';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
-import type { FamilyEnv } from '../api/context';
+import { noHead, rawParam, type FamilyEnv } from '../api/context';
 
 const CloudflareUserEnvelopeSchema = v.object({
   success: v.optional(v.boolean()), result: v.optional(JsonValueSchema),
@@ -90,32 +90,19 @@ authApiRoutes.get('/api/auth/me', async (c) => {
 });
 
 /** Sign-in pages and OAuth legs. */
-export async function handleAuthRequest<Id>(request: Request, env: AuthRoutesEnv<Id>, ctx?: Pick<ExecutionContext, 'waitUntil'>): Promise<Response | null> {
-  const url = new URL(request.url);
-  const method = request.method;
+type AuthPagesEnv = FamilyEnv<AuthRoutesEnv<unknown>, object>;
 
-  if (url.pathname === '/login' && method === 'GET') {
-    return renderLogin(request, env);
-  }
+export const authPageRoutes = new Hono<AuthPagesEnv>();
 
-  if (url.pathname === '/logout' && (method === 'GET' || method === 'POST')) {
-    return logout(request, env);
-  }
+authPageRoutes.get('/login', noHead<AuthPagesEnv>(async (c) => renderLogin(c.req.raw, c.env)));
 
-  const startMatch = url.pathname.match(/^\/auth\/([^/]+)\/start$/);
+authPageRoutes.on(['GET', 'POST'], '/logout', noHead<AuthPagesEnv>(async (c) => logout(c.req.raw, c.env)));
 
-  if (startMatch && method === 'GET') {
-    return startOAuth(request, env, decodeURIComponent(startMatch[1]));
-  }
+authPageRoutes.get('/auth/:provider/start', noHead<AuthPagesEnv>(async (c) =>
+  startOAuth(c.req.raw, c.env, decodeURIComponent(rawParam(c, 'provider')))));
 
-  const callbackMatch = url.pathname.match(/^\/auth\/([^/]+)\/callback$/);
-
-  if (callbackMatch && method === 'GET') {
-    return finishOAuth(request, env, ctx, decodeURIComponent(callbackMatch[1]));
-  }
-
-  return null;
-}
+authPageRoutes.get('/auth/:provider/callback', noHead<AuthPagesEnv>(async (c) =>
+  finishOAuth(c.req.raw, c.env, c.executionCtx, decodeURIComponent(rawParam(c, 'provider')))));
 
 async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promise<Response> {
   const url = new URL(request.url);
@@ -196,7 +183,7 @@ async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, provider
 
 /** Burns the handoff cookie whatever the outcome; its state record is already spent. */
 async function finishOAuth<Id>(
-  request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'> | undefined, providerId: string,
+  request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, providerId: string,
 ): Promise<Response> {
   const response = await completeOAuth(request, env, ctx, providerId);
   response.headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, '', 0));
@@ -205,7 +192,7 @@ async function finishOAuth<Id>(
 }
 
 async function completeOAuth<Id>(
-  request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'> | undefined, providerId: string,
+  request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, providerId: string,
 ): Promise<Response> {
   const provider = getOAuthProvider(env, providerId);
 
@@ -280,7 +267,7 @@ async function completeOAuth<Id>(
  *  credential is reported by the "Connect Cloudflare Workers AI" notice. */
 async function attachCloudflareWorkersAI<Id>(
   env: AuthRoutesEnv<Id>,
-  ctx: Pick<ExecutionContext, 'waitUntil'> | undefined,
+  ctx: Pick<ExecutionContext, 'waitUntil'>,
   userId: string,
   tokens: CloudflareTokenPayload,
 ): Promise<void> {

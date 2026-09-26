@@ -11,6 +11,7 @@ const expectedRules = [
   "anti-slop/no-chained-type-assertions",
   "anti-slop/no-conditional-empty-object-spread",
   "anti-slop/no-copy-rpc-stub",
+  "anti-slop/no-bare-error-in-durable-object",
   "anti-slop/no-ddl-in-catch",
   "anti-slop/no-elapsed-work-deadline",
   "anti-slop/no-empty-catch",

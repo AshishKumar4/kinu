@@ -95,7 +95,7 @@ export interface ReleaseManifest {
 
 const Sha256Schema = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/u));
 
-// Matches `RELEASE_ARTIFACT_ROUTE`; also a local directory name, so no `/` or `..`.
+// Matches `RELEASE_ARTIFACT_NAME`; also a local directory name, so no `/` or `..`.
 const RELEASE_VERSION = /^[A-Za-z0-9._+-]+$/u;
 
 // The local door writes these to disk, so escaping paths are refused here, once.
@@ -167,7 +167,7 @@ export const ReleaseManifestSchema: v.GenericSchema<ReleaseManifest> = v.object(
 
 
 /** Must match `workerArtifactPath`; the artifact is an R2 object, too large for a static asset. */
-export const RELEASE_ARTIFACT_ROUTE = /^\/downloads\/(kinu-worker-[A-Za-z0-9._+-]+\.tar\.gz)$/u;
+export const RELEASE_ARTIFACT_NAME = 'kinu-worker-[A-Za-z0-9._+-]+\\.tar\\.gz';
 
 export function parseReleaseManifest(text: string): ReleaseManifest {
   return v.parse(ReleaseManifestSchema, JSON.parse(text));

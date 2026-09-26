@@ -9,6 +9,7 @@ import { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorRunResu
 import { runSyntheticProbes } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
+import { KinuError } from '@kinu.run/core/obs';
 
 export const MONITOR_SINGLETON = 'site';
 
@@ -43,7 +44,7 @@ export class MonitorDO extends DurableObject<Env> {
     const origin = this.env.CLI_PUBLIC_ORIGIN;
 
     if (!origin) {
-      throw new Error('CLI_PUBLIC_ORIGIN is not configured; there is no origin to probe.');
+      throw new KinuError('unavailable', 'CLI_PUBLIC_ORIGIN is not configured; there is no origin to probe.');
     }
 
     const outcomes = await runSyntheticProbes({ origin, fetch: (input, init) => fetch(input, init) });

@@ -1,12 +1,12 @@
 /** `/api/control/*`: the operator gate is the first middleware; Access, the app's first gate, sets the required `access`. One audited mutation endpoint. */
 import { Hono, type Context } from 'hono';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { authoredRefusal, diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import type { Page, PageRequest } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
-import { err, json, safeJson } from '@kinu.run/core';
+import { err, json, publicError, publicText, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { MONITOR_SINGLETON, type MonitorDO } from '../monitor/monitor-do';
 import {
@@ -80,15 +80,12 @@ type ControlContextOf = Context<FamilyEnv<ControlEnv<unknown>, ControlVariables>
 /** Each section answers its whole subtree. */
 export const controlRoutes = new Hono<FamilyEnv<ControlEnv<unknown>, ControlVariables>>();
 
-// Past the operator gate a throw is recorded and answered 500.
+// Past the operator gate a throw is recorded and answered with its class; a refusal the plane authored is input.
 controlRoutes.onError((cause, c) => {
-  diagnostics.failure('control_plane.request_failed', toKinuError({
-    doing: 'serving an admin control-plane request',
-    cause,
-    otherwise: 'unavailable',
-  }), { path: new URL(c.req.url).pathname, method: c.req.method });
+  const error = authoredRefusal({ doing: 'serving an admin control-plane request', cause });
+  diagnostics.failure('control_plane.request_failed', error, { path: new URL(c.req.url).pathname, method: c.req.method });
 
-  return err(500, renderThrownChain({ cause }));
+  return publicError(error);
 });
 
 // Reader first: a stale operator is refused, and audited, at `handleAction`'s mutation check.
@@ -417,7 +414,10 @@ async function readRoster<Id>(env: ControlEnv<Id>, userId: string): Promise<Rost
       reason: `the roster did not end within ${String(MAX_PAGES)} pages; the index was left alone`,
     };
   } catch (cause) {
-    return { status: 'failed', reason: renderThrownChain({ cause }) };
+    const error = authoredRefusal({ doing: 'reading a user\'s workspace roster', cause });
+    diagnostics.failure('control_plane.roster_unread', error, { user: userId });
+
+    return { status: 'failed', reason: publicText(error) };
   }
 }
 
@@ -477,9 +477,11 @@ export interface WorkspaceDetail {
 }
 
 function settled<Value>(result: PromiseSettledResult<Value>): SettledPanel<Value> {
-  return result.status === 'fulfilled'
-    ? { status: 'ok', value: result.value }
-    : { status: 'failed', reason: renderThrownChain({ cause: result.reason }) };
+  if (result.status === 'fulfilled') return { status: 'ok', value: result.value };
+  const error = authoredRefusal({ doing: 'reading a workspace panel', cause: result.reason });
+  diagnostics.failure('control_plane.panel_unread', error);
+
+  return { status: 'failed', reason: publicText(error) };
 }
 
 const CursorParamSchema = v.pipe(v.string(), v.nonEmpty());

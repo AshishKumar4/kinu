@@ -212,6 +212,32 @@ describe('ChatApp consent ownership', () => {
     expect(screen.frame().replaceAll('\n', '')).not.toMatch(/\p{Cc}/u);
   });
 
+  test('an approval shows a command\'s bidi and zero-width characters as marks, so it reads as what runs', async () => {
+    // U+202E and U+2066 reorder what follows; U+200B hides a byte. Shown raw, the prompt reads as other text.
+    const command = 'rm -rf ./build \u202E\u2066gpj.x\u200B';
+
+    const agent = fakeClient({
+      name: 'shell',
+      consents: {
+        listPending: async () => [{ consentId: 'consent-bidi', deviceLabel: 'Workstation', method: 'shell', command }],
+        resolve: async () => ({ ok: true }),
+      },
+    });
+
+    const screen = await mountChat(agent.client);
+    const answer = agent.requestShellApproval({ ...shellRequest, command });
+    await screen.waitFor('shell approval', () => screen.frame().includes('Run this command?'));
+    expect(screen.frame()).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u);
+    expect(screen.frame()).toContain('\uFFFD');
+    screen.mockInput.pressKey('n');
+    expect(await answer).toBe('deny');
+
+    agent.emit({ type: 'turn-start', kind: 'user', text: 'run it' });
+    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your computer?'));
+    expect(screen.frame()).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u);
+    expect(screen.frame()).toContain('\uFFFD');
+  });
+
   test('a wide glyph is budgeted two columns, not four', () => {
     // Counting UTF-16 units would read 39 emoji as four rows and refuse.
     expect(deviceConsentCanApprove({ command: '😀'.repeat(39) }, { width: 100, height: 11 })).toBe(true);

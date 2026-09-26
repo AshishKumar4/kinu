@@ -6,11 +6,14 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSy
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { scratchDir } from '@kinu.run/test-utils';
-import { handleCliRequest } from '../src/cli/routes';
+import { cliPageRoutes } from '../src/cli/routes';
+import { serveFamily } from './helpers/api';
 import { staticRouteCliEnv } from './helpers/bindings';
 
+const cliPages = serveFamily(cliPageRoutes);
+
 async function launcherScript(): Promise<string> {
-  const shim = await handleCliRequest(
+  const shim = await cliPages(
     new Request('https://kinu.example.com/downloads/kinu'), staticRouteCliEnv(),
   );
 
