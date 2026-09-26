@@ -1297,29 +1297,34 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.eventRecorder.openTurn()?.turn.turnId === turnId;
   }
 
+  private readonly runningWakeRows = new Set<string>();
+
   /**
-   * Idempotent soonest-wins arm of one durable wake row per `callback`; shared by all Kinu wake chains.
-   * Writes before collapsing, re-reads after the write so racers converge, and counts future rows only.
+   * Soonest-wins arm of one wake row per `callback`. A due row counts (it fires now) unless its tick is
+   * running, since the SDK deletes that one. Re-reads after its write so racers converge.
    */
   protected async armWakeRow(callback: keyof this & string, atMs: number): Promise<string> {
     const nowSec = Math.floor(Date.now() / 1000);
     // Round up: the SDK stores whole seconds, and waking early would re-arm and busy-spin the alarm.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
 
-    const pending = async (): Promise<{ id: string; time: number }[]> =>
+    const armed = async (): Promise<{ id: string; time: number }[]> =>
       (await this.listSchedules())
-        .filter((row) => row.callback === callback && row.time > nowSec)
+        .filter((row) => row.callback === callback && !this.runningWakeRows.has(row.id))
         .map((row) => ({ id: row.id, time: row.time }));
 
-    const armed = await pending();
-    const desired = Math.min(targetSec, ...armed.map((row) => row.time));
+    const earliest = (rows: readonly { id: string; time: number }[]): { id: string; time: number } | undefined =>
+      rows.reduce<{ id: string; time: number } | undefined>((best, row) =>
+        best === undefined || row.time < best.time || (row.time === best.time && row.id < best.id) ? row : best, undefined);
 
-    if (armed.length === 1 && armed[0].time === desired) return armed[0].id;
-    await this.schedule(new Date(desired * 1000), callback);
-    const settled = await pending();
+    const before = await armed();
+    const kept = earliest(before);
 
-    const keeper = settled.reduce((best, row) =>
-      row.time < best.time || (row.time === best.time && row.id < best.id) ? row : best);
+    if (kept === undefined || kept.time > targetSec) await this.schedule(new Date(targetSec * 1000), callback);
+    const settled = await armed();
+    const keeper = earliest(settled);
+
+    if (keeper === undefined) throw new KinuError('io', `the ${callback} wake row vanished while it was armed`);
 
     // The keeper is never cancelled, so failure leaves extra wakes, never zero; errors propagate.
     for (const row of settled) {
@@ -1329,24 +1334,36 @@ export abstract class ActorAgent extends Agent<Env> {
     return keeper.id;
   }
 
+  protected async runWakeRow(own: Schedule<undefined>, body: () => Promise<void>): Promise<void> {
+    this.runningWakeRows.add(own.id);
+
+    try {
+      await body();
+    } finally {
+      this.runningWakeRows.delete(own.id);
+    }
+  }
+
   /** One soonest-wins row per actor; returns the surviving row's id so a caller can release it. */
   protected scheduleTerminalRetry(atMs: number): Promise<string> {
     return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs);
   }
 
-  /** Public because `Agent.schedule()` types callbacks as `keyof this`; idempotent, re-arms from storage. */
   /**
-   * `armWakeRow` collapses future rows only, so repeated deaths inside the tick leave overdue rows
-   * the SDK runs in one alarm. Retire every other due row first; the SDK passes this callback its own.
+   * Public because `Agent.schedule()` types callbacks as `keyof this`. One pass per alarm: the SDK read
+   * every due row first, so a row this pass retired still arrives and runs nothing.
    */
   async _kinuTerminalRetryTick(_payload: undefined, own: Schedule<undefined>): Promise<void> {
     const nowSec = Math.floor(Date.now() / 1000);
+    const rows = (await this.listSchedules()).filter((row) => row.callback === TERMINAL_RETRY_CALLBACK);
 
-    for (const row of await this.listSchedules()) {
-      if (row.callback === TERMINAL_RETRY_CALLBACK && row.time <= nowSec && row.id !== own.id) await this.cancelSchedule(row.id);
+    if (!rows.some((row) => row.id === own.id)) return;
+
+    for (const row of rows) {
+      if (row.time <= nowSec && row.id !== own.id) await this.cancelSchedule(row.id);
     }
 
-    await this.terminalRetryPass();
+    await this.runWakeRow(own, () => this.terminalRetryPass());
   }
 
   async terminalRetryPass(): Promise<void> {

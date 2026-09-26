@@ -1,12 +1,17 @@
 /** Best-effort browser render-failure report: one POST, arranged so trying cannot add a second error. */
 
+import * as v from 'valibot';
 import {
+  CLIENT_CHAT_STREAM_FAILED,
   CLIENT_ERROR_ENDPOINT,
   CLIENT_RENDER_FAILED,
   COMPONENT_STACK_FRAME,
   STACK_FRAME,
+  StreamPartErrorSchema,
+  fitChatStreamFailureReport,
   fitClientErrorReport,
   stackFrames,
+  type ChatStreamFailureReport,
   type ClientErrorReport,
 } from "./client-error-contract";
 import type { ReportedRoute } from './app-routes';
@@ -27,10 +32,7 @@ function isTolerableSendFailure(input: { cause: unknown }): boolean {
   return input.cause instanceof TypeError || input.cause instanceof DOMException;
 }
 
-/**
- * Pure: no message, path, or user content, fitted to the bound before send. `release` is the build
- * this page loaded, not the live one; the route compares the two.
- */
+/** Pure: no message, path or user content. `release` is this page's build, which the route compares. */
 function renderFailureReport(
   error: Error,
   componentStack: string,
@@ -49,15 +51,32 @@ function renderFailureReport(
   return fitClientErrorReport(page.release === null ? report : { ...report, release: page.release });
 }
 
-/**
- * Never rejects for a network reason. `keepalive` so the report survives the reload of a broken view.
- * No deadline: nothing waits on it, and a timer would turn a late report into a lost one.
- */
 export async function reportRenderFailure(
   error: Error, componentStack: string, page: PageIdentity,
 ): Promise<void> {
-  const report = renderFailureReport(error, componentStack, page);
+  await send(renderFailureReport(error, componentStack, page));
+}
 
+/** Once per error; a protocol error adds its part. */
+export async function reportChatStreamFailure(
+  error: Error, pane: ChatStreamFailureReport['pane'], page: PageIdentity,
+): Promise<void> {
+  const part = v.safeParse(StreamPartErrorSchema, error);
+
+  const report: ChatStreamFailureReport = {
+    event: CLIENT_CHAT_STREAM_FAILED,
+    errorName: IDENTIFIER.test(error.name) ? error.name : 'Error',
+    route: page.route,
+    pane,
+    stack: stackFrames(error.stack ?? '', STACK_FRAME).join('\n'),
+    ...(part.success && { part: { type: part.output.chunkType, id: part.output.chunkId } }),
+  };
+
+  await send(fitChatStreamFailureReport(page.release === null ? report : { ...report, release: page.release }));
+}
+
+/** Never rejects on the network; `keepalive` outlives a reload. */
+async function send(report: ClientErrorReport | ChatStreamFailureReport): Promise<void> {
   try {
     await fetch(CLIENT_ERROR_ENDPOINT, {
       method: 'POST',

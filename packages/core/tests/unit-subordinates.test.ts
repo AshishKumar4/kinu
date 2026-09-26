@@ -455,7 +455,7 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
       calls.push(`rename:${name}:${displayName}:${nameOrigin}`);
       fail('rename');
     },
-    async dismiss(name, keepHistory, reference) {
+    async dismiss(name, { keepHistory }, reference) {
       calls.push(`dismiss:${name}:${keepHistory}`); fail('dismiss');
 
       if (!keepHistory) {

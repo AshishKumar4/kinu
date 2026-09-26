@@ -40,6 +40,8 @@ import {
   fetchDeployedBuildSha,
   isNewerDeployedBuild,
   pageDeployedBuildSha,
+  reportChatStreamFailure,
+  routeTemplateOf,
   type SessionRecovery,
 } from "@kinu.run/core";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
@@ -1056,10 +1058,30 @@ export function useKinu(target?: string | KinuActorAddress) {
     [],
   );
 
+  const chatStreamReports = useRef(new Set<Promise<void>>());
+
   // Always live: the transport only surfaces this for a request id still in flight.
   useEffect(() => {
-    if (streamError) setChatError({ body: streamError.message || String(streamError), replayed: false });
-  }, [streamError]);
+    if (!streamError) return;
+    setChatError({ body: streamError.message || String(streamError), replayed: false });
+    const reports = chatStreamReports.current;
+
+    let report: Promise<void> | null = null;
+
+    report = (async () => {
+      try {
+        await reportChatStreamFailure(streamError, subordinate === undefined ? "root" : "actor", {
+          release: await pageDeployedBuildSha(),
+          route: routeTemplateOf(location.pathname),
+        });
+      } catch (cause) {
+        diagnostics.event("client_error.reporter_failed", { reason: renderThrownChain({ cause }) });
+      } finally {
+        if (report !== null) reports.delete(report);
+      }
+    })();
+    reports.add(report);
+  }, [streamError, subordinate]);
 
   // Version skew: /api/health's build sha compared on each reconnect. The baseline is per page
   // (`pageDeployedBuildSha`) because this hook remounts on every workspace navigation.

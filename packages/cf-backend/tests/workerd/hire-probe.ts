@@ -26,13 +26,13 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    for (const name of ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript']) {
+    for (const name of ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'stopHosted']) {
       Reflect.deleteProperty(this, name);
     }
 
     sealRpcSurface(this, [
       ...ORCHESTRATOR_RPC_SURFACE,
-      'rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript',
+      'rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'stopHosted',
     ]);
   }
 
@@ -170,6 +170,14 @@ export class HireOrchestrator extends ProductionOrchestrator {
     return lines;
   }
 
+  /** The owner's Stop in an actor pane: the `cancel` frame reaches the hosted room's wire as this call. */
+  async stopHosted(name: string): Promise<void> {
+    const wire = this.hostedChatWire(name);
+
+    if (wire === null) throw new Error(`no hosted chat wire for ${name}`);
+    wire.interrupt();
+  }
+
   /**
    * Runs the full wake `_kinuTerminalRetryTick` in-request (an in-flight request holds the input gate, so no alarm arrives).
    * A narrower frame would report hangs the product does not have. The debounced reactor drain is driven separately.
@@ -213,9 +221,9 @@ interface HireRunOptions {
 }
 
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
-type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp'>
+type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
   & Pick<HireOrchestrator,
-    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript'>;
+    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'stopHosted'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -283,6 +291,24 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
    *  request — the caller observing its answer. */
   async callerObserved(): Promise<void> {
     await fetch('http://hire-control.invalid/hire/root-saw');
+  }
+
+  async stopChild(workspace: string): Promise<void> {
+    const target = await this.target(workspace);
+    const [child] = await target.rosterRows();
+
+    if (child === undefined) throw new Error('no hired child to stop');
+    await target.stopHosted(child.name);
+  }
+
+  /** The owner's Dismiss with its history kept, as the roster menu calls it. */
+  async dismissChild(workspace: string): Promise<string> {
+    const target = await this.target(workspace);
+    const [child] = await target.rosterRows();
+
+    if (child === undefined) throw new Error('no hired child to dismiss');
+
+    return (await target.dismissSubordinate(child.name, true)).name;
   }
 
   async openHire(workspace: string, prompt: string): Promise<void> {
