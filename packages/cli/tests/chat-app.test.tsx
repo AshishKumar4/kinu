@@ -518,6 +518,27 @@ test('when a turn ends, the next keys still land in the composer', async () => {
   await screen.waitFor('the next draft in the composer', () => screen.frame().includes('and again'));
 });
 
+test('a turn shows its reasoning as it streams, its elapsed time and a token count, then folds the reasoning', async () => {
+  // Nothing streamed while a model reasoned: a minute on a bare spinner, with no sign of progress.
+  const agent = fakeClient({ name: 'reasons' });
+
+  const screen = await mountChat(agent.client);
+  agent.emit({ type: 'turn-start', kind: 'user', text: 'plan the migration' });
+  agent.emit({ type: 'reasoning-delta', delta: 'Weigh the two schemas first.\nThe old table keeps its rows.' });
+  await screen.waitFor('the reasoning, live', () => screen.frame().includes('The old table keeps its rows.'));
+  expect(screen.frame()).toMatch(/\b\d+s · ~\d+ tokens\b/u);
+
+  agent.emit({ type: 'text-delta', delta: 'Migrate in two steps.' });
+  agent.emit({ type: 'turn-end', turn: TURN });
+  await screen.waitFor('the answer', () => screen.frame().includes('Migrate in two steps.'));
+  await screen.waitFor('the reasoning folded', () => !screen.frame().includes('The old table keeps its rows.'));
+  expect(screen.frame()).toContain('Weigh the two schemas first.');
+  expect(screen.frame()).not.toMatch(/\d+s · ~\d+ tokens/u);
+
+  screen.mockInput.pressKey('o', { ctrl: true });
+  await screen.waitFor('the reasoning expanded', () => screen.frame().includes('The old table keeps its rows.'));
+});
+
 test('a turn waiting on a rate limit names the provider, not thinking', async () => {
   const agent = fakeClient({ name: 'wait-visible' });
 

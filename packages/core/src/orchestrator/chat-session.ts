@@ -109,6 +109,8 @@ export type SessionEvent =
       /** A rerun answers every leftover as one turn; a transport closes their requests with it. */
       carried: readonly string[] }
   | { type: 'text-delta'; delta: string }
+  /** The model's reasoning as it streams; shown live, never part of the answer or stored. */
+  | { type: 'reasoning-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
   | { type: 'turn-end'; turn: CompletedTurn }
@@ -943,7 +945,8 @@ export class ChatSession {
 
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
 
-      if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') return this.emit(event);
+      if (event.type === 'text-delta' || event.type === 'reasoning-delta' || event.type === 'tool-call' || event.type === 'tool-result'
+        || event.type === 'error') return this.emit(event);
     });
 
     const fullText = continuedAnswer(item.continuation, execution);

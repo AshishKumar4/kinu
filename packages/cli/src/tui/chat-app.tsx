@@ -49,6 +49,7 @@ import { guideFailure } from '../provider-guidance';
 import { openBrowser } from '../commands/auth';
 import { StatusBar } from './status-bar';
 import { MessageList, type DisplayMessage } from './messages';
+import type { TurnMeter } from './overlays';
 import {
   ChangelogOverlay,
   CommandHintOverlay,
@@ -409,14 +410,24 @@ function ChatScene({
   /** If false at turn-end, turn.text is appended once. */
   const turnStreamedTextRef = useRef(false);
 
-  const writeActiveSegment = useCallback((value: string | null) => {
-    const id = activeSegmentRef.current;
-
-    if (!id || value === null) return;
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: value } : m)));
-  }, []);
-
+  const writeActiveSegment = useMemo(() => writeLiveMessage(activeSegmentRef, setMessages), []);
   const stream = useStreamingBuffer(writeActiveSegment);
+  // Reasoning streams into its own segment, sealed by the first text or tool after it.
+  const activeThinkingRef = useRef<string | null>(null);
+  const writeThinking = useMemo(() => writeLiveMessage(activeThinkingRef, setMessages), []);
+  const thinkingStream = useStreamingBuffer(writeThinking);
+  const turnMeterRef = useRef<TurnMeter | null>(null);
+
+  const appendThinking = useCallback((delta: string) => {
+    if (!activeThinkingRef.current) {
+      const id = `msg-${++msgIdRef.current}`;
+      activeThinkingRef.current = id;
+      setMessages((prev) => [...prev, { id, role: 'thinking', content: '', live: true }]);
+      thinkingStream.start();
+    }
+
+    thinkingStream.append(delta);
+  }, [thinkingStream]);
 
   const beginSegment = useCallback(() => {
     const id = `msg-${++msgIdRef.current}`;
@@ -425,6 +436,15 @@ function ChatScene({
     setMessages((prev) => [...prev, segment]);
     stream.start();
   }, [stream]);
+
+  const sealThinking = useCallback(() => {
+    const id = activeThinkingRef.current;
+
+    if (!id) return;
+    thinkingStream.finish();
+    activeThinkingRef.current = null;
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, live: false } : m)));
+  }, [thinkingStream]);
 
   /** An empty segment (tool before any text) is removed. */
   const sealSegment = useCallback(() => {
@@ -1226,6 +1246,8 @@ function ChatScene({
   }, [addMessage, client]);
 
   const handleTurnEnd = useCallback(async (event: Extract<AgentClientEvent, { type: 'turn-end' }>) => {
+    sealThinking();
+
     if (activeSegmentRef.current) stream.finish();
     sealSegment();
 
@@ -1235,12 +1257,15 @@ function ChatScene({
 
     const inputEffects = runInputEffects(dispatchInput({ type: 'turn-settled' }));
 
-    if (machineRef.current.activeTurns === 0) setTurnPhase(null);
+    if (machineRef.current.activeTurns === 0) {
+      setTurnPhase(null);
+      turnMeterRef.current = null;
+    }
 
     if (event.turn.toolCalls.some((call) => call.name === 'agents')) await hintAlternateTakes();
 
     await inputEffects;
-  }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, setTurnPhase, stream]);
+  }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, sealThinking, setTurnPhase, stream]);
 
   const handleBroadcast = useCallback((event: Extract<AgentClientEvent, { type: 'broadcast' }>) => {
     if (event.event.type === 'plan_updated' && event.event.plan) {
@@ -1277,7 +1302,9 @@ function ChatScene({
         dispatchInput({ type: 'turn-start' });
         // A new segment opens lazily on the first text-delta — start clean.
         sealSegment();
+        sealThinking();
         turnStreamedTextRef.current = false;
+        turnMeterRef.current ??= { startedAt: Date.now(), streamedChars: 0 };
         setTurnPhase(event.kind === 'programmatic' ? 'running background work' : 'thinking');
 
         if (event.kind === 'programmatic') {
@@ -1287,8 +1314,15 @@ function ChatScene({
         return;
       }
 
+      case 'reasoning-delta':
+        countStreamed(turnMeterRef.current, event.delta);
+        appendThinking(event.delta);
+
+        return;
       case 'text-delta':
         if (!event.delta) return;
+        sealThinking();
+        countStreamed(turnMeterRef.current, event.delta);
         turnStreamedTextRef.current = true;
 
         if (!activeSegmentRef.current) beginSegment();
@@ -1297,6 +1331,7 @@ function ChatScene({
 
         return;
       case 'tool-call':
+        sealThinking();
         sealSegment();
         setTurnPhase(`calling ${event.toolName}`);
         addMessage({
@@ -1323,6 +1358,7 @@ function ChatScene({
 
         return;
       case 'error':
+        sealThinking();
         sealSegment();
         addMessage({ role: 'system', content: errorLine(event.message) });
 
@@ -1346,7 +1382,7 @@ function ChatScene({
         return;
       }
     }
-  }, [addMessage, beginSegment, dispatchInput, handleBroadcast, handleTurnEnd, sealSegment, setTurnPhase, stream]);
+  }, [addMessage, appendThinking, beginSegment, dispatchInput, handleBroadcast, handleTurnEnd, sealSegment, sealThinking, setTurnPhase, stream]);
 
   // Connect once per client; re-runs when a walk-back fork swaps in a sibling client.
   useEffect(() => {
@@ -1908,7 +1944,7 @@ function ChatScene({
         }}
       >
         <MessageList messages={messages} toolDetailsExpanded={toolDetailsExpanded} />
-        <PhaseLine label={phaseLineLabel(isProcessing, turnPhase, nextTier)} />
+        <PhaseLine label={phaseLineLabel(isProcessing, turnPhase, nextTier)} meter={turnMeterRef} />
       </scrollbox>
 
       {inputState.queue.length > 0 && (
@@ -1979,6 +2015,23 @@ function composerPlaceholderFor(ready: boolean, isProcessing: boolean): string {
   if (!ready) return 'Connecting…';
 
   return isProcessing ? TUI_COMPOSER_STEERING_PLACEHOLDER : TUI_COMPOSER_PLACEHOLDER;
+}
+
+/** Writes a live message's streamed text into the message `ref` names. */
+function writeLiveMessage(
+  ref: { readonly current: string | null },
+  setMessages: (update: (prev: DisplayMessage[]) => DisplayMessage[]) => void,
+): (value: string | null) => void {
+  return (value) => {
+    const id = ref.current;
+
+    if (!id || value === null) return;
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: value } : m)));
+  };
+}
+
+function countStreamed(meter: TurnMeter | null, delta: string): void {
+  if (meter) meter.streamedChars += delta.length;
 }
 
 function phaseLineLabel(isProcessing: boolean, turnPhase: string | null, nextTier: TierId | null): string | null {

@@ -1204,7 +1204,20 @@ function PaletteLine(props: { text: string; width: number; color: string; accent
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-export function PhaseLine({ label }: { label: string | null }) {
+export interface TurnMeter {
+  readonly startedAt: number;
+  streamedChars: number;
+}
+
+/** A token is about four characters; `~` marks the estimate. */
+function meterText(meter: TurnMeter, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - meter.startedAt) / 1000));
+  const tokens = Math.ceil(meter.streamedChars / 4);
+
+  return tokens === 0 ? ` · ${String(seconds)}s` : ` · ${String(seconds)}s · ~${String(tokens)} tokens`;
+}
+
+export function PhaseLine({ label, meter }: { label: string | null; meter?: { readonly current: TurnMeter | null } }) {
   const { colors } = useTuiTheme();
   const [frame, setFrame] = useState(0);
   useEffect(() => {
@@ -1223,7 +1236,11 @@ export function PhaseLine({ label }: { label: string | null }) {
 
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text><span fg={colors.intent.accent}>{SPINNER_FRAMES[frame]} </span><i fg={colors.text.muted}>{label}</i></text>
+      <text>
+        <span fg={colors.intent.accent}>{SPINNER_FRAMES[frame]} </span>
+        <i fg={colors.text.muted}>{label}</i>
+        {meter?.current ? <span fg={colors.text.muted}>{meterText(meter.current, Date.now())}</span> : null}
+      </text>
     </box>
   );
 }

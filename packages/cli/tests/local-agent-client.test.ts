@@ -51,6 +51,29 @@ function fakeModel(answer: string, onPrompt?: (prompt: LanguageModelV2Prompt) =>
   });
 }
 
+function reasoningModel(thought: string, answer: string): LanguageModel {
+  return new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doStream: async () => ({
+      stream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'stream-start', warnings: [] });
+          controller.enqueue({ type: 'reasoning-start', id: 'r' });
+          controller.enqueue({ type: 'reasoning-delta', id: 'r', delta: thought });
+          controller.enqueue({ type: 'reasoning-end', id: 'r' });
+          controller.enqueue({ type: 'text-start', id: '0' });
+          controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
+          controller.enqueue({ type: 'text-end', id: '0' });
+          controller.enqueue({ type: 'finish', finishReason: 'stop', usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 } });
+          controller.close();
+        },
+      }),
+      response: { headers: {} },
+    }),
+  });
+}
+
 function stallingModel(): LanguageModel {
   return new TestLanguageModelV2({
     provider: 'fake',
@@ -503,6 +526,21 @@ describe('LocalAgentClient', () => {
     expect(await client.status()).toMatchObject({ model: 'fake/big-model', reasoningEffort: 'max', tierId: 'default' });
     await client.setModel('fake/pinned-model');
     expect(await client.status()).toMatchObject({ model: 'fake/pinned-model', reasoningEffort: 'max' });
+    await client.close();
+  });
+
+  test('a turn\'s reasoning reaches the client as it streams, apart from the answer', async () => {
+    const { client } = setup(reasoningModel('check the index first', 'done'));
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+    await client.connect();
+
+    const result = await client.send('go', { cwd: '/work' });
+
+    expect(events.filter((event) => event.type === 'reasoning-delta')).toEqual([{ type: 'reasoning-delta', delta: 'check the index first' }]);
+
+    if (result.landed !== 'turn') throw new Error('an idle agent runs the message as its own turn');
+    expect(result.text).toBe('done');
     await client.close();
   });
 

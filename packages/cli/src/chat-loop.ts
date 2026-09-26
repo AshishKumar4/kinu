@@ -650,6 +650,8 @@ function renderClientEvent({ event, agentName, status, getHeader, setHeader }: C
       header();
       process.stdout.write(event.delta);
       break;
+    case 'reasoning-delta':
+      break;
     case 'tool-call':
       status.clear();
       printToolCall(event.toolName, event.args);

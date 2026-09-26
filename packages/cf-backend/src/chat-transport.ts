@@ -389,6 +389,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         return;
 
       case 'text-delta':
+      case 'reasoning-delta':
       case 'tool-call':
       case 'tool-result':
       case 'evolution':

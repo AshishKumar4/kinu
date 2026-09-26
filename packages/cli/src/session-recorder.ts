@@ -22,6 +22,8 @@ export class SessionRecorder {
       case 'text-delta':
         this.pendingText += event.delta;
         break;
+      case 'reasoning-delta':
+        break;
       case 'tool-call':
         this.flushText(session);
         session.append('tool_call', { toolName: event.toolName, toolCallId: event.toolCallId, args: event.args, backend: this.backend });

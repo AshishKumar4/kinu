@@ -13,7 +13,7 @@ import { useSceneWidth } from './tui-shell';
 
 export interface DisplayMessage {
   id: string;
-  role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'evolution' | 'system';
+  role: 'user' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'evolution' | 'system';
   content: string;
   toolName?: string;
   /** Pairs a result with its call however they interleave. */
@@ -265,6 +265,31 @@ function ToolResultRow({ message, call, previewWidth, expanded }: {
   );
 }
 
+const THINKING_TAIL_LINES = 4;
+
+/** Its latest lines while it streams, then its first line until Ctrl+O expands it. */
+function ThinkingMessage({ content, live, expanded }: { content: string; live?: boolean; expanded: boolean }) {
+  const { colors } = useTuiTheme();
+  const lines = content.trim().split('\n').filter((line) => line.trim() !== '');
+
+  if (lines.length === 0) return null;
+  let shown = lines;
+
+  if (live) shown = lines.slice(-THINKING_TAIL_LINES);
+  else if (!expanded) shown = [lines.length > 1 ? `${lines[0] ?? ''} … (${String(lines.length)} lines)` : (lines[0] ?? '')];
+
+  return (
+    <box flexDirection="column" style={{ paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
+      {shown.map((line, index) => (
+        <text key={`${String(index)}-${line}`}>
+          <span fg={colors.text.muted}>{index === 0 ? `${TUI_MARKS.thinking} ` : '  '}</span>
+          <i fg={colors.text.muted}>{line}</i>
+        </text>
+      ))}
+    </box>
+  );
+}
+
 function EvolutionMessage({ content }: { content: string }) {
   const { colors } = useTuiTheme();
 
@@ -401,6 +426,8 @@ export function MessageList({ messages, toolDetailsExpanded = false }: {
             return <UserMessage key={message.id} content={message.content} attachments={message.attachments} steered={message.steered} branched={message.branched} />;
           case 'assistant':
             return <AssistantMessage key={message.id} content={message.content} live={message.live} />;
+          case 'thinking':
+            return <ThinkingMessage key={message.id} content={message.content} live={message.live} expanded={toolDetailsExpanded} />;
           case 'evolution':
             return <EvolutionMessage key={message.id} content={message.content} />;
           case 'system':
