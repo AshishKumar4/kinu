@@ -1368,8 +1368,15 @@ object's alarm (`container.js:1594-1603`). Tests: a box stopped each of those
 three ways, owing three overdue beats, runs what the stop left once, starts
 nothing, and holds no row and no alarm (`tests/schedule-chain.test.ts`). It
 was red before (a heartbeat row and an alarm remained after 20 passes) and is
-green after. Deployed re-proof owed: alarms per stopped box after the next
-deploy.
+green after. Deployed re-proof, 2026-09-26: the 03:38Z deploy carried it.
+Production `KinuSandbox` alarm invocations per hour, canceled / ok, were flat
+at 11,300-12,500 / 9,500-10,700 from 09-24 06Z to 09-26 02Z over about 185
+objects. After the deploy: 03Z 7,900 / 7,149 (the deploy hour), 04Z 0 / 75,
+05Z 6 / 136. Query: Workers Observability telemetry, `view: calculations`,
+`granularity: 3600000`, filters `$workers.entrypoint = KinuSandbox`,
+`$metadata.type = cf-worker-event`, `$workers.eventType = alarm`, grouped by
+`$workers.scriptName` and `$workers.outcome`; `scripts/prod-logs.ts` holds
+the client.
 
 ## Measurement contract for a strategy comparison
 
