@@ -100,6 +100,23 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   longTurn(priorTurns: number, deltas: number, priorDeltas?: number): Promise<{ priorMs: number; longMs: number; calls: number }>;
 }
 
+/** The shipped root, sealed as the product seals it: the call `getAgentByName` makes on every stub, which it answers,
+ *  and the inherited members it must refuse (`tests/helpers/rpc-denied.ts`), declared so a test can make each call. */
+interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded {
+  __unsafe_ensureInitialized(): Promise<void>;
+  sql(): Promise<void>;
+  destroy(): Promise<void>;
+  setState(): Promise<void>;
+  stash(): Promise<void>;
+  _cf_invokeSubAgent(): Promise<void>;
+  _cf_invokeSubAgentPath(): Promise<void>;
+  _cf_invokeAgentPath(): Promise<void>;
+  _cf_invokeStubMethod(): Promise<void>;
+  schedule(): Promise<void>;
+  runFiber(): Promise<void>;
+  keepAlive(): Promise<void>;
+}
+
 interface CodexEgressProbeRpc extends Rpc.DurableObjectBranded, HostileCalls {
   forward(ownerUserId: string, callId: string, request: Request): Promise<Response>;
   cancel(callId: string): void;
@@ -311,6 +328,7 @@ declare global {
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
       ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;
       ATTRIBUTION_PROBE: DurableObjectNamespace<AttributionProbeRpc>;
+      SEALED_ORCHESTRATOR: DurableObjectNamespace<SealedOrchestratorRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
   DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       LOADER: WorkerLoader;

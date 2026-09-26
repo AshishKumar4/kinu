@@ -547,6 +547,8 @@ export default defineConfig({
           STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', scriptName: 'store-reset-probe', useSQLite: true },
           ADDRESSED_NAME_PROBE: { className: 'AddressedNameProbeRoot', scriptName: 'addressed-name-probe', useSQLite: true },
           ATTRIBUTION_PROBE: { className: 'AttributionProbeRoot', scriptName: 'attribution-probe', useSQLite: true },
+          // The shipped root as the product seals it: `public-surface-probe` re-exports `src/server`'s class unchanged.
+          SEALED_ORCHESTRATOR: { className: 'OrchestratorAgent', scriptName: 'public-surface-probe', useSQLite: true },
           DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', scriptName: 'deploy-probe', useSQLite: true },
         },
       },
