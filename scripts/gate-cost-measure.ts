@@ -60,7 +60,7 @@ import {
   COST_TABLE, KINU_WORK, QUIET_LOAD, type RowCost, costRssMb, costThreads, holdsCheckoutResource, machineName, readCosts, writeCosts,
 } from './gate-cost';
 import {
-  GATE_DEADLINE_SECONDS, SHARED_POOL, gatesFor, packageScripts, sharedOf, trackedTestFiles,
+  GATE_DEADLINE_SECONDS, LADDER, SHARED_POOL, gatesFor, packageScripts, sharedOf, trackedTestFiles,
 } from './ladder';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -467,7 +467,14 @@ if (import.meta.main) {
     process.exit(2);
   }
 
-  const measured = { ...existing };
+  // A figure for a row that is no longer a ladder gate is dropped as the table is written: a renamed row is a new
+  // key, and the plan must not keep reading the old one (`ladder.test.ts` refuses a stale entry).
+  const gates = new Set(LADDER.map((gate) => gate.run));
+  const dropped = Object.keys(existing).filter((run) => !gates.has(run));
+  const measured = Object.fromEntries(Object.entries(existing).filter(([run]) => gates.has(run)));
+
+  for (const run of dropped) console.log(`dropping the figure for a row that is no longer a gate: ${run}`);
+
   const ticksPerSecond = configured('CLK_TCK');
   const dumpMembers = process.argv.includes('--dump-peak');
   const scratch = mkdtempSync(join(tmpdir(), 'kinu-cost-'));

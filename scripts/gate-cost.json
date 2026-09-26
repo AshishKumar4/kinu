@@ -344,17 +344,6 @@
       "loadAtStart": 2.53,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/deploy.test.ts": {
-      "wallSeconds": 89.64,
-      "cpuSeconds": 24.65,
-      "peakRssMb": 441.33,
-      "peakRunnable": 10,
-      "peakCpuThreads": 2.1,
-      "meanThreads": 0.28,
-      "samples": 391,
-      "loadAtStart": 2.1,
-      "exit": 0
-    },
     "bun test --timeout=0 scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts": {
       "wallSeconds": 28.1,
       "cpuSeconds": 30.47,
@@ -925,6 +914,28 @@
       "meanThreads": 0.84,
       "samples": 5,
       "loadAtStart": 6.36,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts": {
+      "wallSeconds": 152.68,
+      "cpuSeconds": 60.46,
+      "peakRssMb": 525.13,
+      "peakRunnable": 19,
+      "peakCpuThreads": 2.12,
+      "meanThreads": 0.4,
+      "samples": 618,
+      "loadAtStart": 13.32,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/wake-loops.test.ts": {
+      "wallSeconds": 1.39,
+      "cpuSeconds": 0.1,
+      "peakRssMb": 35.53,
+      "peakRunnable": 0,
+      "peakCpuThreads": 0.23,
+      "meanThreads": 0.07,
+      "samples": 8,
+      "loadAtStart": 17.33,
       "exit": 0
     }
   }
