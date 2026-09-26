@@ -369,7 +369,7 @@ const PERSISTED_NAME_KEY = '__ps_name';
 
 /** A terminal that cannot open: the chain goes to diagnostics, the pane reads the refusal. */
 function terminalRefusal(failure: { doing: string; cause: unknown }): string {
-  const error = authoredRefusal({ ...failure, code: 'unavailable' });
+  const error = authoredRefusal({ ...failure });
   diagnostics.failure('terminal.prepare_failed', error);
 
   return publicText(error);

@@ -82,7 +82,7 @@ export const controlRoutes = new Hono<FamilyEnv<ControlEnv<unknown>, ControlVari
 
 // Past the operator gate a throw is recorded and answered with its class; a refusal the plane authored is input.
 controlRoutes.onError((cause, c) => {
-  const error = authoredRefusal({ doing: 'serving an admin control-plane request', cause, code: 'bad_input' });
+  const error = authoredRefusal({ doing: 'serving an admin control-plane request', cause });
   diagnostics.failure('control_plane.request_failed', error, { path: new URL(c.req.url).pathname, method: c.req.method });
 
   return publicError(error);
@@ -414,7 +414,7 @@ async function readRoster<Id>(env: ControlEnv<Id>, userId: string): Promise<Rost
       reason: `the roster did not end within ${String(MAX_PAGES)} pages; the index was left alone`,
     };
   } catch (cause) {
-    const error = authoredRefusal({ doing: 'reading a user\'s workspace roster', cause, code: 'unavailable' });
+    const error = authoredRefusal({ doing: 'reading a user\'s workspace roster', cause });
     diagnostics.failure('control_plane.roster_unread', error, { user: userId });
 
     return { status: 'failed', reason: publicText(error) };
@@ -478,7 +478,7 @@ export interface WorkspaceDetail {
 
 function settled<Value>(result: PromiseSettledResult<Value>): SettledPanel<Value> {
   if (result.status === 'fulfilled') return { status: 'ok', value: result.value };
-  const error = authoredRefusal({ doing: 'reading a workspace panel', cause: result.reason, code: 'unavailable' });
+  const error = authoredRefusal({ doing: 'reading a workspace panel', cause: result.reason });
   diagnostics.failure('control_plane.panel_unread', error);
 
   return { status: 'failed', reason: publicText(error) };

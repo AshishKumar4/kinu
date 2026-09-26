@@ -4,6 +4,7 @@
  */
 
 import { z } from 'zod';
+import * as v from 'valibot';
 import { classify, errnoCode, scalarText } from './expected-failure';
 
 /**
@@ -57,7 +58,10 @@ export const CODE_WORK_DID_NOT_START = {
   io: false,
 } satisfies Readonly<Record<ErrorCode, boolean>>;
 
-/** A classified failure; an ordinary `Error` chaining through native `cause`. */
+/**
+ * A classified failure chaining through native `cause`. The name carries the class: DO RPC keeps only
+ * `name: message` (compat 2025-12-01; measured 2026-09-26, docs/OBSERVABILITY.md).
+ */
 export class KinuError extends Error {
   override readonly name: string = 'KinuError';
   declare readonly execution?: { readonly exitCode: number };
@@ -68,6 +72,7 @@ export class KinuError extends Error {
     options?: ErrorOptions & { execution?: { readonly exitCode: number } },
   ) {
     super(message, options);
+    this.name = `KinuError[${code}]`;
 
     if (options?.execution !== undefined) this.execution = options.execution;
   }
@@ -147,6 +152,9 @@ const CODE_BY_REMOTE_NAME = new Map<string, ErrorCode>([...CODE_BY_ERROR_NAME, [
 // As trustworthy as the thrower: a slate facet or codemode guest can forge the name. A label, never an authorization.
 function codeByName(caught: Error): ErrorCode | undefined {
   const remote = 'remote' in caught && caught.remote === true && caught.name === 'Error';
+  const refusal = remote ? remoteRefusal(caught.message) : null;
+
+  if (refusal !== null) return refusal.code;
   const named = remote ? /^([A-Z][A-Za-z]*Error): /u.exec(caught.message)?.[1] : undefined;
 
   return named === undefined ? CODE_BY_ERROR_NAME.get(caught.name) : CODE_BY_REMOTE_NAME.get(named);
@@ -224,22 +232,31 @@ export function toKinuError(
   return new KinuError(code, input.doing, { cause: input.cause });
 }
 
-/** A remote `KinuError` (compat 2025-12-01). */
-const REMOTE_KINU_ERROR = 'KinuError: ';
+const REMOTE_KINU_ERROR = /^KinuError\[([a-z_]+)\]: ([\s\S]*)$/u;
+
+/** A `KinuError` another object threw, as RPC delivers it; null for any other text. */
+function remoteRefusal(message: string): { code: ErrorCode; message: string } | null {
+  const [, code, text] = REMOTE_KINU_ERROR.exec(message) ?? [];
+  const known = v.safeParse(v.picklist(ERROR_CODES), code);
+
+  return known.success && text !== undefined ? { code: known.output, message: text } : null;
+}
 
 function authoredMessage(link: Error): string | null {
   if (link instanceof KinuError) return link.message;
-  const remote = 'remote' in link && link.remote === true && link.message.startsWith(REMOTE_KINU_ERROR);
+  const remote = 'remote' in link && link.remote === true ? remoteRefusal(link.message) : null;
 
-  return remote ? link.message.slice(REMOTE_KINU_ERROR.length) : null;
+  return remote === null ? null : remote.message;
 }
 
-/** A caught `KinuError`, here or across RPC, as `code` with its message; anything else classified as `doing`. */
-export function authoredRefusal(input: { doing: string; cause: unknown; code: ErrorCode }): KinuError {
+/** A caught `KinuError`, here or across RPC, with its class and message; anything else ours, classified as `doing`. */
+export function authoredRefusal(input: { doing: string; cause: unknown }): KinuError {
   const { cause } = input;
-  const authored = cause instanceof Error ? authoredMessage(cause) : null;
 
-  return authored === null ? toKinuError({ doing: input.doing, cause, otherwise: 'io' }) : new KinuError(input.code, authored, { cause });
+  if (cause instanceof KinuError) return cause;
+  const remote = cause instanceof Error && 'remote' in cause && cause.remote === true ? remoteRefusal(cause.message) : null;
+
+  return remote === null ? toKinuError({ doing: input.doing, cause, otherwise: 'io' }) : new KinuError(remote.code, remote.message, { cause });
 }
 
 function unauthoredText(link: Error): string {

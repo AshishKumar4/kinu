@@ -79,7 +79,7 @@ async function listWorkspaceRoster(c: UserContext): Promise<Response> {
   try {
     return json({ body: await c.get('stub').listWorkspaces(c.get('owner'), { cursor, limit, bucket: bucket.output, query }) });
   } catch (cause) {
-    throw authoredRefusal({ doing: 'listing your workspaces', cause, code: 'bad_input' });
+    throw authoredRefusal({ doing: 'listing your workspaces', cause });
   }
 }
 
@@ -231,7 +231,7 @@ userRoutes.post('/api/user/workspaces/:name/touch', async (c) => {
 
     return json({ body: { ok: true } });
   }
-  catch (cause) { throw authoredRefusal({ doing: 'recording this workspace visit', cause, code: 'bad_input' }); }
+  catch (cause) { throw authoredRefusal({ doing: 'recording this workspace visit', cause }); }
 });
 
 userRoutes.delete('/api/user/workspaces/:name', async (c) => {
@@ -240,7 +240,7 @@ userRoutes.delete('/api/user/workspaces/:name', async (c) => {
 
     return json({ body: { ok: true } });
   }
-  catch (cause) { throw authoredRefusal({ doing: 'deleting this workspace', cause, code: 'bad_input' }); }
+  catch (cause) { throw authoredRefusal({ doing: 'deleting this workspace', cause }); }
 });
 
 userRoutes.get('/api/user/devices', async (c) => json({ body: await c.get('stub').listDevices(c.get('owner')) }));
@@ -267,7 +267,7 @@ userRoutes.delete('/api/user/devices/:id/unstopped', async (c) => {
 
     return json({ body: { ok: true } });
   } catch (cause) {
-    throw authoredRefusal({ doing: 'acknowledging this device', cause, code: 'bad_input' });
+    throw authoredRefusal({ doing: 'acknowledging this device', cause });
   }
 });
 
@@ -278,7 +278,7 @@ userRoutes.delete('/api/user/devices/:id', async (c) => {
 
     return json({ body: result });
   } catch (cause) {
-    throw authoredRefusal({ doing: 'revoking this device', cause, code: 'bad_input' });
+    throw authoredRefusal({ doing: 'revoking this device', cause });
   }
 });
 
@@ -336,7 +336,7 @@ userRoutes.post('/api/user/credentials/:key', async (c) => {
   if (body === null) return err(400, 'Body must be JSON');
 
   try { await c.get('stub').setCredential(c.get('owner'), c.get('key'), body); }
-  catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause, code: 'bad_input' }); }
+  catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause }); }
 
   credentialsChanged(c);
 
@@ -345,7 +345,7 @@ userRoutes.post('/api/user/credentials/:key', async (c) => {
 
 userRoutes.delete('/api/user/credentials/:key', async (c) => {
   try { await c.get('stub').deleteCredential(c.get('owner'), c.get('key')); }
-  catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause, code: 'bad_input' }); }
+  catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause }); }
 
   credentialsChanged(c);
 
@@ -434,7 +434,7 @@ userRoutes.put('/api/user/cloudflare/account', async (c) => {
   if (!body) return err(400, 'id (string) required');
 
   try { await c.get('stub').selectCloudflareAccount(c.get('owner'), body.id); }
-  catch (cause) { throw authoredRefusal({ doing: 'selecting this Cloudflare account', cause, code: 'bad_input' }); }
+  catch (cause) { throw authoredRefusal({ doing: 'selecting this Cloudflare account', cause }); }
 
   credentialsChanged(c);
 
@@ -451,7 +451,7 @@ userRoutes.put('/api/user/cloudflare/gateway', async (c) => {
   }
 
   try { await c.get('stub').selectAIGateway(c.get('owner'), body.id); }
-  catch (cause) { throw authoredRefusal({ doing: 'selecting this AI Gateway', cause, code: 'bad_input' }); }
+  catch (cause) { throw authoredRefusal({ doing: 'selecting this AI Gateway', cause }); }
 
   credentialsChanged(c);
 
@@ -468,7 +468,7 @@ userRoutes.post('/api/user/mcp/servers', async (c) => {
   if (body === null) return err(400, 'Body must be JSON');
 
   try { return json({ body: await c.get('stub').userMcp_add(c.get('owner'), body, publicOrigin(c)) }, { status: 201 }); }
-  catch (cause) { throw authoredRefusal({ doing: 'adding this MCP server', cause, code: 'bad_input' }); }
+  catch (cause) { throw authoredRefusal({ doing: 'adding this MCP server', cause }); }
 });
 
 userRoutes.all('/api/user/mcp/servers/:id', async (c, next) => {
@@ -482,7 +482,7 @@ userRoutes.delete('/api/user/mcp/servers/:id', async (c) => {
 
     return json({ body: { ok: true } });
   }
-  catch (cause) { throw authoredRefusal({ doing: 'removing this MCP server', cause, code: 'bad_input' }); }
+  catch (cause) { throw authoredRefusal({ doing: 'removing this MCP server', cause }); }
 });
 
 userRoutes.patch('/api/user/mcp/servers/:id', async (c) => {
@@ -495,7 +495,7 @@ userRoutes.patch('/api/user/mcp/servers/:id', async (c) => {
 
     return json({ body: { ok: true } });
   }
-  catch (cause) { throw authoredRefusal({ doing: 'updating this MCP server', cause, code: 'bad_input' }); }
+  catch (cause) { throw authoredRefusal({ doing: 'updating this MCP server', cause }); }
 });
 
 userRoutes.get('/api/user/mcp/callback', async (c) => {

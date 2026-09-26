@@ -61,7 +61,7 @@ export async function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequ
 
     return json({ body: entry }, { status: 201 });
   } catch (cause) {
-    const error = authoredRefusal({ doing: 'creating this workspace', cause, code: 'bad_input' });
+    const error = authoredRefusal({ doing: 'creating this workspace', cause });
 
     // Two of workspace-create.ts's refusals are conflicts (409): an unserved provider, and a name held by an unfinished transfer.
     const conflict = error.message.startsWith('Cloudflare Workers AI is not connected')

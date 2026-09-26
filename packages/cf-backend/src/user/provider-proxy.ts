@@ -72,7 +72,7 @@ async function listProxyableCredentials(
     try {
       credentialBase = await userDO.getCredentialBaseURL(owner, key);
     } catch (cause) {
-      const error = authoredRefusal({ doing: 'reading a credential\'s base URL', cause, code: 'unavailable' });
+      const error = authoredRefusal({ doing: 'reading a credential\'s base URL', cause });
       diagnostics.failure('provider_proxy.base_url_unread', error, { key });
       out.push({ key, failure: publicText(error) });
       continue;
@@ -103,7 +103,7 @@ async function forwardUpstream(
   if (!target) return errorResponse(400, `${PROXY_TARGET_HEADER} is required — name the upstream URL.`);
 
   try { validateCredentialKey(credKey); }
-  catch (cause) { return errorResponse(400, publicText(authoredRefusal({ doing: 'reading the credential key', cause, code: 'bad_input' }))); }
+  catch (cause) { return errorResponse(400, publicText(authoredRefusal({ doing: 'reading the credential key', cause }))); }
 
   if (isProxyDeniedCredentialKey(credKey)) {
     return errorResponse(403, `${credKey} is not served by this proxy — Cloudflare-backed models go through /api/user/ai/v1, and Codex must be connected on the machine that uses it.`);

@@ -396,10 +396,12 @@ paths and, through a substituted URL or a stored header, secrets. The chain goes
 - A `KinuError` whose message repeats the text of a cause no `KinuError` authored gets the fixed text
   instead (`publicMessage`, `obs/error.ts`). An authored message may name a path or a name; it may not
   quote a caught error.
-- Across Durable Object RPC a thrown `KinuError` keeps only its message, prefixed `KinuError: `
-  (compat 2025-12-01, measured 2026-09-23). `authoredRefusal({ doing, cause, code })` reads it back as
-  `code`; any other failure there is classified as `doing`. So an object refuses input with a
-  `KinuError`, and a plain `Error` it throws reaches the client as the route's `doing` text.
+- Across Durable Object RPC an error keeps only `name: message` (compat 2025-12-01), so a `KinuError`'s
+  name carries its class: `KinuError[unavailable]: …` (miniflare 5.20260903.0-alpha, 2026-09-26).
+  `authoredRefusal({ doing, cause })` reads a caught one back with its class and message; any other
+  failure is classified as `doing`. So an object refuses with a `KinuError` (`unit-do-refusals`), and a
+  plain `Error` reaches the client as the route's `doing` text. Agent RPC over `/api/cli/…/rpc` still
+  shows `calling <method>` for plain throws in deep core helpers until the Effect waves convert them.
 
 ## `ReservedLogField`: the compile-time ban
 

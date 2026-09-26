@@ -179,7 +179,7 @@ describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch
     const handle = adaptCloudflareSandbox(box, async () => {}, null);
 
     await expect(handle.exec("bun test")).rejects.toMatchObject({
-      name: 'KinuError', code: 'unavailable', message: reason,
+      name: 'KinuError[unavailable]', code: 'unavailable', message: reason,
     });
     expect(calls).toEqual({ exec: [], started: [], killed: [] });
 

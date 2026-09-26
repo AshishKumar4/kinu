@@ -181,7 +181,7 @@ async function createTrigger<Bindings extends HubEnv>(c: HubContext<Bindings>): 
   try {
     rateLimit = normalizeWebhookRateLimitPerMin(body.rate_limit_per_min);
   } catch (cause) {
-    throw authoredRefusal({ doing: 'reading rate_limit_per_min', cause, code: 'bad_input' });
+    throw authoredRefusal({ doing: 'reading rate_limit_per_min', cause });
   }
 
   try {
@@ -195,7 +195,7 @@ async function createTrigger<Bindings extends HubEnv>(c: HubContext<Bindings>): 
       }),
     }, { status: 201 });
   } catch (cause) {
-    throw authoredRefusal({ doing: 'creating this webhook', cause, code: 'bad_input' });
+    throw authoredRefusal({ doing: 'creating this webhook', cause });
   }
 }
 

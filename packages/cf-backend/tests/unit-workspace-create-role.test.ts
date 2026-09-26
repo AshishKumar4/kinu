@@ -132,7 +132,7 @@ async function postCreate(
 }
 
 describe('a name whose teardown is still pending', () => {
-  test('a create is refused as input, with the object\'s reason, across RPC', async () => {
+  test('a create is refused with the object\'s class and reason, across RPC', async () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID, destroyWorkspaceError: 'the container refused to go' });
     const owner = await testOwner();
     await harness.userDO.registerWorkspace(owner, AGENT);
@@ -144,7 +144,8 @@ describe('a name whose teardown is still pending', () => {
     const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' }, undefined, CONNECTED,
       async (_caller, name) => await register(name));
 
-    expect(created.status).toBe(400);
+    // `unavailable`: the name frees once its teardown finishes.
+    expect(created.status).toBe(503);
     expect(created.error).toContain('still being deleted');
     harness.close();
   });

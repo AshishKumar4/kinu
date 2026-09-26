@@ -878,7 +878,7 @@ describe('cloud agent ownership safety', () => {
       'https://kinu.example.com/api/user/workspaces/jarvis', { method: 'DELETE' },
     ), env);
 
-    expect(response?.status).toBe(400);
+    expect(response?.status).toBe(403);
     expect(healthy.tableNames()).toContain('workspace_identity');
   });
 });

@@ -99,7 +99,7 @@ async function mcpClient(resolveAgent: McpResolver, agentName: string): Promise<
 /** A tool's failure as the MCP client reads it: logged with its chain, answered with its class's text. */
 function mcpToolFailure(failure: { tool: string; cause: unknown }): string {
   const { tool, cause } = failure;
-  const error = authoredRefusal({ doing: `running the MCP tool ${tool}`, cause, code: 'bad_input' });
+  const error = authoredRefusal({ doing: `running the MCP tool ${tool}`, cause });
   diagnostics.failure('mcp.tool_failed', error, { tool });
 
   return publicText(error);

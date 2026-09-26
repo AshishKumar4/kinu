@@ -13,9 +13,9 @@ export function jsrpcStub<T extends object>(methods: T): T {
 }
 
 /**
- * A method as a caller in another object sees it: a thrown error arrives as a plain `Error` with `remote`, its class
- * named in the message and nothing else kept. Measured in workerd at compat 2025-12-01 (kinu-logs/effect-plan
- * do-probe-result.json, 2026-09-23): a `KinuError('denied', 'refused by gate')` arrived as `KinuError: refused by gate`.
+ * A method as a caller in another object sees it: a thrown error arrives as a plain `Error` with `remote`, its name
+ * prefixed to the message and nothing else kept. Measured under miniflare 5.20260903.0-alpha at compat 2025-12-01
+ * (2026-09-26): a `KinuError('unavailable', 'refused by gate')` arrived as `KinuError[unavailable]: refused by gate`.
  */
 export function acrossRpc<Args extends readonly JsonValue[], Result>(
   method: (...args: Args) => Promise<Result>,

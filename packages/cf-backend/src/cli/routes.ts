@@ -319,7 +319,7 @@ cliRoutes.delete('/api/cli/workspaces/:name', async (c) => {
 
     return json({ body: { ok: true } });
   } catch (cause) {
-    throw authoredRefusal({ doing: 'deleting this workspace', cause, code: 'bad_input' });
+    throw authoredRefusal({ doing: 'deleting this workspace', cause });
   }
 });
 
@@ -370,7 +370,7 @@ cliRoutes.post('/api/cli/workspaces/:name/triggers/webhook', async (c) => {
       }),
     }, { status: 201 });
   } catch (cause) {
-    throw authoredRefusal({ doing: 'creating this webhook', cause, code: 'bad_input' });
+    throw authoredRefusal({ doing: 'creating this webhook', cause });
   }
 });
 
@@ -398,7 +398,7 @@ cliRoutes.post('/api/cli/credentials/:key', async (c) => {
   const body = await safeJson(c.req.raw, JsonValueSchema);
 
   try { await cli.userDO.setCredential(await ownerCaller(c.env), c.get('key'), body); }
-  catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause, code: 'bad_input' }); }
+  catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause }); }
 
   // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
   notifyWorkspacesCredentialsChanged(c.env, cli.userDO, c.executionCtx);
@@ -410,7 +410,7 @@ cliRoutes.delete('/api/cli/credentials/:key', async (c) => {
   const cli = c.get('cli');
 
   try { await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key')); }
-  catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause, code: 'bad_input' }); }
+  catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause }); }
 
   notifyWorkspacesCredentialsChanged(c.env, cli.userDO, c.executionCtx);
 
@@ -472,7 +472,7 @@ async function handleAgentRpc(c: CliContext, name: string): Promise<Response> {
     const invoke = v.parse(v.function(), agent[rpcMethod]);
     result = await invoke(...args);
   } catch (cause) {
-    throw authoredRefusal({ doing: `calling ${rpcMethod}`, cause, code: 'bad_input' });
+    throw authoredRefusal({ doing: `calling ${rpcMethod}`, cause });
   }
 
   // A failed fold leaves the write answered.
@@ -627,7 +627,7 @@ async function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): 
       },
     });
   } catch (cause) {
-    const error = authoredRefusal({ doing: 'approving this sign-in', cause, code: 'bad_input' });
+    const error = authoredRefusal({ doing: 'approving this sign-in', cause });
     diagnostics.failure('cli.approval_failed', error);
 
     return html('Connect the Kinu CLI', `<p>${escapeHtml(publicText(error))}</p>`, 400);
