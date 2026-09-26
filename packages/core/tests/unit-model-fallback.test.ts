@@ -30,6 +30,13 @@ const toolStep = (): Response => new Response(sse([
 
 const refused = (status: number): Response => Response.json({ error: { message: `refused with ${String(status)}` } }, { status });
 
+/** A 503 that asks to be retried at once. The SDK retries a 503 by itself, and without the header it waits its default
+ *  backoff, 2 s and then 4 s, which is no part of what these tests measure and outlasts bun's default 5 s timeout. */
+const overloaded = (): Response => Response.json(
+  { error: { message: 'refused with 503' } },
+  { status: 503, headers: { 'retry-after-ms': '0' } },
+);
+
 /** Part of an answer, then the provider's stream fails. */
 const partThenFail = (text: string): Response => new Response(sse([
   JSON.stringify({ choices: [{ delta: { content: text } }] }),
@@ -113,7 +120,7 @@ describe('a failed call hands the turn down its fallback chain', () => {
     const { events, threw, served } = await turn((model, seen) => {
       if (model === 'backup') return answer('done after the tool');
 
-      return seen === 1 ? toolStep() : refused(503);
+      return seen === 1 ? toolStep() : overloaded();
     }, ['backup']);
 
     expect(threw).toBeNull();
