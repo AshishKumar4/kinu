@@ -22,7 +22,8 @@ import {
   requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import {
-  type AccessApplicationView, accessCovering, accessDestinations, accessOverreach, edgeResponds, routeAnswer,
+  type AccessApplicationView, type ContainerApplication, accessCovering, accessDestinations, accessOverreach, edgeResponds,
+  namespaceBinding, routeAnswer,
 } from './infra-cloudflare';
 import {
   type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observedRow, phaseFrom, supplyDrift,
@@ -546,6 +547,54 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
 
     expect(unreadable.findings.length).toBe(1);
     expect(unreadable.findings[0]).toContain('token expired');
+  });
+});
+
+/**
+ * A container class's namespace, bound to the application the deploy names or to none. The red case is staging's
+ * on 2026-09-26: its KinuSandbox namespace was held by an application a 2026-09-05 attempt had created, the
+ * bootstrap phase deferred the container the deploy would create, and the deploy uploaded the Worker and was then
+ * refused with DURABLE_OBJECT_ALREADY_HAS_APPLICATION.
+ */
+describe('a container namespace is bound to the application the deploy names, or to none', () => {
+  const STRAY: ContainerApplication = {
+    id: 'a03743fa-2e8f-45f9-af8c-3c8cc87c1a36',
+    name: 'kinu-staging-kinusandbox-staging',
+    namespace: 'ded5b3c6073b4224ba00e0c48050411f',
+  };
+
+  const staging = deriveInfrastructure('staging');
+
+  const named = (declared: Infrastructure, kind: Resource['kind']): string[] => declared.resources
+    .filter((resource) => resource.kind === kind)
+    .map((resource) => resource.name);
+
+  test('each application is named as wrangler names it: the top-level Worker, the class, the environment', () => {
+    expect(named(infrastructure, 'container')).toEqual(['kinu-kinusandbox', 'kinu-codexegress']);
+    expect(named(staging, 'container')).toEqual(['kinu-kinusandbox-staging', 'kinu-codexegress-staging']);
+    expect(named(staging, 'container-namespace')).toEqual(named(staging, 'container'));
+  });
+
+  test('an application of another name holding the namespace blocks the deploy, in every phase', () => {
+    const observed = namespaceBinding(STRAY.namespace, 'kinu-kinusandbox-staging', [STRAY]);
+    const resource = staging.resources.find((each) => each.id === 'container-namespace.kinu-kinusandbox-staging');
+
+    if (resource === undefined) throw new Error('staging declares no namespace row for KinuSandbox');
+
+    expect(observed.state === 'absent' ? observed.detail : observed.state).toContain(`${STRAY.name} (${STRAY.id})`);
+
+    for (const phase of PHASES) {
+      const { findings } = audit({ infrastructure: staging, rows: [observedRow(resource, observed)], supplied: [], unreadFields: [], phase });
+
+      expect(findings.filter((found) => found.includes(resource.id))).toHaveLength(1);
+    }
+  });
+
+  test('the named application, or none, is a namespace the deploy proceeds from', () => {
+    expect(namespaceBinding(STRAY.namespace, STRAY.name, [STRAY]).state).toBe('present');
+    expect(namespaceBinding(STRAY.namespace, 'kinu-kinusandbox-staging', [{ ...STRAY, namespace: 'another' }]).state)
+      .toBe('present');
+    expect(namespaceBinding(undefined, 'kinu-kinusandbox-staging', [STRAY]).state).toBe('present');
   });
 });
 

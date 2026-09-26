@@ -31,6 +31,7 @@ import { connect } from 'node:tls';
 import * as v from 'valibot';
 import { parseJsonc } from './jsonc';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { tolerate } from '@kinu.run/core/obs';
 import type { InfraEnvironment } from './infra-manifest';
 
 /** The argv that points a Worker-scoped wrangler command at `environment`'s Worker; production is the top level. */
@@ -228,6 +229,33 @@ const vectorizeCatalog = new Catalog('Vectorize', ['vectorize', 'list', '--json'
 
 const containerCatalog = new Catalog('Containers', ['containers', 'list', '--json'], ContainerRows);
 
+/** `wrangler containers info <id> --json`: the one command that says which namespace an application holds. The list
+ *  above does not carry it. */
+const ContainerInfo = v.object({
+  id: v.string(),
+  name: v.string(),
+  durable_objects: v.optional(v.object({ namespace_id: v.string() })),
+});
+
+const containerInfos = new Map<string, v.InferOutput<typeof ContainerInfo> | { readonly failure: string }>();
+
+function containerInfo(id: string): v.InferOutput<typeof ContainerInfo> | { readonly failure: string } {
+  const cached = containerInfos.get(id);
+
+  if (cached !== undefined) return cached;
+  const run = wrangler(['containers', 'info', id, '--json']);
+  const body = run.ok ? jsonBody(run.stdout, '{') : undefined;
+  const parsed = body === undefined ? undefined : v.safeParse(ContainerInfo, tolerate(() => JSON.parse(body), 'malformed-input'));
+
+  const answer = parsed?.success === true
+    ? parsed.output
+    : { failure: `\`wrangler containers info ${id} --json\` ${run.ok ? 'printed no application this can read' : `failed: ${why(run)}`}` };
+
+  containerInfos.set(id, answer);
+
+  return answer;
+}
+
 /** Observed KV namespaces, or the reason the catalogue could not be read.
  *  Matched on the namespace id, because that is the only thing wrangler.jsonc
  *  names — KV titles are not unique and two of them can answer to one name. */
@@ -269,6 +297,64 @@ export function container(name: string, image: string): Observation {
     ? `${row.id} running ${row.image}`
     : `${row.id} running ${row.image} — MANIFEST DECLARES ${image}; the SDK logs a version `
       + 'mismatch on every container start until the Worker is redeployed');
+}
+
+/** A container application on the account, and the Durable Object namespace it is bound to. */
+export interface ContainerApplication {
+  readonly id: string;
+  readonly name: string;
+  readonly namespace: string | undefined;
+}
+
+/**
+ * Whether a container class's Durable Object namespace is bound to `application`, the one the deploy names, or to
+ * none. `namespace` undefined is a class with no namespace yet: the Worker was never deployed, or never bound the
+ * class, so nothing can hold one.
+ */
+export function namespaceBinding(
+  namespace: string | undefined,
+  application: string,
+  applications: readonly ContainerApplication[],
+): Observation {
+  if (namespace === undefined) return present(`no namespace yet, so the deploy binds ${application} to the one it creates`);
+  const holders = applications.filter((candidate) => candidate.namespace === namespace);
+  const strays = holders.filter((holder) => holder.name !== application);
+
+  if (strays.length > 0) {
+    return {
+      state: 'absent',
+      detail: `namespace ${namespace} is bound to ${strays.map((stray) => `${stray.name} (${stray.id})`).join(', ')}, not `
+        + `${application}: \`wrangler deploy\` uploads the Worker, then refuses to create ${application} with `
+        + 'DURABLE_OBJECT_ALREADY_HAS_APPLICATION. Delete it (`npx wrangler containers delete <id>`) and deploy again; '
+        + 'the namespace and its storage stay with the Worker.',
+    };
+  }
+
+  return present(holders.length === 0
+    ? `namespace ${namespace} is bound to no application, so the deploy binds ${application}`
+    : `namespace ${namespace} is bound to ${application} (${holders[0]?.id ?? ''})`);
+}
+
+/**
+ * {@link namespaceBinding} over the account. Every application is asked, because the one holding the namespace can
+ * have any name: on 2026-09-26 staging's was `kinu-staging-kinusandbox-staging`, left from a 2026-09-05 attempt, and
+ * the deploy that named `kinu-kinusandbox-staging` uploaded the Worker and was then refused.
+ */
+export function containerNamespace(namespace: string | undefined, application: string): Observation {
+  if (namespace === undefined) return namespaceBinding(namespace, application, []);
+  const loaded = containerCatalog.load();
+
+  if ('failure' in loaded) return unknown(loaded.failure);
+  const applications: ContainerApplication[] = [];
+
+  for (const row of loaded.rows) {
+    const info = containerInfo(row.id);
+
+    if ('failure' in info) return unknown(info.failure);
+    applications.push({ id: info.id, name: info.name, namespace: info.durable_objects?.namespace_id });
+  }
+
+  return namespaceBinding(namespace, application, applications);
 }
 
 /**
@@ -315,6 +401,8 @@ export interface DeployedBinding {
    *  Explicitly `| undefined` rather than optional: a binding that names nothing
    *  is a real, common case (`AI`, `ASSETS`), not an absent field. */
   readonly target: string | undefined;
+  /** The namespace id, for a Durable Object or KV binding: what a container application is bound to. */
+  readonly namespace: string | undefined;
 }
 
 export type Deployment =
@@ -387,6 +475,7 @@ export function deployment(environment: InfraEnvironment): Deployment {
           type: binding.type,
           target: binding.class_name ?? binding.bucket_name ?? binding.index_name
             ?? binding.namespace_id,
+          namespace: binding.namespace_id,
         };
       }),
     };
