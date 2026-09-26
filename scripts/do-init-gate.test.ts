@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { present } from '@kinu.run/test-utils';
 
 import { readSources } from './sources';
-import { audit, auditFile, MODEL_SINKS } from './do-init-gate';
+import { audit, auditConstructors, auditFile, MODEL_SINKS } from './do-init-gate';
 
 /**
  * The fixture is not invented. This is `SubordinateAgent.onStart` exactly as it
@@ -707,5 +707,66 @@ ${hold.body}
     const { violations } = auditFile(file, respawned);
     expect(violations.map((v) => `${v.owner}.${v.member}`)).toEqual(['OrchestratorAgent.onStart']);
     expect(violations[0].reason).toContain('reaches `applyAutoTitle`');
+  });
+});
+
+describe('a Durable Object constructor is held to the synchronous start rule', () => {
+  const SOURCES = readSources();
+
+  const ctorViolations = (src: string, declared: readonly string[] = ['Box']): string[] =>
+    auditConstructors(new Map([['box.ts', src]]), declared).violations.map((v) => `${v.member}: ${v.reason}`);
+
+  const CLEAN = `export class Box extends DurableObject {
+    constructor(ctx, env) {
+      super(ctx, env);
+      this.initTables();
+      this.releaseAbandoned();
+      this.onMessage = async (message) => { await this.handle(message); };
+    }
+    initTables() { this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS t (id TEXT)'); }
+    releaseAbandoned() { this.ctx.storage.sql.exec('UPDATE t SET claim = NULL WHERE claim IS NOT NULL'); }
+    async handle(message) { await fetch(message); }
+  }`;
+
+  test('DDL, one bounded statement and a closure defined for later pass', () => {
+    expect(ctorViolations(CLEAN)).toEqual([]);
+  });
+
+  test.each([
+    ['an async same-class method (a planted await)', 'this.initTables();', 'this.initTables(); this.warm();\n    }\n    async warm() { await this.ctx.storage.sql.exec(\'SELECT 1\');', 'which is async'],
+    ['a loop over rows read into a variable', 'releaseAbandoned() {', "releaseAbandoned() { const rows = this.ctx.storage.sql.exec('SELECT id FROM t').toArray(); for (const row of rows) this.ctx.storage.sql.exec('DELETE FROM t WHERE id = ?', row.id);", 'loops over table rows'],
+    ['a loop over a read inline', 'initTables() {', "initTables() { for (const row of this.sql`SELECT id FROM t`) this.drop(row);", 'loops over table rows'],
+    ['a binding call', 'this.initTables();', 'this.initTables(); this.env.UserDO.get(id);', 'calls a binding'],
+    ['a schedule', 'this.initTables();', "this.initTables(); this.schedule(60, 'tick');", 'calls `schedule`'],
+    ['a nested gate', 'this.initTables();', 'this.initTables(); this.ctx.blockConcurrencyWhile(() => this.handle(1));', 'calls `blockConcurrencyWhile`'],
+  ])('refused: %s', (_name, from, to, reason) => {
+    const planted = CLEAN.replace(from, to);
+    expect(planted).not.toBe(CLEAN);
+    expect(ctorViolations(planted).some((found) => found.includes(reason))).toBe(true);
+  });
+
+  test('an ancestor of a declared class is governed through it; an undeclared class is not', () => {
+    const inherited = `export class Base extends DurableObject { constructor(ctx, env) { super(ctx, env); this.schedule(1, 'x'); } }
+      export class Box extends Base { constructor(ctx, env) { super(ctx, env); } }`;
+
+    expect(ctorViolations(inherited)).toEqual([expect.stringContaining('calls `schedule`')]);
+    expect(ctorViolations(inherited, ['Other'])).toEqual([]);
+  });
+
+  test('the real tree governs every constructor of a declared class, and each is clean', () => {
+    const declared = ['OrchestratorAgent', 'UserDO', 'ControlPlaneDO', 'MonitorDO', 'DeployRunDO', 'CodexEgress'];
+    const { inspected, violations } = auditConstructors(SOURCES, declared);
+    expect(inspected.map((i) => i.owner).sort()).toEqual([...declared, 'ActorAgent'].sort());
+    expect(violations).toEqual([]);
+  });
+
+  test('cut the wire: a row loop planted in the real UserDO constructor path goes red', () => {
+    const file = 'packages/cf-backend/src/user/user-do.ts';
+    const real = present(SOURCES.get(file), `the ${file} source`);
+    const anchor = '    this._inflight.releaseAbandonedClaims();\n';
+    expect(real).toContain(anchor);
+    const planted = real.replace(anchor, `${anchor}    for (const row of this.ctx.storage.sql.exec('SELECT id FROM user_devices')) this.ctx.storage.sql.exec('DELETE FROM user_devices WHERE id = ?', row.id);\n`);
+    const found = auditConstructors(new Map([...SOURCES, [file, planted]]), ['UserDO']).violations;
+    expect(found.map((v) => `${v.owner}.${v.member}`)).toEqual(['UserDO.initTables']);
   });
 });

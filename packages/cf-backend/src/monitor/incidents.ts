@@ -65,8 +65,8 @@ export function ensureMonitorSchema(sql: SqlExec): void {
   sql.exec(MONITOR_INCIDENTS_DDL);
 }
 
+/** The schema is the caller's: `MonitorDO` makes it in its constructor. */
 export async function recordProbeRun(deps: MonitorDeps, outcomes: ProbeOutcome[]): Promise<MonitorRunResult> {
-  ensureMonitorSchema(deps.sql);
   const open = new Map(listIncidents(deps.sql).map((row) => [row.probe, row]));
   const failing = outcomes.filter((o) => !o.ok);
   const passing = outcomes.filter((o) => o.ok);
