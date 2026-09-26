@@ -3,8 +3,9 @@ import { analyticsMissingSettings, runAnalyticsBatch, type AnalyticsResult } fro
 import type { ProbeOutcome } from '../http/synthetic-probes';
 import type { SqlExec } from '../types/primitives';
 import {
-  ALERT_SIGNALS, evaluateFleet, settleSignal, type AlertSignal, type FleetSample, type SignalStreak,
+  ALERT_SIGNALS, ALERT_UNMEASURED, evaluateFleet, settleSignal, type FleetSample, type SignalStreak, type SignalVerdict,
 } from '../obs/analytics/alerts';
+import { renderThrownChain } from '../obs/index';
 import { fleetAlertQueries } from '../obs/analytics/query';
 import * as v from 'valibot';
 
@@ -12,7 +13,9 @@ const HOUR_MS = 3_600_000;
 
 export const FLEET_PROBE_PREFIX = 'fleet.';
 
-const FLEET_SOURCES_PROBE = `${FLEET_PROBE_PREFIX}sources`;
+const SOURCES = 'sources';
+
+const FLEET_SOURCES_PROBE = `${FLEET_PROBE_PREFIX}${SOURCES}`;
 
 export interface FleetEnv {
   CLOUDFLARE_ACCOUNT_ID?: string;
@@ -33,6 +36,7 @@ const TurnRow = v.object({ outcome: v.string(), count: Count });
 
 interface Unavailable {
   readonly source: string;
+  readonly kind: 'unset' | 'unreadable';
   readonly why: string;
 }
 
@@ -41,16 +45,24 @@ interface Read<T> {
   readonly unavailable: Unavailable | null;
 }
 
-type PanelRows = Extract<AnalyticsResult, { status: 'ok' }>['rows'];
+const unreadable = (source: string, why: string): Read<never> => ({ value: null, unavailable: { source, kind: 'unreadable', why } });
 
-function fromPanel<T>(source: string, panel: AnalyticsResult | undefined, parse: (rows: PanelRows) => T): Read<T> {
-  if (panel === undefined) return { value: null, unavailable: { source, why: 'no answer' } };
+function fromPanel<R extends v.GenericSchema, T>(
+  source: string,
+  panel: AnalyticsResult | undefined,
+  row: R,
+  fold: (rows: readonly v.InferOutput<R>[]) => T,
+): Read<T> {
+  if (panel === undefined) return unreadable(source, 'no answer');
 
-  if (panel.status === 'unconfigured') return { value: null, unavailable: { source, why: `set ${panel.missing.join(' and ')}` } };
+  if (panel.status === 'unconfigured') return { value: null, unavailable: { source, kind: 'unset', why: `set ${panel.missing.join(' and ')}` } };
 
-  if (panel.status === 'failed') return { value: null, unavailable: { source, why: panel.reason } };
+  if (panel.status === 'failed') return unreadable(source, panel.reason);
+  const rows = v.safeParse(v.array(row), panel.rows);
 
-  return { value: parse(panel.rows), unavailable: null };
+  if (!rows.success) return unreadable(source, `rows of an unexpected shape: ${v.summarize(rows.issues)}`);
+
+  return { value: fold(rows.output), unavailable: null };
 }
 
 function hourOf(text: string): number {
@@ -59,13 +71,13 @@ function hourOf(text: string): number {
 
 const TelemetryAnswer = v.object({
   result: v.object({
-    calculations: v.array(v.object({
+    calculations: v.optional(v.array(v.object({
       alias: v.optional(v.string(), ''),
       aggregates: v.array(v.object({
         groups: v.optional(v.array(v.object({ value: v.pipe(v.union([v.string(), v.number()]), v.transform(String)) })), []),
         value: v.number(),
       })),
-    })),
+    })), []),
   }),
 });
 
@@ -78,11 +90,16 @@ async function readKills(env: FleetEnv, now: number, fetch: Fetch): Promise<Read
     ...env.CF_VERSION_METADATA === undefined ? ['the CF_VERSION_METADATA binding'] : [],
   ];
 
-  if (missing.length > 0 || env.CF_VERSION_METADATA === undefined) return { value: null, unavailable: { source, why: `set ${missing.join(' and ')}` } };
+  if (missing.length > 0 || env.CF_VERSION_METADATA === undefined) {
+    return { value: null, unavailable: { source, kind: 'unset', why: `set ${missing.join(' and ')}` } };
+  }
 
   const eq = (key: string, value: string) => ({ key, operation: 'eq', value, type: 'string' });
 
-  const response = await fetch(
+  let answered: Response;
+
+  try {
+    answered = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID ?? ''}/workers/observability/telemetry/query`,
     {
       method: 'POST',
@@ -97,7 +114,6 @@ async function readKills(env: FleetEnv, now: number, fetch: Fetch): Promise<Read
             eq('$metadata.type', 'cf-worker-event'),
             eq('$workers.scriptVersion.id', env.CF_VERSION_METADATA.id),
             eq('$workers.entrypoint', 'OrchestratorAgent'),
-            { key: '$workers.outcome', operation: 'neq', value: 'ok', type: 'string' },
           ],
           calculations: [
             { operator: 'count', alias: 'count' },
@@ -109,43 +125,64 @@ async function readKills(env: FleetEnv, now: number, fetch: Fetch): Promise<Read
       }),
     },
   );
+  } catch (cause) {
+    return unreadable(source, `the telemetry API did not answer: ${renderThrownChain({ cause })}`);
+  }
 
-  if (!response.ok) return { value: null, unavailable: { source, why: `the telemetry API answered ${String(response.status)}` } };
-  const { calculations } = v.parse(TelemetryAnswer, await response.json()).result;
+  if (!answered.ok) return unreadable(source, `the telemetry API answered ${String(answered.status)}`);
+  let body: unknown;
+
+  try {
+    body = await answered.json();
+  } catch (cause) {
+    return unreadable(source, `the telemetry API answered no JSON: ${renderThrownChain({ cause })}`);
+  }
+
+  const parsed = v.safeParse(TelemetryAnswer, body);
+
+  if (!parsed.success) return unreadable(source, `the telemetry API answered an unexpected shape: ${v.summarize(parsed.issues)}`);
+  const { calculations } = parsed.output.result;
 
   const valueOf = (alias: string, outcome: string): number => calculations.find((c) => c.alias === alias)?.aggregates
     .find((a) => a.groups[0]?.value === outcome)?.value ?? 0;
 
-  return { value: { exceededMemory: valueOf('count', 'exceededMemory'), exceededWallTimeObjects: valueOf('objects', 'exceededWallTime') }, unavailable: null };
+  const invocations = calculations.find((c) => c.alias === 'count')?.aggregates.reduce((sum, a) => sum + a.value, 0) ?? 0;
+
+  return {
+    value: { exceededMemory: valueOf('count', 'exceededMemory'), exceededWallTimeObjects: valueOf('objects', 'exceededWallTime'), invocations },
+    unavailable: null,
+  };
+}
+
+async function analyticsPanels(env: FleetEnv, queries: ReadonlyMap<string, string>, now: number): Promise<Partial<Record<string, AnalyticsResult>>> {
+  if (analyticsMissingSettings(env).length > 0) return {};
+
+  try {
+    return await runAnalyticsBatch(env, queries, now);
+  } catch (cause) {
+    const failed: AnalyticsResult = { status: 'failed', reason: renderThrownChain({ cause }) };
+
+    return Object.fromEntries([...queries.keys()].map((name) => [name, failed]));
+  }
 }
 
 export async function sampleFleet(env: FleetEnv, now: number, fetch: Fetch): Promise<{ sample: FleetSample; unavailable: Unavailable[] }> {
   const queries = fleetAlertQueries();
   const missing = analyticsMissingSettings(env);
 
-  const panels = missing.length > 0
-    ? {}
-    : await runAnalyticsBatch(env, new Map(Object.entries(queries)), now);
+  const panels = await analyticsPanels(env, new Map(Object.entries(queries)), now);
+  const panel = (name: keyof typeof queries): AnalyticsResult | undefined => missing.length > 0 ? { status: 'unconfigured', missing } : panels[name];
 
-  const unconfigured: AnalyticsResult = { status: 'unconfigured', missing };
-  const panel = (name: keyof typeof queries): AnalyticsResult | undefined => missing.length > 0 ? unconfigured : panels[name];
+  const startups = fromPanel('startups', panel('startups'), StartupRow, (rows) => rows.map((row) => (
+    { object: row.workspace, hour: hourOf(row.hour), startups: row.startups }
+  )));
 
-  const startups = fromPanel('startups', panel('startups'), (rows) => rows.map((row) => {
-    const parsed = v.parse(StartupRow, row);
+  const events = fromPanel('events', panel('events'), EventRow, (rows) => rows);
 
-    return { object: parsed.workspace, hour: hourOf(parsed.hour), startups: parsed.startups };
+  const turns = fromPanel('turns', panel('turns'), TurnRow, (rows) => ({
+    settled: rows.reduce((sum, row) => sum + row.count, 0),
+    failed: rows.filter((row) => row.outcome === 'failed').reduce((sum, row) => sum + row.count, 0),
   }));
-
-  const events = fromPanel('events', panel('events'), (rows) => rows.map((row) => v.parse(EventRow, row)));
-
-  const turns = fromPanel('turns', panel('turns'), (rows) => {
-    const parsed = rows.map((row) => v.parse(TurnRow, row));
-
-    return {
-      settled: parsed.reduce((sum, row) => sum + row.count, 0),
-      failed: parsed.filter((row) => row.outcome === 'failed').reduce((sum, row) => sum + row.count, 0),
-    };
-  });
 
   const kills = await readKills(env, now, fetch);
 
@@ -162,7 +199,11 @@ CREATE TABLE IF NOT EXISTS monitor_signal_streaks (
   clean   INTEGER NOT NULL
 )`;
 
-const StreakRow = v.object({ signal: v.picklist(ALERT_SIGNALS), crossed: v.number(), clean: v.number() });
+const StreakRow = v.object({ signal: v.picklist([...ALERT_SIGNALS, SOURCES]), crossed: v.number(), clean: v.number() });
+
+function observedOf(verdict: SignalVerdict): string | undefined {
+  return 'observed' in verdict ? verdict.observed : undefined;
+}
 
 export function settleFleet(
   sql: SqlExec,
@@ -171,28 +212,36 @@ export function settleFleet(
 ): ProbeOutcome[] {
   sql.exec(STREAKS_DDL);
 
-  const streaks = new Map<AlertSignal, SignalStreak>(
+  const streaks = new Map<string, SignalStreak>(
     v.parse(v.array(StreakRow), sql.exec('SELECT signal, crossed, clean FROM monitor_signal_streaks').toArray())
       .map((row) => [row.signal, { crossed: row.crossed, clean: row.clean }]),
   );
 
-  const outcomes = evaluateFleet(read.sample).map((verdict): ProbeOutcome => {
-    const probe = `${FLEET_PROBE_PREFIX}${verdict.signal}`;
-    const settled = settleSignal(streaks.get(verdict.signal) ?? { crossed: 0, clean: 0 }, verdict, open.has(probe));
+  const settle = (signal: string, tick: Parameters<typeof settleSignal>[1]): boolean => {
+    const settled = settleSignal(streaks.get(signal) ?? { crossed: 0, clean: 0 }, tick, open.has(`${FLEET_PROBE_PREFIX}${signal}`));
 
     sql.exec(
       `INSERT INTO monitor_signal_streaks (signal, crossed, clean) VALUES (?, ?, ?)
        ON CONFLICT(signal) DO UPDATE SET crossed = excluded.crossed, clean = excluded.clean`,
-      verdict.signal, settled.streak.crossed, settled.streak.clean,
+      signal, settled.streak.crossed, settled.streak.clean,
     );
-    const detail = verdict.state === 'crossed' ? verdict.detail : open.get(probe) ?? 'clear';
 
-    return { probe, ok: !settled.failing, detail };
+    return settled.failing;
+  };
+
+  const outcomes = evaluateFleet(read.sample).map((verdict): ProbeOutcome => {
+    const probe = `${FLEET_PROBE_PREFIX}${verdict.signal}`;
+    const failing = settle(verdict.signal, verdict);
+    const said = verdict.state === 'crossed' ? verdict.detail : observedOf(verdict);
+
+    if (ALERT_UNMEASURED.includes(verdict.signal)) return { probe, ok: true, detail: `not alerting until measured; ${said ?? 'clear'}` };
+
+    return { probe, ok: !failing, detail: said ?? open.get(probe) ?? 'clear' };
   });
 
-  const sources: ProbeOutcome = read.unavailable.length === 0
-    ? { probe: FLEET_SOURCES_PROBE, ok: true, detail: 'every source reads' }
-    : { probe: FLEET_SOURCES_PROBE, ok: false, detail: read.unavailable.map((u) => `${u.source}: ${u.why}`).join('; ') };
+  const unset = read.unavailable.filter((u) => u.kind === 'unset');
+  const failing = settle(SOURCES, { state: read.unavailable.some((u) => u.kind === 'unreadable') ? 'crossed' : 'ok' }) || unset.length > 0;
+  const detail = read.unavailable.map((u) => `${u.source}: ${u.why}`).join('; ');
 
-  return [...outcomes, sources];
+  return [...outcomes, { probe: FLEET_SOURCES_PROBE, ok: !failing, detail: detail === '' ? 'every source reads' : detail }];
 }

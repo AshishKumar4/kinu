@@ -91,6 +91,7 @@ export {
 export {
   ALERT_SIGNALS,
   ALERT_THRESHOLDS,
+  ALERT_UNMEASURED,
   evaluateFleet,
   findWakeLoops,
   settleSignal,

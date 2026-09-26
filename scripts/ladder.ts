@@ -1113,7 +1113,6 @@ export const LADDER: readonly Gate[] = [
       + 'promotion uploaded: that is its smoke test\'s, against the deployment.',
     inputs: AMBIENT_BY_NAME,
   },
-
   {
     run: 'bun test --timeout=0 scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts',
     label: 'Gate self-tests: secrets, corpus, preflight',

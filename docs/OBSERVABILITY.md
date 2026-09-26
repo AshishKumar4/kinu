@@ -21,6 +21,7 @@ spend. `AGENTS.md` § Errors and Logs points here. The source of truth is
 | Analytics Engine fleet metrics | built, three datasets | `core/src/obs/analytics/` |
 | Control-plane audit and exact feedback index | built | `cf-backend/src/control-plane/` |
 | Feedback screenshot objects | built, stored in R2 | `cf-backend/src/feedback/` |
+| Fleet alerts (see below) | built; `fleet.client_errors` is streaked but not emailed. Owed: set its threshold from the first week of `client.*` rows after 345ced8462 deploys, then drop it from `ALERT_UNMEASURED` | `core/src/control-plane/fleet-alerts.ts`, `core/src/obs/analytics/alerts.ts` |
 | `Result<T, KinuError>` via `neverthrow` | rejected, see below | none |
 
 ## Fleet metrics, exact state, and feedback
@@ -70,7 +71,7 @@ under `env.staging`. Writes omit it because the binding names its dataset.
 ## Fleet alerts
 
 Every `*/15` cron tick, `MonitorDO` reads the fleet as well as the site probes
-(`cf-backend/src/monitor/fleet.ts`). It makes one Analytics Engine batch
+(`core/src/control-plane/fleet-alerts.ts`). It makes one Analytics Engine batch
 (`fleetAlertQueries`) and one Workers Observability query for the workspace
 objects killed on this deployment's version. The rules and thresholds live in
 `core/src/obs/analytics/alerts.ts`, each threshold beside the measurement it
@@ -86,11 +87,22 @@ Measurements come from Analytics Engine and telemetry over the 7 days to 2026-09
 | `fleet.platform_kill` | invocation outcomes (`KINU_OBS_TOKEN`) | any out-of-memory kill, or 3+ objects over the wall-time limit, in an hour | Steady state is 0. The 71 OOM kills on 09-22..24 were one incident. On 09-26: 108 wall-time kills on 3 objects, all of them loopers. |
 | `fleet.provider_down` | `provider.error` by code | 5+ `denied`, or 100+ of any code, in an hour | one `denied` in 168 hours; the worst hour had 72 errors, from one 404 source |
 | `fleet.turn_failures` | settled turns | over 25% failed, once there are 20+ turns in the hour | 32 hours had 20+ turns; the failed share was p50 0% and p90 19%, and 27%, 45% and 86% in the incident hours |
-| `fleet.client_errors` | `client.*` | 50+ in an hour, or 6+ unreadable reports | unmeasured: 0 rows arrived until 345ced8462 fixed the reports being refused |
+| `fleet.client_errors` | `client.*` | provisional: 50+ in an hour, or 6+ unreadable reports; not emailed until measured | unmeasured: 0 rows arrived until 345ced8462 fixed the reports being refused |
 | `fleet.stuck_effects` | `turn.terminal_effect_failed`, `turn.terminal_effects_owed` | 61+ failed or 1,001+ owed in an hour | failed p90 19/h, p99 62, max 69; owed p50 2/h, p90 970, p99 2,534 (warm-forge) |
 
 A source that is not configured or cannot be read is a single
-`fleet.sources` incident naming what to set. It is never treated as a quiet
+`fleet.sources` incident naming what to set. A missing setting opens it at
+once, because no retry fixes one. An unreadable answer (a 429, a timeout, an
+unexpected shape) must hold for two ticks, like a signal. A read that fails
+never stops the site probes from recording.
+
+`fleet.platform_kill` reads only this deployment's version. Until that version
+has served 200 workspace-object invocations in the hour, a clean tick counts
+toward nothing: it neither closes an open incident nor starts a clean streak.
+That keeps a deploy from closing an incident before the new version has run.
+200 is under the quietest hour of the week to 2026-09-26: `kinu`'s
+`OrchestratorAgent` served 230 invocations then, with p10 1,030 and p50 2,960
+(sampled 7-day telemetry). It is never treated as a quiet
 fleet. Eval and user workspaces share `fleet.wake_loop`, because the digest
 cannot tell them apart. The alert names the worst workspace's digest, and
 `scripts/prod-logs.ts wakes` names the workspace.

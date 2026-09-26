@@ -55,7 +55,7 @@ describe('findWakeLoops', () => {
   });
 });
 
-const QUIET = { startups: [], events: [], turns: { settled: 0, failed: 0 }, kills: { exceededMemory: 0, exceededWallTimeObjects: 0 } } as const;
+const QUIET = { startups: [], events: [], turns: { settled: 0, failed: 0 }, kills: { exceededMemory: 0, exceededWallTimeObjects: 0, invocations: 1000 } } as const;
 
 const stateOf = (sample: Parameters<typeof evaluateFleet>[0]) => Object.fromEntries(evaluateFleet(sample).map((v) => [v.signal, v.state]));
 
@@ -81,7 +81,12 @@ describe('evaluateFleet', () => {
   });
 
   test('one out-of-memory kill is an incident', () => {
-    expect(stateOf({ ...QUIET, kills: { exceededMemory: 1, exceededWallTimeObjects: 0 } })['platform_kill']).toBe('crossed');
+    expect(stateOf({ ...QUIET, kills: { exceededMemory: 1, exceededWallTimeObjects: 0, invocations: 3 } })['platform_kill']).toBe('crossed');
+  });
+
+  test('a version that has barely run is not yet clean: under 200 invocations (the week\'s quietest hour served 230) it is unjudged', () => {
+    expect(stateOf({ ...QUIET, kills: { exceededMemory: 0, exceededWallTimeObjects: 0, invocations: 199 } })['platform_kill']).toBe('unjudged');
+    expect(stateOf({ ...QUIET, kills: { exceededMemory: 0, exceededWallTimeObjects: 0, invocations: 200 } })['platform_kill']).toBe('ok');
   });
 
   test('a source that is not configured says so, instead of reading as quiet', () => {
@@ -112,6 +117,11 @@ describe('settleSignal: two ticks to open, two to close', () => {
 
   test('an open incident survives one clean tick and one flap, and closes on two clean ticks', () => {
     expect(run(['x', 'x', '.', 'x', '.', '.'])).toEqual([false, true, true, true, true, false]);
+  });
+
+  test('an unjudged tick (a fresh deploy) holds an open incident open, and does not count toward closing it', () => {
+    const unjudged = { signal: 'platform_kill', state: 'unjudged', observed: '12 invocations' } as const;
+    expect(settleSignal({ crossed: 0, clean: 1 }, unjudged, true)).toEqual({ streak: { crossed: 0, clean: 1 }, failing: true });
   });
 
   test('a source going unconfigured neither opens nor closes an incident', () => {

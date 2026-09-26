@@ -7,6 +7,8 @@ export const ALERT_SIGNALS = [
 
 export type AlertSignal = (typeof ALERT_SIGNALS)[number];
 
+export const ALERT_UNMEASURED: readonly AlertSignal[] = ['client_errors'];
+
 /** docs/OBSERVABILITY.md. */
 export const ALERT_THRESHOLDS = {
   startupsPerHour: 30,
@@ -20,6 +22,7 @@ export const ALERT_THRESHOLDS = {
   clientUnreadablePerHour: 5,
   effectFailuresPerHour: 60,
   effectsOwedPerHour: 1000,
+  killJudgingInvocations: 200,
 } as const;
 
 export interface StartupHour {
@@ -84,13 +87,18 @@ export interface FleetSample {
   readonly startups: readonly StartupHour[] | null;
   readonly events: readonly { readonly event: string; readonly code: string; readonly count: number }[] | null;
   readonly turns: { readonly settled: number; readonly failed: number } | null;
-  readonly kills: { readonly exceededMemory: number; readonly exceededWallTimeObjects: number } | null;
+  readonly kills: {
+    readonly exceededMemory: number;
+    readonly exceededWallTimeObjects: number;
+    readonly invocations: number;
+  } | null;
 }
 
 export type SignalVerdict =
-  | { readonly signal: AlertSignal; readonly state: 'ok' }
+  | { readonly signal: AlertSignal; readonly state: 'ok'; readonly observed?: string }
   | { readonly signal: AlertSignal; readonly state: 'crossed'; readonly detail: string }
-  | { readonly signal: AlertSignal; readonly state: 'unconfigured' };
+  | { readonly signal: AlertSignal; readonly state: 'unconfigured' }
+  | { readonly signal: AlertSignal; readonly state: 'unjudged'; readonly observed: string };
 
 export function evaluateFleet(sample: FleetSample): SignalVerdict[] {
   return [
@@ -127,7 +135,13 @@ function killVerdict(kills: FleetSample['kills']): SignalVerdict {
     reasons.push(`${String(kills.exceededWallTimeObjects)} objects hit the wall-time limit`);
   }
 
-  return verdict('platform_kill', reasons.length === 0 ? null : `in the last hour: ${reasons.join('; ')}`);
+  if (reasons.length > 0) return verdict('platform_kill', `in the last hour: ${reasons.join('; ')}`);
+
+  if (kills.invocations < ALERT_THRESHOLDS.killJudgingInvocations) {
+    return { signal: 'platform_kill', state: 'unjudged', observed: `${String(kills.invocations)} invocations on this version so far` };
+  }
+
+  return verdict('platform_kill', null);
 }
 
 type EventRows = NonNullable<FleetSample['events']>;
@@ -161,7 +175,9 @@ function clientVerdict(events: FleetSample['events']): SignalVerdict {
 
   if (unreadable > ALERT_THRESHOLDS.clientUnreadablePerHour) return verdict('client_errors', `${String(unreadable)} browser reports were unreadable in the last hour`);
 
-  return verdict('client_errors', all > ALERT_THRESHOLDS.clientErrorsPerHour ? `${String(all)} browser errors in the last hour` : null);
+  if (all > ALERT_THRESHOLDS.clientErrorsPerHour) return verdict('client_errors', `${String(all)} browser errors in the last hour`);
+
+  return { signal: 'client_errors', state: 'ok', observed: `${String(all)} browser errors, ${String(unreadable)} unreadable, in the last hour` };
 }
 
 function effectsVerdict(events: FleetSample['events']): SignalVerdict {
@@ -186,8 +202,8 @@ export interface SettledSignal {
   readonly failing: boolean;
 }
 
-export function settleSignal(streak: SignalStreak, tick: SignalVerdict, open: boolean): SettledSignal {
-  if (tick.state === 'unconfigured') return { streak, failing: open };
+export function settleSignal(streak: SignalStreak, tick: Pick<SignalVerdict, 'state'>, open: boolean): SettledSignal {
+  if (tick.state === 'unconfigured' || tick.state === 'unjudged') return { streak, failing: open };
 
   const next = tick.state === 'crossed'
     ? { crossed: streak.crossed + 1, clean: 0 }
