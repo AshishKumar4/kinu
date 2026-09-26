@@ -48,6 +48,7 @@ import {
   WorkspaceActorDirectory, actorReferenceOf, recoverSubordinateLifecycles, type ActorReference,
   type ActorHandle,
   type AgentConfigStore,
+  initSubordinateRosterTable,
 } from '../src/index';
 import { CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
 import { codenameFor } from '../src/identity/naming';
@@ -330,6 +331,16 @@ describe('workspace subordinate roster', () => {
     roster.restore(beforeDismiss);
     expect(roster.get('researcher')).toEqual(beforeDismiss);
     expect(() => roster.requireExisting('missing')).toThrow('unknown subordinate');
+  });
+
+  test('a roster read works on tables the workspace object made at construction, before any store existed', () => {
+    const { sql, actor } = makeWorld();
+    initSubordinateRosterTable(sql);
+
+    // No `ensureSchema`: a read that reaches the object first finds only what the constructor made.
+    const roster = new SubordinateRosterStore(sql, actor);
+
+    expect(roster.list()).toEqual([]);
   });
 
   test('a durable hire whose turn ended reads idle, and keeps the assignment it may still answer', () => {

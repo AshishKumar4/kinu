@@ -119,6 +119,7 @@ export function initSubordinateRosterTable(sql: SqlExec): void {
   )`);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_actor_subordinates_order
     ON actor_subordinates(actor_id, created_at, name)`);
+  initEvolutionHelperTable(sql);
 }
 
 /** Parent-actor roster; owns all subordinate status policy. */
@@ -136,7 +137,6 @@ export class SubordinateRosterStore {
   ensureSchema(): void {
     this.actor.assertCurrent();
     initSubordinateRosterTable(this.sql);
-    initEvolutionHelperTable(this.sql);
   }
 
   /** `onConflict` is empty for a first insert and the upsert clause for a compensating restore. */
