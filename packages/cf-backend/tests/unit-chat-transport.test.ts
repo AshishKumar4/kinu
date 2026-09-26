@@ -543,6 +543,12 @@ describe('ChatWireTransport', () => {
       .map((frame) => v.parse(v.looseObject({ type: v.string() }), JSON.parse(frame.body ?? '')).type);
 
     expect(bodies).toEqual(['start', 'text-start', 'text-delta']);
+
+    // The resume it was told of settles: the old request ends for it before the new stream begins.
+    const oldEnds = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
+      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === 'req-1' && frame.done === true);
+
+    expect(oldEnds).toHaveLength(1);
   });
 
   test('a tab still in its handshake that sends a message spliced into the live turn hears its landing', async () => {

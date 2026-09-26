@@ -25,7 +25,7 @@ export interface ChatWire {
   readonly sql: SqlExecutor | null;
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
-  getConnection(id: string): ChatSocket | undefined;
+  getConnection(id: string): Connection | undefined;
   history(limit?: number): Promise<UIMessage[]>;
   /** A durable row or an accepted send's reservation: the hook resends its whole list per request. */
   admitted(id: string): boolean;
@@ -324,10 +324,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       carried.push(request);
     }
 
+    this.releaseWaiters();
     const streamId = this.resume?.resumable.start(requestId, { messageId: turn.messageId }) ?? requestId;
-
-    // A tab told to resume the previous stream waits on one that no longer grows: it hears this one from its start.
-    this.pendingResume.clear();
 
     this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), taken: false, broken: false, failure: null };
 
@@ -372,8 +370,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         // A Stop is not a failure: an `error` frame here makes the SDK client paint an error card.
         if (event.message === INTERRUPTED_TURN) return;
 
+        this.releaseWaiters();
         this.resume?.resumable.markError(live.streamId);
-        this.pendingResume.clear();
         live.failure = event.message;
 
         return;
@@ -454,12 +452,26 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
   }
 
+  /** A tab told to resume a stream that will not grow again hears that stream end, so its resume settles; from here
+   *  it hears live frames like any tab. */
+  private releaseWaiters(): void {
+    const stale = this.resume?.resumable.activeRequestId ?? null;
+
+    for (const id of this.pendingResume) {
+      const connection = this.wire.getConnection(id);
+
+      if (stale !== null && connection !== undefined) sendIfOpen(connection, doneFrame(stale, {}));
+    }
+
+    this.pendingResume.clear();
+  }
+
   /** The relay broke; the turn did not. The tab gets our classification; the SDK's words go to diagnostics. */
   private degradeRelay(live: LiveStream, error: KinuError): void {
     diagnostics.failure('chat.stream_observe_failed', error);
     live.broken = true;
+    this.releaseWaiters();
     this.resume?.resumable.markError(live.streamId);
-    this.pendingResume.clear();
     this.wire.broadcast(JSON.stringify({
       type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: refusalOf(error).error, done: false, error: true,
     }));
