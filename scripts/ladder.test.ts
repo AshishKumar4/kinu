@@ -83,13 +83,16 @@ const NON_BUN_RUNNERS: readonly {
  * cannot select a `.eval.ts` at all — so `bun run evals` is their only runner.
  * The live-app suite and the product flows are here because their own
  * deploy rows are their only runners: CI_EXEMPT carries why a pull request
- * cannot boot the product's dev server.
+ * cannot boot the product's dev server. The capability suite needs a user
+ * systemd manager that grants a unit an ambient capability, which a CI runner's
+ * does not; CI_EXEMPT carries that too.
  */
 const AFTER_CI_SUITES = {
   'evals/tasks/budget-board.eval.ts': 'bun run evals',
   'evals/tasks/lending-library.eval.ts': 'bun run evals',
   'evals/tasks/order-book.eval.ts': 'bun run evals',
   'evals/tasks/request-logs.eval.ts': 'bun run evals',
+  'scripts/deadline-capability.test.ts': 'bun test --timeout=0 scripts/deadline-capability.test.ts',
   'scripts/live-app-tier.test.ts': 'bun test --timeout=0 scripts/live-app-tier.test.ts',
   'scripts/product-flows.test.ts': 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
 } satisfies Record<string, string>;
