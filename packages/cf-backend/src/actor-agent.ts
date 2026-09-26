@@ -1045,6 +1045,10 @@ export abstract class ActorAgent extends Agent<Env> {
     attributeWorkspace(ActorAgent.invocationWorkspace);
   }
 
+  /**
+   * Total only while every subclass fixes its name at construction or refuses to exist, as
+   * OrchestratorAgent does; one that does not brings PartyServer's throwing `name` into the logger.
+   */
   private static invocationWorkspace(this: void): string {
     const { agent } = getCurrentAgent();
 
