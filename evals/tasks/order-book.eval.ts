@@ -428,6 +428,7 @@ usual. "WOULD_CROSS" comes after the other rules. Orders already in the book sta
       await sameAsReference(verifier, 'asking-changes-nothing', AFTER_TURN_2, lookBoth);
     },
   }],
+  evidence: (call) => lookBoth((method, input) => call('exchange', method, input)),
 });
 
 defineTaskEval(task);

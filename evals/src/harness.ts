@@ -1,7 +1,11 @@
+import { join } from 'node:path';
+import * as v from 'valibot';
 import { attachHarnessRunToError, createHarness, normalizeHarnessRun, type TranscriptEvent } from 'vitest-evals';
-import type { RunEvent } from '@kinu.run/core';
+import { platformFact, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { DeploymentAnswer, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
+import { DeploymentAnswer, evalNameSlug, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
+import { gatherEvidence, writeEvidence, type WorkspaceEvidence } from './evidence';
+import { HarnessRunSchema } from './results';
 import type { KinuPublicSession, PublicMessage } from './session';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm, type EvalTarget } from './target';
 import type {
@@ -22,6 +26,14 @@ const CUT_REPORTED_COMPLETED = 'deployment.cut-reported-completed';
 
 
 export type TrialIdentity = { readonly taskVersion: string; readonly evalCommit: string };
+
+/** How an isolate memory reset reads when it surfaces (platform catalog `do.isolate.oom_reported`). */
+const MEMORY_RESETS = platformFact('do.isolate.oom_reported').observable.map((observable) => observable.message);
+
+/** The deployment answered with its workspace's isolate reset for memory: the owner counts that as infrastructure. */
+function memoryReset(answer: DeploymentAnswer): boolean {
+  return MEMORY_RESETS.some((message) => answer.message.includes(message));
+}
 
 function openRuns(events: readonly RunEvent[]): string[] {
   const ended = new Set(events.filter((event) => event.type === 'run_end').map((event) => event.runId));
@@ -128,19 +140,53 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn): Promise<Eval
 }
 
 /**
+ * What a trial's workspace holds at its end, then its deletion: the ledger and spend, the evidence, the
+ * teardown. A failure of any is recorded in `errors`, or, for the evidence, said in it, and never
+ * thrown over the verdict the trial's checks gave.
+ */
+async function closeWorkspace(session: KinuPublicSession, task: EvalTask, errors: HarnessError[]): Promise<{
+  events: RunEvent[]; costUsd: number | undefined; workspace: WorkspaceEvidence | { unread: string };
+}> {
+  let events: RunEvent[] = [];
+  let costUsd: number | undefined;
+  let workspace: WorkspaceEvidence | { unread: string };
+
+  try {
+    events = [...await session.runEvents()];
+    costUsd = (await session.spend()).total.usd;
+  } catch (error) {
+    errors.push({ name: 'InfraError', message: `the trial's ledger could not be read: ${renderThrownChain({ cause: error })}` });
+  }
+
+  try {
+    workspace = await gatherEvidence(session, task.evidence);
+  } catch (error) {
+    workspace = { unread: renderThrownChain({ cause: error }) };
+  }
+
+  try {
+    await session.teardown();
+  } catch (error) {
+    errors.push({ name: 'EvalCleanupError', message: renderThrownChain({ cause: error }) });
+  }
+
+  return { events, costUsd, workspace };
+}
+
+/**
  * One trial of one task on the deployment: a fresh workspace, then per turn the seeded files, the
  * prompt, the wait until the workspace settles, and the checks. It stops at the first turn that
- * fails, because every later turn builds on it, and deletes the workspace whatever happened.
+ * fails, because every later turn builds on it, keeps the trial's evidence under `evidenceRoot`, and
+ * deletes the workspace whatever happened.
  */
-export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: TrialIdentity) {
+export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: TrialIdentity, evidenceRoot: string) {
   return createHarness<EvalRunInput, EvalRunOutput>({
     name: 'kinu-agent',
     run: async ({ input, signal }) => {
+      const startedAt = Date.now();
       const turns: EvalTurnResult[] = [];
       const errors: HarnessError[] = [];
       let session: KinuPublicSession | undefined;
-      let events: RunEvent[] = [];
-      let costUsd: number | undefined;
       let productSha = 'unknown';
       let attempted: string | undefined;
       let turnStartedAt = Date.now();
@@ -165,7 +211,9 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       } catch (error) {
         const message = renderThrownChain({ cause: error });
 
-        if (error instanceof DeploymentAnswer) {
+        if (error instanceof DeploymentAnswer && memoryReset(error)) {
+          errors.push({ name: 'InfraError', message: `the workspace's isolate was reset for memory: ${message}` });
+        } else if (error instanceof DeploymentAnswer) {
           // The build answered one of this turn's requests with a failure of its own: the turn failed on the build.
           turns.push({ outcome: { status: 'refused', message: redact(message) }, checks: [], turnWallMs: Date.now() - turnStartedAt, verificationWallMs: 0 });
         } else {
@@ -174,20 +222,9 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         }
       }
 
-      if (session !== undefined) {
-        try {
-          events = [...await session.runEvents()];
-          costUsd = (await session.spend()).total.usd;
-        } catch (error) {
-          errors.push({ name: 'InfraError', message: `the trial's ledger could not be read: ${renderThrownChain({ cause: error })}` });
-        }
-
-        try {
-          await session.teardown();
-        } catch (error) {
-          errors.push({ name: 'EvalCleanupError', message: renderThrownChain({ cause: error }) });
-        }
-      }
+      const { events, costUsd, workspace } = session === undefined
+        ? { events: [], costUsd: undefined, workspace: { unread: 'no workspace was opened' } }
+        : await closeWorkspace(session, task, errors);
 
       try {
         const after = await deployedBuild(target);
@@ -240,8 +277,15 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         metadata: {
           taskId: task.id, taskVersion: identity.taskVersion, evalCommit: identity.evalCommit, productSha,
           arm: input.arm, trial: input.trial, origin: target.origin, workspace: session?.workspace ?? null,
+          evidence: join(evidenceRoot, evalNameSlug(input.model), input.arm, `${task.id}-trial-${String(input.trial)}`),
         },
       };
+
+      writeEvidence(result.metadata.evidence, {
+        run: v.parse(HarnessRunSchema, normalizeHarnessRun(input, result)),
+        verdict: { status: success ? 'passed' : 'failed', durationMs: Date.now() - startedAt },
+        events, workspace,
+      });
 
       if (scrubbed.length > 0) {
         const failure = new Error(scrubbed.map((error) => `${error.name}: ${error.message}`).join('\n'));

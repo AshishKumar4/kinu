@@ -13,11 +13,16 @@ export type EvalTurn = {
   readonly verifyAfterEviction?: (verifier: EvalVerifier) => Promise<void>;
 };
 
+/** A slate call as a trial's evidence makes it: `slate.method(input)`, answered with what the slate returned. */
+export type EvidenceCall = (slate: string, method: string, input?: JsonValue) => Promise<JsonValue>;
+
 export type EvalTask = {
   readonly id: string;
   /** The workspace's mission, written to SOUL.md before the first prompt; no genesis turn runs. */
   readonly mission: string;
   readonly turns: readonly [EvalTurn, ...EvalTurn[]];
+  /** Reads that show the data the task's slates hold, made at the end of every trial and kept with its evidence. */
+  readonly evidence?: (call: EvidenceCall) => Promise<void>;
 };
 
 export type EvalCheck = { id: string; pass: boolean; evidence?: JsonValue };

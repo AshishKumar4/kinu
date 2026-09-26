@@ -341,6 +341,7 @@ count anywhere, not as requests and not as skipped lines, and a 429 now counts a
       });
     },
   }],
+  evidence: (call) => readEveryDay((method, input) => call('logs', method, input)),
 });
 
 defineTaskEval(task);

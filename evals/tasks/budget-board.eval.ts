@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
 import { defineTaskEval } from '../src/eval';
-import { defineEvalTask } from '../src/task';
+import { defineEvalTask, type EvidenceCall } from '../src/task';
 import { matchesReference, SlateRefusal, type EvalVerifier, type Normalize, type Script, type SlateClient } from '../src/verifier';
 
 // Two slates that depend on each other: a ledger of team expenses, and a budget board that reads
@@ -241,9 +241,13 @@ async function booksAfter(history: readonly Step[]): Promise<ReferenceBooks> {
 
 const LEDGER: readonly string[] = LEDGER_METHODS;
 
-/** Both slates as one client: their method names do not overlap. */
+/** Both slates as one client over `call`: their method names do not overlap. */
+function bothSlates(call: EvidenceCall): SlateClient<Method> {
+  return (method, input) => call(LEDGER.includes(method) ? 'ledger' : 'board', method, input);
+}
+
 function slates(verifier: EvalVerifier): SlateClient<Method> {
-  return (method, input) => verifier.call(LEDGER.includes(method) ? 'ledger' : 'board', method, input === undefined ? [] : [input]);
+  return bothSlates((slate, method, input) => verifier.call(slate, method, input === undefined ? [] : [input]));
 }
 
 async function sameAsReference(
@@ -401,6 +405,10 @@ return the following ones, or null on the last page. limit is 1 to 50; answer an
       await sameAsReference(verifier, 'asking-changes-nothing', { history: AFTER_TURN_2, script: readTheMonth, currency: true });
     },
   }],
+  evidence: async (call) => {
+    await listEverything(bothSlates(call));
+    await readTheMonth(bothSlates(call));
+  },
 });
 
 defineTaskEval(task);

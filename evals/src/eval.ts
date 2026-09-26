@@ -1,4 +1,7 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createJudge, describeEval } from 'vitest-evals';
+import { resolveArtifactRoot } from '../../scripts/bench-retention';
 import { evalCommit, evalMatrix } from './config';
 import { createKinuHarness } from './harness';
 import { ARMS, resolveEvalTarget } from './target';
@@ -23,12 +26,19 @@ const FunctionalJudge = createJudge<EvalRunInput, EvalRunOutput>('functional res
  * Register one task as model x arm x trial cases. Trials run concurrently, each on its own
  * workspace, so a task takes as long as its slowest trial. A run holds trials `firstTrial` onward,
  * so one task's trials can be split across jobs. A missing identity or a bad matrix fails here, at
- * collection, before any inference.
+ * collection, before any inference. Every trial's evidence goes under one directory per run, retained
+ * beside every other family's runs (`resolveArtifactRoot`), never under a swept root.
  */
 export function defineTaskEval(task: EvalTask): void {
   const matrix = evalMatrix(process.env, ARMS.map((arm) => arm.id));
   const target = resolveEvalTarget(process.env);
-  const harness = createKinuHarness(task, target, { taskVersion: taskVersion(task), evalCommit: evalCommit(process.env) });
+
+  const evidence = join(
+    resolveArtifactRoot({ flag: undefined, env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS }, repoRoot: join(import.meta.dirname, '../..'), runRoot: tmpdir() }),
+    `evals-${task.id}-${String(Date.now())}`,
+  );
+
+  const harness = createKinuHarness(task, target, { taskVersion: taskVersion(task), evalCommit: evalCommit(process.env) }, evidence);
 
   describeEval(task.id, { harness }, (it) => {
     for (const model of matrix.models) {

@@ -772,6 +772,13 @@ const SubordinateRosterSchema = v.array(SubordinateRowSchema);
 /** One row of the roster, as the Agents surface lists it. */
 export type PublicSubordinate = v.InferOutput<typeof SubordinateRowSchema>;
 
+/** One entry of a folder as the Files tab lists it (`getExecutorFiles`). */
+const DirEntrySchema = v.object({ name: v.string(), type: v.picklist(['file', 'dir']) });
+
+const DirectorySchema = v.object({ entries: v.optional(v.array(DirEntrySchema)), error: v.optional(v.string()) });
+
+export type PublicDirEntry = v.InferOutput<typeof DirEntrySchema>;
+
 /** What `readExecutorFile` answers, exactly as `ExecutorTextFile` declares it
  *  (core/src/read-models/files.ts): the preview's text, or the reason there is
  *  none. Both optional, because the read model answers one or the other. */
@@ -1347,6 +1354,22 @@ export class KinuPublicSession {
     return v.parse(SubordinateRosterSchema, rows);
   }
 
+  /** One folder of the workspace as the Files tab lists it. With
+   *  `allowMissing`, a folder that does not exist lists nothing; any other
+   *  refusal is the build's answer. */
+  async listFiles(dir: string, options: { allowMissing?: boolean } = {}): Promise<readonly PublicDirEntry[]> {
+    const listing = v.parse(DirectorySchema, await infraBoundary(
+      `getExecutorFiles ${dir} on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getExecutorFiles', [WORKSPACE_EXECUTOR, dir]),
+    ));
+
+    if (listing.error === undefined) return listing.entries ?? [];
+
+    if (options.allowMissing === true && /\bENOENT\b/.test(listing.error)) return [];
+
+    throw new DeploymentAnswer(`could not list ${dir}: ${listing.error.slice(0, 200)}`, 500);
+  }
+
   /** Resolve when a response chunk of `requestId` satisfies `accept` — a
    *  wait on the socket's own output, for a row that must act while a turn
    *  is inside its work (its first tool result has streamed). */
@@ -1554,6 +1577,21 @@ export class KinuPublicSession {
       }
 
       return text;
+    });
+  }
+
+  /** One file's bytes off the same route: what a trial leaves behind is kept
+   *  as the workspace held it, text or not. */
+  readBytes(path: string): Promise<Uint8Array> {
+    return infraBoundary(`GET files ${path}`, async () => {
+      const response = await fetch(this.filesUrl(path), { headers: webHeaders(this.input.identity) });
+
+      if (!response.ok) {
+        throw new DeploymentAnswer(`could not read ${path} over the files route: ${String(response.status)} `
+          + `${response.statusText} — ${(await response.text()).slice(0, 200)}`, response.status);
+      }
+
+      return new Uint8Array(await response.arrayBuffer());
     });
   }
 
