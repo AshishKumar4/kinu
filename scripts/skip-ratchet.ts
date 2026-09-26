@@ -120,6 +120,8 @@ export interface FailedTest {
 
 export interface TestReport {
   readonly total: number;
+  /** Every testcase's key, whatever its outcome. */
+  readonly keys: readonly string[];
   readonly failed: readonly FailedTest[];
   readonly skipped: readonly SkippedTest[];
   /** Every file that contributed at least one testcase. */
@@ -145,6 +147,7 @@ export interface TestReport {
 export function parseJUnit(xml: string): TestReport {
   const skipped: SkippedTest[] = [];
   const failed: FailedTest[] = [];
+  const keys: string[] = [];
   const files = new Set<string>();
   const testcases = elementsNamed(parseXml(xml), 'testcase');
 
@@ -157,6 +160,7 @@ export function parseJUnit(xml: string): TestReport {
     // already joined the describe path into `name` — so spelling one would put
     // the file in the key twice.
     const key = declared ? `${file} › ${classname} › ${name}` : `${file} › ${name}`;
+    keys.push(key);
     const outcomes = testcase.children.flatMap((child) => child.kind === 'element' ? [child.name] : []);
 
     if (outcomes.includes('failure') || outcomes.includes('error')) {
@@ -172,7 +176,7 @@ export function parseJUnit(xml: string): TestReport {
     if (outcomes.includes('skipped')) skipped.push({ key, file });
   }
 
-  return { total: testcases.length, failed, skipped, files };
+  return { total: testcases.length, keys, failed, skipped, files };
 }
 
 /** A locked skip and why it is acceptable. A skip whose reason nobody wrote
@@ -328,6 +332,7 @@ function runTargets(): readonly string[] {
 export function mergeReports(reports: readonly TestReport[]): TestReport {
   return {
     total: reports.reduce((sum, r) => sum + r.total, 0),
+    keys: reports.flatMap((r) => [...r.keys]),
     failed: reports.flatMap((r) => [...r.failed]),
     skipped: reports.flatMap((r) => [...r.skipped]),
     files: new Set(reports.flatMap((r) => [...r.files])),

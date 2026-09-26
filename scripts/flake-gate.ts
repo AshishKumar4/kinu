@@ -21,12 +21,15 @@
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
 import { runUnderDeadline } from './deadline';
 import { finding } from './gate-ratchet';
-import { GATE_DEADLINE_SECONDS, LADDER, TIERS, claims, narrowedTo, sharedBrowserModules, type Gate } from './ladder';
+import { GATE_DEADLINE_SECONDS, LADDER, TIERS, claims, gatesFor, narrowedTo, sharedBrowserModules, type Gate } from './ladder';
+import { discoverArgv } from './python-suites';
 import { parseJUnit } from './skip-ratchet';
+import { writtenSkips } from './test-census';
 import { ANTI_SLOP_RULES, isAntiSlopRuleSuite, isFirstRunSuite, isPythonSuite, isRunnableSuite, trackedFiles } from './sources';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -250,20 +253,209 @@ const BLIND_SPOTS = [
     + '(`bun scripts/flake-gate.ts --sweep`) repeats every suite the CI tier runs',
   'N runs sample N interleavings: greens raise confidence and prove nothing about absence',
   'a suite never runs beside itself here, so a race between two copies of one suite is not provoked',
+  'a file runs apart from its row\'s siblings, so a leak between them (a module mock, a global) is not provoked '
+    + 'here; a row that runs its files in fresh globals (`--isolate`) cannot have one',
   'the working tree is run, not the staged content: the hook\'s own stated imprecision',
 ] as const;
 
-/** The line naming one repeated suite's verdict. */
-function line(plan: Extract<Plan, { kind: 'repeat' }>, outcomes: readonly RunOutcome[], verdict: Verdict): string {
+/** The line naming one repeated suite's verdict; `written` are the skips its file declares unconditionally. */
+function line(plan: Extract<Plan, { kind: 'repeat' }>, outcomes: readonly RunOutcome[], verdict: Verdict, written: readonly string[]): string {
   const seconds = outcomes.reduce((sum, outcome) => sum + outcome.seconds, 0).toFixed(1);
   const runs = `${String(outcomes.length)} run(s) through "${plan.row.label}", ${seconds}s`;
 
   switch (verdict.kind) {
     case 'green': return `  ok       ${plan.file}  green in ${runs}`;
-    case 'skipped': return `  skipped  ${plan.file}  every test skipped in ${runs}: its subject needs what this machine does not give it`;
+    case 'skipped': return written.length > 0
+      ? `  SKIPPED  ${plan.file}  every test skipped in ${runs}, as written`
+      : `  skipped  ${plan.file}  every test skipped in ${runs}, each on a condition this machine does not meet`;
     case 'red': return `  RED      ${plan.file}  red in every one of ${runs}`;
     case 'flaky': return `  FLAKE    ${plan.file}  red in run(s) ${verdict.red.join(', ')} of ${runs}`;
   }
+}
+
+/* ── The nightly sweep ────────────────────────────────────────────────── */
+
+/** Runs of each suite in the sweep: fewer than a commit's six, over every suite the CI tier runs. */
+export const SWEEP_RUNS = 3;
+
+/** One sweep batch: the test files one row runs together, run the way that row runs them. */
+export interface SweepBatch {
+  readonly row: Pick<Gate, 'label' | 'deadline'>;
+  readonly argv: readonly string[];
+  readonly lane: Lane;
+}
+
+/**
+ * Every batch the sweep runs: each test file the CI tier claims, planned as the commit gate plans it, then its row's
+ * files put back together under one command, so every suite runs beside its row's siblings. A Python suite runs its
+ * directory's discovery.
+ */
+export function sweepBatches(tracked: readonly string[]): SweepBatch[] {
+  const rows = gatesFor('ci');
+  const files = [...new Set(rows.flatMap((row) => claims(row.run, tracked)))];
+  const batches = new Map<string, { row: Pick<Gate, 'label' | 'deadline'>; prefix: string[]; targets: Set<string>; lane: Lane }>();
+
+  for (const plan of files.map((file) => planFor(file, tracked, rows))) {
+    if (plan.kind !== 'repeat') continue;
+
+    const python = plan.argv.includes('unittest');
+    const prefix = python ? discoverArgv(dirname(plan.file)) : plan.argv.slice(0, -1);
+    const key = `${plan.row.label}\u0000${prefix.join(' ')}`;
+    const batch = batches.get(key) ?? { row: plan.row, prefix, targets: new Set<string>(), lane: plan.lane };
+
+    if (!python) batch.targets.add(plan.argv.at(-1) ?? '');
+
+    if (plan.lane === 'browser') batch.lane = 'browser';
+    batches.set(key, batch);
+  }
+
+  return [...batches.values()].map(({ row, prefix, targets, lane }) => ({ row, argv: [...prefix, ...targets], lane }));
+}
+
+/** `argv` running its tests in an order `seed` decides: bun's `--randomize`, vitest's shuffle. A runner with neither
+ *  runs in its own order. */
+export function seeded(argv: readonly string[], seed: number): string[] {
+  const at = argv.findIndex((word, index) => (word === 'test' && argv[index - 1] === 'bun') || (word === 'run' && argv[index - 1] === 'vitest'));
+
+  if (at === -1) return [...argv];
+
+  const flags = argv[at] === 'test'
+    ? ['--randomize', `--seed=${String(seed)}`]
+    : ['--sequence.shuffle', `--sequence.seed=${String(seed)}`];
+
+  return [...argv.slice(0, at + 1), ...flags, ...argv.slice(at + 1)];
+}
+
+/** One seeded run of a batch: every test's key, and the ones that failed. */
+export interface SweepRun {
+  readonly seed: number;
+  readonly exitCode: number;
+  readonly seconds: number;
+  readonly tests: readonly string[];
+  readonly failed: readonly string[];
+  /** The whole output of a run that was not green, since the interleaving that failed is only there. */
+  readonly output?: string;
+}
+
+/** What a batch's runs say about each test that was not green in all of them. */
+export interface SweepVerdict {
+  /** Red under some seeds and green under others: an order or a timing the test depends on. */
+  readonly flaky: readonly { readonly test: string; readonly red: readonly number[]; readonly green: readonly number[] }[];
+  /** Red under every seed that ran it. */
+  readonly red: readonly string[];
+  /** Runs that failed with no test failing: a crash, a timeout, a runner that reports nothing. */
+  readonly broken: readonly number[];
+}
+
+export function sweepVerdict(runs: readonly SweepRun[]): SweepVerdict {
+  const tests = [...new Set(runs.flatMap((run) => [...run.tests, ...run.failed]))].sort();
+  const flaky: SweepVerdict['flaky'][number][] = [];
+  const red: string[] = [];
+
+  for (const test of tests) {
+    const ran = runs.filter((run) => run.tests.includes(test) || run.failed.includes(test));
+    const failing = ran.filter((run) => run.failed.includes(test)).map((run) => run.seed);
+    const passing = ran.filter((run) => !run.failed.includes(test)).map((run) => run.seed);
+
+    if (failing.length > 0 && passing.length > 0) flaky.push({ test, red: failing, green: passing });
+    else if (failing.length > 0) red.push(test);
+  }
+
+  const broken = runs.filter((run) => (run.exitCode !== 0 && run.failed.length === 0) || run.tests.length === 0).map((run) => run.seed);
+
+  return { flaky, red, broken };
+}
+
+const CiRunSchema = v.array(v.object({ conclusion: v.string(), status: v.string(), createdAt: v.string(), url: v.string() }));
+
+/** Main's latest CI run, as GitHub reports it, or why it could not be read. */
+function mainCiVerdict(): string {
+  const run = Bun.spawnSync(['gh', 'run', 'list', '--workflow=ci.yml', '--branch', 'main', '--limit', '1', '--json', 'conclusion,status,createdAt,url'], {
+    cwd: root, stdout: 'pipe', stderr: 'pipe',
+  });
+
+  const parsed = run.exitCode === 0 ? v.safeParse(CiRunSchema, tolerate(() => JSON.parse(run.stdout.toString()), 'malformed-input')) : undefined;
+  const [latest] = parsed?.success === true ? parsed.output : [];
+
+  if (latest === undefined) return `unknown: gh run list answered ${String(run.exitCode)} ${run.stderr.toString().trim().slice(0, 160)}`;
+
+  return `${latest.conclusion === '' ? latest.status : latest.conclusion}, the run of ${latest.createdAt} (${latest.url})`;
+}
+
+/** One run of `batch` in the order `seed` decides, its JUnit report read where its runner writes one. */
+export async function sweepRun(batch: SweepBatch, seed: number, scratch: string, index: number): Promise<SweepRun> {
+  const report = join(scratch, `sweep-${String(index)}-${String(seed)}.xml`);
+  const { argv, junit } = withJUnit(seeded(batch.argv, seed), report);
+  const spawned = argv[0] === 'vitest' ? [join(root, 'node_modules', '.bin', 'vitest'), ...argv.slice(1)] : argv;
+
+  const outcome = await runUnderDeadline({
+    argv: spawned, cwd: root, seconds: batch.row.deadline?.seconds ?? GATE_DEADLINE_SECONDS,
+    label: `${batch.row.label} under seed ${String(seed)}`, stdio: 'pipe',
+  });
+
+  const xml = junit ? tolerate(() => readFileSync(report, 'utf8'), 'enoent') : undefined;
+  const parsed = xml === undefined ? undefined : parseJUnit(xml);
+  // A runner without a report stands for its batch as one test, named by its row, and fails as it exits.
+  const tests = parsed === undefined ? [batch.row.label] : [...parsed.keys];
+
+  const failed = parsed?.failed.map((test) => test.key) ?? (outcome.exitCode === 0 ? [] : [batch.row.label]);
+
+  const green = outcome.exitCode === 0 && failed.length === 0;
+
+  return {
+    seed, exitCode: outcome.exitCode, seconds: outcome.seconds, tests, failed,
+    output: green ? undefined : `${outcome.stdout}${outcome.stderr}`,
+  };
+}
+
+/** The sweep: every batch, SWEEP_RUNS seeded runs each, one batch at a time so each runs on the load it would alone.
+ *  `only` narrows it to the batches of one row, by label: a flake chased on demand. */
+async function sweep(only: string | undefined): Promise<number> {
+  const tracked = trackedFiles();
+  const batches = sweepBatches(tracked).filter((batch) => only === undefined || batch.row.label === only);
+
+  if (batches.length === 0) throw new Error(`no CI-tier row is labelled ${JSON.stringify(only)}`);
+  const ci = mainCiVerdict();
+
+  console.log(`flake-sweep: main's CI: ${ci}`);
+  console.log(`flake-sweep: ${String(batches.length)} batch(es) from the CI tier, ${String(SWEEP_RUNS)} seeded run(s) each`);
+
+  const scratch = mkdtempSync(join(tmpdir(), 'kinu-scratch-flake-sweep-'));
+  const results: { batch: SweepBatch; runs: SweepRun[]; verdict: SweepVerdict }[] = [];
+
+  try {
+    for (const [index, batch] of batches.entries()) {
+      const runs: SweepRun[] = [];
+
+      for (let run = 0; run < SWEEP_RUNS; run += 1) runs.push(await sweepRun(batch, crypto.getRandomValues(new Uint32Array(1))[0] ?? 0, scratch, index));
+      const verdict = sweepVerdict(runs);
+      results.push({ batch, runs, verdict });
+
+      for (const entry of verdict.flaky) {
+        console.log(`  FLAKE  ${entry.test}  red under seed(s) ${entry.red.join(', ')}, green under ${entry.green.join(', ')}`);
+      }
+
+      for (const test of verdict.red) console.log(`  RED    ${test}  red under every seed`);
+
+      for (const seed of verdict.broken) console.log(`  BROKEN ${batch.row.label}  the run under seed ${String(seed)} failed with no test failing`);
+    }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+
+  const directory = join(root, 'bench-artifacts', 'flake-sweep');
+  const artifact = join(directory, `${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  const tree = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim();
+
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(artifact, `${JSON.stringify({ ranAt: new Date().toISOString(), tree, ci, results }, null, 2)}\n`);
+
+  const flaky = results.reduce((sum, { verdict }) => sum + verdict.flaky.length, 0);
+  const red = results.reduce((sum, { verdict }) => sum + verdict.red.length + verdict.broken.length, 0);
+
+  console.log(`flake-sweep: ${String(flaky)} flaky test(s), ${String(red)} red; the report: ${artifact}`);
+
+  return flaky + red > 0 ? 1 : 0;
 }
 
 async function main(): Promise<number> {
@@ -306,7 +498,18 @@ async function main(): Promise<number> {
 
       const outcomes = results.get(plan.file) ?? [];
       const verdict = verdictOf(outcomes);
-      console.log(line(plan, outcomes, verdict));
+      const written = verdict.kind === 'skipped' ? writtenSkips(plan.file, readFileSync(join(root, plan.file), 'utf8')) : [];
+      console.log(line(plan, outcomes, verdict, written));
+
+      if (written.length > 0) {
+        findings.push(finding({
+          at: plan.file,
+          invariant: 'a test this commit adds or changes runs somewhere',
+          found: `every test skipped, as written: ${written.join('; ')}`,
+          silently: 'the file lands tests no machine runs, and its green run says nothing about them',
+          fix: 'run them, or gate each on the condition it needs with `test.skipIf`, which the skip ratchet governs',
+        }));
+      }
 
       if (verdict.kind === 'flaky') {
         for (const [key, runs] of verdict.tests) console.log(`           ${key}  red in run(s) ${runs.join(', ')}`);
@@ -351,4 +554,8 @@ async function main(): Promise<number> {
   return 0;
 }
 
-if (import.meta.main) process.exit(await main());
+if (import.meta.main) {
+  const only = process.argv.find((word) => word.startsWith('--only='))?.slice('--only='.length);
+
+  process.exit(await (process.argv.includes('--sweep') ? sweep(only) : main()));
+}

@@ -4,8 +4,9 @@ import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
-import { REPEATS, planFor, repeatAll, verdictOf, type Plan, type RunOutcome } from './flake-gate';
+import { REPEATS, planFor, repeatAll, sweepRun, sweepVerdict, verdictOf, type Plan, type RunOutcome } from './flake-gate';
 import { isFirstRunSuite, isPythonSuite, isRunnableSuite, trackedFiles } from './sources';
+import { writtenSkips } from './test-census';
 
 /** A suite in `directory`, repeated the way the gate repeats one: `bun test` over the file alone, REPEATS times. */
 function planted(directory: string, name: string): Extract<Plan, { kind: 'repeat' }> {
@@ -43,6 +44,61 @@ test('passes on odd runs and fails on even ones', () => {
 
     expect(verdictOf([run({ total: 0, failed: [], skipped: 0 })]).kind).toBe('red');
     expect(verdictOf([run({ total: 3, failed: [], skipped: 3 })]).kind).toBe('skipped');
+  });
+});
+
+describe('the nightly sweep', () => {
+  test('a planted flake comes out flaky under the seeds it was red with, a steady red red, a crash broken', async () => {
+    const directory = scratchDir('flake-sweep-planted');
+    const counter = join(directory, 'runs');
+
+    writeFileSync(join(directory, 'flaky.test.ts'), `import { expect, test } from 'bun:test';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+
+test('passes on odd runs and fails on even ones', () => {
+  const seen = existsSync(${JSON.stringify(counter)}) ? Number(readFileSync(${JSON.stringify(counter)}, 'utf8')) : 0;
+
+  writeFileSync(${JSON.stringify(counter)}, String(seen + 1));
+  expect(seen % 2).toBe(0);
+});
+`);
+    writeFileSync(join(directory, 'red.test.ts'), "import { expect, test } from 'bun:test';\n\ntest('fails', () => { expect(1).toBe(2); });\n");
+
+    const batch = {
+      row: { label: 'planted' }, lane: 'plain' as const,
+      argv: ['bun', 'test', '--timeout=0', join(directory, 'flaky.test.ts'), join(directory, 'red.test.ts')],
+    };
+
+    const runs = [];
+
+    for (const seed of [11, 22, 33]) runs.push(await sweepRun(batch, seed, directory, 0));
+
+    const verdict = sweepVerdict(runs);
+
+    expect(verdict.flaky.map((entry) => ({ flaky: entry.test.endsWith('passes on odd runs and fails on even ones'), red: entry.red, green: entry.green })))
+      .toEqual([{ flaky: true, red: [22], green: [11, 33] }]);
+    expect(verdict.red.map((key) => key.endsWith('fails'))).toEqual([true]);
+    // Every run here had a red test, and the report keeps what each printed: the failing interleaving is only there.
+    expect(runs.map((run) => run.output?.includes('Expected: 2') ?? false)).toEqual([true, true, true]);
+    expect(sweepVerdict([{ seed: 7, exitCode: 1, seconds: 0, tests: ['a'], failed: [] }]).broken).toEqual([7]);
+  });
+});
+
+describe('a suite whose every test skipped', () => {
+  test('passes only when each skip waits on a condition: a skip as written is named, and refused', () => {
+    const text = [
+      "import { describe, test } from 'bun:test';",
+      "test.skip('never runs', () => {});",
+      "test.skipIf(process.env.CI !== undefined)('runs off CI', () => {});",
+      "describe.skip('none of these', () => { test('inner', () => {}); });",
+      "test.todo('written later');",
+    ].join('\n');
+
+    expect(writtenSkips('scripts/planted.test.ts', text).sort()).toEqual([
+      "describe.skip('none of these') at line 4",
+      "test.skip('never runs') at line 2",
+      "test.todo('written later') at line 5",
+    ]);
   });
 });
 
