@@ -32,6 +32,14 @@ function isTolerableSendFailure(input: { cause: unknown }): boolean {
   return input.cause instanceof TypeError || input.cause instanceof DOMException;
 }
 
+/** Frames after V8's `name: message` header. */
+function errorFrames(error: Error): string {
+  const stack = error.stack ?? '';
+  const header = String(error);
+
+  return stackFrames(stack.startsWith(header) ? stack.slice(header.length) : stack, STACK_FRAME).join('\n');
+}
+
 /** Pure: no message, path or user content. `release` is this page's build, which the route compares. */
 function renderFailureReport(
   error: Error,
@@ -43,8 +51,7 @@ function renderFailureReport(
     // Never `error.message` (may be user or model text); `name` is writable, so re-check its shape.
     errorName: IDENTIFIER.test(error.name) ? error.name : 'Error',
     route: page.route,
-    // The frame filter drops V8's `name: message` first line.
-    stack: stackFrames(error.stack ?? '', STACK_FRAME).join('\n'),
+    stack: errorFrames(error),
     componentStack: stackFrames(componentStack, COMPONENT_STACK_FRAME).join('\n'),
   };
 
@@ -68,7 +75,7 @@ export async function reportChatStreamFailure(
     errorName: IDENTIFIER.test(error.name) ? error.name : 'Error',
     route: page.route,
     pane,
-    stack: stackFrames(error.stack ?? '', STACK_FRAME).join('\n'),
+    stack: errorFrames(error),
     ...(part.success && { part: { type: part.output.chunkType, id: part.output.chunkId } }),
   };
 

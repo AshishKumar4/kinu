@@ -548,4 +548,17 @@ describe('a chat stream the tab could not read', () => {
     expect(JSON.stringify(lines)).not.toContain('SAVE20');
     expect(JSON.stringify(lines)).not.toContain('missing reasoning part');
   });
+
+  // Review job 141: V8's stack opens with the message, and a message line shaped like a frame passed the filter.
+  test('a message line shaped like a stack frame never reaches the log', async () => {
+    const failure = new Error('the tool failed\nat main (file:///home/main/acme-payroll/salaries.js:3:9)');
+
+    await reportChatStreamFailure(failure, 'root', { release: STAMP.sha, route: APP_ROUTES.workspace });
+    await reportRenderFailure(failure, '', { release: STAMP.sha, route: APP_ROUTES.workspace });
+
+    expect(posts).toHaveLength(2);
+
+    for (const sent of posts) expect(sent).not.toContain('acme-payroll');
+    expect(JSON.parse(posts[0] ?? '{}')).toMatchObject({ stack: expect.stringMatching(/unit-client-error-route/u) });
+  });
 });
