@@ -32,12 +32,16 @@ function wakeArmed(db: Database): boolean {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** A branch head spawned now: work in flight in this activation, which recovery leaves running. */
+/**
+ * A branch head spawned now: work in flight in this activation, which recovery leaves running. The
+ * next activation sweeps it only once its start is later than `spawned_at`, so a test that needs the
+ * sweep moves the clock between activations rather than hoping they land in different milliseconds.
+ */
 function liveHead(db: Database, id: string): void {
   db.prepare(
     `INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
      VALUES (?, ?, ?, 0, 'take a branch', 'running', ?)`,
-  ).run(harnessActorId(db), id, `branch-${id}`, Date.now() + 5);
+  ).run(harnessActorId(db), id, `branch-${id}`, Date.now());
 }
 
 /** An assignment row's dispatch state and, once settled, the reason it was dismissed. */
@@ -512,6 +516,9 @@ describe('the workspace keeps exactly one wake row', () => {
       liveHead(db, `lap-${String(lap)}`);
       const due = (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
 
+      // The first lap starts the chain; each later lap's row is the one the lap before armed.
+      if (due.length === 0) await agent.terminalRetryPass();
+
       for (const row of due) {
         const firedAtSec = Math.floor(Date.now() / 1000);
         await agent._kinuTerminalRetryTick(undefined, row);
@@ -536,8 +543,12 @@ describe('the workspace keeps exactly one wake row', () => {
     const recorder = createRecordingLogger();
     let running = true;
     let laps = 0;
+    const start = Date.now();
+    let activations = 0;
 
     const lap = async (): Promise<void> => {
+      // A minute per activation: the lap before's head is older than this activation, so its recovery sweeps it.
+      setSystemTime(new Date(start + ++activations * 60_000));
       const { agent } = await reactivateOrchestratorHarness(db);
 
       if (running) liveHead(db, `streak-${String(laps++)}`);
@@ -558,14 +569,18 @@ describe('the workspace keeps exactly one wake row', () => {
       }
     };
 
-    for (let i = 0; i < 5; i++) await lap();
+    try {
+      for (let i = 0; i < 5; i++) await lap();
 
-    // The streak ends: a lap with nothing owed, since a new activation errors the heads a dead one left.
-    running = false;
-    await lap();
-    running = true;
+      // The streak ends: a lap with nothing owed, since a new activation errors the heads a dead one left.
+      running = false;
+      await lap();
+      running = true;
 
-    for (let i = 0; i < 3; i++) await lap();
+      for (let i = 0; i < 3; i++) await lap();
+    } finally {
+      setSystemTime();
+    }
 
     const named = recorder.emitted.filter((line) => line.event === 'wake.unfinished_arms');
 
