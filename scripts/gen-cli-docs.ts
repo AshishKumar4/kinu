@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Write docs/CLI.md from the CLI's own command registry. `--check` verifies the
-// checked-in copy is current instead of writing it (what the test runs).
+// checked-in copy is current instead of writing it (what the commit tier runs).
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildProgram } from '../packages/cli/src/program';
