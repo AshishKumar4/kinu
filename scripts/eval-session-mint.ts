@@ -8,7 +8,7 @@
 // approval is `POST /cli/auth` presenting the secret in core's `DEV_IDENTITY_HEADER`,
 // which `authenticateRequest` honours for exactly that header and nothing else.
 //
-// Writes `~/.config/kinu/eval-session/config.json` (mode 0600), the file
+// Writes `~/.config/kinu/eval-session/<host>/config.json` (mode 0600), the file
 // `scripts/eval-credentials.ts` reads; with KINU_EVAL_ACCOUNT, the named eval
 // account's bearer, approved as that account, beside it (`evalSessionPath`).
 // Never touches the person's own config. Exits 0 having written nothing when a
@@ -26,8 +26,6 @@ import { pollCliAuth, startCliAuth } from '../packages/cli/src/cloud-api';
 
 const account = evalAccount();
 
-const persistedPath = evalSessionPath(account);
-
 // An origin set to blank names no target, so it reads as absent.
 const originFromEnv = process.env[EVAL_IDENTITY_ENV.origin]?.trim();
 
@@ -41,6 +39,8 @@ if (target.kind === 'refused') {
   console.error(`eval-session-mint: REFUSED — ${target.reason}`);
   process.exit(1);
 }
+
+const persistedPath = evalSessionPath(target.origin, account);
 
 const webIdentity = process.env.KINU_EVAL_WEB_IDENTITY?.trim();
 
@@ -69,7 +69,7 @@ if (existsSync(persistedPath)) {
     process.exit(0);
   }
 
-  // Another deployment's bearer lives here, and this is the only copy of it.
+  // This deployment's file holds something else, and this is the only copy of it.
   console.error(`eval-session-mint: REFUSED — ${persistedPath} holds a session for ` +
     `${persisted.success ? persisted.output.origin : 'an unreadable origin'}, not ${target.origin}; move it aside first.`);
   process.exit(1);

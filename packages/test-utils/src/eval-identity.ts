@@ -47,9 +47,10 @@ export function isEvalAccountEmail(email: string, account: EvalAccount): boolean
   return at > 0 && email.slice(0, at).endsWith(`+${account}`);
 }
 
-/** Where the CLI bearer minted for `account` is kept: the eval service's own, else its named account's beside it. */
-export function evalSessionPath(account: EvalAccount | undefined): string {
-  const dir = `${homedir()}/.config/kinu/eval-session`;
+/** Where the CLI bearer minted on `origin` for `account` is kept: a directory per deployment, so one deployment's
+ *  bearer never stands in the way of another's, holding the eval service's own and its named accounts' beside it. */
+export function evalSessionPath(origin: string, account: EvalAccount | undefined): string {
+  const dir = `${homedir()}/.config/kinu/eval-session/${new URL(origin).host}`;
 
   return account === undefined ? `${dir}/config.json` : `${dir}/${account}/config.json`;
 }
