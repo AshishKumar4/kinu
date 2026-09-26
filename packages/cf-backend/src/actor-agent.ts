@@ -127,7 +127,7 @@ import {
   resolveTurnSkills, filterToolNamesBySkills,
   type ActiveSkillSet,
   inheritedContextFromTranscript,
-  PlanReviewActions, type PlanDecisionOutcome,
+  PlanReviewActions, planHandoffStillOwed, type PlanDecisionOutcome,
   type PlanEdit, type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
@@ -1845,6 +1845,7 @@ export abstract class ActorAgent extends Agent<Env> {
           driverGate: () => this.driverGate(),
           // The workspace UI IS the review surface: a plan turn is admitted.
           planTurnRefusal: () => null,
+          stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
           // Prompt-cache warming belongs to the root actor (it owns the wake chain); hosted actors wire none.
           ...(this.cacheWarmingLane() && { cacheWarming: this.cacheWarmingLane() }),
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake

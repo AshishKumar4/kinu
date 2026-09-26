@@ -147,7 +147,7 @@ import { TierIdSchema,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
-  PlanReviewActions, SUBMIT_PLAN_TOOL, workModeUnderReview, authoredTurnMetadata,
+  PlanReviewActions, SUBMIT_PLAN_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
@@ -601,6 +601,7 @@ export class LocalAgentSession {
       ports: {
         prepareTurn: (item, lease) => this.prepareTurn(item, lease),
         // Only a root chat can approve a plan; a subordinate's plan is refused at admission.
+        stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
         planTurnRefusal: () => this.planReviewSurface()
           ? null
           : 'Plan review belongs to the owner of this workspace; a delegated task reports its result instead.',

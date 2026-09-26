@@ -60,7 +60,6 @@ export function planReviewAwaitingDecision(
     || (review?.status === 'approved' && !review.handoffAccepted);
 }
 
-/** Holds only the owner's unchosen-mode messages to the plan's own actor. */
 export function workModeUnderReview(
   requested: WorkMode,
   metadata: JsonObject | undefined,
@@ -460,6 +459,26 @@ function planHandoffTurn(plan: PlanReview, decision: PlanReviewDecision): PlanHa
   };
 }
 
+const PlanHandoffMetadataSchema = v.object({
+  kinuEvent: v.picklist(['plan_approved', 'plan_feedback']),
+  planId: v.string(),
+  revision: v.number(),
+});
+
+/** Owed while the plan row still holds that decision. */
+export function planHandoffStillOwed(
+  metadata: JsonObject | undefined,
+  plans: Pick<PlanReviewStore, 'get'>,
+): boolean {
+  if (metadata?.kinuEvent !== 'plan_approved' && metadata?.kinuEvent !== 'plan_feedback') return true;
+  const handoff = v.safeParse(PlanHandoffMetadataSchema, metadata);
+
+  if (!handoff.success) return false;
+  const { kinuEvent, planId, revision } = handoff.output;
+
+  return plans.get(planId, revision)?.status === (kinuEvent === 'plan_approved' ? 'approved' : 'changes_requested');
+}
+
 /** Keyed on the decision's identity so a re-delivery collapses onto the first attempt's row. */
 function planHandoffKey(plan: PlanReview, decision: PlanReviewDecision, attempt: number): string {
   return `plan:${plan.id}:${plan.revision}:${decision}:${attempt}`;
@@ -650,7 +669,6 @@ export class PlanReviewStore {
     return this.written(id, revision);
   }
 
-  /** The owner's exit; no handoff follows. */
   dismiss(id: string, revision: number): PlanReviewResult {
     const current = this.get(id, revision);
 
