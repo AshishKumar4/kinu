@@ -54,6 +54,7 @@ export {
   isPlaceholderMission,
   workspaceGenesisSignal,
   readSoul,
+  storeDurableSoul,
   readMission,
   renderSoulMarkdown,
   seedSoul,
@@ -62,7 +63,7 @@ export {
   writeSoul,
 } from './identity/soul';
 
-export { WORKSPACE_IDENTITY_DDL } from './identity/schema';
+export { WORKSPACE_IDENTITY_DDL, WORKSPACE_SOUL_DDL } from './identity/schema';
 
 export { validateSwarmProfileSnapshot } from './profiles';
 
@@ -1138,7 +1139,7 @@ export type {
 } from './vfs/nimbus-workspace';
 
 export {
-  writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, archiveFileTree,
+  settledWorkspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, workspaceArchiveTarget, archiveFileTree,
 } from './vfs/workspace-planes';
 
 export {

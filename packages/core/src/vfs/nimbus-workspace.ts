@@ -18,7 +18,7 @@ import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import {
   agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
-  settleWorkspaceSlates, settleWorkspaceSoul,
+  settleWorkspaceSlates, resealWorkspaceSoul,
   type HomeRootVfs, type TmpConfiner,
 } from './agent-home';
 import { provisionWorkspaceRuntimes, workspaceCommandNotFound } from './workspace-runtimes';
@@ -216,6 +216,7 @@ export interface WorkspaceSession {
   readonly processes: SessionProcessSupervisor;
   /** Hosts must forward their mounted facet method here, or `git clone`/`npm install` refuse. */
   readonly supervisorOp: (envelope: SupervisorOpEnvelope) => Promise<SupervisorOpResult>;
+  readonly sql: SqlDatabase;
 }
 
 export interface WorkspaceBundle {
@@ -288,7 +289,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         const workspace = await NimbusWorkspace.create(creation);
         settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
         settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL));
-        settleWorkspaceSoul(workspace.vfs.as(CRED_KERNEL));
+        resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);
 
         // After substrate registrations so a runtime bin never shadows a coreutil.
         const provisioning: Parameters<typeof provisionWorkspaceRuntimes>[0] = {
@@ -356,6 +357,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         vfs: workspace.vfs,
         registry: workspace.registry,
         processes,
+        sql: opts.sql,
         // Bound to the origin workspace, where the dispatch table was built.
         supervisorOp: (envelope: SupervisorOpEnvelope) => workspace.supervisorOp(envelope),
       };

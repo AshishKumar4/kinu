@@ -8,10 +8,10 @@ import {
 } from '../identity/fork-sink';
 import type { ForkFileSource } from '../identity/fork-transfer';
 import type { ForkTreeReader } from '../identity/fork';
-import type { ArchiveFileSource } from '../identity/archive';
-import { SOUL_PATH, summarizeSoulBytes } from '../identity/soul';
+import type { ArchiveFileSource, ArchiveFileTarget } from '../identity/archive';
+import { SOUL_PATH, storeDurableSoul, summarizeSoulBytes } from '../identity/soul';
 import { tolerate } from '../obs/index';
-import { settleWorkspaceSoul } from './agent-home';
+import { resealWorkspaceSoul, sealWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
 import type { WorkspaceBundle } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -22,18 +22,26 @@ async function sessionPlane(bundle: WorkspaceBundle): Promise<CredentialedVfs> {
   return (await bundle.session()).vfs.as(CRED_SESSION_USER);
 }
 
+/** The prompt's soul; reseals the file. */
+export async function settledWorkspaceSoul(bundle: WorkspaceBundle): Promise<string | null> {
+  const session = await bundle.session();
+
+  return resealWorkspaceSoul(session.vfs.as(CRED_KERNEL), session.sql);
+}
+
 /** The owner's SOUL write, then sealed. */
 export async function writeWorkspaceSoul(
   bundle: WorkspaceBundle, content: string | Uint8Array,
 ): Promise<void> {
-  const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
+  const session = await bundle.session();
+  const kernel = session.vfs.as(CRED_KERNEL);
 
   if (!kernel.exists(WORKSPACE_ROOT) || !kernel.isDirectory(WORKSPACE_ROOT)) {
     throw new Error(`the workspace root ${WORKSPACE_ROOT} does not exist`);
   }
 
-  kernel.writeFile(workspacePath(SOUL_PATH), content);
-  settleWorkspaceSoul(kernel);
+  sealWorkspaceSoul(kernel, content);
+  storeDurableSoul(session.sql, content instanceof Uint8Array ? new TextDecoder().decode(content) : content);
 }
 
 function workspaceForkPort(bundle: WorkspaceBundle): ForkNativeFilePort {
@@ -140,6 +148,16 @@ function lstatOrNull(plane: CredentialedVfs, path: string): VfsStat | null {
 }
 
 /** An unsupported node kind fails the backup. */
+/** An import's target; SOUL.md is an owner write. */
+export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveFileTarget {
+  return {
+    writeFile: async (path, data) => (normalizeVfsPath(workspacePath(path)) === normalizeVfsPath(workspacePath(SOUL_PATH))
+      ? await writeWorkspaceSoul(bundle, data)
+      : await bundle.vfs.writeFile(path, data)),
+    mkdir: async (path, opts) => { await bundle.vfs.mkdir(path, opts); },
+  };
+}
+
 export function workspaceArchiveFiles(bundle: WorkspaceBundle): ArchiveFileSource {
   return archiveFileTree({
     readdir: async (path) => [...(await sessionPlane(bundle)).readdir(workspacePath(path))],

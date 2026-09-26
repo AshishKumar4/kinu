@@ -22,7 +22,8 @@ import {
 import { createTestActor, createWorkspaceBundle, makeExecRaw, makeSql } from './helpers';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
-import type { WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import type { WorkspaceBundle, WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import { workspaceArchiveTarget } from '../src/vfs/workspace-planes';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 import { testActorHandle, present } from '@kinu.run/test-utils';
 
@@ -33,16 +34,18 @@ interface Workspace {
   readonly execRaw: RawSqlExec;
   readonly archive: SqlExec;
   readonly vfs: WorkspaceVFS;
+  readonly bundle: WorkspaceBundle;
 }
 
 function fresh(): Workspace {
   const db = new Database(':memory:');
   // Built on demand: a restore-target database must stay empty, and building one creates tables.
-  let vfs: WorkspaceVFS | null = null;
+  let bundle: WorkspaceBundle | null = null;
 
   return {
     db, sql: makeSql(db), execRaw: makeExecRaw(db), archive: archiveSqlFromDatabase(db),
-    get vfs() { return (vfs ??= createWorkspaceBundle(db).vfs); },
+    get bundle() { return (bundle ??= createWorkspaceBundle(db)); },
+    get vfs() { return this.bundle.vfs; },
   };
 }
 
@@ -107,7 +110,7 @@ describe('workspace archive', () => {
     const files = workspaceArchiveFiles(createWorkspaceBundle(source.db));
     const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', files });
     const target = fresh();
-    const restored = await restoreWorkspaceArchive(target.archive, lines, { files: () => target.vfs });
+    const restored = await restoreWorkspaceArchive(target.archive, lines, { files: () => workspaceArchiveTarget(target.bundle) });
 
     expect(restored.files).toBeGreaterThan(0);
     expect(await target.vfs.readFile('artifacts/logo.bin')).toEqual(source.bytes);
@@ -127,7 +130,7 @@ describe('workspace archive', () => {
       ...lines.slice(0, -1),
       JSON.stringify({ t: 'schema', kind: 'table', name: 'late_table', sql: 'CREATE TABLE late_table (id INTEGER)' }),
       end,
-    ], { files: () => target.vfs })).rejects.toThrow('SQL records after its workspace files');
+    ], { files: () => workspaceArchiveTarget(target.bundle) })).rejects.toThrow('SQL records after its workspace files');
   });
 
   test('round-trips a workspace into an empty database, byte-exactly', async () => {

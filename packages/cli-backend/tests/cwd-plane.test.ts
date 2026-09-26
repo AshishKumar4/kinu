@@ -507,7 +507,7 @@ test('a file the agent writes is named local:// when the directory is the worksp
 describe('SOUL.md is the owner\'s', () => {
   const forgeries = ['printf forged > SOUL.md', 'rm -f SOUL.md', 'mv SOUL.md gone.md', 'chmod 666 SOUL.md', 'printf forged > f && mv -f f SOUL.md'];
 
-  test('no agent file or shell write reaches it in a workspace opened without a directory', async () => {
+  test('no agent file or shell forgery reaches the next turn in a workspace opened without a directory', async () => {
     const { state } = roots('soul-owner');
     const dbPath = join(state, 'jarvis', 'agent.db');
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -515,13 +515,17 @@ describe('SOUL.md is the owner\'s', () => {
     await createWorkspace(db, { name: 'jarvis', purpose: 'Test agent jarvis', llm: DUMMY_LLM });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
-    const born = await readText(rt, 'SOUL.md');
+    const ownerSoul = present(rt.ownerSoul, 'the owner soul reader');
+    const born = present(await ownerSoul(), 'the born soul');
 
     await expect(rt.storage.vfs.writeFile('SOUL.md', 'forged')).rejects.toThrow();
-    await expect(rt.storage.vfs.unlink('SOUL.md')).rejects.toThrow();
 
-    for (const command of forgeries) await present(rt.shell, 'the workspace shell').exec(command);
+    for (const command of forgeries) {
+      await present(rt.shell, 'the workspace shell').exec(command);
 
-    expect(await readText(rt, 'SOUL.md')).toBe(born);
+      expect(await ownerSoul()).toBe(born);
+      expect(await readText(rt, 'SOUL.md')).toBe(born);
+    }
   });
+
 });

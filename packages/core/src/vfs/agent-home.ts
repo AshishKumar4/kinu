@@ -9,7 +9,7 @@ import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import * as v from 'valibot';
-import { SOUL_PATH } from '../identity/soul';
+import { ownerSoul, SOUL_PATH, type SoulSql } from '../identity/soul';
 import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
@@ -18,7 +18,6 @@ export const MAIN_AGENT = 'main';
 /** Owner writes; everyone reads and traverses. */
 export const AGENT_HOME_MODE = 0o755;
 
-const WORKSPACE_ROOT_MODE = 0o1777;
 
 /** Owner only, and discarded with the agent. */
 export const AGENT_TMP_MODE = 0o700;
@@ -177,13 +176,8 @@ interface AgentDir {
 
 /** In creation order. */
 function agentHomeLayout(agentName: string, identity: AgentIdentity): readonly AgentDir[] {
-  // The root holds the owner's SOUL.md: the kernel's, sticky.
-  const home = agentName === MAIN_AGENT
-    ? { path: WORKSPACE_ROOT, uid: 0, gid: 0, mode: WORKSPACE_ROOT_MODE }
-    : { path: agentHome(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_HOME_MODE };
-
   return [
-    home,
+    { path: agentHome(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_HOME_MODE },
     { path: agentTmpRoot(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_TMP_MODE },
     { path: `${agentHome(agentName)}/.kinu`, uid: identity.uid, gid: identity.gid, mode: 0o700 },
     { path: agentArtifactDirectory(agentHome(agentName)), uid: identity.uid, gid: identity.gid, mode: 0o700 },
@@ -234,17 +228,50 @@ export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
   }
 }
 
-/** SOUL.md is the owner's: kernel-owned, 444; resealed each boot. */
-export function settleWorkspaceSoul(kernel: RootMoveVfs): void {
-  const soul = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
+export type SoulVfs = Pick<CredentialedVfs, 'readdir' | 'lstat' | 'unlink' | 'removeRecursive' | 'writeFile' | 'readFile' | 'chown' | 'chmod'>;
 
-  if (!kernel.exists(soul) || kernel.isSymlink(soul)) return;
-  const file = kernel.stat(soul);
+const SOUL_FILE = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
 
-  if (file.uid !== 0 || file.gid !== 0 || (file.mode & 0o7777) !== 0o444) {
-    kernel.chown(soul, 0, 0);
-    kernel.chmod(soul, 0o444);
+/** Listed: a dangling link is an entry. */
+function soulPresent(kernel: SoulVfs): boolean {
+  return kernel.readdir(WORKSPACE_ROOT).some((entry) => entry.name === SOUL_PATH);
+}
+
+function sealedSoul(kernel: SoulVfs): boolean {
+  if (!soulPresent(kernel)) return false;
+  const entry = kernel.lstat(SOUL_FILE);
+
+  return entry.type === 'file' && entry.uid === 0 && entry.gid === 0;
+}
+
+export function sealWorkspaceSoul(kernel: SoulVfs, content: string | Uint8Array): void {
+  if (soulPresent(kernel)) {
+    if (kernel.lstat(SOUL_FILE).type === 'directory') kernel.removeRecursive(SOUL_FILE);
+    else kernel.unlink(SOUL_FILE);
   }
+
+  kernel.writeFile(SOUL_FILE, content);
+  kernel.chown(SOUL_FILE, 0, 0);
+  kernel.chmod(SOUL_FILE, 0o444);
+}
+
+function kernelHeldSoul(kernel: SoulVfs): string | null {
+  return sealedSoul(kernel) ? new TextDecoder().decode(kernel.readFile(SOUL_FILE)) : null;
+}
+
+/** SOUL.md as the row's view; written only on a mismatch. */
+export function resealWorkspaceSoul(kernel: SoulVfs, sql: SoulSql): string | null {
+  const soul = ownerSoul(sql, () => kernelHeldSoul(kernel));
+
+  if (soul === null) return null;
+
+  const intact = sealedSoul(kernel)
+    && (kernel.lstat(SOUL_FILE).mode & 0o7777) === 0o444
+    && new TextDecoder().decode(kernel.readFile(SOUL_FILE)) === soul;
+
+  if (!intact) sealWorkspaceSoul(kernel, soul);
+
+  return soul;
 }
 
 export type SlatesMoveVfs = RootMoveVfs & Pick<CredentialedVfs, 'mkdir' | 'lstat'>;

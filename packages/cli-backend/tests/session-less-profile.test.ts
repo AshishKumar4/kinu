@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LLM, LLMProviderConfig, ModelRouteResolution } from '@kinu.run/core';
+import { storeDurableSoul } from '@kinu.run/core';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 import { captureOperationProfile, runOperationProfile, operationProfileStream, currentOperationProfile,
   WORKSPACE_RUN_ID } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
@@ -35,7 +37,8 @@ async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: 
   const dbPath = join(dir, 'agent.db');
   const db = new Database(dbPath);
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM, agentName: 'jarvis' });
-  await (rt.agentStateVfs ?? rt.storage.vfs).writeFile('SOUL.md', '# jarvis\n\n## Mission\n\nRun the lab.');
+  // The owner's soul, as `writeWorkspaceSoul` records it; the next turn reseals the file from it.
+  storeDurableSoul(inlineWorkspaceStorage(db).sql, '# jarvis\n\n## Mission\n\nRun the lab.');
 
   if (storedModel !== undefined) rt.actor.config.setModel(storedModel);
 

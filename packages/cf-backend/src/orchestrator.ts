@@ -8,7 +8,7 @@ import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
-  createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
+  createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf,
@@ -4778,7 +4778,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         executorId,
         path,
         expectedRevision,
-        upload: new ExecutorFileUpload(router, executorId, path, expectedRevision),
+        upload: new ExecutorFileUpload(router, executorId, path, {
+          expectedRevision,
+          writeSoul: async (bytes) => { await this.setSoul(new TextDecoder().decode(bytes)); },
+        }),
       };
       this.executorFileUploads.set(transferId, row);
     } else if (!row || row.executorId !== executorId || row.path !== path) {
@@ -4938,6 +4941,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { ok: true };
   }
 
+  /** From the owner's row; the file view is resealed first, since the main agent owns the root. */
+  protected override async loadSoulText(): Promise<string> {
+    return (await settledWorkspaceSoul(this.hostedWorkspace().bundle)) ?? '';
+  }
+
   @callable() async setSoul(soul: string) {
     const text = soul.trim();
 
@@ -4945,13 +4953,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const ownerUserId = this.getOwnerUserId();
 
     if (!ownerUserId) throw new KinuError('unavailable', 'SOUL.md is unavailable until the workspace owner claim completes.');
-    await writeSoul(
-      this.rt.storage.vfs,
-      this.boundSql,
-      text,
-      (_path, content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
-    );
-    // The next turn re-reads the soul from the workspace filesystem.
+    await writeSoul(this.boundSql, text, (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content));
+    // The next turn re-reads the soul from its row.
     this._cachedSoulText = null;
 
     return { soul: text, purpose: summarizeSoul(text) };

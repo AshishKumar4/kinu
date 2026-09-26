@@ -81,6 +81,29 @@ describe("ExecutorFileUpload", () => {
     expect([...present(plane.files.get("/home/main/big.bin"), "the transferred big.bin")]).toEqual([...whole]);
   });
 
+  test("a save of the workspace's SOUL.md is the owner's soul write, never a plain file write", async () => {
+    for (const path of ["SOUL.md", "./SOUL.md", "/home/main/SOUL.md", "/home/user/SOUL.md"]) {
+      const plane = makePlane();
+      const souls: string[] = [];
+
+      const upload = new ExecutorFileUpload(plane.router, "workspace", path, {
+        expectedRevision: 3, writeSoul: async (bytes) => { souls.push(new TextDecoder().decode(bytes)); },
+      });
+
+      expect(await upload.chunk(0, new TextEncoder().encode("# mine"), true)).toEqual({ ok: true });
+      expect(souls).toEqual(["# mine"]);
+      expect(plane.files.size).toBe(0);
+    }
+
+    const plane = makePlane();
+
+    const notes = new ExecutorFileUpload(plane.router, "workspace", "/home/main/notes/SOUL.md", {
+      writeSoul: async () => { throw new Error("not the soul"); },
+    });
+
+    expect(await notes.chunk(0, new TextEncoder().encode("x"), true)).toEqual({ ok: true });
+  });
+
   test("an out-of-order chunk is refused with the expected offset, and the stream recovers", async () => {
     const plane = makePlane();
     const upload = new ExecutorFileUpload(plane.router, "workspace", "/f.bin");
@@ -129,12 +152,12 @@ describe("ExecutorFileUpload", () => {
     const plane = makePlane({ [path]: new TextEncoder().encode("first") });
     await plane.vfs.writeFile(path, new TextEncoder().encode("newer"));
 
-    const stale = new ExecutorFileUpload(plane.router, "workspace", path, 1);
+    const stale = new ExecutorFileUpload(plane.router, "workspace", path, { expectedRevision: 1 });
     expect(await stale.chunk(0, new TextEncoder().encode("stale"), true))
       .toEqual({ conflict: true, revision: 2 });
     expect(new TextDecoder().decode(plane.files.get(path))).toBe("newer");
 
-    const current = new ExecutorFileUpload(plane.router, "workspace", path, 2);
+    const current = new ExecutorFileUpload(plane.router, "workspace", path, { expectedRevision: 2 });
     expect(await current.chunk(0, new TextEncoder().encode("current"), true))
       .toEqual({ ok: true, revision: 3 });
     expect(new TextDecoder().decode(plane.files.get(path))).toBe("current");

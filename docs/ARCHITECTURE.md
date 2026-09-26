@@ -587,9 +587,11 @@ the work: reflection and MCTS rollouts take `low`, and scaffold mutation takes
 ## Storage and formal models
 
 Two authorities own workspace state. The Nimbus session owns files, including
-`SOUL.md`, memory markdown, and scaffolds. `SOUL.md` is the owner's: the kernel
-owns it (mode 444) and the workspace root (sticky 1777), re-sealed at every boot,
-so no agent file tool or shell can replace, rename or remove it; it enters the
+`SOUL.md`, memory markdown, and scaffolds. The soul is the owner's: its authority
+is the `workspace_soul` row, written only by `writeWorkspaceSoul` (birth, fork,
+settings, a Drive save of `SOUL.md`). Prompts read the row; the file is a kernel
+444 view, compared and resealed from the row at every boot and turn start, so a
+file the main agent swaps (it owns the root) never reaches a prompt. It enters the
 prompt as one `<soul>` block no text inside can close. The actor SQLite owns relational
 state: plans, messages, memory and craft indexes, MCTS, search records,
 evolution, and event logs. Schema and boundaries are in

@@ -95,7 +95,7 @@ export async function createWorkspace(
   const titled = config.title?.trim();
   const heading = titled === undefined || titled === '' ? UNTITLED_WORKSPACE_NAME : titled;
 
-  await seedSoul(workspace.vfs, sql, { name: heading, mission: config.purpose }, (_path, content) => writeWorkspaceSoul(workspace, content));
+  await seedSoul(sql, { name: heading, mission: config.purpose }, (content) => writeWorkspaceSoul(workspace, content));
 
   await workspace.vfs.mkdir('scaffold', { recursive: true });
   // The versioned source is authoritative; agent.js is its rebuildable view.

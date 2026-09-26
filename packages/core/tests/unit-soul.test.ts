@@ -7,6 +7,7 @@ import {
 import { initAllTables } from '../src/state/workspace-schema';
 import { createWorkspace } from '../src/workspace-birth';
 import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers';
+import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
 
@@ -16,57 +17,47 @@ function freshWorkspace() {
   initAllTables(makeExecRaw(db), makeSql(db));
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'W'}, ${'atlas'}, ${100})`;
 
-  return { db, sql, vfs: createWorkspaceBundle(db).vfs };
+  const bundle = createWorkspaceBundle(db);
+
+  return { db, sql, vfs: bundle.vfs, seal: (content: string) => writeWorkspaceSoul(bundle, content) };
 }
 
 describe('the soul is a file', () => {
   test('writeSoul round-trips through the workspace filesystem', async () => {
-    const { sql, vfs } = freshWorkspace();
-    await writeSoul(vfs, sql, '# Atlas\n\n## Mission\n\nHelp with testing.');
+    const { sql, vfs, seal } = freshWorkspace();
+    await writeSoul(sql, '# Atlas\n\n## Mission\n\nHelp with testing.', seal);
 
     expect(await readSoul(vfs)).toBe('# Atlas\n\n## Mission\n\nHelp with testing.');
     expect(await vfs.readFile(SOUL_PATH, { encoding: 'utf8' })).toContain('Help with testing.');
   });
 
-  test('a workspace with no soul reads as null rather than throwing', async () => {
-    const { vfs } = freshWorkspace();
-    expect(await readSoul(vfs)).toBeNull();
+  test('an unborn workspace reads as no soul rather than throwing', async () => {
+    const db = new Database(':memory:');
+    initAllTables(makeExecRaw(db), makeSql(db));
+    expect(await readSoul(createWorkspaceBundle(db).vfs)).toBeNull();
   });
 
   test('an empty document is no document', async () => {
-    const { sql, vfs } = freshWorkspace();
-    await writeSoul(vfs, sql, '   \n  ');
+    const { sql, vfs, seal } = freshWorkspace();
+    await writeSoul(sql, '   \n  ', seal);
     expect(await readSoul(vfs)).toBeNull();
   });
 
-  test('a host-owned writer can protect the file without duplicating mission updates', async () => {
-    const { sql, vfs } = freshWorkspace();
-    const writes: Array<{ path: string; content: string }> = [];
-    const content = '# Atlas\n\n## Mission\n\nsecond mission';
 
-    await writeSoul(vfs, sql, content, async (path, markdown) => {
-      writes.push({ path, content: markdown });
-      await vfs.writeFile(path, markdown);
-    });
-
-    expect(writes).toEqual([{ path: SOUL_PATH, content }]);
-    expect(await readSoul(vfs)).toBe(content);
-    expect(readMission(sql)).toBe('second mission');
-  });
 });
 
 describe('the mission a read-only listing reads', () => {
   test('writeSoul maintains it, so the row cannot drift from the document', async () => {
-    const { sql, vfs } = freshWorkspace();
-    await writeSoul(vfs, sql, '# Atlas\n\n## Mission\n\nHelp with testing.');
+    const { sql, vfs, seal } = freshWorkspace();
+    await writeSoul(sql, '# Atlas\n\n## Mission\n\nHelp with testing.', seal);
 
     expect(readMission(sql)).toBe('Help with testing.');
     expect(readMission(sql)).toBe(summarizeSoul(await readSoul(vfs)));
   });
 
   test('it is readable without opening a filesystem — the point of it existing', async () => {
-    const { db, sql, vfs } = freshWorkspace();
-    await seedSoul(vfs, sql, { name: 'atlas', mission: 'ship the thing' });
+    const { db, sql, seal } = freshWorkspace();
+    await seedSoul(sql, { name: 'atlas', mission: 'ship the thing' }, seal);
 
     // A handle with no workspace filesystem, as `kinu list` has, so a listing never writes.
     const listing = makeSql(db);

@@ -504,11 +504,11 @@ describe('executor file plane', () => {
 
   test('an empty path lists where the environment itself says it starts', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/home/main/SOUL.md', 'me');
+    await rt.storage.vfs.writeFile('/home/main/notes.md', 'me');
 
     const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '');
     expect(listed.path).toBe('/home/main');
-    expect(listed.entries?.map((e) => e.name)).toContain('SOUL.md');
+    expect(listed.entries?.map((e) => e.name)).toContain('notes.md');
     db.close();
   });
 
@@ -525,7 +525,7 @@ describe('executor file plane', () => {
 
   test('the listed directory comes back absolute and resolved, so the caller can walk up', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/home/main/SOUL.md', 'me');
+    await rt.storage.vfs.writeFile('/home/main/notes.md', 'me');
 
     // `..` from the agent's home is /home, not the filesystem root: the old root's link sits beside it.
     const up = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/..');

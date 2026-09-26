@@ -1652,5 +1652,9 @@
     "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
     "decisions INTEGER NOT NULL",
     "changed_at INTEGER NOT NULL"
+  ],
+  "workspace_soul@packages/core/src/identity/schema.ts": [
+    "id INTEGER PRIMARY KEY CHECK (id = 1)",
+    "markdown TEXT NOT NULL"
   ]
 }

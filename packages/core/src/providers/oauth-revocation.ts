@@ -50,7 +50,7 @@ export async function revokeOAuthGrant(input: {
     const headers = { 'content-type': 'application/x-www-form-urlencoded', ...endpoint.client.headers };
 
     try {
-      const response = await input.fetch(endpoint.url, { method: 'POST', headers, body });
+      const response = await input.fetch(endpoint.url, { method: 'POST', headers, body, redirect: 'error' });
 
       if (!response.ok) failures.push(new KinuError(response.status === 429 ? 'budget' : 'unavailable', `the provider refused to revoke the ${hint} (HTTP ${String(response.status)})`));
     } catch (cause) {
