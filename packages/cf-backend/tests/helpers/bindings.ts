@@ -50,6 +50,7 @@ export function workerEnv(reached: Partial<Env> = {}): Env {
     ASSETS: unreachableFetcher('ASSETS'),
     AI_GATEWAY_URL: 'https://gateway.invalid/unreachable',
     PREVIEW_HOST_SUFFIX: '',
+    SIGN_IN_PROVIDERS: '',
     ...reached,
   };
 }

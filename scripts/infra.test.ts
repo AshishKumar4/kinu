@@ -159,6 +159,22 @@ describe('the supply census is pinned to `Env`', () => {
     expect(verdictOf('CREDENTIAL_ENCRYPTION_KEY')).toBe('absent');
   });
 
+  test('a declared sign-in provider with its client id or secret missing fails by name', () => {
+    const held = (names: readonly string[]) => ({ state: 'present', detail: 'fixture', names } as const);
+    const providerRow = (w: InfraWorker, names: readonly string[]) => supplyRows(w, held(names)).find((entry) => entry.name === 'sign-in provider cloudflare');
+
+    // Production's declaration, as wrangler.jsonc writes it.
+    expect(worker.vars.get('SIGN_IN_PROVIDERS')).toBe('cloudflare');
+    expect(providerRow(worker, [])).toMatchObject({ verdict: 'absent', required: true });
+    expect(providerRow(worker, ['CLOUDFLARE_OAUTH_CLIENT_SECRET'])).toMatchObject({ verdict: 'present' });
+
+    const idless: InfraWorker = { ...worker, vars: new Map([...worker.vars, ['CLOUDFLARE_OAUTH_CLIENT_ID', '']]) };
+    expect(providerRow(idless, ['CLOUDFLARE_OAUTH_CLIENT_SECRET'])).toMatchObject({ verdict: 'absent' });
+
+    const undeclared: InfraWorker = { ...worker, vars: new Map([...worker.vars, ['SIGN_IN_PROVIDERS', '']]) };
+    expect(providerRow(undeclared, [])).toBeUndefined();
+  });
+
   test('a required value missing fails by name', () => {
     const held = (names: readonly string[]) => ({ state: 'present', detail: 'fixture', names } as const);
     const named = (entry: string): boolean => entry.startsWith('  CREDENTIAL_ENCRYPTION_KEY\n');

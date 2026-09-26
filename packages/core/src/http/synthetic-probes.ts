@@ -32,7 +32,11 @@ export interface ProbeDeps {
   origin: string;
   /** Structural rather than `typeof fetch`: the bound global differs between worker runtime and tests. */
   fetch(input: string, init?: RequestInit): Promise<Response>;
-  signInProviders: readonly string[];
+  signIn: { readonly declared: readonly string[]; readonly configured: readonly string[] };
+}
+
+export function declaredSignInProviders(raw: string): string[] {
+  return raw.split(',').map((id) => id.trim()).filter((id) => id !== '');
 }
 
 const TIMEOUT_MS = 10_000;
@@ -201,15 +205,22 @@ async function probeLogin(deps: ProbeDeps): Promise<ProbeOutcome> {
     return fail('GET /login did not render the sign-in page');
   }
 
-  if (deps.signInProviders.length === 0) return { probe: 'login', ok: true, detail: 'sign-in page renders; this deployment configures no provider' };
+  const { declared, configured } = deps.signIn;
+
+  if (declared.length === 0) return { probe: 'login', ok: true, detail: 'sign-in page renders; this deployment declares no provider' };
+  const unconfigured = declared.filter((id) => !configured.includes(id));
+
+  if (unconfigured.length > 0) {
+    return fail(`${unconfigured.join(', ')} is declared in SIGN_IN_PROVIDERS but has no client id or secret — nobody can sign in with it`);
+  }
 
   if (!body.includes('href="/auth/')) {
     return fail('GET /login offers no sign-in provider — nobody can sign in');
   }
 
-  const missing = deps.signInProviders.filter((id) => !body.includes(`href="/auth/${id}/start`));
+  const missing = declared.filter((id) => !body.includes(`href="/auth/${id}/start`));
 
-  if (missing.length > 0) return fail(`GET /login does not offer ${missing.join(', ')}, which this deployment configures`);
+  if (missing.length > 0) return fail(`GET /login does not offer ${missing.join(', ')}, which SIGN_IN_PROVIDERS declares`);
 
   return { probe: 'login', ok: true, detail: 'sign-in page renders' };
 }
