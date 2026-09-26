@@ -140,15 +140,21 @@ describe('a dismissed agent keeps its conversation reachable', () => {
     expect(listed.find((entry) => entry.name === name)?.status).toBe('dismissed');
   });
 
+  const rosterRow = (name: string, fields: Partial<SubordinateRosterEntry>): SubordinateRosterEntry => ({
+    name, actorId: `actor-${name}`, displayName: name, role: 'task', nameOrigin: 'user', createdBy: 'user', lifetime: 'durable',
+    status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, ...fields,
+  });
+
   const ROSTER: SubordinateRosterEntry[] = [
-    {
-      name: 'busy-mill-01', actorId: 'actor-busy-mill', displayName: 'Busy Mill', role: 'task', createdBy: 'user',
-      status: 'working', currentTask: 'Build the chess app', createdAt: 1, dismissedAt: null,
-    },
-    {
-      name: 'quiet-harbor-1a4e20', actorId: 'actor-quiet-harbor', displayName: 'Quiet Harbor', role: 'task', createdBy: 'user',
-      status: 'dismissed', currentTask: null, createdAt: 2, dismissedAt: 200,
-    },
+    rosterRow('busy-mill-01', { displayName: 'Busy Mill', nameOrigin: 'auto', status: 'working', currentTask: 'Build the chess app' }),
+    rosterRow('hello', { displayName: 'hello', createdAt: 2 }),
+    rosterRow('quiet-harbor-1a4e20', { displayName: 'Quiet Harbor', status: 'dismissed', createdAt: 3, dismissedAt: 200 }),
+    // Internal helpers: an evolution lane's refiner, and one-question helpers running and finished.
+    rosterRow('ask-refiner-fb0gr9', { displayName: 'Quiet Ash', nameOrigin: 'auto', createdBy: 'evolution', lifetime: 'task', status: 'working', createdAt: 4 }),
+    rosterRow('ask-reviewer-a1', { displayName: 'reviewing', nameOrigin: 'auto', createdBy: 'orchestrator', lifetime: 'task', status: 'working', createdAt: 5 }),
+    ...['ask-reviewer-b2', 'ask-reviewer-c3', 'ask-reviewer-d4'].map((name, index) => rosterRow(name, {
+      displayName: 'reviewing', nameOrigin: 'auto', createdBy: 'orchestrator', lifetime: 'task', status: 'dismissed', createdAt: 6 + index, dismissedAt: 300,
+    })),
   ];
 
   const strip = (activeName?: string) => renderToStaticMarkup(createElement(MemoryRouter, null,
@@ -171,6 +177,14 @@ describe('a dismissed agent keeps its conversation reachable', () => {
 
     expect(markup).toContain('/workspace/hardy-workshop/agents/quiet-harbor-1a4e20');
     expect(markup).toContain('aria-expanded="true"');
+  });
+
+  test('internal helpers, running or finished, get no tab and no dismissed entry', () => {
+    const markup = strip('quiet-harbor-1a4e20');
+
+    for (const name of ['ask-refiner-fb0gr9', 'ask-reviewer-a1', 'ask-reviewer-b2', 'ask-reviewer-c3', 'ask-reviewer-d4']) {
+      expect(markup).not.toContain(`data-agent-tab="${name}"`);
+    }
   });
 
   test('the kept pane draws an entry it could not read in its place, named, between the ones it could', () => {

@@ -13,7 +13,7 @@ import { tierIdsOf,
   DEFAULT_ROLE_ID, TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, nextReasoningEffort, offeredReasoningEfforts,
   composerVisibleRows, effectiveRoleCatalog,
   type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ReasoningEffort, type SeekCursor,
-  type SubordinateRosterEntry, type TierId,
+  type SubordinateChild, type TierId,
 } from '@kinu.run/core';
 import {
   findForkPivot,
@@ -2217,7 +2217,7 @@ async function readSubagentConversation(client: AgentClient, name: string): Prom
 }
 
 async function readSubordinates(client: AgentClient): Promise<TuiSubordinate[]> {
-  const entries: SubordinateRosterEntry[] = [];
+  const entries: SubordinateChild[] = [];
   let cursor: SeekCursor | undefined;
 
   do {

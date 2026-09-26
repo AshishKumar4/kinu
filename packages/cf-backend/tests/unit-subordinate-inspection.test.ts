@@ -94,12 +94,13 @@ function read(
 function rosterChild(
   fixture: InspectionFixture,
   parent: ActorHandle,
-  name: string,
+  child: ActorHandle,
   createdAt: number,
 ): void {
+  const name = child.name;
   fixture.roster(parent).create({
     name,
-    actorReference: null,
+    actorReference: { actorId: child.actorId, workspaceId: child.workspaceId, parentActorId: child.parentActorId },
     birth: null,
     deleteRequested: false,
     createdBy: 'orchestrator',
@@ -137,8 +138,7 @@ describe('owner reads of retained subordinate paths', () => {
     const fixture = workspaceFixture();
 
     for (const [index, name] of ['alpha', 'beta', 'gamma'].entries()) {
-      fixture.child(fixture.main, name);
-      rosterChild(fixture, fixture.main, name, index + 1);
+      rosterChild(fixture, fixture.main, fixture.child(fixture.main, name), index + 1);
     }
 
     const first = await read(fixture, { path: [], view: 'children', page: { limit: 2 } });

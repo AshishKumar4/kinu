@@ -5,7 +5,7 @@ import { basename, join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
-import { missingSubordinateHistory, type AgentModelMenu, type SubordinateRosterEntry } from '@kinu.run/core';
+import { missingSubordinateHistory, type AgentModelMenu, type SubordinateChild } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
@@ -916,8 +916,11 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
   });
 
   test('the Agent Hub lists the subagents the open agent hired, and Enter opens one\'s conversation', async () => {
-    const scout: SubordinateRosterEntry = {
+    const scout: SubordinateChild = {
       name: 'scout',
+      displayName: 'Scout',
+      nameOrigin: 'user',
+      role: 'task',
       actorReference: null,
       birth: {
         creationId: 'birth-scout',
@@ -934,7 +937,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       taskEventId: null,
     };
 
-    const dismissed: SubordinateRosterEntry = {
+    const dismissed: SubordinateChild = {
       ...scout,
       name: 'retired-helper',
       birth: null,
@@ -942,10 +945,14 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       dismissedAt: 2,
     };
 
+    const helper: SubordinateChild = { ...scout, name: 'busy-mill-01', displayName: 'Busy Mill', nameOrigin: 'auto', birth: null, currentTask: null };
+    const refiner: SubordinateChild = { ...helper, name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', createdBy: 'evolution', lifetime: 'task' };
+    const asked: SubordinateChild = { ...helper, name: 'ask-reviewer-a1', displayName: 'reviewing', lifetime: 'task' };
+
     const main = fakeClient({
       name: 'checkout',
       inspectSubordinate: async (request) => {
-        if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [scout, dismissed] } };
+        if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [scout, dismissed, helper, refiner, asked] } };
 
         if (request.view !== 'history' || request.path.join('/') !== 'scout') return missingSubordinateHistory(request.path);
 
@@ -968,6 +975,10 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the hired subagent in the hub', () => screen.frame().includes('Scout · agent · task/default'));
     expect(screen.frame()).toContain('Survey the logs');
     expect(screen.frame()).not.toContain('retired-helper');
+    // Internal helpers are not listed at all, by title or by slug.
+
+    for (const shown of ['Quiet Ash', 'ask-refiner-fb0gr9', 'reviewing', 'ask-reviewer-a1']) expect(screen.frame()).not.toContain(shown);
+    expect(screen.frame()).toContain('Busy Mill · agent');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();

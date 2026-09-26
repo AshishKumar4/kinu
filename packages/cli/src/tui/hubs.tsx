@@ -4,7 +4,8 @@ import { tierIdsOf,
   type ProfileCatalogEnvelope,
   type ResolvedTurnProfile,
   type RoleId,
-  type SubordinateRosterEntry,
+  type SubordinateChild,
+  ownerFacingSubordinate,
 } from '@kinu.run/core';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { agentWorkspaceKey } from '../agent-list';
@@ -125,17 +126,16 @@ const ROSTER_STATUS = {
   idle: 'idle',
   working: 'running',
   awaiting_input: 'needs-you',
-} as const satisfies Record<Exclude<SubordinateRosterEntry['status'], 'dismissed'>, TuiAgentStatus>;
+} as const satisfies Record<Exclude<SubordinateChild['status'], 'dismissed'>, TuiAgentStatus>;
 
-export function subordinatesFromRoster(entries: readonly SubordinateRosterEntry[]): TuiSubordinate[] {
+export function subordinatesFromRoster(entries: readonly SubordinateChild[]): TuiSubordinate[] {
   return entries.flatMap((entry): TuiSubordinate[] => {
-    if (entry.status === 'dismissed' || entry.deleteRequested) return [];
+    if (entry.status === 'dismissed' || entry.deleteRequested || !ownerFacingSubordinate(entry)) return [];
     const seed = entry.birth?.seed;
 
-    // A finished birth drops its seed.
     const subordinate: SubordinateDraft = {
       id: entry.name,
-      label: seed?.displayName.trim() ? seed.displayName : entry.name,
+      label: agentDisplayLabel({ name: entry.name, label: entry.displayName }),
       status: ROSTER_STATUS[entry.status],
     };
 

@@ -43,7 +43,7 @@ import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { KeptChatColumn } from "@/components/KeptChatColumn";
 import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
-import { revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
+import { ownerFacingSubordinate, revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 
@@ -623,7 +623,7 @@ export default function WorkspacePage() {
         running,
         unseenChangelog: state.changelogUnseen,
         // Dismissed agents stay reachable from the chat strip, not the sidebar's working roster.
-        agents: state.subordinates.filter((sub) => sub.status !== "dismissed").map((sub) => ({
+        agents: state.subordinates.filter((sub) => sub.status !== "dismissed" && ownerFacingSubordinate(sub)).map((sub) => ({
           name: sub.name, displayName: sub.displayName, status: sub.status,
         })),
       },

@@ -17,6 +17,8 @@ import { SubordinateBirthSchema } from './birth';
 import { parseJsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
 import { EvolutionHelperStore, initEvolutionHelperTable } from '../identity/evolution-helpers';
+import type { AgentConfigStore } from '../config/store';
+import type { NameOrigin } from '../identity/naming';
 
 const ROSTER_COLUMNS =
   'actor_id, name, created_by, status, current_task, created_at, dismissed_at, lifetime, task_event_id, actor_reference, birth_request, delete_requested';
@@ -71,6 +73,24 @@ function parseStoredRosterRow(row: SqlExecRow): SubordinateRosterEntry {
   } catch (cause) {
     throw new KinuError('io', 'Stored subordinate roster data is malformed.', { cause });
   }
+}
+
+export interface SubordinateTitle {
+  readonly displayName: string;
+  readonly nameOrigin: NameOrigin;
+  readonly role: string;
+}
+
+export function subordinateTitle(entry: SubordinateRosterEntry, config: AgentConfigStore | null): SubordinateTitle {
+  if (config !== null) {
+    return { displayName: config.getDisplayName() ?? entry.name, nameOrigin: config.getNameOrigin() ?? 'auto', role: config.getRoleSelection() };
+  }
+
+  const seed = entry.birth?.seed;
+
+  if (seed === undefined) throw new KinuError('io', `Subordinate "${entry.name}" has neither an actor nor a birth.`);
+
+  return { displayName: seed.displayName, nameOrigin: seed.nameOrigin, role: seed.role };
 }
 
 /** Only a mid-turn note on an open assignment keeps a row working; a turn's end idles it. */

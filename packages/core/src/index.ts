@@ -1,7 +1,7 @@
 // Identity
 export { initFiberTable, tableExists } from './identity/schema';
 
-export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './subordinates/inspection';
+export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
 
 export { inspectSubordinateStorage, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
 
@@ -617,7 +617,7 @@ export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self'
 export { agentSelfHost } from './orchestrator/agent-self-host';
 
 // Platform-neutral: a backend supplies only SubordinateRuntime.
-export { SubordinateRosterStore } from './subordinates/roster';
+export { SubordinateRosterStore, subordinateTitle } from './subordinates/roster';
 
 export {
   SubordinateIdentityStore,
@@ -2139,7 +2139,7 @@ export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
   type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
-  type TabPresence, type ToolInfo,
+  type TabPresence, type ToolInfo, ownerFacingSubordinate,
 } from './protocol';
 
 export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';

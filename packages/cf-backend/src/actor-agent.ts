@@ -135,7 +135,7 @@ import {
   type ParentRpcWrite,
   type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
   type SubordinateRuntime, type TemporaryAgentPort,
-  SubordinateRosterStore,
+  SubordinateRosterStore, subordinateTitle,
   createTeamToolDeps, createTemporaryAgentPort, receiveSubordinateEvent,
   type SubordinatesChangedEvent, type SubordinateReportStatus, type SubordinateReportOrigin,
   type SubordinateEventResult,
@@ -803,21 +803,13 @@ export abstract class ActorAgent extends Agent<Env> {
     if (entry === null) throw new KinuError('missing', `Subordinate "${name}" is not in the roster`);
     const reference = entry.actorReference;
 
-    if (reference === null) {
-      // Admitted and not yet born: its seed is the only descriptor it has.
-      const seed = entry.birth?.seed;
-
-      if (seed === undefined) throw new KinuError('io', `Subordinate "${name}" has neither an actor nor a birth.`);
-
-      return { ...entry, actorId: null, displayName: seed.displayName, role: seed.role };
-    }
+    if (reference === null) return { ...entry, actorId: null, ...subordinateTitle(entry, null) };
 
     const record = this.actorDirectoryStore().retained(reference.actorId);
 
     if (record === null) throw new KinuError('missing', `Subordinate "${name}" names an actor this workspace does not hold.`);
-    const config = actorReadHandle(this.boundSql, record).config;
 
-    return { ...entry, actorId: reference.actorId, displayName: config.getDisplayName() ?? entry.name, role: config.getRoleSelection() };
+    return { ...entry, actorId: reference.actorId, ...subordinateTitle(entry, actorReadHandle(this.boundSql, record).config) };
   }
 
   protected async subordinateViews(): Promise<SubordinateView[]> {
