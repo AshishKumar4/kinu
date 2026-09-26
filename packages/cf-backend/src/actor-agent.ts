@@ -219,7 +219,7 @@ import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/cor
 import type { WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
 import { sha256Hex } from '@kinu.run/core';
-import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
+import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { openAnalyticsWindow } from "@kinu.run/core/analytics";
 import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
@@ -1038,13 +1038,17 @@ export abstract class ActorAgent extends Agent<Env> {
     // constructor because that is the one point guaranteed to precede every RPC
     // (`onStart` is not — see `OrchestratorAgent.claimOwner`), and idempotent per
     // isolate, so a re-activation costs nothing.
-    // The workspace is NOT passed. An isolate-level default would be wrong the
-    // moment two actors share an isolate — `setDiagnosticsSink` is module-global
-    // and Cloudflare co-locates Durable Objects, so the first actor to install
-    // would own the attribution of every actor beside it. Each emit that knows
-    // its workspace says so, as a `workspace` field; the rest are honestly
-    // unattributed. See `analytics/install.ts`.
+    // The workspace comes from the invocation, not the isolate: `setDiagnosticsSink` is module-global
+    // and Cloudflare co-locates Durable Objects, so an install-time default would attribute every
+    // co-located actor to the first. The SDK's per-invocation context names the running agent.
     installAnalyticsDiagnostics(this.env);
+    attributeWorkspace(ActorAgent.invocationWorkspace);
+  }
+
+  private static invocationWorkspace(this: void): string {
+    const { agent } = getCurrentAgent();
+
+    return agent instanceof ActorAgent ? agent.workspaceName() : '';
   }
   protected installClientMessageGate(): void {
     const dispatchMessage = this.onMessage.bind(this);
