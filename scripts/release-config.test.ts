@@ -235,10 +235,10 @@ describe("the deployed Worker's stack traces are readable", () => {
     const plugins = (viteConfigFor({ command: 'build', mode: 'production' }).plugins ?? []).flatMap((plugin) => {
       const parsed = v.safeParse(EnvironmentScopedPluginSchema, plugin);
 
-      return parsed.success ? [parsed.output] : [];
+      return parsed.success && parsed.output.name === 'kinu:worker-source-maps' ? [parsed.output] : [];
     });
 
-    expect(plugins.length, `${VITE_CONFIG} declares no environment-scoped plugin`).toBe(1);
+    expect(plugins.length, `${VITE_CONFIG} declares no worker source-map plugin`).toBe(1);
     const [sourceMaps] = plugins;
 
     // The worker environment is named after the worker (`kinu`), so the hook
