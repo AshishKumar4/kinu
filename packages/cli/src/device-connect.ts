@@ -9,7 +9,7 @@ import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { isolatedBunArgs } from './self-spawn';
+import { isolatedBunArgs } from '@kinu.run/core';
 import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix } from '@kinu.run/core';
 import { enforceOwnerOnly, ensureSecretDir } from '@kinu.run/cli-backend';

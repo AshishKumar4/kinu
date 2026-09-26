@@ -1,10 +1,30 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 import { createSandboxedExecutor } from '../src/executor';
 
 describe('createSandboxedExecutor', () => {
+  test('code runs apart from the project it was started in: no bunfig preload, no .env, not its directory', async () => {
+    // The CLI now runs in the owner's project, which may be a cloned repo holding a hostile bunfig.toml.
+    const project = scratchDir('executor-hostile-project');
+    writeFileSync(join(project, 'preload.ts'), `require('node:fs').writeFileSync(${JSON.stringify(join(project, 'PRELOAD-RAN'))}, '');\n`);
+    writeFileSync(join(project, 'bunfig.toml'), 'preload = ["./preload.ts"]\n');
+    writeFileSync(join(project, '.env'), 'KINU_PROJECT_LEAK=1\n');
+    const started = process.cwd();
+    process.chdir(project);
+
+    try {
+      const seen = await createSandboxedExecutor().execute('({ cwd: process.cwd(), leak: process.env.KINU_PROJECT_LEAK ?? null })', []);
+
+      expect(seen).toMatchObject({ result: { leak: null } });
+      expect(seen.result).not.toMatchObject({ cwd: realpathSync(project) });
+      expect(existsSync(join(project, 'PRELOAD-RAN'))).toBe(false);
+    } finally {
+      process.chdir(started);
+    }
+  });
+
   test('runs without provider arguments', async () => {
     const result = await createSandboxedExecutor().execute('7 * 6', []);
     expect(result).toEqual({ result: 42 });
