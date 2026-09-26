@@ -181,6 +181,27 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
       + 'change of arms, `source` naming the unfinished arms. The arm names why a workspace keeps '
       + 'waking.',
   },
+  {
+    id: 'turn.resumed',
+    family: 'lifecycle',
+    event: 'turn.resumed',
+    site: 'packages/core/src/orchestrator/turn-recovery-events.ts',
+    mechanism: 'diagnostics',
+    emitter: 'event',
+    means: 'A turn a dead activation left open was admitted again: one row per interruption an '
+      + 'actor turn survived. `stepsKept` is what the resume did not buy again, `sameBuild` whether '
+      + 'our own deploy caused it. Per hour of active work it is the disruption rate.',
+  },
+  {
+    id: 'turn.recovery_settled',
+    family: 'lifecycle',
+    event: 'turn.recovery_settled',
+    site: 'packages/core/src/orchestrator/turn-recovery-events.ts',
+    mechanism: 'diagnostics',
+    emitter: 'event',
+    means: 'Recovery closed an interrupted hosted turn instead of resuming it: `cause` is an '
+      + 'unreadable record, a stall, or a program it could not verify.',
+  },
 ];
 
 const BOUNDARY_ID_BY_EVENT: Record<string, string> = Object.fromEntries(

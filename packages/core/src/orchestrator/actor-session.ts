@@ -38,6 +38,7 @@ import { contextWindowForModel } from '../context-window';
 import { SessionHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
+import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
 
 /** A hosted actor shares workspace priorities, but delivers feedback to itself. */
@@ -83,6 +84,9 @@ export interface ActorExecutionInput {
   readonly scaffoldStreamOptions?: ScaffoldBridgeOpts['streamOptions'];
   /** A warming lane's cover. */
   readonly cacheKeptAliveUntil?: number | null;
+  /** Steps a resumed turn keeps from its dead activation's run. */
+  readonly resumedSteps?: number;
+  readonly resumedMidStep?: boolean;
 }
 
 const RequestCacheSchema = v.looseObject({ cache: v.optional(PromptCacheRouteSchema) });
@@ -168,7 +172,7 @@ export class ActorSession {
     });
   }
 
-  /** Called once, when the owning session is built. `landed` is recorded only after `onDrain` returns, so a failed write leaves no unseen row. */
+  /** Once, at session build; `landed` is recorded after `onDrain` returns, so a failed write leaves no unseen row. */
   bindSteerPersistence(deps: {
     readonly onAccept?: (steer: AcceptedSteer) => void;
     readonly prepareDrain?: (rows: readonly LandedSteerRow[], atStep: number, reference: MessageReference) => Promise<(selection: ContextSelection) => void>;
@@ -371,7 +375,7 @@ export class ActorSession {
     this.messages.splice(0, this.messages.length, ...opened.messages);
   }
 
-  /** The one rule for where a turn's conversation comes from: a delivery turn (`metadata.drainTurnId`) opens on the settled working revision; others append. */
+  /** A delivery turn (`metadata.drainTurnId`) opens on the settled working revision; others append. */
   async openTurnInput(lease: ActorTurnLease, input: {
     readonly item: Pick<ChatTurnInput, 'metadata'>;
     readonly message: ModelMessage;
@@ -522,7 +526,7 @@ export class ActorSession {
       active.abort.signal.throwIfAborted();
       const prepared = await this.prepareProgram(input.loopVersion, active.abort.signal);
       program = prepared.program;
-      const claim = await this.admitClaim(lease, program, prepared.selection);
+      const claim = await this.admitClaim(lease, program, prepared.selection, input);
       active.claim = claim;
       tally.admittedMessages = prepared.messages;
 
@@ -566,8 +570,13 @@ export class ActorSession {
     return { program, selection: admitted.selection, messages: admitted.messages };
   }
 
-  private admitClaim(lease: ActorTurnLease, program: ActorTurnProgram, context: ContextSelection): Promise<ActorTurnClaim> {
-    return this.options.claims.admit({
+  /** An unsettled claim for this turn means a dead activation left it open. */
+  private async admitClaim(
+    lease: ActorTurnLease, program: ActorTurnProgram, context: ContextSelection, input: ActorExecutionInput,
+  ): Promise<ActorTurnClaim> {
+    const previous = this.options.claims.read(lease.turnId);
+
+    const claim = await this.options.claims.admit({
       runId: lease.runId,
       turnId: lease.turnId,
       workMode: this.mode,
@@ -575,6 +584,17 @@ export class ActorSession {
       context,
       installedBuild: this.options.installedBuild,
     });
+
+    if (previous?.status === 'admitted') {
+      recordTurnResumed({
+        actor: this.runtime.identity.name,
+        stepsKept: input.resumedSteps ?? 0,
+        midStep: input.resumedMidStep ?? false,
+        sameBuild: sameBuildOf(previous.program.build, this.options.installedBuild),
+      });
+    }
+
+    return claim;
   }
 
   private turnEvents(turn: {
@@ -683,7 +703,7 @@ export class ActorSession {
       case 'done':
         this.messages.push(...this.orchestrator.inbox.replayInto(event.responseMessages));
 
-        // The runner's `done` answer wins over the concatenated deltas; deltas are the fallback when there is no `done`.
+        // The runner's `done` answer wins; the concatenated deltas are the fallback.
         if (event.text.trim()) tally.text = event.text;
 
         if (event.answer !== undefined && event.answer.trim()) tally.answer = event.answer;

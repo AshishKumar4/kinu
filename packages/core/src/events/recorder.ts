@@ -594,6 +594,7 @@ export class RunEventRecorder {
     readonly runId: string;
     readonly turn: OpenTurnIdentity;
     readonly steps: ModelMessage[];
+    readonly finishedSteps: number;
     readonly partial: Extract<RunEvent, { type: 'step_partial' }> | null;
   } | null {
     this.actor.assertCurrent();
@@ -633,7 +634,7 @@ export class RunEventRecorder {
     const newest = partials[0] === undefined ? null : parseStoredRunEvent(partials[0].payload);
     const partial = newest !== null && newest.type === 'step_partial' && newest.stepIndex > finishedSteps ? newest : null;
 
-    return { runId: row.run_id, turn: start.turn, steps, partial };
+    return { runId: row.run_id, turn: start.turn, steps, finishedSteps, partial };
   }
 
   /** Filtered in SQL so `limit` is a real bound. Ties on `ts` break by rowid: `event_index`

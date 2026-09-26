@@ -19,6 +19,7 @@ import type { ActorContextStores, ChildContextResolver } from '../vfs/context-pl
 import type { ContextEventRecorder } from '../types/context-plane';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { verifyClaimedProgram } from '../orchestrator/actor-claims';
+import { recordRecoverySettled, sameBuildOf } from '../orchestrator/turn-recovery-events';
 import { readVersionedScaffoldSource } from '../scaffold/shadow';
 import { sha256Hex } from '../safety/argument-digest';
 import { diagnostics, renderThrownChain, toKinuError, type AgentTracing } from '../obs/index';
@@ -543,6 +544,7 @@ export async function recoverActorTurns(
         actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
         failed.push(turn.claim.turnId);
         diagnostics.failure('actor.turn_record_unreadable', evidence.failure, { actor: turn.record.name, turn: turn.claim.turnId });
+        recordRecoverySettled({ actor: turn.record.name, cause: 'record_unreadable', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
         continue;
       }
 
@@ -564,6 +566,7 @@ export async function recoverActorTurns(
         actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
         stalled.push(turn);
         diagnostics.event('actor.turn_stalled', { actor: turn.record.name, turn: turn.claim.turnId, runs: turn.claim.epoch });
+        recordRecoverySettled({ actor: turn.record.name, cause: 'stalled', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
         continue;
       }
 
@@ -574,6 +577,7 @@ export async function recoverActorTurns(
 
       actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'indeterminate');
       refused.push(turn.claim.turnId);
+      recordRecoverySettled({ actor: turn.record.name, cause: 'unverified', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
     }
     catch (cause) {
       // One unreadable actor must not end the sweep; this turn stays owed.
