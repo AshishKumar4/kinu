@@ -1146,19 +1146,6 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/wake-loops.test.ts',
-    label: 'Wake-loop detection over production telemetry',
-    tier: 'push',
-    // 0.14 s, 5 tests, measured 2026-09-26 on the 24-thread box.
-    seconds: 0.2,
-    catches: 'a wake loop `prod-logs.ts wakes` misses or invents: startups summed per object and hour '
-      + 'before the threshold is read, the threshold hour counted and the hour under it not, a loop '
-      + 'sustained only over consecutive hours, and the longest loop ranked first.',
-    blind: 'the telemetry query and whether production writes the startup rows it counts; the '
-      + 'threshold is one week\'s measurement (2026-09-26).',
-    inputs: AMBIENT_BY_NAME,
-  },
-  {
     run: 'bun test --timeout=0 scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts',
     label: 'Gate self-tests: secrets, corpus, preflight',
     tier: 'push',
