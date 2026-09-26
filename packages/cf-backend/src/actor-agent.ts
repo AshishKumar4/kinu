@@ -718,7 +718,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult | Promise<PlanReviewResult> {
-    return this.planActions.submit(edits);
+    return this.planActions.submit(edits, this.turnDrivingMetadata());
   }
 
   @callable()

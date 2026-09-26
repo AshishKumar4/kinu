@@ -232,6 +232,32 @@ describe('LocalAgentSession — plan review', () => {
     }
   });
 
+  test('a plan-mode harness turn carrying a refiner\'s proposal cannot submit it as a plan', async () => {
+    const proposal = '{"scope":"workspace","edits":[{"kind":"prompt_section","sectionId":"state/output-format","source":"Stop after one line."}]}';
+
+    const { db, agent, events } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: `# Prompt edits\n${proposal}` }] } },
+      { answer: 'Could not submit.' },
+    ]);
+
+    try {
+      await agent.enqueueTurn({
+        text: `1 event arrived while you were idle.\n- [subordinate_report] from subordinate (ask-refiner-a1): completed: ${proposal}`,
+        idempotencyKey: 'drain:refiner', metadata: { kinuEvent: 'event_drain', kinuMode: 'plan' },
+      });
+      await agent.settleBackgroundWork();
+
+      expect(turnModes(agent)).toEqual(['plan']);
+      expect(events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan'))
+        .toMatchObject({ output: { ok: false } });
+      expect(await agent.getActivePlanReview()).toBeNull();
+      expect(planBroadcasts(events)).toEqual([]);
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
   test('dismissing a pending plan lifts the hold with no handoff turn', async () => {
     const { db, agent, events, taken } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },

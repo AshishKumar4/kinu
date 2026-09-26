@@ -751,7 +751,16 @@ export class PlanReviewActions {
     return result;
   }
 
-  submit(edits: readonly PlanEdit[]): PlanReviewResult {
+  /** `driving`: the calling turn's metadata. A harness turn may not make its input an owner decision. */
+  submit(edits: readonly PlanEdit[], driving: JsonObject | undefined): PlanReviewResult {
+    if (turnAuthor({ metadata: driving }) !== 'operator' && driving?.kinuEvent !== 'plan_feedback') {
+      return {
+        ok: false,
+        error: 'a plan is submitted only from a turn the owner wrote or from its feedback turn; this turn was started by the harness',
+        plan: this.store.getActive(CHAT_SESSION_ID),
+      };
+    }
+
     return this.announced(this.store.submit(CHAT_SESSION_ID, edits));
   }
 

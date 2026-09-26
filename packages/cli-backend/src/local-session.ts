@@ -5,7 +5,7 @@
 
 import { realpathSync } from 'node:fs';
 import { sameActorReference, testModel, type ModelTestResult } from '@kinu.run/core';
-import type { ActorHandle } from '@kinu.run/core';
+import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
   stepCountIs,
@@ -453,6 +453,9 @@ export class LocalAgentSession {
     (path, content) => this.instructionApprovals.trustOf(path, content);
   /** Whether this turn came from the parent; gates the `report` surface. */
   private turnIsParentAssigned = false;
+
+  /** The running turn's author-stamped metadata: plan submission is refused to a harness turn. */
+  private turnDriving: JsonObject | undefined;
 
   private readonly headJournal: HeadJournal;
   private readonly headActivity: AnnounceHeadActivity = (headId) => {
@@ -1003,7 +1006,7 @@ export class LocalAgentSession {
   }
 
   private submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult {
-    return this.planActions.submit(edits);
+    return this.planActions.submit(edits, this.turnDriving);
   }
 
   async getActivePlanReview(): Promise<PlanReview | null> {
@@ -1607,6 +1610,7 @@ export class LocalAgentSession {
     this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: this.sessionId });
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnIsParentAssigned = item.kind === 'programmatic';
+    this.turnDriving = authoredTurnMetadata(item);
     const profileInputs = await this.profiles().inputs();
     const activeRoleId = this.getActiveRoleId();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
