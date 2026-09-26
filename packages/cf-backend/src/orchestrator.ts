@@ -3121,7 +3121,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const status = await getAgentStatus({
       sql: this.boundSql,
       actor: this.rt.actor,
-      vfs: this.rt.storage.vfs,
       model: this.effectiveModelSpec(),
       reasoningEffort: profile?.tier.reasoningEffort ?? this.config.getReasoningEffort(),
       name: this.name,
@@ -4941,7 +4940,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { ok: true };
   }
 
-  /** From the owner's row; the file view is resealed first, since the main agent owns the root. */
+  /** From the owner's row, the file resealed first. */
   protected override async loadSoulText(): Promise<string> {
     return (await settledWorkspaceSoul(this.hostedWorkspace().bundle)) ?? '';
   }

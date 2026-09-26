@@ -10,7 +10,7 @@ import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { fakeMossaic, sqlOver } from '@kinu.run/test-utils';
 import {
   agentCred, agentIdentity, mossaicVfs, provisionAgentHome, renderSoulMarkdown, settledWorkspaceSoul, sharedDriveMount, withMountTable,
-  WORKSPACE_IDENTITY_DDL, writeWorkspaceSoul, type JsonValue,
+  initWorkspaceActorTable, WORKSPACE_IDENTITY_DDL, writeWorkspaceSoul, type JsonValue,
 } from '@kinu.run/core';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { Refusal } from '@kinu.run/core/obs';
@@ -218,6 +218,35 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       expect(await soulFile(workspace)).toMatchObject(SEALED);
     });
   }
+
+  test('a pre-kernel soul is set aside as SOUL.md.unverified, the birth render sealed, and the owner told once', async () => {
+    const actor = actorObject();
+    actor.database.exec(`CREATE TABLE IF NOT EXISTS activity_log (
+      actor_id TEXT NOT NULL, id TEXT NOT NULL DEFAULT (lower(hex(randomblob(9)))),
+      event TEXT NOT NULL, detail TEXT, elapsed_ms INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (actor_id, id))`);
+    initWorkspaceActorTable((ddl: string) => { actor.database.exec(ddl); });
+    actor.database.run(
+      `INSERT INTO workspace_actors (actor_id, workspace_id, name, storage_key, kind, lifetime, created_at, creation_id)
+       VALUES ('main-actor', 'w', 'Atlas', 'agent:main', 'main', 'durable', 1, 'c1')`,
+    );
+    const open = bornWorkspace(actor);
+    const first = open();
+    // A soul last written before 2026-08-31: the agent's own, no row.
+    const kernel = (await first.bundle.session()).vfs.as(CRED_KERNEL);
+    kernel.unlink('/home/main/SOUL.md');
+    kernel.writeFile('/home/main/SOUL.md', 'an old soul of mine');
+    kernel.chown('/home/main/SOUL.md', 1000, 1000);
+    actor.database.run('DELETE FROM workspace_soul');
+
+    const restarted = open();
+
+    expect(await settledWorkspaceSoul(restarted.bundle)).toBe(renderSoulMarkdown({ name: 'Atlas', mission: 'Help with testing.' }));
+    expect(await restarted.bundle.vfs.readFile('SOUL.md.unverified', { encoding: 'utf8' })).toBe('an old soul of mine');
+    expect(await soulFile(restarted)).toMatchObject({ uid: 0, mode: 0o444 });
+    expect(actor.database.query('SELECT event FROM activity_log WHERE event = \'soul.unverified_moved\'').all())
+      .toHaveLength(1);
+  });
 
   test('an intact SOUL.md is not rewritten at a turn start', async () => {
     const workspace = (await ownedSoul(actorObject()))();

@@ -19,7 +19,6 @@ export const WORKSPACE_SOUL_DDL = `CREATE TABLE IF NOT EXISTS workspace_soul (
     markdown TEXT NOT NULL
   )`;
 
-/** Durable state owned by every full-loop actor, including facet actors. */
 const ACTOR_DDL = [
   // mcts/schemas.ts and scaffold/schemas.ts own their DDL (initActorTables runs it): one owner per table.
 
@@ -84,7 +83,7 @@ const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
     forked_at                     INTEGER NOT NULL
   )`;
 
-/** The one unpublished fork transfer being received; a second `begin` replaces it (identity/fork-staging.ts). */
+/** A second `begin` replaces the unpublished fork transfer. */
 const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     id                              INTEGER PRIMARY KEY CHECK (id = 1),
     head_declared                   INTEGER NOT NULL DEFAULT 0,

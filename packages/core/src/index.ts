@@ -54,7 +54,7 @@ export {
   isPlaceholderMission,
   workspaceGenesisSignal,
   readSoul,
-  storeDurableSoul,
+  storeDurableSoulDb,
   readMission,
   renderSoulMarkdown,
   seedSoul,

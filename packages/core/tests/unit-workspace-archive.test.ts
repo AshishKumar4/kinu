@@ -20,6 +20,9 @@ import {
   type SqlValue,
 } from '../src/index';
 import { createTestActor, createWorkspaceBundle, makeExecRaw, makeSql } from './helpers';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { writeSoul } from '../src/identity/soul';
+import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import type { WorkspaceBundle, WorkspaceVFS } from '../src/vfs/nimbus-workspace';
@@ -222,6 +225,25 @@ describe('workspace archive', () => {
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, paged);
     expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM conversation_entries`[0].n).toBe(5);
+  });
+
+const OWNER_TEXT = '# the owner wrote this\n';
+
+  test('an export carries the owner\'s soul, not a file swapped since the seal', async () => {
+    const source = await seeded();
+    const bundle = createWorkspaceBundle(source.db);
+    await writeSoul(source.sql, OWNER_TEXT, (content) => writeWorkspaceSoul(bundle, content));
+    // A mid-turn swap (the file's bytes, not the row): the export must still carry the row.
+    const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
+    kernel.unlink('/home/main/SOUL.md');
+    kernel.writeFile('/home/main/SOUL.md', 'forged');
+    kernel.chown('/home/main/SOUL.md', 1000, 1000);
+    kernel.chmod('/home/main/SOUL.md', 0o644);
+
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', files: workspaceArchiveFiles(bundle) });
+    const soul = lines.find((line) => line.includes('"path":"SOUL.md"'));
+
+    expect(present(soul, 'the exported SOUL.md')).toContain(Buffer.from(OWNER_TEXT).toString('base64'));
   });
 
   test('external workspace files page in the same stream and restore byte-exactly', async () => {

@@ -3,8 +3,9 @@
 
 import * as v from 'valibot';
 import { WORKSPACE_SOUL_DDL } from './schema';
-import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { SqlRow } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { AgentSignal } from '../types/signals';
+import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlExecutor, VFS } from '../types/primitives';
 
 export const SOUL_PATH = 'SOUL.md';
@@ -260,6 +261,8 @@ export async function readSoul(vfs: VFS): Promise<string | null> {
   return text.trim() ? text : null;
 }
 
+
+
 /** The mission off the identity row, readable without opening a filesystem. */
 export function readMission(sql: SqlExecutor): string | null {
   const mission = sql<{ mission: string | null }>`
@@ -289,39 +292,94 @@ export async function seedSoul(
   return soul;
 }
 
-export type SoulSql = SqlDatabase;
+const IdentityRow = v.object({ name: v.string(), mission: v.optional(v.string(), '') });
 
 const SoulRow = v.object({ markdown: v.string() });
 
-// Older imports lack `mission`.
-const IdentityRow = v.object({ name: v.string(), mission: v.optional(v.string(), '') });
-
-function hasTable(sql: SoulSql, table: string): boolean {
-  return [...sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, table)].length > 0;
+function soulText(row: SqlRow): string {
+  return v.parse(SoulRow, row).markdown;
 }
 
-/** From its row, seeded once: the kernel's file, else the birth render. */
-export function ownerSoul(sql: SoulSql, kernelHeld: () => string | null): string | null {
-  if (hasTable(sql, 'workspace_soul')) {
-    const [row] = [...sql.exec(`SELECT markdown FROM workspace_soul WHERE id = 1`)];
+export interface SoulReads {
+  readonly soulTable: boolean;
+  readonly soul: string | null;
+  readonly identity: { name: string; mission: string } | null;
+}
 
-    if (row !== undefined) return v.parse(SoulRow, row).markdown;
+export const UNVERIFIED_SOUL_PATH = 'SOUL.md.unverified';
+
+function soulReadsDb(db: SqlDatabase): SoulReads {
+  const has = (table: string): boolean =>
+    [...db.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, table)].length > 0;
+
+  const soulRows = has('workspace_soul') ? [...db.exec(`SELECT markdown FROM workspace_soul WHERE id = 1`)] : [];
+
+  const soul = soulRows.length === 0 ? null : soulText(soulRows[0]);
+
+  const identity = has('workspace_identity')
+    ? v.safeParse(IdentityRow, [...db.exec(`SELECT * FROM workspace_identity LIMIT 1`)][0])
+    : { success: false as const };
+
+  return {
+    soulTable: has('workspace_soul'),
+    soul,
+    identity: identity.success ? { name: identity.output.name, mission: identity.output.mission } : null,
+  };
+}
+
+export function soulReadsSql(sql: SqlExecutor): SoulReads {
+  const [soulRow] = sql<SqlRow>`SELECT markdown FROM workspace_soul WHERE id = 1`;
+
+  const soul = soulRow === undefined ? null : soulText(soulRow);
+
+  const identity = v.safeParse(IdentityRow, sql<SqlRow>`SELECT * FROM workspace_identity LIMIT 1`[0]);
+
+  return {
+    soulTable: sql<SqlRow>`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_soul'`.length > 0,
+    soul,
+    identity: identity.success ? { name: identity.output.name, mission: identity.output.mission } : null,
+  };
+}
+
+export function ownerSoulDb(db: SqlDatabase, kernelHeld: string | null): string | null {
+  const reads = soulReadsDb(db);
+
+  if (reads.soul !== null) return reads.soul;
+
+  if (reads.identity === null) return null;
+
+  if (kernelHeld !== null) {
+    recordKernelSoul(db, kernelHeld);
+
+    return kernelHeld;
   }
 
-  if (!hasTable(sql, 'workspace_identity')) return null;
-  const [identity] = [...sql.exec(`SELECT * FROM workspace_identity LIMIT 1`)];
-
-  if (identity === undefined) return null;
-  const { name, mission } = v.parse(IdentityRow, identity);
-  const seed = kernelHeld() ?? renderSoulMarkdown({ name, mission });
-
-  sql.exec(WORKSPACE_SOUL_DDL);
-  sql.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, seed);
+  const seed = renderSoulMarkdown(reads.identity);
+  db.exec(WORKSPACE_SOUL_DDL);
+  db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, seed);
 
   return seed;
+
+
 }
 
-export function storeDurableSoul(sql: SoulSql, markdown: string): void {
-  sql.exec(WORKSPACE_SOUL_DDL);
-  sql.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown`, markdown);
+function recordKernelSoul(db: SqlDatabase, markdown: string): void {
+
+  db.exec(WORKSPACE_SOUL_DDL);
+  db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, markdown);
 }
+
+export function ownerMissionOf(reads: SoulReads): string | null {
+  if (reads.soul !== null) return summarizeSoul(reads.soul);
+
+
+  if (reads.identity === null) return null;
+
+  return summarizeSoul(renderSoulMarkdown(reads.identity));
+}
+
+export function storeDurableSoulDb(db: SqlDatabase, markdown: string): void {
+  db.exec(WORKSPACE_SOUL_DDL);
+  db.exec(`INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown`, markdown);
+}
+

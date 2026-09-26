@@ -9,7 +9,7 @@ import {
 import type { ForkFileSource } from '../identity/fork-transfer';
 import type { ForkTreeReader } from '../identity/fork';
 import type { ArchiveFileSource, ArchiveFileTarget } from '../identity/archive';
-import { SOUL_PATH, storeDurableSoul, summarizeSoulBytes } from '../identity/soul';
+import { SOUL_PATH, storeDurableSoulDb, summarizeSoulBytes } from '../identity/soul';
 import { tolerate } from '../obs/index';
 import { resealWorkspaceSoul, sealWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
@@ -41,7 +41,7 @@ export async function writeWorkspaceSoul(
   }
 
   sealWorkspaceSoul(kernel, content);
-  storeDurableSoul(session.sql, content instanceof Uint8Array ? new TextDecoder().decode(content) : content);
+  storeDurableSoulDb(session.sql, content instanceof Uint8Array ? new TextDecoder().decode(content) : content);
 }
 
 function workspaceForkPort(bundle: WorkspaceBundle): ForkNativeFilePort {
@@ -126,7 +126,9 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
 export function createWorkspaceForkSource(bundle: WorkspaceBundle): ForkFileSource {
   return {
     async open(): Promise<ForkTreeReader> {
-      const plane = (await bundle.session()).vfs.as(CRED_KERNEL);
+      const session = await bundle.session();
+      const plane = session.vfs.as(CRED_KERNEL);
+      resealWorkspaceSoul(plane, session.sql);
 
       return {
         lstat(path) {
@@ -160,9 +162,18 @@ export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveFileTarg
 
 export function workspaceArchiveFiles(bundle: WorkspaceBundle): ArchiveFileSource {
   return archiveFileTree({
-    readdir: async (path) => [...(await sessionPlane(bundle)).readdir(workspacePath(path))],
-    readFile: async (path) => (await sessionPlane(bundle)).readFile(workspacePath(path)),
+    readdir: async (path) => [...(await soulPlane(bundle)).readdir(workspacePath(path))],
+    readFile: async (path) => (await soulPlane(bundle)).readFile(workspacePath(path)),
   });
+}
+
+/** Files with SOUL.md resealed first. */
+async function soulPlane(bundle: WorkspaceBundle): Promise<CredentialedVfs> {
+  const session = await bundle.session();
+
+  resealWorkspaceSoul(session.vfs.as(CRED_KERNEL), session.sql);
+
+  return sessionPlane(bundle);
 }
 
 export function archiveFileTree(source: {

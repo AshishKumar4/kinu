@@ -928,7 +928,7 @@ export class EvolutionEngine {
     const rt = this.rt;
 
     const purpose = summarizeSoul(await readSoul(rt.agentStateVfs ?? rt.storage.vfs))
-      || 'be a helpful assistant';
+      ?? 'be a helpful assistant';
 
     this.emit({
       type: 'mcts_started',

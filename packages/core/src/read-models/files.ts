@@ -570,6 +570,11 @@ export async function renameExecutorPathOp(
   if (!from || !to || to.endsWith('/')) return { error: 'both source and target paths are required' };
 
   if (from === to) return { ok: true };
+
+  if (isWorkspaceSoul(executorId, from) || isWorkspaceSoul(executorId, to)) {
+    return { error: 'SOUL.md is set from Settings, not by moving files' };
+  }
+
   const vfs = executorFiles(router, executorId);
 
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
@@ -605,6 +610,9 @@ export async function deleteExecutorPathOp(
   path: string,
 ): Promise<ExecutorWriteResult> {
   if (!path || normalizeDir(path) === '/') return { error: 'a real path is required' };
+
+  if (isWorkspaceSoul(executorId, path)) return { error: 'SOUL.md is set from Settings, not by deleting it' };
+
   const vfs = executorFiles(router, executorId);
 
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };

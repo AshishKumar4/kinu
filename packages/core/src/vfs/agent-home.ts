@@ -9,7 +9,8 @@ import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import * as v from 'valibot';
-import { ownerSoul, SOUL_PATH, type SoulSql } from '../identity/soul';
+import { ownerSoulDb, SOUL_PATH, UNVERIFIED_SOUL_PATH } from '../identity/soul';
+import { diagnostics } from '../obs/index';
 import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
@@ -228,13 +229,12 @@ export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
   }
 }
 
-export type SoulVfs = Pick<CredentialedVfs, 'readdir' | 'lstat' | 'unlink' | 'removeRecursive' | 'writeFile' | 'readFile' | 'chown' | 'chmod'>;
+export type SoulVfs = Pick<CredentialedVfs, 'readdir' | 'lstat' | 'unlink' | 'rename' | 'removeRecursive' | 'writeFile' | 'readFile' | 'chown' | 'chmod'>;
 
 const SOUL_FILE = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
 
-/** Listed: a dangling link is an entry. */
 function soulPresent(kernel: SoulVfs): boolean {
-  return kernel.readdir(WORKSPACE_ROOT).some((entry) => entry.name === SOUL_PATH);
+  return soulPresentName(kernel, SOUL_PATH);
 }
 
 function sealedSoul(kernel: SoulVfs): boolean {
@@ -260,8 +260,8 @@ function kernelHeldSoul(kernel: SoulVfs): string | null {
 }
 
 /** SOUL.md as the row's view; written only on a mismatch. */
-export function resealWorkspaceSoul(kernel: SoulVfs, sql: SoulSql): string | null {
-  const soul = ownerSoul(sql, () => kernelHeldSoul(kernel));
+export function resealWorkspaceSoul(kernel: SoulVfs, sql: SqlDatabase): string | null {
+  const soul = ownerSoulDb(sql, kernelHeldSoul(kernel));
 
   if (soul === null) return null;
 
@@ -269,9 +269,42 @@ export function resealWorkspaceSoul(kernel: SoulVfs, sql: SoulSql): string | nul
     && (kernel.lstat(SOUL_FILE).mode & 0o7777) === 0o444
     && new TextDecoder().decode(kernel.readFile(SOUL_FILE)) === soul;
 
+  if (!intact && soulPresent(kernel) && !sealedSoul(kernel)) {
+    const stale = `${WORKSPACE_ROOT}/${UNVERIFIED_SOUL_PATH}`;
+
+    if (kernel.lstat(SOUL_FILE).type === 'directory') kernel.removeRecursive(SOUL_FILE);
+    else if (kernel.lstat(SOUL_FILE).type === 'symlink') kernel.unlink(SOUL_FILE);
+    else {
+      if (soulPresentName(kernel, UNVERIFIED_SOUL_PATH)) kernel.unlink(stale);
+      kernel.rename(SOUL_FILE, stale);
+      writeUnverifiedNote(sql);
+    }
+
+    sealWorkspaceSoul(kernel, soul);
+
+    return soul;
+  }
+
   if (!intact) sealWorkspaceSoul(kernel, soul);
 
   return soul;
+}
+
+function soulPresentName(kernel: SoulVfs, name: string): boolean {
+  return kernel.readdir(WORKSPACE_ROOT).some((entry) => entry.name === name);
+}
+
+function writeUnverifiedNote(sql: SqlDatabase): void {
+  try {
+    const [id] = [...sql.exec(`SELECT workspace_id FROM workspace_actors WHERE kind = 'main' AND deleted_at IS NULL LIMIT 1`)];
+    const workspace = v.parse(v.object({ workspace_id: v.string() }), id).workspace_id;
+    sql.exec(
+      `INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at) VALUES (?, 'soul.unverified_moved', 'An older SOUL.md was moved to SOUL.md.unverified and is no longer read; set SOUL.md to adopt it.', 0, ?)`,
+      workspace, Date.now(),
+    );
+  } catch {
+    diagnostics.event('soul.unverified_moved', { path: UNVERIFIED_SOUL_PATH });
+  }
 }
 
 export type SlatesMoveVfs = RootMoveVfs & Pick<CredentialedVfs, 'mkdir' | 'lstat'>;

@@ -3,8 +3,6 @@
 import { describe, test, expect } from 'bun:test';
 import { createMockFetch, createTestActorsOver, createTestSql, handClock, present, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type HandClock, type TranscriptRow, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
-import { storeDurableSoul } from '@kinu.run/core';
-import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 import { KinuError } from '@kinu.run/core/obs';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -5513,7 +5511,11 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
   test('a custom SOUL.md reaches the model request, re-read each turn', async () => {
     // The soul is read per turn from its row, so an owner edit lands next request.
     const { db, rt } = workspaceRuntime();
-    const ownerEdit = (markdown: string): void => { storeDurableSoul(inlineWorkspaceStorage(db).sql, markdown); };
+
+    const ownerEdit = (markdown: string): void => {
+      db.exec('CREATE TABLE IF NOT EXISTS workspace_soul (id INTEGER PRIMARY KEY CHECK (id = 1), markdown TEXT NOT NULL)');
+      db.prepare('INSERT INTO workspace_soul (id, markdown) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET markdown = excluded.markdown').run(markdown);
+    };
 
     ownerEdit('# Soul\n\nYou are Atlas. Hold the owner\'s stated intent above the letter of the ask.');
     let system = '';

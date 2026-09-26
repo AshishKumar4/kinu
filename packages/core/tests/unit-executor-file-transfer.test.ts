@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { present } from "@kinu.run/test-utils";
 import {
   ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
-  statExecutorFile, writeExecutorFileOp, type VFS,
+  deleteExecutorPathOp, renameExecutorPathOp, statExecutorFile, writeExecutorFileOp, type VFS,
 } from "@kinu.run/core";
 
 const MiB = 1024 * 1024;
@@ -173,6 +173,19 @@ describe("ExecutorFileUpload", () => {
     const bytes = patternBytes(2 * MiB);
     expect(await writeExecutorFileOp(plane.router, "workspace", "/g.bin", { bytes: bytes })).toEqual({ ok: true });
     expect(await statExecutorFile(plane.router, "workspace", "/g.bin")).toEqual({ size: bytes.byteLength });
+  });
+});
+
+describe("the owner's SOUL.md is set, not moved or deleted", () => {
+  test("a rename onto it or a delete of it says where the soul is set, and writes nothing", async () => {
+    const plane = makePlane();
+
+    expect(await renameExecutorPathOp(plane.router, "workspace", "/home/main/SOUL.md", "/home/main/old.md"))
+      .toMatchObject({ error: expect.stringContaining("Settings") });
+    expect(await renameExecutorPathOp(plane.router, "workspace", "/home/main/notes.md", "SOUL.md"))
+      .toMatchObject({ error: expect.stringContaining("Settings") });
+    expect(await deleteExecutorPathOp(plane.router, "workspace", "/home/main/SOUL.md"))
+      .toMatchObject({ error: expect.stringContaining("Settings") });
   });
 });
 
