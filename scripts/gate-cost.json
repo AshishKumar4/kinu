@@ -948,6 +948,28 @@
       "samples": 8,
       "loadAtStart": 12.21,
       "exit": 0
+    },
+    "bun scripts/flake-gate.ts": {
+      "wallSeconds": 0.34,
+      "cpuSeconds": 0.41,
+      "peakRssMb": 71.77,
+      "peakRunnable": 2,
+      "peakCpuThreads": 0,
+      "meanThreads": 1.19,
+      "samples": 4,
+      "loadAtStart": 16.62,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/flake-gate.test.ts": {
+      "wallSeconds": 4.1,
+      "cpuSeconds": 6.03,
+      "peakRssMb": 453.06,
+      "peakRunnable": 3,
+      "peakCpuThreads": 3.11,
+      "meanThreads": 1.47,
+      "samples": 53,
+      "loadAtStart": 15.96,
+      "exit": 0
     }
   }
 }
