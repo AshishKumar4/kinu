@@ -2761,12 +2761,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Whether the workspace container is in use, asked by its box before it may rest: a live turn of
-   * any actor here, or a detached job some runner of this activation drives. Work the root owes itself
-   * (sends, claims, fibers to re-drive) is its own wake's business and never holds the container; a
-   * box that stops is restored by the next caller.
+   * any actor here, or a job this activation's runner drives, re-drives included. Work the root owes
+   * itself (sends, claims, fibers to re-drive) is its own wake's business; a process an earlier
+   * activation left running is the box's own check.
    */
   override async sandboxInUse(): Promise<boolean> {
-    if (this._inFlight || this.jobs.hasDrivenJobsInWorkspace(this.activationStartedAt)) return true;
+    if (this._inFlight || this.jobRunner.inFlight > 0) return true;
     const host = this.actorHost();
 
     return host.list().some((reference) => host.hosted(reference)?.session.inFlight === true);

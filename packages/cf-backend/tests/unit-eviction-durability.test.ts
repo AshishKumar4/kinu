@@ -455,16 +455,6 @@ describe('whether the container is in use', () => {
     expect(await agent.sandboxInUse()).toBe(false);
   });
 
-  test('a detached job this activation started counts, because it may be running in the container', async () => {
-    const { agent, db } = orchestratorHarness();
-    jobsOver(db).create({
-      id: 'bgjob-live', kind: 'shell', workMode: 'build',
-      input: JSON.stringify({ command: 'npm test' }), now: Date.now(), label: 'npm test',
-    });
-
-    expect(await agent.sandboxInUse()).toBe(true);
-  });
-
   test('a running job row nothing drives (deferred, or left by a dead activation) does not', async () => {
     const { agent, db } = orchestratorHarness();
     jobsOver(db).create({

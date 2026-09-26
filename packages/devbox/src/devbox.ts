@@ -2126,6 +2126,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         || this.#startup !== undefined
         || this.#gateRestore !== undefined;
 
+      if (!backgroundWork) backgroundWork = await this.#commandRunning();
+
       if (!backgroundWork) backgroundWork = await this.#hostBackgroundWork(now);
 
       const decision = quiesceStep({
@@ -2161,7 +2163,20 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     });
   }
 
-  /** The host's answer, reused for a quiet-confirm window: each ask wakes the owning workspace. */
+  /** A live process no supervised spec names (D35). */
+  async #commandRunning(): Promise<boolean> {
+    try {
+      const supervised = new Set((await this.#procSpecs()).map((spec) => spec.processId));
+
+      return (await this.listProcesses()).some((live) => isProcessLive(live.status) && !supervised.has(live.id));
+    } catch (error) {
+      console.error(`[devbox] process list unreadable, holding: ${describe({ cause: error })}`);
+
+      return true;
+    }
+  }
+
+  /** Reused for a quiet-confirm window: each ask wakes the workspace. */
   #hostAnswer: { readonly at: number; readonly busy: boolean } | undefined;
 
   async #hostBackgroundWork(now: number): Promise<boolean> {

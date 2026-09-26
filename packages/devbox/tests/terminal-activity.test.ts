@@ -132,6 +132,54 @@ describe('the beat asks the host at most once per quiet-confirm window', () => {
   });
 });
 
+describe('a box rests only once no command it ran is still running', () => {
+  test("an earlier activation's command keeps the box awake, and the box rests once it exits", async () => {
+    const start = Date.now();
+    const { box, container, rows } = harness(IdleHostBox);
+
+    try {
+      await box.devboxStartup();
+      rows.set(LAST_INTERACTION_KEY, start - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
+      rows.set(QUIET_SINCE_KEY, start - DEFAULT_DEVBOX_POLICY.quietConfirmMs - 60_000);
+      // A detached `npm test` its caller's evicted activation left running.
+      container.processes.set('cmd-npm-test', { id: 'cmd-npm-test', pid: 4242, status: 'running', command: 'npm test' });
+
+      await box.devboxHeartbeat();
+
+      expect((await box.devboxState()).lastTick?.decision).toBe('hold');
+      expect(container.running.running).toBe(true);
+
+      container.processes.set('cmd-npm-test', { id: 'cmd-npm-test', pid: 4242, status: 'completed', command: 'npm test' });
+      await box.devboxHeartbeat();
+      setSystemTime(start + DEFAULT_DEVBOX_POLICY.quietConfirmMs + 60_000);
+      await box.devboxHeartbeat();
+
+      expect((await box.devboxState()).lastTick?.decision).toBe('quiesce');
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('a supervised server does not hold the box: the next start restores it', async () => {
+    const start = Date.now();
+    const { box } = harness(IdleHostBox);
+
+    try {
+      await box.devboxStartup();
+      await box.startSupervised('python3 -m http.server 8000');
+
+      setSystemTime(start + DEFAULT_DEVBOX_POLICY.idleMs + 60_000);
+      await box.devboxHeartbeat();
+      setSystemTime(start + DEFAULT_DEVBOX_POLICY.idleMs + DEFAULT_DEVBOX_POLICY.quietConfirmMs + 120_000);
+      await box.devboxHeartbeat();
+
+      expect((await box.devboxState()).lastTick?.decision).toBe('quiesce');
+    } finally {
+      setSystemTime();
+    }
+  });
+});
+
 describe('every admitted operation is an interaction', () => {
   test('a file write on an admitted box stamps the lease the heartbeat reads', async () => {
     const { box } = harness(TestBox);
