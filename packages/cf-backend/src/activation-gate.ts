@@ -1,4 +1,4 @@
-/** The SDK starts only for fetch, alarm and its own RPCs; `ready()` also returns at once mid-start, so no re-entry. */
+/** The SDK starts only for fetch, alarm and its own RPCs; `ready()` never re-enters a start. */
 import { callable, type CallableMetadata } from 'agents';
 import { LifecycleCapability } from 'agents/lifecycle';
 import { KinuError } from '@kinu.run/core/obs';

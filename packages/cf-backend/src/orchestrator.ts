@@ -9,7 +9,7 @@ import { ActivationGate, startBeforeRpc } from "./activation-gate";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
-  createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
+  createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf,
@@ -391,19 +391,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.addressedName = name;
     sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
 
-    // Every event reaches a whole workspace: a native RPC runs no `onStart`, so the tables are made here.
+    // A native RPC runs no `onStart`.
     if (!this.nimbusSibling && this.storageRefusal === undefined) this.initSchema();
 
     this.installClientMessageGate();
-    // A sibling serves `supervisorOp` over its own storage and never runs the workspace's start.
     const gate = new ActivationGate();
     this.lifecycle.use(gate);
     startBeforeRpc(this, ORCHESTRATOR_STARTED_RPC, () => (this.nimbusSibling ? Promise.resolve() : gate.ready()));
   }
 
-  /** A Nimbus sibling (`nbf:…`, docs/NIMBUS-INTEGRATION.md) is an ordinary instance of this class that serves
-   *  `supervisorOp` over its own storage; it has no genesis, owner or transcript. User workspace names cannot
-   *  contain `:` (`validateWorkspaceName`), so the prefix names only these. */
+  /** A Nimbus sibling (docs/NIMBUS-INTEGRATION.md); no workspace name holds `:`. */
   private get nimbusSibling(): boolean {
     return this.addressedName.startsWith('nbf:');
   }
@@ -3111,7 +3108,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const status = await getAgentStatus({
       sql: this.boundSql,
       actor: this.rt.actor,
-      vfs: this.rt.storage.vfs,
       model: this.effectiveModelSpec(),
       reasoningEffort: profile?.tier.reasoningEffort ?? this.config.getReasoningEffort(),
       name: this.name,
@@ -4765,7 +4761,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         executorId,
         path,
         expectedRevision,
-        upload: new ExecutorFileUpload(router, executorId, path, expectedRevision),
+        upload: new ExecutorFileUpload(router, executorId, path, {
+          expectedRevision,
+          writeSoul: async (bytes) => { await this.setSoul(new TextDecoder().decode(bytes)); },
+        }),
       };
       this.executorFileUploads.set(transferId, row);
     } else if (!row || row.executorId !== executorId || row.path !== path) {
@@ -4921,6 +4920,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { ok: true };
   }
 
+  /** From the owner's row, the file resealed first. */
+  protected override async loadSoulText(): Promise<string> {
+    return (await settledWorkspaceSoul(this.hostedWorkspace().bundle)) ?? '';
+  }
+
   @callable() async setSoul(soul: string) {
     const text = soul.trim();
 
@@ -4928,13 +4932,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const ownerUserId = this.getOwnerUserId();
 
     if (!ownerUserId) throw new KinuError('unavailable', 'SOUL.md is unavailable until the workspace owner claim completes.');
-    await writeSoul(
-      this.rt.storage.vfs,
-      this.boundSql,
-      text,
-      (_path, content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
-    );
-    // The next turn re-reads the soul from the workspace filesystem.
+    await writeSoul(this.boundSql, text, (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content));
+    // The next turn re-reads the soul from its row.
     this._cachedSoulText = null;
 
     return { soul: text, purpose: summarizeSoul(text) };

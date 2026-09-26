@@ -55,6 +55,12 @@ const PYTHON = process.env.KINU_PYTHON ?? 'python3';
  *  runner would load. */
 const DISCOVER_PATTERN = 'test_*.py';
 
+/** The argv that runs `pattern`'s suites under one root, as this gate runs each root: `-t <dir>` as well as
+ *  `-s <dir>`, because with `-t .` these roots are not importable and discovery raises rather than running. */
+export function discoverArgv(directory: string, pattern = DISCOVER_PATTERN): string[] {
+  return [PYTHON, '-m', 'unittest', 'discover', '-v', '-s', directory, '-t', directory, '-p', pattern];
+}
+
 /** One discovery root and the suites enumerated under it. */
 export interface SuiteRoot {
   /** Repo-relative directory, which is both `-s` and `-t`. */
@@ -153,13 +159,8 @@ function main(): number {
   let executed = 0;
 
   for (const { directory, modules } of roots) {
-    // `-t <dir>` as well as `-s <dir>`: with `-t .` these roots are not
-    // importable and discovery raises rather than running.
-    const run = spawnSync(
-      PYTHON,
-      ['-m', 'unittest', 'discover', '-v', '-s', directory, '-t', directory, '-p', DISCOVER_PATTERN],
-      { cwd: root, encoding: 'utf8' },
-    );
+    const [interpreter = PYTHON, ...args] = discoverArgv(directory);
+    const run = spawnSync(interpreter, args, { cwd: root, encoding: 'utf8' });
 
     const output = `${run.stdout}\n${run.stderr}`;
     const count = reportedCount(output);

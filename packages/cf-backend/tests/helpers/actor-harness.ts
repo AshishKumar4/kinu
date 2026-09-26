@@ -184,6 +184,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeSubordinateRuntime() { return this.subordinateRuntime(); }
   observeRuntime(): AgentRuntime { return this.rt; }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
+
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
   /** The webhook signing secret, absent from the harness env by default. */
   declareWebhookRouteSecret(secret: string): void {

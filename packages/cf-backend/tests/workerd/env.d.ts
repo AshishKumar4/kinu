@@ -7,6 +7,7 @@ import type {
 import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { HireObservation } from './hire-shapes';
 import type { SpendProbeDO } from './spend-probe';
+import type { OperationCost } from './sql-meter';
 import type { HostileCalls, ProbeRecords } from './codex-egress-records';
 import type { TerminalEffectProbeDO } from './terminal-effect-probe';
 import type { DbCapabilityProbeDO } from './db-capability-probe';
@@ -95,9 +96,26 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
   parityComplete(prepared: ParityPrepared): Promise<ParityCompleted>;
+  longTurnCost(priorDeltas: number): Promise<{ cost: OperationCost; historyReads: number }>;
   backgroundWakeConversation(where: WakeHoldPlacement): Promise<WakeDriveResult>;
   rawChat(): Promise<RawChatProbeResult>;
-  longTurn(priorTurns: number, deltas: number, priorDeltas?: number): Promise<{ priorMs: number; longMs: number; calls: number }>;
+}
+
+/** The shipped root, sealed as the product seals it: the call `getAgentByName` makes on every stub, which it answers,
+ *  and the inherited members it must refuse (`tests/helpers/rpc-denied.ts`), declared so a test can make each call. */
+interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded {
+  __unsafe_ensureInitialized(): Promise<void>;
+  sql(): Promise<void>;
+  destroy(): Promise<void>;
+  setState(): Promise<void>;
+  stash(): Promise<void>;
+  _cf_invokeSubAgent(): Promise<void>;
+  _cf_invokeSubAgentPath(): Promise<void>;
+  _cf_invokeAgentPath(): Promise<void>;
+  _cf_invokeStubMethod(): Promise<void>;
+  schedule(): Promise<void>;
+  runFiber(): Promise<void>;
+  keepAlive(): Promise<void>;
 }
 
 interface CodexEgressProbeRpc extends Rpc.DurableObjectBranded, HostileCalls {
@@ -314,6 +332,7 @@ declare global {
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
       ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;
       ATTRIBUTION_PROBE: DurableObjectNamespace<AttributionProbeRpc>;
+      SEALED_ORCHESTRATOR: DurableObjectNamespace<SealedOrchestratorRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
   DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       LOADER: WorkerLoader;

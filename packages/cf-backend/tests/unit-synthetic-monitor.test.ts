@@ -6,7 +6,9 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { EmailOutbox, type OutboundEmailMessage } from '@kinu.run/core';
+import { EmailOutbox, asFetchFunction, type OutboundEmailMessage } from '@kinu.run/core';
+import { analyticsDigest } from '@kinu.run/core/analytics';
+import { clearAnalyticsCache, sampleFleet, settleFleet, type FleetEnv } from '@kinu.run/core/control-plane';
 import { ensureMonitorSchema, recordProbeRun, listIncidents, type MonitorDeps } from '../src/monitor/incidents';
 import { runSyntheticProbes, type ProbeDeps, type ProbeOutcome } from '@kinu.run/core';
 import { CLI_DIST_PATHS } from '@kinu.run/core';
@@ -303,5 +305,141 @@ describe('alert fatigue', () => {
     expect(result.skipped).toBe('email not configured');
     expect(listIncidents(l.sql)).toHaveLength(1);
     expect(l.sent).toHaveLength(0);
+  });
+});
+
+describe('fleet signals share the ledger', () => {
+  const T0 = Date.parse('2026-09-26T03:05:00Z');
+  const TICK = 15 * 60_000;
+  const WARM_FORGE = analyticsDigest('warm-forge-4d6acc02');
+
+  const FLEET_ENV: FleetEnv = {
+    CLOUDFLARE_ACCOUNT_ID: 'acct', ANALYTICS_SQL_API_TOKEN: 'ae-read', KINU_OBS_TOKEN: 'obs-read', CF_VERSION_METADATA: { id: 'v1' },
+  };
+
+  interface FleetApiState {
+    looping: boolean;
+    /** The telemetry API refuses the connection. */
+    telemetryDown?: boolean;
+    /** Browser errors in the last hour. */
+    clientErrors?: number;
+  }
+
+  /** Analytics Engine answers startups for a looping workspace while `looping` holds; the rest is quiet. */
+  function fleetApi(state: FleetApiState): typeof fetch {
+    return asFetchFunction(async (input, init) => {
+      const url = new Request(input).url;
+
+      if (url.includes('/telemetry/query')) {
+        if (state.telemetryDown === true) throw new TypeError('fetch failed: connection refused');
+
+        return Response.json({ result: { calculations: [] } });
+      }
+
+      const sql = v.parse(v.string(), init?.body);
+      const hour = (at: number) => new Date(at).toISOString().slice(0, 13).replace('T', ' ') + ':00:00';
+
+      const loop = [{ workspace: WARM_FORGE, hour: hour(T0 - 3_600_000), startups: '74' }, { workspace: WARM_FORGE, hour: hour(T0), startups: '78' }];
+      const clients = [{ event: 'client.render_failed', code: '', count: String(state.clientErrors ?? 0) }];
+
+      if (sql.includes("'actor.startup'")) return Response.json({ data: state.looping ? loop : [] });
+
+      return Response.json({ data: sql.includes('client.render_failed') ? clients : [] });
+    });
+  }
+
+  async function tick(l: ReturnType<typeof ledger>, env: FleetEnv, now: number, probes: readonly ProbeOutcome[] = []) {
+    const open = new Map(listIncidents(l.sql).map((row) => [row.probe, row.detail]));
+    clearAnalyticsCache();
+
+    return recordProbeRun(l.deps(now), [...probes, ...settleFleet(l.sql, await sampleFleet(env, now, globalThis.fetch), open)]);
+  }
+
+  const originalFetch = globalThis.fetch;
+
+  test('a wake loop (warm-forge-4d6acc02, 09-26) emails once after two ticks, and once after two clean ticks', async () => {
+    const l = ledger();
+    const state = { looping: true };
+    globalThis.fetch = fleetApi(state);
+
+    try {
+      expect((await tick(l, FLEET_ENV, T0)).emails).toBe(0);
+      expect((await tick(l, FLEET_ENV, T0 + TICK)).alerting).toEqual(['fleet.wake_loop']);
+      expect(l.sent).toHaveLength(1);
+      expect(l.sent[0]?.text).toContain(WARM_FORGE);
+      expect(l.sent[0]?.text).toContain('prod-logs.ts');
+      expect(l.sent[0]?.text).not.toContain('scripts/deploy.sh');
+
+      expect((await tick(l, FLEET_ENV, T0 + 2 * TICK)).emails).toBe(0);
+      state.looping = false;
+      expect((await tick(l, FLEET_ENV, T0 + 3 * TICK)).emails).toBe(0);
+      expect((await tick(l, FLEET_ENV, T0 + 4 * TICK)).recovered).toEqual(['fleet.wake_loop']);
+      expect(l.sent).toHaveLength(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('a telemetry API that refuses the connection still lets the site checks record and alert', async () => {
+    const l = ledger();
+    globalThis.fetch = fleetApi({ looping: false, telemetryDown: true });
+
+    try {
+      const run = await tick(l, FLEET_ENV, T0, FAILING);
+
+      expect(run.alerting).toEqual(['downloads']);
+      expect(listIncidents(l.sql).map((row) => row.probe)).toEqual(['downloads']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('one unreadable tick is not an incident; two are, and it recovers only after two clean ticks', async () => {
+    const l = ledger();
+    const state: FleetApiState = { looping: false, telemetryDown: true };
+    globalThis.fetch = fleetApi(state);
+
+    try {
+      expect((await tick(l, FLEET_ENV, T0)).emails).toBe(0);
+      state.telemetryDown = false;
+      expect((await tick(l, FLEET_ENV, T0 + TICK)).emails).toBe(0);
+      state.telemetryDown = true;
+      expect((await tick(l, FLEET_ENV, T0 + 2 * TICK)).emails).toBe(0);
+      expect((await tick(l, FLEET_ENV, T0 + 3 * TICK)).alerting).toEqual(['fleet.sources']);
+      expect(l.sent[0]?.text).toContain('connection refused');
+      state.telemetryDown = false;
+      expect((await tick(l, FLEET_ENV, T0 + 4 * TICK)).recovered).toEqual([]);
+      expect((await tick(l, FLEET_ENV, T0 + 5 * TICK)).recovered).toEqual(['fleet.sources']);
+      expect(l.sent).toHaveLength(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('browser errors over the provisional cap are recorded but never emailed until measured', async () => {
+    const l = ledger();
+    globalThis.fetch = fleetApi({ looping: false, clientErrors: 400 });
+
+    try {
+      for (let at = 0; at < 3; at++) expect((await tick(l, FLEET_ENV, T0 + at * TICK)).emails).toBe(0);
+      expect(listIncidents(l.sql)).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('an unset read token is one alert naming it, not a quiet fleet', async () => {
+    const l = ledger();
+    globalThis.fetch = fleetApi({ looping: false });
+    const { KINU_OBS_TOKEN: _dropped, ...unset } = FLEET_ENV;
+
+    try {
+      expect((await tick(l, unset, T0)).alerting).toEqual(['fleet.sources']);
+      expect(l.sent[0]?.text).toContain('KINU_OBS_TOKEN');
+      expect((await tick(l, unset, T0 + TICK)).emails).toBe(0);
+      expect(l.sent).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

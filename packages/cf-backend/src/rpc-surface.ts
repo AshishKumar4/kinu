@@ -105,6 +105,7 @@ const USER_DO_METHODS = [
   'completeOnboarding',
   'deleteAccount',
   'deleteCredential',
+  'dismissUnrevokedGrant',
   'deviceRpc',
   'deviceRuntimeStatus',
   'disconnectCodex',
@@ -135,6 +136,7 @@ const USER_DO_METHODS = [
   'listDeviceConsents',
   'listDevices',
   'listEgressSecrets',
+  'listUnrevokedGrants',
   'listWorkspaces',
   'mintAccessToken',
   'mintCliToken',
@@ -215,7 +217,7 @@ export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];
 
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
 
-/** Deleting the account must work on an object whose start throws: it wipes the storage start reads. */
+/** `deleteAccount` must work when start throws. */
 export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((name) => name !== 'deleteAccount');
 
 /** Members every actor exposes; entries a facet reaches on its parent stub must be listed or nested
@@ -325,7 +327,7 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...ORCHESTRATOR_METHODS,
 ];
 
-/** Never gated: `destroyAgent` must delete an object whose start throws. Platform and facet names the SDK starts. */
+/** Never gated: `destroyAgent` must work when start throws. */
 const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'evalAbortActivation']);
 
 export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [

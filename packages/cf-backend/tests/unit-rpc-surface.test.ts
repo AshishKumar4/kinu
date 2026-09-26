@@ -21,6 +21,7 @@ import type { UserDO } from '../src/user/user-do';
 import type { FilesRouteAgent } from '../src/files-routes';
 import type { TerminalWorkspace } from '../src/terminal-route';
 import { orchestratorHarness, rpcReachableFrom, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { MUST_STAY_DENIED } from './helpers/rpc-denied';
 import { declaredName, memberCalleeName, parse, walk } from '../../../scripts/syntax';
 
 // After the helpers register the SDK mock: a static import would bind these to the real `agents` Agent.
@@ -206,12 +207,6 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
 
 /** The names Cloudflare's runtime invokes on a Durable Object: its fetch, alarm and hibernation handlers. */
 const RUNTIME_HANDLERS = ['fetch', 'alarm', 'webSocketMessage', 'webSocketClose', 'webSocketError'];
-
-/** Inherited members that make an unsealed DO a liability: the SDK's sql runner, storage teardown, state writer and method bridges. */
-const MUST_STAY_DENIED = [
-  'sql', 'destroy', 'setState', 'stash',
-  '_cf_invokeSubAgent', '_cf_invokeSubAgentPath', '_cf_invokeAgentPath', '_cf_invokeStubMethod',
-];
 
 const SEALED_SURFACES = [
   ['UserDO', USER_DO_RPC_SURFACE],

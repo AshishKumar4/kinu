@@ -508,34 +508,42 @@ describe('the workspace keeps exactly one wake row', () => {
   test('evictions between unfinished laps neither shorten the pace nor lift its ceiling', async () => {
     const { db } = orchestratorHarness();
     const lapDelays: number[] = [];
+    // Each lap fires at its row's own second on a frozen clock, as the platform delivers it, so a delay is
+    // the product's pace and never a wall read that happened to cross a second boundary mid-tick.
+    let at = Math.ceil(Date.now() / 1000) * 1000;
 
-    for (let lap = 0; lap < 8; lap++) {
-      // Every lap is a fresh activation over the same storage, as the platform's idle eviction makes it.
-      const { agent } = await reactivateOrchestratorHarness(db);
-      // Work still running in this activation keeps the lap unfinished.
-      liveHead(db, `lap-${String(lap)}`);
-      const due = (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
+    try {
+      for (let lap = 0; lap < 8; lap++) {
+        setSystemTime(new Date(at));
+        // Every lap is a fresh activation over the same storage, as the platform's idle eviction makes it.
+        const { agent } = await reactivateOrchestratorHarness(db);
+        // Work still running in this activation keeps the lap unfinished.
+        liveHead(db, `lap-${String(lap)}`);
+        const [due] = (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
 
-      // The first lap starts the chain; each later lap's row is the one the lap before armed.
-      if (due.length === 0) await agent.terminalRetryPass();
+        if (due === undefined) {
+          // The first lap starts the chain; each later lap fires the row the lap before armed.
+          await agent.terminalRetryPass();
+        } else {
+          await agent._kinuTerminalRetryTick(undefined, due);
+          // The SDK deletes a one-shot row once its callback returns.
+          await agent.cancelSchedule(due.id);
+        }
 
-      for (const row of due) {
-        const firedAtSec = Math.floor(Date.now() / 1000);
-        await agent._kinuTerminalRetryTick(undefined, row);
-        // The SDK deletes a one-shot row once its callback returns.
-        await agent.cancelSchedule(row.id);
+        const [next] = (await agent.listSchedules()).filter((armed) => armed.callback === '_kinuTerminalRetryTick');
 
-        const next = (await agent.listSchedules()).filter((armed) => armed.callback === '_kinuTerminalRetryTick');
-
-        if (row === due[0]) lapDelays.push((next[0]?.time ?? firedAtSec) - firedAtSec);
+        if (next === undefined) throw new Error(`lap ${String(lap)} left no wake row`);
+        lapDelays.push(next.time - at / 1000);
+        at = next.time * 1000;
       }
+    } finally {
+      setSystemTime();
     }
 
     for (let lap = 1; lap < lapDelays.length; lap++) expect(lapDelays[lap]).toBeGreaterThanOrEqual(lapDelays[lap - 1] ?? 0);
-    // The SDK stores whole seconds and the arm rounds up, so a lap lands at most one second late.
     const ceiling = recoveryBackoffMs(Infinity) / 1000;
-    expect(lapDelays.at(-1)).toBeGreaterThanOrEqual(ceiling);
-    expect(Math.max(...lapDelays)).toBeLessThanOrEqual(ceiling + 1);
+    expect(lapDelays.at(-1)).toBe(ceiling);
+    expect(Math.max(...lapDelays)).toBe(ceiling);
   });
 
   test('an unfinished streak names its arms once, however many laps, and a new streak names them again', async () => {

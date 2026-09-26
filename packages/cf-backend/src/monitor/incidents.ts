@@ -5,6 +5,7 @@
 
 import { argumentDigest, type SqlExec } from '@kinu.run/core';
 import { sendOwnerEmail } from '../email/outbound';
+import { FLEET_PROBE_PREFIX } from '@kinu.run/core/control-plane';
 import type { EmailOutbox } from '@kinu.run/core';
 import type { ProbeOutcome } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -153,10 +154,8 @@ function openedNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
     'What this means for a user right now:',
     ...rows.map((row) => `• ${row.probe}: ${IMPACT.get(row.probe) ?? 'this check is part of the public surface.'}`),
     '',
-    'Usual cause: a deploy that did not go through scripts/deploy.sh, which builds the',
-    'CLI source archive into dist/client/downloads and re-runs these same checks before',
-    'it will call a deploy good. Re-deploying through it is the first thing to try.',
-    '',
+    ...rows.some((row) => !row.probe.startsWith(FLEET_PROBE_PREFIX)) ? SITE_ADVICE : [],
+    ...rows.some((row) => row.probe.startsWith(FLEET_PROBE_PREFIX)) ? FLEET_ADVICE : [],
     'This is the only email for these checks until they recover.',
   ].join('\n');
 
@@ -188,7 +187,27 @@ const IMPACT = new Map([
   ['health', 'the API is down, or the worker and its assets are from different deploys.'],
   ['downloads', 'a new install and every `kinu update` fail on the checksum.'],
   ['login', 'nobody can sign in to the web app.'],
+  ['fleet.wake_loop', 'a workspace keeps restarting: its agents lose work in flight and the owner pays for every start.'],
+  ['fleet.platform_kill', 'the platform is killing workspace objects mid-turn: out of memory or over the wall-time limit.'],
+  ['fleet.provider_down', 'model calls are failing, so turns stall or fail for everyone on that provider.'],
+  ['fleet.turn_failures', 'a large share of turns end failed.'],
+  ['fleet.client_errors', 'the web app is failing in people\'s browsers.'],
+  ['fleet.stuck_effects', 'finished turns cannot deliver their results, and keep retrying.'],
+  ['fleet.sources', 'part of the fleet is unwatched: the signals named above cannot be read.'],
 ]);
+
+const SITE_ADVICE = [
+  'Usual cause for a site check: a deploy that did not go through scripts/deploy.sh, which builds the',
+  'CLI source archive into dist/client/downloads and re-runs these same checks before',
+  'it will call a deploy good. Re-deploying through it is the first thing to try.',
+  '',
+];
+
+const FLEET_ADVICE = [
+  'For a fleet signal: `bun scripts/prod-logs.ts wakes`, `errors` and `timeline <workspace>` name',
+  'the objects and their failures; docs/OBSERVABILITY.md lists each rule and its measured threshold.',
+  '',
+];
 
 async function send(deps: MonitorDeps, notice: Notice): Promise<boolean> {
   return sendOwnerEmail({

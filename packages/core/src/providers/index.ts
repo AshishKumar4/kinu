@@ -86,3 +86,5 @@ export * from './direct-workers-ai-fetch';
 export * from './stream-usage-repair';
 
 export * from './tool-call-id';
+
+export * from './oauth-revocation';

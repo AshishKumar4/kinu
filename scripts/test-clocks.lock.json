@@ -1,6 +1,6 @@
 {
-  "measuredAt": "2026-09-24",
-  "total": 178,
+  "measuredAt": "2026-09-26",
+  "total": 177,
   "files": {
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
@@ -19,9 +19,6 @@
     },
     "packages/cf-backend/tests/unit-diff.test.ts": {
       "clock-compare": 2
-    },
-    "packages/cf-backend/tests/unit-install-script.test.ts": {
-      "sleep": 1
     },
     "packages/cf-backend/tests/unit-pc-agent-exec.test.ts": {
       "clock-compare": 1,

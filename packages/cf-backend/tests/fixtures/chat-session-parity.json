@@ -1923,6 +1923,12 @@
       },
       {
         "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-TOOL",
+        "done": true
+      },
+      {
+        "socket": "B",
         "type": "turn_claim"
       },
       {

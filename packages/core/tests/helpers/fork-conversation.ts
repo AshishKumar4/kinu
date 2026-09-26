@@ -13,6 +13,7 @@ import { SessionContext, type ContextSelection } from '../../src/session/context
 import { SessionPayloads } from '../../src/session/payload';
 import { SessionTranscript, readSessionTranscript } from '../../src/session/transcript';
 import { writeSoul } from '../../src/identity/soul';
+import { writeWorkspaceSoul } from '../../src/vfs/workspace-planes';
 import type { JsonObject } from '../../src/utils/json';
 import { PLATFORM_CATALOG } from '../../src/platform-catalog';
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '../../src/vfs/agent-home';
@@ -160,7 +161,7 @@ export async function seedForkSource(workspace: TestWorkspace, opts: {
   const workspaceName = opts.workspaceName ?? 'origin';
   void workspace.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${workspaceName}, ${100})`;
   const actor = new WorkspaceActorDirectory(workspace.sql, { workspaceId, ownerUserId: '' }).createMain({ name: workspaceName });
-  await writeSoul(workspace.vfs, workspace.sql, opts.purpose ?? 'help with testing');
+  await writeSoul(workspace.sql, opts.purpose ?? 'help with testing', (content) => writeWorkspaceSoul(workspace.bundle, content));
   actor.config.setModel('@cf/moonshotai/kimi-k2.6');
 
   for (const tool of opts.craftedTools ?? []) {
@@ -188,7 +189,7 @@ export async function seedForkTarget(workspace: TestWorkspace, opts: {
   const workspaceName = opts.workspaceName ?? 'target-bootstrap';
   void workspace.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${workspaceName}, ${200})`;
   new WorkspaceActorDirectory(workspace.sql, { workspaceId, ownerUserId: '' }).createMain({ name: workspaceName });
-  await writeSoul(workspace.vfs, workspace.sql, 'default bootstrap purpose');
+  await writeSoul(workspace.sql, 'default bootstrap purpose', (content) => writeWorkspaceSoul(workspace.bundle, content));
 }
 
 /** Read through the production transcript reader, so payload files are resolved and digest-checked. */

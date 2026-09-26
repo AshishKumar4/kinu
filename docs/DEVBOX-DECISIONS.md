@@ -1017,7 +1017,10 @@ shapes; the Durable Object statement cost D23 measured is what the row
 counts stand for. The workerd transcript-cost gate
 (`packages/cf-backend/tests/workerd/long/transcript-cost.test.ts`) on this
 tree: a 500-delta turn 219 ms on an empty transcript and 299 ms after twenty
-2,000-delta answers (1.37x, bound 3x). Removed: 3 tables (`message_parts`,
+2,000-delta answers (1.37x, bound 3x). 2026-09-26: that wall ratio read 6.8x
+in a loaded deploy yet 0.26-1.28x in eight runs at the same tree, so it became
+the complexity subject `session store, a long turn after twenty long answers`,
+which counts rows and fails on this entry's per-delta rows re-read (n^0.48). Removed: 3 tables (`message_parts`,
 `message_updates`, `message_projections`; `stream_parts` added), 7
 `*_sequence` columns with their FKs, 4 fork staging columns, 908 source
 lines against 544 added across 22 files (`git diff --numstat c57832111

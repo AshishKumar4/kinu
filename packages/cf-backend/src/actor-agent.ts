@@ -2270,7 +2270,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   // Platform fan-out and wake ownership around core's serialized chat loop.
   private _host: BackendHost | null = null;
-  private readonly _drainTimerTasks = new Map<string, AsyncTaskOwner>();
+  protected readonly _drainTimerTasks = new Map<string, AsyncTaskOwner>();
   protected get host(): BackendHost {
     if (!this._host) {
       const armWake = this.durableWakeOwner();
@@ -3618,10 +3618,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.ownedModelServices.resolveModel(spec);
   }
 
-  /**
-   * Cached SOUL.md text, refreshed at turn start and invalidated by setSoul().
-   * Cached because the soul is a workspace file and `beforeTurn` is the one place that can await it.
-   */
+  /** Cached SOUL.md text, refreshed at turn start and invalidated by setSoul(). */
   protected _cachedSoulText: string | null = null;
   protected async loadSoulText(): Promise<string> {
     return (await readSoul(this.rt.storage.vfs)) ?? '';
