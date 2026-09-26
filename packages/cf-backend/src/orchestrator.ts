@@ -207,6 +207,7 @@ import {
   TERMINAL_RETRY_CALLBACK,
   type ActorDynamicContextExtras,
   type ActorToolDeps,
+  type UntimedArms,
 } from "./actor-agent";
 import { recordJobSettled, recordSandboxRecovery, type AgentKind } from "@kinu.run/core/analytics";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
@@ -1009,25 +1010,30 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * One `LIMIT 1` existence read per store, short-circuited, since each predicate is its owner's
-   * policy; runs in the init gate. Interpreting a lease is left to {@link owedDeliveryWork}.
+   * One `LIMIT 1` read per store, all read so the wake can name them. Runs in the init gate;
+   * interpreting a lease is left to {@link owedDeliveryWork}.
    */
-  protected override owedUntimedWork(): boolean {
-    return this.eventLog.hasOpenDrainLease()
+  protected override owedUntimedArms(): Required<UntimedArms> {
+    return {
+      openDrainLease: this.eventLog.hasOpenDrainLease(),
       // Interrupted terminal sequence with no retry instant; one awaiting a retry is timed (`nextOwedAt`).
-      || (this.terminal.hasIncomplete() && this.terminal.nextRetryAt() === null)
-      || this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms()
+      terminalIncomplete: this.terminal.hasIncomplete() && this.terminal.nextRetryAt() === null,
+      unfinishedHeads: this.headJournal.hasUnfinishedHeads(),
+      runningSwarms: this.mctsSearchStore.hasRunningSwarms(),
       // A running job with no resume instant (live or orphaned); jobs waiting on an instant are timed
       // and read by `nextOwedAt`, so a lone deferred job costs one wake at its instant.
-      || this.jobs.hasUntimedLiveJobsInWorkspace() || this.workspaceActors().hasRetirements()
-      || this.subordinateRoster.hasPendingBirths() || this.subordinateRoster.hasPendingDeletions()
+      untimedJobs: this.jobs.hasUntimedLiveJobsInWorkspace(),
+      retirements: this.workspaceActors().hasRetirements(),
+      pendingBirths: this.subordinateRoster.hasPendingBirths(),
+      pendingDeletions: this.subordinateRoster.hasPendingDeletions(),
       // An unsettled hosted claim; without this, a workspace whose only owed work is an interrupted
       // hosted turn arms no wake and the recovery arm of `maintenanceWork` never runs.
-      || this.actorHost().resumable(1).length > 0
+      unsettledClaims: this.actorHost().resumable(1).length > 0,
       // Admitted but unstarted delegations hold no claim, so `resumable` does not cover them.
-      || this.hasAdmittedDelegations()
+      admittedDelegations: this.hasAdmittedDelegations(),
       // The root's loop: a turn a dead process was inside, or an acknowledged send never drained.
-      || this.chatLoopOwesWork();
+      chatLoop: this.chatLoopOwesWork(),
+    };
   }
 
   /** Soonest instant a timed ledger (terminal retry, deferred job resume) owes a wake, or null.
