@@ -428,7 +428,7 @@ describe('the embedded workspace removes a tree natively', () => {
   });
 });
 
-describe('the workspace generation is fabric\u2019s counter over one row', () => {
+describe('the workspace generation is one row, taken in one write transaction', () => {
   test('each open of the same database adopts the next generation, and the pid floor follows it', async () => {
     const database = new Database(':memory:');
     const first = createWorkspaceBundle(database);
@@ -443,7 +443,7 @@ describe('the workspace generation is fabric\u2019s counter over one row', () =>
     database.close();
   });
 
-  test('a bump that did not persist refuses the open, on a boot that is not the first', async () => {
+  test('a generation write that fails refuses the open and leaves the counter where it was', async () => {
     const database = new Database(':memory:');
     const first = createWorkspaceBundle(database);
     await first.session();
