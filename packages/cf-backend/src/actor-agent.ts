@@ -2697,46 +2697,8 @@ export abstract class ActorAgent extends Agent<Env> {
       + unconfirmed.map((o) => `${o.requestId} (${o.detail ?? 'no detail'})`).join('; '));
   }
 
-  /**
-   * Is there work in this actor's SUBTREE that may still touch the container?
-   *
-   * Asked by the sandbox's own Durable Object before it does anything a live
-   * user of the container would notice. It is a question about safety, so it is
-   * answered conservatively in one direction only: a wrong `true` costs a warm
-   * container, a wrong `false` pulls the filesystem out from under running work.
-   * Every source below is therefore admitted on "may use", never on "will use" —
-   * a `shell` and an `eval` reach the container directly, and every other
-   * kind of work can call one.
-   *
-   * Four durable sources plus one in-memory one, and each answers a question
-   * the others cannot:
-   *   • detached tool calls  — `background_jobs` rows still `running`, which is
-   *     the only record of work whose executor may be in another activation;
-   *   • admitted work       — open turns, pending sends and hosted claims the
-   *     workspace's durable wake must finish, even with no connected client;
-   *   • managed fibers       — anything durably accepted through the fiber
-   *     ledger and not yet settled, `interrupted` included: an interrupted row
-   *     is work a recovery is about to re-drive, not work that has stopped;
-   *   • the live turn        — in memory by nature, and the single most likely
-   *     caller of a container tool.
-   *
-   * No subtree walk: every hosted actor shares this workspace's container, and
-   * `countRunningInWorkspace()` is workspace-wide by contract. Asking that
-   * global question once per child would return the same answer N times, not N
-   * answers.
-   */
-  async hasSandboxBackgroundWork(): Promise<boolean> {
-    if (this._inFlight) return true;
-
-    if (this.jobs.countRunningInWorkspace() > 0) return true;
-
-    if (this.owedUntimedWork()) return true;
-    const fibers = await this.listFibers({ status: ['pending', 'running', 'interrupted'] });
-
-    if (fibers.length > 0) return true;
-
-    return false;
-  }
+  /** Asked by the workspace container's box before it may rest. */
+  abstract sandboxInUse(): Promise<boolean>;
   /** Controllers for foreground long tools; once detached, BackgroundJobRunner owns cancellation. */
   protected readonly _activeToolControllers = new Set<AbortController>();
 

@@ -1,6 +1,6 @@
 // The ready+activity bridge lives on `Devbox`, so every host inherits it: a terminal lane
 // stamps the durable interaction only after the readiness gate admits the box.
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 
 import { DEFAULT_DEVBOX_POLICY, LAST_INTERACTION_KEY, QUIET_SINCE_KEY, type DevboxPolicy } from '../src/lifecycle';
 import { Devbox, harness } from './support/devbox-harness';
@@ -90,6 +90,45 @@ describe('a throwing host-background check holds the box', () => {
     await box.devboxHeartbeat();
 
     expect((await box.devboxState()).lastTick?.decision).toBe('quiesce');
+  });
+});
+
+/** Busy, and counts how often the beat asks: each ask wakes the owning workspace. */
+class CountingHostBox extends TestBox {
+  asks = 0;
+
+  protected override async hasBackgroundWork(): Promise<boolean> {
+    this.asks += 1;
+
+    return true;
+  }
+}
+
+describe('the beat asks the host at most once per quiet-confirm window', () => {
+  test('beats inside one window reuse the answer, and the next window asks again', async () => {
+    const start = Date.now();
+    const { box, rows } = harness(CountingHostBox);
+
+    try {
+      await box.devboxStartup();
+      rows.set(LAST_INTERACTION_KEY, start - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
+
+      for (let beat = 0; beat < 5; beat++) {
+        setSystemTime(start + beat * 60_000);
+        await box.devboxHeartbeat();
+      }
+
+      // warm-forge-4d6acc02's box asked its root every minute for 30+ hours (2026-09-25/26).
+      expect(box.asks).toBe(1);
+      expect((await box.devboxState()).lastTick?.decision).toBe('hold');
+
+      setSystemTime(start + DEFAULT_DEVBOX_POLICY.quietConfirmMs + 60_000);
+      await box.devboxHeartbeat();
+
+      expect(box.asks).toBe(2);
+    } finally {
+      setSystemTime();
+    }
   });
 });
 

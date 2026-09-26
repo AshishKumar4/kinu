@@ -1378,6 +1378,29 @@ objects. After the deploy: 03Z 7,900 / 7,149 (the deploy hour), 04Z 0 / 75,
 `$workers.scriptName` and `$workers.outcome`; `scripts/prod-logs.ts` holds
 the client.
 
+D35. Container rest follows container use (2026-09-26). The heartbeat asked the
+owning workspace whether it had background work every beat. The root answered
+yes for anything it owed itself: pending sends, unsettled claims, untimed arms,
+fibers to re-drive. warm-forge-4d6acc02's root owed work it could not finish,
+so its box (bcac5302…) kept its container running for 30+ hours, measured in
+Workers Logs 2026-09-25 00Z to 2026-09-26 06Z: 120 alarms an hour, then 60
+after D34. Each beat also woke the root with an RPC.
+
+The root's predicate is now `sandboxInUse`: a live turn of any actor, or a
+detached job that a runner of this activation drives (a `running`, undeferred
+row whose attempt began after the activation started). Owed work is the root's
+own wake's business; a box that stops is restored by its next caller. The beat
+reuses the host's answer for one `quietConfirmMs` window, so a busy root is
+asked once per 10 minutes, not 60 times.
+
+Tests: `cf-backend/tests/unit-eviction-durability.test.ts` (an admitted send
+and an orphaned job row no longer hold the container: red before, green after)
+and `devbox/tests/terminal-activity.test.ts` (five beats in one window ask
+once; the next window asks again: red at 5 asks, green at 1).
+
+Deployed re-proof owed: warm-forge-class boxes quiesce within `idleMs +
+quietConfirmMs` (40 minutes) of their last use.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

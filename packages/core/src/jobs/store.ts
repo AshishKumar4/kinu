@@ -220,6 +220,14 @@ export class BackgroundJobStore {
       SELECT 1 AS present FROM background_jobs WHERE status = 'running' AND resume_after IS NULL LIMIT 1`.length > 0;
   }
 
+  hasDrivenJobsInWorkspace(since: number): boolean {
+    this.actor.assertCurrent();
+
+    return this.sql<{ present: number }>`
+      SELECT 1 AS present FROM background_jobs
+      WHERE status = 'running' AND resume_after IS NULL AND attempt_started_at >= ${since} LIMIT 1`.length > 0;
+  }
+
   /** Remove this actor's settled jobs only. */
   clearSettled(): void {
     this.actor.assertCurrent();

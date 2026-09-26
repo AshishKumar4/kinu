@@ -38,7 +38,7 @@ describe('request-owned chat inputs', () => {
     const turn = claims(harness).latestTurn();
 
     if (turn === null) throw new Error('no root turn was admitted');
-    expect(await harness.agent.hasSandboxBackgroundWork()).toBe(true);
+    expect(await harness.agent.sandboxInUse()).toBe(true);
 
     await harness.agent.terminalRetryPass();
     expect(claims(harness).read(turn.turnId)?.status).toBe('admitted');
@@ -49,7 +49,7 @@ describe('request-owned chat inputs', () => {
     const harness = await opening();
     const ending = settle(harness, 'answer', 'complete answer');
     const claimed = claims(harness).latestTurn()?.status;
-    const busy = harness.agent.hasSandboxBackgroundWork();
+    const busy = harness.agent.sandboxInUse();
     await ending;
 
     expect(claimed).toBe('admitted');

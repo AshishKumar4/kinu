@@ -2126,18 +2126,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         || this.#startup !== undefined
         || this.#gateRestore !== undefined;
 
-      if (!backgroundWork) {
-        // An unreachable host means POSSIBLY busy, so hold. Never stop on a guess.
-        backgroundWork = true;
-
-        try {
-          backgroundWork = await this.hasBackgroundWork();
-        } catch (error) {
-          console.error(
-            `[devbox] background-work check failed, holding: ${describe({ cause: error })}`,
-          );
-        }
-      }
+      if (!backgroundWork) backgroundWork = await this.#hostBackgroundWork(now);
 
       const decision = quiesceStep({
         now,
@@ -2170,6 +2159,27 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // heartbeat retries the whole decision with fresh evidence.
       return (await this.quiesce()).kind === 'failed' ? beat : null;
     });
+  }
+
+  /** The host's answer, reused for a quiet-confirm window: each ask wakes the owning workspace. */
+  #hostAnswer: { readonly at: number; readonly busy: boolean } | undefined;
+
+  async #hostBackgroundWork(now: number): Promise<boolean> {
+    const held = this.#hostAnswer;
+
+    if (held !== undefined && now - held.at < this.policy.quietConfirmMs) return held.busy;
+    // An unreachable host means POSSIBLY busy, so hold. Never stop on a guess.
+    let busy = true;
+
+    try {
+      busy = await this.hasBackgroundWork();
+    } catch (error) {
+      console.error(`[devbox] background-work check failed, holding: ${describe({ cause: error })}`);
+    }
+
+    this.#hostAnswer = { at: now, busy };
+
+    return busy;
   }
 
   /** SDK activity expiry: checkpoint first, since the disk is readable only until the base stop.
