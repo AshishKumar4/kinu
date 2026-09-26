@@ -877,8 +877,8 @@ export async function deleteWorkspace(origin: string, identity: PublicWebIdentit
   });
 }
 
-/** One beat: the roster's mark on `name` moves to now, and whether the deployment took it. A beat that fails is
- *  said, and the lease rides out the next nine. */
+/** One beat: the roster's mark on `name` moves to now, and whether the deployment took it. A workspace the roster no
+ *  longer holds refuses the mark with 404. A beat that fails is said, and the lease rides out the next nine. */
 async function markLive(origin: string, identity: PublicWebIdentity, name: string): Promise<boolean> {
   try {
     const response = await fetch(`${origin}/api/user/workspaces/${encodeURIComponent(name)}/touch`, { method: 'POST', headers: webHeaders(identity) });
@@ -893,21 +893,18 @@ async function markLive(origin: string, identity: PublicWebIdentity, name: strin
   }
 }
 
-/** Mark `name` live every {@link WORKSPACE_BEAT_MS} until the returned stop is called; its create is the first mark.
- *  `marked` hears the time of each mark the deployment took. */
-export function beatWorkspace(
-  origin: string,
-  identity: PublicWebIdentity,
-  name: string,
-  marked: (at: number) => void = () => undefined,
-): () => void {
-  const timer = setInterval(async () => {
-    if (await markLive(origin, identity, name)) marked(Date.now());
-  }, WORKSPACE_BEAT_MS);
+/** Runs `beat` every {@link WORKSPACE_BEAT_MS} until the returned stop is called. */
+function everyBeat(beat: () => Promise<boolean>): () => void {
+  const timer = setInterval(async () => { await beat(); }, WORKSPACE_BEAT_MS);
 
   timer.unref();
 
   return () => { clearInterval(timer); };
+}
+
+/** Mark `name` live every {@link WORKSPACE_BEAT_MS} until the returned stop is called; its create is the first mark. */
+export function beatWorkspace(origin: string, identity: PublicWebIdentity, name: string): () => void {
+  return everyBeat(() => markLive(origin, identity, name));
 }
 
 export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
@@ -1083,10 +1080,19 @@ export class KinuPublicSession {
     readonly workspace: string,
   ) {}
 
-  /** Mark this workspace live on the deployment until teardown (`beatWorkspace`). */
+  /** Mark this workspace live on the deployment until teardown, one {@link markLive} a beat. */
   beat(): void {
     this.lastMarked = Date.now();
-    this.stopBeat = beatWorkspace(this.input.origin, this.input.identity, this.workspace, (at) => { this.lastMarked = at; });
+    this.stopBeat = everyBeat(() => this.markLive());
+  }
+
+  /** One beat: whether the deployment took this workspace's mark, which moves {@link lastMarked} only when it did. */
+  async markLive(): Promise<boolean> {
+    const took = await markLive(this.input.origin, this.input.identity, this.workspace);
+
+    if (took) this.lastMarked = Date.now();
+
+    return took;
   }
 
   get describe(): string {

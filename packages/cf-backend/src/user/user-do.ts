@@ -1207,16 +1207,23 @@ export class UserDO extends Agent<Env> {
     return true;
   }
 
-  async touchWorkspace(caller: UserCaller, name: string): Promise<void> {
+  /** Marks `name` visited now, and says whether the roster took the mark: a name it does not hold, or holds only while
+   *  it is created or torn down, takes none, so a caller keeping a workspace alive by its visits learns it is gone. */
+  async touchWorkspace(caller: UserCaller, name: string): Promise<boolean> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
+
     // Rows being torn down or not yet published are not visitable, matching ordinary reads.
-    this.sqlx(
+    const touched = this.sqlx<{ name: string }>(
       `UPDATE user_workspaces SET last_visited = ?
-       WHERE name = ? AND delete_pending = 0 AND create_pending = 0`,
+       WHERE name = ? AND delete_pending = 0 AND create_pending = 0
+       RETURNING name`,
       Date.now(), name,
-    );
-    this.rosterChanged(name);
+    ).length > 0;
+
+    if (touched) this.rosterChanged(name);
+
+    return touched;
   }
 
   /**

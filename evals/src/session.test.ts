@@ -700,6 +700,28 @@ test('the workspace answering 404 once its own mark is a lease old is a sweep\'s
   }
 });
 
+test('a beat on a workspace a sweep took marks nothing, so the next 404 is still the sweep\'s', async () => {
+  // Asleep past the lease, the machine stopped beating and another run's sweep deleted the workspace. On waking, the
+  // overdue beat fires first, and the roster that no longer holds the workspace refuses its mark with 404.
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => Response.json({ error: 'No such workspace.' }, { status: 404 }) });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'swept-workspace probe',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    const asleepSince = Date.now() - WORKSPACE_LEASE_MS;
+    session.lastMarked = asleepSince;
+
+    expect(await session.markLive()).toBe(false);
+    expect(session.lastMarked).toBe(asleepSince);
+    await expect(session.readFile('notes.txt')).rejects.toThrow(`${INFRA_FAILURE_MARKER} — GET files notes.txt: the workspace was swept`);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 /** One RPC method → the reply this fixture answers it with. */
 const FixtureRpcMethodSchema = v.picklist(['listSubordinates']);
 

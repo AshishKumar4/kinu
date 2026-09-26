@@ -1285,14 +1285,20 @@ const HARNESS_INSTANCE = '../../src/devbox.ts?harness';
 // fake reached every later importer of the SDK, which lost every export but `Sandbox` (a later suite's `getSandbox`
 // import failed to link), and a process that had loaded `@kinu.run/devbox` first handed this harness a class built
 // on the real SDK. So the fake base is registered around exactly one import, this harness's own instance, beside
-// every export the SDK has, and the exports the process had are put back once the class is built.
+// every export the SDK has, and the exports the process had are put back whether that import loads or throws.
 const exported = { ...sandboxSdk };
 
-await mock.module('@cloudflare/sandbox', () => ({ ...exported, Sandbox: FakeSandbox }));
+async function harnessInstance(): Promise<typeof import('../../src/devbox')> {
+  await mock.module('@cloudflare/sandbox', () => ({ ...exported, Sandbox: FakeSandbox }));
 
-const instance: typeof import('../../src/devbox') = await import(HARNESS_INSTANCE);
+  try {
+    return await import(HARNESS_INSTANCE);
+  } finally {
+    await mock.module('@cloudflare/sandbox', () => exported);
+  }
+}
 
-await mock.module('@cloudflare/sandbox', () => exported);
+const instance = await harnessInstance();
 
 if (Object.getPrototypeOf(instance.Devbox) !== FakeSandbox) {
   throw new Error(`the harness's Devbox is not built on FakeSandbox: ${HARNESS_INSTANCE} was an instance already evaluated against another \`Sandbox\``);
