@@ -365,11 +365,11 @@ test('a change-set read that fails raises the Changes tab, which says what faile
       await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="Dashboard"]');
       expect(await page.$('[aria-label="Changes"]')).toBeNull();
-      // Nothing changed anywhere, so only the failure can raise the tab. The tab polls every
-      // 2 s, so by the second failed read the first one's answer has rendered.
+      // Nothing changed anywhere, so only the failure can raise the tab. Unseen, Changes reads only on an event it
+      // listens to; the window taking focus is one.
       await page.click('[data-break-diff]');
-      await page.waitForFunction(() => Number(document.querySelector('[data-break-diff]')?.getAttribute('data-reads')) >= 2);
-      expect(await page.$('[aria-label="Changes"]')).not.toBeNull();
+      await page.evaluate(() => { window.dispatchEvent(new Event('focus')); });
+      await page.waitForSelector('[aria-label="Changes"]');
       await page.click('[aria-label="Changes"]');
       await page.waitForSelector('[data-changes-error]');
       expect(await page.$eval('[data-changes] header', el => el.textContent?.trim())).toBe("Can't read Workspace");
@@ -444,8 +444,14 @@ async function resizePane(page: Page): Promise<void> {
   await resized.evaluate((box) => box.done);
 }
 
+/** Painted at rest: a fold still animating moves the rows below it, so a click aimed at one could land elsewhere. */
 async function drawn(page: Page): Promise<void> {
-  await page.evaluate(() => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); }));
+  await page.evaluate(async () => {
+    await Promise.allSettled(document.getAnimations()
+      .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
+      .map((animation) => animation.finished));
+    await new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); });
+  });
 }
 
 test('a wide pane shows every file expanded beside the tree, with no expand button; narrowed, it opens one file at a time', async () => {

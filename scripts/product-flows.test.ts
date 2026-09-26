@@ -12,12 +12,13 @@ import { SHARE_VIEWER_REQUESTS_PER_MINUTE } from '@kinu.run/core';
 import { resolveWebIdentity } from '../evals/src/session';
 import { withBrowser } from './live-app-harness';
 import {
-  DRIVE_SLATE, FLOW_PROBE, FLOW_SLATE, INSPECTOR_SHUT_PX,
+  DRIVE_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, driveKeepsWhatIsDone, driveOpens, reachesHome, slateOpensFromMyStuff, slateSharesWithNoBindings,
   slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges,
   type AgentReturnVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict, type WrittenFileVerdict,
 } from './product-flows';
+import { FLOW_PROBE, FLOW_SLATE } from './flows-script';
 import { rowVerdicts } from './row-verdicts';
 
 interface FlowVerdicts {

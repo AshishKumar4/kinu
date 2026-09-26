@@ -13,6 +13,7 @@ import type { MockLanguageModelV3 } from 'ai/test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { catalogTurn, chatSessionTurns, gatewayWorkspace, orchestratorHarness } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 
 const METADATA = 'http://169.254.169.254/latest/meta-data/iam/security-credentials/';
 
@@ -90,6 +91,7 @@ describe('the cloud metadata service is out of reach on every path', () => {
 
     await catalogTurn(workspace.agent, 'Have a helper look up the host credentials.');
     await workspace.agent.terminalRetryPass();
+    await joinHarnessFibers();
 
     expect(childRequests.length).toBeGreaterThan(1);
     expect(childRequests.at(-1)).toContain(REFUSED);

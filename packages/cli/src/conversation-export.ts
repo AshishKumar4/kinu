@@ -1,6 +1,5 @@
 import type { AgentTranscriptMessage } from './agent-client';
 
-/** A fence longer than any backtick run in `text`, so the text cannot close it. */
 function fence(text: string): string {
   const longest = Math.max(2, ...[...text.matchAll(/`+/gu)].map((run) => run[0].length));
 

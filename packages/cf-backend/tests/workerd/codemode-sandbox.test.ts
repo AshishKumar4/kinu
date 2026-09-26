@@ -276,7 +276,7 @@ describe('the eval sandbox under workerd', () => {
     expect(String(offline.result)).toContain('threw: ');
 
     // The loopback stub `enable_ctx_exports` mints for the exported class.
-    const egress = codemodeEgress();
+    const egress = codemodeEgress(null);
     expect(egress).not.toBeNull();
     const online = new KinuSandboxExecutor({ loader: env.LOADER, egress });
     const result = await online.execute(program, [toolsProvider([]), stateProvider, workspace]);
@@ -288,7 +288,7 @@ describe('the eval sandbox under workerd', () => {
 
   test('a program cannot reach cloud metadata, and is told why', async () => {
     // Refused by the shared classifier before any DNS lookup or socket, as shell and `web.fetch` refuse it.
-    const egress = codemodeEgress();
+    const egress = codemodeEgress(null);
     expect(egress).not.toBeNull();
     const online = new KinuSandboxExecutor({ loader: env.LOADER, egress });
     const program = "// probe the metadata service\ntry { await fetch('http://169.254.169.254/latest/meta-data/'); return 'reached'; } catch (e) { return 'threw: ' + e.message; }";

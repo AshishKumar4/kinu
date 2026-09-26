@@ -16,7 +16,9 @@
  * prompt transform) — and the caller decides which kinds to follow. A dynamic
  * import over anything but a string literal is reported as COMPUTED rather than
  * dropped: a walker that drops it shrinks the graph in silence, which is what a
- * cache must never do.
+ * cache must never do. The one exception is a template whose fixed start is
+ * `data:`: that URL is the module's own text, built from values the graph
+ * already holds, and it loads no file whatever follows the scheme.
  *
  * Resolution follows relative paths, tsconfig `paths` aliases from the nearest
  * governing tsconfig, and workspace package subpath maps. A workspace package
@@ -92,8 +94,8 @@ export function moduleEdges(parsed: Parsed): ModuleEdges {
       const literal = node.children.find((child) => child.raw.type === 'Literal');
       const source = literal === undefined ? undefined : literalText(literal);
 
-      if (source === undefined || raw.source.type !== 'Literal') computed.push(line);
-      else edges.push({ specifier: source, line, kind: 'value' });
+      if (source !== undefined && raw.source.type === 'Literal') edges.push({ specifier: source, line, kind: 'value' });
+      else if (!(raw.source.type === 'TemplateLiteral' && raw.source.quasis[0]?.value.cooked?.startsWith('data:') === true)) computed.push(line);
 
       return;
     }

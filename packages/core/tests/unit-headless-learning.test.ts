@@ -222,7 +222,7 @@ describe('a headless actor runs the step clock only', () => {
     const main = seats.directory.main();
     await seats.host.retire(
       { actorId: main.actorId, workspaceId: main.workspaceId, parentActorId: main.parentActorId },
-      { reference: seat.actor.reference, name: seat.actor.record.name, destroy: true },
+      { reference: seat.actor.reference, name: seat.actor.record.name, destroy: true, interrupt: true },
     );
     expect(rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM lessons WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(0);
   });

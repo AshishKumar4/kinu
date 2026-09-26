@@ -102,7 +102,7 @@ export async function recoverSubordinateLifecycles(roster: SubordinateRosterStor
       reference = await runtime.cancelBirth({ ...entry.birth.seed, creationId: entry.birth.creationId });
       roster.attachActor(entry.name, entry.birth.creationId, reference);
     } else {
-      await runtime.dismiss(entry.name, false, reference);
+      await runtime.dismiss(entry.name, { keepHistory: false, interrupt: true }, reference);
     }
 
     roster.removeActor(entry.name, reference);

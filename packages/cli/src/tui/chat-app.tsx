@@ -493,7 +493,6 @@ function ChatScene({
   /** `!command` output for the next prompt, as in omp. */
   const localOutputsRef = useRef<string[]>([]);
 
-  // Held command output must reach no other agent.
   const forgetSessionTurn = useCallback(() => {
     localOutputsRef.current = [];
     setAdmittedContext(null);

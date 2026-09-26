@@ -98,7 +98,7 @@ async function retireExploration(
 ): Promise<void> {
   const live = seams.host.hosted(reference);
   const claim = live === null ? null : live.session.turnClaim;
-  const request: ActorRetirementRequest = { reference, name, keepHistory: false };
+  const request: ActorRetirementRequest = { reference, name, keepHistory: false, interrupt: true };
 
   if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
   const retirement = actorRetirementFor(request);

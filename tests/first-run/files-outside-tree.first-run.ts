@@ -78,6 +78,7 @@ describe(SUITE, () => {
     await runFirstRunCase(PLAN, {
       id: CASE,
       modelCalls: 'none',
+      genesis: false,
       purpose: 'A workspace whose files a person opens.',
       async run({ session }) {
         // Written through the workspace's own shell rather than the files

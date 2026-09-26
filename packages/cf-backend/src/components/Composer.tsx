@@ -12,6 +12,7 @@ import type { FileUIPart } from "ai";
 import type { TurnLiveness } from "@kinu.run/core";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import type { WorkspaceNotice } from "@/hooks/use-kinu";
+import { composing } from "@/components/ui/form";
 
 const CHAT_MODES = ["build", "plan"] as const;
 
@@ -299,9 +300,7 @@ export function Composer({
           onKeyDown={(e) => {
             if (e.key !== "Enter") return;
 
-            // Enter that commits IME composition belongs to the IME; keyCode 229
-            // covers engines that fire keydown after compositionend.
-            if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+            if (composing(e.nativeEvent)) return;
 
             if (e.shiftKey) {
               // Kumo's controlled InputArea drops the native line break; insert it

@@ -288,7 +288,7 @@ export interface ResolvedLocalAgent extends LocalAgentRef {
   placement: LocalPlacement;
 }
 
-/** The old launcher ran in the install tree; a placement there names no project, so it reads as unplaced. */
+/** An install-tree placement (the old launcher's) names no project. */
 function insideInstallTree(cwd: string): boolean {
   const relative = relativePath(canonicalProjectRoot(join(AGENT_HOME, 'cli')), canonicalProjectRoot(cwd));
 

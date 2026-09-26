@@ -219,6 +219,27 @@ export async function relayHostedReport(
   }, { fromSubordinate: name, ...report }, Date.now()));
 }
 
+export async function retireStalledTask(
+  seams: SubordinateHostSeams,
+  child: HostedActor,
+  turn: { readonly turnId: string; readonly runs: number; readonly workMode: WorkMode },
+): Promise<void> {
+  new EventLog(seams.exec, child.handle).dismiss(turn.turnId, `stalled after ${String(turn.runs)} runs`, 'system');
+
+  const owed = await terminalTaskReport({
+    lifetime: hostedLifetime(child.record),
+    ending: 'recovered',
+    assistantText: 'This task was cut off twice at the same step by resets of the workspace (a platform memory or time '
+      + 'limit), so it is not being run again. A reset may have come from other work in the workspace, not from this task.',
+    narration: () => Promise.resolve([]),
+  });
+
+  if (owed === null) return;
+  await relayHostedReport(seams, child, {
+    status: owed.status, content: owed.content, origin: 'turn_end', mode: turn.workMode, sequenceId: turn.turnId,
+  });
+}
+
 /**
  * One delegated turn via `runHeadInference`. A `task` child owes a terminal answer on every ending
  * (an `agents.ask` is blocked on it); a `durable` child relays only a completed turn. A report that
@@ -442,11 +463,11 @@ export function hostedSubordinateRuntime(
       });
     },
     /** Wipe removes rows, home and state subtree; archive keeps them. `observed` lets the host settle a live claim. */
-    dismiss: async (name, keepHistory, reference) => {
+    dismiss: async (name, { keepHistory, interrupt }, reference) => {
       const live = seams.host.hosted(reference);
       const claim = live === null ? null : live.session.turnClaim;
       // `observed` only when a claim was seen: the host's refusal depends on absent vs present.
-      const request: ActorRetirementRequest = { reference, name, keepHistory };
+      const request: ActorRetirementRequest = { reference, name, keepHistory, interrupt };
 
       if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
       await seams.host.retire(parent().reference, actorRetirementFor(request));

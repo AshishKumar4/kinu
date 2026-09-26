@@ -385,13 +385,14 @@ export interface ActorRetirementRequest {
   readonly reference: ActorReference;
   readonly name: string;
   readonly keepHistory: boolean;
+  readonly interrupt: boolean;
   observed?: { readonly turnId: string; readonly epoch: number };
 }
 
 /** `destroy` reclaims rows and bytes; archive keeps both. `observed` is set only when the caller saw a live claim. */
 export function actorRetirementFor(input: ActorRetirementRequest): ActorRetirement {
   const retirement: ActorRetirement = {
-    reference: input.reference, name: input.name, destroy: !input.keepHistory,
+    reference: input.reference, name: input.name, destroy: !input.keepHistory, interrupt: input.interrupt,
   };
 
   if (input.observed === undefined) return retirement;

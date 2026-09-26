@@ -12,15 +12,14 @@
  * requires before it lets a suite read `KINU_ORIGIN` at all
  * (scripts/test-scratch-home.ts).
  *
- * The model is the flows' script (`flowsModel` in scripts/product-flows.ts) on
- * a local endpoint, made the account's default before the command starts, so a
- * run here tests the product deterministically; the deployment's run tests the
- * real model.
+ * The model is the product tiers' script (`tierModel`, scripts/tier-model.ts)
+ * on a local endpoint, made the account's default before the command starts,
+ * so a run here tests the product deterministically.
  */
 import { releaseOnSignals, releaseScratch } from '@kinu.run/test-utils';
 import { resolveWebIdentity, webHeaders } from '../evals/src/session';
 import { withDevServer } from './live-app-harness';
-import { flowsModel } from './product-flows';
+import { tierModel } from './tier-model';
 import { defaultToScriptedModel, registerScriptedModel, startScriptedModel } from './scripted-model';
 
 // Outside `bun test` no preload releases what the boot minted: its dev server's
@@ -40,10 +39,10 @@ const status = await withDevServer(async ({ origin, previewPort }) => {
 
   if (identity.kind === 'absent') throw new Error(identity.remedy);
   const headers = webHeaders(identity.identity);
-  const model = await startScriptedModel(flowsModel);
+  const model = await startScriptedModel(tierModel);
 
   try {
-    await registerScriptedModel(origin, model.port, headers);
+    await registerScriptedModel(origin, model.baseURL, headers);
     await defaultToScriptedModel(origin, headers);
     console.error(`with-dev-server: ${origin} is up, on the flows' scripted model; running ${command.join(' ')}`);
 

@@ -46,6 +46,8 @@ export * from './spawn';
 
 export * from './eval-run';
 
+export * from './scripted-model-spec';
+
 export * from './eval-outcome';
 
 export * from './parity-normalizer';

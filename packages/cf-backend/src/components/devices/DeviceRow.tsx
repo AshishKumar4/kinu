@@ -10,6 +10,7 @@ import {
 import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode, type DeviceMode } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
+import { composing } from "@/components/ui/form";
 
 /** The hub enforces the same `effectiveDeviceMode`, so this line matches what it does. */
 const SANDBOX_MODE_COPY = {
@@ -148,6 +149,8 @@ export function DeviceRow({
             onChange={(e) => setEditing(e.target.value)}
             onBlur={save}
             onKeyDown={async (e) => {
+              if (composing(e.nativeEvent)) return;
+
               if (e.key === "Enter") {
                 e.preventDefault();
                 setEditing(null);

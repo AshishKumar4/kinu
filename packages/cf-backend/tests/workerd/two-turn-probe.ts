@@ -324,9 +324,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** Settled by the first `_kinuTimerTick` this activation finishes, whoever delivered it. */
   private readonly firstTimerTick = Promise.withResolvers<void>();
 
-  override async _kinuTimerTick(): Promise<void> {
+  override async _kinuTimerTick(...args: Parameters<ProductionOrchestrator['_kinuTimerTick']>): Promise<void> {
     try {
-      await super._kinuTimerTick();
+      await super._kinuTimerTick(...args);
     } finally {
       this.firstTimerTick.resolve();
     }

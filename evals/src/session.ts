@@ -108,21 +108,9 @@ import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from 
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
 import {
   absorbingRunId, compareRunEventOrder, DeploymentAnswer, evalAccount, evalNameSlug, evalTargetVerdict,
-  evalWorkspaceName, INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend, workerSession,
-  EVAL_BACKEND_ENV,
+  evalWebIdentityEnv, evalWorkspaceName, INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend,
+  workerSession, EVAL_BACKEND_ENV,
 } from '@kinu.run/test-utils';
-
-/**
- * The variable that carries the browser plane's authority to this harness.
- *
- * Named separately from `KINU_EVAL_TOKEN` because it is a different credential
- * for a different plane, and conflating them would let a run holding only the
- * CLI bearer believe it could reach `/api/user/*`. Its VALUE is the
- * deployment's `DEV_IDENTITY_SECRET` (its `SUPPLY` row in scripts/infra-manifest.ts) — the whole
- * authority for the deployment's synthetic identity — which is why the remedy below
- * names how it was installed rather than inventing a second source for it.
- */
-export const PUBLIC_IDENTITY_ENV = 'KINU_EVAL_WEB_IDENTITY';
 
 /** The executor a deployed workspace's own filesystem lives on — the same name
  *  the operator-plane target addresses it by, so the two arms read one plane. */
@@ -195,7 +183,8 @@ export function resolveWebIdentity(
   origin: string,
   env: Record<string, string | undefined> = process.env,
 ): PublicWebIdentityResolution {
-  const secret = env[PUBLIC_IDENTITY_ENV]?.trim();
+  const variable = evalWebIdentityEnv(origin);
+  const secret = env[variable]?.trim();
   const account = evalAccount(env);
   const named = account === undefined ? {} : { account };
 
@@ -211,7 +200,7 @@ export function resolveWebIdentity(
       + 'tier\'s KINU_EVAL_TOKEN is a CLI bearer, and `handleCliRequest` answers nothing outside '
       + '`/api/cli` (cli/routes.ts:87), so it cannot reach `/api/user/workspaces`, '
       + '`/api/workspaces/:name/runs` or the files route this session reads. Export the '
-      + `deployment's synthetic-identity secret as ${PUBLIC_IDENTITY_ENV} — the value installed `
+      + `deployment's synthetic-identity secret as ${variable} — the value installed on it `
       + 'with `wrangler secret put DEV_IDENTITY_SECRET`, which is what '
       + `\`authenticateRequest\` accepts in \`${DEV_IDENTITY_HEADER}\` (auth/session.ts). `
       + 'A loopback `wrangler dev` origin needs no secret at all.',

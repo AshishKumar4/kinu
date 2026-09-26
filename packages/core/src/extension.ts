@@ -46,7 +46,7 @@ interface PrepareStepResumption {
   readonly first: Promise<ModelMessage[] | undefined>;
 }
 
-/** 'force': after an overflow, to the ladder's target; 'user': the owner's /compact, to the last exchanges. */
+/** 'force': overflow recovery; 'user': /compact. */
 export type CompactionTrigger = 'auto' | 'force' | 'user';
 
 export type ArmedCompaction = Exclude<CompactionTrigger, 'auto'>;

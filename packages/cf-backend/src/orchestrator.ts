@@ -3,7 +3,7 @@
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
  */
 
-import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
+import { callable, type AgentContext, type Connection, type ConnectionContext, type Schedule } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
@@ -11,12 +11,12 @@ import {
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
-  recoverActorTurns, EventLog, actorReferenceOf,
+  recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf,
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
   mintSubordinateName, withHeadCaptureRecording,
-  type ActorHost, type ActorToolsetDeps, type AgentsSwarmDeps, type AgentsToolDeps,
+  type ActorHost, type ActorToolsetDeps, type AgentsSwarmDeps, type AgentsToolDeps, type ResumableActorTurn,
   type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
@@ -31,6 +31,7 @@ import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, 
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
 import { TRANSCRIPT_WINDOW, type ChatWire } from './chat-transport';
+import { DELEGATION_LANE_FIBER } from './fiber-recovery';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
@@ -45,7 +46,7 @@ import {
   type ExplorationHostSeams,
 } from "./exploration-hosting";
 import {
-  admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport,
+  admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
   reportSettlesRun, runHostedTask,
   type HostedTaskProfile, type HostedTaskTurn, type SubordinateHostSeams,
 } from "./subordinate-hosting";
@@ -206,6 +207,7 @@ import {
   TERMINAL_RETRY_CALLBACK,
   type ActorDynamicContextExtras,
   type ActorToolDeps,
+  type UntimedArms,
 } from "./actor-agent";
 import { recordJobSettled, recordSandboxRecovery, type AgentKind } from "@kinu.run/core/analytics";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
@@ -640,7 +642,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ),
       codemodeTool: (runtime, webSearch) => {
         const factory = createCodemodeToolFactory({
-          loader: this.env.LOADER, egress: codemodeEgress(), rt: runtime,
+          loader: this.env.LOADER, egress: codemodeEgress(this.workspaceName()), rt: runtime,
           sql: this.boundSql, workspace: this.workspaceName(), webSearch,
         });
 
@@ -701,7 +703,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(), rt: turn.runtime,
+      loader: this.env.LOADER, egress: codemodeEgress(this.workspaceName()), rt: turn.runtime,
       sql: this.boundSql, workspace: this.workspaceName(), webSearch,
       // A thunk, so it reads the `report` deps declared below rather than a construction-time copy.
       extraProviders: () => [createReportCodemodeProvider(() => report)],
@@ -1008,25 +1010,30 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * One `LIMIT 1` existence read per store, short-circuited, since each predicate is its owner's
-   * policy; runs in the init gate. Interpreting a lease is left to {@link owedDeliveryWork}.
+   * One `LIMIT 1` read per store, all read so the wake can name them. Runs in the init gate;
+   * interpreting a lease is left to {@link owedDeliveryWork}.
    */
-  protected override owedUntimedWork(): boolean {
-    return this.eventLog.hasOpenDrainLease()
+  protected override owedUntimedArms(): Required<UntimedArms> {
+    return {
+      openDrainLease: this.eventLog.hasOpenDrainLease(),
       // Interrupted terminal sequence with no retry instant; one awaiting a retry is timed (`nextOwedAt`).
-      || (this.terminal.hasIncomplete() && this.terminal.nextRetryAt() === null)
-      || this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms()
+      terminalIncomplete: this.terminal.hasIncomplete() && this.terminal.nextRetryAt() === null,
+      unfinishedHeads: this.headJournal.hasUnfinishedHeads(),
+      runningSwarms: this.mctsSearchStore.hasRunningSwarms(),
       // A running job with no resume instant (live or orphaned); jobs waiting on an instant are timed
       // and read by `nextOwedAt`, so a lone deferred job costs one wake at its instant.
-      || this.jobs.hasUntimedLiveJobsInWorkspace() || this.workspaceActors().hasRetirements()
-      || this.subordinateRoster.hasPendingBirths() || this.subordinateRoster.hasPendingDeletions()
+      untimedJobs: this.jobs.hasUntimedLiveJobsInWorkspace(),
+      retirements: this.workspaceActors().hasRetirements(),
+      pendingBirths: this.subordinateRoster.hasPendingBirths(),
+      pendingDeletions: this.subordinateRoster.hasPendingDeletions(),
       // An unsettled hosted claim; without this, a workspace whose only owed work is an interrupted
       // hosted turn arms no wake and the recovery arm of `maintenanceWork` never runs.
-      || this.actorHost().resumable(1).length > 0
+      unsettledClaims: this.actorHost().resumable(1).length > 0,
       // Admitted but unstarted delegations hold no claim, so `resumable` does not cover them.
-      || this.hasAdmittedDelegations()
+      admittedDelegations: this.hasAdmittedDelegations(),
       // The root's loop: a turn a dead process was inside, or an acknowledged send never drained.
-      || this.chatLoopOwesWork();
+      chatLoop: this.chatLoopOwesWork(),
+    };
   }
 
   /** Soonest instant a timed ledger (terminal retry, deferred job resume) owes a wake, or null.
@@ -1056,20 +1063,58 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ).toArray().length > 0;
   }
 
+  /** One drain per isolate: a second would open two turns on one actor's chat room. */
+  private _delegationDrain: Promise<void> | null = null;
+
+  private _delegationDrainAgain = false;
+
   /**
-   * Runs admitted delegated turns on the durable wake; admission must not run them (`waitUntil` shape).
-   * Per-queue policy lives in core's `drainAssignments`; this is the cf budget and runner.
+   * Admitted delegated turns run on a fiber, off the wake: inside it a turn held the alarm to its
+   * 15-minute wall, whose reset closed every socket (warm-forge-4d6acc02, 2026-09-25).
    */
+  private startDelegationDrain(): void {
+    if (this._delegationDrain !== null) {
+      this._delegationDrainAgain = true;
+
+      return;
+    }
+
+    const drain = (async () => {
+      try {
+        await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
+          ctx.stash({ lane: DELEGATION_LANE_FIBER });
+          let again = true;
+
+          while (again) {
+            this._delegationDrainAgain = false;
+            again = await this.drainAdmittedDelegations() || this._delegationDrainAgain;
+          }
+        });
+      } catch (cause) {
+        diagnostics.failure('subordinate.delegation_drain_failed', toKinuError({
+          doing: 'draining the delegated turns this workspace admitted', cause, otherwise: 'io',
+        }), { workspace: this.name });
+      } finally {
+        this._delegationDrain = null;
+      }
+    })();
+
+    this._delegationDrain = drain;
+  }
+
   private async drainAdmittedDelegations(): Promise<boolean> {
     const seams = this.subordinateSeams();
     const exec = this.boundExec();
     const now = Date.now();
     let budget = HOSTED_DELEGATION_DRAIN_BUDGET;
     let truncated = false;
+    const hires = this.workspaceActors().list().filter((record) => record.kind === 'subordinate');
 
-    for (const record of this.workspaceActors().list()) {
-      if (record.kind !== 'subordinate') continue;
+    for (const orphan of dismissOrphanedAssignments(exec, new Set(hires.map((record) => record.actorId)))) {
+      diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id });
+    }
 
+    for (const record of hires) {
       if (budget <= 0) { truncated = true; break; }
 
       const reference: ActorReference = {
@@ -1153,6 +1198,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       } catch (cause) {
         diagnostics.failure('subordinate.assignment_repend_failed', toKinuError({
           doing: 'returning an interrupted delegated turn to the admitted queue', cause, otherwise: 'io',
+        }), { workspace: this.name, actor: turn.record.name });
+      }
+    }
+  }
+
+  private async retireStalledAssignments(stalled: readonly ResumableActorTurn[]): Promise<void> {
+    for (const turn of stalled) {
+      if (turn.record.kind !== 'subordinate') continue;
+
+      try {
+        const child = await this.actorHost().acquire(actorReferenceOf(turn.record));
+        await retireStalledTask(this.subordinateSeams(), child, {
+          turnId: turn.claim.turnId, runs: turn.claim.epoch, workMode: turn.claim.workMode,
+        });
+      } catch (cause) {
+        diagnostics.failure('subordinate.stalled_retire_failed', toKinuError({
+          doing: 'retiring a delegated turn whose runs stalled', cause, otherwise: 'io',
         }), { workspace: this.name, actor: turn.record.name });
       }
     }
@@ -1687,7 +1749,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The host does the whole physical retirement in one call: runtime objects, `actor_id` rows in
       // the retirement transaction, and on destroy the home and `.kinu/agents/<key>/` subtree.
       await this.actorHost().retire(caller, {
-        reference: input.reference, name: input.name, destroy: true,
+        reference: input.reference, name: input.name, destroy: true, interrupt: true,
       });
 
       return entry.state === 'deleted' ? entry : directory.apply(caller, path, { action: 'release', name: input.name, reference: input.reference });
@@ -2731,13 +2793,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // The alarm owns recovery authority. Core retains verified claims as owed,
     // settles unverified ones indeterminate, and leaves live actors untouched.
     let owedClaims: readonly string[] = [];
+    let stalled: readonly ResumableActorTurn[] = [];
 
     try {
       const host = this.actorHost();
       const rootActorId = this.actorHandle().actorId;
-      const rootIsLive = () => this._inFlight;
+      const rootIsLive = () => this._inFlight || this.actorSession.turnOpen;
 
       const recovered = await recoverActorTurns({
+        installedBuild: host.installedBuild,
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
           const actor = await host.acquire(reference);
@@ -2749,8 +2813,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
             // its tabs are told about every claim written there.
             stores: root ? this.stores : actor.stores,
             session: {
-              get inFlight() {
-                return root ? rootIsLive() : actor.session.inFlight;
+              get turnOpen() {
+                return root ? rootIsLive() : actor.session.turnOpen;
               },
             },
           };
@@ -2758,6 +2822,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       owedClaims = recovered.verified;
+      stalled = recovered.stalled;
     } catch (cause) {
       diagnostics.failure('actor.turn_recovery_failed', toKinuError({
         doing: 'rebuilding the hosted turns an eviction interrupted', cause, otherwise: 'io',
@@ -2765,10 +2830,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     this.rependRecoveredAssignments(owedClaims);
+    await this.retireStalledAssignments(stalled);
     // Retained claims still fence new work; verification alone is not execution.
-    const delegationsTruncated = await this.drainAdmittedDelegations();
+    this.startDelegationDrain();
 
-    if (!this.activationRecoveryPending) return delegationsTruncated || await super.maintenanceWork();
+    if (!this.activationRecoveryPending) return await super.maintenanceWork();
 
     // Wait for the branch seal to drain: the fork reconcile would retire a pre-cutoff running
     // steer branch head as lost fork work.
@@ -2813,7 +2879,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }), { workspace: this.name });
     }
 
-    return delegationsTruncated || await super.maintenanceWork();
+    return await super.maintenanceWork();
   }
   /**
    * Retire exploration actors a reset left behind, against ledgers fork reconciliation settled (S13).
@@ -2860,7 +2926,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // `(trigger_id, scheduled_fire_at)` makes a re-fire after eviction a no-op publish.
   // A wake is a separate invocation from whatever armed it; `tracing.invocation` revokes the handle
   // when this promise settles, so spans cannot cover both.
-  async _kinuTimerTick(): Promise<void> {
+  async _kinuTimerTick(_payload?: undefined, own?: Schedule<undefined>): Promise<void> {
+    if (own === undefined) return this.timerTickPass();
+    await this.runWakeRow(own, () => this.timerTickPass());
+  }
+
+  private async timerTickPass(): Promise<void> {
     const now = Date.now();
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
       await tick.span('alarm.due_triggers', async (span) => {

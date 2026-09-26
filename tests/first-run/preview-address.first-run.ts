@@ -22,7 +22,7 @@ describe(SUITE, () => {
   test.skipIf(PLAN === null)('MEASURED: preview-address', async () => {
     if (PLAN === null) throw new Error('Explicit operator plan required');
     await runFirstRunCase(PLAN, {
-      id: CASE, modelCalls: 'none', purpose: 'Disposable preview address admission verification; no model task.',
+      id: CASE, modelCalls: 'none', genesis: false, purpose: 'Disposable preview address admission verification; no model task.',
       async run({ session }) {
         const suffix = crypto.randomUUID().replaceAll('-', '');
         const longName = 'first-run-address-' + suffix.slice(0, 14);

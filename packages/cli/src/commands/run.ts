@@ -574,7 +574,6 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
 
     case 'text-delta':
       return [{ type: 'message_delta', role: 'assistant', delta: event.delta }];
-    // A JSON event type is a contract its readers parse.
     case 'reasoning-delta':
       return [];
     case 'tool-call':

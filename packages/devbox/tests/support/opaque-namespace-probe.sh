@@ -13,7 +13,6 @@ cleanup() {
   for mount in "$block" "$delta" "$base"; do
     if mountpoint -q "$mount"; then fusermount3 -uz "$mount"; fi
   done
-  chown -R --no-dereference "$(stat -c %u:%g /fixture)" /fixture
 }
 trap cleanup EXIT
 mksquashfs /fixture/base "$probe_dir/base.sqsh" -comp zstd -no-progress -processors 1 >/dev/null

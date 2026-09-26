@@ -6,7 +6,7 @@ export function modelDisplayName(spec: string | null | undefined): string {
 
   if (!raw) return 'default';
   const listed = specWithoutAccount(raw);
-  // The model is the last path segment: a provider, a gateway or a vendor folder only prefixes it.
+  // The model is the last path segment.
   const leaf = listed.split('/').at(-1) ?? listed;
 
   const name = leaf

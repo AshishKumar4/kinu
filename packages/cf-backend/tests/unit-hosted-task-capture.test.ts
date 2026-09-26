@@ -8,6 +8,7 @@ import { expect, test } from 'bun:test';
 import { ADVISOR_HEADER } from '@kinu.run/core';
 import { catalogTurn, gatewayWorkspace, relayedReports, workspaceMainActor } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 
 const MISSION = 'Catalogue every file under the home directory.';
 
@@ -41,6 +42,7 @@ test("a delegated turn's tool call reaches the answer its caller gets", async ()
 
   await catalogTurn(workspace.agent, 'Have a reader catalogue the home directory.');
   await workspace.agent.terminalRetryPass();
+  await joinHarnessFibers();
 
   // No decision or finding, so the synthesis falls to the tool tally from the shared capture.
   expect(relayedReports(workspace.db)).toEqual(['Ran 1 tool call(s): file']);
@@ -80,6 +82,7 @@ test('a hosted subordinate is advised without adding a turn to either evolution 
   const before = completedTurns();
 
   await workspace.agent.terminalRetryPass();
+  await joinHarnessFibers();
 
   expect(relayedReports(workspace.db)).toEqual(['The probe succeeded.']);
   expect(reviews).toHaveLength(2);

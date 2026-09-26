@@ -13,6 +13,7 @@ import {
   SubordinateRosterStore,
   SubordinateIdentityStore,
   admitSubordinateTask,
+  dismissOrphanedAssignments,
   drainAssignments,
   type SubordinateInheritedContext,
   actorReferenceOf,
@@ -1154,8 +1155,8 @@ export class LocalAgentHost {
         child.config.setDisplayNameOrigin(displayName, nameOrigin);
         child.session.host.broadcast({ type: 'workspace_renamed', displayName });
       },
-      dismiss: async (name, keepHistory, reference) => {
-        await this.removeChild(parentOf(), name, keepHistory, reference);
+      dismiss: async (name, { keepHistory, interrupt }, reference) => {
+        await this.removeChild(parentOf(), name, { keepHistory, interrupt }, reference);
       },
     };
   }
@@ -1368,13 +1369,15 @@ export class LocalAgentHost {
     });
 
     await parent.tree.host.retire(parent.actor.reference, {
-      reference, name: input.name, destroy: true,
+      reference, name: input.name, destroy: true, interrupt: true,
     });
 
     return reference;
   }
 
-  private async removeChild(parent: HostEntry, name: string, keepHistory: boolean, reference: ActorReference): Promise<void> {
+  private async removeChild(
+    parent: HostEntry, name: string, { keepHistory, interrupt }: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference,
+  ): Promise<void> {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
     const candidate = parent.children.get(name) ?? this.entries.get(`${parent.key}/${name}`);
     const child = candidate?.ws.rt.actor.actorId === reference.actorId ? candidate : undefined;
@@ -1393,7 +1396,7 @@ export class LocalAgentHost {
 
     // A retained dismissal keeps history as rows; only scratch bytes are removed.
     const retirement: Parameters<ActorHost['retire']>[1] = {
-      reference, name, destroy: !keepHistory,
+      reference, name, destroy: !keepHistory, interrupt,
     };
 
     await parent.tree.host.retire(parent.actor.reference, retirement);
@@ -1404,7 +1407,15 @@ export class LocalAgentHost {
    * reactor digest. `drainTurnId` splices the birth context. Roots have no assignments.
    */
   private async drainAssignedWork(entry: HostEntry): Promise<void> {
-    if (entry.parentKey === null) return;
+    if (entry.parentKey === null) {
+      const hires = entry.tree.directory.list().filter((record) => record.kind === 'subordinate');
+
+      for (const orphan of dismissOrphanedAssignments(makeSqlExec(entry.tree.db), new Set(hires.map((record) => record.actorId)))) {
+        diagnostics.event('subordinate.assignment_orphaned', { agent: entry.key, actor: orphan.actorId, assignment: orphan.id });
+      }
+
+      return;
+    }
 
     const swept = await drainAssignments(entry.eventLog, {
       now: Date.now(),

@@ -388,6 +388,14 @@ export class ResidentSlateProcesses {
       throw new KinuError('bad_input', 'package.json main must name the module that exports class Slate extends SlateObject from kinu:slate');
     }
 
+    const authored = session.vfs.as(input.cred);
+
+    for (const [field, entry] of [['main', main], ['browser', browser]] as const) {
+      if (entry !== undefined && !authored.exists(`${input.root}/${entry}`)) {
+        throw new KinuError('bad_input', `package.json "${field}" names ${entry}, which is not a file in ${input.root}`);
+      }
+    }
+
     const bundlerKey = slateCredentialKey(input.cred);
     let bundler = this.bundlers.get(bundlerKey);
 

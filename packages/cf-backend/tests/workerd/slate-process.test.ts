@@ -207,6 +207,20 @@ it('a class that is not the slate contract fails to boot, and the authored fetch
   }
 });
 
+it('a package.json entry naming no file is refused naming the field and the file', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('missing-entry'));
+  const slate = 'import { SlateObject } from "kinu:slate"; export class Slate extends SlateObject { }';
+  // 2026-09-25: a model named a browser entry it never wrote, and heard only the resolver's
+  // "Cannot read directory ".": not implemented on js".
+  const browser = await subject.compileProbe(slate, undefined, { main: 'server.ts', browser: 'client.tsx', slate: { title: 'Notes' } });
+
+  expect(browser).toMatchObject({ code: 'bad_input', detail: expect.stringContaining('package.json "browser" names client.tsx') });
+
+  const main = await subject.compileProbe(null, undefined, { main: 'absent.ts' });
+
+  expect(main).toMatchObject({ code: 'bad_input', detail: expect.stringContaining('package.json "main" names absent.ts') });
+});
+
 it('boots the class whether main exports it as Slate or as default, and the refusal names what it found', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('export-shapes'));
   // The exact source a first-run eval model wrote: SlateObject from kinu:slate, class as default export.

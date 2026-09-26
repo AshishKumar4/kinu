@@ -10,19 +10,11 @@ import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
   firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
+import { HELLO_SLATE_ASK as ASK, HELLO_SLATE_ID as ID } from './asks';
 
 const SUITE = 'First-run · slate';
 
 const CASE = 'slate';
-
-const ID = 'hello';
-
-const ASK = 'Use the file tool to create a slate at /slates/hello/. '
-  + 'Write package.json with main "server.ts" and slate {"title":"Hello","port":8787,"bindings":{}}. '
-  + 'Write server.ts so the slate answers GET /ping with JSON '
-  + '{"message":"pong","method":request.method,"path":new URL(request.url).pathname} '
-  + 'and HTTP 404 for other paths. Start its preview yourself and verify GET /ping. '
-  + 'Reply with pong on its own line and the working preview URL.';
 
 const ExpectedResponse = v.strictObject({
   message: v.literal('pong'),

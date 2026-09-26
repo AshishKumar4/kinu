@@ -2,13 +2,13 @@
 //
 // The first-run tier runs inside the deploy, against the build it just shipped,
 // and its browser plane already holds the deployment's `DEV_IDENTITY_SECRET`
-// (`KINU_EVAL_WEB_IDENTITY`). Its CLI plane needs a bearer for the same account,
+// (in the variable `evalWebIdentityEnv` names for its origin). Its CLI plane needs a bearer for the same account,
 // and the only way to get one is the device flow `kinu auth` runs — with the
 // approval made by the eval identity instead of a person in a browser. That
 // approval is `POST /cli/auth` presenting the secret in core's `DEV_IDENTITY_HEADER`,
 // which `authenticateRequest` honours for exactly that header and nothing else.
 //
-// Writes `~/.config/kinu/eval-session/config.json` (mode 0600), the file
+// Writes `~/.config/kinu/eval-session/<host>/config.json` (mode 0600), the file
 // `scripts/eval-credentials.ts` reads; with KINU_EVAL_ACCOUNT, the named eval
 // account's bearer, approved as that account, beside it (`evalSessionPath`).
 // Never touches the person's own config. Exits 0 having written nothing when a
@@ -20,13 +20,12 @@ import { dirname } from 'node:path';
 import * as v from 'valibot';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER } from '@kinu.run/core';
 import {
-  EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, evalAccount, evalSessionPath, evalTargetVerdict, isEvalAccountEmail,
+  EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, evalAccount, evalSessionPath, evalTargetVerdict, evalWebIdentityEnv,
+  isEvalAccountEmail,
 } from '@kinu.run/test-utils';
 import { pollCliAuth, startCliAuth } from '../packages/cli/src/cloud-api';
 
 const account = evalAccount();
-
-const persistedPath = evalSessionPath(account);
 
 // An origin set to blank names no target, so it reads as absent.
 const originFromEnv = process.env[EVAL_IDENTITY_ENV.origin]?.trim();
@@ -42,10 +41,14 @@ if (target.kind === 'refused') {
   process.exit(1);
 }
 
-const webIdentity = process.env.KINU_EVAL_WEB_IDENTITY?.trim();
+const persistedPath = evalSessionPath(target.origin, account);
+
+const webIdentityEnv = evalWebIdentityEnv(target.origin);
+
+const webIdentity = process.env[webIdentityEnv]?.trim();
 
 if (!webIdentity) {
-  console.error('eval-session-mint: KINU_EVAL_WEB_IDENTITY is not set; nothing can approve the flow.');
+  console.error(`eval-session-mint: ${webIdentityEnv} is not set; nothing can approve the flow on ${target.origin}.`);
   process.exit(1);
 }
 
@@ -69,7 +72,7 @@ if (existsSync(persistedPath)) {
     process.exit(0);
   }
 
-  // Another deployment's bearer lives here, and this is the only copy of it.
+  // This deployment's file holds something else, and this is the only copy of it.
   console.error(`eval-session-mint: REFUSED — ${persistedPath} holds a session for ` +
     `${persisted.success ? persisted.output.origin : 'an unreadable origin'}, not ${target.origin}; move it aside first.`);
   process.exit(1);
@@ -88,7 +91,7 @@ const page = await fetch(`${target.origin}/cli/auth?code=${encodeURIComponent(fl
 
 if (page.status >= 400) {
   console.error(`eval-session-mint: the deployment refused the approval page (${page.status}); ` +
-    'does it set DEV_USER_EMAIL, and does KINU_EVAL_WEB_IDENTITY match its DEV_IDENTITY_SECRET?');
+    `does it set DEV_USER_EMAIL, and does ${webIdentityEnv} match its DEV_IDENTITY_SECRET?`);
   process.exit(1);
 }
 

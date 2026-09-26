@@ -32,30 +32,12 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
+import { MOUNT_ASK as ASK, MOUNT_BYTES as BYTES, MOUNT_TARGET as TARGET } from './asks';
 import type { RunEvent } from '../../packages/core/src/index';
 
 const SUITE = 'First-run · sandbox-mount-write';
 
 const CASE = 'sandbox-mount-write' as const;
-
-/** The mounted path the defect named, and the bytes this case chose. */
-const TARGET = '/sandbox/workspace/first-run-mount.mjs';
-
-const BYTES = 'export const firstRun = "KINU_SANDBOX_MOUNT_OK";\n';
-
-/** The turn's marker, so its own events can be picked out of the workspace's
- *  log — the genesis turn's events are not this case's evidence. */
-const MARK = 'MOUNT-WRITE-PROBE';
-
-/** One turn that does the whole defect: the listing, the create, the read-back
- *  and the empty-path namespace listing — the same calls the failed run made. */
-const ASK = `This turn is identified by ${MARK}. Do all of this, in order, without ` +
-  'narrating:\n' +
-  `1. With the file tool, list ${TARGET.slice(0, TARGET.lastIndexOf('/'))} — it should be empty.\n` +
-  `2. With the file tool, write ${TARGET} containing exactly these bytes:\n${BYTES}` +
-  '3. With the file tool, read that path back.\n' +
-  `4. With eval, run: const ls = await sandbox.listFiles(''); return ls;\n` +
-  'Then answer with one line naming the file you wrote.';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
 

@@ -52,7 +52,7 @@ function setup() {
     status: async () => ({ lastActivity: 0, recentSteps: [] }),
     message: async () => { throw new KinuError('unsupported', 'This test does not send a second message.'); },
     rename: async () => { throw new KinuError('unsupported', 'This test does not rename actors.'); },
-    dismiss: async (name, keepHistory, reference) => {
+    dismiss: async (name, { keepHistory }, reference) => {
       if (keepHistory) return;
       const actor = directory.apply(main, [], { action: 'retire', name, reference });
 

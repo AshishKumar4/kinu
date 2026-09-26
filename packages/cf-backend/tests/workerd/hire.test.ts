@@ -83,6 +83,70 @@ describe('hire', () => {
     );
   });
 
+  // warm-forge-4d6acc02, 2026-09-25: a delegated turn run inside the alarm slept on an 8-day Retry-After until the
+  // 15-minute alarm wall reset the object, every 15 minutes, closing every socket. The wake must hand the turn off.
+  it('the wake that starts a delegated turn returns while that turn is still running', async () => {
+    const workspace = 'hire-wake-returns';
+
+    await probe(workspace).setup(workspace, 'hire-root', 'park');
+    const hiring = probe(workspace).openHire(workspace, 'Hire one auditor; it will park.');
+
+    await probe(workspace).childSpoke();
+    // Hangs while the wake holds the parked turn: the release below is never reached.
+    await probe(workspace).wakeReturned(workspace);
+    await probe(workspace).releaseChild();
+    await hiring;
+    await probe(workspace).callerObserved();
+
+    const observed: HireObservation = await probe(workspace).observe(workspace);
+
+    expect(observed.toolResults.join(' ')).toContain(CHILD_ANSWER);
+  });
+
+  it('the owner\'s Stop ends a parked delegated turn, and a restart does not run it again', async () => {
+    const workspace = 'hire-stop';
+
+    await probe(workspace).setup(workspace, 'hire-root', 'park');
+    const hiring = probe(workspace).openHire(workspace, 'Hire one auditor; the owner will stop it.');
+
+    await probe(workspace).childSpoke();
+    await probe(workspace).stopChild(workspace);
+    // Hangs while the parked turn outlives the Stop: nothing below releases it.
+    await hiring;
+    await abortAllDurableObjects();
+    await probe(workspace).reenter(workspace);
+
+    const observed: HireObservation = await probe(workspace).observe(workspace);
+    const childTurns = observed.turns.filter((row) => row.actorId !== observed.rootActorId);
+
+    expect(observed.toolResults.join(' ')).not.toContain(CHILD_ANSWER);
+    expect(childTurns).toHaveLength(1);
+    expect(childTurns[0]?.runs).toBe(1);
+  });
+
+  it('the owner\'s Dismiss with history kept ends a parked delegated turn instead of waiting on it', async () => {
+    const workspace = 'hire-dismiss';
+
+    await probe(workspace).setup(workspace, 'hire-root-durable', 'park');
+    // Held, not awaited: the root's turn waits on the child's answers, which the dismissal ends.
+    const hiring = probe(workspace).openHire(workspace, 'Hire one durable auditor; the owner will dismiss it.');
+
+    await probe(workspace).childSpoke();
+    // Hangs while the retirement waits on the parked turn: nothing below releases it.
+    const dismissed = await probe(workspace).dismissChild(workspace);
+
+    await abortAllDurableObjects();
+    await Promise.allSettled([hiring]);
+    await probe(workspace).reenter(workspace);
+
+    const observed: HireObservation = await probe(workspace).observe(workspace);
+    const childTurns = observed.turns.filter((row) => row.actorId !== observed.rootActorId);
+
+    expect(observed.roster.find((row) => row.name === dismissed)?.status).toBe('dismissed');
+    expect(observed.toolResults.join(' ')).not.toContain(CHILD_ANSWER);
+    expect(childTurns[0]?.runs).toBe(1);
+  });
+
   it('an eviction between the child\'s answer and the caller\'s wait still settles the caller', async () => {
     const workspace = 'hire-evict';
 

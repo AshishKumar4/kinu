@@ -430,7 +430,6 @@ export function parentReasoningEffort(authority: ProfileAuthorityInputs, ancesto
   return inherited;
 }
 
-/** One source for a turn's own choices. */
 export function ownProfileChoices(
   config: PinnedProfile,
   authority: ProfileAuthorityInputs,

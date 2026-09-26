@@ -8,23 +8,21 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { recordNoModelEpisode, recordUnmeasuredEpisode, recordWorkspaceSpend, type LiveModelSpend } from './live-model';
 import {
-  classifyToolFailure, DEFAULT_WORKERS_AI_MODEL_ID,
+  classifyToolFailure,
   type Clock, type ReasoningEffort, type RunEvent, type WorkspaceSpend, type ToolOutcome,
 } from '@kinu.run/core';
+import { SCRIPTED_MODEL_SPEC } from './scripted-model-spec';
 import { gitEnv } from './git';
 import { BEHAVIOUR_SCORERS } from './agent-evals';
 import { TASK_OUTCOME, isCovariateRow, type EvalSubgoal } from './eval-outcome';
 import { compareRunEventOrder } from './eval-target';
 
 /**
- * The DeepSeek arms, read from the live model catalogue (flash is not derivable from pro: `-0813` vs
- * `-0731`). Flash for high-volume stats, pro for upper bounds. `product` is imported from core's default,
- * the arm the first-run tier runs on after a deploy.
+ * The model a first-run record's workspaces pinned. The tier checks the product, so it runs on the scripted model: a
+ * check whose outcome rides on what a model chooses is an eval (evals/), with a pass rate per model.
  */
 export const EVAL_MODELS = {
-  flash: '@cf/deepseek-ai/deepseek-v4-flash-0731',
-  pro: '@cf/deepseek-ai/deepseek-v4-pro-0813',
-  product: DEFAULT_WORKERS_AI_MODEL_ID,
+  scripted: SCRIPTED_MODEL_SPEC,
 } as const satisfies Record<string, string>;
 
 export type EvalTier = keyof typeof EVAL_MODELS;

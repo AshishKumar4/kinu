@@ -409,10 +409,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
 const GENERATION_TABLE = 'kinu_workspace_generation';
 
-/**
- * One past the persisted generation, taken in one write transaction. The CLI's daemon and its chat open one database,
- * and a read and a later write let both take the same pid floor (measured: two openers booting at once did).
- */
+/** One past the persisted generation, in one write transaction (ADR W1). */
 function takeWorkspaceGeneration(opts: Pick<WorkspaceOptions, 'sql' | 'transactions' | 'generation'>): number {
   const adopted = generation(opts.generation);
 
@@ -432,7 +429,6 @@ function takeWorkspaceGeneration(opts: Pick<WorkspaceOptions, 'sql' | 'transacti
   return next;
 }
 
-/** The generation counter's table, and the key this workspace's taken generation is held under in memory. */
 export interface WorkspaceGeneration {
   readonly table: typeof GENERATION_TABLE;
 }

@@ -16,13 +16,17 @@ import { join } from 'node:path';
 import { decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import type { Agent } from 'agents';
 import * as v from 'valibot';
-import { ActorAgent } from '../src/actor-agent';
-import { OrchestratorAgent } from '../src/orchestrator';
+import type { OrchestratorAgent } from '../src/orchestrator';
 import type { UserDO } from '../src/user/user-do';
 import type { FilesRouteAgent } from '../src/files-routes';
 import type { TerminalWorkspace } from '../src/terminal-route';
 import { orchestratorHarness, rpcReachableFrom, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { declaredName, memberCalleeName, parse, walk } from '../../../scripts/syntax';
+
+// After the helpers register the SDK mock: a static import would bind these to the real `agents` Agent.
+const { ActorAgent } = await import('../src/actor-agent');
+
+const { OrchestratorAgent: OrchestratorAgentClass } = await import('../src/orchestrator');
 
 /** Methods called on a binding named `…stub` or `…Stub` inside `getAgentByName`, read from the parsed module;
  *  undefined when the module declares no such function. */
@@ -265,7 +269,7 @@ describe('the agent surfaces cannot drift from their callers', () => {
     const shared = ['getStoredModelSpec', 'setModel', 'send', 'cancelCurrentWork', 'getChatHistoryPage'];
 
     expect(shared.filter((name) => !Object.hasOwn(ActorAgent.prototype, name))).toEqual([]);
-    expect(shared.filter((name) => Object.hasOwn(OrchestratorAgent.prototype, name))).toEqual([]);
+    expect(shared.filter((name) => Object.hasOwn(OrchestratorAgentClass.prototype, name))).toEqual([]);
   });
 });
 

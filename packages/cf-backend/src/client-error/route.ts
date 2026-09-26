@@ -1,5 +1,5 @@
 /**
- * `POST /api/client-errors`: one browser render failure becomes one Workers Logs line via `diagnostics`.
+ * `POST /api/client-errors`: one browser render or chat-stream failure becomes one Workers Logs line via `diagnostics`.
  * The release is read from the deployed bundle, not trusted from the browser; a mismatch is labelled `stale`, never refused.
  * No rate gate: callers are session+CSRF-gated browsers and `components/ErrorBoundary.tsx` bounds reports client-side.
  */
@@ -13,9 +13,10 @@ import { err, json, readBounded } from '@kinu.run/core';
 import { readBuildStamp } from '@kinu.run/core';
 import {
   CLIENT_ERROR_ENDPOINT,
+  CLIENT_CHAT_STREAM_FAILED,
   CLIENT_ERROR_MAX_REQUEST_BYTES,
   CLIENT_RENDER_FAILED,
-  ClientErrorReportSchema,
+  ClientReportSchema,
   type ReleaseMatch,
 } from '@kinu.run/core';
 
@@ -50,7 +51,7 @@ async function handleClientErrorReport(
   }
 
   const parsed = v.safeParse(
-    ClientErrorReportSchema,
+    ClientReportSchema,
     tolerate(() => JSON.parse(new TextDecoder().decode(bounded)), 'malformed-input'),
   );
 
@@ -62,7 +63,7 @@ async function handleClientErrorReport(
   const match = releaseMatch(report.release, build?.sha);
 
   // Scalars only. `release` is this deployment's stamp; `reportedRelease` is the browser's claim, kept apart for comparison.
-  diagnostics.event(CLIENT_RENDER_FAILED, {
+  const common = {
     release: build?.sha ?? '',
     version: build?.version ?? '',
     builtAt: build?.builtAt ?? '',
@@ -71,8 +72,15 @@ async function handleClientErrorReport(
     route: report.route,
     errorName: report.errorName,
     stack: report.stack,
-    componentStack: report.componentStack,
-  });
+  };
+
+  if (report.event === CLIENT_RENDER_FAILED) {
+    diagnostics.event(CLIENT_RENDER_FAILED, { ...common, componentStack: report.componentStack });
+  } else {
+    diagnostics.event(CLIENT_CHAT_STREAM_FAILED, {
+      ...common, pane: report.pane, partType: report.part?.type ?? '', partId: report.part?.id ?? '',
+    });
+  }
 
   return json({ body: { releaseMatch: match } }, { status: 202 });
 }

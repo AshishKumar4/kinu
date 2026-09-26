@@ -1,7 +1,7 @@
 import type { SelectOption, SelectRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, clipText, filterModels, formatContextWindow, formatModelSpec, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
+import { CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, clipText, filterModels, formatContextWindow, formatModelSpec, literalText, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
@@ -792,6 +792,11 @@ export function deviceConsentCanApprove(
   return deviceConsentLayout(consent, terminal).canApprove;
 }
 
+/** The command as it will run, controls drawn, not obeyed; the layout counts this text. */
+function shownCommand(command: string): string {
+  return literalText(command || '(command)');
+}
+
 function deviceConsentLayout(
   consent: { command: string },
   terminal: OverlayGeometry,
@@ -800,7 +805,7 @@ function deviceConsentLayout(
   const innerWidth = Math.max(1, paletteWidth - 4);
   // Half-width budget, so a wide command is never approved from an unseen tail.
   const commandColumns = Math.max(1, Math.floor(innerWidth / 2));
-  const commandText = `Command: ${consent.command || '(command)'}`;
+  const commandText = `Command: ${shownCommand(consent.command)}`;
 
   const commandRows = commandText.split('\n')
     .reduce((rows, line) => rows + Math.max(1, Math.ceil(Array.from(line).length / commandColumns)), 0);
@@ -844,7 +849,7 @@ export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlay
       <PaletteLine text={`The agent wants to use ${consent.deviceLabel}.`} width={layout.innerWidth} color={colors.text.primary} />
       <PaletteLine text={`Method: ${consent.method}`} width={layout.innerWidth} color={colors.text.muted} />
       <box style={{ width: '100%', height: commandHeight }}>
-        <text wrapMode="word"><span fg={colors.text.strong}>Command: {consent.command || '(command)'}</span></text>
+        <text wrapMode="word"><span fg={colors.text.strong}>Command: {shownCommand(consent.command)}</span></text>
       </box>
       <PaletteLine
         text={layout.canApprove
@@ -863,7 +868,7 @@ interface DeviceConnectOverlayProps {
 }
 
 function shellApprovalDetails(request: ShellApprovalRequest): string {
-  return `${request.command}\nExecutor: ${request.executor}\n${request.review.hits.map((hit) => `${hit.rule}: ${hit.explanation}`).join('\n')}`;
+  return `${shownCommand(request.command)}\nExecutor: ${request.executor}\n${request.review.hits.map((hit) => `${hit.rule}: ${hit.explanation}`).join('\n')}`;
 }
 
 export function shellApprovalCanApprove(request: ShellApprovalRequest, terminal: OverlayGeometry): boolean {

@@ -587,8 +587,8 @@ export const FIRST_RUN_DEFECTS = {
   },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
-/** Which arm this process is — the same split every sibling eval arm declares. */
-export const FIRST_RUN_TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
+/** The model every case's workspace pins: the scripted one, served by the tiers' Worker (scripts/tier-model.ts). */
+export const FIRST_RUN_TIER: EvalTier = 'scripted';
 
 /**
  * The arm, recorded because a measurement whose mechanism was switched off is

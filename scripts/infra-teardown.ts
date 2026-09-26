@@ -21,7 +21,7 @@
  */
 
 import { createInterface } from 'node:readline/promises';
-import { type Resource, deriveInfrastructure } from './infra-manifest';
+import { INFRA_ENVIRONMENTS, type Resource, deriveInfrastructure, environmentFrom } from './infra-manifest';
 import { authenticated, why, wrangler } from './infra-cloudflare';
 
 const BOLD = '\u001B[1m';
@@ -116,14 +116,15 @@ function describe(deleted: readonly Resource[], swept: readonly Resource[]): voi
 }
 
 async function main(): Promise<number> {
-  if (process.argv.length > 2) {
-    console.error('infra:teardown: takes no arguments; there is one Worker.\n'
-      + '  usage: bun run infra:teardown');
+  const environment = environmentFrom(process.argv.slice(2));
+
+  if (environment === undefined) {
+    console.error(`infra:teardown: usage: bun run infra:teardown [${INFRA_ENVIRONMENTS.join('|')}]`);
 
     return 1;
   }
 
-  const { worker, resources } = deriveInfrastructure();
+  const { worker, resources } = deriveInfrastructure(environment);
 
   const session = authenticated();
 

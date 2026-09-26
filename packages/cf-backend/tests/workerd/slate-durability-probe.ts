@@ -65,7 +65,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** One program through this workspace's production `eval` tool, in Build mode; its answer as JSON. */
   async runProgram(code: string): Promise<string> {
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(), rt: this.rt, sql: this.rt.storage.sql,
+      loader: this.env.LOADER, egress: codemodeEgress(null), rt: this.rt, sql: this.rt.storage.sql,
       workspace: this.name, webSearch: createDefaultWebSearchProvider({ fetch }),
     });
 

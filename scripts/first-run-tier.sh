@@ -6,9 +6,9 @@
 # the only tier in this repository whose subject is the DEPLOYED product rather
 # than this tree. Every other gate runs before the upload, over inputs their
 # authors wrote; this one drives the deployment the way a person does — a fresh
-# workspace over the public REST, the real model, a real browser click, two real
-# daemons, real pty bytes — and it is RED on any of the five defects the owner
-# found by hand.
+# workspace over the public REST, the scripted model on the deployment's own
+# provider path, a real browser click, two real daemons, real pty bytes — and it
+# is RED on any of the defects the owner found by hand.
 #
 # WHAT IT NEEDS, and what it does with nothing:
 #
@@ -21,13 +21,15 @@
 #                             tier resolves it. It registers devices and drives
 #                             the pty client. `scripts/eval-session-mint.ts` mints
 #                             it when none is persisted.
-#   KINU_EVAL_WEB_IDENTITY    the deployment's DEV_IDENTITY_SECRET. The browser
-#                             plane's authority: the REST create, the run-event
-#                             and file routes, the consent and revoke routes,
-#                             and the Chrome page all act as it.
-#   KINU_EVAL_ORIGIN          which deployment. Defaults to https://kinu.run, and
-#                             the allowlist admits that and loopback dev servers
-#                             only.
+#   KINU_EVAL_WEB_IDENTITY    the deployment's DEV_IDENTITY_SECRET; staging's
+#                             is KINU_EVAL_STAGING_WEB_IDENTITY (each
+#                             deployment has its own: `evalWebIdentityEnv`).
+#                             The browser plane's authority: the REST create,
+#                             the run-event and file routes, the consent and
+#                             revoke routes, and the Chrome page all act as it.
+#   KINU_EVAL_ORIGIN          which deployment. Defaults to https://kinu.run;
+#                             the allowlist admits that, https://staging.kinu.run
+#                             and loopback dev servers only.
 #
 # WITH A CREDENTIAL MISSING IT FAILS. That is the opposite of the eval tier's
 # rule and it is deliberate: the eval tier must be reproducible on a machine
@@ -44,8 +46,8 @@ cd "$(dirname "$0")/.."
 
 # The knob the suites gate on, before anything reads a credential.
 export KINU_EVAL_BACKEND=cloud
-# The consent that lets a live model be called at all, exactly as the eval tier
-# spells it: being driven by this script is the consent.
+# The consent that lets a case drive the deployment's model path at all, exactly
+# as the eval tier spells it: being driven by this script is the consent.
 export KINU_EVAL_LIVE=1
 
 REPORT_DIR="$(bun scripts/bench-retention.ts --family first-run --backend cloud)"
@@ -63,7 +65,10 @@ export KINU_EVAL_SPEND_FILE="$SPEND"
 # The tier runs inside the deploy, against the build it just shipped, so the
 # eval-service bearer for THIS deployment may not exist yet. The web identity
 # can approve the device flow that mints one; a persisted session is reused.
-if [[ -n "${KINU_EVAL_WEB_IDENTITY:-}" && -z "${KINU_EVAL_TOKEN:-}" ]]; then
+IDENTITY_ENV="$(bun -e "import { EVAL_DEPLOYMENT_ORIGIN, evalWebIdentityEnv } from '@kinu.run/test-utils'; console.log(evalWebIdentityEnv(process.argv[1] || EVAL_DEPLOYMENT_ORIGIN))" "${KINU_EVAL_ORIGIN:-}")" \
+  && [[ -n "$IDENTITY_ENV" ]] \
+  || { echo "first-run: cannot name the variable holding ${KINU_EVAL_ORIGIN:-the deployment}'s DEV_IDENTITY_SECRET." >&2; exit 1; }
+if [[ -n "${!IDENTITY_ENV:-}" && -z "${KINU_EVAL_TOKEN:-}" ]]; then
   bun scripts/eval-session-mint.ts || exit 1
 fi
 RESOLVED_OUT="$(bun scripts/eval-credentials.ts)"
@@ -76,12 +81,12 @@ fi
 if [[ -z "${KINU_TOKEN:-}" || -z "${KINU_ORIGIN:-}" ]]; then
   echo "first-run: no deployment credential resolved, so this tier would measure nothing." >&2
   echo "  It drives the DEPLOYED product; a skip here is a deploy gate passing over a product" >&2
-  echo "  nobody looked at. Export KINU_EVAL_TOKEN (the CLI bearer) and KINU_EVAL_WEB_IDENTITY" >&2
+  echo "  nobody looked at. Export KINU_EVAL_TOKEN (the CLI bearer) and $IDENTITY_ENV" >&2
   echo "  (the deployment's DEV_IDENTITY_SECRET). scripts/eval-session-mint.ts mints the bearer." >&2
   exit 1
 fi
-if [[ -z "${KINU_EVAL_WEB_IDENTITY:-}" ]]; then
-  echo "first-run: KINU_EVAL_WEB_IDENTITY is not set, so the browser plane has no authority." >&2
+if [[ -z "${!IDENTITY_ENV:-}" ]]; then
+  echo "first-run: $IDENTITY_ENV is not set, so the browser plane has no authority at $KINU_ORIGIN." >&2
   echo "  Every case creates its workspace over /api/user/workspaces and one of them clicks a" >&2
   echo "  button in Chrome; the CLI bearer reaches neither. Its value is the deployment's" >&2
   echo "  DEV_IDENTITY_SECRET." >&2
@@ -105,6 +110,26 @@ if [[ ${#FLEET_RESOLVED[@]} -ne 2 || "${FLEET_RESOLVED[0]}" != "$KINU_ORIGIN" ]]
   exit 1
 fi
 FLEET_TOKEN="${FLEET_RESOLVED[1]}"
+
+# THE CASES ACT AS THE `scripted` ACCOUNT, ON THE SCRIPTED MODEL. The tier
+# checks the product, not what a model chooses: every workspace of both
+# accounts, and every helper and swarm node they hire, answers from
+# `tierModel` (scripts/tier-model.ts) through the tiers' Worker. A helper's
+# model comes from its account's default tier, so the cases need an account
+# of their own; the eval service's is shared with the evals, whose runs must
+# keep a real model. Whether a model makes the calls a case names when asked
+# in plain words is an eval's question, with a pass rate per model (evals/).
+CASES_ACCOUNT=scripted
+KINU_EVAL_ACCOUNT=$CASES_ACCOUNT bun scripts/eval-session-mint.ts || exit 1
+CASES_OUT="$(KINU_EVAL_ACCOUNT=$CASES_ACCOUNT bun scripts/eval-credentials.ts)"
+mapfile -t CASES_RESOLVED <<< "$CASES_OUT"
+if [[ ${#CASES_RESOLVED[@]} -ne 2 || "${CASES_RESOLVED[0]}" != "$KINU_ORIGIN" ]]; then
+  echo "first-run: no CLI bearer for the $CASES_ACCOUNT eval account at $KINU_ORIGIN." >&2
+  exit 1
+fi
+CASES_TOKEN="${CASES_RESOLVED[1]}"
+KINU_TOKEN=$CASES_TOKEN bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$CASES_ACCOUNT" || exit 1
+KINU_TOKEN=$FLEET_TOKEN bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$FLEET_ACCOUNT" || exit 1
 
 echo "── first-run tier ────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN"
@@ -141,7 +166,7 @@ run_project() {
 set +e
 KINU_EVAL_ACCOUNT=$FLEET_ACCOUNT KINU_TOKEN=$FLEET_TOKEN run_project first-run-fleet "$@" &
 FLEET_PID=$!
-run_project first-run-cases "$@" &
+KINU_EVAL_ACCOUNT=$CASES_ACCOUNT KINU_TOKEN=$CASES_TOKEN run_project first-run-cases "$@" &
 CASES_PID=$!
 wait "$FLEET_PID"
 FLEET_STATUS=$?

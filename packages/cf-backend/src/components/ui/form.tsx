@@ -10,6 +10,12 @@ export const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outlin
 /** Shared by both headers so the active underline lands on the strip's rule. */
 export const tabStripH = "h-[45px]";
 
+/** An IME's own keystroke: the Enter that picks a candidate, the Escape that drops one. WebKit ends the composition
+ *  first, so there only keyCode 229 marks it. */
+export function composing(event: KeyboardEvent): boolean {
+  return event.isComposing || event.keyCode === 229;
+}
+
 export const tabCls = "p-tab -mb-px flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] p-t-control";
 
 export function Card({ title, icon: Icon, description, actions, children }: {

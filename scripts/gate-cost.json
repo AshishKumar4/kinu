@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-25",
   "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
-  "method": "each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> /usr/bin/time -v bash -c <run>`; the row's whole process tree \u2014 its session plus every descendant by ppid, so a setsid'd dev server or browser counts \u2014 sampled every 0.05s for its first 3s and every 0.25s after \u2014 summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, \u0394(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)",
+  "method": "each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> /usr/bin/time -v bash -c <run>`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)",
   "rows": {
     "bun scripts/preflight.ts": {
       "wallSeconds": 0.22,
@@ -906,14 +906,14 @@
       "exit": 0
     },
     "bun test --timeout=0 scripts/test-chrome.test.ts": {
-      "wallSeconds": 0.94,
-      "cpuSeconds": 0.84,
-      "peakRssMb": 479.84,
-      "peakRunnable": 14,
-      "peakCpuThreads": 1.52,
-      "meanThreads": 0.89,
-      "samples": 16,
-      "loadAtStart": 1.59,
+      "wallSeconds": 2.93,
+      "cpuSeconds": 3.43,
+      "peakRssMb": 459.17,
+      "peakRunnable": 7,
+      "peakCpuThreads": 1.97,
+      "meanThreads": 1.17,
+      "samples": 49,
+      "loadAtStart": 6.93,
       "exit": 0
     }
   }

@@ -321,10 +321,14 @@ describe('ladder-closure — red in every direction it refuses', () => {
       'scripts/h.ts': "const name = 'x';\nexport const h = require(name);",
       'scripts/x.ts': 'export const x = 1;',
       'scripts/plain.ts': 'export const plain = 1;',
+      // A `data:` URL is the module's text, not a path: its scheme is fixed, so it loads no file whatever follows.
+      'scripts/inline.ts': "import { SOURCE } from './source';\nexport const inline = () => import(`data:text/javascript;base64,${btoa(SOURCE)}`);",
+      'scripts/source.ts': "export const SOURCE = 'export const one = 1;';",
     });
 
     expect(refused(deriveClosure('bun scripts/g.ts', DECLARED, repo))).toContain('computed specifier');
     expect(refused(deriveClosure('bun scripts/h.ts', DECLARED, repo))).toContain('computed specifier');
+    expect(derived(deriveClosure('bun scripts/inline.ts', DECLARED, repo))).toContain('scripts/source.ts');
     // Declared: the named files join the closure.
     const declared = deriveClosure('bun scripts/g.ts', { ...DECLARED, imports: ['scripts/x.ts'] }, repo);
     expect(derived(declared)).toContain('scripts/x.ts');

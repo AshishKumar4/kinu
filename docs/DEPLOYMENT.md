@@ -2,13 +2,13 @@
 
 ## Live instance
 
-Kinu runs in one environment, https://kinu.run. There is no staging deployment. Previews live under `<PREVIEW_HOST_SUFFIX>`, one capability hostname per exposed Workspace or Sandbox port. Previews are agent-written HTML, so each port gets its own hostname and the suffix needs wildcard DNS. Sandbox uses the @cloudflare/sandbox SDK hostname. The Workspace uses a Nimbus session capability under the same trust boundary. `packages/core/src/preview/preview-origin.ts` holds the reasoning. The Public Suffix List prerequisite is still open for full cookie-site isolation.
+Kinu runs in two environments on one account. Staging, https://staging.kinu.run (the Worker `kinu-staging`, `env.staging` in `wrangler.jsonc`), is where every deploy lands and the post-deploy tiers run. Production, https://kinu.run (`kinu`), takes only a build staging verified (§ Deploy script). Each has its own Durable Objects, stores and secrets. Staging has no admin plane, no OAuth provider and no mail; the eval identity is its only way in, granted only to a request presenting staging's own `DEV_IDENTITY_SECRET`, never to a caller without it (KINU-001 in the owner's hardening audit). Provisioning mints each deployment's secret, so staging's never acts on production. Previews live under `<PREVIEW_HOST_SUFFIX>`, one capability hostname per exposed Workspace or Sandbox port. Previews are agent-written HTML, so each port gets its own hostname and the suffix needs wildcard DNS. Sandbox uses the @cloudflare/sandbox SDK hostname. The Workspace uses a Nimbus session capability under the same trust boundary. `packages/core/src/preview/preview-origin.ts` holds the reasoning. The Public Suffix List prerequisite is still open for full cookie-site isolation.
 
-### One origin
+### One origin per environment
 
-One app origin serves the deployment (`workers_dev` is false), so `CLI_PUBLIC_ORIGIN` names it. The Worker redirects cleartext to HTTPS and sends HSTS for that host plus the preview subtree. Any other hostname that reaches the Worker is not an app origin and gets served as nothing.
+One app origin serves each deployment (`workers_dev` is false), so its `CLI_PUBLIC_ORIGIN` names it. The Worker redirects cleartext to HTTPS and sends HSTS for that host plus the preview subtree. Any other hostname that reaches the Worker is not an app origin and gets served as nothing.
 
-The preview suffix is `kinu.run` itself, so previews are strict subdomains of the app host, and the `*.kinu.run/*` route matches previews, never the app. The app host is a custom domain (`kinu.run`, `custom_domain: true`).
+The preview suffix is the app host itself, so previews are strict subdomains of it. Production's app host is a custom domain (`kinu.run`, `custom_domain: true`), and the `*.kinu.run/*` route matches its previews, never the app. Staging's app host and previews are both routes, `staging.kinu.run/*` and `*.staging.kinu.run/*`: a route runs before a Custom Domain on a hostname both match, so production's wildcard would answer a staging Custom Domain, while between two routes the most specific pattern wins (Workers routing docs).
 
 ## Local development
 
@@ -51,13 +51,18 @@ From source I run `bun run cli -- setup`, then `bun run cli -- ...`. Origin defa
 
 ## Zero to production
 
-This assumes an empty Cloudflare account. Three commands do it, and a fourth proves it:
+This assumes an empty Cloudflare account. Three commands bring up each environment, staging first because every build lands there, and a fourth proves it:
 
 ```bash
-bun run infra:provision      # the R2 buckets and the Vectorize indexes
-bun run deploy               # the Worker, its DO namespaces, container, routes, cron
-bun run infra:provision      # the secrets; `wrangler secret put` needs the Worker to exist
-bun run gate:infra           # every declared resource exists and is bound
+bun run infra:provision staging   # staging's R2 buckets and Vectorize index
+bun run deploy                    # kinu-staging, its DO namespaces, containers, routes, cron
+bun run infra:provision staging   # its secrets; `wrangler secret put` needs the Worker to exist
+bun run gate:infra staging        # every resource staging declares exists and is bound
+
+bun run infra:provision           # the same for production
+bun run deploy --promote          # kinu, from the build staging verified
+bun run infra:provision
+bun run gate:infra
 ```
 
 `wrangler secret put` refuses on a nonexistent Worker, so on a fresh account the root secret installs only after the first deploy. That is why provisioning runs twice. The second run creates nothing new. `bun run deploy` is the only supported deploy path. Provisioning creates resources and never deploys.
@@ -79,24 +84,31 @@ Provisioning cannot create these. A fresh account fails without them. The provis
 | Email Routing onboarding for `EMAIL_DOMAIN` | MX records, a verified destination, and a rule delivering to this Worker. The `send_email` binding is outbound only. See [EMAIL-INGRESS.md](EMAIL-INGRESS.md). |
 | A Cloudflare Access application on `/control` | `CONTROL_PLANE_ACCESS_TEAM_DOMAIN` and `CONTROL_PLANE_ACCESS_AUD` pin it. wrangler has no `access` command; `gate:infra` reads it through the Access REST API. Without it the admin plane answers 404 to everyone. |
 
-Universal SSL on `kinu.run` covers the app host and every preview host. I need no Advanced Certificate Manager.
+Universal SSL on `kinu.run` covers both app hosts and production's previews. Staging adds four, made once in the dashboard of the `kinu.run` zone:
+
+| Staging prerequisite | Why nothing here can create it |
+| --- | --- |
+| No DNS record of its own for `staging.kinu.run` | `kinu-staging`'s first deploy makes `staging.kinu.run` a Custom Domain, and wrangler creates its record then; one already there refuses it. The Custom Domain's certificate covers `staging.kinu.run` and `*.staging.kinu.run`, which a staging preview needs: it is two labels below `kinu.run`, where Universal SSL stops, and `kinu.run` sends HSTS with `includeSubDomains`. |
+| A proxied wildcard DNS record `*.staging` (A `192.0.2.1`, like the zone's `*`) | A wildcard does not answer below a name that exists, so `*.kinu.run` stops short of staging's previews. |
+| A **KV namespace** `kinu-auth-staging` | The same reason as `kinu-auth`. Its id is in `env.staging`. |
+| An **AI Gateway** `kinu-ai-gateway-staging`, with `default`'s settings | The same reason as production's: staging's gateway logs are its own. |
 
 ### What each command does
 
 `infra:provision` reads its inventory from `wrangler.jsonc`. There is no second list. It creates what is missing in dependency order (R2 buckets, then Vectorize indexes). It prints `CREATED` or `existed` per resource, so a second run is visibly a no-op. A failed lookup refuses rather than creates: "network down" and "does not exist" differ, and creating through the first would leave two candidate snapshot buckets. What wrangler cannot create prints as a manual worklist on every run.
 
-`gate:infra` checks that every declared resource exists and that the deployed Worker binds it, and exits non-zero otherwise. The deploy script runs it alone, as the last gate before the build. It takes the environment from argv, then `KINU_DEPLOY_ENV`, then defaults to `production`. It reports one verdict per resource instead of dying on the first failure (`scripts/infra-verify.ts` has the reasoning):
+`gate:infra` checks that every declared resource exists and that the deployed Worker binds it, and exits non-zero otherwise. The deploy script runs it alone, as the last gate before the build. Its one argument names the environment, `production` or `staging`; without one it takes `KINU_INFRA_ENVIRONMENT`, which the deploy script always sets, and then production; staging reads `env.staging` in `wrangler.jsonc` the way Wrangler does, and refuses one that names no routes of its own. `infra:provision` and `infra:teardown` take the same argument. It reports one verdict per resource instead of dying on the first failure (`scripts/infra-verify.ts` has the reasoning):
 
 | Verdict | Meaning |
 | --- | --- |
 | `present` | observed to exist |
 | `absent` | observed not to exist. Fails when `env.d.ts` declares the field required |
 | `unknown` | the lookup failed. Always a failure, because a check that could not look did not pass |
-| `unobservable` | no CLI path can confirm it. Declared in `UNOBSERVABLE` with its manual check, and pinned by equality so the blind spot can only shrink |
+| `unobservable` | no CLI path can confirm it. Its kind is declared in `UNOBSERVABLE` with the manual check, and pinned by equality so the blind spot can only shrink |
 
 With no Cloudflare session the verdict is BLOCKED with a non-zero exit.
 
-`bun run infra:teardown production` deletes in reverse dependency order. It refuses without the typed phrase `destroy kinu production`. It prints what sits inside each data-bearing resource before asking. Nothing imports it and no other command reaches it.
+`bun run infra:teardown [staging]` deletes in reverse dependency order. It refuses without the typed phrase `destroy <worker>` (`destroy kinu`, `destroy kinu-staging`). It prints what sits inside each data-bearing resource before asking. Nothing imports it and no other command reaches it.
 
 ### Every value the Worker reads, and where it comes from
 
@@ -108,7 +120,7 @@ This derives from `Env` in `packages/cf-backend/env.d.ts` and from `SUPPLY` in `
 | `WEBHOOK_ROUTE_SECRET` | **prompt**: paste 32 random bytes (`openssl rand -base64 32`) | yes | No workspace can take an inbound webhook. Creating one answers 503, and every delivery URL answers 404 without waking a workspace. Timers and email keep working. |
 | `JWT_SECRET` | **prompt**: paste 32 random bytes (`openssl rand -base64 32`) | yes | No Drive. The Mossaic tenant objects sign every listing cursor with it inside the Durable Object, so the Drive page and every `/shared` listing answer 503 (stated up front) instead of the 500 the deployed build answered on 2026-09-21 before the secret existed. |
 | `CLOUDFLARE_OAUTH_CLIENT_SECRET` | **prompt** | yes, beside `CLOUDFLARE_OAUTH_CLIENT_ID` | Chat falls back to the platform gateway and bills the **platform** account instead of each user's. |
-| `DEV_IDENTITY_SECRET` | **prompt**: 32 random bytes, never shared with another deployment | beside `DEV_USER_EMAIL` | No synthetic identity. The first-run tier and every eval fail to authenticate as `eval-service`. |
+| `DEV_IDENTITY_SECRET` | **prompt**: minted there, 32 random bytes shown once; a pasted value is refused, so no two deployments share one | beside `DEV_USER_EMAIL` | No synthetic identity. The first-run tier and every eval fail to authenticate as `eval-service`. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | **prompt** | where `GOOGLE_OAUTH_CLIENT_ID` is a var | Google is not on `/login`. Unset on kinu.run. |
 | `GITHUB_OAUTH_CLIENT_SECRET` | **prompt** | where `GITHUB_OAUTH_CLIENT_ID` is a var | GitHub is not on `/login`. Unset on kinu.run. |
 | `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | **out of band**: the outgoing key, during a rotation | no | Nothing. It is the read-only half of a rotation. |
@@ -397,25 +409,27 @@ Every workspace agent (main, subordinate, head, swarm node, branch) is a logical
 
 ## Deploy script
 
-`scripts/deploy.sh` is the one deploy path (`bun run deploy`). It publishes one Worker, `kinu`, to https://kinu.run. Nimbus is held as a library inside the `OrchestratorAgent` that owns each workspace, so there is no separate Nimbus deploy.
+`scripts/deploy.sh` is the one deploy path. `bun run deploy` publishes `kinu-staging` to https://staging.kinu.run; `bun run deploy --promote` publishes `kinu` to https://kinu.run, and only the build staging verified; `bun run deploy --rollback` returns production to the build it took before (§ Rollback). Nimbus is held as a library inside the `OrchestratorAgent` that owns each workspace, so there is no separate Nimbus deploy.
 
 ```bash
-bash scripts/deploy.sh [--bootstrap] [--gates-only] [--all]
+bash scripts/deploy.sh [--promote] [--bootstrap] [--gates-only] [--all]
+bash scripts/deploy.sh --rollback
 ```
 
-`--bootstrap` is for the deploy that declares something only a deploy can create (a Durable Object class new to `migrations`, a new container, a new route): the pre-deploy infra phase defers exactly those, and step 5 re-checks everything with no tolerance. `--gates-only` runs every pre-publish wave and stops before the build. `--all` keeps launching after the first red so one run reports every red. Any other argument exits 2 and runs nothing.
+`--promote` runs no source gate: the record staging's green deploy of HEAD wrote (`scripts/promote.ts`) stands for them, and promotion refuses without it or when staging no longer serves that run's downloads. A staging deploy withdraws HEAD's record before it builds, so a promotion never takes what a staging deploy under way, or red, left there. `--bootstrap` is for the deploy that declares something only a deploy can create (a Durable Object class new to `migrations`, a new container, a new route): the pre-deploy infra phase defers exactly those, and step 6 re-checks everything with no tolerance. `--gates-only` runs every pre-publish wave and stops before the build. `--all` keeps launching after the first red so one run reports every red. Any other argument exits 2 and runs nothing.
 
 ### Order of operations
 
 A dirty checkout is refused first, so the `/api/health` build SHA always names the published bytes. Then come the preflight phase, the Wrangler auth check, and `bun install --frozen-lockfile` when there is no root `node_modules`.
 
-1. Required pre-deploy gates. `scripts/deploy.sh` names no gate itself: it loads `bun scripts/ladder.ts --plan`, one tab-separated line per deploy-tier row (phase, label, threads, resident MiB, deadline, command) in phase order, and `run_phase` schedules each phase as one wave with a barrier after it. Preflight runs alone first. The source phase runs concurrently under two caps the machine answers for, `nproc` threads and 75% of `MemAvailable`, against each row's measured cost in `scripts/gate-cost.json` (`bun scripts/gate-cost-measure.ts` runs every row alone and samples its session; no row declares a cost). A row heavier than the whole cap runs alone rather than never. Then `gate:hammer` and `gate:infra` each run alone, in that order. Each gate verdict is its child exit status, read with `wait -n -p`. A gate killed by the OOM killer settles as 128+signal. One past its deadline (the row's own, or 480 s) settles as 124. A gate that never reports cannot hold the wave open. The first red stops new launches and lets running gates finish. `scripts/deploy.test.ts` drives the real script against stub gates over the same plan, proves each of those behaviours, and asserts the script contains no gate command of its own.
-2. Build. `vite build`, then `scripts/build-worker-release.ts` (the self-deploy tarball and `release.json`), then `scripts/build-cli-dist.sh` (four platform artifacts, the shared CPython runtime, a `.sha256` for each, and `kinu-version.json`). The build fails if any output misses `dist/client/downloads/`. The worker tarball is over the 25 MiB per-file asset limit, so the script uploads it and its `.sha256` to the `kinu-releases` R2 bucket before the deploy.
-3. Deploy. `npx wrangler deploy --tag <sha> --message "kinu production <sha>"`, so the published Worker version carries the build sha as a version annotation. Workers Logs tags an invocation with a version id and nothing else, and `npx wrangler versions list` prints the pair. The step verifies the `KinuSandbox` binding appears in output and the assets directory reported is the one downloads were staged into.
-4. Smoke test. HTTP 200 plus app content on `https://kinu.run/`. The `/api/health` stamp equals the deployed commit. `/downloads/kinu-version.json` and `release.json` parse and name that commit, and the worker tarball's `.sha256` matches the signed manifest. The CLI launcher points at the deployed artifacts. Every artifact downloads, unpacks, and matches its published `.sha256`. Stamp checks retry with backoff: edge rollout takes about two minutes, and a stamp that never converges is the real failure.
-5. Post-publish tiers. The first-run tier and the product flows drive the deployed product as the eval service identity, in one wave. The first-run tier's fleet project, whose cases attach machines, acts as the `devices` eval account (`DEV_USER_EMAIL` above).
-6. Infrastructure verification. `bun scripts/infra-verify.ts production --phase=post-deploy`, the strictest phase, unconditional.
-7. Summary. URL, Version ID, build sha.
+1. Required pre-deploy gates. On staging, every gate: `scripts/deploy.sh` names no gate itself: it loads `bun scripts/ladder.ts --plan`, one tab-separated line per deploy-tier row (phase, label, threads, resident MiB, deadline, command) in phase order, and `run_phase` schedules each phase as one wave with a barrier after it. Preflight runs alone first. The source phase runs concurrently under two caps the machine answers for, `nproc` threads and 75% of `MemAvailable`, against each row's measured cost in `scripts/gate-cost.json` (`bun scripts/gate-cost-measure.ts` runs every row alone and samples its session; no row declares a cost). A row heavier than the whole cap runs alone rather than never. Then `gate:hammer` and `gate:infra` each run alone, in that order. Each gate verdict is its child exit status, read with `wait -n -p`. A gate killed by the OOM killer settles as 128+signal. One past its deadline (the row's own, or 480 s) settles as 124. A gate that never reports cannot hold the wave open. The first red stops new launches and lets running gates finish. `scripts/deploy.test.ts` drives the real script against stub gates over the same plan, proves each of those behaviours, and asserts the script contains no gate command of its own. On a promotion, `bun scripts/promote.ts check` instead of the source and hammer phases: HEAD's record exists, staging still serves its downloads, and every container image production names is the one staging ran. Then `gate:infra` for production. `gate:infra` reads its environment from `KINU_INFRA_ENVIRONMENT`, which the script always sets, as it does the phase.
+2. Build. On staging, `bun scripts/promote.ts forget` first withdraws HEAD's record, and a record that cannot be withdrawn stops the deploy. Then `vite build` for the deploy's environment (`CLOUDFLARE_ENV=staging` on staging; production is the config's top level), and the build's own flattened config (`dist/kinu/wrangler.json`) must name that environment, or nothing leaves the machine; the Worker name and origin the later steps use are read from it. On staging, `scripts/build-worker-release.ts` (the self-deploy tarball and `release.json`), then `scripts/build-cli-dist.sh` (four platform artifacts, the shared CPython runtime, a `.sha256` for each, and `kinu-version.json`), and the worker tarball, over the 25 MiB per-file asset limit, goes with its `.sha256` to staging's releases bucket before the deploy. On a promotion nothing of that is rebuilt: `bun scripts/promote.ts adopt` refuses a build whose artifact digest is not the one staging recorded, fetches every download the record lists from staging, each refused unless it hashes as the green run's did, writes them into `dist/client/downloads/`, and copies the worker tarball into `kinu-releases` only once it hashes as the signed stamp says. The first promotion also starts production's history with the build production serves before it, with the hash of every download it serves. The build fails if any output misses `dist/client/downloads/`.
+3. Deploy. `npx wrangler deploy --tag <sha> --message "kinu <environment> <sha>"`, so the published Worker version carries the build sha as a version annotation. Workers Logs tags an invocation with a version id and nothing else, and `npx wrangler versions list` prints the pair. The step verifies the `KinuSandbox` binding appears in output and the assets directory reported is the one downloads were staged into.
+4. Smoke test, against the deployment's own origin. HTTP 200 plus app content. The `/api/health` stamp equals the deployed commit. `/downloads/kinu-version.json` and `release.json` parse and name that commit, and the worker tarball's `.sha256` matches the signed manifest. The CLI launcher points at the deployed artifacts. Every artifact downloads, unpacks, and matches its published `.sha256`. Stamp checks retry with backoff: edge rollout takes about two minutes, and a stamp that never converges is the real failure.
+5. Post-publish tiers. First `kinu-scripted-model` is published from this tree: the scripted model the first-run tier runs on, a Worker at `scripted-model.kinu.run` (`scripts/scripted-model-worker.jsonc`) on both its own route and a Custom Domain. A hosted turn's call comes from a Durable Object, whose fetch runs the zone's routes first, so the route has to beat production's `*.kinu.run/*`; the provider proxy's fetch comes from the Worker's request context, which skips same-zone routes and reaches a same-account Worker at a Custom Domain only. It serves both environments. Then the first-run tier and the product flows drive the deployment just published as the eval service identity, in one wave: `KINU_EVAL_ORIGIN` and `KINU_ORIGIN` name it, and its own `DEV_IDENTITY_SECRET` comes from `KINU_EVAL_WEB_IDENTITY` for production or `KINU_EVAL_STAGING_WEB_IDENTITY` for staging (`evalWebIdentityEnv`), which the caller exports. The first-run tier's fleet project, whose cases attach machines, acts as the `devices` eval account (`DEV_USER_EMAIL` above), and its other cases as `scripted`.
+6. Infrastructure verification. `bun scripts/infra-verify.ts --phase=post-deploy` for the deploy's environment, the strictest phase, unconditional.
+7. On staging, the record: `bun scripts/promote.ts record <version>` writes `verified/<sha>.json` (the sha, the artifact digest, the staging version, and every download under `dist/client/downloads/` with its sha256) to staging's releases bucket, last, so a red anywhere above leaves none, and only once staging is seen serving that commit with that signed stamp. On a promotion, the history: `bun scripts/promote.ts promoted <version>` adds the build to `promoted.json` in `kinu-releases`, each download with its hash, once production is seen serving that version and that signed stamp; a promotion production cannot record fails, since no rollback could return to it. Then the evals: `.github/workflows/evals.yml` is dispatched against the build kinu.run now serves.
+8. Summary. URL, Worker, Version ID, build sha.
 
 ### Build budget
 
@@ -446,7 +460,7 @@ Step 2 asserts downloads exist in `dist/client/downloads/`. Step 3 asserts wrang
 
 ### CI credentials
 
-`.github/workflows/evals.yml` holds a credential, so its two jobs that read it (`evals`, `diagnose`) ask for the GitHub environment `eval`, and no pull request can start the workflow: it is dispatched after a deploy and measures the deployed build. Two things only an operator can do:
+`.github/workflows/evals.yml` holds a credential, so its two jobs that read it (`evals`, `diagnose`) ask for the GitHub environment `eval`, and no pull request can start the workflow: it is dispatched after a promotion and measures the build production serves. Two things only an operator can do:
 
 | Operator setup required | Where | Why the repository cannot do it |
 |---|---|---|
@@ -480,21 +494,10 @@ One email per incident: one alert on open, silence while it persists, one recove
 
 ### Rollback
 
-Assets ride the Worker version, so rollback moves code and published `/downloads/*` together. I have not measured version retention here. `npx wrangler versions list` prints what I can roll back to.
-
 ```bash
-cd packages/cf-backend
-npx wrangler versions list
-npx wrangler rollback --version-id <version-id>
+bun run deploy --rollback
 ```
 
-Then I confirm it took, the way the deploy gate does: the stamp names the rolled-back commit and downloads still verify.
+It returns production to the newest build it took before the one it serves (`bun scripts/promote.ts rollback`). `promoted.json` in `kinu-releases` lists every build a green promotion gave production, oldest first, and the first promotion starts it with the build production served before it. A promotion that went red after its upload serves a version the list never took, so a rollback from it returns to the newest build in the list; from a listed build it returns to the one before, and withdraws the build it leaves, so a later rollback never returns to it. It runs `wrangler rollback` to that version, then proves the rollback took, the way the deploy's smoke test does: `/api/health` names the build's commit once the edge converges, and every download, the worker release tarball among them, hashes as that build's did. Assets ride the Worker version, so the rollback moves code and `/downloads/*` together, and the worker tarball a build's `release.json` names stays in `kinu-releases` under its own versioned key. A rollback moves no Durable Object, R2 or KV state. Cloudflare refuses one across a Durable Object class migration, or to a version bound to a bucket, namespace or queue that no longer exists, and keeps only the 100 most recent versions (Workers rollbacks docs); a forward deploy is then the way back.
 
-```bash
-curl -s https://kinu.run/api/health | jq '.ok, .build'
-curl -fsSL https://kinu.run/downloads/kinu-cli-linux-x64.tar.gz -o /tmp/p.tgz
-curl -fsSL https://kinu.run/downloads/kinu-cli-linux-x64.tar.gz.sha256
-sha256sum /tmp/p.tgz
-```
-
-`ok: false`, an unexpected `build.sha`, or a downloads 404 means the rollback recovered nothing, and I redeploy forward with `bun run deploy`. I have not run this rehearsal against production. The commands are the checks `scripts/deploy.sh` runs, reduced to what a rollback needs.
+Going forward instead means a commit staging verifies: `bun run deploy`, then `bun run deploy --promote`.

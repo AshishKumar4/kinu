@@ -160,6 +160,25 @@ describe('sanitizeAttachmentsForModel', () => {
     expect(parts[1].text).toContain('attachments/');
   });
 
+  test('an SVG never goes out as an image: the image modality carries raster pictures, and the model reads the markup', async () => {
+    const { vfs } = countingVfs();
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>';
+    const url = `data:image/svg+xml;base64,${btoa(svg)}`;
+
+    const message: ModelMessage = {
+      role: 'user',
+      content: [
+        { type: 'file', data: url, mediaType: 'image/svg+xml', filename: 'logo.svg' },
+        { type: 'image', image: url, mediaType: 'image/svg+xml' },
+      ],
+    };
+
+    const out = await sanitizeAttachmentsForModel([message], { accepts: accepts('image', 'pdf'), vfs });
+    const parts = textParts(out[0]);
+
+    expect(parts.map((part) => part.text.includes(svg))).toEqual([true, true]);
+  });
+
   test('passes PDFs through untouched for pdf-capable models', async () => {
     const { vfs, writes } = countingVfs();
     const message = pdfMessage();

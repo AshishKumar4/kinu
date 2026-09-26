@@ -69,14 +69,23 @@ export function recordOwner(root: string): void {
   if (owner !== null) writeFileSync(join(root, OWNER_RECORD), JSON.stringify(owner));
 }
 
+export interface ReapedRoots {
+  readonly reaped: readonly string[];
+  /** Abandoned roots holding files this user may not remove, left in place: a container that ran as root wrote
+   *  under one and was killed before handing its files back. */
+  readonly unremovable: readonly string[];
+}
+
 /**
  * Remove every scratch root under `parent` whose recorded owner has ended; `keep` is the caller's own. Age says
  * nothing: an eval episode runs 30 minutes by design and an eval tier for hours, and the 30-minute bound this
  * replaced reaped live roots out from under them. A root with no readable record (minted before records existed,
- * or killed mid-write) is left to `scripts/preflight.ts --reclaim` rather than guessed at.
+ * or killed mid-write) is left to `scripts/preflight.ts --reclaim` rather than guessed at. A root this user may not
+ * remove is left and returned, since the sweep runs before every suite and one stranded root must not stop them all.
  */
-export function reapAbandonedRoots(parent: string, keep: string): string[] {
+export function reapAbandonedRoots(parent: string, keep: string): ReapedRoots {
   const reaped: string[] = [];
+  const unremovable: string[] = [];
 
   for (const name of readdirSync(parent)) {
     const path = join(parent, name);
@@ -90,10 +99,16 @@ export function reapAbandonedRoots(parent: string, keep: string): string[] {
     const recorded = text === undefined ? undefined : v.safeParse(v.pipe(v.string(), v.parseJson(), ProcessOwnerSchema), text);
 
     if (!recorded?.success || ownerAlive(recorded.output)) continue;
+
     // A racing peer may remove it between the read and the rm; `force` covers that.
-    rmSync(path, { recursive: true, force: true });
-    reaped.push(path);
+    const removed = tolerate(() => {
+      rmSync(path, { recursive: true, force: true });
+
+      return true;
+    }, 'eacces');
+
+    (removed === true ? reaped : unremovable).push(path);
   }
 
-  return reaped;
+  return { reaped, unremovable };
 }

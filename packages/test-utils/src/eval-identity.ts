@@ -1,7 +1,7 @@
 /**
  * Who an eval run authenticates as, and where it may point. Identity: {@link EVAL_SERVICE_ACCOUNT} via
  * {@link EVAL_IDENTITY_ENV.token}, never a person's stored session; no credential means skip. Target: an
- * allowlist of the one deployment plus loopback, failing closed. Pure over its environment.
+ * allowlist of the two deployments, production and staging, plus loopback, failing closed. Pure over its environment.
  */
 import { homedir } from 'node:os';
 import * as v from 'valibot';
@@ -47,16 +47,40 @@ export function isEvalAccountEmail(email: string, account: EvalAccount): boolean
   return at > 0 && email.slice(0, at).endsWith(`+${account}`);
 }
 
-/** Where the CLI bearer minted for `account` is kept: the eval service's own, else its named account's beside it. */
-export function evalSessionPath(account: EvalAccount | undefined): string {
-  const dir = `${homedir()}/.config/kinu/eval-session`;
+/** Where the CLI bearer minted on `origin` for `account` is kept: a directory per deployment, so one deployment's
+ *  bearer never stands in the way of another's, holding the eval service's own and its named accounts' beside it. */
+export function evalSessionPath(origin: string, account: EvalAccount | undefined): string {
+  const dir = `${homedir()}/.config/kinu/eval-session/${new URL(origin).host}`;
 
   return account === undefined ? `${dir}/config.json` : `${dir}/${account}/config.json`;
 }
 
-/** The default eval target, pinned to wrangler.jsonc's CLI_PUBLIC_ORIGIN by tests. `workers_dev` is off,
- *  so no second host is allowed: it would expose the DEV_USER_EMAIL identity on an unwatched name. */
+/** The default eval target, production: wrangler.jsonc's top-level CLI_PUBLIC_ORIGIN, pinned by tests. */
 export const EVAL_DEPLOYMENT_ORIGIN = 'https://kinu.run';
+
+/** Staging, `env.staging`'s CLI_PUBLIC_ORIGIN: every deploy lands there first, and its tiers and evals run there. */
+export const EVAL_STAGING_ORIGIN = 'https://staging.kinu.run';
+
+/** One origin per wrangler environment, and no other. Each grants the DEV_USER_EMAIL identity only to a request
+ *  carrying that deployment's own DEV_IDENTITY_SECRET ({@link evalWebIdentityEnv}), and `workers_dev` is off in
+ *  both: a further host would grant it on a name nobody watches. */
+const EVAL_DEPLOYMENT_ORIGINS: readonly string[] = [EVAL_DEPLOYMENT_ORIGIN, EVAL_STAGING_ORIGIN];
+
+/** The variables carrying each deployment's DEV_IDENTITY_SECRET, the browser plane's authority: a credential apart
+ *  from {@link EVAL_IDENTITY_ENV.token}'s CLI bearer, which reaches nothing outside `/api/cli`. The two deployments
+ *  never share a secret. */
+export const EVAL_WEB_IDENTITY_ENV = {
+  production: 'KINU_EVAL_WEB_IDENTITY',
+  staging: 'KINU_EVAL_STAGING_WEB_IDENTITY',
+} as const;
+
+/** The variable a run driving `origin` takes its web identity from, so no run presents one deployment's secret
+ *  to the other. A loopback dev server reads production's name, holding the secret the run gave that server. */
+export function evalWebIdentityEnv(origin: string): string {
+  return new URL(origin).origin === EVAL_STAGING_ORIGIN
+    ? EVAL_WEB_IDENTITY_ENV.staging
+    : EVAL_WEB_IDENTITY_ENV.production;
+}
 
 /** Hosts that can only be the developer's machine. `[::1]` keeps its brackets because `URL.hostname` does. */
 const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'];
@@ -115,7 +139,7 @@ export function evalTargetVerdict(origin: string): EvalTargetVerdict {
     return { kind: 'allowed', origin: normalized, why: 'local' };
   }
 
-  if (normalized === EVAL_DEPLOYMENT_ORIGIN) {
+  if (EVAL_DEPLOYMENT_ORIGINS.includes(normalized)) {
     return { kind: 'allowed', origin: normalized, why: 'deployment' };
   }
 
@@ -123,7 +147,7 @@ export function evalTargetVerdict(origin: string): EvalTargetVerdict {
     kind: 'refused',
     origin: normalized,
     reason: `${normalized} is not an eval target. Tests and evals run against `
-      + `${EVAL_DEPLOYMENT_ORIGIN} or a loopback dev server. Set ${EVAL_IDENTITY_ENV.origin} `
+      + `${EVAL_DEPLOYMENT_ORIGINS.join(', ')} or a loopback dev server. Set ${EVAL_IDENTITY_ENV.origin} `
       + `to one of those.`,
   };
 }

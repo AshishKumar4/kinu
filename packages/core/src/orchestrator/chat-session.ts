@@ -109,7 +109,7 @@ export type SessionEvent =
       /** A rerun answers every leftover as one turn; a transport closes their requests with it. */
       carried: readonly string[] }
   | { type: 'text-delta'; delta: string }
-  /** The model's reasoning as it streams; shown live, never part of the answer or stored. */
+  /** Shown live; never the answer, never stored. */
   | { type: 'reasoning-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
@@ -589,7 +589,6 @@ export class ChatSession {
     await this.flushEvents();
   }
 
-  /** A new conversation in the same workspace: the transcript and the model's context start empty. */
   async clear(): Promise<void> {
     await this.actorSession.clearConversation(this.sessionId, () => {
       if (this.turnInFlight()) throw new KinuError('denied', CLEAR_NEEDS_IDLE);

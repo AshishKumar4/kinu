@@ -243,12 +243,19 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
   });
 }
 
-export async function readLocalNextTurnTier(name: string): Promise<ResolvedTurnProfile['tier']> {
-  return withLocalDbAsync(name, async (db) => createLocalProfileAuthority({
-    config: openWorkspaceMainActor(makeSql(db)).config,
-    plane: resolverModelPlane(createConfiguredLocalModelResolver().resolver),
-    envelope: createProfileAuthorityReader(),
-  }).nextTurnTier({ workMode: 'build' }));
+/** Null when nothing names a model. */
+export async function readLocalNextTurnTier(name: string): Promise<ResolvedTurnProfile['tier'] | null> {
+  const envelope = await createProfileAuthorityReader()();
+  const { llmConfig, resolver } = createConfiguredLocalModelResolver();
+
+  return withLocalDbAsync(name, async (db) => {
+    const { config } = openWorkspaceMainActor(makeSql(db));
+
+    if (envelope === null && config.getModel() === null && llmConfig === null) return null;
+
+    return createLocalProfileAuthority({ config, plane: resolverModelPlane(resolver), envelope: async () => envelope })
+      .nextTurnTier({ workMode: 'build' });
+  });
 }
 
 /** Reassembled from `memory_chunks`, MemoryStore's index of `memory/MEMORY.md`; opening the file would write (see getLocalStatus). */

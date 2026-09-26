@@ -25,15 +25,12 @@ import { isBackgroundHandle, ORCHESTRATOR_AGENT_SLUG, type RunEvent } from '../.
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase, type FirstRunSession,
 } from './first-run';
+import { SWARM_ASK as ASK } from './asks';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 
 const SUITE = 'First-run · exploration';
 
 const CASE = 'exploration' as const;
-
-const ASK = 'Use your agents tool with action swarm and preset ideate, with this task: '
-  + '"Name one fruit whose skin is yellow. Report only the fruit\'s name." '
-  + 'When the swarm settles, reply with one line: SWARM <the names it returned>.';
 
 /** The lowercase words of `text`. */
 function wordsOf(text: string): string[] {

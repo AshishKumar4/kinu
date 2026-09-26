@@ -24,13 +24,15 @@
  *                 green the tier was rebuilt to remove.
  */
 import { describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 import type { Server, ServerWebSocket } from 'bun';
 import * as v from 'valibot';
 
 import { isAgentRpcMethod, renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
-import { DeploymentAnswer, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
+import { DeploymentAnswer, EVAL_WEB_IDENTITY_ENV, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import {
-  PUBLIC_IDENTITY_ENV, decodeFrame, encodeChatRequest, encodeRpcRequest,
+  decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity,
   type PublicTurnRecorder,
   KinuPublicSession, openPublicSession,
@@ -595,6 +597,19 @@ describe('the live arm is reachable only under KINU_EVAL_BACKEND=cloud', () => {
 
     expect(resolution.remedy).toContain('gate:first-run');
   });
+
+  test('every task loads under the runner `bun run evals` spells', () => {
+    // Collecting a task imports it, under Bun as `bun run evals` runs it. On 2026-09-25 every task failed there at
+    // import: `import { z } from 'zod'` in core came back undefined. A task resolves its target and the commit its
+    // definitions are compared under as it loads, so collection names a loopback origin and a commit; nothing runs.
+    const listed = spawnSync('bun', ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'evals/vitest.config.ts', '--json'], {
+      cwd: join(import.meta.dirname, '../..'),
+      encoding: 'utf8',
+      env: { ...process.env, KINU_EVAL_ORIGIN: 'http://127.0.0.1:9', KINU_EVAL_COMMIT: '0'.repeat(40) },
+    });
+
+    expect(listed.status, listed.stderr).toBe(0);
+  });
 });
 
 describe('the browser plane names its own credential', () => {
@@ -607,7 +622,7 @@ describe('the browser plane names its own credential', () => {
 
     // The variable to export, and where the value comes from. Without the
     // second half the remedy is a name nobody can act on.
-    expect(resolution.remedy).toContain(PUBLIC_IDENTITY_ENV);
+    expect(resolution.remedy).toContain(EVAL_WEB_IDENTITY_ENV.production);
     expect(resolution.remedy).toContain('wrangler secret put DEV_IDENTITY_SECRET');
     // And WHY the tier's own credential is not enough, so the next reader does
     // not spend an afternoon trying it.
@@ -615,7 +630,7 @@ describe('the browser plane names its own credential', () => {
   });
 
   test('the secret is taken from the environment, and loopback needs none', () => {
-    expect(resolveWebIdentity(DEPLOYMENT, { [PUBLIC_IDENTITY_ENV]: 'sekret' }))
+    expect(resolveWebIdentity(DEPLOYMENT, { [EVAL_WEB_IDENTITY_ENV.production]: 'sekret' }))
       .toEqual({ kind: 'ready', identity: { kind: 'secret', secret: 'sekret' } });
     // A developer's own machine is already the trust boundary — the same rule
     // `authenticateRequest` applies (auth/session.ts:164).
@@ -623,7 +638,7 @@ describe('the browser plane names its own credential', () => {
       .toEqual({ kind: 'ready', identity: { kind: 'loopback' } });
     // Blank is absent, never a secret: an empty export would otherwise send an
     // empty header and read as a rejected identity at the deployment.
-    expect(resolveWebIdentity(DEPLOYMENT, { [PUBLIC_IDENTITY_ENV]: '   ' }).kind).toBe('absent');
+    expect(resolveWebIdentity(DEPLOYMENT, { [EVAL_WEB_IDENTITY_ENV.production]: '   ' }).kind).toBe('absent');
   });
 });
 

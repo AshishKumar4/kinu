@@ -14,6 +14,8 @@ import { resolveAgentTarget } from '../agent-target';
 import { requireLocalAgent } from '../local-target';
 import { getLocalAgentInfo, readLocalNextTurnTier } from '../local-inspection';
 
+const NO_MODEL = 'none yet (kinu setup picks one)';
+
 export async function statusCommand(name: string): Promise<void> {
   const target = resolveAgentTarget(name);
 
@@ -70,8 +72,8 @@ export async function statusCommand(name: string): Promise<void> {
 
   printAgentStatus(info, statSync(local.dbPath).size, {
     conversationCount: info.conversationCount,
-    model: tier.model,
-    reasoningEffort: tier.reasoningEffort,
+    model: tier?.model ?? NO_MODEL,
+    reasoningEffort: tier === null ? info.reasoningEffort : tier.reasoningEffort,
   });
 }
 

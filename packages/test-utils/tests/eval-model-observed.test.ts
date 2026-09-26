@@ -151,7 +151,7 @@ describe('publishRunRecord — the record carries the observed model', () => {
   for (const published of publishCases) {
     test(published.name, () => {
       const record = publishRunRecord({
-        family: 'test', tier: 'flash', modelId: published.modelId, modelObserved: published.observed,
+        family: 'test', tier: 'scripted', modelId: published.modelId, modelObserved: published.observed,
         repeats: 1, seed: 1,
         arm: { evolution: false, settle: 'none', tools: [] },
         declaredTasks: ['case-a'], observations: [scored()], spend: SPEND,

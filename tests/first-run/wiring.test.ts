@@ -42,9 +42,11 @@ test('a red in either project reds the tier, which still reports spend and keeps
   // project's green must not become the tier's verdict.
   writeFileSync(join(bin, 'bun'), `#!/bin/bash
 case "$1" in
+  -e) printf '%s\\n' KINU_EVAL_WEB_IDENTITY ;;
   scripts/bench-retention.ts) mkdir -p "$REPORT_FIXTURE"; printf '%s\\n' "$REPORT_FIXTURE" ;;
   scripts/eval-session-mint.ts) ;;
   scripts/eval-credentials.ts) printf '%s\\n' 'https://kinu.run' 'fixture-token' ;;
+  scripts/scripted-tier.ts) shift; printf '%s %s\\n' "$*" "$KINU_TOKEN" >> "$REPORT_FIXTURE/scripted" ;;
   --bun) project="$(printf '%s\\n' "$@" | grep -A1 -x -- --project | tail -1)"
     printf '%s\\n' "$project" >> "$REPORT_FIXTURE/projects"
     printf 'measured-spend\\n' >> "$KINU_EVAL_SPEND_FILE"
@@ -61,6 +63,9 @@ esac
   });
 
   expect(run.status).toBe(42);
+  // Both accounts the cases act as run on the scripted model, each put there with its own bearer.
+  expect(readFileSync(join(reports, 'scripted'), 'utf8').trim().split('\n').sort())
+    .toEqual(['https://kinu.run devices fixture-token', 'https://kinu.run scripted fixture-token']);
   expect(readFileSync(join(reports, 'projects'), 'utf8').trim().split('\n').sort()).toEqual(['first-run-cases', 'first-run-fleet']);
   expect(readFileSync(join(reports, 'spend-first-run.jsonl'), 'utf8')).toBe('measured-spend\nmeasured-spend\n');
   expect(readFileSync(join(reports, 'spend-reported'), 'utf8')).toBe('reported\n');
@@ -159,6 +164,16 @@ describe('the first-run corpus is the set this tier runs', () => {
     // A deployed episode's completion is decided by the episode. An elapsed
     // deadline here would report a slow model as a product defect.
     expect(firstRunConfig.test?.testTimeout).toBe(0);
+  });
+
+  test('every case loads under the tier\'s own runner', () => {
+    // Collecting a case imports it, under Bun as the tier runs it, which the partition above never does. On
+    // 2026-09-25 35 cases failed there at import (`import { z } from 'zod'` in core came back undefined), and only a
+    // deploy's post-publish wave would have shown it.
+    const listed = spawnSync('bun', ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts', '--json'],
+      { cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
+
+    expect(listed.status, listed.stderr).toBe(0);
   });
 });
 

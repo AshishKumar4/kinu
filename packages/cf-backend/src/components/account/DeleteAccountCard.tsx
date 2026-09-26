@@ -5,7 +5,7 @@ import { WarningIcon } from "@phosphor-icons/react";
 import { confirmsAccountDelete } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { deleteAccount } from "@/lib/user-api";
-import { Card, Field, inputCls } from "@/components/ui/form";
+import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 
@@ -61,7 +61,7 @@ export function DeleteAccountCard({ email }: { email: string }) {
               autoComplete="off"
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && confirmed && !busy) startTransition(run); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !composing(e.nativeEvent) && confirmed && !busy) startTransition(run); }}
               className={inputCls}
               aria-label="Confirm your email"
             />

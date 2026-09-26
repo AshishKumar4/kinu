@@ -54,38 +54,11 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
+import { CRAFT_ANSWER as ANSWER, CRAFT_ASK as ASK } from './asks';
 
 const SUITE = 'First-run · codemode-craft';
 
 const CASE = 'codemode-craft' as const;
-
-/**
- * The input, and the answer this file computed without the product.
- *
- * Two three-digit numbers rather than one obvious pair: the answer must not be
- * something a model can produce by pattern rather than by running the tool it
- * just wrote, and it must not collide with any number the surrounding prose
- * contains. The tool is asked for a SUM OF DIGITS, which is a real loop — a body
- * with no branch or accumulator cannot answer it.
- */
-const INPUT = '4827516390';
-
-/** 4+8+2+7+5+1+6+3+9+0 = 45, computed here, in this file, from the string
- *  above — never read back off the deployment. */
-const ANSWER = INPUT.split('').reduce((sum, digit) => sum + Number(digit), 0);
-
-/**
- * The ask, in the words a person uses.
- *
- * It names the CAPABILITY ("a reusable tool of your own") and the OUTCOME ("the
- * number on its own line"), and nothing else: no function signature, no
- * `createTool`, no mention of codemode. A prompt that spelled the API would test
- * whether the model can transcribe an instruction, which is not the thing that
- * broke.
- */
-const ASK = 'Build yourself a small reusable tool that adds up the digits of a number, then '
-  + `use that tool on ${INPUT} and reply with the resulting number on its own line. `
-  + 'Do the arithmetic with the tool rather than in your head.';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
 

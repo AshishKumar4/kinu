@@ -126,7 +126,6 @@ export interface ChatOptions {
   credentialOf?: (spec: string) => Promise<string | null>;
   /** Provider-reported prompt tokens of the previous turn's final request, the measured compaction trigger. */
   providerReportedTokens?: number;
-  /** The armed compaction the caller consumed, if any. */
   transformTrigger?: CompactionTrigger;
   /** The provider's own request token count (providers/input-tokens.ts); omitted, the shared estimate gates. */
   countInputTokens?: (request: CountableRequest) => Promise<InputTokenCount>;

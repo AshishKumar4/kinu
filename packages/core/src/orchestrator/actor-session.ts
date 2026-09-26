@@ -210,6 +210,8 @@ export class ActorSession {
   }
   get landedSteers(): readonly LandedSteerRow[] { return this.landed; }
   get inFlight(): boolean { return this.active !== null && this.active.phase !== 'settling'; }
+  /** Until `finishTurn`, a settling turn owns its claim. */
+  get turnOpen(): boolean { return this.active !== null; }
 
   lastRequestAt(): number | null {
     return this.canonical.requests.lastStep()?.recordedAt ?? null;
@@ -297,7 +299,6 @@ export class ActorSession {
     await this.restoreWorkingHistory();
   }
 
-  /** Empty the conversation; the running turn must be stopped first. */
   async clearConversation(sessionId: string, assertIdle: () => void): Promise<void> {
     this.canonical.clearConversation(sessionId, () => {
       if (this.inFlight) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
@@ -511,6 +512,7 @@ export class ActorSession {
         workMode: this.mode,
         program: programIdentityOf(program, this.options.installedBuild),
         context: admitted.selection,
+        installedBuild: this.options.installedBuild,
       });
 
       active.claim = claim;

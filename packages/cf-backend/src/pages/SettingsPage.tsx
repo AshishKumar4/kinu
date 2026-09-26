@@ -16,7 +16,7 @@ import {
 } from "@kinu.run/core";
 import { executorLabel } from "@kinu.run/core";
 import { useKinu } from "@/hooks/use-kinu";
-import { Card, Field, inputCls } from "@/components/ui/form";
+import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -844,7 +844,7 @@ function AlwaysActiveSkillsCard({
           value={input}
           placeholder="skill-name"
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={async (e) => { if (e.key === 'Enter') await add(); }}
+          onKeyDown={async (e) => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }}
           className={inputCls + " text-xs"}
         />
         <button

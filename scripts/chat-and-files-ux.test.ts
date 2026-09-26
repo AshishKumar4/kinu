@@ -1857,6 +1857,90 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
 });
 
 /**
+ * iOS Safari zooms the page when a text field under 16px takes focus, and leaves it zoomed. On a touch phone every
+ * text field, on the pages that carry one, must compute to at least 16px.
+ */
+describe('text fields on a touch phone', () => {
+  test('every visible text field computes to at least 16px, so iOS does not zoom on focus', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const small: string[] = [];
+
+      for (const frame of ['workspacepage', 'home', 'files', 'usersettingsstate&section=providers']) {
+        const page = await newPage();
+        await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+        await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('input, textarea');
+
+        const measured = await page.$$eval(
+          'input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"]), textarea, select',
+          (fields) => ({
+            coarse: matchMedia('(pointer: coarse)').matches,
+            fields: fields.filter((field) => field.checkVisibility()).map((field) => ({
+              name: field.getAttribute('aria-label') ?? field.getAttribute('placeholder') ?? field.tagName,
+              px: Number.parseFloat(getComputedStyle(field).fontSize),
+            })),
+          }),
+        );
+
+        expect(measured.coarse).toBe(true);
+        expect(measured.fields.length).toBeGreaterThan(0);
+        small.push(...measured.fields.filter((field) => field.px < 16).map((field) => `${frame}: ${field.name} ${String(field.px)}px`));
+        await page.close();
+      }
+
+      expect(small).toEqual([]);
+    });
+  });
+});
+
+/**
+ * An IME delivers the Enter that picks a candidate, and the Escape that drops one, as ordinary keydowns: Chrome marks them
+ * `isComposing`, and WebKit, which ends the composition first, marks them keyCode 229. Neither may commit or cancel.
+ */
+describe('a rename while an IME composes', () => {
+  test("the IME's own Enter and Escape leave the rename open with its text", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=files`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      const row = (name: string) => `[data-files-entry][title="${name}"]`;
+      await page.waitForSelector(row('home'));
+      await page.click(row('home'));
+      await page.waitForSelector(row('main'));
+      await page.click(row('main'));
+      await page.waitForSelector(row('SOUL.md'));
+      await page.hover(row('SOUL.md'));
+      await page.click(`${row('SOUL.md')} [data-files-rename]`);
+      await page.waitForSelector('[data-files-rename-input]');
+      await page.$eval('[data-files-rename-input]', (el) => { if (el instanceof HTMLInputElement) el.value = ''; });
+      await page.type('[data-files-rename-input]', '魂');
+
+      const imeKey = (key: string, mark: 'composing' | 'webkit') => page.evaluate((k, m) => {
+        document.querySelector('[data-files-rename-input]')?.dispatchEvent(new KeyboardEvent('keydown', {
+          key: k, bubbles: true, cancelable: true, isComposing: m === 'composing', keyCode: m === 'webkit' ? 229 : 0,
+        }));
+      }, key, mark);
+
+      const open = () => page.evaluate(() => {
+        const input = document.querySelector('[data-files-rename-input]');
+
+        return input instanceof HTMLInputElement ? input.value : null;
+      });
+
+      for (const mark of ['composing', 'webkit'] as const) {
+        await imeKey('Enter', mark);
+        await imeKey('Escape', mark);
+        expect(await open()).toBe('魂');
+      }
+
+      expect(await page.$(row('魂'))).toBeNull();
+      await page.close();
+    });
+  });
+});
+
+/**
  * KINU-060. The real FilesSurface opens a preview whose FIRST RPC is held by
  * the fixture transport. A fixture mutation changes the listing's revision;
  * actual Refresh causes FileViewer/useAsyncResource to start its new request,
