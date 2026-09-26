@@ -60,13 +60,15 @@ interface StatusRefresh {
 
 export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTransport {
   let snapshot: DeviceStatus = DISCONNECTED;
-  let served: string | null = null;
+  let answered = false;
   let inFlight: StatusRefresh | null = null;
 
   const adopt = (next: DeviceStatus): void => {
+    const moved = answered && JSON.stringify(next) !== JSON.stringify(snapshot);
+    answered = true;
     snapshot = next;
 
-    if (served !== null && served !== JSON.stringify(next)) opts.onStatusChanged?.();
+    if (moved) opts.onStatusChanged?.();
   };
 
   /** Authoritative hub check, deduped. Failure keeps the last snapshot; the slot is released only by its owner. */
@@ -109,11 +111,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
 
   return {
     /** Never asks the hub: a read of the executors must not cost a cross-object call. */
-    status: (): DeviceStatus => {
-      served = JSON.stringify(snapshot);
-
-      return snapshot;
-    },
+    status: (): DeviceStatus => snapshot,
     refreshStatus,
     rpc: async (method, params, rpcOpts) => {
       const hub = opts.hub();

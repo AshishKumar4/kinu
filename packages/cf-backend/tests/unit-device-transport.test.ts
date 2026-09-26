@@ -63,7 +63,7 @@ describe('createHubDeviceTransport', () => {
 
   // 2026-09-26: every wake of an idle workspace re-read its page's executors, since a fresh object's first answer
   // differed from the empty one it starts with, though no page had read that one.
-  test('status() never asks the hub; a refresh says so only when it changes what a reader was told', async () => {
+  test('status() never asks the hub; a refresh says so only when it changes an answer the object had', async () => {
     let listCalls = 0;
     let connected = false;
     let moved = 0;

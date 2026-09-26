@@ -2335,7 +2335,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const { stub, caller } = await this.userHub();
         await stub.watchDeviceStatus(caller, watching);
 
-        if (watching) await this.rt.deviceTransport.refreshStatus();
+        if (!watching) return;
+        const opened = JSON.stringify(this.rt.deviceTransport.status());
+
+        if (JSON.stringify(await this.rt.deviceTransport.refreshStatus()) !== opened) {
+          this.liveReadsMoved(['getExecutors', 'getToolDescriptions']);
+        }
       } catch (cause) {
         diagnostics.failure('device.watch_failed', toKinuError({
           doing: watching ? 'asking to hear device changes' : 'leaving the device-change list', cause, otherwise: 'unavailable',
