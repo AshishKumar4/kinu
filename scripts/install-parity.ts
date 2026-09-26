@@ -99,10 +99,14 @@ export interface InstalledPackage {
 }
 
 /** Every package under `modules` and the `node_modules` nested in each, keyed from `prefix`. Dot entries (`.bin`,
- *  `.cache`, `.vite`) are the tools' own and hold no package. A workspace link is the workspace's, walked from its
- *  own path. Each install location is its own key even where two share a directory: bun links a nested copy to an
- *  identical one elsewhere (`rolldown-plugin-dts/typescript` is `@mossaic/sdk`'s). `ancestors` stops a link cycle. */
-function packagesUnder(modules: string, prefix: string, root: string, ancestors: ReadonlySet<string>): InstalledPackage[] {
+ *  `.cache`, `.vite`) are the tools' own and hold no package. A workspace is walked from its own path, so its link
+ *  is passed over, and only a link that IS one: a key naming the workspace whose directory it reaches (`workspaces`,
+ *  by real directory). Any other link is a package, whatever it reaches. Each install location is its own key even
+ *  where two share a directory: bun links a nested copy to an identical one elsewhere (`rolldown-plugin-dts/typescript`
+ *  is `@mossaic/sdk`'s). `ancestors` stops a link cycle. */
+function packagesUnder(
+  modules: string, prefix: string, workspaces: ReadonlyMap<string, string>, ancestors: ReadonlySet<string>,
+): InstalledPackage[] {
   if (!existsSync(modules)) return [];
   const found: InstalledPackage[] = [];
 
@@ -114,7 +118,7 @@ function packagesUnder(modules: string, prefix: string, root: string, ancestors:
     const path = join(modules, name);
     const real = tolerate(() => realpathSync(path), 'enoent');
 
-    if (real !== undefined && real.startsWith(`${root}/`) && !real.includes('/node_modules/')) continue;
+    if (real !== undefined && workspaces.get(real) === `${prefix}${name}`) continue;
 
     if (real === undefined || !statSync(real).isDirectory()) {
       found.push({ key: `${prefix}${name}`, path, real, version: undefined });
@@ -130,7 +134,7 @@ function packagesUnder(modules: string, prefix: string, root: string, ancestors:
       real,
       version: manifest === undefined ? undefined : v.parse(PackageVersion, JSON.parse(manifest)).version,
     });
-    found.push(...packagesUnder(join(real, 'node_modules'), `${prefix}${name}/`, root, new Set([...ancestors, real])));
+    found.push(...packagesUnder(join(real, 'node_modules'), `${prefix}${name}/`, workspaces, new Set([...ancestors, real])));
   }
 
   return found;
@@ -138,11 +142,15 @@ function packagesUnder(modules: string, prefix: string, root: string, ancestors:
 
 /** Every package installed in the checkout at `root`: its root `node_modules` and each workspace's. */
 export function installedTree(root: string, workspaces: ReadonlyMap<string, string>): InstalledPackage[] {
-  const top = realpathSync(root);
+  const linked = new Map([...workspaces].flatMap(([path, name]) => {
+    const real = tolerate(() => realpathSync(join(root, path)), 'enoent');
+
+    return real === undefined ? [] : [[real, name] as const];
+  }));
 
   return [
-    ...packagesUnder(join(root, 'node_modules'), '', top, new Set()),
-    ...[...workspaces].flatMap(([path, name]) => packagesUnder(join(root, path, 'node_modules'), `${name}/`, top, new Set())),
+    ...packagesUnder(join(root, 'node_modules'), '', linked, new Set()),
+    ...[...workspaces].flatMap(([path, name]) => packagesUnder(join(root, path, 'node_modules'), `${name}/`, linked, new Set())),
   ];
 }
 

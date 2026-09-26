@@ -25,6 +25,7 @@ const LOCK = `{
     "@fx/app/dep": ["dep@3.0.0", "", {}, "sha512-d"],
     "native-elsewhere": ["native-elsewhere@1.0.0", "", { "os": "none" }, "sha512-e"],
     "rolldown-plugin-dts": ["rolldown-plugin-dts@0.27.14", "", {}, "sha512-f"],
+    "vendored": ["vendored@1.0.0", "", {}, "sha512-i"],
     "typescript": ["typescript@7.0.2", "", {}, "sha512-g"],
     "@mossaic/sdk/typescript": ["typescript@6.0.3", "", {}, "sha512-h"],
   },
@@ -53,6 +54,7 @@ function checkout(name: string): string {
   mkdirSync(join(root, 'node_modules/@fx'), { recursive: true });
   symlinkSync(join(root, 'packages/app'), join(root, 'node_modules/@fx/app'), 'dir');
   install(root, 'node_modules/rolldown-plugin-dts', '0.27.14');
+  install(root, 'node_modules/vendored', '1.0.0');
   install(root, 'node_modules/typescript', '7.0.2');
   install(root, `${MOSSAIC_SDK}/node_modules/typescript`, '6.0.3');
   mkdirSync(join(root, 'node_modules/.bin'), { recursive: true });
@@ -74,6 +76,16 @@ describe('the installed tree is the one bun.lock names', () => {
     install(root, path, version);
 
     expect(installDrift(root)).toEqual([`${join(root, path)} holds ${version} ${where}`]);
+  });
+
+  test('a link into the repository that is not a workspace is a package, held to the lock', () => {
+    const root = checkout('install-parity-vendor');
+
+    install(root, 'vendor/vendored', '9.9.9');
+    rmSync(join(root, 'node_modules/vendored'), { recursive: true });
+    symlinkSync(join(root, 'vendor/vendored'), join(root, 'node_modules/vendored'), 'dir');
+
+    expect(installDrift(root)).toEqual([`${join(root, 'node_modules/vendored')} holds 9.9.9 where bun.lock names 1.0.0`]);
   });
 
   test('a nested package the lock places, missing under its installed parent, is drift', () => {
