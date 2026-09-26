@@ -1209,7 +1209,6 @@ export interface TurnMeter {
   streamedChars: number;
 }
 
-/** A token is about four characters; `~` marks the estimate. */
 function meterText(meter: TurnMeter, now: number): string {
   const seconds = Math.max(0, Math.floor((now - meter.startedAt) / 1000));
   const tokens = Math.ceil(meter.streamedChars / 4);

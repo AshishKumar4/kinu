@@ -267,7 +267,6 @@ function ToolResultRow({ message, call, previewWidth, expanded }: {
 
 const THINKING_TAIL_LINES = 4;
 
-/** Its latest lines while it streams, then its first line until Ctrl+O expands it. */
 function ThinkingMessage({ content, live, expanded }: { content: string; live?: boolean; expanded: boolean }) {
   const { colors } = useTuiTheme();
   const lines = content.trim().split('\n').filter((line) => line.trim() !== '');

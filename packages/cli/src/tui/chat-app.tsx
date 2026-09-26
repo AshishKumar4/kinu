@@ -2,6 +2,7 @@
 
 import {
   createCliRenderer,
+  type CliRenderer,
   type ScrollBoxRenderable,
   type TextareaRenderable,
 } from '@opentui/core';
@@ -413,7 +414,6 @@ function ChatScene({
 
   const writeActiveSegment = useMemo(() => writeLiveMessage(activeSegmentRef, setMessages), []);
   const stream = useStreamingBuffer(writeActiveSegment);
-  // Sealed by the first text or tool after it.
   const activeThinkingRef = useRef<string | null>(null);
   const writeThinking = useMemo(() => writeLiveMessage(activeThinkingRef, setMessages), []);
   const thinkingStream = useStreamingBuffer(writeThinking);
@@ -490,8 +490,16 @@ function ChatScene({
   const [connectFailed, setConnectFailed] = useState(false);
   const [connectAttempt, setConnectAttempt] = useState(0);
 
-  /** `!command` output the next prompt carries, as in omp. */
+  /** `!command` output for the next prompt, as in omp. */
   const localOutputsRef = useRef<string[]>([]);
+
+  // Held command output must reach no other agent.
+  const forgetSessionTurn = useCallback(() => {
+    localOutputsRef.current = [];
+    turnMeterRef.current = null;
+    activeThinkingRef.current = null;
+    thinkingStream.clear();
+  }, [thinkingStream]);
 
   const sendPrompt = useCallback(async (input: string, mode?: WorkMode) => {
     rememberPrompt(input);
@@ -566,6 +574,7 @@ function ChatScene({
         setModelCatalog([]);
         setBranchTasks({});
         skipHydrationRef.current = true;
+        forgetSessionTurn();
         const previous = client;
         setClient(result.client);
         onClientChange?.(result.client);
@@ -596,7 +605,7 @@ function ChatScene({
       selectionPendingRef.current = false;
       setReady(true);
     }
-  }, [addError, addMessage, client, dispatchInput, onClientChange, setInputText]);
+  }, [addError, addMessage, client, dispatchInput, forgetSessionTurn, onClientChange, setInputText]);
 
   const switchWorkspace = useCallback(async (
     workspace: TuiAgentSummary,
@@ -660,6 +669,7 @@ function ChatScene({
       skipHydrationRef.current = true;
       clientGenerationRef.current += 1;
       activeSegmentRef.current = null;
+      forgetSessionTurn();
       setTurnPhase(null);
       setStatus(null);
       setModelSpec('');
@@ -714,7 +724,7 @@ function ChatScene({
       addError({ cause: error });
       selectionPendingRef.current = false;
     }
-  }, [addError, addMessage, client, onClientChange, onWorkspaceSelect, setInputText, stream]);
+  }, [addError, addMessage, client, forgetSessionTurn, onClientChange, onWorkspaceSelect, setInputText, stream]);
 
 
   /** Cloud supplies a facet client: the conversation nests under its parent workspace. */
@@ -972,15 +982,13 @@ function ChatScene({
       case 'text':
         if (outcome.cleared) setMessages([]);
 
-        if (outcome.copy !== undefined) rendererInstance?.copyToClipboardOSC52(outcome.copy);
-
         if (outcome.workspaces) {
           openWorkspaces();
 
           return;
         }
 
-        addMessage({ role: 'system', content: outcome.text });
+        addMessage({ role: 'system', content: copyRefused(outcome, rendererInstance) ?? outcome.text });
 
         return;
       case 'changelog':
@@ -2059,7 +2067,12 @@ function ChatScene({
 }
 
 
-/** A failed connect takes keys too: Enter there retries it. */
+function copyRefused(outcome: Extract<SlashOutcome, { kind: 'text' }>, renderer: CliRenderer): string | null {
+  if (outcome.copy === undefined || renderer.copyToClipboardOSC52(outcome.copy)) return null;
+
+  return 'This terminal does not accept clipboard writes (OSC 52), so nothing was copied.';
+}
+
 function composerTakesKeys(ready: boolean, connectFailed: boolean, overlayOpen: boolean): boolean {
   return (ready || connectFailed) && !overlayOpen;
 }

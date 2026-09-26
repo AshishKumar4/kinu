@@ -30,7 +30,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
-import { REVERT_NEEDS_IDLE } from './actor-session';
+import { CLEAR_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
@@ -592,7 +592,7 @@ export class ChatSession {
   /** A new conversation in the same workspace: the transcript and the model's context start empty. */
   async clear(): Promise<void> {
     await this.actorSession.clearConversation(this.sessionId, () => {
-      if (this.turnInFlight()) throw new KinuError('denied', REVERT_NEEDS_IDLE);
+      if (this.turnInFlight()) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
     });
   }
 

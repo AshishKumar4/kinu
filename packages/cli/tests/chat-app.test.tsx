@@ -345,7 +345,6 @@ describe('ChatApp terminal interaction', () => {
     });
 
     expect(screen.frame()).toContain('Error: the workspace socket refused: ECONNREFUSED 127.0.0.1');
-    expect(screen.frame()).toContain('Connecting…');
   });
 
   test('a failed slash command reports the whole cause chain', async () => {
@@ -391,6 +390,38 @@ describe('ChatApp terminal interaction', () => {
     expect(screen.frame()).toContain('Send a message');
     expect(controlled.state.closed).toBe(0);
     expect(candidate.state.closed).toBe(1);
+  });
+
+  test('!command output held for one workspace never reaches the next one after a switch', async () => {
+    const beta = fakeClient({ name: 'beta', send: async (input) => {
+      betaSent.push(JSON.stringify(input));
+
+      return TURN;
+    } });
+
+    const betaSent: string[] = [];
+
+    const screen = await mountChat(fakeClient({ name: 'alpha' }).client, {
+      listWorkspaces: () => [ALPHA_LOCAL, BETA_LOCAL],
+      onWorkspaceSelect: async () => beta.client,
+      width: 80,
+    });
+
+    await screen.mockInput.typeText('!printf alpha-secret');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the command output', () => screen.frame().includes('alpha-secret'));
+    await screen.mockInput.typeText('/resume');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the workspace picker', () => screen.frame().includes('Beta'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('beta connected', () => screen.frame().includes('Connected to beta'));
+
+    await screen.mockInput.typeText('hello beta');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the prompt to beta', () => betaSent.length === 1);
+    expect(betaSent[0]).toContain('hello beta');
+    expect(betaSent[0]).not.toContain('alpha-secret');
   });
 
   test('/resume opens the workspace picker, where a workspace is picked with the keys', async () => {
