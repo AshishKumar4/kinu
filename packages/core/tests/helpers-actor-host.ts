@@ -7,6 +7,7 @@ import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory, type WorkspaceActor } from '../src/identity/workspace-actors';
 import { explorationActorKey } from '../src/identity/actor-key';
 import { createActorHost, type ActorHost, type BoundActor } from '../src/state/actor-host';
+import type { AgentTracing } from '../src/obs/agent-tracing';
 import { initEventsHubTables, EventLog } from '../src/events/hub/index';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { createScaffoldSurface } from '../src/scaffold/surface';
@@ -66,6 +67,8 @@ export function hostedSeatsOver(input: {
   /** Build every seat's engine with auto-evolution on, as both backends host an actor. Off by default:
    *  most suites want the ledgers without an enabled engine's writes. */
   readonly autoEvolve?: boolean;
+  /** Spans every seat's turns. */
+  readonly tracing?: AgentTracing;
 }): HostedSeats {
   const { rt, db } = input;
   const runId = input.runId ?? 'run-hosted-fixture';
@@ -116,7 +119,10 @@ export function hostedSeatsOver(input: {
     eventLog: new EventLog(exec, bound.handle),
   });
 
+  const tracing = input.tracing;
+
   const host = createActorHost({
+    tracing: tracing && (() => tracing),
     filesFor: async (bound) => {
       bound.handle.assertCurrent();
 

@@ -37,6 +37,7 @@ export function localTestActorHost(
   const { directory } = localActorDirectory(parent.actor);
 
   return createActorHost({
+    tracing: undefined,
     filesFor: async (bound) => {
       if (!parent.filesForActor) throw new Error('test workspace has no actor file resolver');
 

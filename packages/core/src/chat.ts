@@ -40,11 +40,12 @@ import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } f
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES, RATE_LIMIT_HANDOVER_HEADER } from './providers/rate-limit-retry';
 import { callAccountOf, type CallAccount } from './providers/quota';
-import { classifyErrorCode, diagnostics, toKinuError } from './obs/index';
+import { classifyErrorCode, diagnostics, renderThrownChain, toKinuError, type TracedInvocation } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 import { invalidToolCallRefusal, toolSchemaDialect, withToolSchemaDialect } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
+import { ModelCallSpan, traceTools } from './turn-trace';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -150,6 +151,7 @@ export interface ChatOptions {
   /** Where each call opens and closes its `model_operation` rows, so one in flight at process death shows in
    *  `RunEventRecorder.unterminatedModelOperations`. */
   operations?: ModelOperationSink;
+  trace?: TracedInvocation;
 }
 
 /**
@@ -554,7 +556,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const extensions = opts.extensions;
 
   // Extension tools never shadow a caller tool of the same name.
-  const tools: ToolSet = extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools;
+  const tools = traceTools(opts.trace, extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools);
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
 
   let stepCount = 0;
@@ -670,6 +672,30 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     request: readonly ModelMessage[],
     stepOffset: number,
   ): AsyncGenerator<ChatEvent, CallOutcome> {
+    const span = new ModelCallSpan(opts.trace, {
+      spec: current.spec, provider: current.provider, index: calls, fallback: servingFallback !== undefined,
+    });
+
+    try {
+      const outcome = yield* callModelOnce(request, stepOffset, span);
+      span.finish({ steps: outcome.steps.length, interrupted: outcome.interrupted });
+
+      if (outcome.failure !== null) span.fail(outcome.failure.error);
+
+      return outcome;
+    } catch (error) {
+      span.fail(error instanceof Error ? error : new Error(renderThrownChain({ cause: error })));
+      throw error;
+    } finally {
+      await span.close();
+    }
+  };
+
+  const callModelOnce = async function* (
+    request: readonly ModelMessage[],
+    stepOffset: number,
+    span: ModelCallSpan,
+  ): AsyncGenerator<ChatEvent, CallOutcome> {
     const callIndex = calls++;
 
     const operation = beginModelOperation(
@@ -680,7 +706,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     const call = new ProviderCall(servingFallback);
 
-    const result = streamText({
+    const result = span.launch(() => streamText({
       model: current.model,
       system: cache.system,
       // Ours, not the vendor's default: see PROVIDER_SDK_RETRIES.
@@ -740,7 +766,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           call.stepFailure ??= { doing: 'run the step hook', cause };
         }
       },
-    });
+    }));
 
     suppressDeferredRejections(result, () => call.interrupted || (opts.signal?.aborted ?? false));
     // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.

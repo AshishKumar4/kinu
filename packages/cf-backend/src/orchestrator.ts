@@ -209,7 +209,9 @@ import {
   type ActorToolDeps,
   type UntimedArms,
 } from "./actor-agent";
-import { recordJobSettled, recordSandboxRecovery, type AgentKind } from "@kinu.run/core/analytics";
+import {
+  recordJobSettled, recordSandboxRecovery, type AgentKind,
+} from "@kinu.run/core/analytics";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
 import {
   agentSelfHost, createAgentSelfProvider,
@@ -587,6 +589,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       setTimer: (fn, ms) => { this.host.setTimer(fn, ms); },
       reconcileDurableWake: () => { this.durableWakeOwner()(); },
       logActivity: (actorId, event, detail) => { this.logActivity(event, detail === undefined ? actorId : `${actorId} ${detail}`); },
+      tracing: () => this.tracing,
       slate: (actor, operation) => this.slateAs(
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
       ),
@@ -2708,6 +2711,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Synchronous by contract: runs inside blockConcurrencyWhile, which gates every request and
    *  resets the object at 30s (`do.block_concurrency.cancel_ms`); `scripts/do-init-gate.ts` enforces. */
   async onStart(): Promise<void> {
+    diagnostics.event('actor.startup', { workspace: this.name });
     this.installClientMessageGate();
 
     if (this.storageRefusal !== undefined) return;

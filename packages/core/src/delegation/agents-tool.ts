@@ -60,7 +60,9 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../types/turn';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, KinuError, renderThrownChain, toKinuError, type ErrorCode, type Refusal } from '../obs/index';
+import {
+  diagnostics, KinuError, renderThrownChain, toKinuError, type ErrorCode, type Refusal, type TracedInvocation,
+} from '../obs/index';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -869,6 +871,7 @@ export function resumableAgentsInput(kind: string, input: JsonValue): AgentsTool
 
 interface AgentsToolCallOptions {
   abortSignal?: AbortSignal;
+  trace?: TracedInvocation;
 }
 
 /** Invalid operation inputs fail before delegation; namespace adapters preserve branchable refusals. */
@@ -1723,6 +1726,8 @@ function nestingRoom(delegation: DelegationBudget): string {
   return 'A subordinate you hire cannot hire its own.';
 }
 
+const DELEGATING_ACTIONS: readonly AgentsToolAction[] = ['swarm', 'hire', 'msg'];
+
 export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
   const actions = agentsActionsFor(deps);
   const team = deps.team;
@@ -1751,7 +1756,15 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
         throw new KinuError('bad_input', renderThrownChain({ cause: error }), { cause: error });
       }
 
-      return dispatchAgentsAction(deps, parsed, toolOptions);
+      const trace = toolOptions?.trace;
+
+      if (trace === undefined || !DELEGATING_ACTIONS.includes(parsed.action)) return dispatchAgentsAction(deps, parsed, toolOptions);
+
+      return trace.span('turn.delegation', (span) => {
+        span.setAttribute('kinu.delegation.action', parsed.action);
+
+        return dispatchAgentsAction(deps, parsed, toolOptions);
+      });
     },
   }));
 }
