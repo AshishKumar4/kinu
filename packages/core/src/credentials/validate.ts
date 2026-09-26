@@ -77,7 +77,7 @@ export function validateCredentialKey(key: string): void {
   const { base, account } = splitAccount(key);
 
   if (!/^[a-zA-Z0-9._-]{1,128}$/.test(base)) {
-    throw new Error('Invalid credential key. Use alphanumerics, dot, underscore and dash only (max 128 chars).');
+    throw new KinuError('bad_input', 'Invalid credential key. Use alphanumerics, dot, underscore and dash only (max 128 chars).');
   }
 
   if (account !== null && accountCredentialKey(base, account) !== key) {

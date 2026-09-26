@@ -71,13 +71,17 @@ import {
   type NameOrigin,
 } from '@kinu.run/core';
 import {
+  authoredRefusal,
   diagnostics,
   KinuError,
   renderThrownChain,
   tolerate,
   toKinuError,
 } from '@kinu.run/core/obs';
+import { publicText } from '@kinu.run/core';
 import * as v from 'valibot';
+import { Hono } from 'hono';
+import { rawPath, rethrow } from '../api/context';
 import {
   initUserTables, PROFILE_CATALOG_CONFIG_KEY,
   CapabilityDeniedError,
@@ -266,7 +270,7 @@ function mcpNameTakenMessage(name: string): string {
  */
 function rethrowMcpNameCollision(input: { cause: unknown; name: string }): never {
   if (/UNIQUE constraint failed/i.test(renderThrownChain({ cause: input.cause }))) {
-    throw new Error(mcpNameTakenMessage(input.name), { cause: input.cause });
+    throw new KinuError('bad_input', mcpNameTakenMessage(input.name), { cause: input.cause });
   }
 
   throw input.cause;
@@ -691,7 +695,7 @@ export class UserDO extends Agent<Env> {
     validateWorkspaceName(workspaceName);
 
     if (!this.workspaceRegistered(workspaceName)) {
-      throw new Error(`Workspace ${workspaceName} is not in your registry.`);
+      throw new KinuError('missing', `Workspace ${workspaceName} is not in your registry.`);
     }
 
     return this.reconcileWorkspaceCapability(workspaceName, presentedHash);
@@ -730,7 +734,7 @@ export class UserDO extends Agent<Env> {
       const { token, tokenHash } = await freshWorkspaceCapability();
 
       if (!this.workspaceMintable(workspaceName)) {
-        throw new Error(`Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
+        throw new KinuError('unavailable', `Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
       }
 
       commitWorkspaceCapability(this.ctx.storage.sql, workspaceName, tokenHash);
@@ -838,7 +842,7 @@ export class UserDO extends Agent<Env> {
 
     const stamped = this.onboardingCompletedAt();
 
-    if (stamped === null) throw new Error('user_onboarding has no row after the insert');
+    if (stamped === null) throw new KinuError('io', 'user_onboarding has no row after the insert');
 
     return { onboardedAt: stamped };
   }
@@ -848,13 +852,13 @@ export class UserDO extends Agent<Env> {
     const name = displayName.trim();
     const problem = displayNameProblem(name);
 
-    if (problem !== null) throw new Error(problem);
+    if (problem !== null) throw new KinuError('bad_input', problem);
 
     this.sqlx(`UPDATE user_profile SET display_name = ? WHERE id = 1`, name);
 
     const profile = await this.getProfile(caller);
 
-    if (!profile) throw new Error('No profile row to rename');
+    if (!profile) throw new KinuError('missing', 'No profile row to rename');
 
     return profile;
   }
@@ -927,7 +931,7 @@ export class UserDO extends Agent<Env> {
     validateWorkspaceName(name);
 
     if (resolved.kind === 'workspace' && resolved.workspace !== name) {
-      throw new Error(`Workspace "${resolved.workspace}" may only push its own overview.`);
+      throw new KinuError('denied', `Workspace "${resolved.workspace}" may only push its own overview.`);
     }
 
     const parsed = v.parse(WorkspaceOverviewSchema, overview);
@@ -1112,7 +1116,7 @@ export class UserDO extends Agent<Env> {
         cause: new Error('this user object has no user id to authorize the destroy with'),
         otherwise: 'denied',
       }), { workspace: name });
-      throw new Error(`Workspace "${name}" holds an abandoned fork reservation that cannot be reclaimed.`);
+      throw new KinuError('unavailable', `Workspace "${name}" holds an abandoned fork reservation that cannot be reclaimed.`);
     }
 
     await this.tearDownWorkspace(name, ownerUserId);
@@ -1223,7 +1227,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
     await this.tearDownWorkspace(name, ownerUserId);
   }
 
@@ -1301,7 +1305,7 @@ export class UserDO extends Agent<Env> {
     await this.resumePendingDeletions();
 
     if (this.sqlx(marked, name).length === 0) return;
-    throw new Error(`Workspace "${name}" is still being deleted; its teardown has not finished.`);
+    throw new KinuError('unavailable', `Workspace "${name}" is still being deleted; its teardown has not finished.`);
   }
 
   /**
@@ -1316,7 +1320,7 @@ export class UserDO extends Agent<Env> {
 
     // An agent renames only itself; this is what makes rename safe at the `shared` tier.
     if (resolved.kind === 'workspace' && resolved.workspace !== name) {
-      throw new Error(`Workspace "${resolved.workspace}" may only rename itself.`);
+      throw new KinuError('denied', `Workspace "${resolved.workspace}" may only rename itself.`);
     }
 
     const current = this.sqlx<{ name_origin: string }>(
@@ -1497,9 +1501,9 @@ export class UserDO extends Agent<Env> {
   ): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
     await this.requireTier(caller, 'auth_tokens');
 
-    if (!/^[a-f0-9]{32}$/.test(userId)) throw new Error('invalid user id');
+    if (!/^[a-f0-9]{32}$/.test(userId)) throw new KinuError('bad_input', 'invalid user id');
 
-    if (!/^[a-f0-9]{64}$/.test(authorizationHash)) throw new Error('invalid authorization hash');
+    if (!/^[a-f0-9]{64}$/.test(authorizationHash)) throw new KinuError('bad_input', 'invalid authorization hash');
     const token = `ptc_${userId}_${nanoid(44)}`;
     const tokenHash = await sha256Hex(token);
     const now = Date.now();
@@ -1828,16 +1832,16 @@ export class UserDO extends Agent<Env> {
   /** Durable record of commands running on devices (see ./device-inflight.ts); the ledger owns the table. */
   private readonly _inflight = new DeviceRequestLedger(this.ctx.storage.sql);
 
+  /** A WebSocket cannot cross RPC; the Worker forwards these upgrades. */
+  private readonly _sockets = new Hono({ getPath: rawPath })
+    .all(DEVICE_CONNECT_PATH, async (c) => this.acceptDeviceSocket(c.req.raw, new URL(c.req.url)))
+    .all(DEVICE_TERMINAL_PATH, async (c) => this.acceptTerminalSocket(c.req.raw, new URL(c.req.url)))
+    .all(ROSTER_SOCKET_PATH, async (c) => acceptRosterSocket(this.ctx, c.req.raw))
+    .notFound(async (c) => super.fetch(c.req.raw))
+    .onError(rethrow);
+
   override async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === DEVICE_CONNECT_PATH) return this.acceptDeviceSocket(request, url);
-
-    if (url.pathname === DEVICE_TERMINAL_PATH) return this.acceptTerminalSocket(request, url);
-
-    if (url.pathname === ROSTER_SOCKET_PATH) return acceptRosterSocket(this.ctx, request);
-
-    return super.fetch(request);
+    return await this._sockets.fetch(request);
   }
 
   /**
@@ -1917,7 +1921,7 @@ export class UserDO extends Agent<Env> {
       attached = this._terminals.attach(session, server);
     } catch (cause) {
       // Unknown or taken session is expected (shell ended or object evicted); the pane opens a new one.
-      return new Response(renderThrownChain({ cause }), { status: 409 });
+      return new Response(publicText(authoredRefusal({ doing: 'attaching a terminal pane', cause })), { status: 409 });
     }
 
     server.send(JSON.stringify({ type: 'ready' }));
@@ -2102,10 +2106,10 @@ export class UserDO extends Agent<Env> {
     } catch (cause) {
       // An install too old for terminals gets an actionable message; other failures pass through.
       if (isDeviceUnknownMethodError({ cause })) {
-        throw new Error(`${this.deviceLabel(target)} runs an older Kinu. Run \`kinu update\` on that machine.`, { cause });
+        throw new KinuError('unsupported', `${this.deviceLabel(target)} runs an older Kinu. Run \`kinu update\` on that machine.`, { cause });
       }
 
-      throw new Error('opening a terminal on this machine', { cause });
+      throw new KinuError('unavailable', 'Could not open a terminal on this machine; try again.', { cause });
     }
 
     this._terminals.register(session, target, agentName);
@@ -2411,7 +2415,7 @@ export class UserDO extends Agent<Env> {
 
     if (consentAgent !== undefined) await this.announceDevicesUnavailable(consentAgent);
 
-    throw new Error(NO_DEVICE_CONNECTED);
+    throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
   }
 
   /** Revoked rows are excluded: revoked means gone, not offline. */
@@ -2450,7 +2454,7 @@ export class UserDO extends Agent<Env> {
     if (deviceId) return deviceId;
 
     if (requested === undefined && this._devices.connectedDeviceIds().length > 1) {
-      throw new Error(`${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`);
+      throw new KinuError('bad_input', `${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`);
     }
 
     return null;
@@ -2469,7 +2473,7 @@ export class UserDO extends Agent<Env> {
     const proven = resolved.kind === 'workspace' ? resolved.workspace : null;
 
     if (proven !== null && Object.hasOwn(CHECKPOINT_STORE_METHODS, method) && params[0] !== proven) {
-      throw new Error(`workspace ${proven} reads and restores only its own device checkpoints`);
+      throw new KinuError('denied', `workspace ${proven} reads and restores only its own device checkpoints`);
     }
 
     // Cancellation is never consent-gated: it only ends a command already allowed, and
@@ -2481,7 +2485,7 @@ export class UserDO extends Agent<Env> {
 
     const deviceId = await this.resolveDeviceForCall(opts?.deviceId, consentAgent);
 
-    if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
+    if (!stopping && !this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
 
     if (consentAgent !== undefined) {
       // Consent is keyed on the proven workspace, never the claimed name, so an agent cannot
@@ -2491,15 +2495,15 @@ export class UserDO extends Agent<Env> {
         workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
       });
 
-      if (!consent.allowed) throw new Error(consent.reason);
+      if (!consent.allowed) throw new KinuError('denied', consent.reason);
     }
 
     const frameSandbox = Object.hasOwn(DEVICE_VIEW_METHODS, method) ? this.frameSandboxFor(method, deviceId, proven) : null;
 
-    if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
+    if (!stopping && !this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
     const tunnel = this._devices.tunnel(deviceId);
 
-    if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
+    if (!tunnel) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
     const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = { extra: { deviceId } };
 
     if (opts?.checkpoint) {
@@ -2532,7 +2536,7 @@ export class UserDO extends Agent<Env> {
 
       // A revocation sweep can land during the probe await; recheck so no command runs
       // with nothing left to cancel or count it.
-      if (!this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
+      if (!this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
       // A command inside a detached scope belongs to the background job from insert.
       // A blank owner is refused: neither turn nor job sweep could ever select that row.
       const backgroundJobId = opts?.backgroundJobId ?? null;
@@ -2565,11 +2569,11 @@ export class UserDO extends Agent<Env> {
 
     // Neither end ever downgrades a sandboxed command to raw; files need no kernel.
     if ((method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) && effectiveDeviceMode(sandbox) === 'files_only') {
-      throw new Error(this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
+      throw new KinuError('denied', this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
     }
 
     if (sandbox.tier === 'sandboxed' && sandbox.agentHome === null) {
-      throw new Error(this.sandboxRefusal(deviceId, sandbox, workspace === null
+      throw new KinuError('denied', this.sandboxRefusal(deviceId, sandbox, workspace === null
         ? 'an agent home belongs to a workspace, and this call has none'
         : 'the daemon did not report where agent homes live'));
     }
@@ -2601,7 +2605,7 @@ export class UserDO extends Agent<Env> {
     if (!held) return;
     const tunnel = this._devices.tunnel(held.deviceId);
 
-    if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
+    if (!tunnel) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
     await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]);
     this._inflight.deleteAcknowledged({
       requestId, workspace: resolved.workspace, deviceId: held.deviceId,
@@ -2717,7 +2721,7 @@ export class UserDO extends Agent<Env> {
     const tunnel = this._devices.tunnel(row.deviceId);
 
     try {
-      if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
+      if (!tunnel) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
       await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]);
       this._inflight.deleteHeld(row.requestId, row.claim);
     } catch (err) {
@@ -3186,7 +3190,7 @@ export class UserDO extends Agent<Env> {
     const resolved = await this.requireTier(caller, 'experience.write');
 
     if (resolved.kind !== 'workspace') {
-      throw new Error('Only a workspace can publish experience; it publishes under its own name.');
+      throw new KinuError('denied', 'Only a workspace can publish experience; it publishes under its own name.');
     }
 
     return this.experienceLibrary().publish(candidate, resolved.workspace);
@@ -3237,13 +3241,13 @@ export class UserDO extends Agent<Env> {
     validateCredentialKey(key);
 
     if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
-      throw new Error(`${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
+      throw new KinuError('bad_input', `${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
     }
 
     const cred = validateCredential({ value: credentialJson });
 
     if (subscriptionIssuer(key) !== null && cred.kind === 'oauth' && !cred.refreshToken) {
-      throw new Error(`${key} requires an OAuth refresh token.`);
+      throw new KinuError('bad_input', `${key} requires an OAuth refresh token.`);
     }
 
     await this.writeCredential(key, cred);
@@ -3689,8 +3693,11 @@ export class UserDO extends Agent<Env> {
       }
 
       return { connected: true, selectedId, gateways, error: null };
-    } catch (err) {
-      return { connected: true, selectedId, gateways: [], error: renderThrownChain({ cause: err }) };
+    } catch (cause) {
+      const error = authoredRefusal({ doing: 'listing your Cloudflare AI Gateways', cause });
+      diagnostics.failure('user.ai_gateways_unread', error);
+
+      return { connected: true, selectedId, gateways: [], error: publicText(error) };
     }
   }
 
@@ -3703,7 +3710,7 @@ export class UserDO extends Agent<Env> {
       return;
     }
 
-    if (!isCloudflareAIGatewayId(gatewayId)) throw new Error('Invalid AI Gateway id.');
+    if (!isCloudflareAIGatewayId(gatewayId)) throw new KinuError('bad_input', 'Invalid AI Gateway id.');
     await this.setConfig(await ownerCaller(this.env), UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId);
   }
 
@@ -3732,7 +3739,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'ai_gateway.admin');
     const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
 
-    if (cred?.kind !== 'oauth') throw new Error('Cloudflare is not connected.');
+    if (cred?.kind !== 'oauth') throw new KinuError('bad_input', 'Cloudflare is not connected.');
     await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, withCloudflareAccount(cred, accountId));
     const owner = await ownerCaller(this.env);
     await this.selectAIGateway(owner, null);
@@ -3877,8 +3884,11 @@ export class UserDO extends Agent<Env> {
       }
 
       return { connected: true, accountId: accountId ?? undefined };
-    } catch (err) {
-      return { connected: false, error: renderThrownChain({ cause: err }) };
+    } catch (cause) {
+      const error = authoredRefusal({ doing: 'checking the Codex sign-in', cause });
+      diagnostics.failure('user.codex_poll_failed', error);
+
+      return { connected: false, error: publicText(error) };
     }
   }
 
@@ -3946,7 +3956,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'config');
 
     if (key === PROFILE_CATALOG_CONFIG_KEY) {
-      throw new Error('profile_catalog has a dedicated typed CAS route.');
+      throw new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
     }
 
     const row = this.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0];
@@ -3958,7 +3968,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'config');
 
     if (key === PROFILE_CATALOG_CONFIG_KEY) {
-      throw new Error('profile_catalog has a dedicated typed CAS route.');
+      throw new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
     }
 
     this.sqlx(
@@ -4003,7 +4013,7 @@ export class UserDO extends Agent<Env> {
     try {
       json = decodeJsonValue({ value: JSON.parse(value) });
     } catch (error) {
-      throw new Error(
+      throw new KinuError('io', 
         'The stored account profile catalog cannot be decoded as JSON.',
         { cause: error },
       );
@@ -4012,7 +4022,7 @@ export class UserDO extends Agent<Env> {
     try {
       return validateProfileCatalog({ value: json });
     } catch (error) {
-      throw new Error(
+      throw new KinuError('io', 
         'The stored account profile catalog violates the profile catalog contract.',
         { cause: error },
       );
@@ -4041,7 +4051,7 @@ export class UserDO extends Agent<Env> {
     try {
       row = v.parse(StoredProfileCatalogRowSchema, rawRow);
     } catch (error) {
-      throw new Error('The stored account profile catalog state is malformed.', { cause: error });
+      throw new KinuError('io', 'The stored account profile catalog state is malformed.', { cause: error });
     }
 
     return { version: row.version, catalog: this.parseStoredProfileCatalog(row.value) };
@@ -4078,9 +4088,8 @@ export class UserDO extends Agent<Env> {
     try {
       parsed = validateProfileCatalog({ value: catalog });
     } catch (cause) {
-      // Render the whole cause chain: the frame naming the offending path may sit below the wrapper,
-      // and this reason is all the owner is shown.
-      return { ok: false, kind: 'malformed', reason: renderThrownChain({ cause }) };
+      // The refusal names the offending path; it is all the owner is shown.
+      return { ok: false, kind: 'malformed', reason: publicText(authoredRefusal({ doing: 'reading the profile catalog', cause })) };
     }
 
     // No await from here to the write: DO input gates make the CAS atomic.
@@ -4304,7 +4313,7 @@ export class UserDO extends Agent<Env> {
   async deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
     await this.requireTier(caller, 'account');
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
 
     const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`);
 
@@ -4587,7 +4596,7 @@ export class UserDO extends Agent<Env> {
     const cfg = validateMcpServerInput(input);
 
     if (!/^https?:\/\//.test(publicOrigin)) {
-      throw new Error('publicOrigin must be a full https?:// origin.');
+      throw new KinuError('bad_input', 'publicOrigin must be a full https?:// origin.');
     }
 
     const preset = cfg.presetId === undefined ? undefined : mcpPresetById(cfg.presetId);
@@ -4597,7 +4606,7 @@ export class UserDO extends Agent<Env> {
     if (preset?.auth === 'oauth-app' && !mcpAppCredentials(this.env, preset) && !cfg.headers) {
       const names = mcpAppEnvNames(preset);
 
-      throw new Error(
+      throw new KinuError('bad_input', 
         `'${preset.title}' needs either the deployment's ${names?.clientIdEnv ?? 'app'}/`
         + `${names?.clientSecretEnv ?? 'secret'} OAuth app or a token in \`headers\`.`,
       );
@@ -4672,7 +4681,7 @@ export class UserDO extends Agent<Env> {
       const result = await mgr.connectToServer(id);
 
       if (result.state === 'failed') {
-        throw new Error(result.error ?? 'connection failed');
+        throw new KinuError('unavailable', result.error ?? 'connection failed');
       }
 
       if (result.state === 'authenticating') {
@@ -4687,7 +4696,7 @@ export class UserDO extends Agent<Env> {
       // Roll back both our row and the SDK's storage entry so the user can retry cleanly.
       this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
       await this.userMcp().removeServer(id);
-      throw new Error(`MCP connect failed: ${renderThrownChain({ cause: err })}`, { cause: err });
+      throw new KinuError('unavailable', 'Could not connect to the MCP server. Check its URL and credentials, then add it again.', { cause: err });
     }
 
     return { id, authUrl };
@@ -4696,7 +4705,7 @@ export class UserDO extends Agent<Env> {
   async userMcp_remove(caller: UserCaller, id: string): Promise<void> {
     await this.requireTier(caller, 'mcp.manage');
 
-    if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new KinuError('bad_input', 'Invalid server id.');
 
     try { await this.userMcp().removeServer(id); }
     catch (err) {
@@ -4716,10 +4725,10 @@ export class UserDO extends Agent<Env> {
   async userMcp_update(caller: UserCaller, id: string, patch: JsonValue): Promise<void> {
     await this.requireTier(caller, 'mcp.manage');
 
-    if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new KinuError('bad_input', 'Invalid server id.');
     const parsedPatch = v.safeParse(JsonObjectSchema, patch);
 
-    if (!parsedPatch.success) throw new Error('patch must be a JSON object.');
+    if (!parsedPatch.success) throw new KinuError('bad_input', 'patch must be a JSON object.');
     const p = parsedPatch.output;
     const sets: string[] = [];
     const args: SqlStorageValue[] = [];
@@ -4731,7 +4740,7 @@ export class UserDO extends Agent<Env> {
     if (p.allowedTools !== undefined) {
       const allowedTools = v.safeParse(NullableStringArraySchema, p.allowedTools);
 
-      if (!allowedTools.success) throw new Error('allowedTools must be string[] or null.');
+      if (!allowedTools.success) throw new KinuError('bad_input', 'allowedTools must be string[] or null.');
 
       if (allowedTools.output === null) {
         sets.push('allowed_tools = ?'); args.push(null);
@@ -4743,7 +4752,7 @@ export class UserDO extends Agent<Env> {
     if (p.headers !== undefined) {
       const headers = v.safeParse(NullableStringRecordSchema, p.headers);
 
-      if (!headers.success) throw new Error('headers must be Record<string,string> or null.');
+      if (!headers.success) throw new KinuError('bad_input', 'headers must be Record<string,string> or null.');
 
       if (headers.output === null) {
         sets.push('headers = ?'); args.push(null);
@@ -4789,7 +4798,7 @@ export class UserDO extends Agent<Env> {
           name, serverId,
         ).toArray().length > 0;
 
-        if (taken) throw new Error(mcpNameTakenMessage(name));
+        if (taken) throw new KinuError('bad_input', mcpNameTakenMessage(name));
         write();
       });
     } catch (err) {
@@ -4921,7 +4930,7 @@ export class UserDO extends Agent<Env> {
 
     if (!this._userMcpHydrated) {
       try { await this.hydrateUserMcp(); }
-      catch (err) { throw new Error(`MCP not ready: ${renderThrownChain({ cause: err })}`, { cause: err }); }
+      catch (err) { throw new KinuError('unavailable', 'The MCP server is not connected yet; try again.', { cause: err }); }
     }
 
     // Check server membership in SQL so a stale orchestrator closure can't dispatch to a deleted server.
@@ -4929,11 +4938,11 @@ export class UserDO extends Agent<Env> {
       `SELECT allowed_tools FROM user_mcp_servers WHERE id = ?`, serverId,
     )[0];
 
-    if (!row) throw new Error(`Unknown MCP server: ${serverId}`);
+    if (!row) throw new KinuError('missing', `Unknown MCP server: ${serverId}`);
     const allowed = parseAllowedTools(row.allowed_tools);
 
     if (allowed && !allowed.includes(name)) {
-      throw new Error(`Tool '${name}' is not in the allowed_tools list for this server.`);
+      throw new KinuError('denied', `Tool '${name}' is not in the allowed_tools list for this server.`);
     }
 
     const parsedParams = v.safeParse(JsonObjectSchema, args);
@@ -4989,7 +4998,11 @@ export class UserDO extends Agent<Env> {
         // Awaited in its own try: tokens are already saved, so a connect failure is not an auth failure.
         // A DO cannot retain an unawaited promise (`do.wait_until.no_op`).
         try { await this.userMcp().establishConnection(result.serverId); }
-        catch (err) { return { ok: true, serverId: result.serverId, error: `connected but not established: ${renderThrownChain({ cause: err })}` }; }
+        catch (cause) {
+          diagnostics.failure('mcp.connect_failed', toKinuError({ doing: 'establishing an authorized MCP connection', cause, otherwise: 'unavailable' }));
+
+          return { ok: true, serverId: result.serverId, error: 'Signed in, but the MCP server did not accept the connection yet.' };
+        }
 
         await this.readMcpToolList(result.serverId);
 
@@ -4997,8 +5010,11 @@ export class UserDO extends Agent<Env> {
       }
 
       return { ok: false, serverId: result.serverId ?? null, error: result.authError };
-    } catch (err) {
-      return { ok: false, serverId: null, error: renderThrownChain({ cause: err }) };
+    } catch (cause) {
+      const error = toKinuError({ doing: 'completing an MCP sign-in', cause, otherwise: 'unavailable' });
+      diagnostics.failure('mcp.oauth_callback_failed', error);
+
+      return { ok: false, serverId: null, error: publicText(error) };
     }
   }
 

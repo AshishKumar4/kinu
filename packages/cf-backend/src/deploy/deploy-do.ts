@@ -43,7 +43,7 @@ import {
   type DeployStepRow, type DeployStepSeed, type DeploymentRecord,
 } from '@kinu.run/core/deploy';
 import { randomToken } from '@kinu.run/core';
-import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 interface StepRecord extends Record<string, SqlStorageValue> {
@@ -410,7 +410,7 @@ export class DeployRunDO extends DurableObject<Env> {
   private async accessToken(): Promise<string> {
     const held = await this.ctx.storage.get<string>(`${SECRET_PREFIX}${ACCESS_TOKEN_KEY}`);
 
-    if (held === undefined) throw new Error('this run holds no Cloudflare authorization');
+    if (held === undefined) throw new KinuError('denied', 'this run holds no Cloudflare authorization');
     const expiresAt = await this.ctx.storage.get<number>(TOKEN_EXPIRES_KEY) ?? 0;
 
     if (expiresAt === 0 || expiresAt > Date.now() + TOKEN_FLOOR_MS) return held;

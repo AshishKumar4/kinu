@@ -10,6 +10,10 @@ import {
 } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../src/auth/session';
 import { clientErrorRoutes, type ClientErrorEnv } from '../src/client-error/route';
+import { makeKv } from './helpers/kv';
+import { workerEnv } from './helpers/bindings';
+import { cliRoutes } from '../src/cli/routes';
+import { userRoutes } from '../src/user/routes';
 import { serveFamily } from './helpers/api';
 import {
   CLIENT_ERROR_ENDPOINT,
@@ -549,6 +553,13 @@ describe('a chat stream the tab could not read', () => {
     expect(JSON.stringify(lines)).not.toContain('missing reasoning part');
   });
 
+  test('a refused report rejects with the route\'s answer, where the page logs it, instead of passing for sent', async () => {
+    globalThis.fetch = asFetchFunction(async () => new Response('{"error":"Missing Authorization: Bearer <token>"}', { status: 401 }));
+
+    await expect(reportChatStreamFailure(new Error('stream broke'), 'root', { release: STAMP.sha, route: APP_ROUTES.workspace }))
+      .rejects.toThrow(/refused: 401 .*Missing Authorization/u);
+  });
+
   // Review job 141: V8's stack opens with the message, and a message line shaped like a frame passed the filter.
   test('a message line shaped like a stack frame never reaches the log', async () => {
     const failure = new Error('the tool failed\nat main (file:///home/main/acme-payroll/salaries.js:3:9)');
@@ -560,5 +571,38 @@ describe('a chat stream the tab could not read', () => {
 
     for (const sent of posts) expect(sent).not.toContain('acme-payroll');
     expect(JSON.parse(posts[0] ?? '{}')).toMatchObject({ stack: expect.stringMatching(/unit-client-error-route/u) });
+  });
+});
+
+describe('the families mounted before it', () => {
+  // 2026-09-26: `/api/cli*` matched `/api/client-errors`, so every report met the CLI's bearer gate and was
+  // refused 401 before this route ran: zero chat-stream reports in 48 hours of an error the owner kept seeing.
+  test('neither the CLI nor the account family answers the report endpoint', async () => {
+    // Every binding refuses when touched: a family that reached for one has already answered the path.
+    expect(await serveFamily(cliRoutes, { identity: ME })(post(JSON.stringify(report())), workerEnv())).toBeNull();
+    expect(await serveFamily(userRoutes, { identity: ME })(post(JSON.stringify(report())), workerEnv())).toBeNull();
+  });
+});
+
+describe('the report budget', () => {
+  test('a session past its budget is answered 429, and the drop is logged once, not once per report', async () => {
+    const logs = createRecordingLogger();
+    setDiagnosticsSink(logs);
+    const env = { ...envWithStamp(STAMP), AUTH_KV: makeKv() };
+    const serve = serveFamily(clientErrorRoutes, { identity: ME });
+    const statuses: number[] = [];
+
+    // A looping tab: far more reports in one minute than any page failure produces.
+    for (let sent = 0; sent < 60; sent += 1) {
+      statuses.push((await serve(post(JSON.stringify(report())), env))?.status ?? 0);
+    }
+
+    const accepted = statuses.indexOf(429);
+
+    expect(accepted).toBeGreaterThan(0);
+    expect(statuses.slice(0, accepted).every((status) => status === 202)).toBe(true);
+    expect(statuses.slice(accepted).every((status) => status === 429)).toBe(true);
+    expect(logs.emitted.filter((line) => line.event === CLIENT_RENDER_FAILED)).toHaveLength(accepted);
+    expect(logs.emitted.filter((line) => line.event === 'client.reports_dropped')).toHaveLength(1);
   });
 });

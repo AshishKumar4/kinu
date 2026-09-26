@@ -43,7 +43,7 @@ import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { KeptChatColumn } from "@/components/KeptChatColumn";
 import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
-import { workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
+import { revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 
@@ -115,7 +115,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
           <div className="text-xs p-text">
             Use <span className="font-medium">{consent.deviceLabel}</span> for {forWhom}?
           </div>
-          <code className="block mt-1 p-t-code p-text-2 break-all p-fill rounded-sm px-2 py-1">{consent.command || "(command)"}</code>
+          <code className="block mt-1 p-t-code p-text-2 break-all p-fill rounded-sm px-2 py-1">{revealMisrepresenting(consent.command || "(command)")}</code>
           <div className="mt-1 p-meta p-text-3">
             Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access on the Devices page.
           </div>
@@ -343,7 +343,7 @@ function SubordinateChatColumn({
     onReachEdge: history.loadMore,
     initialScroll: ui.savedScroll,
     onScrollPosition: ui.rememberScroll,
-    exhausted: history.exhausted,
+    settled: state.transcriptSeeded,
   });
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -590,7 +590,7 @@ export default function WorkspacePage() {
     onReachEdge: history.loadMore,
     initialScroll: ui.savedScroll,
     onScrollPosition: ui.rememberScroll,
-    exhausted: history.exhausted,
+    settled: state.transcriptSeeded,
   });
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null);

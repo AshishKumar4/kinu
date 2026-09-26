@@ -3,10 +3,14 @@
  * first; `authorizeAdmin` then requires an allowlisted session email EQUAL to the
  * Access email, so one person must pass both gates. Worker-code trust is `capability.ts`.
  */
-import { hmacSha256Hex } from '@kinu.run/core';
+import type { MiddlewareHandler } from 'hono';
+import { err, hmacSha256Hex } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
 import { isFreshAuthTime, type AuthIdentity } from '../auth/session';
-import type { AccessDenial, AccessIdentity } from './access-gate';
+import type { FamilyEnv } from '../api/context';
+import {
+  verifyControlPlaneAccess, type AccessDenial, type AccessIdentity, type ControlPlaneAccessEnv,
+} from './access-gate';
 import {
   adminControlToken, ControlPlaneUnconfiguredError, type ControlCaller, type ControlSecretEnv,
 } from '@kinu.run/core/control-plane';
@@ -155,3 +159,19 @@ export function actorDigest(env: ControlSecretEnv, email: string): Promise<strin
 export function reportAdminDenial(denial: AdminDenial, path: string, method: string): void {
   diagnostics.event('control_plane.denied', { reason: denial, outcome: 'denied', path, method });
 }
+
+/** Cloudflare Access; the verified identity rides on `access`. */
+export const controlPlaneAccess: MiddlewareHandler<FamilyEnv<ControlPlaneAccessEnv, { access: AccessIdentity }>> = async (c, next) => {
+  const access = await verifyControlPlaneAccess(c.req.raw, c.env);
+
+  if (!access.ok) {
+    reportAdminDenial(access.denial, new URL(c.req.url).pathname, c.req.method);
+
+    const answer = adminDenialAnswer(access.denial);
+
+    return err(answer.status, answer.message);
+  }
+
+  c.set('access', access.access);
+  await next();
+};

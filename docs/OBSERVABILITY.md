@@ -62,6 +62,31 @@ Reads also need `ANALYTICS_DATASET_SUFFIX`: empty in production, `_staging`
 under `env.staging`. Writes omit it because the binding names its dataset.
 `scripts/analytics-datasets.test.ts` checks that the two agree per environment.
 
+## Reading one turn as the model received it
+
+A turn's requests are rebuilt from what the session already keeps: each
+step's prepared request, the renders it names, and that step's `step_finish`
+row. Wire bytes are never stored, and this read stores nothing new.
+
+- Owner: `kinu debug <workspace> --turn <id> [--actor <id>]` writes every
+  request, page by page, to an owner-only NDJSON file through `redactPayload`.
+  `getTurnRequests` and `getTurnRequest` are `interactive` in
+  `AGENT_RPC_ACCESS`, so no `pta_` token reaches them, exactly like
+  `getRunEvents`. A page stays under `run_events.page_bytes`.
+- Support: the `workspace.turn_read` control action. It needs Access, the
+  admin allowlist and a fresh sign-in, the same bar as a mutation, and a
+  closed reason (`support_ticket`, `incident`, `owner_request`). The audit row
+  is written before the read and never holds what was read. The workspace
+  logs `support.read` with the reason in its activity log, so the owner sees
+  every read.
+
+Retention, measured in source on 2026-09-26: nothing prunes `run_events`,
+`session_messages`, `request_renders` or the turn claims by age. They are
+removed when the workspace is removed (`destroyAgent`, then `deleteAll`) or
+when an actor is retired with `destroy` (`purgeActorRows`). Clearing a chat
+removes the visible conversation only, not the model's history. This read
+changes none of that.
+
 ## Where spans are open
 
 Two invocation sites, both in `cf-backend/src/orchestrator.ts`, in two of the
@@ -383,6 +408,25 @@ with `code: 23`. Both names come from the platform, minted at runtime by the
 browser and workerd engines; no identifier in this repository spells them.
 Classification keys on the names, which are stable. The numeric codes are not
 used.
+
+## What a client reads of a failure
+
+A response body carries a failure's class and a message written for its reader, `{ error, code }`
+(`publicError`, `core/src/http/http.ts`), never its cause chain: a chain holds platform wording, file
+paths and, through a substituted URL or a stored header, secrets. The chain goes to `diagnostics`.
+
+- Every Hono router answers an uncaught throw through `routeError` (`cf-backend/src/api/context.ts`),
+  logged as `http.request_failed`. A thrown `KinuError` keeps its message; anything else gets its
+  class's fixed text (`PUBLIC_MESSAGE`).
+- A `KinuError` whose message repeats the text of a cause no `KinuError` authored gets the fixed text
+  instead (`publicMessage`, `obs/error.ts`). An authored message may name a path or a name; it may not
+  quote a caught error.
+- Across Durable Object RPC an error keeps only `name: message` (compat 2025-12-01), so a `KinuError`'s
+  name carries its class: `KinuError[unavailable]: …` (miniflare 5.20260903.0-alpha, 2026-09-26).
+  `authoredRefusal({ doing, cause })` reads a caught one back with its class and message; any other
+  failure is classified as `doing`. So an object refuses with a `KinuError` (`unit-do-refusals`), and a
+  plain `Error` reaches the client as the route's `doing` text. Agent RPC over `/api/cli/…/rpc` still
+  shows `calling <method>` for plain throws in deep core helpers until the Effect waves convert them.
 
 ## `ReservedLogField`: the compile-time ban
 

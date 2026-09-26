@@ -1,6 +1,6 @@
 /**
  * Knock budget for unauthenticated rails that pick a Durable Object by caller-supplied name before any identity
- * exists (`pc-handler.ts` ticket exchange, webhook deliveries). Rate limiting, not route verification.
+ * exists (`pc-handler.ts` ticket exchange, webhook deliveries), and browser reports.
  */
 import * as v from 'valibot';
 import { json } from './http';
@@ -11,24 +11,24 @@ const INGRESS_WINDOW_MS = 60_000;
 
 const INGRESS_WINDOW_SCHEMA = v.object({ count: v.number(), windowStart: v.number() });
 
+export type IngressAdmission = 'admitted' | 'first-refusal' | 'refused';
+
 /** Fixed-window per-source counter in AUTH_KV. Get-then-put is not atomic across isolates, so PoPs can overshoot. */
-export async function ingressAdmitted(
-  kv: KvStore,
-  rail: string,
-  ip: string,
-  limit: number,
-): Promise<boolean> {
+export async function ingressAdmission(kv: KvStore, rail: string, source: string, limit: number): Promise<IngressAdmission> {
   const now = Date.now();
   const windowStart = now - (now % INGRESS_WINDOW_MS);
-  const source = await sha256Hex(`${rail}\u0000${ip}`);
-  const key = `ingress:${String(windowStart)}:${source}`;
+  const key = `ingress:${String(windowStart)}:${await sha256Hex(`${rail}\u0000${source}`)}`;
   const current = await readKvJson(kv, key, INGRESS_WINDOW_SCHEMA);
   const count = (current !== null && current.windowStart === windowStart ? current.count : 0) + 1;
 
-  if (count > limit) return false;
+  if (count > limit + 1) return 'refused';
   await writeKvJson(kv, key, { count, windowStart }, windowStart + 2 * INGRESS_WINDOW_MS - now);
 
-  return true;
+  return count > limit ? 'first-refusal' : 'admitted';
+}
+
+export async function ingressAdmitted(kv: KvStore, rail: string, source: string, limit: number): Promise<boolean> {
+  return await ingressAdmission(kv, rail, source, limit) === 'admitted';
 }
 
 export function ingressDenied(): Response {

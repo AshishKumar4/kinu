@@ -194,6 +194,17 @@ export function pacedTurn(request: ScriptedRequest): ScriptedAnswer | null {
   return request.userTexts.some((text) => text.includes(PACED_TURN_ASK)) ? pacedSteps(request) : null;
 }
 
+export const THINKING_TURN_ASK = 'Think this through aloud before you answer.';
+
+export const THINKING_TURN_ANSWER = 'Thought it through.';
+
+/** A turn that reasons for a few seconds in small steps before it answers, so a tab can join or reconnect mid-thought. */
+export function thinkingTurn(request: ScriptedRequest): ScriptedAnswer | null {
+  if (!request.userTexts.some((text) => text.includes(THINKING_TURN_ASK))) return null;
+
+  return { text: THINKING_TURN_ANSWER, pace: { firstTokenMs: 0, lead: '', leadMs: 0, reasoning: { deltas: 150, everyMs: 20 } } };
+}
+
 /** A model call a row holds open: its turn is admitted and its model silent until the row lets it answer. */
 export interface HeldCall {
   /** Settles once the held call has reached the scripted server. */

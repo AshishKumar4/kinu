@@ -5,7 +5,6 @@ export {
   AUDIT_OUTCOMES,
   CONTROL_PAGE_DEFAULT,
   CONTROL_PAGE_MAX,
-  MalformedCursorError,
   appendAudit,
   forgetWorkspace,
   getUser,

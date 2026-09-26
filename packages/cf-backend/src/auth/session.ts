@@ -2,13 +2,12 @@
 
 import * as v from 'valibot';
 import {
-  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, DEVICE_CONNECT_PATH, EVAL_ACCOUNTS, timingSafeEqual,
+  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, timingSafeEqual,
 } from '@kinu.run/core';
 import {
   SessionAuthorityUnavailableError, deriveUserId, verifySession,
   type AuthStoreEnv, type SessionAuthority,
 } from './store';
-import { isDeployPath } from '@kinu.run/core/deploy';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
@@ -213,27 +212,4 @@ function originOf(value: string | null): string | null {
   if (!value || !URL.canParse(value)) return null;
 
   return new URL(value).origin;
-}
-
-export function isPublicPath(pathname: string): boolean {
-  if (pathname === '/api/health') return true;
-
-  if (pathname === '/login' || pathname === '/logout') return true;
-
-  if (pathname.startsWith('/auth/')) return true;
-
-  if (pathname.startsWith('/api/auth/')) return true;
-
-  // the tunnel uses its own auth
-  if (pathname.startsWith(DEVICE_CONNECT_PATH)) return true;
-
-  if (pathname.startsWith('/assets/')) return true;
-
-  // Data (`/api/shared/blueprint/:id`) is signature-checked before the auth gate.
-  if (pathname.startsWith('/shared/blueprint/')) return true;
-
-  // The self-deploy door: authorized by the run key (deploy/routes.ts), not a session.
-  if (isDeployPath(pathname)) return true;
-
-  return false;
 }

@@ -24,7 +24,7 @@ import {
   type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
-import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
+import { isWorkspaceTerminal, publicText, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
 import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
@@ -168,6 +168,7 @@ import {
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
+  turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
   restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
@@ -200,6 +201,8 @@ import {
   type AgentSignal,
 } from "@kinu.run/core";
 import * as v from 'valibot';
+import { Hono } from 'hono';
+import { beneath, rawPath, rethrow } from './api/context';
 import { experienceLibraryOver } from './user/experience-library';
 import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
@@ -225,7 +228,7 @@ import {
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
-import { classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, toKinuError, type Refusal } from "@kinu.run/core/obs";
+import { authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork } from "./user/workspace-fork";
@@ -365,6 +368,14 @@ function clampLimit(requested: number | undefined, max: number): number {
 /** agents 0.22 reads this key back at start when `ctx.id` has no name. */
 const PERSISTED_NAME_KEY = '__ps_name';
 
+/** A terminal that cannot open: the chain goes to diagnostics, the pane reads the refusal. */
+function terminalRefusal(failure: { doing: string; cause: unknown }): string {
+  const error = authoredRefusal({ ...failure });
+  diagnostics.failure('terminal.prepare_failed', error);
+
+  return publicText(error);
+}
+
 export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly addressedName: string;
 
@@ -373,7 +384,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const name = ctx.id.name ?? this.recordedName();
 
     if (name === undefined) {
-      throw new Error('This workspace object was reached by id before any named start recorded its name; address it by name.');
+      throw new KinuError('unsupported', 'This workspace object was reached by id before any named start recorded its name; address it by name.');
     }
 
     this.addressedName = name;
@@ -919,28 +930,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Partyserver owns `fetch` for chat, so preview upgrades are answered first; the capability
-   * handle is rechecked inside `routePreview`.
+   * handle is rechecked inside `routePreview`. Share sockets likewise; `routeShare` admits by the share row.
    */
-  override async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname.startsWith(`${WORKSPACE_PREVIEW_PATH}/`)) {
-      const [port, handle, ...rest] = url.pathname.slice(WORKSPACE_PREVIEW_PATH.length + 1).split('/');
+  private readonly _forwarded = new Hono({ getPath: rawPath })
+    .all(`${WORKSPACE_PREVIEW_PATH}/*`, beneath(WORKSPACE_PREVIEW_PATH, async (c) => {
+      const [port, handle, ...rest] = c.req.path.slice(WORKSPACE_PREVIEW_PATH.length + 1).split('/');
       const parsed = Number(port);
 
       if (!Number.isInteger(parsed) || !handle) {
         return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
       }
 
-      return await this.routeWorkspacePreview(parsed, handle, request, `/${rest.join('/')}`);
-    }
+      return await this.routeWorkspacePreview(parsed, handle, c.req.raw, `/${rest.join('/')}`);
+    }))
+    .all(`${SLATE_SHARE_PATH}/*`, beneath(SLATE_SHARE_PATH, async (c) => {
+      const [handle, claimText, ...rest] = c.req.path.slice(SLATE_SHARE_PATH.length + 1).split('/');
 
-    // A share socket cannot cross a DO RPC boundary, so the share route forwards it by `fetch` here;
-    // the label was verified at the edge and `routeShare` admits by the share row.
-    if (url.pathname.startsWith(`${SLATE_SHARE_PATH}/`)) {
-      const [handle, claimText, ...rest] = url.pathname.slice(SLATE_SHARE_PATH.length + 1).split('/');
       // The claim segment is JSON the edge wrote; a parse failure yields the same 404 as a bad shape.
-
       const claim = v.safeParse(
         v.pipe(v.string(), v.parseJson(), ShareViewerClaimSchema),
         claimText ? decodeURIComponent(claimText) : '',
@@ -950,10 +956,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
       }
 
-      return await this.routeSlateShare(handle, claim.output, request, `/${rest.join('/')}`);
-    }
+      return await this.routeSlateShare(handle, claim.output, c.req.raw, `/${rest.join('/')}`);
+    }))
+    .notFound(async (c) => super.fetch(c.req.raw))
+    .onError(rethrow);
 
-    return await super.fetch(request);
+  override async fetch(request: Request): Promise<Response> {
+    return await this._forwarded.fetch(request);
   }
 
   /** A socket forwarded by the terminal route is tagged as the workspace shell, ahead of identity tags. */
@@ -1410,7 +1419,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private requireOwnerUserId(): string {
     const userId = this.getOwnerUserId();
 
-    if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
+    if (!userId) throw new KinuError('unavailable', 'Agent has no owner yet — peer messaging needs an owned agent.');
 
     return userId;
   }
@@ -1895,11 +1904,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const requirePeer = async (agent: string): Promise<void> => {
       this.requireOwnerUserId();
 
-      if (agent === this.name) throw new Error('that is this agent — pick another peer (action:"list")');
+      if (agent === this.name) throw new KinuError('bad_input', 'that is this agent — pick another peer (action:"list")');
       const { stub, caller } = await this.userHub();
       const known = await stub.hasWorkspace(caller, agent);
 
-      if (!known) throw new Error(`unknown peer "${agent}" — list your team with action:"list"`);
+      if (!known) throw new KinuError('missing', `unknown peer "${agent}" — list your team with action:"list"`);
     };
 
     return {
@@ -1979,7 +1988,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Called by the Worker on every authenticated request before any other RPC; 403s on cross-user collision.
    *  May run before onStart() completes, so ensureSchema() runs here first. */
   async claimOwner(userId: string): Promise<{ owner: string; capabilityHash: string | null }> {
-    if (!userId) throw new Error('userId required');
+    if (!userId) throw new KinuError('bad_input', 'userId required');
 
     try {
       this.ensureSchema();
@@ -2017,7 +2026,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     if (current !== userId) {
-      throw new Error(`Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
+      throw new KinuError('denied', `Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
     }
 
     // No scaffold probe here: this runs on every authenticated request. An interrupted bootstrap
@@ -2760,6 +2769,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly activationStartedAt = Date.now();
 
   /**
+   * Whether the workspace container is in use, asked by its box before it may rest: a live turn of
+   * any actor here, or a job this activation's runner drives, re-drives included. Work the root owes
+   * itself (sends, claims, fibers to re-drive) is its own wake's business; a process an earlier
+   * activation left running is the box's own check.
+   */
+  override async sandboxInUse(): Promise<boolean> {
+    if (this._inFlight || this.jobRunner.inFlight > 0) return true;
+    const host = this.actorHost();
+
+    return host.list().some((reference) => host.hosted(reference)?.session.inFlight === true);
+  }
+
+  /**
    * In-memory on purpose: fork-journal recovery runs once per isolate; a second pass could retire
    * a root the resume gate already claimed and re-drove in this activation.
    */
@@ -2806,6 +2828,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       const recovered = await recoverActorTurns({
         installedBuild: host.installedBuild,
+        workspace: this.workspaceName(),
         resumable: (limit) => host.resumable(limit),
         acquire: async (reference) => {
           const actor = await host.acquire(reference);
@@ -3253,7 +3276,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async branchTurn(text: string): Promise<{ accepted: boolean; branchId?: string; reason?: string }> {
     const task = text.trim();
 
-    if (!task) throw new Error('branchTurn requires the redirect text');
+    if (!task) throw new KinuError('bad_input', 'branchTurn requires the redirect text');
 
     if (!this._inFlight) {
       return { accepted: false, reason: 'No turn is running — send it as a normal message instead.' };
@@ -3459,7 +3482,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     feedback: 'positive' | 'negative' | null,
   ): Promise<{ ok: true; messageId: string; feedback: 'positive' | 'negative' | null; rescored: number }> {
     if (messageId.length === 0) {
-      throw new Error('messageId must be a non-empty string');
+      throw new KinuError('bad_input', 'messageId must be a non-empty string');
     }
 
     if (feedback === null) {
@@ -3470,7 +3493,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     if (feedback !== 'positive' && feedback !== 'negative') {
-      throw new Error(`feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
+      throw new KinuError('bad_input', `feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
     }
 
     void this.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
@@ -3744,7 +3767,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
     const ownerUserId = this.getOwnerUserId();
 
-    if (!ownerUserId) throw new Error('Cannot export an unclaimed workspace.');
+    if (!ownerUserId) throw new KinuError('unavailable', 'Cannot export an unclaimed workspace.');
     const workspace = this.hostedWorkspace().bundle;
 
     return readWorkspaceArchivePage(this.ctx.storage.sql, {
@@ -3760,14 +3783,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Not @callable: destruction must go through UserDO's ownership check.
    */
   async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
-    if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new Error('invalid expected owner user id');
+    if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new KinuError('bad_input', 'invalid expected owner user id');
 
     // A workspace whose creation died before `ensureSchema` has no `workspace_identity` table; the
     // caller `removeWorkspace` already verified ownership via the user's roster.
     if (tableExists(this.boundSql, 'workspace_identity')) {
       const ownerUserId = this.getOwnerUserId();
 
-      if (ownerUserId !== expectedOwnerUserId) throw new Error('Agent owner mismatch; refusing to destroy.');
+      if (ownerUserId !== expectedOwnerUserId) throw new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
     }
 
     // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
@@ -3805,6 +3828,43 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** With candidateCode: the GEPA metric's rollout; without: runs the live scaffold. */
   private runScaffoldCaptureText(task: string, candidateCode?: string): Promise<string> {
     return runScaffoldCaptureText(this.scaffoldControl, task, candidateCode);
+  }
+
+  /** Not @callable. */
+  async getTurnRequests(turnId: string, actor?: string): Promise<TurnRequestIndex> {
+    return turnRequestIndex(this.turnRequestSources(actor), turnId);
+  }
+
+  async getTurnRequest(
+    turnId: string, at: { readonly epoch: number; readonly revision: number; readonly from?: number; readonly actor?: string },
+  ): Promise<TurnRequestPage> {
+    return await turnRequestPage(this.turnRequestSources(at.actor), { turnId, epoch: at.epoch, revision: at.revision, from: at.from });
+  }
+
+  /** Not @callable: the audited `workspace.turn_read`. */
+  async supportReadTurn(read: {
+    readonly turnId: string;
+    readonly reason: string;
+    readonly actor?: string;
+    readonly at?: { readonly epoch: number; readonly revision: number; readonly from?: number };
+  }): Promise<TurnRequestIndex | TurnRequestPage> {
+    this.logActivity('support.read', `support read turn ${read.turnId} (${read.reason})`);
+
+    return read.at === undefined
+      ? await this.getTurnRequests(read.turnId, read.actor)
+      : await this.getTurnRequest(read.turnId, { ...read.at, ...(read.actor !== undefined && { actor: read.actor }) });
+  }
+
+  private turnRequestSources(actorId: string | undefined): AgentStores {
+    this.ensureSchema();
+
+    if (actorId === undefined) return this.stores;
+    const host = this.actorHost();
+    const record = host.describe(actorId);
+
+    if (record === null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
+
+    return host.bindStores({ actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId }).stores;
   }
 
   /** For resume, pass the last seen `since` index; returns events strictly after it. */
@@ -3957,7 +4017,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
     const trimmed = text.trim();
 
-    if (!trimmed) throw new Error('run_task requires non-empty text');
+    if (!trimmed) throw new KinuError('bad_input', 'run_task requires non-empty text');
 
     const outcome = await this.orch.inbox.send({
       kind: 'mcp', text: trimmed,
@@ -3969,7 +4029,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Fire-and-forget over the peer-deps transport; owner + same-owner roster gate is enforced there. */
   async sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
-    if (!input?.agent || !input?.message) throw new Error('send_peer requires agent and message');
+    if (!input?.agent || !input?.message) throw new KinuError('bad_input', 'send_peer requires agent and message');
 
     return this.getPeersToolDeps().send({
       agent: input.agent,
@@ -4759,13 +4819,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return { ok: true };
       } catch (cause) {
-        return {
-          error: renderCauseChain(toKinuError({
-            doing: 'composing the workspace runtime for a terminal',
-            cause,
-            otherwise: 'unavailable',
-          })),
-        };
+        return { error: terminalRefusal({ doing: 'composing the workspace runtime for a terminal', cause }) };
       }
     }
 
@@ -4779,15 +4833,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       return { ok: true };
     } catch (cause) {
-      // Render the full cause chain: the outermost message cannot distinguish attach timeouts
-      // from container start failures.
-      return {
-        error: renderCauseChain(toKinuError({
-          doing: 'preparing the sandbox container for a terminal',
-          cause,
-          otherwise: 'unavailable',
-        })),
-      };
+      return { error: terminalRefusal({ doing: 'preparing the sandbox container for a terminal', cause }) };
     }
   }
 
@@ -4809,14 +4855,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       return { session: opened.session, user };
     } catch (cause) {
-      // Render the full cause chain; each failure kind carries its own actionable message.
-      return {
-        error: renderCauseChain(toKinuError({
-          doing: 'opening a terminal on this machine',
-          cause,
-          otherwise: 'unavailable',
-        })),
-      };
+      // Each refusal the user object authors (no device, an older daemon, consent) reaches the pane as written.
+      return { error: terminalRefusal({ doing: 'opening a terminal on this machine', cause }) };
     }
   }
 
@@ -4901,10 +4941,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable() async setSoul(soul: string) {
     const text = soul.trim();
 
-    if (!text) throw new Error('SOUL.md cannot be empty.');
+    if (!text) throw new KinuError('bad_input', 'SOUL.md cannot be empty.');
     const ownerUserId = this.getOwnerUserId();
 
-    if (!ownerUserId) throw new Error('SOUL.md is unavailable until the workspace owner claim completes.');
+    if (!ownerUserId) throw new KinuError('unavailable', 'SOUL.md is unavailable until the workspace owner claim completes.');
     await writeSoul(
       this.rt.storage.vfs,
       this.boundSql,
@@ -4977,7 +5017,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private requireOwnerForFork(): string {
     const ownerUserId = this.getOwnerUserId();
 
-    if (!ownerUserId) throw new Error('cannot fork an unclaimed workspace');
+    if (!ownerUserId) throw new KinuError('unavailable', 'cannot fork an unclaimed workspace');
 
     return ownerUserId;
   }
@@ -4996,7 +5036,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       deliver: async (name, snapshot) => {
         const ownerUserId = this.getOwnerUserId();
 
-        if (!ownerUserId) throw new Error('cannot fork an unclaimed workspace');
+        if (!ownerUserId) throw new KinuError('unavailable', 'cannot fork an unclaimed workspace');
         const { stub, caller } = await this.userHub();
 
         return deliverCloudFork({
@@ -5051,7 +5091,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     | { ok: true; status: 'published'; agentId: string; capabilityHash: string | null; forkPointMs: number }
     | { ok: false; reason: 'owned_by_another_user' }
   > {
-    if (!ownerUserId) throw new Error('fork owner is required');
+    if (!ownerUserId) throw new KinuError('bad_input', 'fork owner is required');
     this.ensureSchema();
     const currentOwner = this.getOwnerUserId();
 
@@ -5128,7 +5168,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Read before the row is written: a trigger whose URL cannot be signed is unreachable.
     const routeSecret = webhookRouteSecret(this.env);
 
-    if (routeSecret === null) throw new Error(WEBHOOK_ROUTE_UNAVAILABLE);
+    if (routeSecret === null) throw new KinuError('unavailable', WEBHOOK_ROUTE_UNAVAILABLE);
     const now = Date.now();
     // Core decides and stores the secret; an hmac/bearer trigger without one refuses every delivery.
     const webhook = await registerDurableWebhook(this.triggerRegistry, this.webhookSecrets, opts, now);

@@ -2,7 +2,7 @@ import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { OAuthTokenError } from './oauth-token-error';
 import { nonEmptyString } from '../utils/json';
 import type { OAuthCredential } from '../credentials/store';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, toKinuError } from '../obs/index';
 import * as v from 'valibot';
 
 const CloudflareAccountSchema = v.object({ id: v.string(), name: v.optional(v.string()) });
@@ -299,7 +299,7 @@ export function cloudflareAccountsFromCredential(credential: OAuthCredential): C
 export function withCloudflareAccount(credential: OAuthCredential, accountId: string): OAuthCredential {
   const account = cloudflareAccountsFromCredential(credential).find((row) => row.id === accountId);
 
-  if (!account) throw new Error('That Cloudflare account is not one this login can see. Reconnect Cloudflare and try again.');
+  if (!account) throw new KinuError('bad_input', 'That Cloudflare account is not one this login can see. Reconnect Cloudflare and try again.');
 
   return {
     ...credential,

@@ -295,7 +295,7 @@ describe('hosted Nimbus workspace provider', () => {
     });
 
     await expect(provider.listExposedPorts()).rejects.toMatchObject({
-      name: 'KinuError', code: 'unsupported', message: expect.stringContaining(reason),
+      name: 'KinuError[unsupported]', code: 'unsupported', message: expect.stringContaining(reason),
     });
     expect(JSON.parse(toolText(await provider.tools.listPorts.execute()))).toEqual([
       { port: 4321, unavailable: reason },
