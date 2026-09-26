@@ -106,6 +106,7 @@ import { tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
 import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from '../../packages/cli/src/agent-client';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
+import { claimEvalWorkspace, releaseEvalWorkspace } from './claims';
 import {
   absorbingRunId, compareRunEventOrder, DeploymentAnswer, evalAccount, evalNameSlug, evalTargetVerdict,
   evalWorkspaceName, INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend, workerSession,
@@ -831,8 +832,43 @@ export interface PublicSubmission {
  *  shared rather than re-typed. */
 const SESSION_DISPLAY_NAME = 'Trajectory Evals';
 
+const RosterPageSchema = v.object({ entries: v.array(v.object({ name: v.string() })), nextCursor: v.nullable(v.string()) });
+
+/** Every workspace name on the identity's account, page by page, as the sidebar's roster lists them. */
+export async function listWorkspaces(origin: string, identity: PublicWebIdentity): Promise<string[]> {
+  const names: string[] = [];
+  let cursor: string | null = null;
+
+  do {
+    const url = `${origin}/api/user/workspaces${cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`}`;
+
+    // Annotated because the loop reads its own result: `page.nextCursor` feeds the next iteration.
+    const page: v.InferOutput<typeof RosterPageSchema> = v.parse(RosterPageSchema, await infraBoundary(`GET ${url}`, async () =>
+      readJson(await fetch(url, { headers: webHeaders(identity) }), 'list the workspaces')));
+
+    names.push(...page.entries.map((entry) => entry.name));
+    cursor = page.nextCursor;
+  } while (cursor !== null);
+
+  return names;
+}
+
+/** Delete a workspace, the DELETE the sidebar's Remove issues, then drop this machine's claim on it. */
+export async function deleteWorkspace(origin: string, identity: PublicWebIdentity, name: string): Promise<void> {
+  await infraBoundary(`DELETE ${origin}/api/user/workspaces/${name}`, async () => {
+    const response = await fetch(`${origin}/api/user/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE', headers: webHeaders(identity) });
+
+    await readJson(response, `delete the workspace ${name}`);
+  });
+
+  releaseEvalWorkspace(origin, name);
+}
+
 export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
   const headers = webHeaders(input.identity);
+
+  // Before the create, so a run sweeping this account never finds the workspace unclaimed.
+  claimEvalWorkspace(input.origin, input.workspace);
 
   const created = await infraBoundary(
     `POST ${input.origin}/api/user/workspaces`,
@@ -1623,17 +1659,7 @@ export class KinuPublicSession {
    */
   async teardown(): Promise<void> {
     try {
-      await infraBoundary(
-        `DELETE ${this.input.origin}/api/user/workspaces/${this.workspace}`,
-        async () => {
-          const response = await fetch(
-            `${this.input.origin}/api/user/workspaces/${encodeURIComponent(this.workspace)}`,
-            { method: 'DELETE', headers: webHeaders(this.input.identity) },
-          );
-
-          await readJson(response, `delete the workspace ${this.workspace}`);
-        },
-      );
+      await deleteWorkspace(this.input.origin, this.input.identity, this.workspace);
     } finally {
       this.failInFlight('the session was torn down');
       this.socket?.close();
