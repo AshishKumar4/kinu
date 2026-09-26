@@ -288,6 +288,17 @@ export async function verifyServing(
   }
 }
 
+/**
+ * The container classes whose image production would run and staging did not: the Worker and client are proven the
+ * same artifact by digest, and a container's code is its image, which each environment names in its own section.
+ */
+export function imagesStagingNeverRan(
+  production: ReadonlyMap<string, string>,
+  staging: ReadonlyMap<string, string>,
+): readonly string[] {
+  return [...production].filter(([name, image]) => staging.get(name) !== image).map(([name, image]) => `${name} (${image})`);
+}
+
 /** Where promotion reads and writes, from wrangler.jsonc. */
 interface Targets {
   /** Each environment's origin. */
@@ -367,6 +378,18 @@ function promotions(bucket: string): Promotion[] {
   throw new Error(`wrangler r2 object get ${bucket}/${HISTORY_KEY} failed: ${why(run)}`);
 }
 
+/** Refused unless `origin` serves `sha` with this very signed stamp: a record or a history entry names what a
+ *  deployment serves, never a build that exists only on this machine. */
+async function servedAs(origin: string, sha: string, downloads: Downloads): Promise<void> {
+  const health = v.parse(HealthBodySchema, await (await fetch(`${origin}/api/health`)).text());
+
+  if (health.build.sha !== sha) throw new Error(`${origin} serves ${health.build.sha}, not ${sha}`);
+  const stamp = downloads[STAMP];
+
+  if (stamp === undefined) throw new Error(`the downloads hold no ${STAMP}`);
+  await readDownloads(origin, { [STAMP]: stamp });
+}
+
 /** The version production's Worker serves. */
 function servingVersion(): string {
   const serving = deployment('production');
@@ -431,6 +454,7 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
       sha, digest: artifactDigest(DIST), stagingVersion: rest[0] ?? '', recordedAt: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS),
     };
 
+    await servedAs(origins.staging, sha, record.downloads);
     staging.put(verifiedKey(sha), JSON.stringify(record), 'application/json');
     console.log(`promote: ${sha} verified on staging (${record.digest}, ${String(Object.keys(record.downloads).length)} downloads)`);
 
@@ -438,14 +462,12 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
   }
 
   if (command === 'check' && rest.length === 0) {
+    const drift = imagesStagingNeverRan(deriveInfrastructure('production').worker.images, deriveInfrastructure('staging').worker.images);
+
+    if (drift.length > 0) throw new Error(`production names container images staging never ran: ${drift.join(', ')}`);
     const record = verified(buckets.staging, sha);
-    const served = v.parse(HealthSchema, await (await fetch(`${origins.staging}/api/health`)).json());
 
-    if (served.build.sha !== sha) throw new Error(`staging serves ${served.build.sha}, not ${sha}: promote what it verified`);
-    const stamp = record.downloads[STAMP];
-
-    if (stamp === undefined) throw new Error(`the record of ${sha} binds no ${STAMP}`);
-    await readDownloads(origins.staging, { [STAMP]: stamp });
+    await servedAs(origins.staging, sha, record.downloads);
     console.log(`promote: ${sha} was verified on staging (version ${record.stagingVersion}), and staging serves that run's downloads`);
 
     return 0;
@@ -483,6 +505,10 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
 
     if (!/^[0-9a-f-]{36}$/u.test(version)) throw new Error(`'${version}' is not a Worker version id, so no rollback could return to it`);
     const promotion: Promotion = { sha, version, at: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS) };
+    const serving = servingVersion();
+
+    if (serving !== version) throw new Error(`production serves version ${serving}, not ${version}`);
+    await servedAs(origins.production, sha, promotion.downloads);
 
     production.put(HISTORY_KEY, JSON.stringify([...promotions(buckets.production), promotion]), 'application/json');
     console.log(`promote: production took ${sha} as version ${version}`);

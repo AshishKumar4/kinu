@@ -29,7 +29,7 @@ import {
   supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
 import { confirmationPhrase, partition } from './infra-teardown';
-import { plan } from './infra-provision';
+import { plan, putSecret, type SecretIo } from './infra-provision';
 import { isProductSource, readMatching } from './sources';
 
 const infrastructure = deriveInfrastructure();
@@ -937,3 +937,43 @@ describe('staging is the one named environment, read the way Wrangler reads it',
     expect(environmentFrom(['staging', 'production'])).toBeUndefined();
   });
 });
+
+/**
+ * KINU-001: DEV_IDENTITY_SECRET is the whole authority for the synthetic identity, so a staging secret that is also
+ * production's would let whoever holds staging's act as the eval identity on production.
+ */
+describe('the synthetic identity\'s secret, as provisioning installs it', () => {
+  const staging = { worker: deriveInfrastructure('staging').worker };
+
+  /** An operator who types `typed` at every prompt, and the values installed. */
+  function operator(typed: string): SecretIo & { readonly installed: string[] } {
+    const installed: string[] = [];
+
+    return {
+      installed,
+      ask: async () => typed,
+      interactive: true,
+      install: (_name, value) => {
+        installed.push(value);
+
+        return { ok: true, stdout: '', stderr: '', code: 0 };
+      },
+      show: () => undefined,
+    };
+  }
+
+  test('is minted fresh for each deployment, and a value pasted from anywhere is refused', async () => {
+    const pasted = operator('the value production already holds');
+
+    expect((await putSecret('DEV_IDENTITY_SECRET', staging, pasted)).outcome).toBe('refused');
+    expect(pasted.installed).toEqual([]);
+
+    const [first, second] = [operator(''), operator('')];
+
+    await putSecret('DEV_IDENTITY_SECRET', staging, first);
+    await putSecret('DEV_IDENTITY_SECRET', { worker: deriveInfrastructure('production').worker }, second);
+    expect([...first.installed, ...second.installed].map((value) => Buffer.from(value, 'base64').length)).toEqual([32, 32]);
+    expect(first.installed).not.toEqual(second.installed);
+  });
+});
+

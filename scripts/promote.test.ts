@@ -4,8 +4,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
-  adoptDownloads, adoptTarball, artifactDigest, downloadsServed, planRollback, readDownloads, verifyServing, type Promotion,
-  type Verified,
+  adoptDownloads, adoptTarball, artifactDigest, downloadsServed, imagesStagingNeverRan, planRollback, readDownloads, verifyServing,
+  type Promotion, type Verified,
 } from './promote';
 
 /** A build's dist, as Vite and the release scripts leave it. */
@@ -26,6 +26,15 @@ const BUILD = {
   'client/index.html': '<html></html>',
   'client/downloads/kinu-version.json': '{"sha":"abc"}',
 };
+
+// A container's code is its image, and each environment names its images in its own section of wrangler.jsonc.
+test('production may run only the container images staging ran', () => {
+  const staging = new Map([['KinuSandbox', 'sandbox@sha256:aaa'], ['CodexEgress', 'egress@sha256:bbb']]);
+
+  expect(imagesStagingNeverRan(new Map(staging), staging)).toEqual([]);
+  expect(imagesStagingNeverRan(new Map([...staging, ['CodexEgress', 'egress@sha256:ccc']]), staging)).toEqual(['CodexEgress (egress@sha256:ccc)']);
+  expect(imagesStagingNeverRan(new Map([...staging, ['NewBox', 'box@sha256:ddd']]), staging)).toEqual(['NewBox (box@sha256:ddd)']);
+});
 
 describe('the artifact digest', () => {
   test('is the Worker and client, not the environment\'s config nor the downloads promotion copies', () => {
