@@ -1292,7 +1292,9 @@ export const LADDER: readonly Gate[] = [
       + 'and an ephemeral deployed Worker, not this gate.',
     // Measured by `--audit-closure` 2026-09-15: the suite opens manifests, the
     // worker source and its bench sources by path, so its closure is the corpus.
-    inputs: { ...AMBIENT_BY_NAME, corpus: true },
+    // The harness and its isolation suite load instances of their own of the class
+    // module through a query-suffixed specifier, which the walker cannot follow.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/devbox/src/devbox.ts'] },
   },
   {
     run: 'bun test --timeout=0 packages/test-utils/',

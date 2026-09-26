@@ -351,15 +351,20 @@ const TURN_2: readonly Script<Method>[] = [selfTrades, postOnlyOrders, replay(SE
 
 const AFTER_TURN_2: readonly Step[] = [TURN_1, TURN_2_FEATURES, TURN_2];
 
+/** The share the last turn asks about. */
+const QUESTION_SYMBOL = 'ACME';
+
 /**
  * Turn 2's features, probed after an eviction without changing the book: a post-only order that would
  * take is refused, and trader t20's sell against its own new top bid cancels that bid instead of
- * trading, rests, and is cancelled in turn. The probe needs a cent between a symbol's best bid and ask.
+ * trading, rests, and is cancelled in turn. The probe needs a cent between a symbol's best bid and ask,
+ * on a share the last turn does not ask about: a slate that lost self-trade prevention trades the
+ * probe's two orders, and that trade must not land in the question's answer.
  */
 async function featuresProbe(history: readonly Step[]): Promise<Script<Method>> {
   const exchange = await exchangeAfter(history);
 
-  const symbol = SYMBOLS.find((name) => {
+  const symbol = SYMBOLS.filter((name) => name !== QUESTION_SYMBOL).find((name) => {
     const { bids, asks } = exchange.book(name);
 
     return bids[0] !== undefined && asks[0] !== undefined && Math.round(asks[0].price * 100) - Math.round(bids[0].price * 100) >= 2;
@@ -368,7 +373,10 @@ async function featuresProbe(history: readonly Step[]): Promise<Script<Method>> 
   const { bids, asks } = exchange.book(symbol ?? '');
   const [bid, ask] = [bids[0], asks[0]];
 
-  if (symbol === undefined || bid === undefined || ask === undefined) throw new Error('no symbol leaves a cent inside its spread for the probe');
+  if (symbol === undefined || bid === undefined || ask === undefined) {
+    throw new Error(`no share but ${QUESTION_SYMBOL} leaves a cent inside its spread for the probe`);
+  }
+
   const inside = (Math.round(bid.price * 100) + 1) / 100;
   const order = { trader: 't20', symbol, type: 'limit', qty: 5 };
 
@@ -380,8 +388,6 @@ async function featuresProbe(history: readonly Step[]): Promise<Script<Method>> 
     await lookBoth(client);
   };
 }
-
-const QUESTION_SYMBOL = 'ACME';
 
 // ── The task ─────────────────────────────────────────────────────────
 

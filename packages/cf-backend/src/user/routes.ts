@@ -224,11 +224,13 @@ userRoutes.post('/api/user/workspaces', async (c) => handleCreateWorkspaceReques
   request: c.req.raw, env: c.env, userId: c.get('identity').userId, userDO: c.get('stub'),
 }));
 
+// A visit the roster did not take is a 404: the workspace is gone, or not visitable while it is created or torn down,
+// and a client that keeps a workspace alive by its visits must hear that rather than an `ok`.
 userRoutes.post('/api/user/workspaces/:name/touch', async (c) => {
   try {
-    await c.get('stub').touchWorkspace(c.get('owner'), decodeURIComponent(rawParam(c, 'name')));
+    const touched = await c.get('stub').touchWorkspace(c.get('owner'), decodeURIComponent(rawParam(c, 'name')));
 
-    return json({ body: { ok: true } });
+    return touched ? json({ body: { ok: true } }) : err(404, 'No such workspace.');
   }
   catch (cause) { throw authoredRefusal({ doing: 'recording this workspace visit', cause }); }
 });

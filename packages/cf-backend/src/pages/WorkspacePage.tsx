@@ -605,6 +605,7 @@ export default function WorkspacePage() {
     if (!agentId) return;
     startTransition(async () => {
       try {
+        // A visit the roster did not take is a gone workspace, which the page's own missing state already shows.
         await touchWorkspace(agentId);
         reportSide("visit", null);
       } catch (cause) {
