@@ -69,7 +69,6 @@ const MEMORY_FILE = workspacePath(MEMORY_PATH).slice(1);
 
 const MEMORY_READS: readonly LiveRead[] = ['getMemoryContent', 'getWorkspaceTabPresence'];
 
-/** Paths come with or without the leading slash. */
 export function readsMovedByFiles(paths: readonly string[]): readonly LiveRead[] {
   return paths.some((path) => path.replace(/^\//, '') === MEMORY_FILE) ? MEMORY_READS : NONE;
 }

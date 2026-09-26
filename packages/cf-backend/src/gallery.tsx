@@ -1696,7 +1696,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult(null).json<T>();
   }
 
-  // Arrives after first paint: once the gate sets the dataset flag, the pushed frame's re-read lists a new port.
+  // Arrives after first paint, once the gate sets the dataset flag.
   if (method === "getExposedPorts" && document.documentElement.dataset.previewArrived === "1" && args?.[0] === "sandbox") {
     return rpcResult({ ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] }).json<T>();
   }

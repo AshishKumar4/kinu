@@ -233,8 +233,7 @@ export function adaptCloudflareSandbox(
     },
     // Re-publishing keeps long-lived previews from ageing out. A failed refresh is reported and the
     // listing stands: the record is already correct, unlike an unpublished URL in `exposePort`.
-    // Not `onContainer`: the listing is the object's own rows, and a stopped box has none, so a
-    // read never starts a container or counts as its use.
+    // Not `onContainer`: a read never starts a container.
     getExposedPorts: async (hostname) => {
       const rows = await handle.getExposedPorts(hostname);
 

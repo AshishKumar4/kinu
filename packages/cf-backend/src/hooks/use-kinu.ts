@@ -90,7 +90,6 @@ export type SendAdmission =
 
 type SendLandingResolvers = ReturnType<typeof Promise.withResolvers<SendLanding>>;
 
-/** Per read, how many frames have named it; a consumer re-reads when its count moves. */
 export type ReadMoves = Readonly<Partial<Record<LiveRead, number>>>;
 
 /** A call the actor refused takes the waiter with it; the refusal is the answer. */
@@ -1567,7 +1566,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     liveRefreshTasks.current.set(taskId, task);
   }, [liveReads]);
 
-  /** Turn end, reconnect and retry re-read everything; between them only what a frame names. */
   const refreshLiveData = useCallback((): void => {
     rereadLive(LIVE_READS, [
       () => refreshCurrentLiveResource("consents", () => rpc<PendingConsent[]>("listPendingConsents", []), setPendingConsents),

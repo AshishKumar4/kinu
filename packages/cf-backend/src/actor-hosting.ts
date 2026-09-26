@@ -61,7 +61,6 @@ export interface WorkspaceHostSeams {
     readonly workMode: WorkMode;
   }): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
   reportModelCall(report: ModelCallReport): void;
-  /** The sandbox is the workspace's, so a hosted actor's port moves the root's pages' read too. */
   liveReadsMoved(reads: readonly LiveRead[]): void;
   readonly modelOperations: ModelOperationSink;
   pricing(spec?: string): ModelPricing | null;

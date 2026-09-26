@@ -2987,7 +2987,6 @@ export class UserDO extends Agent<Env> {
       }));
   }
 
-  /** Idempotent: a workspace registers on every first page socket and leaves on the last close. */
   async watchDeviceStatus(caller: UserCaller, watching: boolean): Promise<void> {
     const resolved = await this.requireTier(caller, 'device.rpc');
 

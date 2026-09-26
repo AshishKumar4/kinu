@@ -445,7 +445,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
   };
 }
 
-/** Nimbus mutates listeners only through these three, so they are where the workspace's port list moves. */
+/** Nimbus mutates listeners only through these three. */
 class ObservedPortRegistry extends PortRegistry {
   constructor(private readonly moved: () => void) {
     super();
