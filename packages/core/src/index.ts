@@ -1062,7 +1062,7 @@ export {
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   deviceToolchainAnswer, freshDeviceToolchain,
-  connectedDevices, deviceByName, deviceFleetAsk,
+  connectedDevices, deviceByName, deviceFleetAsk, sameDeviceStatus,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
   sandboxReasonFix, sandboxCause, describeGpuNodes,
   DEVICE_TOOLCHAIN_TTL_MS,

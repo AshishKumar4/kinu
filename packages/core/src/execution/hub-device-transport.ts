@@ -6,7 +6,7 @@ import { WORKSPACE_HAS_NO_OWNER, isDeviceAmbiguityError, isDeviceNotConnectedErr
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { shellQuote } from '../utils/shell';
 import { type DeviceCheckpointHint } from '../checkpoints/types';
-import { type DeviceStatus } from './device-status';
+import { sameDeviceStatus, type DeviceStatus } from './device-status';
 import { type DeviceTransport } from './device-tunnel-executor';
 import { KinuError, diagnostics, renderThrownChain, toKinuError, type LogEventName } from "../obs/index";
 import * as v from 'valibot';
@@ -64,7 +64,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
   let inFlight: StatusRefresh | null = null;
 
   const adopt = (next: DeviceStatus): void => {
-    const moved = answered && JSON.stringify(next) !== JSON.stringify(snapshot);
+    const moved = answered && !sameDeviceStatus(next, snapshot);
     answered = true;
     snapshot = next;
 

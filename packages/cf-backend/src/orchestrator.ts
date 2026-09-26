@@ -169,7 +169,7 @@ import {
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
-  LiveReadsNotice, readsMovedByFiles, readsWrittenBy, type LiveRead,
+  LiveReadsNotice, readsMovedByFiles, readsWrittenBy, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
   restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
@@ -2360,9 +2360,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await stub.watchDeviceStatus(caller, watching);
 
         if (!watching) return;
-        const opened = JSON.stringify(this.rt.deviceTransport.status());
+        const opened = this.rt.deviceTransport.status();
 
-        if (JSON.stringify(await this.rt.deviceTransport.refreshStatus()) !== opened) {
+        if (!sameDeviceStatus(await this.rt.deviceTransport.refreshStatus(), opened)) {
           this.liveReadsMoved(['getExecutors', 'getToolDescriptions']);
         }
       } catch (cause) {
