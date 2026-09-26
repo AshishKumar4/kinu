@@ -23,6 +23,7 @@ import {
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { SqlMeter, type OperationCost } from './sql-meter';
 import type {
   AgentLogEvent,
   CallRecord,
@@ -64,7 +65,7 @@ import {
   type WakeHoldPlacement,
   type WakeRows,
 } from './two-turn-shapes';
-import { ownerCaller, type PeerMessage, type WorkMode } from '@kinu.run/core';
+import { ownerCaller, type PeerMessage, type SessionTranscript, type WorkMode } from '@kinu.run/core';
 import type { ToolSet } from 'ai';
 
 // Re-exported under production names so the auxiliary worker binds the shipped
@@ -76,12 +77,64 @@ const textColumn = (value: SqlStorageValue): string => v.parse(v.string(), value
 
 /** The production orchestrator plus fixture reads; adds no production method or state,
  *  only retains DurableObjectState to observe the durable send ledger. */
+/** Meters `sql` in place: the platform refuses a wrapped state object, and a patched `exec` counts every caller. */
+function meterInPlace(sql: SqlStorage) {
+  const unmetered = sql.exec.bind(sql);
+  const meter = new SqlMeter({ exec: unmetered, get databaseSize() { return sql.databaseSize; } });
+
+  sql.exec = (query, ...bindings) => meter.exec(query, ...bindings);
+
+  return { meter, unmetered };
+}
+
+const ScheduleRowsSchema = v.array(v.looseObject({ id: v.string() }));
+
+/** What still runs in the object, by name, and its schedule rows as read now. */
+export interface SettleState {
+  readonly busy: readonly string[];
+  readonly schedules: string;
+}
+
+/**
+ * Waits for the object's own settle signals: no turn in flight, no detached task, terminal close, debounced drain or
+ * keepAlive hold in this isolate, no durable fiber, no alarm due, and the same schedule rows on two reads in a row. 15 s is the failure bound only.
+ */
+async function awaitSettled(target: { settleState(): Promise<SettleState> }): Promise<void> {
+  const started = Date.now();
+  let previous: string | null = null;
+
+  for (;;) {
+    const state = await target.settleState();
+
+    if (state.busy.length === 0 && state.schedules === previous) return;
+    previous = state.busy.length === 0 ? state.schedules : null;
+
+    if (Date.now() - started > 15000) {
+      throw new Error(`two-turn probe: the object never settled: ${state.busy.join(', ') || 'its schedule rows kept changing'}`);
+    }
+
+    const tick = Promise.withResolvers<void>();
+
+    setTimeout(tick.resolve, 50);
+    await tick.promise;
+  }
+}
+
 export class ObservedOrchestrator extends ProductionOrchestrator {
   private readonly actorState: AgentContext;
+  private readonly meter: SqlMeter;
+  /** The database without the meter, for the probe's own reads. */
+  private readonly unmetered: SqlStorage['exec'];
+  /** Transcript reads the chat transport made while the meter runs. */
+  private historyReads: number | null = null;
 
   constructor(ctx: AgentContext, env: ProbeEnv) {
     super(ctx, env);
     this.actorState = ctx;
+    const metered = meterInPlace(ctx.storage.sql);
+
+    this.meter = metered.meter;
+    this.unmetered = metered.unmetered;
     Reflect.deleteProperty(this, 'chatHistoryPage');
     Reflect.deleteProperty(this, 'pendingSteers');
     Reflect.deleteProperty(this, 'pendingSteerFileRows');
@@ -96,7 +149,68 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'timerTickFinished');
     Reflect.deleteProperty(this, 'runCauses');
     Reflect.deleteProperty(this, 'drainRunClosed');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed']);
+    Reflect.deleteProperty(this, 'meterBegin');
+    Reflect.deleteProperty(this, 'meterEnd');
+    Reflect.deleteProperty(this, 'settleState');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'settleState', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed']);
+  }
+
+  async settleState(): Promise<SettleState> {
+    const busy: string[] = [];
+
+    if (this._inFlight) busy.push('a turn in flight');
+
+    if (this._backgroundTasks.size > 0) busy.push(`${String(this._backgroundTasks.size)} detached task(s)`);
+
+    if (this.terminalClosing) busy.push('a terminal close');
+
+    if (this._drainTimerTasks.size > 0) busy.push(`${String(this._drainTimerTasks.size)} debounced event drain(s)`);
+
+    // The SDK's holds: `keepAliveWhile` arms its heartbeat alarm in the future, so no alarm is yet due.
+    if (this._keepAliveRefs > 0) busy.push(`${String(this._keepAliveRefs)} keepAlive hold(s)`);
+    const fibers = this.unmetered('SELECT id FROM cf_agents_runs').toArray().length;
+
+    if (fibers > 0) busy.push(`${String(fibers)} durable fiber(s)`);
+    const alarm = await this.actorState.storage.getAlarm();
+
+    if (alarm !== null && alarm <= Date.now()) busy.push('an alarm due');
+    const schedules = v.parse(ScheduleRowsSchema, this.unmetered('SELECT * FROM cf_agents_schedules ORDER BY id').toArray());
+
+    return { busy, schedules: JSON.stringify(schedules) };
+  }
+
+  async meterBegin(): Promise<void> {
+    this.meter.begin();
+    this.historyReads = 0;
+  }
+
+  async meterEnd(): Promise<{ cost: OperationCost; historyReads: number }> {
+    const historyReads = this.historyReads ?? 0;
+
+    this.historyReads = null;
+
+    return { cost: this.meter.end(null), historyReads };
+  }
+
+  private countedTranscript: SessionTranscript | null = null;
+
+  /** The production transcript, each whole-history read counted while the meter runs. */
+  protected override get chatTranscript(): SessionTranscript {
+    const transcript = super.chatTranscript;
+
+    if (this.countedTranscript !== transcript) {
+      const history = transcript.history.bind(transcript);
+
+      transcript.history = async (leafId, limit) => {
+        if (this.historyReads !== null) this.historyReads += 1;
+
+        return await history(leafId, limit);
+      };
+
+      this.countedTranscript = transcript;
+    }
+
+    return transcript;
   }
 
   /** Parks a turn-end extension over `/wake/wait`, holding the settle window open
@@ -522,13 +636,13 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'AI' | 'OrchestratorAgent'> {
  *  overflows TypeScript's instantiation depth. */
 type ExerciseTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'writeWorkspaceFile'>
-  & Pick<ObservedOrchestrator, 'chatHistoryPage'>;
+  & Pick<ObservedOrchestrator, 'chatHistoryPage' | 'settleState'>;
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
   | 'createSubordinateAgent'>
   & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
-  | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed'>;
+  | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
 const WAKE_RUN_SLEEP_MS = 40_000;
@@ -580,32 +694,6 @@ async function awaitWithLimit<T>(work: Promise<T>, ms: number, what: string): Pr
 }
 
 /** The close's `end()` emits the owed event synchronously, so a quiet log without it is a clean close. */
-async function awaitQuiet(recording: RecordingLogger): Promise<void> {
-  const started = Date.now();
-  let seen = recording.emitted.length;
-  let silentSince = Date.now();
-
-  for (;;) {
-    const tick = Promise.withResolvers<void>();
-
-    setTimeout(tick.resolve, 50);
-    await tick.promise;
-
-    const now = Date.now();
-
-    if (recording.emitted.length !== seen) {
-      seen = recording.emitted.length;
-      silentSince = now;
-    } else if (now - silentSince >= 1000) {
-      return;
-    }
-
-    if (now - started > 15000) {
-      throw new Error('two-turn probe: log never went quiet; work is still detached at exit');
-    }
-  }
-}
-
 /** Prefixes the reason `receivePeerThenEvict` aborts with, ahead of the rows it saw. */
 const REACTOR_EVICTION = 'reactor-wake probe eviction: ';
 
@@ -702,7 +790,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       }
 
       await awaitSleepTimeSettled(recording, 2);
-      await awaitQuiet(recording);
+      await awaitSettled(target);
 
       const snapshot = await target.getWorkspaceSnapshot();
       const history = await target.chatHistoryPage();
@@ -725,9 +813,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  /** Timed enqueue-to-settle as the object experiences it; the transcript-cost gate compares them. */
-  async longTurn(priorTurns: number, deltas: number, priorDeltas = 20): Promise<{ priorMs: number; longMs: number; calls: number }> {
-    const workspace = `long-${priorTurns}-${deltas}-${priorDeltas}`;
+  /** A 500-delta turn after twenty answers of `priorDeltas` deltas, counted in the production orchestrator's own
+   *  SQLite and transcript reads, from enqueue to its sleep-time settle. */
+  async longTurnCost(priorDeltas: number): Promise<{ cost: OperationCost; historyReads: number }> {
+    const workspace = `long-cost-${String(priorDeltas)}-${crypto.randomUUID()}`;
     const target: QueueTarget = await this.queueTarget(workspace);
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('long-owner'));
@@ -742,24 +831,21 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const recording = createRecordingLogger();
     setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
 
-    const t0 = Date.now();
+    for (let i = 0; i < 20; i += 1) {
+      const queued = await target.runTaskFromMcp(`long:${String(priorDeltas)}`);
 
-    for (let i = 0; i < priorTurns; i += 1) {
-      const queued = await target.runTaskFromMcp(`long:${priorDeltas}`);
-
-      if (queued.status !== 'queued') throw new Error(`long bench: prior turn ${JSON.stringify(queued)}`);
+      if (queued.status !== 'queued') throw new Error(`long cost: prior turn ${JSON.stringify(queued)}`);
       await awaitSleepTimeSettled(recording, i + 1);
     }
 
-    const priorMs = Date.now() - t0;
-    const t1 = Date.now();
-    const queued = await target.runTaskFromMcp(`long:${deltas}`);
+    await target.meterBegin();
+    const queued = await target.runTaskFromMcp('long:500');
 
-    if (queued.status !== 'queued') throw new Error(`long bench: long turn ${JSON.stringify(queued)}`);
-    await awaitSleepTimeSettled(recording, priorTurns + 1);
-    const longMs = Date.now() - t1;
+    if (queued.status !== 'queued') throw new Error(`long cost: measured turn ${JSON.stringify(queued)}`);
+    await awaitSleepTimeSettled(recording, 21);
+    await awaitSettled(target);
 
-    return { priorMs, longMs, calls: (await this.httpCalls()).length };
+    return await target.meterEnd();
   }
 
   /** Only this worker's outbound handler routes to the control host, so no new Worker or binding. */
@@ -902,7 +988,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       // The held genesis and one user-origin rerun of the sends it could not land; a signal or peer
       // event that waited with them rides its first step.
       await awaitSleepTimeSettled(recording, { chat: 2, peer: 2, signal: 2, yield: 1, attach: 2 }[mode]);
-      await awaitQuiet(recording);
+      await awaitSettled(target);
 
       return { http: await this.httpCalls(), task };
     } finally {
@@ -1170,7 +1256,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
       // One turn: the re-opened genesis, with B and C landed at its first step.
       await awaitSleepTimeSettled(recording, 1);
-      await awaitQuiet(recording);
+      await awaitSettled(target);
 
       return {
         http: await this.httpCalls(), steers: await target.pendingSteers(), steerFiles: await target.pendingSteerFileRows(),
@@ -1319,7 +1405,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         landings['PARITY-TWO'] = (await done('PARITY-TWO')).landed ?? null;
         landings['PARITY-TWO-STEER'] = (await done('PARITY-TWO-STEER')).landed ?? null;
         await awaitSleepTimeSettled(recording, 3);
-        await awaitQuiet(recording);
+        await awaitSettled(target);
         afterTwo = await target.parityRows();
 
         await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt: 'first' }) });
@@ -1328,7 +1414,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         socket.send(JSON.stringify({ type: 'cf_agent_chat_request_cancel', id: 'PARITY-THREE' }));
         landings['PARITY-THREE'] = (await done('PARITY-THREE')).landed ?? null;
         await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
-        await awaitQuiet(recording);
+        await awaitSettled(target);
 
         await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt: 'partial' }) });
         socket.send(this.parityFrame('PARITY-FOUR-TOOL'));
@@ -1370,14 +1456,14 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       try {
         socket.send(JSON.stringify({ type: 'cf_agent_stream_resume_request' }));
         await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
-        await awaitQuiet(recording);
+        await awaitSettled(target);
         await awaitSleepTimeSettled(recording, 1);
-        await awaitQuiet(recording);
+        await awaitSettled(target);
 
         socket.send(this.parityFrame('PARITY-FIVE'));
         landings['PARITY-FIVE'] = (await done('PARITY-FIVE')).landed ?? null;
         await awaitSleepTimeSettled(recording, 2);
-        await awaitQuiet(recording);
+        await awaitSettled(target);
       } finally {
         socket.close(1000, 'parity complete');
       }
@@ -1555,7 +1641,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
       // A second admitted turn would compress its facts too, so this count discriminates.
       await awaitSleepTimeSettled(recording, 1);
-      await awaitQuiet(recording);
+      await awaitSettled(target);
 
       return {
         http: await this.httpCalls(),
@@ -1765,7 +1851,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       const landing = await answered.promise;
       // One turn when the words landed inside it; two when they ran after it.
       await awaitSleepTimeSettled(recording, persistedWhileHeld ? 2 : 1);
-      await awaitQuiet(recording);
+      await awaitSettled(target);
 
       return {
         admission, landing, pendingIds, persistedWhileHeld,
@@ -1843,7 +1929,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       }
 
       await awaitSleepTimeSettled(recording, 1);
-      await awaitQuiet(recording);
+      await awaitSettled(target);
 
       const snapshot = await target.getWorkspaceSnapshot();
       const history = await target.chatHistoryPage();

@@ -31,7 +31,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
-  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listActiveWorkspaces' | 'getAuthHeaders'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listUnrevokedGrants' | 'dismissUnrevokedGrant' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow'
   | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
@@ -224,11 +224,13 @@ userRoutes.post('/api/user/workspaces', async (c) => handleCreateWorkspaceReques
   request: c.req.raw, env: c.env, userId: c.get('identity').userId, userDO: c.get('stub'),
 }));
 
+// A visit the roster did not take is a 404: the workspace is gone, or not visitable while it is created or torn down,
+// and a client that keeps a workspace alive by its visits must hear that rather than an `ok`.
 userRoutes.post('/api/user/workspaces/:name/touch', async (c) => {
   try {
-    await c.get('stub').touchWorkspace(c.get('owner'), decodeURIComponent(rawParam(c, 'name')));
+    const touched = await c.get('stub').touchWorkspace(c.get('owner'), decodeURIComponent(rawParam(c, 'name')));
 
-    return json({ body: { ok: true } });
+    return touched ? json({ body: { ok: true } }) : err(404, 'No such workspace.');
   }
   catch (cause) { throw authoredRefusal({ doing: 'recording this workspace visit', cause }); }
 });
@@ -347,6 +349,14 @@ userRoutes.delete('/api/user/credentials/:key', async (c) => {
   catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause }); }
 
   credentialsChanged(c);
+
+  return json({ body: { ok: true } });
+});
+
+userRoutes.get('/api/user/unrevoked-grants', async (c) => json({ body: await c.get('stub').listUnrevokedGrants(c.get('owner')) }));
+
+userRoutes.delete('/api/user/unrevoked-grants/:key', async (c) => {
+  await c.get('stub').dismissUnrevokedGrant(c.get('owner'), decodeURIComponent(rawParam(c, 'key')));
 
   return json({ body: { ok: true } });
 });

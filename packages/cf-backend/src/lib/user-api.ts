@@ -240,8 +240,19 @@ export function listWorkspaces(query: RosterQuery = {}) {
 export const registerWorkspace  = (name?: string, purpose?: string, displayName?: string) =>
   api(WorkspaceEntrySchema, 'POST', '/workspaces', { name, displayName, purpose });
 
-export const touchWorkspace     = (name: string) =>
-  api(OkSchema, 'POST', `/workspaces/${encodeURIComponent(name)}/touch`);
+/** Records a visit to `name`, and says whether the roster took it. A 404 is the roster no longer holding the
+ *  workspace, an answer rather than a failed visit; any other failure throws. */
+export async function touchWorkspace(name: string): Promise<boolean> {
+  try {
+    await api(OkSchema, 'POST', `/workspaces/${encodeURIComponent(name)}/touch`);
+
+    return true;
+  } catch (error) {
+    if (error instanceof UserApiError && error.status === 404) return false;
+
+    throw error;
+  }
+}
 
 export const removeWorkspace    = (name: string) =>
   api(OkSchema, 'DELETE', `/workspaces/${encodeURIComponent(name)}`);
@@ -373,6 +384,14 @@ export const pollCodexFlow    = () => api(PollResultSchema, 'POST', '/codex/poll
   .then((r) => { if (r.connected) invalidateModelsCache();
 
  return r; });
+
+const UnrevokedGrantSchema = v.object({ key: v.string(), reasons: v.array(v.string()), recordedAt: v.number() });
+
+export type UnrevokedGrant = v.InferOutput<typeof UnrevokedGrantSchema>;
+
+export const listUnrevokedGrants = () => api(v.array(UnrevokedGrantSchema), 'GET', '/unrevoked-grants');
+
+export const dismissUnrevokedGrant = (key: string) => api(OkSchema, 'DELETE', `/unrevoked-grants/${encodeURIComponent(key)}`);
 
 export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
   .then((r) => { invalidateModelsCache();

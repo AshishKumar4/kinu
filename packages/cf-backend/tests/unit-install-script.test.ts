@@ -9,7 +9,6 @@ import { createHash } from 'node:crypto';
 
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
-import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { cliPageRoutes } from '../src/cli/routes';
 import { serveFamily } from './helpers/api';
@@ -17,6 +16,7 @@ import { staticRouteCliEnv } from './helpers/bindings';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell } from '@kinu.run/core';
 import { CLI_DIST_PATHS, RELEASE_SIGNING_PUBLIC_KEY, generateReleaseSigningKey, signRelease } from '@kinu.run/core';
+import { RUN_MARK } from '../../../scripts/deadline';
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -196,18 +196,16 @@ async function makeSandbox(options: SandboxOptions = {}): Promise<InstallSandbox
   return { home, stubBin, bunLog, managedBun: join(home, '.kinu/runtime/bin/bun') };
 }
 
-/** Runs the script like `curl | bash` in a detached session: stdin is the pipe, /dev/tty cannot open. */
+/** Runs the script like `curl | bash` in a detached session: stdin is the pipe, /dev/tty cannot open. It ends when
+ *  the shell does: a script that froze holds the suite to its row's deadline, which names it, and a machine too
+ *  loaded to finish in any given time is not a red. */
 function runHeadlessInstall(
   script: string,
   home: string,
   stubBin: string,
   extraEnv: Record<string, string> = {},
-): Promise<{
-  exitCode: number | null; output: string; timedOut: boolean;
-}> {
-  const { promise, resolve } = Promise.withResolvers<{
-    exitCode: number | null; output: string; timedOut: boolean;
-  }>();
+): Promise<{ exitCode: number | null; output: string }> {
+  const { promise, resolve, reject } = Promise.withResolvers<{ exitCode: number | null; output: string }>();
 
   const child = spawn('bash', [], {
     detached: true,
@@ -217,6 +215,8 @@ function runHeadlessInstall(
       KINU_HOME: join(home, '.kinu'),
       PATH: `${stubBin}:/usr/bin:/bin`,
       SHELL: '/bin/bash',
+      // Its own session escapes the deadline's group kill, so the leftover scan finds it by the run's mark instead.
+      [RUN_MARK]: process.env[RUN_MARK],
       ...RELEASE_ENV,
       ...extraEnv,
     },
@@ -225,25 +225,9 @@ function runHeadlessInstall(
   let output = '';
   child.stdout.setEncoding('utf8').on('data', (chunk: string) => { output += chunk; });
   child.stderr.setEncoding('utf8').on('data', (chunk: string) => { output += chunk; });
+  child.on('error', reject);
+  child.on('exit', (code) => { resolve({ exitCode: code, output }); });
   child.stdin.end(script);
-
-  const childPid = child.pid;
-
-  if (childPid === undefined) {
-    resolve({ exitCode: null, output, timedOut: true });
-
-    return promise;
-  }
-
-  const timer = setTimeout(() => {
-    tolerate(() => process.kill(-childPid, 'SIGKILL'), 'esrch');
-    resolve({ exitCode: null, output, timedOut: true });
-  }, 20_000);
-
-  child.on('exit', (code) => {
-    clearTimeout(timer);
-    resolve({ exitCode: code, output, timedOut: false });
-  });
 
   return promise;
 }
@@ -254,7 +238,6 @@ describe('install.sh terminal handling', () => {
     const { home, stubBin } = await makeSandbox();
     const result = await runHeadlessInstall(script, home, stubBin);
 
-    expect(result.timedOut).toBe(false);
     expect(result.output).toContain('Kinu installed.');
     expect(result.output).toContain('Setup was not started because no interactive terminal is attached.');
     expect(result.output).toContain(`setup --origin ${ORIGIN}`);
@@ -485,7 +468,6 @@ describe('the CLI installs as a prebuilt artifact', () => {
     const { home, stubBin } = await makeSandbox({ ambientBun: null, launcher });
     const result = await runHeadlessInstall(script, home, stubBin);
 
-    expect(result.timedOut).toBe(false);
     expect(result.output).toContain('Downloading Kinu CLI...');
     expect(result.output).not.toContain('Preparing Kinu CLI...');
     expect(result.exitCode).toBe(0);
@@ -595,7 +577,6 @@ describe('Bun runtime resolution is one source of truth', () => {
     const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: '1.9.2', launcher });
     const result = await runHeadlessInstall(script, home, stubBin);
 
-    expect(result.timedOut).toBe(false);
     expect(result.output).toContain(`Using Bun 1.9.2 at ${join(stubBin, 'bun')}.`);
     expect(result.output).not.toContain('Installing Bun');
     expect(existsSync(managedBun)).toBe(false);
@@ -608,7 +589,6 @@ describe('Bun runtime resolution is one source of truth', () => {
     const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: '1.1.45', launcher });
     const result = await runHeadlessInstall(script, home, stubBin);
 
-    expect(result.timedOut).toBe(false);
     expect(result.output).toContain(`Installing Bun ${approvedBun()}...`);
     expect(result.output).toContain(`Using Bun ${approvedBun()} at ${managedBun}.`);
     expect(existsSync(managedBun)).toBe(true);
@@ -633,7 +613,6 @@ describe('Bun runtime resolution is one source of truth', () => {
     const { home, stubBin, bunLog, managedBun } = await makeSandbox({ ambientBun: null, launcher });
     const install = await runHeadlessInstall(script, home, stubBin);
 
-    expect(install.timedOut).toBe(false);
     expect(install.output).toContain(`Installing Bun ${approvedBun()}...`);
     expect(install.output).toContain('Kinu CLI is ready.');
     expect(install.exitCode).toBe(0);
@@ -661,7 +640,7 @@ describe('Bun runtime resolution is one source of truth', () => {
 
 /** Runs `bash < install.sh` with a PTY controlling terminal and stdin on a pipe (the `curl | bash` topology), then reports termios. */
 const PTY_HARNESS = `
-import json, os, pty, sys, time, fcntl, termios, signal, select
+import json, os, pty, sys, fcntl, termios, select
 
 script = open(sys.argv[1], "rb").read()
 master, slave = pty.openpty()
@@ -683,8 +662,8 @@ os.close(pipe_w)
 
 output = b""
 exitcode = None
-deadline = time.time() + 30
-while time.time() < deadline:
+# Until the shell exits: a script that froze holds the suite to its row's deadline, never to a clock of its own.
+while exitcode is None:
     ready, _, _ = select.select([master], [], [], 0.2)
     if ready:
         try:
@@ -696,10 +675,6 @@ while time.time() < deadline:
     done, status = os.waitpid(pid, os.WNOHANG)
     if done:
         exitcode = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
-        break
-if exitcode is None:
-    os.kill(pid, signal.SIGKILL)
-    os.waitpid(pid, 0)
 
 flag = termios.tcgetattr(master)[3]
 print(json.dumps({

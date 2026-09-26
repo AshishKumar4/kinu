@@ -108,6 +108,7 @@ import {
   revokeEgressSecret, rewrapEgressSecrets,
   type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
   type PutEgressSecretInput,
+  revocationEndpointFor, revokeOAuthGrant, type UnrevokedGrant,
 } from '@kinu.run/core';
 import { compareCodeUnits, initAccessTokenTable } from '@kinu.run/core';
 import {
@@ -1207,16 +1208,23 @@ export class UserDO extends Agent<Env> {
     return true;
   }
 
-  async touchWorkspace(caller: UserCaller, name: string): Promise<void> {
+  /** Marks `name` visited now, and says whether the roster took the mark: a name it does not hold, or holds only while
+   *  it is created or torn down, takes none, so a caller keeping a workspace alive by its visits learns it is gone. */
+  async touchWorkspace(caller: UserCaller, name: string): Promise<boolean> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
+
     // Rows being torn down or not yet published are not visitable, matching ordinary reads.
-    this.sqlx(
+    const touched = this.sqlx<{ name: string }>(
       `UPDATE user_workspaces SET last_visited = ?
-       WHERE name = ? AND delete_pending = 0 AND create_pending = 0`,
+       WHERE name = ? AND delete_pending = 0 AND create_pending = 0
+       RETURNING name`,
       Date.now(), name,
-    );
-    this.rosterChanged(name);
+    ).length > 0;
+
+    if (touched) this.rosterChanged(name);
+
+    return touched;
   }
 
   /**
@@ -3260,8 +3268,67 @@ export class UserDO extends Agent<Env> {
   async deleteCredential(caller: UserCaller, key: string): Promise<void> {
     await this.requireTier(caller, 'credentials.other');
     validateCredentialKey(key);
-    this.dropCredential(key);
+    await this.disconnectCredential(key);
   }
+
+  /** Disconnected grants the provider refused to revoke, newest first. */
+  async listUnrevokedGrants(caller: UserCaller): Promise<UnrevokedGrant[]> {
+    await this.requireTier(caller, 'credentials.other');
+
+    return this.sqlx<{ key: string; reasons_json: string; recorded_at: number }>(
+      `SELECT key, reasons_json, recorded_at FROM user_unrevoked_grants ORDER BY recorded_at DESC`,
+    ).map((row) => ({ key: row.key, reasons: v.parse(v.array(v.string()), JSON.parse(row.reasons_json)), recordedAt: row.recorded_at }));
+  }
+
+  /** The owner revoked it at the provider by hand, or accepts it. */
+  async dismissUnrevokedGrant(caller: UserCaller, key: string): Promise<void> {
+    await this.requireTier(caller, 'credentials.other');
+    this.sqlx(`DELETE FROM user_unrevoked_grants WHERE key = ?`, key);
+  }
+
+  /**
+   * Removes the credential, then asks its provider to revoke the grant (RFC 7009). Removal comes first so a
+   * slow or failing provider cannot keep it live here; a refused revoke is kept for the owner to see.
+   */
+  private async disconnectCredential(key: string): Promise<void> {
+    const endpoint = revocationEndpointFor(key, this.env);
+
+    if (endpoint === null) {
+      this.dropCredential(key);
+
+      return;
+    }
+
+    let failures: readonly KinuError[];
+
+    try {
+      const credential = await this.readCredential(key);
+
+      this.dropCredential(key);
+
+      if (credential?.kind !== 'oauth') return;
+      failures = await revokeOAuthGrant({ endpoint, credential, fetch: globalThis.fetch });
+    } catch (cause) {
+      // An unopenable row still leaves Kinu; its grant cannot be revoked from here.
+      this.dropCredential(key);
+      failures = [toKinuError({ doing: 'reading the credential to revoke it', cause, otherwise: 'io' })];
+    }
+
+    if (failures.length === 0) {
+      this.sqlx(`DELETE FROM user_unrevoked_grants WHERE key = ?`, key);
+
+      return;
+    }
+
+    for (const failure of failures) diagnostics.failure('credential.revoke_failed', failure, { credentialKey: key });
+
+    this.sqlx(
+      `INSERT INTO user_unrevoked_grants (key, reasons_json, recorded_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET reasons_json = excluded.reasons_json, recorded_at = excluded.recorded_at`,
+      key, JSON.stringify(failures.map((failure) => failure.message)), Date.now(),
+    );
+  }
+
 
   // All reads/writes of `user_credentials.value` go through this pair; the only places plaintext
   // secrets exist in this class (sealed by credential-envelope.ts).
@@ -3915,7 +3982,7 @@ export class UserDO extends Agent<Env> {
 
   async disconnectCodex(caller: UserCaller): Promise<void> {
     await this.requireTier(caller, 'codex_auth');
-    this.dropCredential(CODEX_CRED_KEY);
+    await this.disconnectCredential(CODEX_CRED_KEY);
     // Settled, not deleted: the generation must keep rising, and a poll already waiting on OpenAI
     // must find this attempt closed rather than find no row to fence against.
     this.sqlx(`UPDATE codex_device_flow SET settled_at = ? WHERE id = 1 AND settled_at IS NULL`, Date.now());

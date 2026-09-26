@@ -12,6 +12,7 @@ import type { SqlExecutor } from '../../src/types/primitives';
 import { openWorkspaceMainActor } from '../../src/identity/workspace-actors';
 import type { TestWorkspace } from '../helpers';
 import { SOURCE_ARTIFACTS } from './fork-conversation';
+import { writeWorkspaceSoul } from '../../src/vfs/workspace-planes';
 
 /** The store a fork reads from or lands in. */
 interface ForkStore {
@@ -119,8 +120,9 @@ export function sinkFor(tgt: TestWorkspace): ForkFileSink {
 
       ranges.delete(path);
 
+      // As production publishes it (createWorkspaceForkSink): the owner's protected write.
       if (path === SOUL_PATH) {
-        await tgt.vfs.writeFile(path, bytes);
+        await writeWorkspaceSoul(tgt.bundle, bytes);
 
         return { mission: summarizeSoul(new TextDecoder().decode(bytes)) };
       }

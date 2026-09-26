@@ -751,7 +751,7 @@ export class PlanReviewActions {
     return result;
   }
 
-  /** `driving`: the calling turn's metadata. A harness turn may not make its input an owner decision. */
+  /** `driving`: the calling turn's metadata. */
   submit(edits: readonly PlanEdit[], driving: JsonObject | undefined): PlanReviewResult {
     if (turnAuthor({ metadata: driving }) !== 'operator' && driving?.kinuEvent !== 'plan_feedback') {
       return {

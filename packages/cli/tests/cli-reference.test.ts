@@ -1,29 +1,22 @@
-/** docs/CLI.md is generated from the command registry; the checked-in copy must match it. */
+/** The CLI reference is rendered from the command registry: every command, with its options and one example that
+ *  runs it. Whether docs/CLI.md is that rendering is the commit tier's check, `bun scripts/gen-cli-docs.ts --check`. */
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
 import { buildProgram } from '../src/program';
 import { renderCliReference } from '../src/cli-reference';
 import { commandEntries } from '../src/display';
 
-const docPath = join(resolve(__dirname, '../../..'), 'docs/CLI.md');
-
-describe('docs/CLI.md', () => {
-  test('is current — regenerate with `bun run docs:cli`', () => {
-    expect(readFileSync(docPath, 'utf8')).toBe(renderCliReference(buildProgram()));
-  });
-
+describe('the CLI reference', () => {
   test('documents every registered command, with its options', () => {
-    const doc = readFileSync(docPath, 'utf8');
+    const reference = renderCliReference(buildProgram());
     const entries = commandEntries(buildProgram());
     expect(entries.length).toBeGreaterThan(40);
 
     for (const entry of entries) {
-      expect(doc).toContain(`### kinu ${entry.term}`);
+      expect(reference).toContain(`### kinu ${entry.term}`);
 
       for (const option of entry.command.options.filter((o) => !o.hidden)) {
-        expect(doc).toContain(`\`${option.flags}\``);
+        expect(reference).toContain(`\`${option.flags}\``);
       }
     }
   });

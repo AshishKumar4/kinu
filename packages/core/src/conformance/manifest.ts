@@ -110,6 +110,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
 
   table: {
     workspace_identity: EVERYWHERE,
+    workspace_soul: EVERYWHERE,
     // The workspace's actor directory; subordinates read the root's roster.
     workspace_actors: EVERYWHERE,
     crafted_tools: EVERYWHERE,

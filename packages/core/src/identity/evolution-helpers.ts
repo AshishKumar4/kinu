@@ -63,7 +63,7 @@ export class EvolutionHelperStore {
     ).toArray().length > 0;
   }
 
-  /** First answer wins, so a replay cannot rewrite what the lane read. */
+  /** First answer wins. */
   storeAnswer(name: string, taskEventId: string | null, status: EvolutionAnswerStatus, answer: string): void {
     this.actor.assertCurrent();
     this.sql.exec(

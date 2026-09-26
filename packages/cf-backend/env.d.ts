@@ -64,6 +64,8 @@ declare global {
     /** Analytics SQL API account (var) and token (secret); either absent ⇒ metrics view unconfigured. */
     CLOUDFLARE_ACCOUNT_ID?: string;
     ANALYTICS_SQL_API_TOKEN?: string;
+    /** Workers Observability read token (secret) for the monitor's platform-kill signal. */
+    KINU_OBS_TOKEN?: string;
     AI_GATEWAY_URL: string;
     /** Zone for per-port preview hostnames; empty disables previews. */
     PREVIEW_HOST_SUFFIX: string;

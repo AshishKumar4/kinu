@@ -238,6 +238,7 @@ export function initRunEventTables(execRaw: RawSqlExec): void {
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_run_ts ON run_events(actor_id, run_id, ts)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(actor_id, type, ts DESC)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_actor ON run_events(actor_id)`);
   // One row per actor: a person's newest words stay one read however much automation follows.
   execRaw(`CREATE TABLE IF NOT EXISTS operator_requests (
     actor_id TEXT PRIMARY KEY,
@@ -506,7 +507,7 @@ export class RunEventRecorder {
     this.actor.assertCurrent();
 
     const latest = this.sql<{ run_id: string }>`
-      SELECT run_id FROM run_events
+      SELECT run_id FROM run_events INDEXED BY idx_run_events_actor
       WHERE actor_id = ${this.actorId} AND run_id != ${WORKSPACE_RUN_ID}
       ORDER BY rowid DESC LIMIT 1`;
 

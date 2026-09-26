@@ -362,6 +362,11 @@ function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | unde
   return parsed.success ? parsed.output.profile_tier : undefined;
 }
 
+/** The owner's soul from its row where the runtime holds a workspace, else the actor's own file. */
+async function currentSoul(rt: CLIRuntime): Promise<string | null> {
+  return await (rt.ownerSoul?.() ?? readSoul(rt.agentStateVfs ?? rt.storage.vfs));
+}
+
 export class LocalAgentSession {
   /** The seam core publishes and enqueues through, as cf's actor holds one; outside callers publish here too. */
   readonly host: BackendHost;
@@ -1690,7 +1695,7 @@ export class LocalAgentSession {
     const agentsMd = discoverAgentsMd(this.cwd, this.modelCatalog.window(), this.instructionTrust);
 
     // agentStateVfs is the identity tree when it differs; a missing SOUL.md renders the default.
-    const soul = await readSoul(this.rt.agentStateVfs ?? this.rt.storage.vfs);
+    const soul = await currentSoul(this.rt);
 
     const systemPromptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {
       executors,

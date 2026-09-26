@@ -20,9 +20,13 @@ import {
   type SqlValue,
 } from '../src/index';
 import { createTestActor, createWorkspaceBundle, makeExecRaw, makeSql } from './helpers';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { writeSoul } from '../src/identity/soul';
+import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
-import type { WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import type { WorkspaceBundle, WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import { workspaceArchiveTarget } from '../src/vfs/workspace-planes';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 import { testActorHandle, present } from '@kinu.run/test-utils';
 
@@ -33,16 +37,18 @@ interface Workspace {
   readonly execRaw: RawSqlExec;
   readonly archive: SqlExec;
   readonly vfs: WorkspaceVFS;
+  readonly bundle: WorkspaceBundle;
 }
 
 function fresh(): Workspace {
   const db = new Database(':memory:');
   // Built on demand: a restore-target database must stay empty, and building one creates tables.
-  let vfs: WorkspaceVFS | null = null;
+  let bundle: WorkspaceBundle | null = null;
 
   return {
     db, sql: makeSql(db), execRaw: makeExecRaw(db), archive: archiveSqlFromDatabase(db),
-    get vfs() { return (vfs ??= createWorkspaceBundle(db).vfs); },
+    get bundle() { return (bundle ??= createWorkspaceBundle(db)); },
+    get vfs() { return this.bundle.vfs; },
   };
 }
 
@@ -107,7 +113,7 @@ describe('workspace archive', () => {
     const files = workspaceArchiveFiles(createWorkspaceBundle(source.db));
     const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', files });
     const target = fresh();
-    const restored = await restoreWorkspaceArchive(target.archive, lines, { files: () => target.vfs });
+    const restored = await restoreWorkspaceArchive(target.archive, lines, { files: () => workspaceArchiveTarget(target.bundle) });
 
     expect(restored.files).toBeGreaterThan(0);
     expect(await target.vfs.readFile('artifacts/logo.bin')).toEqual(source.bytes);
@@ -127,7 +133,7 @@ describe('workspace archive', () => {
       ...lines.slice(0, -1),
       JSON.stringify({ t: 'schema', kind: 'table', name: 'late_table', sql: 'CREATE TABLE late_table (id INTEGER)' }),
       end,
-    ], { files: () => target.vfs })).rejects.toThrow('SQL records after its workspace files');
+    ], { files: () => workspaceArchiveTarget(target.bundle) })).rejects.toThrow('SQL records after its workspace files');
   });
 
   test('round-trips a workspace into an empty database, byte-exactly', async () => {
@@ -219,6 +225,25 @@ describe('workspace archive', () => {
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, paged);
     expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM conversation_entries`[0].n).toBe(5);
+  });
+
+const OWNER_TEXT = '# the owner wrote this\n';
+
+  test('an export carries the owner\'s soul, not a file swapped since the seal', async () => {
+    const source = await seeded();
+    const bundle = createWorkspaceBundle(source.db);
+    await writeSoul(source.sql, OWNER_TEXT, (content) => writeWorkspaceSoul(bundle, content));
+    // A mid-turn swap (the file's bytes, not the row): the export must still carry the row.
+    const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
+    kernel.unlink('/home/main/SOUL.md');
+    kernel.writeFile('/home/main/SOUL.md', 'forged');
+    kernel.chown('/home/main/SOUL.md', 1000, 1000);
+    kernel.chmod('/home/main/SOUL.md', 0o644);
+
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', files: workspaceArchiveFiles(bundle) });
+    const soul = lines.find((line) => line.includes('"path":"SOUL.md"'));
+
+    expect(present(soul, 'the exported SOUL.md')).toContain(Buffer.from(OWNER_TEXT).toString('base64'));
   });
 
   test('external workspace files page in the same stream and restore byte-exactly', async () => {

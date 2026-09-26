@@ -63,6 +63,7 @@
     "gate:typecheck-coverage": "bun scripts/typecheck-coverage.ts",
     "gate:python-suites": "bun scripts/python-suites.ts",
     "sweep:mutation": "bun scripts/mutation-sweep.ts",
+    "sweep:flakes": "bun scripts/flake-gate.ts --sweep",
     "census:bloat": "bun scripts/bloat-census.ts",
     "proof:comment-only": "bun scripts/comment-only.ts",
     "gate:hammer": "bun scripts/hammer.ts",

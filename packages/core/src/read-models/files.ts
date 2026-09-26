@@ -16,6 +16,8 @@ import type { VFS, VfsRevision } from '../types/primitives';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
+import { canonicalWorkspacePath, workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { SOUL_PATH } from '../identity/soul';
 
 export interface ExecutorFileLookup {
   getProvider(name: string): { files?: VFS; homeDir(segment?: string): Promise<string> } | undefined;
@@ -103,7 +105,10 @@ export class ExecutorFileUpload {
     private readonly router: ExecutorFileLookup,
     private readonly executorId: string,
     private readonly path: string,
-    private readonly expectedRevision?: VfsRevision,
+    private readonly write: {
+      readonly expectedRevision?: VfsRevision | undefined;
+      readonly writeSoul?: (bytes: Uint8Array) => Promise<void>;
+    } = {},
   ) {}
 
   get done(): boolean {
@@ -115,13 +120,24 @@ export class ExecutorFileUpload {
 
     if (!('assembled' in step)) return step;
 
-    return writeExecutorFileOp(this.router, this.executorId, this.path,
-      { bytes: step.assembled, expectedRevision: this.expectedRevision });
+    const { writeSoul, expectedRevision } = this.write;
+
+    if (writeSoul !== undefined && isWorkspaceSoul(this.executorId, this.path)) {
+      await writeSoul(step.assembled);
+
+      return { ok: true };
+    }
+
+    return writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: step.assembled, expectedRevision });
   }
 
   abort(): void {
     this.chunks.abort();
   }
+}
+
+function isWorkspaceSoul(executorId: string, path: string): boolean {
+  return executorId === 'workspace' && canonicalWorkspacePath(workspacePath(path)) === `${WORKSPACE_ROOT}/${SOUL_PATH}`;
 }
 
 /** In-order chunk assembly; `assembled` is answered exactly once, on the final chunk. */
@@ -554,6 +570,11 @@ export async function renameExecutorPathOp(
   if (!from || !to || to.endsWith('/')) return { error: 'both source and target paths are required' };
 
   if (from === to) return { ok: true };
+
+  if (isWorkspaceSoul(executorId, from) || isWorkspaceSoul(executorId, to)) {
+    return { error: 'SOUL.md is set from Settings, not by moving files' };
+  }
+
   const vfs = executorFiles(router, executorId);
 
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
@@ -589,6 +610,9 @@ export async function deleteExecutorPathOp(
   path: string,
 ): Promise<ExecutorWriteResult> {
   if (!path || normalizeDir(path) === '/') return { error: 'a real path is required' };
+
+  if (isWorkspaceSoul(executorId, path)) return { error: 'SOUL.md is set from Settings, not by deleting it' };
+
   const vfs = executorFiles(router, executorId);
 
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };

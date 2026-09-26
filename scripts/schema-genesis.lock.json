@@ -839,6 +839,11 @@
     "failures INTEGER NOT NULL DEFAULT 1",
     "seen_at INTEGER NOT NULL"
   ],
+  "monitor_signal_streaks@packages/core/src/control-plane/fleet-alerts.ts": [
+    "signal TEXT PRIMARY KEY",
+    "crossed INTEGER NOT NULL",
+    "clean INTEGER NOT NULL"
+  ],
   "operator_requests@packages/core/src/events/recorder.ts": [
     "actor_id TEXT PRIMARY KEY",
     "text TEXT NOT NULL"
@@ -1543,6 +1548,11 @@
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "PRIMARY KEY (owner_user_id, workspace, share_id)"
   ],
+  "user_unrevoked_grants@packages/core/src/state/user-schema.ts": [
+    "key TEXT PRIMARY KEY",
+    "reasons_json TEXT NOT NULL",
+    "recorded_at INTEGER NOT NULL"
+  ],
   "user_workspaces@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
     "display_name TEXT NOT NULL",
@@ -1653,5 +1663,9 @@
     "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
     "decisions INTEGER NOT NULL",
     "changed_at INTEGER NOT NULL"
+  ],
+  "workspace_soul@packages/core/src/identity/schema.ts": [
+    "id INTEGER PRIMARY KEY CHECK (id = 1)",
+    "markdown TEXT NOT NULL"
   ]
 }

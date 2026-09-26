@@ -15,12 +15,12 @@
  * had shipped them.
  */
 import { expect, test } from 'bun:test';
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
-import { MOSSAIC_MANIFEST, MOSSAIC_ROOT } from './sources';
-import { verifyPinnedSource } from './mossaic-sdk';
+import { MOSSAIC_MANIFEST, MOSSAIC_ROOT, MOSSAIC_SDK } from './sources';
+import { bindPinnedCompiler, verifyPinnedSource } from './mossaic-sdk';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -100,4 +100,28 @@ test('a pinned path missing from the tree is drift', () => {
   expect(drift).toEqual([
     { file: dropped, detail: `pinned in ${MOSSAIC_MANIFEST}, absent from the tree` },
   ]);
+});
+
+test('a linked worktree leaves the compiler link of the checkout it links, and refuses one that misses', () => {
+  // `setup-worktree.sh` links a worktree's node_modules entries to the donor checkout's, the plugin's included.
+  const donor = realpathSync(scratchDir('mossaic-donor'));
+  const tree = scratchDir('mossaic-linked');
+  const compiler = join(donor, MOSSAIC_SDK, 'node_modules/typescript');
+  const link = join(donor, 'node_modules/rolldown-plugin-dts/node_modules/typescript');
+
+  mkdirSync(compiler, { recursive: true });
+  mkdirSync(join(donor, 'node_modules/rolldown-plugin-dts'), { recursive: true });
+  bindPinnedCompiler(donor);
+  mkdirSync(join(tree, MOSSAIC_SDK, 'node_modules'), { recursive: true });
+  symlinkSync(compiler, join(tree, MOSSAIC_SDK, 'node_modules/typescript'), 'dir');
+  mkdirSync(join(tree, 'node_modules'), { recursive: true });
+  symlinkSync(join(donor, 'node_modules/rolldown-plugin-dts'), join(tree, 'node_modules/rolldown-plugin-dts'), 'dir');
+
+  bindPinnedCompiler(tree);
+
+  expect(readlinkSync(link)).toBe(compiler);
+
+  rmSync(link);
+
+  expect(() => bindPinnedCompiler(tree)).toThrow(`run \`bun scripts/mossaic-sdk.ts\` in the checkout ${donor}`);
 });

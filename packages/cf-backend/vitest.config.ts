@@ -172,6 +172,15 @@ const addressedNameProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const attributionProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/attribution-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/attribution-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 const slateDurabilityProbe = buildSync({
   entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-durability-probe.ts', import.meta.url))],
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-durability-probe.js', import.meta.url)),
@@ -199,6 +208,84 @@ const deployRunProbe = buildSync({
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
 let forbiddenEgressHits = 0;
+
+/**
+ * `https://hold.test` for the attribution probe: holds one workspace's request until another's
+ * releases it, answers the release only once the held workspace has logged, and keeps the order.
+ */
+interface AttributionHold {
+  readonly released: PromiseWithResolvers<void>;
+  readonly logged: PromiseWithResolvers<void>;
+}
+
+interface AttributionLedger {
+  readonly order: string[];
+  readonly held: Map<string, AttributionHold>;
+  logged: number;
+  readonly waiters: { readonly count: number; readonly arrived: () => void }[];
+}
+
+const attribution: AttributionLedger = { order: [], held: new Map(), logged: 0, waiters: [] };
+
+function attributionHold(name: string): AttributionHold {
+  const hold = attribution.held.get(name) ?? { released: Promise.withResolvers<void>(), logged: Promise.withResolvers<void>() };
+  attribution.held.set(name, hold);
+
+  return hold;
+}
+
+async function attributionOutbound(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const [verb = '', first = '', second = ''] = url.pathname.split('/').slice(1);
+
+  if (url.origin !== 'https://hold.test') throw new Error('Unmatched test egress is disabled: ' + request.url);
+
+  switch (verb) {
+    case 'returned':
+      attribution.order.push(`${first} returned`);
+
+      return new Response('ok');
+    case 'hold':
+      await attributionHold(first).released.promise;
+
+      return new Response('released');
+    case 'release':
+      attribution.order.push(`release ${first}`);
+      attributionHold(first).released.resolve();
+      await attributionHold(first).logged.promise;
+      attribution.order.push(`release ${first} answered`);
+
+      return new Response('logged');
+    case 'logged':
+      attribution.order.push(`${second} logged ${first}`);
+      attribution.logged += 1;
+
+      if (first === 'detached') attributionHold(second).logged.resolve();
+
+      for (const waiter of attribution.waiters.filter((entry) => entry.count <= attribution.logged)) {
+        attribution.waiters.splice(attribution.waiters.indexOf(waiter), 1);
+        waiter.arrived();
+      }
+
+      return new Response('ok');
+    case 'await': {
+      const count = Number(first);
+
+      if (attribution.logged < count) {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        attribution.waiters.push({ count, arrived: resolve });
+        await promise;
+      }
+
+      return new Response('ok');
+    }
+
+    case 'order':
+      return Response.json(attribution.order);
+    default:
+      throw new Error('Unmatched hold.test path: ' + request.url);
+  }
+}
 
 export default defineConfig({
   plugins: [
@@ -364,6 +451,16 @@ export default defineConfig({
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         }, {
+          name: 'attribution-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: probeModules(attributionProbe),
+          bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YXR0cmlidXRpb24tcHJvYmUtY3JlZC1rZXktMzJieXQ=' },
+          outboundService: attributionOutbound,
+          durableObjects: {
+            ATTRIBUTION_PROBE: { className: 'AttributionProbeRoot', useSQLite: true },
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+            UserDO: { className: 'UserDO', useSQLite: true },
+          },
+        }, {
           // The production Worker entry (`route()`), reached over `PUBLIC_SURFACE`; same
           // `enable_abortsignal_rpc` reason as two-turn-probe.
           name: 'public-surface-probe',
@@ -449,6 +546,9 @@ export default defineConfig({
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },
           STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', scriptName: 'store-reset-probe', useSQLite: true },
           ADDRESSED_NAME_PROBE: { className: 'AddressedNameProbeRoot', scriptName: 'addressed-name-probe', useSQLite: true },
+          ATTRIBUTION_PROBE: { className: 'AttributionProbeRoot', scriptName: 'attribution-probe', useSQLite: true },
+          // The shipped root as the product seals it: `public-surface-probe` re-exports `src/server`'s class unchanged.
+          SEALED_ORCHESTRATOR: { className: 'OrchestratorAgent', scriptName: 'public-surface-probe', useSQLite: true },
           DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', scriptName: 'deploy-probe', useSQLite: true },
         },
       },

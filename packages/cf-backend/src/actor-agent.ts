@@ -219,7 +219,7 @@ import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/cor
 import type { WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
 import { sha256Hex } from '@kinu.run/core';
-import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
+import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import { openAnalyticsWindow } from "@kinu.run/core/analytics";
 import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
@@ -1043,13 +1043,21 @@ export abstract class ActorAgent extends Agent<Env> {
     // constructor because that is the one point guaranteed to precede every RPC
     // (`onStart` is not — see `OrchestratorAgent.claimOwner`), and idempotent per
     // isolate, so a re-activation costs nothing.
-    // The workspace is NOT passed. An isolate-level default would be wrong the
-    // moment two actors share an isolate — `setDiagnosticsSink` is module-global
-    // and Cloudflare co-locates Durable Objects, so the first actor to install
-    // would own the attribution of every actor beside it. Each emit that knows
-    // its workspace says so, as a `workspace` field; the rest are honestly
-    // unattributed. See `analytics/install.ts`.
+    // The workspace comes from the invocation, not the isolate: `setDiagnosticsSink` is module-global
+    // and Cloudflare co-locates Durable Objects, so an install-time default would attribute every
+    // co-located actor to the first. The SDK's per-invocation context names the running agent.
     installAnalyticsDiagnostics(this.env);
+    attributeWorkspace(ActorAgent.invocationWorkspace);
+  }
+
+  /**
+   * Total only while every subclass fixes its name at construction or refuses to exist, as
+   * OrchestratorAgent does; one that does not brings PartyServer's throwing `name` into the logger.
+   */
+  private static invocationWorkspace(this: void): string {
+    const { agent } = getCurrentAgent();
+
+    return agent instanceof ActorAgent ? agent.workspaceName() : '';
   }
   protected installClientMessageGate(): void {
     const dispatchMessage = this.onMessage.bind(this);
@@ -2270,7 +2278,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   // Platform fan-out and wake ownership around core's serialized chat loop.
   private _host: BackendHost | null = null;
-  private readonly _drainTimerTasks = new Map<string, AsyncTaskOwner>();
+  protected readonly _drainTimerTasks = new Map<string, AsyncTaskOwner>();
   protected get host(): BackendHost {
     if (!this._host) {
       const armWake = this.durableWakeOwner();
@@ -3624,10 +3632,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.ownedModelServices.resolveModel(spec);
   }
 
-  /**
-   * Cached SOUL.md text, refreshed at turn start and invalidated by setSoul().
-   * Cached because the soul is a workspace file and `beforeTurn` is the one place that can await it.
-   */
+  /** Cached SOUL.md text, refreshed at turn start and invalidated by setSoul(). */
   protected _cachedSoulText: string | null = null;
   protected async loadSoulText(): Promise<string> {
     return (await readSoul(this.rt.storage.vfs)) ?? '';

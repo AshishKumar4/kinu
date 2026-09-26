@@ -6,6 +6,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { EmailOutbox } from '@kinu.run/core';
 import { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorRunResult } from './incidents';
+import { sampleFleet, settleFleet } from '@kinu.run/core/control-plane';
 import { runSyntheticProbes } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
@@ -47,7 +48,10 @@ export class MonitorDO extends DurableObject<Env> {
       throw new KinuError('unavailable', 'CLI_PUBLIC_ORIGIN is not configured; there is no origin to probe.');
     }
 
-    const outcomes = await runSyntheticProbes({ origin, fetch: (input, init) => fetch(input, init) });
+    const probes = await runSyntheticProbes({ origin, fetch: (input, init) => fetch(input, init) });
+    const fleet = await sampleFleet(this.env, now, (input, init) => fetch(input, init));
+    const open = new Map(listIncidents(this.ctx.storage.sql).map((row) => [row.probe, row.detail]));
+    const outcomes = [...probes, ...settleFleet(this.ctx.storage.sql, fleet, open)];
 
     return recordProbeRun({
       sql: this.ctx.storage.sql,
