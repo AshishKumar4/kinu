@@ -444,8 +444,14 @@ async function resizePane(page: Page): Promise<void> {
   await resized.evaluate((box) => box.done);
 }
 
+/** Painted at rest: a fold still animating moves the rows below it, so a click aimed at one could land elsewhere. */
 async function drawn(page: Page): Promise<void> {
-  await page.evaluate(() => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); }));
+  await page.evaluate(async () => {
+    await Promise.allSettled(document.getAnimations()
+      .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
+      .map((animation) => animation.finished));
+    await new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); });
+  });
 }
 
 test('a wide pane shows every file expanded beside the tree, with no expand button; narrowed, it opens one file at a time', async () => {
