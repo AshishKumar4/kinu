@@ -44,7 +44,7 @@ export interface HostedReportLedger {
  * `model`/`profile` resolution (a second lookup can land a different digest than the claim).
  */
 export interface HostedTaskTurn {
-  /** The assignment row's id: the key of this turn's claim and of every effect it claims. */
+  /** The assignment row's id: keys this turn's claim and effects. */
   readonly turnId: string;
   readonly actor: HostedActor;
   readonly runtime: CFRuntime;

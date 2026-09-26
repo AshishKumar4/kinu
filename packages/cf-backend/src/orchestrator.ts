@@ -769,8 +769,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       workMode: turn.input.mode,
       // This actor's own conversation, never the workspace's.
       history: turn.actor.stores.history,
-      // Keyed on the turn id a recovery re-admits: a fresh id would replay the effect, and the actor's name
-      // would make every turn of a durable hire one turn.
+      // Keyed on the turn id a recovery re-admits; a fresh id would replay the effect.
       effectClaims: {
         actor: turn.actor.handle,
         sql: turn.runtime.storage.sql,
