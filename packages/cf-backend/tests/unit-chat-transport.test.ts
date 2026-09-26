@@ -35,12 +35,16 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   let clears = 0;
   const connections = new Map<string, Connection>();
   const frames = new Map<string, string[]>();
+  /** Everything a socket was handed, in order: its own sends and each broadcast that did not exclude it. */
+  const received = new Map<string, string[]>();
 
   /** A socket the SDK's protocol helpers can drive; every other platform-socket member throws, so a reach past them names itself. */
   const connection = (id: string): Connection => {
     const socketFrames: string[] = [];
+    const heard: string[] = [];
     frames.set(id, socketFrames);
-    const socket = socketConnection({ id, send: (frame: string) => { socketFrames.push(frame); } });
+    received.set(id, heard);
+    const socket = socketConnection({ id, send: (frame: string) => { socketFrames.push(frame); heard.push(frame); } });
     connections.set(id, socket);
 
     return socket;
@@ -48,7 +52,11 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
   const wire: ChatWire = {
     sql,
-    broadcast: (message, exclude) => { broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude }); },
+    broadcast: (message, exclude) => {
+      broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude });
+
+      for (const [id, heard] of received) if (!(exclude ?? []).includes(id)) heard.push(message);
+    },
     getConnection: (id) => connections.get(id),
     history: loadHistory ?? (async () => [...history]),
     admitted: (id) => history.some((row) => row.id === id) || reserved.has(id),
@@ -77,6 +85,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
     interrupts: () => interrupts, clears: () => clears,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
     connectionFrames: (id: string): string[] => frames.get(id) ?? [],
+    received: (id: string): string[] => received.get(id) ?? [],
   };
 }
 
@@ -228,13 +237,24 @@ describe('ChatWireTransport', () => {
     expect(h.broadcasts.filter((b) => b.frame.type === 'cf_agent_chat_messages')).toEqual([]);
   });
 
-  test('a send that faults underneath the loop is not a refusal: it propagates, and the request is not closed as one', async () => {
+  test('a send that faults underneath the loop still closes the request, once, as a failure, and propagates', async () => {
     const h = harness({ refuse: 'the send ledger is unreadable', fault: true });
     const conn = h.connection('c1');
 
     await expect(h.transport.onMessage(conn, chatRequest('req-1', 'hello'))).rejects.toThrow('the loop failed to take a client message');
-    // A fault reads as a fault to the socket owner, never as the loop's answer.
-    expect(h.responses()).toEqual([]);
+    // Without the frame the sending tab waits on a turn-end that never comes.
+    expect(h.responses()).toHaveLength(1);
+    expect(h.responses()[0]).toMatchObject({ id: 'req-1', done: true, error: true });
+    expect(h.responses()[0]?.landed).toBeUndefined();
+  });
+
+  test('a history read that fails during admission closes the request too', async () => {
+    const h = harness('turn', () => Promise.reject(new Error('the transcript is unreadable')));
+    const conn = h.connection('c1');
+
+    await expect(h.transport.onMessage(conn, chatRequest('req-1', 'hello'))).rejects.toThrow('the loop failed to take a client message');
+    expect(h.responses()).toHaveLength(1);
+    expect(h.responses()[0]).toMatchObject({ id: 'req-1', done: true, error: true });
   });
 
   test("a client's claim to another request's input is never accepted: the message is admitted under its own id", async () => {
@@ -465,6 +485,42 @@ describe('ChatWireTransport', () => {
     expect(replayed.slice(0, 3).map((f) => [JSON.parse(f.body ?? '{}').type, f.replay])).toEqual([['start', true], ['text-start', true], ['text-delta', true]]);
     expect(replayed.at(-1)).toMatchObject({ done: false, replay: true });
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hel', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.land(answered);
+  });
+
+  /** Owner report 2026-09-26, "reasoning-delta for missing reasoning part": the tab's reader throws on a delta whose
+   *  part it never saw open, so every part a joining tab continues must open in what it reads, before its deltas. */
+  test('a tab joining mid-reasoning reads each part opened before its deltas, live chunks included', async () => {
+    const h = openRequest();
+    const first = h.connection('c1');
+    const { answered } = await h.open(first, 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'reasoning-start', id: 'reasoning-0' }, { type: 'reasoning-delta', id: 'reasoning-0', delta: 'weigh' }]), { index: 0 });
+
+    const second = h.connection('c2');
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
+    await h.transport.onConnect(second);
+    // The reasoning goes on before the joining tab's acknowledgement lands.
+    await h.transport.observe(chunks([{ type: 'reasoning-delta', id: 'reasoning-0', delta: 'ing it' }]), { index: 1 });
+    await h.transport.onMessage(second, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+    await h.transport.observe(chunks([{ type: 'reasoning-end', id: 'reasoning-0' }]), { index: 2 });
+
+    const opened = new Set<string>();
+    const orphans: string[] = [];
+
+    for (const text of h.received('c2')) {
+      const frame = v.parse(FrameSchema, JSON.parse(text));
+
+      if (frame.type !== 'cf_agent_use_chat_response' || frame.id !== 'req-1' || !frame.body) continue;
+      const chunk = v.parse(v.looseObject({ type: v.string(), id: v.optional(v.string()) }), JSON.parse(frame.body));
+
+      if (chunk.type.endsWith('-start') && chunk.id !== undefined) opened.add(chunk.id);
+      else if ((chunk.type.endsWith('-delta') || chunk.type.endsWith('-end')) && chunk.id !== undefined && !opened.has(chunk.id)) orphans.push(chunk.type);
+    }
+
+    expect(orphans).toEqual([]);
+    expect(opened.has('reasoning-0')).toBe(true);
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
   });
 
