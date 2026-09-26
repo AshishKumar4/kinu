@@ -6,9 +6,10 @@
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { isolatedBunArgs } from './self-spawn';
 import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix } from '@kinu.run/core';
 import { enforceOwnerOnly, ensureSecretDir } from '@kinu.run/cli-backend';
@@ -647,9 +648,9 @@ function spawnDaemonChild(runtime: string, session: boolean): DaemonLaunch {
   }
 
   try {
-    const child = spawn(runtime, [SCRIPT_PATH], session
-      ? { stdio: ['ignore', logDescriptor, logDescriptor] }
-      : { detached: true, stdio: ['ignore', logDescriptor, logDescriptor] });
+    const child = spawn(runtime, isolatedBunArgs(SCRIPT_PATH, []), session
+      ? { cwd: dirname(SCRIPT_PATH), stdio: ['ignore', logDescriptor, logDescriptor] }
+      : { cwd: dirname(SCRIPT_PATH), detached: true, stdio: ['ignore', logDescriptor, logDescriptor] });
 
     const launch: DaemonLaunch = { child, failure: null };
     child.once('error', (cause) => {

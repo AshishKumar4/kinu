@@ -5,7 +5,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { isolatedBunArgs, spawnKinuScript } from './self-spawn';
 import {
   CLI_RUNTIME_PATH, CLI_VERSION_PATH, cliArtifactPath, isSameBuild,
   RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema, verifyRelease, type SignedRelease,
@@ -101,7 +102,7 @@ function extractTarball(archive: string, into: string): Promise<string> {
 }
 
 function stagedVersion(tree: string): Promise<string> {
-  return runToCompletion('launching the staged Kinu build', process.execPath, [join(tree, 'cli.js'), '--version'], tree);
+  return runToCompletion('launching the staged Kinu build', process.execPath, isolatedBunArgs(join(tree, 'cli.js'), ['--version']), tree);
 }
 
 /** Failure leaves `current` untouched. */
@@ -262,7 +263,7 @@ export function spawnBackgroundRefresh(): void {
 
   if (entry === undefined) throw new KinuError('unsupported', 'the CLI entry file is unknown, so no background refresh can start');
 
-  const child = spawn(process.execPath, [entry, 'update', '--background'], {
+  const child = spawnKinuScript(entry, ['update', '--background'], {
     detached: true,
     stdio: 'ignore',
     env: { ...process.env, KINU_HOME: AGENT_HOME },
