@@ -67,6 +67,8 @@ export function usePagedScroll<Item>({
     inFlight.current = false;
   }, []);
 
+  const ready = cursor.current !== null || startFrom() !== null;
+
   const loadMore = useCallback(() => {
     if (inFlight.current || exhausted) return;
     const from = cursor.current ?? latest.current.startFrom();
@@ -104,12 +106,8 @@ export function usePagedScroll<Item>({
 
       if (thrown !== null && generation === walk.current) setError(describeError(thrown));
     })();
-  }, [grows, exhausted]);
-
-  // Start as soon as the start point is known; a scroller only re-asks on content change.
-  useEffect(() => {
-    if (cursor.current === null && startFrom() !== null) loadMore();
-  }, [startFrom, loadMore]);
+    // A new identity once startable, so the scroller re-asks.
+  }, [grows, exhausted, ready]);
 
   const reset = useCallback(() => {
     walk.current += 1;

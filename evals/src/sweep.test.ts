@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { sweepEvalWorkspaces, WORKSPACE_LEASE_MS } from './sweep';
+import { WORKSPACE_LEASE_MS } from './session';
+import { sweepEvalWorkspaces } from './sweep';
 
 const NOW = Date.parse('2026-09-26T06:00:00.000Z');
 

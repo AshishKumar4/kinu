@@ -34,7 +34,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
@@ -45,12 +45,14 @@ import {
 } from './ladder-cache';
 import type { GateCacheRequest, Plan } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
+import { driftFinding, installDrift } from './install-parity';
 import { deriveClosure, repoAt } from './ladder-closure';
 import type { Inputs, Repo } from './ladder-closure';
 import {
   isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching,
   trackedFiles,
 } from './sources';
+import { discoverArgv } from './python-suites';
 import { CLI_TEST_ROOT } from './test-cli';
 import { modulesReaching } from './import-closure';
 import type { ModuleEdges } from './import-graph';
@@ -973,6 +975,23 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
+    run: 'bun scripts/gen-cli-docs.ts --check',
+    label: 'CLI reference is current',
+    tier: 'commit',
+    // Measured 2026-09-26 on the 24-thread box, three runs: 0.30/0.30/0.30 s, 134 MB.
+    // The commit tier is where this belongs: the reference is rendered from the command
+    // registry, and the drift is written in the same hunk as the option. Checked only in
+    // the CLI suite, at ci, a commit adding `bundle --turn/--actor` (6c5aa9dd76) reached
+    // a staging deploy with the reference still missing them.
+    seconds: 0.3,
+    catches: 'a command or option added, renamed or removed in the CLI\'s command registry '
+      + 'while docs/CLI.md, the reference rendered from it, still says the old thing: '
+      + 'the checked-in file must equal what `bun run docs:cli` would write.',
+    blind: 'whether what the registry says is true of the command; a hidden option, which '
+      + 'the reference leaves out on purpose.',
+    inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
+  },
+  {
     run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
@@ -1077,7 +1096,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts',
+    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts',
     label: 'Gate ladder wiring and cache soundness',
     tier: 'push',
     // Measured 2026-09-16 on the 24-thread workstation (load 8.1): 1.25/1.20 s
@@ -1090,7 +1109,9 @@ export const LADDER: readonly Gate[] = [
       + 'rather than shrink), and a store that never hits across a touched closure file, a red '
       + 'result, a tool version change, a live row or a closure that moved mid-run. And the '
       + 'cost table\'s one wait: a row is measured beside this checkout\'s own suites never, '
-      + 'beside another checkout\'s always, as load.',
+      + 'beside another checkout\'s always, as load. And the tree the cache stands `bun.lock` in for: an installed '
+      + 'package the lock does not place, at a version it does not name, or missing under its parent, refuses the '
+      + 'whole run.',
     blind: 'whether any individual gate can actually fail. That is each gate\'s own '
       + 'self-test, and the seeded tier nobody has paid for yet. For the cache: a `reads` or '
       + '`env` declaration is a claim these suites cannot check against a live gate; '
@@ -1098,16 +1119,34 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/deploy.test.ts',
+    run: 'bun test --timeout=0 scripts/flake-gate.test.ts',
+    label: 'Flake gate self-tests',
+    tier: 'push',
+    // Measured 2026-09-26 on the 24-thread box (load 16): 4.1 s, most of it planning every tracked test file.
+    seconds: 4.1,
+    catches: 'a flake gate that cannot see a flake: a planted suite red on alternate runs must come out a flake '
+      + 'naming its red runs, apart from a steady red and a steady green, and a run reporting no test is red. And '
+      + 'a test file a commit could change that the gate could not repeat: every tracked suite is repeated through '
+      + 'the row that runs it or named as measured elsewhere.',
+    blind: 'flakes rarer than one run in REPEATS, which the sweep is for (`bun run sweep:flakes`, on demand); '
+      + 'whether a row\'s narrowed argv still means what the row means beyond `claims()` crediting it with exactly '
+      + 'the file.',
+    inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
     // predates the archive unpack-and-install tests; the suite really installs.
-    // Replaces 1s.
+    // Replaces 1s. promote.test.ts joined 2026-09-26 at 0.4 s (13 tests).
     seconds: 87,
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
-      + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails.',
-    blind: 'whether the gates it enumerates pass.',
+      + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails. And a promotion '
+      + 'that ships bytes staging never verified or that production cannot return from: each '
+      + 'promote guard removed in turn fails its own test.',
+    blind: 'whether the gates it enumerates pass, and whether Cloudflare serves what a '
+      + 'promotion uploaded: that is its smoke test\'s, against the deployment.',
     inputs: AMBIENT_BY_NAME,
   },
   {
@@ -1276,7 +1315,9 @@ export const LADDER: readonly Gate[] = [
       + 'and an ephemeral deployed Worker, not this gate.',
     // Measured by `--audit-closure` 2026-09-15: the suite opens manifests, the
     // worker source and its bench sources by path, so its closure is the corpus.
-    inputs: { ...AMBIENT_BY_NAME, corpus: true },
+    // The harness and its isolation suite load instances of their own of the class
+    // module through a query-suffixed specifier, which the walker cannot follow.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/devbox/src/devbox.ts'] },
   },
   {
     run: 'bun test --timeout=0 packages/test-utils/',
@@ -2061,6 +2102,31 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
+    run: 'bun scripts/flake-gate.ts',
+    label: 'Changed test files, repeated',
+    tier: 'commit',
+    // 0.3 s when the commit changes no test file, as at push, in CI and at a deploy. A commit that changes one pays
+    // for REPEATS runs of it (BROWSER_REPEATS for a browser suite), which is the gate's whole point.
+    seconds: 0.3,
+    deadline: {
+      seconds: 3600,
+      why: 'six runs of a changed suite at its own row\'s 480 s deadline, 2,880 s, is the longest a commit that changes '
+        + 'one suite can legitimately take. Each run keeps its row\'s deadline, so this bounds the gate, not a test.',
+    },
+    catches: 'a test that passes and fails on one tree, landing. Every test file the commit adds or changes runs '
+      + 'REPEATS times as the row that claims it runs it, the file alone: red in every run is a failing test, red in '
+      + 'some is a flake, named with the tests and runs that failed, and each red run\'s output is kept. No retry and '
+      + 'no quarantine: a flake is fixed where it lives.',
+    blind: 'a flake that a changed helper or product file puts into a suite the commit does not change, which the '
+      + 'sweep repeats on demand (`bun run sweep:flakes`); interleavings the runs never sampled; two copies of one '
+      + 'suite side by side; a suite whose runner needs a deployment or a model, which is named and left to its tier.',
+    inputs: {
+      kind: 'live',
+      why: 'its subject is the index, the test files the commit being made changes, which no hash over the tree '
+        + 'stands for.',
+    },
+  },
+  {
     run: 'bun test --timeout=0 scripts/hammer.test.ts scripts/mutation-fences.test.ts',
     label: 'Hammer and fence gate self-tests',
     tier: 'push',
@@ -2300,7 +2366,9 @@ export const LADDER: readonly Gate[] = [
       + 'application 404s its own operators and looks like an allowlist typo, while an '
       + 'over-broad one leaves the admin plane working perfectly and puts an interactive '
       + 'corporate login in front of every preview URL an agent hands out, the landing page and '
-      + '/api/feedback.',
+      + '/api/feedback. And a container class\'s namespace held by an application other than the one the deploy '
+      + 'names, in every phase: the deploy uploads the Worker and is then refused with '
+      + 'DURABLE_OBJECT_ALREADY_HAS_APPLICATION, which is how staging\'s bring-up of 2026-09-26 stopped.',
     blind: 'anything no CLI can observe, which it refuses to hide: the AI Gateway (wrangler 4.97 '
       + 'has no `ai-gateway` command and the OAuth session has no `aig` scope) and the cron '
       + 'trigger (writable, never readable) are DECLARED blind spots pinned by equality, so the '
@@ -2944,6 +3012,68 @@ export function claims(command: string, tracked: readonly string[]): string[] {
       && !ignored.some((glob) => glob.match(path)));
 }
 
+/**
+ * The argv that runs `file` ALONE the way `command` runs it: the same runner and flags, the file its only target.
+ * It reads the grammar `claims()` reads and is held to it: an argv `claims()` does not credit with exactly `file`
+ * is refused, `undefined`, never run as a guess. A runner that needs a deployment or a model (the eval suite, the
+ * live tier) narrows to nothing, and so does a form this does not know.
+ *
+ * A Python suite runs as its runner runs a root, `unittest discover` over the file's directory with the pattern
+ * narrowed to its name. `claims()` credits that runner with every Python suite, so that form is exact by
+ * construction rather than by the check.
+ */
+export function narrowedTo(command: string, file: string, tracked: readonly string[]): string[] | undefined {
+  const words = command.split(/\s+/).filter((word) => word.length > 0);
+  const script = words[0] === 'bun' && words[1] === 'run' && words.length === 3 ? packageScripts()[words[2] ?? ''] : undefined;
+  const runner = script === undefined ? words : script.split(/\s+/);
+
+  if (runner[0] === 'bun' && runner[1] === PYTHON_SUITES_SCRIPT) {
+    return isPythonSuite(file) && tracked.includes(file) ? discoverArgv(dirname(file), basename(file)) : undefined;
+  }
+
+  const narrowed = narrowWords(words, file, tracked);
+  const credited = narrowed === undefined ? [] : claims(narrowed.join(' '), tracked);
+
+  return credited.length === 1 && credited[0] === file ? narrowed : undefined;
+}
+
+/** `narrowedTo`'s walk through the forms, one per form `claims()` reads. */
+function narrowWords(words: readonly string[], file: string, tracked: readonly string[]): string[] | undefined {
+  const [first, second] = words;
+
+  if (first === 'bun' && second === 'scripts/ladder.ts' && words[2] === '--run') return narrowWords(words.slice(3), file, tracked);
+
+  if (first === 'bun' && second === DEV_SERVER_WRAPPER) {
+    const inner = narrowWords(words.slice(2), file, tracked);
+
+    return inner === undefined ? undefined : ['bun', DEV_SERVER_WRAPPER, ...inner];
+  }
+
+  if (first === 'bun' && second === 'run') {
+    const part = (packageScripts()[words[2] ?? ''] ?? '').split('&&').map((text) => text.trim())
+      .find((text) => claims(text, tracked).includes(file));
+
+    return part === undefined ? undefined : narrowWords(part.split(/\s+/), file, tracked);
+  }
+
+  // `test-cli.ts` runs its files as `bun test --timeout=0 --parallel=<n> <files>`.
+  if (first === 'bun' && second === 'scripts/test-cli.ts') return ['bun', 'test', '--timeout=0', file];
+
+  const flags = words.filter((word) => word.startsWith('-') && !word.startsWith(`${PATH_IGNORE_FLAG}=`));
+
+  if (first === 'node') return ['node', ...flags, file];
+
+  if (first === 'vitest' && second === 'run') {
+    const base = words[words.indexOf('--root') + 1] ?? '';
+
+    return file.startsWith(`${base}/`) ? ['vitest', 'run', '--root', base, file.slice(base.length + 1)] : undefined;
+  }
+
+  if (first === 'bun' && second === 'test') return ['bun', 'test', ...flags, file];
+
+  return undefined;
+}
+
 /** What a red row that ran to its end found: its exit code, or the processes it left (named above). */
 function ranRed(leftovers: readonly string[]): string {
   return leftovers.length === 0
@@ -3499,6 +3629,16 @@ if (import.meta.main) {
     ['gates in this tier', gates.length],
     ['gates in the deploy plan', deployOrder().length],
   ]);
+
+  // THE INSTALLED TREE. Every row runs on `node_modules` and the cache below stands `bun.lock` in for it, so a tree
+  // that drifted from the lock makes every verdict here, fresh or recorded, one about packages the lock does not
+  // name. The deploy runs each gate through this path, its preflight first, so it stops there.
+  const drifted = installDrift(root);
+
+  if (drifted.length > 0) {
+    console.error(driftFinding(drifted));
+    process.exit(1);
+  }
 
   // A ladder is a description; something has to make it true. This repo has
   // shipped seven gates that existed and were not wired, so the ladder states

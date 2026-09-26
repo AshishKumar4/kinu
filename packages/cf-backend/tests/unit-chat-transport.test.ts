@@ -22,7 +22,8 @@ function isRefusal(landing: HarnessLanding): landing is HarnessRefusal {
   return v.is(v.object({ refuse: v.string() }), landing);
 }
 
-type HarnessLanding = SendLanding | HarnessRefusal | Promise<SendLanding>;
+/** One landing for every send, or one per send in order. */
+type HarnessLanding = SendLanding | HarnessRefusal | Promise<SendLanding> | readonly SendLanding[];
 
 function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<UIMessage[]>) {
   const { sql, db } = createTestSql();
@@ -35,12 +36,16 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   let clears = 0;
   const connections = new Map<string, Connection>();
   const frames = new Map<string, string[]>();
+  /** Everything a socket was handed, in order: its own sends and each broadcast that did not exclude it. */
+  const received = new Map<string, string[]>();
 
   /** A socket the SDK's protocol helpers can drive; every other platform-socket member throws, so a reach past them names itself. */
   const connection = (id: string): Connection => {
     const socketFrames: string[] = [];
+    const heard: string[] = [];
     frames.set(id, socketFrames);
-    const socket = socketConnection({ id, send: (frame: string) => { socketFrames.push(frame); } });
+    received.set(id, heard);
+    const socket = socketConnection({ id, send: (frame: string) => { socketFrames.push(frame); heard.push(frame); } });
     connections.set(id, socket);
 
     return socket;
@@ -48,7 +53,11 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
   const wire: ChatWire = {
     sql,
-    broadcast: (message, exclude) => { broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude }); },
+    broadcast: (message, exclude) => {
+      broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude });
+
+      for (const [id, heard] of received) if (!(exclude ?? []).includes(id)) heard.push(message);
+    },
     getConnection: (id) => connections.get(id),
     history: loadHistory ?? (async () => [...history]),
     admitted: (id) => history.some((row) => row.id === id) || reserved.has(id),
@@ -56,6 +65,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
       if (isRefusal(landing)) return Promise.reject(landing.fault === true ? new Error(landing.refuse) : new KinuError('bad_input', landing.refuse));
       sent.push(input);
       reserved.add(input.id);
+
+      if (Array.isArray(landing)) return Promise.resolve(landing[sent.items.length - 1] ?? 'mid-turn');
 
       return landing instanceof Promise ? landing : Promise.resolve(landing);
     },
@@ -73,10 +84,13 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   const chunkRows = () => db.query<{ body: string }, []>('SELECT body FROM cf_ai_chat_stream_chunks ORDER BY chunk_index').all().map((row) => row.body);
 
   return {
+    /** The object after an eviction: a fresh transport over the same database and sockets. */
+    afterEviction: () => new ChatWireTransport(wire),
     transport, broadcasts, history, reserved, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, chunkRows, db,
     interrupts: () => interrupts, clears: () => clears,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
     connectionFrames: (id: string): string[] => frames.get(id) ?? [],
+    received: (id: string): string[] => received.get(id) ?? [],
   };
 }
 
@@ -228,13 +242,48 @@ describe('ChatWireTransport', () => {
     expect(h.broadcasts.filter((b) => b.frame.type === 'cf_agent_chat_messages')).toEqual([]);
   });
 
-  test('a send that faults underneath the loop is not a refusal: it propagates, and the request is not closed as one', async () => {
+  // Review job 163: a splice ahead of the message that opened the turn kept its mapping, so when that splice was
+  // later handed back as its own turn, the turn streamed under the closed request and its tab heard nothing.
+  test('a message spliced ahead of the one that opened the turn answers under its own id if it later runs alone', async () => {
+    const h = harness(['mid-turn', 'turn']);
+    const conn = h.connection('c1');
+
+    const request = JSON.stringify({
+      type: 'cf_agent_use_chat_request', id: 'req-1',
+      init: { method: 'POST', body: JSON.stringify({ trigger: 'submit-message', messages: [
+        { id: 'input-a', role: 'user', parts: [{ type: 'text', text: 'first' }] },
+        { id: 'input-b', role: 'user', parts: [{ type: 'text', text: 'second' }] },
+      ] }) },
+    });
+
+    await h.transport.onMessage(conn, request);
+    await h.transport.deliver(turnStart('input-b', 'msg-b'));
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'second', assistantResponse: '', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.transport.deliver(turnStart('input-a', 'msg-a'));
+    await h.transport.observe(chunks([{ type: 'start' }]), { index: 0 });
+
+    const streamed = h.broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response' && b.frame.done === false).map((b) => b.frame.id);
+    expect(streamed).not.toContain('req-1');
+  });
+
+  test('a send that faults underneath the loop still closes the request, once, as a failure, and propagates', async () => {
     const h = harness({ refuse: 'the send ledger is unreadable', fault: true });
     const conn = h.connection('c1');
 
     await expect(h.transport.onMessage(conn, chatRequest('req-1', 'hello'))).rejects.toThrow('the loop failed to take a client message');
-    // A fault reads as a fault to the socket owner, never as the loop's answer.
-    expect(h.responses()).toEqual([]);
+    // Without the frame the sending tab waits on a turn-end that never comes.
+    expect(h.responses()).toHaveLength(1);
+    expect(h.responses()[0]).toMatchObject({ id: 'req-1', done: true, error: true });
+    expect(h.responses()[0]?.landed).toBeUndefined();
+  });
+
+  test('a history read that fails during admission closes the request too', async () => {
+    const h = harness('turn', () => Promise.reject(new Error('the transcript is unreadable')));
+    const conn = h.connection('c1');
+
+    await expect(h.transport.onMessage(conn, chatRequest('req-1', 'hello'))).rejects.toThrow('the loop failed to take a client message');
+    expect(h.responses()).toHaveLength(1);
+    expect(h.responses()[0]).toMatchObject({ id: 'req-1', done: true, error: true });
   });
 
   test("a client's claim to another request's input is never accepted: the message is admitted under its own id", async () => {
@@ -466,6 +515,121 @@ describe('ChatWireTransport', () => {
     expect(replayed.at(-1)).toMatchObject({ done: false, replay: true });
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hel', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
+  });
+
+  /** Owner report 2026-09-26, "reasoning-delta for missing reasoning part": the tab's reader throws on a delta whose
+   *  part it never saw open, so every part a joining tab continues must open in what it reads, before its deltas. */
+  // 2026-09-26 (two-turn.test.ts red): a done frame for another request is never stored, so the replay on ack
+  // cannot carry it; skipped for a joining tab, it was lost, and that tab's send waited on it for good.
+  // 2026-09-26 (chat-session-parity red): a tab that connects after an eviction is told to resume the stream the
+  // evicted turn left active. The resumed turn opens a new stream; the tab, still pending for the old one, missed all of it.
+  test('a tab told to resume a stream an eviction left behind hears the next stream whole', async () => {
+    const h = harness();
+    const first = h.connection('c1');
+    await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }]), { index: 0 });
+
+    const revived = h.afterEviction();
+    const second = h.connection('c2');
+    await revived.onConnect(second);
+
+    // The client this pins never acknowledges the old stream: its request is gone with the evicted object.
+    await revived.deliver(turnStart('input-req-1', 'msg-2'));
+    await revived.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }, { type: 'text-delta', id: 'text-0', delta: 'resumed' }]), { index: 0 });
+
+    const bodies = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
+      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.done === false && frame.body !== undefined)
+      .map((frame) => v.parse(v.looseObject({ type: v.string() }), JSON.parse(frame.body ?? '')).type);
+
+    expect(bodies).toEqual(['start', 'text-start', 'text-delta']);
+
+    // The resume it was told of settles: the old request ends for it before the new stream begins.
+    const oldEnds = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
+      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === 'req-1' && frame.done === true);
+
+    expect(oldEnds).toHaveLength(1);
+  });
+
+  test('a tab still in its handshake that sends a message spliced into the live turn hears its landing', async () => {
+    const h = harness(['turn', 'mid-turn']);
+    const first = h.connection('c1');
+    await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }]), { index: 0 });
+
+    const second = h.connection('c2');
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
+    await h.transport.onConnect(second);
+    await h.transport.onMessage(second, chatRequest('req-2', 'and also this'));
+
+    const landings = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
+      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === 'req-2' && frame.done === true);
+
+    expect(landings).toHaveLength(1);
+    expect(landings[0]?.landed).toBe('mid-turn');
+  });
+
+  test('a tab joining mid-reasoning reads each part opened before its deltas, live chunks included', async () => {
+    const h = openRequest();
+    const first = h.connection('c1');
+    const { answered } = await h.open(first, 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'reasoning-start', id: 'reasoning-0' }, { type: 'reasoning-delta', id: 'reasoning-0', delta: 'weigh' }]), { index: 0 });
+
+    const second = h.connection('c2');
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
+    await h.transport.onConnect(second);
+    // The reasoning goes on before the joining tab's acknowledgement lands.
+    await h.transport.observe(chunks([{ type: 'reasoning-delta', id: 'reasoning-0', delta: 'ing it' }]), { index: 1 });
+    await h.transport.onMessage(second, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+    await h.transport.observe(chunks([{ type: 'reasoning-end', id: 'reasoning-0' }]), { index: 2 });
+
+    const opened = new Set<string>();
+    const orphans: string[] = [];
+    let thought = '';
+
+    for (const text of h.received('c2')) {
+      const frame = v.parse(FrameSchema, JSON.parse(text));
+
+      if (frame.type !== 'cf_agent_use_chat_response' || frame.id !== 'req-1' || !frame.body) continue;
+      const chunk = v.parse(v.looseObject({ type: v.string(), id: v.optional(v.string()), delta: v.optional(v.string()) }), JSON.parse(frame.body));
+
+      if (chunk.type === 'reasoning-delta' && chunk.id === 'reasoning-0') thought += chunk.delta ?? '';
+
+      if (chunk.type.endsWith('-start') && chunk.id !== undefined) opened.add(chunk.id);
+      else if ((chunk.type.endsWith('-delta') || chunk.type.endsWith('-end')) && chunk.id !== undefined && !opened.has(chunk.id)) orphans.push(chunk.type);
+    }
+
+    expect(orphans).toEqual([]);
+    expect(opened.has('reasoning-0')).toBe(true);
+    // Every frame of the thought, once: a replay that dropped or repeated one reads wrong.
+    expect(thought).toBe('weighing it');
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.land(answered);
+  });
+
+  // Review job 169: on a failure the joining tab's resume names the failing stream itself, so a synthetic done
+  // there settled it before the turn's own terminal frame, without the error.
+  test('a tab joining a turn that then fails hears one terminal frame, the one carrying the error', async () => {
+    const h = openRequest();
+    const first = h.connection('c1');
+    const { answered } = await h.open(first, 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }]), { index: 0 });
+
+    const second = h.connection('c2');
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
+    await h.transport.onConnect(second);
+    await h.transport.deliver({ type: 'error', message: 'the provider refused the request' });
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 0, durationMs: 0, feedback: null, hadError: true, origin: 'user' } });
+    await h.land(answered);
+
+    const terminal = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
+      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === 'req-1' && frame.done === true);
+
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]?.error).toBe(true);
   });
 
   test('an interrupted turn closes with the abort chunk and no error frame; a failure still carries one', async () => {

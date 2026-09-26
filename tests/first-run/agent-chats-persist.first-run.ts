@@ -134,7 +134,10 @@ interface DrawnRoster { readonly tabs: string[]; readonly links: string[] }
  * settled: its workspace snapshot has answered and every rpc it sent has
  * answered, and still none is outstanding after two frames. Read off the page's
  * own socket through CDP, so it holds whichever reads the page makes, and a
- * page that never settles is bounded by the case budget.
+ * page that never settles is bounded by the case budget. The sidebar's roster
+ * is read apart from those sockets (its first page over HTTP, once the roster
+ * socket opens), so the read also waits for the sidebar's list to stop being
+ * busy: before that the sidebar has drawn no workspace to hang an agent under.
  */
 async function drawnRoster(page: Page, plan: PublicSessionPlan, workspace: string, budget: AbortSignal): Promise<DrawnRoster> {
   const cdp = await page.createCDPSession();
@@ -168,6 +171,11 @@ async function drawnRoster(page: Page, plan: PublicSessionPlan, workspace: strin
   });
 
   await page.goto(`${plan.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'domcontentloaded' });
+
+  await Promise.race([
+    page.waitForFunction(() => document.querySelector('aside ul[aria-busy]')?.getAttribute('aria-busy') === 'false', { timeout: 0 }),
+    aborted,
+  ]);
 
   for (;;) {
     await Promise.race([quiet.promise, aborted]);

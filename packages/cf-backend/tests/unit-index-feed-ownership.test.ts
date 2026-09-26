@@ -17,9 +17,6 @@ const { default: worker } = await import('../src/server');
 
 const APP_HOST = 'app.example.com';
 
-// Not `owner@example.com`: the observe feed memoizes on the derived userId, and other suites prime that memo.
-const OWNER_EMAIL = 'index-feed-owner@example.com';
-
 const SECRET = 'index-feed-test-secret-0123456789';
 
 /** Held the way the eval harness does, since the fixture drives a published (non-localhost) host. */
@@ -36,8 +33,13 @@ interface IndexWrites {
   workspaces: { userId: string; name: string }[];
 }
 
-/** The Worker with a recording control plane; CSRF, the index feed and the ownership check run as in production. */
-function harness(owned: readonly string[]) {
+/**
+ * The Worker with a recording control plane; CSRF, the index feed and the ownership check run as in production.
+ * `email` is the signed-in caller, one no other test in the process signs in as: the observe feed remembers each
+ * account and each of its workspaces for the life of the isolate, so a caller another test here or another suite
+ * already used writes no row, whichever order the tests run in.
+ */
+function harness(email: string, owned: readonly string[]) {
   const index: IndexWrites = { users: [], workspaces: [] };
 
   const controlPlane = {
@@ -78,7 +80,7 @@ function harness(owned: readonly string[]) {
   Object.assign(partialEnv, {
     CLI_PUBLIC_ORIGIN: `https://${APP_HOST}`,
     PREVIEW_HOST_SUFFIX: APP_HOST,
-    DEV_USER_EMAIL: OWNER_EMAIL,
+    DEV_USER_EMAIL: email,
     DEV_IDENTITY_SECRET,
     CREDENTIAL_ENCRYPTION_KEY: SECRET,
     ControlPlaneDO: controlPlane,
@@ -105,7 +107,7 @@ function harness(owned: readonly string[]) {
 
 describe('the workspace index feed sits behind the ownership gate', () => {
   test('a request for a workspace the caller does not own writes no workspace row', async () => {
-    const h = harness([]);
+    const h = harness('index-feed-refused@example.com', []);
     const response = await worker.fetch(appRequest('/api/workspaces/not-mine/state'), h.env, h.ctx);
     await h.settle();
 
@@ -116,7 +118,7 @@ describe('the workspace index feed sits behind the ownership gate', () => {
   });
 
   test('a request for a workspace the caller owns writes it', async () => {
-    const h = harness(['mine']);
+    const h = harness('index-feed-owner@example.com', ['mine']);
     await worker.fetch(appRequest('/api/workspaces/mine/state'), h.env, h.ctx);
     await h.settle();
 
@@ -127,7 +129,7 @@ describe('the workspace index feed sits behind the ownership gate', () => {
 
   test('an invented name in the same session never reaches the index', async () => {
     // One session, many names: each is a distinct memo key, so each would be a separate row.
-    const h = harness(['mine']);
+    const h = harness('index-feed-inventor@example.com', ['mine']);
 
     for (const name of ['made-up-1', 'made-up-2', 'made-up-3']) {
       const response = await worker.fetch(appRequest(`/api/workspaces/${name}/state`), h.env, h.ctx);

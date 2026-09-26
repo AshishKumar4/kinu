@@ -8,7 +8,7 @@
 
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { parseWorkspacePreviewLabel, previewHostSuffix, refusedHostname, type PreviewSuffixEnv } from '@kinu.run/core';
-import { diagnostics, renderThrownChain, KinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 
 /** Loopback throws reach the caller as opaque `internal error`, so failures
  *  travel as responses (codemode-node-shim.ts `createFetch` rethrows). */
@@ -52,8 +52,11 @@ async function forwardCodemodeEgress(request: Request, env: PreviewSuffixEnv, wo
       redirect: request.redirect === 'error' ? 'error' : 'manual',
     }));
   } catch (cause) {
-    return new Response(renderThrownChain({ cause }), {
-      status: 502,
+    const error = toKinuError({ doing: 'forwarding an eval program\'s request', cause, otherwise: 'unavailable' });
+    diagnostics.failure('egress.upstream_failed', error, { host: url.hostname, seam: 'codemode' });
+
+    return new Response(`Kinu could not complete the request to ${url.hostname} (${error.code}).`, {
+      status: error.code === 'timeout' ? 504 : 502,
       headers: { [EGRESS_FAILURE_HEADER]: '1' },
     });
   }

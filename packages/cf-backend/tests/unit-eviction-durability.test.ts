@@ -439,46 +439,37 @@ describe('a sandbox lifecycle failure', () => {
   });
 });
 
-describe('whether the container may be disturbed', () => {
+describe('whether the container is in use', () => {
   test('idle means idle', async () => {
     const { agent } = orchestratorHarness();
-    expect(await agent.hasSandboxBackgroundWork()).toBe(false);
+    expect(await agent.sandboxInUse()).toBe(false);
   });
 
-  test('an admitted send protects the container until its reservation retires', async () => {
+  test('work the root owes itself does not hold the container: an admitted send waits for the root wake', async () => {
+    // warm-forge-4d6acc02 kept its container running 30+ h on 2026-09-25/26 while its root owed work it
+    // could not finish (unfinished arms), and every beat woke the root to ask.
     const { agent, db } = orchestratorHarness();
     const sends = new PendingSendStore(makeSql(db), workspaceMainActor(db).actorId);
     sends.reserve({ id: 'accepted-before-reset', turnId: null, mode: 'build', text: 'inspect the container' });
 
-    expect(await agent.hasSandboxBackgroundWork()).toBe(true);
-    sends.retire(['accepted-before-reset']);
-    expect(await agent.hasSandboxBackgroundWork()).toBe(false);
+    expect(await agent.sandboxInUse()).toBe(false);
   });
 
-  test('a running detached job counts, because it may hold the container', async () => {
+  test('a running job row nothing drives (deferred, or left by a dead activation) does not', async () => {
     const { agent, db } = orchestratorHarness();
     jobsOver(db).create({
-      id: 'bgjob-live', kind: 'shell', workMode: 'build',
-      input: JSON.stringify({ command: 'npm test' }), now: Date.now(), label: 'npm test',
+      // Started by an earlier activation: nothing in this one drives it.
+      id: 'bgjob-orphan', kind: 'shell', workMode: 'build',
+      input: JSON.stringify({ command: 'npm test' }), now: Date.now() - 60_000, label: 'npm test',
     });
-    expect(await agent.hasSandboxBackgroundWork()).toBe(true);
-  });
 
-  test('a settled job does not', async () => {
-    const { agent, db } = orchestratorHarness();
-    const jobs = jobsOver(db);
-    jobs.create({
-      id: 'bgjob-done', kind: 'shell', workMode: 'build',
-      input: JSON.stringify({ command: 'npm test' }), now: Date.now(), label: 'npm test',
-    });
-    jobs.settle('bgjob-done', jobs.epochOf('bgjob-done') ?? 0, '"ok"', Date.now());
-    expect(await agent.hasSandboxBackgroundWork()).toBe(false);
+    expect(await agent.sandboxInUse()).toBe(false);
   });
 
   test('a live turn counts — it is the most likely caller of a container tool', async () => {
     const { agent } = orchestratorHarness();
     await agent.declareTurnInFlight(true);
-    expect(await agent.hasSandboxBackgroundWork()).toBe(true);
+    expect(await agent.sandboxInUse()).toBe(true);
   });
-
 });
+

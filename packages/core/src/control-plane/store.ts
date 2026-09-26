@@ -5,6 +5,7 @@
  */
 import { seekPage, type Page, type PageRequest } from '../session/page';
 import * as v from 'valibot';
+import { KinuError } from '../obs/index';
 import type { ControlPlaneSql, ControlPlaneSqlValue } from './sql';
 import {
   FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS, FEEDBACK_MAX_USER_AGENT_CHARS,
@@ -200,21 +201,16 @@ function anchor(at: number, ...tiebreak: string[]): string {
 }
 
 /** Thrown rather than restarting the walk, which would silently repeat rows. */
-export class MalformedCursorError extends Error {
-  constructor() {
-    super('That control-plane cursor is not one this read issued.');
-    this.name = 'MalformedCursorError';
-  }
-}
+const MALFORMED_CURSOR = 'That control-plane cursor is not one this read issued.';
 
 function readAnchor(cursor: PageRequest['cursor'], parts: number): ControlPlaneSqlValue[] | null {
   if (cursor === undefined) return null;
   const pieces = cursor.after.split('\u0000');
 
-  if (pieces.length !== parts) throw new MalformedCursorError();
+  if (pieces.length !== parts) throw new KinuError('bad_input', MALFORMED_CURSOR);
   const at = Number(pieces[0]);
 
-  if (!Number.isFinite(at)) throw new MalformedCursorError();
+  if (!Number.isFinite(at)) throw new KinuError('bad_input', MALFORMED_CURSOR);
 
   return [at, ...pieces.slice(1)];
 }

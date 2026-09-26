@@ -4,11 +4,11 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { conversationCount } from '../identity/conversation-store';
 import type { SessionTranscriptReader } from '../session/transcript';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
-import { readSoul, summarizeSoul } from '../identity/soul';
+import { ownerMissionOf, soulReadsSql } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
 import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
 import type { CraftStore } from '../types/agent-runtime';
-import type { VFS, SqlExecutor } from '../types/primitives';
+import type { SqlExecutor } from '../types/primitives';
 import type { CraftedTool } from '../types/craft';
 import type { ReasoningEffort } from '../providers/effort';
 import { transcriptRole } from '../utils/ui-message';
@@ -46,7 +46,6 @@ export interface AgentStatusDeps {
   readonly sql: SqlExecutor;
   /** The scaffold pointer is per-actor, so the status reports this actor's version. */
   readonly actor: ActorHandle;
-  readonly vfs: VFS;
   /** The spec the next turn runs (claimed tier's model, else the stored spec); never the stored override
    * alone, which is null on a workspace running its tier's model. */
   readonly model: string;
@@ -62,10 +61,10 @@ function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
 /** Every table read here is created by `initWorkspaceSchema`, so a failed read means a broken workspace
  * and throws rather than answering with a fabricated identity. */
 export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus> {
-  const { sql, actor, vfs } = deps;
+  const { sql, actor } = deps;
   actor.assertCurrent();
-  const soul = (await readSoul(vfs)) ?? '';
-  const purpose = summarizeSoul(soul);
+  const reads = soulReadsSql(sql);
+  const purpose = ownerMissionOf(reads) ?? '';
 
   const identity = sql<{ name: string; created_at: number }>`
     SELECT name, created_at FROM workspace_identity LIMIT 1`;
@@ -85,7 +84,7 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     name: identity[0]?.name ?? deps.name,
     displayName: deps.displayName,
     purpose,
-    soul,
+    soul: reads.soul ?? '',
     createdAt: identity[0]?.created_at ?? 0,
     scaffoldVersion: scaffoldVersion[0]?.v ?? 0,
     searchNodeCount: searchNodes[0]?.c ?? 0,

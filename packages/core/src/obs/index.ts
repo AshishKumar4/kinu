@@ -36,6 +36,8 @@ export {
   CODE_WORK_DID_NOT_START,
   ERROR_CODES,
   KinuError,
+  publicMessage,
+  authoredRefusal,
   refusalOf,
   refusedInput,
   renderCauseChain,

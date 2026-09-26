@@ -1,36 +1,36 @@
 /** `/` for a visitor with no session: streams the built landing asset. */
 
+import { Hono } from 'hono';
 import { AuthError, authenticateRequest } from './auth/session';
 import { publicHtmlHeaders } from '@kinu.run/core';
 import { markDocument } from '@kinu.run/core';
+import type { FamilyEnv } from './api/context';
 
-export async function handleLandingRequest(request: Request, env: Env): Promise<Response | null> {
-  const url = new URL(request.url);
+export const landingRoutes = new Hono<FamilyEnv<Env, object>>();
 
-  if (request.method !== 'GET' && request.method !== 'HEAD') return null;
+landingRoutes.get('/assets/kinu-icon.svg', async () => new Response(markDocument(), {
+  headers: { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=3600, must-revalidate' },
+}));
 
-  if (url.pathname === '/assets/kinu-icon.svg') {
-    return new Response(markDocument(), {
-      headers: { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=3600, must-revalidate' },
-    });
-  }
-
-  if (url.pathname !== '/') return null;
+landingRoutes.get('/', async (c, next) => {
+  const request = c.req.raw;
+  let signedIn = true;
 
   try {
-    await authenticateRequest(request, env);
-
-    return null;
+    await authenticateRequest(request, c.env);
   } catch (e) {
     if (!(e instanceof AuthError) || e.status !== 401) throw e;
+    signedIn = false;
   }
+
+  if (signedIn) return await next();
 
   const headers = new Headers(publicHtmlHeaders());
 
   if (request.method === 'HEAD') return new Response(null, { headers });
 
   const assetUrl = new URL('/landing.html', request.url);
-  const asset = await env.ASSETS.fetch(assetUrl);
+  const asset = await c.env.ASSETS.fetch(assetUrl);
 
   if (!asset.ok) {
     throw new Error(`landing asset returned ${String(asset.status)}`);
@@ -43,4 +43,4 @@ export async function handleLandingRequest(request: Request, env: Env): Promise<
     statusText: asset.statusText,
     headers,
   });
-}
+});

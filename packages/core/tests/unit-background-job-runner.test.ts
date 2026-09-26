@@ -643,6 +643,19 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     expect(first.store.get('jw')?.resumeAttempts).toBe(1);
   });
 
+  test('a re-driven job is in flight for its whole drive, though its row already reads deferred', async () => {
+    // The row names the next attempt's wait before this one starts, so only the runner can say a
+    // container still has this work in it (sandboxInUse).
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const { runner, store } = setup({ resume });
+    store.create({ id: 'jr2', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+
+    await runner.recover({ jobId: 'jr2', phase: 'running' });
+
+    expect(store.get('jr2')?.resumeAfter).not.toBeNull();
+    expect(runner.inFlight).toBe(1);
+  });
+
   test('a job this runner is already driving is never re-driven out from under itself', async () => {
     // A resume leaves its own fiber row, so recover() can see the same job twice.
     const resume: JobResumer = () => new Promise<never>(() => {});

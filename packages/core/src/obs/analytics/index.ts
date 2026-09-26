@@ -13,6 +13,7 @@ export {
 } from './feedback-marker';
 
 export {
+  attributeWorkspace,
   installAnalyticsDiagnostics,
 } from './install';
 
@@ -31,7 +32,9 @@ export {
 
 export {
   controlPlaneMetricsQueries,
+  fleetAlertQueries,
   type ControlPlaneMetricQueries,
+  type FleetAlertQueries,
 } from './query';
 
 export {
@@ -84,3 +87,18 @@ export {
   type AnalyticsWindow,
   type AnalyticsWriter,
 } from './writer';
+
+export {
+  ALERT_SIGNALS,
+  ALERT_THRESHOLDS,
+  ALERT_UNMEASURED,
+  evaluateFleet,
+  findWakeLoops,
+  settleSignal,
+  type SignalStreak,
+  type AlertSignal,
+  type FleetSample,
+  type SignalVerdict,
+  type StartupHour,
+  type WakeLoop,
+} from './alerts';

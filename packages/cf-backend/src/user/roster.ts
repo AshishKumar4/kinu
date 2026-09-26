@@ -1,5 +1,6 @@
 /** The owner's roster, paged in SQL, and the socket its changes arrive on. */
 import * as v from 'valibot';
+import { KinuError } from '@kinu.run/core/obs';
 import { rosterMatches, WorkspaceOverviewSchema, WS_OPEN, type RosterBucket, type SqlExec, type WorkspaceOverview } from '@kinu.run/core';
 import type { WorkspaceEntry } from './user-do';
 
@@ -89,12 +90,12 @@ function decodeRosterCursor(cursor?: string | null): { v: number; n: string } | 
   try {
     raw = JSON.parse(decodeURIComponent(cursor));
   } catch (e) {
-    throw new Error('Invalid workspace roster cursor; start from page one.', { cause: e });
+    throw new KinuError('bad_input', 'Invalid workspace roster cursor; start from page one.', { cause: e });
   }
 
   const parsed = v.safeParse(RosterCursorSchema, raw);
 
-  if (!parsed.success) throw new Error('Invalid workspace roster cursor; start from page one.');
+  if (!parsed.success) throw new KinuError('bad_input', 'Invalid workspace roster cursor; start from page one.');
 
   return parsed.output;
 }
@@ -102,7 +103,7 @@ function decodeRosterCursor(cursor?: string | null): { v: number; n: string } | 
 function clampRosterLimit(limit?: number): number {
   if (limit === undefined) return WORKSPACE_LIST_LIMIT;
 
-  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Workspace roster limit must be a positive integer.');
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new KinuError('bad_input', 'Workspace roster limit must be a positive integer.');
 
   return Math.min(limit, WORKSPACE_LIST_LIMIT);
 }

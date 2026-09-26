@@ -2,7 +2,7 @@
 // reach every active workspace use the exact read.
 import * as v from 'valibot';
 import { serveFamily } from './helpers/api';
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY,
@@ -543,6 +543,77 @@ describe('malformed paging over HTTP', () => {
       expect(second.entries).toHaveLength(1);
       expect(second.nextCursor).toBeNull();
     } finally {
+      harness.close();
+    }
+  });
+});
+
+describe('a visit over HTTP', () => {
+  const IDENTITY: AuthIdentity = { userId: USER_ID, email: 'ashish@example.com', sub: 'workspace-visit', provider: 'test' };
+
+  function visitHarness() {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const inner = harness.userDO;
+
+    const stub = userAccount({
+      async ensureProfile(...args: Parameters<TestUserDO['userDO']['ensureProfile']>) {
+        return inner.ensureProfile(...args);
+      },
+      async touchWorkspace(...args: Parameters<TestUserDO['userDO']['touchWorkspace']>) {
+        return inner.touchWorkspace(...args);
+      },
+    });
+
+    const env: UserRoutesEnv<string> = {
+      UserDO: { idFromName: (name) => name, get: () => stub },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+    };
+
+    const visit = async (name: string): Promise<Response> => {
+      const request = new Request(`https://kinu.example.com/api/user/workspaces/${name}/touch`, { method: 'POST' });
+      const response = await serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(request, env);
+
+      if (!response) throw new Error('visit route did not handle the request');
+
+      return response;
+    };
+
+    return { harness, visit };
+  }
+
+  test('a workspace the roster no longer holds answers 404, so a visit cannot keep it alive', async () => {
+    const { harness, visit } = visitHarness();
+
+    try {
+      const owner = await testOwner();
+      await harness.userDO.registerWorkspace(owner, 'swept');
+      await harness.userDO.removeWorkspace(owner, 'swept', USER_ID);
+
+      const response = await visit('swept');
+      expect(response.status).toBe(404);
+      expect(v.parse(ErrorBodySchema, await response.json())).toEqual({ error: 'No such workspace.' });
+      expect((await visit('never-registered')).status).toBe(404);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('a workspace on the roster takes the visit', async () => {
+    const { harness, visit } = visitHarness();
+
+    try {
+      const owner = await testOwner();
+      setSystemTime(new Date('2026-09-26T08:00:00Z'));
+      await harness.userDO.registerWorkspace(owner, 'visited');
+      const visitedAt = new Date('2026-09-26T08:05:00Z');
+      setSystemTime(visitedAt);
+
+      expect((await visit('visited')).status).toBe(200);
+      const entry = (await harness.userDO.listWorkspaces(owner)).entries.find((listed) => listed.name === 'visited');
+      expect(entry?.lastVisited).toBe(visitedAt.getTime());
+    } finally {
+      setSystemTime();
       harness.close();
     }
   });

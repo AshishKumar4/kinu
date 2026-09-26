@@ -5,7 +5,6 @@ export {
   AUDIT_OUTCOMES,
   CONTROL_PAGE_DEFAULT,
   CONTROL_PAGE_MAX,
-  MalformedCursorError,
   appendAudit,
   forgetWorkspace,
   getUser,
@@ -67,3 +66,10 @@ export {
   type ControlMetrics,
   type MetricsRequest,
 } from './metrics';
+
+export {
+  FLEET_PROBE_PREFIX,
+  sampleFleet,
+  settleFleet,
+  type FleetEnv,
+} from './fleet-alerts';

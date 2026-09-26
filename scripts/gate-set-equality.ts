@@ -171,6 +171,13 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'enumerator can produce.',
   ],
   [
+    'scripts/install-parity.ts',
+    'enumerates the packages installed under every `node_modules` a checkout resolves from (the root\'s, each '
+    + 'workspace\'s, and the ones nested in each package) to hold them to the install paths `bun.lock` names. '
+    + '`git ls-files` has never listed `node_modules`, so that set is exactly the one no repository enumerator can '
+    + 'produce; the lock and its workspaces are read from the checkout itself.',
+  ],
+  [
     'scripts/refuse-linked-install.ts',
     'enumerates the top level of the checkout\'s own `node_modules` for links that resolve '
     + 'outside it, the layout `setup-worktree.sh` makes, so an install that would write through '
@@ -196,6 +203,12 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'their CREATE TABLE DDL — the vendor\'s own shape is the corpus, `git ls-files` has never '
     + 'listed `node_modules`, and preparing against Kinu\'s copy of the DDL is the defect class '
     + 'this gate exists to catch.',
+  ],
+  [
+    'scripts/promote.ts',
+    'walks the BUILD a staging run published, `dist/kinu/wrangler.json` and every file under '
+    + '`dist/client/downloads/`, to hash each one into the record promotion checks. The build '
+    + 'output is not a repository path and git has never listed it.',
   ],
 ]);
 

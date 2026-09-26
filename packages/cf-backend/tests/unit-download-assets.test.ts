@@ -6,11 +6,14 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { BUILTIN_TOOLS, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '@kinu.run/core';
-import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import { cliPageRoutes, type CliRoutesEnv } from '../src/cli/routes';
+import { serveFamily } from './helpers/api';
 import { unreachableKv, unreachableNamespace } from './helpers/bindings';
 import { healthResponse, type AssetFetcher } from '@kinu.run/core';
 import { HealthAnswerSchema } from '@kinu.run/core/deploy';
 import { CLI_DIST_PATHS } from '@kinu.run/core';
+
+const cliPages = serveFamily(cliPageRoutes);
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -88,7 +91,7 @@ describe('CLI download assets', () => {
     const env = envWithAssets(PUBLISHED);
 
     for (const path of DOWNLOAD_PATHS) {
-      const response = requiredResponse(await handleCliRequest(new Request(`${ORIGIN}${path}`), env));
+      const response = requiredResponse(await cliPages(new Request(`${ORIGIN}${path}`), env));
       const asset = PUBLISHED.get(path);
 
       if (!asset) throw new Error(`missing published fixture for ${path}`);
@@ -102,7 +105,7 @@ describe('CLI download assets', () => {
     const env = envWithAssets(new Map());
 
     for (const path of DOWNLOAD_PATHS) {
-      const response = requiredResponse(await handleCliRequest(new Request(`${ORIGIN}${path}`), env));
+      const response = requiredResponse(await cliPages(new Request(`${ORIGIN}${path}`), env));
       expect(response.status).toBe(404);
       const body = await response.text();
       expect(body).not.toContain('<!doctype html>');
@@ -115,13 +118,13 @@ describe('CLI download assets', () => {
     const env = testEnv({ async fetch() { return new Response('boom', { status: 500 }); } });
 
     for (const path of DOWNLOAD_PATHS) {
-      const res = await handleCliRequest(new Request(`${ORIGIN}${path}`), env);
+      const res = await cliPages(new Request(`${ORIGIN}${path}`), env);
       expect(res?.status).toBe(404);
     }
   });
 
   test('HEAD mirrors GET status with no body', async () => {
-    const published = await handleCliRequest(
+    const published = await cliPages(
       new Request(`${ORIGIN}${DOWNLOAD_PATHS[0]}`, { method: 'HEAD' }),
       envWithAssets(PUBLISHED),
     );
@@ -130,7 +133,7 @@ describe('CLI download assets', () => {
     expect(publishedResponse.status).toBe(200);
     expect(publishedResponse.body).toBeNull();
 
-    const missing = await handleCliRequest(
+    const missing = await cliPages(
       new Request(`${ORIGIN}${DOWNLOAD_PATHS[0]}`, { method: 'HEAD' }),
       envWithAssets(new Map()),
     );

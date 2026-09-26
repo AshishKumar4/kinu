@@ -227,3 +227,49 @@ export function controlPlaneMetricsQueries(
     }),
   };
 }
+
+export interface FleetAlertQueries {
+  readonly startups: string;
+  readonly events: string;
+  readonly turns: string;
+}
+
+const ALERTED_EVENTS = [
+  'provider.error', 'client.render_failed', 'client.chat_stream_failed', 'client.report_unreadable',
+  'turn.terminal_effect_failed', 'turn.terminal_effects_owed',
+] as const;
+
+export function fleetAlertQueries(): FleetAlertQueries {
+  const agent = AGENT_METRICS_SCHEMA;
+  const kind = (value: string): string => `${blobColumn(agent, 'kind')} = '${value}'`;
+
+  return {
+    startups: buildWeightedQuery({
+      schema: agent,
+      groupBy: [],
+      groupByComputed: [
+        { as: 'workspace', expression: indexColumn(agent) },
+        { as: 'hour', expression: "toStartOfInterval(timestamp, INTERVAL '1' HOUR)" },
+      ],
+      metrics: [{ as: 'startups', expression: weightedCount() }],
+      since: "'3' HOUR",
+      where: [kind('event'), `${blobColumn(agent, 'event')} = 'actor.startup'`],
+      orderBy: 'startups',
+      limit: 500,
+    }),
+    events: buildWeightedQuery({
+      schema: agent,
+      groupBy: ['event', 'code'],
+      metrics: [{ as: 'count', expression: weightedCount() }],
+      since: "'1' HOUR",
+      where: [kind('event'), `${blobColumn(agent, 'event')} IN (${ALERTED_EVENTS.map((event) => `'${event}'`).join(', ')})`],
+    }),
+    turns: buildWeightedQuery({
+      schema: agent,
+      groupBy: ['outcome'],
+      metrics: [{ as: 'count', expression: weightedCount() }],
+      since: "'1' HOUR",
+      where: [kind('turn')],
+    }),
+  };
+}

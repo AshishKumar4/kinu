@@ -21,6 +21,7 @@ spend. `AGENTS.md` § Errors and Logs points here. The source of truth is
 | Analytics Engine fleet metrics | built, three datasets | `core/src/obs/analytics/` |
 | Control-plane audit and exact feedback index | built | `cf-backend/src/control-plane/` |
 | Feedback screenshot objects | built, stored in R2 | `cf-backend/src/feedback/` |
+| Fleet alerts (see below) | built; `fleet.client_errors` is streaked but not emailed. Owed: set its threshold from the first week of `client.*` rows after 345ced8462 deploys, then drop it from `ALERT_UNMEASURED` | `core/src/control-plane/fleet-alerts.ts`, `core/src/obs/analytics/alerts.ts` |
 | `Result<T, KinuError>` via `neverthrow` | rejected, see below | none |
 
 ## Fleet metrics, exact state, and feedback
@@ -45,6 +46,11 @@ RPC entries of `UserDO`, `MonitorDO` and `ControlPlaneDO`. A constructor runs
 once per activation, so a window opened only there would give a hot Durable
 Object one budget for its whole lifetime.
 
+A diagnostics line lands under its `workspace` field's digest. A line without that field takes
+the workspace of the invocation it runs in, read from the Agents SDK's per-invocation context
+(`attributeWorkspace`). Until 2026-09-26 such lines were unattributed: 366,725 of the 371,749
+event rows in the preceding 7 days had an empty index.
+
 Each workspace object writes an `actor.startup` row when it activates, and a
 wake pass that re-arms itself over unfinished work writes one
 `wake.unfinished_arms` row per arm, once per streak. The Metrics tab's
@@ -61,6 +67,70 @@ Without either, writes continue and the tab says queries are not configured.
 Reads also need `ANALYTICS_DATASET_SUFFIX`: empty in production, `_staging`
 under `env.staging`. Writes omit it because the binding names its dataset.
 `scripts/analytics-datasets.test.ts` checks that the two agree per environment.
+
+## Fleet alerts
+
+Every `*/15` cron tick, `MonitorDO` reads the fleet as well as the site probes
+(`core/src/control-plane/fleet-alerts.ts`). It makes one Analytics Engine batch
+(`fleetAlertQueries`) and one Workers Observability query for the workspace
+objects killed on this deployment's version. The rules and thresholds live in
+`core/src/obs/analytics/alerts.ts`, each threshold beside the measurement it
+came from. An incident opens after two crossing ticks and closes after two
+clean ones, and each opening or closing is one email through the site probes'
+ledger.
+
+Measurements come from Analytics Engine and telemetry over the 7 days to 2026-09-26, unless a row gives a date.
+
+| Signal | Reads | Crosses | Measured |
+| --- | --- | --- | --- |
+| `fleet.wake_loop` | `actor.startup` rows per workspace-hour | 30+ startups in each of two consecutive hours | 1,421 of 1,854 object-hours with a startup had under 5 and 264 had 60+; 23 of 1,153 objects reached 30 in some hour. warm-forge-4d6acc02 peaked at 120 and the eval loop at 129. |
+| `fleet.platform_kill` | invocation outcomes (`KINU_OBS_TOKEN`) | any out-of-memory kill, or 3+ objects over the wall-time limit, in an hour | Steady state is 0. The 71 OOM kills on 09-22..24 were one incident. On 09-26: 108 wall-time kills on 3 objects, all of them loopers. |
+| `fleet.provider_down` | `provider.error` by code | 5+ `denied`, or 100+ of any code, in an hour | one `denied` in 168 hours; the worst hour had 72 errors, from one 404 source |
+| `fleet.turn_failures` | settled turns | over 25% failed, once there are 20+ turns in the hour | 32 hours had 20+ turns; the failed share was p50 0% and p90 19%, and 27%, 45% and 86% in the incident hours |
+| `fleet.client_errors` | `client.*` | provisional: 50+ in an hour, or 6+ unreadable reports; not emailed until measured | unmeasured: 0 rows arrived until 345ced8462 fixed the reports being refused |
+| `fleet.stuck_effects` | `turn.terminal_effect_failed`, `turn.terminal_effects_owed` | 61+ failed or 1,001+ owed in an hour | failed p90 19/h, p99 62, max 69; owed p50 2/h, p90 970, p99 2,534 (warm-forge) |
+
+A source that is not configured or cannot be read is a single
+`fleet.sources` incident naming what to set. A missing setting opens it at
+once, because no retry fixes one. An unreadable answer (a 429, a timeout, an
+unexpected shape) must hold for two ticks, like a signal. A read that fails
+never stops the site probes from recording.
+
+`fleet.platform_kill` reads only this deployment's version. Until that version
+has served 200 workspace-object invocations in the hour, a clean tick counts
+toward nothing: it neither closes an open incident nor starts a clean streak.
+That keeps a deploy from closing an incident before the new version has run.
+200 is under the quietest hour of the week to 2026-09-26: `kinu`'s
+`OrchestratorAgent` served 230 invocations then, with p10 1,030 and p50 2,960
+(sampled 7-day telemetry). It is never treated as a quiet
+fleet. Eval and user workspaces share `fleet.wake_loop`, because the digest
+cannot tell them apart. The alert names the worst workspace's digest, and
+`scripts/prod-logs.ts wakes` names the workspace.
+
+## Reading one turn as the model received it
+
+A turn's requests are rebuilt from what the session already keeps: each
+step's prepared request, the renders it names, and that step's `step_finish`
+row. Wire bytes are never stored, and this read stores nothing new.
+
+- Owner: `kinu debug <workspace> --turn <id> [--actor <id>]` writes every
+  request, page by page, to an owner-only NDJSON file through `redactPayload`.
+  `getTurnRequests` and `getTurnRequest` are `interactive` in
+  `AGENT_RPC_ACCESS`, so no `pta_` token reaches them, exactly like
+  `getRunEvents`. A page stays under `run_events.page_bytes`.
+- Support: the `workspace.turn_read` control action. It needs Access, the
+  admin allowlist and a fresh sign-in, the same bar as a mutation, and a
+  closed reason (`support_ticket`, `incident`, `owner_request`). The audit row
+  is written before the read and never holds what was read. The workspace
+  logs `support.read` with the reason in its activity log, so the owner sees
+  every read.
+
+Retention, measured in source on 2026-09-26: nothing prunes `run_events`,
+`session_messages`, `request_renders` or the turn claims by age. They are
+removed when the workspace is removed (`destroyAgent`, then `deleteAll`) or
+when an actor is retired with `destroy` (`purgeActorRows`). Clearing a chat
+removes the visible conversation only, not the model's history. This read
+changes none of that.
 
 ## Where spans are open
 
@@ -383,6 +453,25 @@ with `code: 23`. Both names come from the platform, minted at runtime by the
 browser and workerd engines; no identifier in this repository spells them.
 Classification keys on the names, which are stable. The numeric codes are not
 used.
+
+## What a client reads of a failure
+
+A response body carries a failure's class and a message written for its reader, `{ error, code }`
+(`publicError`, `core/src/http/http.ts`), never its cause chain: a chain holds platform wording, file
+paths and, through a substituted URL or a stored header, secrets. The chain goes to `diagnostics`.
+
+- Every Hono router answers an uncaught throw through `routeError` (`cf-backend/src/api/context.ts`),
+  logged as `http.request_failed`. A thrown `KinuError` keeps its message; anything else gets its
+  class's fixed text (`PUBLIC_MESSAGE`).
+- A `KinuError` whose message repeats the text of a cause no `KinuError` authored gets the fixed text
+  instead (`publicMessage`, `obs/error.ts`). An authored message may name a path or a name; it may not
+  quote a caught error.
+- Across Durable Object RPC an error keeps only `name: message` (compat 2025-12-01), so a `KinuError`'s
+  name carries its class: `KinuError[unavailable]: …` (miniflare 5.20260903.0-alpha, 2026-09-26).
+  `authoredRefusal({ doing, cause })` reads a caught one back with its class and message; any other
+  failure is classified as `doing`. So an object refuses with a `KinuError` (`unit-do-refusals`), and a
+  plain `Error` reaches the client as the route's `doing` text. Agent RPC over `/api/cli/…/rpc` still
+  shows `calling <method>` for plain throws in deep core helpers until the Effect waves convert them.
 
 ## `ReservedLogField`: the compile-time ban
 

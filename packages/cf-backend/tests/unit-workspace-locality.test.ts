@@ -8,10 +8,16 @@ import * as v from 'valibot';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { fakeMossaic, sqlOver } from '@kinu.run/test-utils';
-import { mossaicVfs, sharedDriveMount, withMountTable, type JsonValue } from '@kinu.run/core';
+import {
+  agentCred, agentIdentity, mossaicVfs, provisionAgentHome, renderSoulMarkdown, settledWorkspaceSoul, sharedDriveMount, withMountTable,
+  initWorkspaceActorTable, WORKSPACE_IDENTITY_DDL, writeWorkspaceSoul, type JsonValue,
+} from '@kinu.run/core';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { RouteableFacetTarget, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, SCRIPT_EXPORTS } from './helpers/programmatic-host';
+
+type KernelVfs = ReturnType<Awaited<ReturnType<HostedWorkspace['bundle']['session']>>['vfs']['as']>;
 
 const databases: Database[] = [];
 
@@ -127,6 +133,173 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     expect(await workspace.bundle.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' }))
       .toBe('the bytes are here\n');
+  });
+
+  const OWNER_SOUL = '# the owner wrote this\n';
+
+  /** A born workspace (the identity row exists), opened fresh on each call: a new object boots it. */
+  function bornWorkspace(actor: ActorObject): () => HostedWorkspace {
+    actor.database.exec(WORKSPACE_IDENTITY_DDL);
+    actor.database.exec(`CREATE TABLE IF NOT EXISTS activity_log (
+      actor_id TEXT NOT NULL, id TEXT NOT NULL DEFAULT (lower(hex(randomblob(9)))),
+      event TEXT NOT NULL, detail TEXT, elapsed_ms INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (actor_id, id))`);
+    initWorkspaceActorTable((ddl: string) => { actor.database.exec(ddl); });
+    actor.database.run(`INSERT INTO workspace_identity (id, name, mission) VALUES ('w', 'Atlas', 'Help with testing.')`);
+
+    return () => createHostedWorkspace({
+      ctx: actor.ctx,
+      env: workspaceBindings(),
+      previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
+    });
+  }
+
+  async function ownedSoul(actor: ActorObject): Promise<() => HostedWorkspace> {
+    const open = bornWorkspace(actor);
+    await writeWorkspaceSoul(open().bundle, OWNER_SOUL);
+
+    return open;
+  }
+
+  async function soulFile(workspace: HostedWorkspace): Promise<{ text: string; uid: number; mode: number; type: string; ino: number; mtime: number }> {
+    const kernel = (await workspace.bundle.session()).vfs.as(CRED_KERNEL);
+    const entry = kernel.lstat('/home/main/SOUL.md');
+
+    return {
+      text: new TextDecoder().decode(kernel.readFile('/home/main/SOUL.md')),
+      uid: entry.uid, mode: entry.mode & 0o7777, type: entry.type, ino: entry.ino, mtime: entry.mtime,
+    };
+  }
+
+  const SEALED = { text: OWNER_SOUL, uid: 0, mode: 0o444, type: 'file' };
+
+  test('SOUL.md is written by no agent file path, and a shell forgery never reaches the next turn', async () => {
+    const restarted = (await ownedSoul(actorObject()))();
+    const box = restarted.box('agent:main');
+
+    await expect(restarted.bundle.vfs.writeFile('SOUL.md', 'forged')).rejects.toThrow();
+    await expect(box.files.write('/home/main/SOUL.md', 'forged')).rejects.toThrow();
+
+    for (const command of ['printf forged > SOUL.md', 'printf forged >> SOUL.md', 'chmod 666 SOUL.md', 'rm -f SOUL.md',
+      'printf forged > f && mv -f f SOUL.md', 'ln -sf /tmp/x SOUL.md']) {
+      await box.exec(command);
+    }
+
+    expect(await settledWorkspaceSoul(restarted.bundle)).toBe(OWNER_SOUL);
+    expect(await soulFile(restarted)).toMatchObject(SEALED);
+  });
+
+  // States an agent could leave; the kernel stands in for that agent so each is exact.
+  const TAMPERINGS = [
+    ['deleted', (kernel: KernelVfs) => { kernel.unlink('/home/main/SOUL.md'); }],
+    ['a link to an agent\'s file', (kernel: KernelVfs) => {
+      kernel.unlink('/home/main/SOUL.md');
+      kernel.writeFile('/home/main/forged.md', 'forged');
+      kernel.symlink('/home/main/forged.md', '/home/main/SOUL.md');
+    }],
+    ['an agent\'s own file', (kernel: KernelVfs) => {
+      kernel.unlink('/home/main/SOUL.md');
+      kernel.writeFile('/home/main/SOUL.md', 'forged');
+      kernel.chown('/home/main/SOUL.md', 1000, 1000);
+    }],
+  ] as const;
+
+  for (const [label, tamper] of TAMPERINGS) {
+    test(`a SOUL.md ${label} is the owner's again after a boot, and no adopt note invites the forge`, async () => {
+      const actor = actorObject();
+      const open = await ownedSoul(actor);
+      tamper((await open().bundle.session()).vfs.as(CRED_KERNEL));
+
+      const restarted = open();
+
+      expect(await soulFile(restarted)).toMatchObject(SEALED);
+      expect(await restarted.bundle.vfs.readFile('SOUL.md', { encoding: 'utf8' })).toBe(OWNER_SOUL);
+      expect(await restarted.bundle.vfs.exists('SOUL.md.unverified')).toBe(false);
+      expect(actor.database.query('SELECT event FROM activity_log WHERE event = \'soul.unverified_moved\'').all())
+        .toEqual([]);
+    });
+
+    test(`a SOUL.md ${label} mid-life is the owner's at the next turn start, and no adopt note invites the forge`, async () => {
+      const actor = actorObject();
+      const workspace = (await ownedSoul(actor))();
+      tamper((await workspace.bundle.session()).vfs.as(CRED_KERNEL));
+
+      expect(await settledWorkspaceSoul(workspace.bundle)).toBe(OWNER_SOUL);
+      expect(await soulFile(workspace)).toMatchObject(SEALED);
+      expect(await workspace.bundle.vfs.exists('SOUL.md.unverified')).toBe(false);
+      expect(actor.database.query('SELECT event FROM activity_log WHERE event = \'soul.unverified_moved\'').all())
+        .toEqual([]);
+    });
+  }
+
+  test('a pre-kernel soul is set aside as SOUL.md.unverified, the birth render sealed, and the owner told once', async () => {
+    const actor = actorObject();
+    const open0 = bornWorkspace(actor);
+
+    open0();
+    actor.database.run(
+      `INSERT INTO workspace_actors (actor_id, workspace_id, name, storage_key, kind, lifetime, created_at, creation_id)
+       VALUES ('main-actor', 'w', 'Atlas', 'agent:main', 'main', 'durable', 1, 'c1')`,
+    );
+    const open = bornWorkspace(actor);
+    const first = open();
+    // A soul last written before 2026-08-31: the agent's own, no row.
+    const kernel = (await first.bundle.session()).vfs.as(CRED_KERNEL);
+    kernel.unlink('/home/main/SOUL.md');
+    kernel.writeFile('/home/main/SOUL.md', 'an old soul of mine');
+    kernel.chown('/home/main/SOUL.md', 1000, 1000);
+    actor.database.run('DELETE FROM workspace_soul');
+
+    const restarted = open();
+
+    expect(await settledWorkspaceSoul(restarted.bundle)).toBe(renderSoulMarkdown({ name: 'Atlas', mission: 'Help with testing.' }));
+    expect(await restarted.bundle.vfs.readFile('SOUL.md.unverified', { encoding: 'utf8' })).toBe('an old soul of mine');
+    expect(await soulFile(restarted)).toMatchObject({ uid: 0, mode: 0o444 });
+    expect(actor.database.query('SELECT event FROM activity_log WHERE event = \'soul.unverified_moved\'').all())
+      .toHaveLength(1);
+  });
+
+  test('an intact SOUL.md is not rewritten at a turn start', async () => {
+    const workspace = (await ownedSoul(actorObject()))();
+    const before = await soulFile(workspace);
+
+    await settledWorkspaceSoul(workspace.bundle);
+
+    expect(await soulFile(workspace)).toEqual(before);
+  });
+
+  test('a workspace with no soul row gets what birth renders from its identity, once', async () => {
+    const actor = actorObject();
+    const open = bornWorkspace(actor);
+    // A workspace from before the row: its SOUL.md the agent's own.
+    const legacy = (await open().bundle.session()).vfs.as(CRED_KERNEL);
+    legacy.unlink('/home/main/SOUL.md');
+    legacy.writeFile('/home/main/SOUL.md', 'the agent wrote this');
+    legacy.chown('/home/main/SOUL.md', 1000, 1000);
+    actor.database.run('DELETE FROM workspace_soul');
+
+    const restarted = open();
+    const birth = renderSoulMarkdown({ name: 'Atlas', mission: 'Help with testing.' });
+
+    expect(await settledWorkspaceSoul(restarted.bundle)).toBe(birth);
+    expect(await soulFile(restarted)).toMatchObject({ text: birth, uid: 0, mode: 0o444 });
+    expect(actor.database.query('SELECT markdown FROM workspace_soul').all()).toEqual([{ markdown: birth }]);
+  });
+
+  test('only the main agent creates in the workspace root', async () => {
+    const workspace = (await ownedSoul(actorObject()))();
+    const session = await workspace.bundle.session();
+    const identity = agentIdentity(session.sql, 'subordinate-alpha');
+    const home = provisionAgentHome(session.vfs.as(CRED_KERNEL), 'subordinate-alpha', identity);
+    const subordinate = await workspace.bundle.asAgent({ cred: agentCred(identity), home, tmp: `${home}/tmp` });
+
+    await expect(subordinate.vfs.writeFile('/home/main/AGENTS.md', 'forged')).rejects.toThrow();
+    await subordinate.shell.exec('printf forged > /home/main/skills.md');
+    await workspace.box('agent:main').exec('printf mine > /home/main/notes.md');
+
+    expect(await workspace.bundle.vfs.exists('AGENTS.md')).toBe(false);
+    expect(await workspace.bundle.vfs.exists('skills.md')).toBe(false);
+    expect(await workspace.bundle.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('mine');
   });
 
   test('the shell and the file plane are two views of the same rows', async () => {

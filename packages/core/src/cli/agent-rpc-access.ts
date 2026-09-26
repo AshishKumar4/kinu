@@ -87,6 +87,7 @@ export const AGENT_RPC_ACCESS = {
   createSubordinateAgent: 'interactive',
   renameSubordinateAgent: 'interactive',
   decidePlanReview: 'interactive',
+  dismissPlanReview: 'interactive',
   listDeferredApprovals: 'interactive',
   savePlanReviewAnnotations: 'interactive',
   dismissBackgroundJob: 'interactive',
@@ -108,6 +109,8 @@ export const AGENT_RPC_ACCESS = {
   getReplayEvals: 'interactive',
   // Raw unredacted event payloads; a workspace.read token gets only the read models.
   getRunEvents: 'interactive',
+  getTurnRequests: 'interactive',
+  getTurnRequest: 'interactive',
   getRunSummaries: 'interactive',
   listRuns: 'interactive',
   getScaffoldDiff: 'interactive',

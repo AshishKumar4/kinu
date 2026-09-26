@@ -19,6 +19,7 @@ import type { ActorContextStores, ChildContextResolver } from '../vfs/context-pl
 import type { ContextEventRecorder } from '../types/context-plane';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { verifyClaimedProgram } from '../orchestrator/actor-claims';
+import { recordRecoverySettled, sameBuildOf } from '../orchestrator/turn-recovery-events';
 import { readVersionedScaffoldSource } from '../scaffold/shadow';
 import { sha256Hex } from '../safety/argument-digest';
 import { diagnostics, renderThrownChain, toKinuError, type AgentTracing } from '../obs/index';
@@ -64,6 +65,7 @@ export interface ActorHostDeps {
   readonly storage: Pick<Storage, 'sql' | 'transactionSync'> & SqlExec;
   readonly directory: WorkspaceActorDirectory;
   readonly installedBuild: string | null;
+  readonly workspace?: string;
   runtimeFor(bound: BoundActor): AgentRuntime | Promise<AgentRuntime>;
   filesFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<SessionFilePlane>;
   /** Asked by the host so no hosted actor silently runs the shipped bootstrap loop. */
@@ -94,6 +96,7 @@ export interface ActorHost {
   retire(parent: ActorReference, retirement: ActorRetirement): Promise<void>;
   resumable(limit?: number): readonly ResumableActorTurn[];
   readonly installedBuild: string | null;
+  readonly workspace?: string;
 }
 
 /** The parent reference the directory row records; the row is the only authority on it. */
@@ -212,6 +215,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
     const session = new ActorSession({
       runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
+      ...(deps.workspace !== undefined && { workspace: deps.workspace }),
       turns: tracing && (() => tracing().turns(actor)),
       history: bound.stores.history,
       events: deps.contextEvents(bound),
@@ -375,6 +379,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       });
     },
     installedBuild: deps.installedBuild,
+    ...(deps.workspace !== undefined && { workspace: deps.workspace }),
     resumable: (limit = 50) => {
       const resumable: ResumableActorTurn[] = [];
 
@@ -502,7 +507,7 @@ async function stalledRun(stores: Pick<AgentStores, 'history'>, claim: StoredAct
  * unreadable claim record settles `error` once; an actor that cannot be opened stays owed.
  */
 export async function recoverActorTurns(
-  host: Pick<ActorHost, 'resumable' | 'installedBuild'> & {
+  host: Pick<ActorHost, 'resumable' | 'installedBuild' | 'workspace'> & {
     acquire(reference: ActorReference): Promise<Pick<HostedActor, 'runtime' | 'stores'> & {
       readonly session: Pick<ActorSession, 'turnOpen'>;
     }>;
@@ -543,6 +548,7 @@ export async function recoverActorTurns(
         actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
         failed.push(turn.claim.turnId);
         diagnostics.failure('actor.turn_record_unreadable', evidence.failure, { actor: turn.record.name, turn: turn.claim.turnId });
+        recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'record_unreadable', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
         continue;
       }
 
@@ -564,6 +570,7 @@ export async function recoverActorTurns(
         actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'error');
         stalled.push(turn);
         diagnostics.event('actor.turn_stalled', { actor: turn.record.name, turn: turn.claim.turnId, runs: turn.claim.epoch });
+        recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'stalled', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
         continue;
       }
 
@@ -574,6 +581,7 @@ export async function recoverActorTurns(
 
       actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'indeterminate');
       refused.push(turn.claim.turnId);
+      recordRecoverySettled({ workspace: host.workspace ?? '', actor: turn.record.name, cause: 'unverified', sameBuild: sameBuildOf(turn.claim.program.build, host.installedBuild) });
     }
     catch (cause) {
       // One unreadable actor must not end the sweep; this turn stays owed.

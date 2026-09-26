@@ -4,6 +4,7 @@
  */
 import { useCallback, useState, type ReactNode } from 'react';
 import { Button } from '@cloudflare/kumo';
+import { revealMisrepresenting } from '@kinu.run/core';
 import { TrashIcon, WarningIcon } from '@phosphor-icons/react';
 import { FilledButton } from '../ui/FilledButton';
 import { Modal } from '../ui/Modal';
@@ -364,7 +365,7 @@ function ApprovalRows(
             <span className="p-annotation p-text-2">{approval.executor}</span>
             <span className="p-meta p-text-3">{when(approval.requestedAt)}</span>
           </div>
-          <div className="font-mono text-xs p-text whitespace-pre-wrap break-all">{approval.command}</div>
+          <div className="font-mono text-xs p-text whitespace-pre-wrap break-all">{revealMisrepresenting(approval.command)}</div>
           <div className="p-row-text p-text-3">{approval.reason}</div>
           <div className="flex gap-1.5">
             {APPROVAL_ANSWERS.map(({ decision, label, body }) => (
@@ -378,7 +379,7 @@ function ApprovalRows(
                     ids: [approval.id], decision,
                   },
                   title: `${label} this command`,
-                  body: `${body}\n\n${approval.command}\n\non ${approval.executor}, in ${workspace}.`,
+                  body: `${body}\n\n${revealMisrepresenting(approval.command)}\n\non ${approval.executor}, in ${workspace}.`,
                   danger: decision === 'always',
                 })}
               >

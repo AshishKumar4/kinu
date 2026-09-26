@@ -134,6 +134,16 @@ describe('the queue card, as the reader sees it', () => {
     expect(html).toContain('Approve all');
   });
 
+  test('a command\'s bidi and zero-width characters show as marks, so the approved text reads as what runs', () => {
+    const html = renderToStaticMarkup(createElement(ParkedCommands, {
+      actions: [parked('a', 'rm -rf ./build \u202E\u2066gpj.x\u200B')],
+      rpc: SILENT_RPC,
+    }));
+
+    expect(html).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u);
+    expect(html).toContain('\uFFFD');
+  });
+
   test('one untick names the one', () => {
     const rec = recorder();
     const flow = new ParkedDecisionFlow(rec);

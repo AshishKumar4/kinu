@@ -612,6 +612,8 @@ Save everything about a workspace to one file: identity, messages, runs and thei
 | `--runs <n>` | How many recent runs, head runs and searches to include |
 | `--limit <n>` | Row limit for the smaller sections (messages, jobs, facts and so on) |
 | `--json` | Print the summary as JSON instead of text |
+| `--turn <id>` | Write one turn's requests, as the model received them, instead of the whole bundle |
+| `--actor <id>` | With --turn: a hosted actor's id (default: the workspace's main actor) |
 
 ```bash
 kinu debug jarvis -o jarvis.debug.jsonl

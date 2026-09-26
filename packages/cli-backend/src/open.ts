@@ -66,7 +66,7 @@ export async function openWorkspaceCLI(
   const rt = createCLIRuntime(db, { ...config, dbPath, agentName: identity.name });
 
   // SOUL belongs to the agent, not to the shared physical project directory.
-  const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs);
+  const soul = await (rt.ownerSoul?.() ?? readSoul(rt.agentStateVfs ?? rt.storage.vfs));
 
   if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 

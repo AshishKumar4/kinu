@@ -1229,6 +1229,27 @@ describe('an additional agent, as an ordinary conversation', () => {
       expect(restored.scrollable).toBe(true);
       expect(restored.scrollTop).toBeLessThan(60);
 
+      // A spot the reopened chat no longer holds opens at the newest message: fetching older
+      // pages to reach it was the runaway of 2026-09-26.
+      await page.$eval('[data-agent-scroll]', (el) => { el.scrollTop = el.scrollHeight - el.clientHeight - 200; });
+      await page.waitForFunction(() => {
+        const el = document.querySelector('[data-agent-scroll]');
+
+        return el !== null && el.scrollHeight - el.scrollTop - el.clientHeight > 150;
+      });
+      await rig.clickTab('Main');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
+      await page.evaluate(() => { window.dispatchEvent(new CustomEvent('gallery:keep-newest', { detail: 12 })); });
+      await rig.clickTab('Checkout scout');
+      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/scout"]');
+
+      const reopened = await page.$eval('[data-agent-scroll]', (el) => ({
+        scrollable: el.scrollHeight > el.clientHeight,
+        fromBottom: el.scrollHeight - el.scrollTop - el.clientHeight,
+      }));
+
+      expect(reopened.fromBottom).toBeLessThan(60);
+
       // Main's own draft survived the whole excursion.
       await rig.clickTab('Main');
       await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');

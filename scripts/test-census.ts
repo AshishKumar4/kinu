@@ -340,6 +340,31 @@ function testSpans(parsed: ParsedFile): TestSpan[] {
   return spans;
 }
 
+/** What a file skips as written, `test.skip`, `test.todo` and `describe.skip`: skips no machine lifts. A
+ *  conditional one (`skipIf`, `todoIf`, `if`) skips only where its condition holds. */
+export function writtenSkips(file: string, text: string): string[] {
+  const parsed = parseFile(file, text);
+
+  const skipped = testSpans(parsed)
+    .filter((span) => span.modifier === 'skip' || span.modifier === 'todo')
+    .map((span) => `test.${span.modifier ?? ''}('${span.title}') at line ${String(span.line)}`);
+
+  walk(parsed.tree, (node) => {
+    const callee = node.raw.type === 'CallExpression' ? node.raw.callee : undefined;
+
+    if (callee?.type !== 'MemberExpression' || callee.computed || callee.object.type !== 'Identifier') return;
+
+    if (callee.object.name !== 'describe' || callee.property.type !== 'Identifier') return;
+    const modifier = callee.property.name;
+
+    if (modifier === 'skip' || modifier === 'todo') {
+      skipped.push(`describe.${modifier}('${stringArguments(node)[0] ?? '(untitled)'}') at line ${String(parsed.lineAt(node.start))}`);
+    }
+  });
+
+  return skipped;
+}
+
 /** Records a finding at a node of one parsed file, under the test its line
  *  falls inside. */
 function finderIn(parsed: ParsedFile, spans: readonly TestSpan[]) {

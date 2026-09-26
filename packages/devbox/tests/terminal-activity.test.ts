@@ -1,6 +1,6 @@
 // The ready+activity bridge lives on `Devbox`, so every host inherits it: a terminal lane
 // stamps the durable interaction only after the readiness gate admits the box.
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 
 import { DEFAULT_DEVBOX_POLICY, LAST_INTERACTION_KEY, QUIET_SINCE_KEY, type DevboxPolicy } from '../src/lifecycle';
 import { Devbox, harness } from './support/devbox-harness';
@@ -90,6 +90,146 @@ describe('a throwing host-background check holds the box', () => {
     await box.devboxHeartbeat();
 
     expect((await box.devboxState()).lastTick?.decision).toBe('quiesce');
+  });
+});
+
+/** Idle host; the container's process list fails every read. */
+class UnreadableProcessesBox extends IdleHostBox {
+  override listProcesses(): Promise<never> {
+    return Promise.reject(new Error('the sandbox /processes endpoint answered 500'));
+  }
+}
+
+/** Busy, and counts how often the beat asks: each ask wakes the owning workspace. */
+class CountingHostBox extends TestBox {
+  asks = 0;
+
+  protected override async hasBackgroundWork(): Promise<boolean> {
+    this.asks += 1;
+
+    return true;
+  }
+}
+
+describe('the beat asks the host at most once per quiet-confirm window', () => {
+  test('beats inside one window reuse the answer, and the next window asks again', async () => {
+    const start = Date.now();
+    const { box, rows } = harness(CountingHostBox);
+
+    try {
+      await box.devboxStartup();
+      rows.set(LAST_INTERACTION_KEY, start - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
+
+      for (let beat = 0; beat < 5; beat++) {
+        setSystemTime(start + beat * 60_000);
+        await box.devboxHeartbeat();
+      }
+
+      // warm-forge-4d6acc02's box asked its root every minute for 30+ hours (2026-09-25/26).
+      expect(box.asks).toBe(1);
+      expect((await box.devboxState()).lastTick?.decision).toBe('hold');
+
+      setSystemTime(start + DEFAULT_DEVBOX_POLICY.quietConfirmMs + 60_000);
+      await box.devboxHeartbeat();
+
+      expect(box.asks).toBe(2);
+    } finally {
+      setSystemTime();
+    }
+  });
+});
+
+describe('a box rests only once no command it ran is still running', () => {
+  test("an earlier activation's command keeps the box awake, and the box rests once it exits", async () => {
+    const start = Date.now();
+    const { box, container, rows } = harness(IdleHostBox);
+
+    try {
+      await box.devboxStartup();
+      rows.set(LAST_INTERACTION_KEY, start - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
+      rows.set(QUIET_SINCE_KEY, start - DEFAULT_DEVBOX_POLICY.quietConfirmMs - 60_000);
+      // A detached `npm test` its caller's evicted activation left running.
+      container.processes.set('cmd-npm-test', { id: 'cmd-npm-test', pid: 4242, status: 'running', command: 'npm test' });
+
+      await box.devboxHeartbeat();
+
+      expect((await box.devboxState()).lastTick?.decision).toBe('hold');
+      expect(container.running.running).toBe(true);
+
+      container.processes.set('cmd-npm-test', { id: 'cmd-npm-test', pid: 4242, status: 'completed', command: 'npm test' });
+      await box.devboxHeartbeat();
+      setSystemTime(start + DEFAULT_DEVBOX_POLICY.quietConfirmMs + 60_000);
+      await box.devboxHeartbeat();
+
+      expect((await box.devboxState()).lastTick?.decision).toBe('quiesce');
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('a process list that never reads holds for one quiet-confirm window, then lets the box rest', async () => {
+    const start = Date.now();
+    const { box, container, rows } = harness(UnreadableProcessesBox);
+
+    try {
+      await box.devboxStartup();
+      rows.set(LAST_INTERACTION_KEY, start - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
+      const beats = [];
+
+      for (let beat = 1; beat <= 40; beat++) {
+        setSystemTime(start + DEFAULT_DEVBOX_POLICY.idleMs + beat * 60_000);
+        await box.devboxHeartbeat();
+        const tick = (await box.devboxState()).lastTick;
+        beats.push(tick?.decision);
+
+        if (tick?.decision === 'quiesce') {
+          expect(tick.note).toContain('process list');
+          break;
+        }
+      }
+
+      expect(beats.slice(0, 9).every((decision) => decision === 'hold')).toBe(true);
+      expect(beats.at(-1)).toBe('quiesce');
+      // The stop itself reads the list to kill processes; it must not refuse on the same failure.
+      expect(container.running.running).toBe(false);
+      // On record, not only on the console: the streak's start, the give-way, and the stop's fallback.
+      expect((await box.devboxState()).incidents.total).toBe(3);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('an unreadable supervised-spec store counts as an unreadable list: the beat holds, it does not throw', async () => {
+    const { box, rows, storage } = harness(IdleHostBox);
+    await box.devboxStartup();
+    const now = Date.now();
+    rows.set(LAST_INTERACTION_KEY, now - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
+    rows.set(QUIET_SINCE_KEY, now - DEFAULT_DEVBOX_POLICY.quietConfirmMs - 60_000);
+    storage.failListOn('devbox:proc:', new Error('storage read failed'));
+
+    await box.devboxHeartbeat();
+    storage.failListOn('devbox:proc:', undefined);
+
+    expect((await box.devboxState()).lastTick?.decision).toBe('hold');
+  });
+
+  test('a supervised server does not hold the box: the next start restores it', async () => {
+    const start = Date.now();
+    const { box } = harness(IdleHostBox);
+
+    try {
+      await box.devboxStartup();
+      await box.startSupervised('python3 -m http.server 8000');
+
+      setSystemTime(start + DEFAULT_DEVBOX_POLICY.idleMs + 60_000);
+      await box.devboxHeartbeat();
+      setSystemTime(start + DEFAULT_DEVBOX_POLICY.idleMs + DEFAULT_DEVBOX_POLICY.quietConfirmMs + 120_000);
+      await box.devboxHeartbeat();
+
+      expect((await box.devboxState()).lastTick?.decision).toBe('quiesce');
+    } finally {
+      setSystemTime();
+    }
   });
 });
 

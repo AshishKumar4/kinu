@@ -94,21 +94,27 @@ describe('the older pages under a sliding window', () => {
     return JSON.parse(JSON.stringify(page));
   };
 
-  async function shownThrough(frames: readonly (readonly UIMessage[])[]): Promise<string[][]> {
+  /** Each frame rendered in turn; `reachEdge` is the scroller reporting the reader at the top. */
+  async function shownThrough(frames: readonly (readonly UIMessage[])[], reachEdge = false): Promise<string[][]> {
     const listens = { addEventListener() {}, removeEventListener() {} };
     const container: Element = Object.create(null, Object.getOwnPropertyDescriptors({ nodeType: 1, tagName: 'DIV', namespaceURI: null, ownerDocument: listens, ...listens }));
     const root = createRoot(container);
     const seen: string[][] = [];
     let shown: string[] = [];
+    let loadMore = (): void => {};
 
     function Pane({ frame }: { frame: readonly UIMessage[] }): null {
-      shown = useChatThread({ rpc: stored, live: frame, seeded: true }).transcript.map((message) => message.id);
+      const thread = useChatThread({ rpc: stored, live: frame, seeded: true });
+      shown = thread.transcript.map((message) => message.id);
+      loadMore = thread.history.loadMore;
 
       return null;
     }
 
     for (const frame of frames) {
       await act(async () => { root.render(createElement(Pane, { frame })); });
+
+      if (reachEdge) await act(async () => { loadMore(); });
       seen.push(shown);
     }
 
@@ -117,14 +123,20 @@ describe('the older pages under a sliding window', () => {
     return seen;
   }
 
-  test('the walk loads the rows older than the window', async () => {
+  test('no older page loads until the reader reaches the top', async () => {
     const [first] = await shownThrough([rows('m41', 'm42')]);
+
+    expect(first).toEqual(['m41', 'm42']);
+  });
+
+  test('the walk loads the rows older than the window', async () => {
+    const [first] = await shownThrough([rows('m41', 'm42')], true);
 
     expect(first?.length).toBe(42);
   });
 
   test('a clear from another tab drops the older pages with the kept rows', async () => {
-    const seen = await shownThrough([rows('m41', 'm42'), [], rows('n1')]);
+    const seen = await shownThrough([rows('m41', 'm42'), [], rows('n1')], true);
 
     expect(seen.slice(1)).toEqual([[], ['n1']]);
   });

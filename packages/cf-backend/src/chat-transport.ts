@@ -25,7 +25,7 @@ export interface ChatWire {
   readonly sql: SqlExecutor | null;
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
-  getConnection(id: string): ChatSocket | undefined;
+  getConnection(id: string): Connection | undefined;
   history(limit?: number): Promise<UIMessage[]>;
   /** A durable row or an accepted send's reservation: the hook resends its whole list per request. */
   admitted(id: string): boolean;
@@ -260,7 +260,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
   }
 
-  /** One send per message the loop does not hold (`reconcileMessages`); answered only once the landing is decided. */
+  /** One send per message the loop does not hold (`reconcileMessages`); answered only once the landing is decided.
+   *  Every request ends in exactly one terminal frame: its turn's, or this method's, whatever failed. */
   private async admitChatRequest(requestId: string, body: string | undefined): Promise<void> {
     const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
 
@@ -270,42 +271,39 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return;
     }
 
-    // The client resends only its window, so reconcile against the window.
-    const storedMessages = await this.wire.history(TRANSCRIPT_WINDOW);
+    // A message that opens a turn hands the request to it: that turn's `turn-end` closes it. Every other
+    // taken message, a splice or the one that failed, gives its mapping back.
+    let opener: string | null = null;
+    const taken: string[] = [];
+    const release = (): void => { for (const id of taken) if (id !== opener) this.requests.delete(id); };
 
-    const fresh = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage)
-      .filter((message) => message.role === 'user' && !this.wire.admitted(message.id));
+    try {
+      // The client resends only its window, so reconcile against the window.
+      const storedMessages = await this.wire.history(TRANSCRIPT_WINDOW);
 
-    if (fresh.length === 0) {
-      this.done(requestId);
+      const fresh = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage)
+        .filter((message) => message.role === 'user' && !this.wire.admitted(message.id));
+
+      for (const message of fresh) {
+        this.requests.set(message.id, requestId);
+        taken.push(message.id);
+
+        if (await this.wire.send({ ...chatInput(message), id: message.id }) === 'turn') opener = message.id;
+      }
+    } catch (cause) {
+      release();
+
+      if (opener === null) this.done(requestId, { error: refusalOf(cause instanceof KinuError ? cause : toKinuError({ doing: 'taking a chat message', cause, otherwise: 'io' })).error });
+
+      // The loop refused and wrote nothing; anything else is a fault its caller must see.
+      if (!(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
 
       return;
     }
 
-    let landed: SendLanding = 'mid-turn';
+    release();
 
-    for (const message of fresh) {
-      this.requests.set(message.id, requestId);
-
-      try {
-        landed = await this.wire.send({ ...chatInput(message), id: message.id });
-      } catch (cause) {
-        // The loop refused and wrote nothing; close the request with the refusal so the hook's send
-        // rejects instead of waiting on a turn-end that never comes.
-        if (!(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
-        this.requests.delete(message.id);
-        this.done(requestId, { error: refusalOf(cause).error });
-
-        return;
-      }
-    }
-
-    // A spliced message is answered by the absorbing turn's stream; an opening message's id is
-    // the turn id, so its `turn-end` closes the request.
-    if (landed === 'mid-turn') {
-      for (const message of fresh) this.requests.delete(message.id);
-      this.done(requestId, { landed });
-    }
+    if (opener === null) this.done(requestId, taken.length === 0 ? {} : { landed: 'mid-turn' });
   }
 
   private done(requestId: string, extra: { landed?: SendLanding; error?: string } = {}): void {
@@ -326,6 +324,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       carried.push(request);
     }
 
+    this.releaseWaiters();
     const streamId = this.resume?.resumable.start(requestId, { messageId: turn.messageId }) ?? requestId;
 
     this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), taken: false, broken: false, failure: null };
@@ -371,6 +370,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         // A Stop is not a failure: an `error` frame here makes the SDK client paint an error card.
         if (event.message === INTERRUPTED_TURN) return;
 
+        // Their resume names this stream: its own terminal frame, with the error, settles it.
+        this.pendingResume.clear();
         this.resume?.resumable.markError(live.streamId);
         live.failure = event.message;
 
@@ -442,7 +443,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           if (live.cadence.flushes(flushSignal(chunk))) resume.resumable.flushBuffer();
         }
 
-        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }));
+        // Stored above, so a tab still joining reads it in its replay, in order; sent to it now it would run ahead of the parts the replay opens.
+        this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
       }
     } catch (cause) {
       this.degradeRelay(live, toKinuError({
@@ -451,10 +453,24 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
   }
 
+  /** A tab told to resume a stream that will not grow again hears it end, so its resume settles. */
+  private releaseWaiters(): void {
+    const stale = this.resume?.resumable.activeRequestId ?? null;
+
+    for (const id of this.pendingResume) {
+      const connection = this.wire.getConnection(id);
+
+      if (stale !== null && connection !== undefined) sendIfOpen(connection, doneFrame(stale, {}));
+    }
+
+    this.pendingResume.clear();
+  }
+
   /** The relay broke; the turn did not. The tab gets our classification; the SDK's words go to diagnostics. */
   private degradeRelay(live: LiveStream, error: KinuError): void {
     diagnostics.failure('chat.stream_observe_failed', error);
     live.broken = true;
+    this.pendingResume.clear();
     this.resume?.resumable.markError(live.streamId);
     this.wire.broadcast(JSON.stringify({
       type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: refusalOf(error).error, done: false, error: true,

@@ -5,6 +5,7 @@ import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.
 import { noElapsedWorkDeadlineRule } from "./rules/no-elapsed-work-deadline.ts";
 import { noConditionalEmptyObjectSpreadRule } from "./rules/no-conditional-empty-object-spread.ts";
 import { noCopyRpcStubRule } from "./rules/no-copy-rpc-stub.ts";
+import { noBareErrorInDurableObjectRule } from "./rules/no-bare-error-in-durable-object.ts";
 import { noDdlInCatchRule } from "./rules/no-ddl-in-catch.ts";
 import { noEmptyCatchRule } from "./rules/no-empty-catch.ts";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.ts";
@@ -55,6 +56,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-chained-type-assertions": noChainedTypeAssertionsRule,
 		"no-conditional-empty-object-spread": noConditionalEmptyObjectSpreadRule,
 		"no-copy-rpc-stub": noCopyRpcStubRule,
+		"no-bare-error-in-durable-object": noBareErrorInDurableObjectRule,
 		"no-ddl-in-catch": noDdlInCatchRule,
 		"no-empty-catch": noEmptyCatchRule,
 		"no-known-value-widening": noKnownValueWideningRule,

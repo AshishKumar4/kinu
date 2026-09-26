@@ -123,6 +123,19 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     },
   },
   {
+    title: 'a dismissed plan stops awaiting a decision and takes no later verdict',
+    covers: ['dismissPlanReview'],
+    async run({ surface, sql, actor }) {
+      const submitted = new PlanReviewStore(sql, actor).submit(CHAT_SESSION_ID, [{ start: 1, content: '# Plan\n\n1. Ship it.\n' }]);
+
+      if (!submitted.ok) throw new Error(submitted.error);
+      const { id, revision } = submitted.plan;
+      expect(await surface.dismissPlanReview(id, revision)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+      expect(await surface.getActivePlanReview()).toMatchObject({ id, status: 'dismissed' });
+      expect(await surface.decidePlanReview(id, revision, 'approve')).toMatchObject({ ok: false, error: 'plan revision is already dismissed' });
+    },
+  },
+  {
     title: 'a refinement with no labelled turns is refused on the record, and an unknown one decides nothing',
     covers: ['requestRefinement', 'listRefinements', 'showRefinement', 'decideRefinement'],
     async run({ surface }) {

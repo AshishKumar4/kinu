@@ -10,7 +10,7 @@ import type {
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { waitForAnswer } from '@kinu.run/core';
+import { literalText, waitForAnswer } from '@kinu.run/core';
 
 const CONSENT_POLL_MS = 750;
 
@@ -125,7 +125,7 @@ export function watchTerminalConsents(
   return watchDeviceConsents(consents, {
     present: (consent, signal) => {
       if (!tty) {
-        console.log(`\n${WARN(`The agent wants to use ${consent.deviceLabel}`)} (${consent.method}: ${consent.command || 'command'}).`);
+        console.log(`\n${WARN(`The agent wants to use ${consent.deviceLabel}`)} (${consent.method}: ${literalText(consent.command || 'command')}).`);
         console.log(MUTED(`  Approve or deny from the Kinu app, or run: kinu chat ${agentName}`));
 
         return Promise.resolve(null);
@@ -161,7 +161,7 @@ export function watchHeadlessConsents(
           message: `Denied: nobody was at the terminal to approve it. ${instructions}`,
         })}\n`);
       } else {
-        console.error(`\n${WARN('Denied: nobody was at the terminal to approve it')} ${consent.method} on ${consent.deviceLabel}: ${consent.command || '(command)'}`);
+        console.error(`\n${WARN('Denied: nobody was at the terminal to approve it')} ${consent.method} on ${consent.deviceLabel}: ${literalText(consent.command || '(command)')}`);
         console.error(MUTED(`  ${instructions}`));
       }
 
@@ -182,7 +182,7 @@ async function promptConsentDecision(
   console.log(`\n${WARN(`This agent wants to use ${consent.deviceLabel}`)}`);
   console.log(`  ${DIM('Device:')}  ${consent.deviceLabel}`);
   console.log(`  ${DIM('Method:')}  ${consent.method}`);
-  console.log(`  ${DIM('Command:')} ${consent.command || '(command)'}`);
+  console.log(`  ${DIM('Command:')} ${literalText(consent.command || '(command)')}`);
 
   while (!signal.aborted) {
     const answer = await askLine(`${DIM('[y] allow once · [a] always allow · [n] deny ›')} `, signal);

@@ -1,7 +1,6 @@
 /**
- * Background-event provenance for chat event cards. Programmatic turns are stored as
- * `role: "user"`; `metadata.kinuEvent` (set by BackendHost.enqueueTurn) marks them as not typed by
- * the operator. A signal card and its durable message are joined by `metadata.signalId`.
+ * Background-event provenance for chat event cards: `metadata.kinuEvent` marks a `role: "user"` row
+ * the operator did not type. A signal card and its message are joined by `metadata.signalId`.
  */
 
 import { ADVISOR_SIGNAL_KIND } from '../advisor/review';
@@ -9,7 +8,7 @@ import { DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity }
 import type { BroadcastEvent } from '../types/backend-host';
 import { SIGNAL_ID_METADATA_KEY } from '../types/signals';
 import type { SignalCardEvent, SignalCardState } from '../types/signals';
-import { turnAuthor } from '../utils/ui-message';
+import { TURN_AUTHOR_METADATA_KEY, turnAuthor } from '../utils/ui-message';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import * as v from 'valibot';
 
@@ -20,7 +19,15 @@ export type ClassifiedProgrammaticTurn =
   | { kind: "background_job"; jobKind: string; status: string }
   | { kind: "deferred_approval"; decision: string; count: number }
   | { kind: "advisor"; severity: AdvisorSeverity }
+  | { kind: "delegated_task"; from: string }
   | { kind: "system_event"; event: string };
+
+const DELEGATED_FROM_KEY = 'kinuFrom';
+
+/** A hirer's task in the hired agent's chat: one event shape on both backends. */
+export function delegatedTaskMetadata(from: string, mode: string): JsonObject {
+  return { kinuEvent: 'subordinate_task', [TURN_AUTHOR_METADATA_KEY]: 'harness', [DELEGATED_FROM_KEY]: from, kinuMode: mode };
+}
 
 const ProgrammaticMetadataSchema = v.looseObject({
   kinuEvent: v.optional(v.string()),
@@ -29,6 +36,7 @@ const ProgrammaticMetadataSchema = v.looseObject({
   status: v.optional(v.string()),
   decision: v.optional(v.string()),
   count: v.optional(v.number()),
+  [DELEGATED_FROM_KEY]: v.optional(v.string()),
 });
 
 /** An empty-string metadata field takes the same default as an absent one. */
@@ -74,6 +82,8 @@ export function classifyProgrammaticTurn(
         decision: cardField(turn.decision, "decided"),
         count: turn.count ?? 1,
       };
+    case "subordinate_task":
+      return { kind: "delegated_task", from: cardField(turn[DELEGATED_FROM_KEY], "the hirer") };
     case ADVISOR_SIGNAL_KIND:
       return {
         kind: "advisor",

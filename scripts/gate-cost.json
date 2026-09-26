@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-26",
   "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
-  "method": "each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> /usr/bin/time -v bash -c <run>`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)",
+  "method": "each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> /usr/bin/time -v bash -c <run>`; the row's whole process tree \u2014 its session plus every descendant by ppid, so a setsid'd dev server or browser counts \u2014 sampled every 0.05s for its first 3s and every 0.25s after \u2014 summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, \u0394(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)",
   "rows": {
     "bun scripts/preflight.ts": {
       "wallSeconds": 0.22,
@@ -342,17 +342,6 @@
       "meanThreads": 0.97,
       "samples": 5,
       "loadAtStart": 2.53,
-      "exit": 0
-    },
-    "bun test --timeout=0 scripts/deploy.test.ts": {
-      "wallSeconds": 89.64,
-      "cpuSeconds": 24.65,
-      "peakRssMb": 441.33,
-      "peakRunnable": 10,
-      "peakCpuThreads": 2.1,
-      "meanThreads": 0.28,
-      "samples": 391,
-      "loadAtStart": 2.1,
       "exit": 0
     },
     "bun test --timeout=0 scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts": {
@@ -828,16 +817,16 @@
       "loadAtStart": 12.41,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts": {
-      "wallSeconds": 10.66,
-      "cpuSeconds": 28.23,
-      "peakRssMb": 2681.67,
-      "peakRunnable": 24,
-      "peakCpuThreads": 8.93,
-      "meanThreads": 2.65,
-      "samples": 71,
-      "loadAtStart": 15.97,
-      "exit": 0
+    "bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts": {
+      "wallSeconds": 14.72,
+      "cpuSeconds": 36.55,
+      "peakRssMb": 3038.44,
+      "peakRunnable": 23,
+      "peakCpuThreads": 9.62,
+      "meanThreads": 2.48,
+      "samples": 95,
+      "loadAtStart": 10.53,
+      "exit": 1
     },
     "bun run test:workerd:cf-complexity": {
       "wallSeconds": 58.81,
@@ -936,6 +925,50 @@
       "meanThreads": 0.84,
       "samples": 5,
       "loadAtStart": 6.36,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts": {
+      "wallSeconds": 152.68,
+      "cpuSeconds": 60.46,
+      "peakRssMb": 525.13,
+      "peakRunnable": 19,
+      "peakCpuThreads": 2.12,
+      "meanThreads": 0.4,
+      "samples": 618,
+      "loadAtStart": 13.32,
+      "exit": 0
+    },
+    "bun scripts/gen-cli-docs.ts --check": {
+      "wallSeconds": 0.52,
+      "cpuSeconds": 0.54,
+      "peakRssMb": 82.43,
+      "peakRunnable": 2,
+      "peakCpuThreads": 1,
+      "meanThreads": 1.05,
+      "samples": 8,
+      "loadAtStart": 12.21,
+      "exit": 0
+    },
+    "bun scripts/flake-gate.ts": {
+      "wallSeconds": 0.34,
+      "cpuSeconds": 0.41,
+      "peakRssMb": 71.77,
+      "peakRunnable": 2,
+      "peakCpuThreads": 0,
+      "meanThreads": 1.19,
+      "samples": 4,
+      "loadAtStart": 16.62,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/flake-gate.test.ts": {
+      "wallSeconds": 4.1,
+      "cpuSeconds": 6.03,
+      "peakRssMb": 453.06,
+      "peakRunnable": 3,
+      "peakCpuThreads": 3.11,
+      "meanThreads": 1.47,
+      "samples": 53,
+      "loadAtStart": 15.96,
       "exit": 0
     }
   }

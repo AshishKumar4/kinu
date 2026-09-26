@@ -24,7 +24,7 @@ const WORKSPACE_NAME_KEY = "kinu:workspace-name";
 /** Type-only, so nothing here reaches orchestrator code at runtime. */
 type SandboxRootClient = Pick<
   OrchestratorAgent,
-  "acceptSandboxLifecycleFailure" | "hasSandboxBackgroundWork"
+  "acceptSandboxLifecycleFailure" | "sandboxInUse"
 >;
 
 export class KinuSandbox extends Devbox<Env> {
@@ -58,7 +58,7 @@ export class KinuSandbox extends Devbox<Env> {
 
     if (root === null) return false;
 
-    return await root.hasSandboxBackgroundWork();
+    return await root.sandboxInUse();
   }
 
   /** Devbox re-delivers until `queued`. `attempt` is Devbox's delivery count, which an evicted

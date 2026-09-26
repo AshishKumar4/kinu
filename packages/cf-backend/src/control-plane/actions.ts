@@ -5,6 +5,7 @@
  * Arms return `ActionOutcome` and never throw for a refusal, so every attempt is audited.
  */
 import { renderThrownChain, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
+import { decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
@@ -20,6 +21,10 @@ export const UserIdSchema = v.pipe(v.string(), v.regex(/^[a-f0-9]{32}$/));
 const WorkspaceSchema = v.pipe(v.string(), v.nonEmpty());
 
 const JobIdSchema = v.pipe(v.string(), v.nonEmpty());
+
+const SUPPORT_READ_REASONS = ['support_ticket', 'incident', 'owner_request'] as const;
+
+const Index = v.pipe(v.number(), v.integer(), v.minValue(0));
 
 /** The actions, as data; `describeAction` derives audit names from these, so vocabulary cannot drift. */
 export const ControlActionSchema = v.variant('action', [
@@ -60,6 +65,15 @@ export const ControlActionSchema = v.variant('action', [
     workspace: WorkspaceSchema,
   }),
   v.object({
+    action: v.literal('workspace.turn_read'),
+    userId: UserIdSchema,
+    workspace: WorkspaceSchema,
+    turnId: v.pipe(v.string(), v.nonEmpty()),
+    reason: v.picklist(SUPPORT_READ_REASONS),
+    actor: v.optional(v.pipe(v.string(), v.nonEmpty())),
+    at: v.optional(v.object({ epoch: Index, revision: Index, from: v.optional(Index) })),
+  }),
+  v.object({
     action: v.literal('workspace.remove'),
     userId: UserIdSchema,
     workspace: WorkspaceSchema,
@@ -91,6 +105,8 @@ export interface ActionOutcome {
   reason: ActionReason;
   code?: ErrorCode;
   affected?: number;
+  /** Never audited. */
+  result?: JsonValue;
 }
 
 /** `request` names no domain object: a body the schema refused, still audited. */
@@ -120,6 +136,8 @@ export function describeAction(action: ControlAction): ActionIdentity {
     case 'shell_grants.revoke':
     case 'workspace.remove':
       return { operation, targetKind: 'workspace', target: owned };
+    case 'workspace.turn_read':
+      return { operation, targetKind: 'workspace', target: `${owned}/${action.turnId}` };
   }
 }
 
@@ -133,6 +151,7 @@ export type ActionTarget = Pick<OrchestratorAgent,
   | 'decideDeferredApprovals'
   | 'getShellApprovalGrants'
   | 'revokeShellApprovalGrants'
+  | 'supportReadTurn'
 >;
 
 export type ActionRegistry = Pick<UserDO,
@@ -231,6 +250,19 @@ export async function runControlAction<Id>(
             outcome: 'denied', detail: 'none of those approvals are still pending',
             reason: 'none_pending', affected: 0,
           };
+      }
+
+      case 'workspace.turn_read': {
+        const read = await agent.supportReadTurn({
+          turnId: action.turnId, reason: action.reason,
+          ...(action.actor !== undefined && { actor: action.actor }),
+          ...(action.at !== undefined && { at: action.at }),
+        });
+
+        return {
+          outcome: 'ok', detail: `read turn ${action.turnId} for ${action.reason}`, reason: 'ok',
+          result: decodeJsonValue({ value: read }),
+        };
       }
 
       case 'shell_grants.revoke': {

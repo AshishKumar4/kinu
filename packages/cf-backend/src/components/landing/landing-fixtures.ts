@@ -333,6 +333,14 @@ export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview |
       return answer({ ok: true, plan: decided, queued: true });
     }
 
+    if (method === 'dismissPlanReview') {
+      if (base === null) return answer({ ok: false, error: 'no plan under review', plan: null });
+      const dismissed: PlanReview = { ...base, status: 'dismissed', updatedAt: Date.now(), decidedAt: Date.now() };
+      onDecide(dismissed);
+
+      return answer({ ok: true, plan: dismissed });
+    }
+
     if (method === 'getExposedPorts') return answer({ ports: [] });
 
     if (method.startsWith('list') || method.startsWith('get')) return answer([]);

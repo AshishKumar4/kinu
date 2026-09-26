@@ -259,7 +259,7 @@ describe('CLI auth route status mapping', () => {
 
     const res = handled(await cli(startRequest(), env));
     expect(res.status).toBe(500);
-    expect(v.parse(ErrorResponseSchema, await res.json()).error).toMatch(/namespace unavailable/i);
+    expect(v.parse(ErrorResponseSchema, await res.json()).error).not.toMatch(/namespace unavailable/i);
   });
 });
 

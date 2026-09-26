@@ -617,7 +617,10 @@ export class Inbox implements AgentInbox {
 
     const turn: ProgrammaticTurn = {
       text: group.map((signal) => signal.text).join('\n\n'),
-      metadata: { ...first.metadata, [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: mode },
+      metadata: {
+        ...first.metadata, [TURN_AUTHOR_METADATA_KEY]: 'operator',
+        ...(group.some((signal) => signal.user.mode !== undefined) && { kinuMode: mode }),
+      },
       origin: 'user',
       steerIds: group.map((signal) => signal.user.id),
       ...(opts.idempotent && {

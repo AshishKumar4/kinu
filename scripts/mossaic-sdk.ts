@@ -34,9 +34,10 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
+import { tolerate } from '@kinu.run/core/obs';
 import { MOSSAIC_MANIFEST, MOSSAIC_ROOT, MOSSAIC_SDK, isMossaicVendored, trackedFiles } from './sources';
 
 const REPO_ROOT = join(import.meta.dir, '..');
@@ -94,6 +95,11 @@ export function verifyPinnedSource(
   return { repository: manifest.repository, commit: manifest.commit, checked: present.size, drift };
 }
 
+/** The link {@link bindPinnedCompiler} adds to the installed tree, as `bun.lock` install keys: the hoisted dts
+ *  plugin's `typescript`, bound to the SDK's pinned compiler. `scripts/install-parity.ts` accepts it beside what the
+ *  lock names while it reaches that compiler. */
+export const PINNED_COMPILER_LINK = { key: 'rolldown-plugin-dts/typescript', target: '@mossaic/sdk/typescript' } as const;
+
 /**
  * The compiler upstream builds with, where the dts generator will find it.
  *
@@ -124,7 +130,7 @@ export function verifyPinnedSource(
  * every resolution in the repo. Not a `patches/` entry, which would pin a
  * build tool's internals to make a resolution edge appear.
  */
-function bindPinnedCompiler(root: string): void {
+export function bindPinnedCompiler(root: string): void {
   const compiler = join(root, MOSSAIC_SDK, 'node_modules/typescript');
 
   if (!existsSync(compiler)) {
@@ -135,6 +141,17 @@ function bindPinnedCompiler(root: string): void {
   }
 
   const peer = join(root, 'node_modules/rolldown-plugin-dts/node_modules/typescript');
+  const plugin = realpathSync(join(root, 'node_modules/rolldown-plugin-dts'));
+
+  // A linked worktree's plugin is the donor checkout's (`setup-worktree.sh`): writing the link there repointed the
+  // donor's build at this tree, dangling once the tree was gone (2026-09-26). The donor's own install binds it, and
+  // this tree's compiler is a link to the donor's, so the one here must already reach it.
+  if (!plugin.startsWith(`${realpathSync(root)}/`)) {
+    if (tolerate(() => realpathSync(peer), 'enoent') === realpathSync(compiler)) return;
+
+    throw new Error(`${peer} does not reach ${compiler}; run \`bun scripts/mossaic-sdk.ts\` in the checkout `
+      + `${dirname(dirname(plugin))} this worktree links, then \`bash scripts/setup-worktree.sh\` here`);
+  }
 
   mkdirSync(dirname(peer), { recursive: true });
   rmSync(peer, { recursive: true, force: true });

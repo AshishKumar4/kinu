@@ -20,7 +20,7 @@ import {
 import { DEFAULT_SOUL_MD } from './identity/soul';
 import { renderAgentsMdSection, type AgentsMdSources } from './prompting/agents-md';
 import {
-  WORKSPACE_INSTRUCTIONS_DELIMITER, WORKSPACE_INSTRUCTIONS_TAG, sealDelimiters,
+  WORKSPACE_INSTRUCTIONS_DELIMITER, WORKSPACE_INSTRUCTIONS_TAG, sealDelimiters, sealSoul,
 } from './utils/prompt-sections';
 import {
   AGENT_NAMES_LINE,
@@ -281,7 +281,7 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
 function readSoulForPrompt(override?: string): string {
   const soul = override?.trim();
 
-  return soul === undefined || soul === '' ? FALLBACK_PURPOSE : soul;
+  return sealSoul(soul === undefined || soul === '' ? FALLBACK_PURPOSE : soul);
 }
 
 /** Activation reasons render in the volatile turn context so the stable prefix stays byte-identical. Order is

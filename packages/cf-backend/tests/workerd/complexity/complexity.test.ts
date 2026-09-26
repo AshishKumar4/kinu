@@ -48,6 +48,29 @@ const SUBJECTS: readonly Subject[] = [{
     + 'before it: a context keeps the head it last read or wrote. Only the request bytes grow with the '
     + 'history, since each request carries it',
 }, {
+  // Replaces transcript-cost's wall-clock ratio (2026-09-26): the deploy's 6.8x there was machine load, not growth.
+  name: 'session store, a long turn after twenty long answers',
+  unit: 'deltas in each earlier answer',
+  sizes: [20, 2_000],
+  run: async (probe, size) => await probe.turnAfterLongAnswers(size),
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
+  why: 'an answer is sealed into its message once; a later turn reads that message, never the deltas it was '
+    + 'streamed as (D23: re-joining every delta row of past answers made a 500-delta turn 6x slower)',
+}, {
+  name: 'orchestrator, a long turn after twenty long answers',
+  unit: 'deltas in each earlier answer',
+  sizes: [20, 2_000],
+  run: async (_probe, size) => {
+    const measured = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName(`long-cost-${String(size)}`)).longTurnCost(size);
+
+    transportReads.set(size, measured.historyReads);
+
+    return measured.cost;
+  },
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
+  why: 'the production turn path, chat transport included: the store subject above drives the pipeline directly, so '
+    + 'per-delta work in the transport (a transcript read, a broadcast) shows only here',
+}, {
   name: 'workspace Diffs, one read',
   unit: 'files in the workspace',
   sizes: [10, 1_000, 10_000],
@@ -82,6 +105,9 @@ const SUBJECTS: readonly Subject[] = [{
   rows: { rowsRead: 'O(n)', rowsWritten: 'O(n)', statements: 'O(n)', rowsScanned: 'O(n)' },
   why: 'a fork writes every file of the version into the new slate once',
 }];
+
+/** The chat transport's whole-transcript reads during the orchestrator subject's measured turn, by size. */
+const transportReads = new Map<number, number>();
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
@@ -167,3 +193,8 @@ for (const subject of SUBJECTS) {
   });
 }
 
+// Runs after the subjects: the orchestrator subject fills `transportReads`.
+test('the chat transport reads the transcript a fixed number of times a turn, never once a delta', () => {
+  // A queued task opens no user turn, so its one read is the transcript frame at its close; 500 deltas stream before it.
+  expect([...transportReads.values()]).toEqual([1, 1]);
+});

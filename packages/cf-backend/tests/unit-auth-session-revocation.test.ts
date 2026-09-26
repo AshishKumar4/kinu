@@ -13,8 +13,9 @@ import {
 import {
   AuthError, SESSION_COOKIE_NAME, authenticateRequest, type AuthEnv,
 } from '../src/auth/session';
-import { handleAuthRequest, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
-import { unreachableNamespace } from './helpers/bindings';
+import { authPageRoutes, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
+import { unreachableNamespace, workerContext } from './helpers/bindings';
+import { serveFamily } from './helpers/api';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { OwnerCapabilityUnavailableError } from '@kinu.run/core';
@@ -23,6 +24,8 @@ import type { UserDO } from '../src/user/user-do';
 import {
   createRecordingLogger, renderThrownChain, setDiagnosticsSink, type RecordingLogger,
 } from '@kinu.run/core/obs';
+
+const authPages = serveFamily(authPageRoutes, { ctx: workerContext() });
 
 const KV_REPLICATION_LAG_MS = 60_000;
 
@@ -304,7 +307,7 @@ describe('logout ends one session everywhere at once', () => {
     const session = await createSession(env, profile('person@example.com'));
 
     const outage = envWith(kv.near, authority.broken('revokeBrowserSession'));
-    const refused = await handleAuthRequest(logoutRequest(session.token), outage);
+    const refused = await authPages(logoutRequest(session.token), outage);
 
     expect(refused?.status).toBe(503);
     expect(refused?.headers.get('location')).toBeNull();
@@ -315,7 +318,7 @@ describe('logout ends one session everywhere at once', () => {
     expect(page).toContain('href="/logout?return_to=%2F"');
     expect(await verifySession(env, session.token)).not.toBeNull();
 
-    const retried = await handleAuthRequest(logoutRequest(session.token), env);
+    const retried = await authPages(logoutRequest(session.token), env);
 
     expect(retried?.status).toBe(302);
     expect(retried?.headers.get('set-cookie')).toContain('Max-Age=0');
@@ -329,7 +332,7 @@ describe('logout ends one session everywhere at once', () => {
     const env = envWith(kv.near, authority.namespace);
     const session = await createSession(env, profile('person@example.com'));
 
-    const response = await handleAuthRequest(logoutRequest(session.token, '/dashboard'), env);
+    const response = await authPages(logoutRequest(session.token, '/dashboard'), env);
 
     expect(response?.status).toBe(302);
     expect(response?.headers.get('location')).toBe('https://kinu.example.com/dashboard');

@@ -238,6 +238,7 @@ export function initRunEventTables(execRaw: RawSqlExec): void {
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_run_ts ON run_events(actor_id, run_id, ts)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(actor_id, type, ts DESC)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_actor ON run_events(actor_id)`);
   // One row per actor: a person's newest words stay one read however much automation follows.
   execRaw(`CREATE TABLE IF NOT EXISTS operator_requests (
     actor_id TEXT PRIMARY KEY,
@@ -506,7 +507,7 @@ export class RunEventRecorder {
     this.actor.assertCurrent();
 
     const latest = this.sql<{ run_id: string }>`
-      SELECT run_id FROM run_events
+      SELECT run_id FROM run_events INDEXED BY idx_run_events_actor
       WHERE actor_id = ${this.actorId} AND run_id != ${WORKSPACE_RUN_ID}
       ORDER BY rowid DESC LIMIT 1`;
 
@@ -557,6 +558,21 @@ export class RunEventRecorder {
     return rows[0]?.n ?? 0;
   }
 
+  stepFinish(runId: string, stepIndex: number): Extract<RunEvent, { type: 'step_finish' }> | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = 'step_finish'
+        AND json_extract(payload, '$.stepIndex') = ${stepIndex}
+      ORDER BY event_index DESC LIMIT 1`[0];
+
+    if (row === undefined) return null;
+    const event = parseStoredRunEvent(row.payload);
+
+    return event.type === 'step_finish' ? event : null;
+  }
+
   /** No live caller; SSE resume goes through {@link readText}. */
   readSince(runId: string, afterIndex: number, limit = RUN_EVENT_LIMIT_MAX): RunEvent[] {
     this.actor.assertCurrent();
@@ -594,6 +610,7 @@ export class RunEventRecorder {
     readonly runId: string;
     readonly turn: OpenTurnIdentity;
     readonly steps: ModelMessage[];
+    readonly finishedSteps: number;
     readonly partial: Extract<RunEvent, { type: 'step_partial' }> | null;
   } | null {
     this.actor.assertCurrent();
@@ -633,7 +650,7 @@ export class RunEventRecorder {
     const newest = partials[0] === undefined ? null : parseStoredRunEvent(partials[0].payload);
     const partial = newest !== null && newest.type === 'step_partial' && newest.stepIndex > finishedSteps ? newest : null;
 
-    return { runId: row.run_id, turn: start.turn, steps, partial };
+    return { runId: row.run_id, turn: start.turn, steps, finishedSteps, partial };
   }
 
   /** Filtered in SQL so `limit` is a real bound. Ties on `ts` break by rowid: `event_index`

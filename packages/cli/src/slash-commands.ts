@@ -69,7 +69,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/clear', description: 'Start a new conversation in this workspace; files and memory stay', aliases: ['/new'], requires: 'localControls', run: clearCommand },
   { name: '/queue', description: 'Send a message after the running turn ends', usage: '/queue <text>', run: queueCommand },
   { name: '/branch', description: 'Try another direction alongside the running turn', usage: '/branch <text>', run: branchCommand },
-  { name: '/plan', description: 'Have the agent draft a plan, then approve it or send it back', usage: '/plan [<text>|show|approve [notes]|changes <feedback>]', requires: 'plans', run: planCommand },
+  { name: '/plan', description: 'Have the agent draft a plan, then approve it, send it back or dismiss it', usage: '/plan [<text>|show|approve [notes]|changes <feedback>|dismiss]', requires: 'plans', run: planCommand },
   { name: '/fork', description: 'Walk back: restart the conversation just before an earlier message', usage: '/fork [number]', run: forkCommand },
   { name: '/undo', description: 'Restore files to how they were n turns back, then offer to walk back the chat', usage: '/undo [n]', requires: 'checkpoints', run: undoCommand },
   { name: '/approval', description: 'Show or set when shell commands need your approval', usage: '/approval strict|allow_all|deny_all', requires: 'localControls', run: approvalCommand },
@@ -552,6 +552,15 @@ async function planCommand({ client, command, arg, rest }: SlashContext): Promis
   const [sub, ...args] = rest.filter((token) => token);
 
   if (sub === undefined || sub === 'show') return { kind: 'text', text: renderPlanReview(await plans.active()) };
+
+  if (sub === 'dismiss') {
+    const active = await plans.active();
+
+    if (!active) return { kind: 'text', text: 'No plan is waiting for you.' };
+    const dismissed = await plans.dismiss(active.id, active.revision);
+
+    return { kind: 'text', text: dismissed.ok ? `Dismissed plan ${active.id}.` : `The plan was not dismissed: ${dismissed.error}` };
+  }
 
   if (sub === 'approve' || sub === 'changes') {
     const active = await plans.active();
@@ -1073,10 +1082,11 @@ export function renderPlanReview(plan: PlanReview | null): string {
   if (!plan) return 'No plan yet. /plan <what to plan> drafts one for review.';
 
   const states: Record<PlanReview['status'], string> = {
-    pending: 'waiting for you: /plan approve [notes] or /plan changes <feedback>',
+    pending: 'waiting for you: /plan approve [notes], /plan changes <feedback> or /plan dismiss',
     changes_requested: 'sent back for changes; the agent is revising it',
     approved: 'approved',
     superseded: 'superseded by a newer revision',
+    dismissed: 'dismissed',
   };
 
   return [

@@ -85,6 +85,7 @@ const WorkerSchema = v.object({
     bindings: v.array(v.object({ name: v.string(), class_name: v.string() })),
   })),
   containers: v.optional(v.array(v.object({
+    name: v.optional(v.string()),
     class_name: v.string(),
     image: v.string(),
     max_instances: v.optional(v.number()),
@@ -123,16 +124,45 @@ const WranglerConfigSchema = v.object({
 
 type WorkerConfig = v.InferOutput<typeof WorkerSchema>;
 
+type Container = NonNullable<WorkerConfig['containers']>[number];
+
+/** A container with the name of the application it runs under. */
+interface NamedContainer extends Container {
+  readonly name: string;
+}
+
+/** What one environment deploys, each container under its application's name. */
+type DeployedConfig = Omit<WorkerConfig, 'containers'> & { readonly containers?: readonly NamedContainer[] };
+
+/**
+ * The application a container runs under, named as Wrangler names it (config validation, wrangler 4.129): its own
+ * `name`, or the TOP-LEVEL Worker name and its class, with `-<environment>` for a named environment, lower-cased and
+ * with spaces as dashes. So staging's KinuSandbox runs as `kinu-kinusandbox-staging`, not under the staging Worker's
+ * name, and a deploy creates the application of this name unless one is already bound to the class's namespace.
+ */
+function applicationOf(container: Container, topLevel: string | undefined, environment: InfraEnvironment): string {
+  if (container.name !== undefined) return container.name;
+  const suffix = environment === 'production' ? '' : `-${environment}`;
+
+  return `${topLevel ?? 'worker'}-${container.class_name}${suffix}`.toLowerCase().replaceAll(' ', '-');
+}
+
 /**
  * What `environment` deploys, read the way Wrangler reads it: an environment inherits the top level's inheritable
  * keys unless it names its own, and declares every binding and var itself (Wrangler configuration docs, "Inheritable
  * keys" and "Non-inheritable keys"). An environment with no name of its own deploys as `<name>-<environment>`.
  * Routes are inheritable, and staging inheriting production's would claim kinu.run, so staging must name its own.
  */
-function environmentConfig(config: v.InferOutput<typeof WranglerConfigSchema>, environment: InfraEnvironment): WorkerConfig {
+function environmentConfig(config: v.InferOutput<typeof WranglerConfigSchema>, environment: InfraEnvironment): DeployedConfig {
   const { env, ...production } = config;
 
-  if (environment === 'production') return production;
+  const named = ({ containers, ...worker }: WorkerConfig): DeployedConfig => {
+    if (containers === undefined) return worker;
+
+    return { ...worker, containers: containers.map((container) => ({ ...container, name: applicationOf(container, production.name, environment) })) };
+  };
+
+  if (environment === 'production') return named(production);
 
   const staging = env?.staging;
 
@@ -147,7 +177,7 @@ function environmentConfig(config: v.InferOutput<typeof WranglerConfigSchema>, e
   const inherited = Object.fromEntries(Object.entries({ account_id: accountId, assets, migrations, triggers })
     .filter(([, value]) => value !== undefined));
 
-  return { ...inherited, name: `${name ?? 'worker'}-staging`, ...staging };
+  return named({ ...inherited, name: `${name ?? 'worker'}-staging`, ...staging });
 }
 
 /* ── The shapes ───────────────────────────────────────────────────────── */
@@ -168,7 +198,11 @@ export type ResourceKind =
   // state is absence — so it is declared as a resource in order to be OBSERVED,
   // which is the only way "we did not accidentally put a login in front of every
   // preview URL" is a checked fact rather than an assumption.
-  | 'access-scope';
+  | 'access-scope'
+  // A container class's namespace bound to the application the config names, or to none. The other state, a stray
+  // application holding the namespace, is one no deploy can move past (DURABLE_OBJECT_ALREADY_HAS_APPLICATION), so it
+  // is observed before the upload rather than deferred to it.
+  | 'container-namespace';
 
 /** How a resource comes into existence. This is the whole of provision's plan
  *  and the whole of teardown's: `wrangler-cli` is what provision creates,
@@ -435,8 +469,9 @@ export const UNCAPTURED: readonly Uncaptured[] = [
     what: 'The sandbox container image being PULLABLE, and the container it starts reporting the '
       + 'SANDBOX_VERSION the configured digest was resolved for. The SDK asks the container for '
       + 'its own SANDBOX_VERSION on every start.',
-    evidence: 'a container application is named after its Worker and class — '
-      + '`kinu-kinusandbox` — and it does not exist until the Worker is deployed. The image is '
+    evidence: 'a container application is named after the top-level Worker name and its class — '
+      + '`kinu-kinusandbox`, and `kinu-kinusandbox-staging` for staging — and it does not exist until the Worker is '
+      + 'deployed. The image is '
       + 'reconciled only by a deploy, and Sandbox.checkVersionCompatibility logs the mismatch at container '
       + 'start rather than failing the deploy. What IS captured, by '
       + '`scripts/release-config.test.ts`: the config names one immutable digest rather '
@@ -610,6 +645,14 @@ export const SUPPLY = new Map<string, Supply>([
       + 'goes through the dataset bindings and needs no token. Only reading does.',
     source: 'https://dash.cloudflare.com/profile/api-tokens — a custom token with '
       + 'Account | Account Analytics | Read, scoped to this account.',
+  }],
+  ['KINU_OBS_TOKEN', {
+    handling: 'prompt',
+    required: false,
+    absent: 'the monitor cannot see workspace objects killed for memory or wall time, and says so '
+      + 'once as a `fleet.sources` alert. Every other fleet signal reads Analytics Engine and is unaffected.',
+    source: 'https://dash.cloudflare.com/profile/api-tokens — a custom token with '
+      + 'Account | Workers Observability | Read, scoped to this account. The owner mints it.',
   }],
   ['CREDENTIAL_ENCRYPTION_KEY_PREVIOUS', {
     handling: 'out-of-band',
@@ -835,7 +878,7 @@ interface Draft {
 const singleBinding = (block: { readonly binding: string } | undefined): readonly string[] =>
   block === undefined ? [] : [block.binding];
 
-function workerRow(config: WorkerConfig): InfraWorker {
+function workerRow(config: DeployedConfig): InfraWorker {
   const bindings = [
     ...(config.kv_namespaces ?? []).map((k) => k.binding),
     ...(config.r2_buckets ?? []).map((r) => r.binding),
@@ -928,11 +971,41 @@ function routeDrafts(routes: NonNullable<WorkerConfig['routes']>): Draft[] {
   return drafts;
 }
 
+/** Each container's application, and the precondition a deploy needs to create it: its class's namespace held by
+ *  that application or by none. */
+function containerDrafts(config: DeployedConfig): Draft[] {
+  const durables = config.durable_objects?.bindings ?? [];
+
+  return (config.containers ?? []).flatMap((container): Draft[] => [
+    {
+      kind: 'container',
+      name: container.name,
+      origin: 'wrangler-deploy',
+      required: true,
+      purpose: `container application for ${container.class_name}, image ${container.image}`,
+    },
+    {
+      kind: 'container-namespace',
+      name: container.name,
+      origin: 'manual',
+      // The Durable Object binding of the class: the live Worker's binding is what names the namespace.
+      binding: durables.find((durable) => durable.class_name === container.class_name)?.name,
+      required: true,
+      purpose: `the ${container.class_name} namespace is bound to container application ${container.name}, or to `
+        + 'none, which the deploy then creates and binds',
+      manual: `another container application holds the ${container.class_name} namespace, so \`wrangler deploy\` `
+        + 'uploads the Worker and then refuses to create its container with DURABLE_OBJECT_ALREADY_HAS_APPLICATION. '
+        + 'Delete that application (`npx wrangler containers delete <id>`) and deploy again, or name it in this '
+        + 'container\'s `name`; the namespace and its Durable Objects\' storage stay with the Worker.',
+    },
+  ]);
+}
+
 /** Everything the Worker's config declares, as resources before requiredness
  *  is resolved against `Env`. */
 function draftsFor(
   declared: InfraWorker,
-  config: WorkerConfig,
+  config: DeployedConfig,
   geometry: VectorGeometry,
 ): readonly Draft[] {
   const worker = declared.workerName;
@@ -1014,15 +1087,7 @@ function draftsFor(
     });
   }
 
-  for (const container of config.containers ?? []) {
-    drafts.push({
-      kind: 'container',
-      name: `${worker}-${container.class_name.toLowerCase()}`,
-      origin: 'wrangler-deploy',
-      required: true,
-      purpose: `container application for ${container.class_name}, image ${container.image}`,
-    });
-  }
+  drafts.push(...containerDrafts(config));
 
   drafts.push(...routeDrafts(config.routes ?? []));
 

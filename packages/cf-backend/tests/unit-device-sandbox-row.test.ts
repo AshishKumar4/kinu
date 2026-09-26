@@ -113,6 +113,15 @@ describe('the bind card asks one question and offers one binding', () => {
     return readable(renderToStaticMarkup(createElement(DeviceConsentCard, { consent, onResolve: () => {} })));
   }
 
+  test('the command\'s bidi and zero-width characters show as marks', () => {
+    const html = renderToStaticMarkup(createElement(DeviceConsentCard, {
+      consent: { ...consent, command: 'rm -rf ./build \u202E\u2066gpj.x\u200B' }, onResolve: () => {},
+    }));
+
+    expect(html).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u);
+    expect(html).toContain('\uFFFD');
+  });
+
   test('the question names the machine and the workspace', () => {
     expect(card().replace(/<[^>]+>/g, '')).toContain('Use ashish-device for “checkout-fixes”?');
   });

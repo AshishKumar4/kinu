@@ -237,7 +237,8 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'Unit and harness proofs cover the grant cut and the agent refusal in isolation; nothing drove the share origin signed out and read the owner tree plus the audit row for the same episode.',
     provedRedAt: null,
     redDirection: 'Green requires the share op to answer a URL a signed-out fetch serves, probe() to answer, mutate() to refuse denied with no mark file on the owner side, ctrl() on an agents-namespace slate to refuse denied, and the audit to record the admitted read and the refused mutation. '
-      + 'No deployed build carried a hole and there is no staging, so the red direction is proved at the grant itself: '
+      + 'No deployed build carried a hole, and one carrying it fails the deploy\'s own source gates before it reaches staging, '
+      + 'so the red direction is proved at the grant itself: '
       + '`grantAdmits` admitting every member lets the viewer\'s mutate() run in packages/cf-backend/tests/workerd/slate-share.test.ts.',
   },
   'blueprint-fork': {
@@ -548,8 +549,8 @@ export const FIRST_RUN_DEFECTS = {
       + 'workerd drives `eval` and a slate\'s global fetch. A deployment whose eval sandbox or slate '
       + 'loader was composed without the egress binding would pass every one of them.',
     provedRedAt: null,
-    redDirection: 'A planted hole cannot be deployed, and there is no staging. The red direction is '
-      + 'proved at each enforcement point on the tier that hosts it: `assertSafeUrl` skipped in '
+    redDirection: 'A build carrying a planted hole fails the deploy\'s own source gates, so it reaches neither staging nor '
+      + 'production. The red direction is proved at each enforcement point on the tier that hosts it: `assertSafeUrl` skipped in '
       + '`web/provider.ts` turns packages/cf-backend/tests/unit-capability-isolation.test.ts red on '
       + 'both web paths, and `refusedHostname` skipped in `codemode-egress.ts` turns the workerd '
       + 'codemode-sandbox and slate-egress rows red.',

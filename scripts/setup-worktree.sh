@@ -97,11 +97,21 @@ mirror() {
   done
 }
 
+# A link whose donor entry is gone (an install removed it) is pruned: left, it is a package this tree still names
+# and `scripts/install-parity.ts` refuses the ladder over it.
+prune() {
+  local link
+  for link in "$1"/* "$1"/.[!.]*; do
+    if [ -L "$link" ] && [ ! -e "$link" ]; then rm -f "$link"; fi
+  done
+}
+
 mirror "$MAIN/node_modules" "$TREE/node_modules" top
-# Nested per-workspace trees carry pinned versions (cf-backend's and the SDK's own typescript).
+prune "$TREE/node_modules"
+# Nested per-workspace trees carry the versions bun.lock places there (the SDK's own typescript).
 for dir in $WORKSPACES; do
-  [ -d "$MAIN/$dir/node_modules" ] || continue
-  mirror "$MAIN/$dir/node_modules" "$TREE/$dir/node_modules"
+  if [ -d "$MAIN/$dir/node_modules" ]; then mirror "$MAIN/$dir/node_modules" "$TREE/$dir/node_modules"; fi
+  if [ -d "$TREE/$dir/node_modules" ]; then prune "$TREE/$dir/node_modules"; fi
 done
 
 cd "$TREE"
