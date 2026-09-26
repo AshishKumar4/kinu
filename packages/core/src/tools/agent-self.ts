@@ -78,7 +78,7 @@ export declare const agent: {
   backgroundJobs(limit?: number): Promise<unknown>;
   /** Compact the conversation when the next turn is assembled; the folded range stays archived. */
   compactNow(): Promise<{ armed: boolean; appliesAt: 'next-turn-assembly' } | Refusal>;
-  /** Past turns replayed against your current config, newest first: loss = 1 − mean score, with a 95% interval. */
+  /** Past turns replayed against your current config, newest first: loss = 1 - mean score, with a 95% interval. */
   replayEvals(limit?: number): Promise<unknown>;
 };
 `;
