@@ -50,6 +50,7 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   ownerUserId?(): string | null;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
+  previewed?(slate: string): void;
 }
 
 interface ViewerAdmission {
@@ -589,6 +590,8 @@ export class SlateHost {
       const preview = await this.deps.apps.url(app.port, app.capability);
 
       if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL: ' + preview.unavailable);
+
+      this.deps.previewed?.(id);
 
       return { ok: true, value: { url: preview.url, port: app.port, inline: { height: project.slate.inline.height } } };
     } catch (cause) {

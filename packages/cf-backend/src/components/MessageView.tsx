@@ -17,12 +17,12 @@ import {
   describeToolCall, rowText, summarizeToolCall,
 } from "@kinu.run/core";
 import type { AdvisorSeverity, DiffAnchor, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
-import { changeNotesCard, MAIN_AGENT } from "@kinu.run/core";
+import { changeNotesCard, MAIN_AGENT, slatesChanged } from "@kinu.run/core";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
-import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
+import { MarkdownContent, CodeBlock, SlateLink } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { extractPreviewUrl } from "@kinu.run/core";
 import {
@@ -809,6 +809,7 @@ export const MessageView = memo(function MessageView({
         </Fragment>
       ))}
       {!isLive && endedMidWork({ metadata: message.metadata }) && <StoppedMidWorkRow />}
+      {!isLive && <ChangedSlates message={message} />}
       {!isLive && (
         <div className="flex items-center gap-2">
           <MessageTimestamp createdAt={messageCreatedAt(message)} />
@@ -825,6 +826,10 @@ export const MessageView = memo(function MessageView({
     </div>
   );
 });
+
+function ChangedSlates({ message }: { message: UIMessage }) {
+  return slatesChanged({ metadata: message.metadata }).map((id) => <SlateLink key={id} id={id} />);
+}
 
 function MessageFeedback({
   messageId, current, onFeedback,

@@ -88,7 +88,7 @@ import {
   drainAssignments,
   appendMemoryNote,
   parseMemoryNotes,
-  type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT,
+  type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview, answerParts,
   type SlateBindingCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
@@ -196,7 +196,7 @@ import {
   boundEventQuery,
   type WorkMode,
   resolveModelRoute,
-  WORKSPACE_RUN_ID,
+  WORKSPACE_RUN_ID, activeOperationProfile, SLATES_ROOT,
   buildWorkspaceOverview, recoveryBackoffMs, type WorkspaceOverview,
   projectJsonValue,
   type AgentSignal,
@@ -281,6 +281,8 @@ const PROMPT_SECTION_LANE = 'prompt_section_lane';
 const SLEEP_TIME_SETTLED_AT = 'sleep_time_settled_at';
 
 const SLEEP_TIME_CLOSED_AT = 'sleep_time_closed_at';
+
+const ANSWERED_TURNS_KEPT = 32;
 
 const SANDBOX_STARTING = 'sandbox_starting';
 
@@ -473,6 +475,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const ids = this.slates.filesChanged(paths);
 
         if (ids.length === 0) return;
+
+        this.noteTurnSlates('changed', ids);
         this.broadcastToActor(null, JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
         this.overviewChanged();
       },
@@ -1936,9 +1940,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (parentId === null) return;
 
+    const metadata = await this.takeTurnSlates(reference.actorId, completion.turnId, () => transcript.narration(answerParts(completion.outputPartReferences, completion.finalTextReference)));
+
     const entry = await transcript.prepareAssistant({
       id, parentId, turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
-      finalText: completion.finalTextReference,
+      finalText: completion.finalTextReference, ...(metadata !== null && { metadata }),
     });
 
     this.ctx.storage.transactionSync(() => transcript.appendAssistant(entry));
@@ -2082,6 +2088,50 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   // The reactor lives on the core AgentOrchestrator. Ingress uses the debounced
   // `this.orch.scheduleDrain()`; the post-turn hook drains via `this.orch.drainPendingEvents()`.
+
+  private readonly turnSlates = new Map<string, { readonly changed: Set<string>; readonly shown: Set<string> }>();
+
+  private readonly answeredTurns = new Map<string, string[]>();
+
+  private noteTurnSlates(kind: 'changed' | 'shown', ids: readonly string[]): void {
+    const actor = activeOperationProfile();
+
+    if (actor === undefined || actor.turnId === WORKSPACE_RUN_ID) return;
+    const actorId = actor.actor.actorId;
+    const key = this.answeredTurns.get(actorId)?.includes(actor.turnId) === true ? `${actorId}:carried` : `${actorId}:${actor.turnId}`;
+    let held = this.turnSlates.get(key);
+
+    if (held === undefined) {
+      held = { changed: new Set(), shown: new Set() };
+      this.turnSlates.set(key, held);
+    }
+
+    for (const id of ids) held[kind].add(id);
+  }
+
+  private async takeTurnSlates(actorId: string, turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null> {
+    const taken = [`${actorId}:${turnId}`, `${actorId}:carried`].map((key) => {
+      const held = this.turnSlates.get(key);
+
+      this.turnSlates.delete(key);
+
+      return held;
+    });
+
+    this.answeredTurns.set(actorId, [...(this.answeredTurns.get(actorId) ?? []).slice(-(ANSWERED_TURNS_KEPT - 1)), turnId]);
+    const changed = taken.flatMap((held) => [...held?.changed ?? []]);
+    const shown = new Set(taken.flatMap((held) => [...held?.shown ?? []]));
+    const vfs = this.hostedWorkspace().bundle.vfs;
+    const kept = [];
+
+    for (const id of slatesToPreview(new Set(changed), shown, await texts())) if (await vfs.exists(`${SLATES_ROOT}/${id}`)) kept.push(id);
+
+    return kept.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: kept };
+  }
+
+  protected override answerMetadata(turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null> {
+    return this.takeTurnSlates(this.actorHandle().actorId, turnId, texts);
+  }
 
   /**
    * Readings this root's settled response owes; all taken now, before any effect runs, since the
@@ -4267,6 +4317,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES);
         this.armDurableWake();
       },
+      previewed: (slate) => { this.noteTurnSlates('shown', [slate]); },
       sharesChanged: async () => {
         this.overviewChanged(true);
 

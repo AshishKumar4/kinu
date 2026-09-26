@@ -90,6 +90,10 @@ interface TranscriptStores<A extends ActorReadAuthority, P extends SessionPayloa
 }
 
 /** Public transcript references canonical parts; pruning model context never rewrites this tree. */
+export function answerParts(parts: readonly MessagePartReference[], finalText: MessagePartReference | null): MessagePartReference[] {
+  return finalText === null ? [...parts] : [...parts, finalText];
+}
+
 export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAuthority, P extends SessionPayloadReader = SessionPayloadReader> {
   protected readonly sql: SqlExecutor;
   protected readonly actor: A;

@@ -411,7 +411,7 @@ export type { SessionFilePlane } from './session/payload';
 
 export type { MessageReference, MessagePartReference, ActorReadAuthority } from './session/messages';
 
-export { SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './session/transcript';
+export { answerParts, SessionTranscript, SessionTranscriptReader, readSessionTranscript, type ConversationEntry, type ConversationProjection, type PreparedConversationEntry } from './session/transcript';
 
 export { encodeModelMessageValues, decodeModelMessageValues } from './session/message-codec';
 
@@ -1732,7 +1732,7 @@ export {
 
 export { createScaffoldCandidateSurface, type ScaffoldCandidateBinding } from './evolution/scaffold-candidate';
 
-export { captureOperationProfile, currentOperationProfile, resolveOperationProfile, runOperationProfile,
+export { activeOperationProfile, captureOperationProfile, currentOperationProfile, resolveOperationProfile, runOperationProfile,
   withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
 
 export { createRoutedModelLane } from './profiles/model-lane';
@@ -2237,7 +2237,7 @@ export {
 } from './read-models/alternate-takes';
 
 export {
-  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, applySignalCard,
+  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, SLATE_LINK, slatesToPreview, applySignalCard,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,
   type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,

@@ -5,7 +5,7 @@ import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
-import { MAX_LINES_PER_FILE, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
+import { MAX_LINES_PER_FILE, SLATE_LINK, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -102,7 +102,7 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
   );
 }
 
-function SlateLink({ id }: { id: string }) {
+export function SlateLink({ id }: { id: string }) {
   const inline = useContext(SlateInlineContext);
 
   if (inline === null) return <code className="p-code-inline">{`slate://${id}`}</code>;
@@ -120,33 +120,22 @@ function remarkSlateLinks() {
     children?: MdNode[];
   }
 
-  const RE = /slate:\/\/[^\s)\]>"'`]+/g;
-
   const split = (node: MdNode): MdNode[] | null => {
+    const value = node.value ?? '';
     const parts: MdNode[] = [];
-    let rest = node.value ?? '';
+    let from = 0;
 
-    while (true) {
-      RE.lastIndex = 0;
-      const hit = RE.exec(rest);
+    for (const hit of value.matchAll(SLATE_LINK)) {
+      if (slateLinkId(hit[0]) === null) continue;
 
-      if (hit === null) break;
-
-      const id = slateLinkId(hit[0]);
-
-      if (id === null) continue;
-
-      const before = rest.slice(0, hit.index);
-
-      if (before !== '') parts.push({ type: 'text', value: before });
-
+      if (hit.index > from) parts.push({ type: 'text', value: value.slice(from, hit.index) });
       parts.push({ type: 'link', url: hit[0], children: [{ type: 'text', value: hit[0] }] });
-      rest = rest.slice(hit.index + hit[0].length);
+      from = hit.index + hit[0].length;
     }
 
     if (parts.length === 0) return null;
 
-    if (rest !== '') parts.push({ type: 'text', value: rest });
+    if (from < value.length) parts.push({ type: 'text', value: value.slice(from) });
 
     return parts;
   };
