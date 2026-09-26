@@ -828,6 +828,11 @@
     "failures INTEGER NOT NULL DEFAULT 1",
     "seen_at INTEGER NOT NULL"
   ],
+  "monitor_signal_streaks@packages/core/src/control-plane/fleet-alerts.ts": [
+    "signal TEXT PRIMARY KEY",
+    "crossed INTEGER NOT NULL",
+    "clean INTEGER NOT NULL"
+  ],
   "operator_requests@packages/core/src/events/recorder.ts": [
     "actor_id TEXT PRIMARY KEY",
     "text TEXT NOT NULL"

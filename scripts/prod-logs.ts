@@ -60,10 +60,8 @@
 import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
+import { ALERT_THRESHOLDS, findWakeLoops, type StartupHour, type WakeLoop } from '@kinu.run/core/analytics';
 import { parseJsonc } from './jsonc';
-import {
-  WAKE_LOOP_STARTUPS_PER_HOUR, findWakeLoops, type StartupHour, type WakeLoop,
-} from './wake-loops';
 
 /** The account this queries and the default worker, read off the manifest this
  *  inspects rather than restated beside it: a second spelling of the id is how
@@ -697,7 +695,7 @@ async function wakes(t: Telemetry, args: Args): Promise<void> {
   console.log([
     `window ${report.window.from} .. ${report.window.to}; ${report.objects} objects started`,
     '',
-    `loops (an hour at ${WAKE_LOOP_STARTUPS_PER_HOUR}+ startups; SUSTAINED = 2+ consecutive hours):`,
+    `loops (an hour at ${ALERT_THRESHOLDS.startupsPerHour}+ startups; SUSTAINED = 2+ consecutive hours):`,
     ...(loops.length === 0 ? ['  none'] : report.loops.map((l) => `  ${l.sustained ? 'SUSTAINED' : 'burst    '}  peak ${String(l.peakPerHour).padStart(4)}/h  ${String(l.loopHours).padStart(3)} loop h (run ${l.longestRunHours})  ${hourLabel(Date.parse(l.firstLoopHour))} .. ${hourLabel(Date.parse(l.lastLoopHour))}  ${l.object.slice(0, 16)}  ${l.name}`)),
     '',
     'busiest others:',
