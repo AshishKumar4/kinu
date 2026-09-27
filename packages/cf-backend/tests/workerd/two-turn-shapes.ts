@@ -40,7 +40,6 @@ export const RegisterSchema = v.variant('status', [
       displayName: v.string(),
       createdAt: v.number(),
       lastVisited: v.number(),
-      archivedAt: v.nullable(v.number()),
     }),
   }),
   v.object({ status: v.literal('reserved') }),

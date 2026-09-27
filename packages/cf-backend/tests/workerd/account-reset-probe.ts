@@ -56,7 +56,7 @@ export class AccountResetProbeDO extends UserDO {
     }
 
     await this.sharesReceived_add(owner, {
-      ownerUserId: 'f'.repeat(32), ownerEmail: 'sam@example.test', workspace: 'their-ws', shareId: 'share-1', title: 'Issue triage',
+      ownerUserId: 'f'.repeat(32), ownerEmail: 'sam@example.test', workspace: 'their-ws', shareId: 'share-1',
     });
     this.ctx.storage.sql.exec(
       `INSERT INTO user_mcp_servers (id, name, server_url, transport) VALUES ('srv-1', 'github', 'https://mcp.example/v1', 'auto')`,

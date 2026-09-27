@@ -199,7 +199,6 @@
     "agent_name TEXT NOT NULL",
     "cli_token_hash TEXT NOT NULL",
     "capabilities TEXT NOT NULL",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "expires_at INTEGER NOT NULL",
     "used_at INTEGER"
   ],
@@ -209,7 +208,6 @@
     "user_code TEXT NOT NULL",
     "poll_interval INTEGER NOT NULL",
     "portal_url TEXT NOT NULL",
-    "started_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "generation INTEGER NOT NULL DEFAULT 1",
     "settled_at INTEGER"
   ],
@@ -449,7 +447,6 @@
   "device_connect_tickets@packages/core/src/state/user-schema.ts": [
     "ticket_hash TEXT PRIMARY KEY",
     "device_id TEXT NOT NULL",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "expires_at INTEGER NOT NULL",
     "used_at INTEGER",
     "token_was_current INTEGER"
@@ -483,8 +480,7 @@
     "cancel_outcome TEXT CHECK (cancel_outcome IN ('terminated', 'unknown'))"
   ],
   "device_notice_pending@packages/core/src/state/user-schema.ts": [
-    "agent_name TEXT PRIMARY KEY",
-    "announced_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "agent_name TEXT PRIMARY KEY"
   ],
   "device_status_watchers@packages/core/src/state/user-schema.ts": [
     "agent_name TEXT PRIMARY KEY"
@@ -1345,13 +1341,11 @@
     "name TEXT NOT NULL",
     "scopes TEXT NOT NULL",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "last_used_at INTEGER",
-    "revoked_at INTEGER"
+    "last_used_at INTEGER"
   ],
   "user_auth_generation@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
-    "generation INTEGER NOT NULL",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "generation INTEGER NOT NULL"
   ],
   "user_browser_sessions@packages/core/src/state/user-schema.ts": [
     "token_hash TEXT PRIMARY KEY",
@@ -1374,13 +1368,11 @@
   "user_config@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",
     "value TEXT NOT NULL",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "version INTEGER NOT NULL DEFAULT 0"
   ],
   "user_credential_revisions@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",
-    "revision INTEGER NOT NULL",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "revision INTEGER NOT NULL"
   ],
   "user_credentials_revision@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
@@ -1390,15 +1382,12 @@
   "user_credentials@packages/core/src/state/user-schema.ts": [
     "key TEXT PRIMARY KEY",
     "kind TEXT NOT NULL",
-    "value TEXT NOT NULL",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "value TEXT NOT NULL"
   ],
   "user_device_builds@packages/core/src/state/user-schema.ts": [
     "device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE",
     "version TEXT",
-    "update_check INTEGER NOT NULL DEFAULT 1",
-    "reported_at INTEGER NOT NULL"
+    "update_check INTEGER NOT NULL DEFAULT 1"
   ],
   "user_device_retired_tokens@packages/core/src/state/user-schema.ts": [
     "token_hash TEXT PRIMARY KEY",
@@ -1414,12 +1403,9 @@
     "os TEXT",
     "hostname TEXT",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "connected_at INTEGER",
     "last_seen_at INTEGER",
     "expires_at INTEGER",
     "revoked_at INTEGER",
-    "last_ip TEXT",
-    "last_agent TEXT",
     "replaced_at INTEGER",
     "consented_root TEXT",
     "device_home TEXT",
@@ -1450,9 +1436,7 @@
     "server_url TEXT NOT NULL",
     "transport TEXT NOT NULL",
     "headers TEXT",
-    "allowed_tools TEXT",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+    "allowed_tools TEXT"
   ],
   "user_onboarding@packages/core/src/state/user-schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
@@ -1480,7 +1464,6 @@
     "owner_email TEXT NOT NULL",
     "workspace TEXT NOT NULL",
     "share_id TEXT NOT NULL",
-    "title TEXT NOT NULL",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "PRIMARY KEY (owner_user_id, workspace, share_id)"
   ],
@@ -1495,7 +1478,6 @@
     "name_origin TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user'))",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "last_visited INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "archived_at INTEGER",
     "delete_pending INTEGER NOT NULL DEFAULT 0",
     "create_pending INTEGER NOT NULL DEFAULT 0",
     "fork_lease_expires_at INTEGER"
@@ -1591,7 +1573,6 @@
     "name TEXT PRIMARY KEY",
     "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
     "decisions INTEGER NOT NULL",
-    "changed_at INTEGER NOT NULL",
     "overview TEXT NOT NULL"
   ],
   "workspace_soul@packages/core/src/identity/schema.ts": [

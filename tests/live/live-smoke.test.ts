@@ -75,8 +75,6 @@ const DeployedDeviceSchema = v.strictObject({
   createdAt: v.number(),
   lastSeenAt: v.nullable(v.number()),
   expiresAt: v.nullable(v.number()),
-  lastIp: v.nullable(v.string()),
-  lastAgent: v.nullable(v.string()),
   replacedAt: v.nullable(v.number()),
   revokedAt: v.nullable(v.number()),
   unstoppedAt: v.nullable(v.number()),

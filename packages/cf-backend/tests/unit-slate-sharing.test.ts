@@ -47,8 +47,8 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     // MCP header, provider key and vault secret: none is in the slate tree, and none may reach the forker.
     const mcpHeader = 'Bearer owner-mcp-header-' + 'a1b2c3d4e5f6';
     await user.userDO.userMcp_list(caller);
-    user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', ?, NULL, 0, 0)`, JSON.stringify({ authorization: mcpHeader }));
+    user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
+      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', ?, NULL)`, JSON.stringify({ authorization: mcpHeader }));
     const providerKey = ['sk-ant-', 'owner-provider-key-0123456789'].join('');
     await user.userDO.setCredential(caller, 'anthropic', { kind: 'bearer', token: providerKey });
     const vaultSecret = 'owner-vault-secret-' + '9f8e7d6c';
@@ -169,10 +169,10 @@ test('naming users on a blueprint records them with the owner and projects the r
     const shared = answered(await owner.agent.shareBlueprintWith(published.share.id, [{ userId: 'fedcba9876543210fedcba9876543210', email: 'pat@example.test' }]), SlateShareRecordSchema);
     expect(shared.users).toEqual(['pat@example.test']);
     const caller = await testOwner();
-    await recipient.userDO.sharesReceived_add(caller, { ownerUserId, ownerEmail: 'owner@example.test', workspace: 'issues-owner', shareId: published.share.id, title: 'Issue triage' });
-    await recipient.userDO.sharesReceived_add(caller, { ownerUserId, ownerEmail: 'owner@example.test', workspace: 'issues-owner', shareId: published.share.id, title: 'Issue triage, renamed' });
+    await recipient.userDO.sharesReceived_add(caller, { ownerUserId, ownerEmail: 'owner@example.test', workspace: 'issues-owner', shareId: published.share.id });
+    await recipient.userDO.sharesReceived_add(caller, { ownerUserId, ownerEmail: 'owner@example.test', workspace: 'issues-owner', shareId: published.share.id });
     expect(await recipient.userDO.sharesReceived_list(caller)).toEqual([
-      { ownerUserId, ownerEmail: 'owner@example.test', workspace: 'issues-owner', shareId: published.share.id, title: 'Issue triage, renamed', createdAt: expect.any(Number) },
+      { ownerUserId, ownerEmail: 'owner@example.test', workspace: 'issues-owner', shareId: published.share.id, createdAt: expect.any(Number) },
     ]);
     await expect(recipient.userDO.sharesReceived_list({ workspaceToken: 'not-an-owner' })).rejects.toThrow();
     answered(await owner.agent.slate({ op: 'unshare', share: published.share.id }), SlateShareRecordSchema);

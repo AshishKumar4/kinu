@@ -44,7 +44,7 @@ function registerWorkspaceStub(
     calls.push(logged(name, displayName, from));
 
     return {
-      entry: { name, displayName: displayName ?? name, createdAt: at, lastVisited: at, archivedAt: null },
+      entry: { name, displayName: displayName ?? name, createdAt: at, lastVisited: at },
       status: 'created' as const,
     };
   };
@@ -98,7 +98,7 @@ function registryStub(): CloudWorkspaceRegistry {
     async ensureWorkspaceCapability() {},
     async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
       return {
-        entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
+        entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1 },
         status: 'created' as const,
       };
     },
@@ -514,7 +514,7 @@ describe('cloud agent ownership safety', () => {
         calls.push(`register:${name}`);
 
         return {
-          entry: { name, displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2, archivedAt: null },
+          entry: { name, displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2 },
           status: 'active' as const,
         };
       },
@@ -571,7 +571,7 @@ describe('cloud agent ownership safety', () => {
     }
 
     expect(first).toEqual({
-      name: 'jarvis', displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2, archivedAt: null,
+      name: 'jarvis', displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2,
     });
     expect(second).toEqual(first);
     // The register is the whole call: no claim, soul, reset, genesis, or rollback.

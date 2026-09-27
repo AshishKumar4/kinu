@@ -19,7 +19,7 @@ function device(sandbox: UserDevice['sandbox'], label = 'workstation', update: P
   return {
     id: 'dev-1', label, os: 'linux', hostname: 'pc', connected: true,
     createdAt: AT, lastSeenAt: AT, expiresAt: AT + 864e5,
-    lastIp: null, lastAgent: null, replacedAt: null, revokedAt: null, unstoppedAt: null,
+    replacedAt: null, revokedAt: null, unstoppedAt: null,
     reuseDetectedAt: null, wholeMachine: false,
     sandbox,
     ...update,
@@ -212,7 +212,7 @@ describe('a device row written before the registry recorded a sandbox', () => {
     const withoutSandbox = {
       id: 'dev-old', label: 'old', os: 'linux', hostname: 'old', connected: false,
       createdAt: AT, lastSeenAt: null, expiresAt: null,
-      lastIp: null, lastAgent: null, replacedAt: null, revokedAt: null, unstoppedAt: null,
+      replacedAt: null, revokedAt: null, unstoppedAt: null,
     };
 
     const withSandbox = { ...withoutSandbox, id: 'dev-new', sandbox: { tier: 'raw', capability: 'sandboxed', reason: null, gpu: [] } };

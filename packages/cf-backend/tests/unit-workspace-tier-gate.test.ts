@@ -258,7 +258,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
     name: 'sharesReceived_add',
     run: (u, c) => u.sharesReceived_add(c, {
       ownerUserId: USER_ID, ownerEmail: 'owner@x', workspace: WORKSPACE,
-      shareId: 'share-1', title: 'a blueprint',
+      shareId: 'share-1',
     }),
   },
   { capability: 'shares', name: 'sharesReceived_list', run: (u, c) => u.sharesReceived_list(c) },
@@ -567,23 +567,21 @@ describe('workspace name reservation', () => {
     .prepare<{ name: string }, []>(`SELECT name FROM user_workspaces ORDER BY name`)
     .all().map((row) => row.name);
 
-  test('a fork conflict leaves an archived roster row byte-for-byte unchanged', async () => {
+  test('a fork conflict leaves an existing roster row byte-for-byte unchanged', async () => {
     const harness = createTestUserDO();
     const owner = await testOwner();
-    await harness.userDO.registerWorkspace(owner, 'archived-name', 'Archived title');
-    harness.db.prepare(
-      'UPDATE user_workspaces SET archived_at = ?, last_visited = ? WHERE name = ?',
-    ).run(777, 123, 'archived-name');
+    await harness.userDO.registerWorkspace(owner, 'existing-name', 'Existing title');
+    harness.db.prepare('UPDATE user_workspaces SET last_visited = ? WHERE name = ?').run(123, 'existing-name');
 
     const before = harness.db.prepare(
       'SELECT * FROM user_workspaces WHERE name = ?',
-    ).get('archived-name');
+    ).get('existing-name');
 
-    const result = await harness.userDO.reserveWorkspace(owner, 'archived-name', 'Fork title');
+    const result = await harness.userDO.reserveWorkspace(owner, 'existing-name', 'Fork title');
 
     const after = harness.db.prepare(
       'SELECT * FROM user_workspaces WHERE name = ?',
-    ).get('archived-name');
+    ).get('existing-name');
 
     expect(result.reserved).toBe(false);
     expect(after).toEqual(before);
