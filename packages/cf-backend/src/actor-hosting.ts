@@ -40,6 +40,7 @@ export interface WorkspaceHostSeams {
   readonly env: Env;
   readonly ctx: AgentContext;
   readonly agent: HostRootAgent;
+  currentTurn(reference: ActorReference): string | null;
   /** The root's own runtime: inheriting children read the retained program from it. */
   rootRuntime(): AgentRuntime;
   readonly sql: SqlExecutor;
@@ -203,6 +204,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
       const hooks: CFRuntimeHooks = {
         reportModelCall: (report) => { seams.reportModelCall(report); },
+        currentTurn: (reference) => seams.currentTurn(reference),
         liveReadsMoved: (reads) => { seams.liveReadsMoved(reads); },
         slate: (operation) => seams.slate(bound.handle, operation),
         deferrals: () => seams.deferrals(),

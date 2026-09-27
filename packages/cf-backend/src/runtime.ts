@@ -37,7 +37,7 @@ import {
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
 import { withHostedNodeExecution, WORKSPACE_ROOT } from '@kinu.run/core';
-import type { HostedNodeHome } from '@kinu.run/core';
+import type { ActorReference, HostedNodeHome } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
@@ -211,6 +211,7 @@ export interface CFRuntimeHooks {
      *  as `step_finish`. */
   reportModelCall: ModelCallSink;
   resolveProfile?: () => Promise<ResolvedTurnProfile>;
+  currentTurn?: (actor: ActorReference) => string | null;
   /** The actor's uid on both planes, or neither: split credentials measured `EACCES` on its own home
      *  and could write a sibling's. */
   workspaceExecution?: HostedNodeHome;
@@ -286,7 +287,7 @@ export function createCFRuntime(
   const executor = createRuntimeExecutor(envForExec.LOADER);
 
   const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
-    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall,
+    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,
   });
 
   // The one required lane: `AgentRuntime.llm` is not optional.
@@ -578,13 +579,11 @@ function buildVectorStore(
 
 /** Resolved at call time so a newly connected provider applies without redeploy; not via
  * `OwnedModelServices`, which memoizes under one fixed title. */
-function actorProviderRegistry(
-  agent: AgentHost,
-  env: Env,
-  actor: ActorRuntimeIdentity,
-  title: string,
-): AgentProviderRegistry {
+function actorProviderRegistry(lane: Pick<ProfileLaneOptions, 'agent' | 'env' | 'actor' | 'currentTurn'>, title: string): AgentProviderRegistry {
+  const { agent, env, actor, currentTurn } = lane;
+
   return createAgentProviderRegistry({
+    ...(currentTurn !== undefined && { currentTurn }),
     env,
     ownerUserId: actor.ownerUserId(),
     userDO: userCredentialSourceFor(env, actor),
@@ -601,11 +600,12 @@ export interface ProfileLaneOptions {
   readonly resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined;
   readonly source: FixedTierSource;
   readonly report: ModelCallSink;
+  readonly currentTurn: ((reference: ActorReference) => string | null) | undefined;
 }
 
 /** Only a completed call reports: a thrown seam was not billed. */
 function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
-  const { agent, env, actor, resolveProfile, source, report } = options;
+  const { actor, resolveProfile, source, report } = options;
 
   if (!resolveProfile) return undefined;
 
@@ -614,7 +614,7 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
     llm: route => ({
       async *stream() { yield ""; },
       async complete(prompt: string): Promise<string> {
-        const registry = actorProviderRegistry(agent, env, actor, `Kinu (${source})`);
+        const registry = actorProviderRegistry(options, `Kinu (${source})`);
 
         const providerOptions = reasoningEffortOptions(
           route.reasoningEffort,
