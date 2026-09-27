@@ -338,6 +338,7 @@ describe('the ladder measures something', () => {
       'Swarm-tree geometry',
       'Test browsers end with their launcher',
       'UI gate self-tests',
+      'UI gate self-tests: account, drive and slates',
       'UI gate self-tests: chat and files',
     ]);
   });
@@ -471,16 +472,11 @@ describe('the ladder measures something', () => {
     expect(rows.flat().sort()).toEqual(claims('bun run test:workerd', tracked).sort());
     expect(new Set(rows.flat()).size).toBe(rows.flat().length);
 
-    // The two UI self-test rows partition the same family: the heavy suite is
-    // a row of its own and the family row carves it out with bun's
-    // `--path-ignore-patterns`, so no file runs twice and none is dropped.
-    // Split on 2026-09-18, when the one row measured 480.42s against a 480s
-    // deadline.
+    // The UI rows partition the family without duplicate or omitted suites, including future glob matches.
     const uiRows = LADDER
       .filter((gate) => gate.label.startsWith('UI gate self-tests'))
       .map((gate) => claims(gate.run, tracked));
 
-    expect(uiRows.length).toBe(2);
     expect(uiRows.every((files) => files.length > 0)).toBe(true);
     expect(new Set(uiRows.flat()).size).toBe(uiRows.flat().length);
     expect(uiRows.flat().sort()).toEqual(

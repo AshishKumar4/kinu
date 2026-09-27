@@ -50,7 +50,7 @@
  *     [--quiet-wait=<s>] [--shared-wait=<s>]
  */
 
-import { existsSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { tolerate } from '@kinu.run/core/obs';
@@ -351,16 +351,20 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
   const loadAtStart = Number(readFileSync('/proc/loadavg', 'utf8').split(' ')[0]);
   const started = performance.now();
 
-  const child = Bun.spawn([
-    'setsid',
-    'timeout', '--signal=TERM', `--kill-after=${String(KILL_AFTER_SECONDS)}s`, String(request.deadline),
-    '/usr/bin/time', '-v', '-o', request.rusagePath,
-    'bash', '-c', request.run,
-  ], {
-    cwd: root,
-    stdout: Bun.file(request.logPath),
-    stderr: Bun.file(request.logPath),
-  });
+  // One open file description shares its offset; opening the path twice overwrites one stream with the other.
+  const log = openSync(request.logPath, 'w');
+  let child: ReturnType<typeof Bun.spawn>;
+
+  try {
+    child = Bun.spawn([
+      'setsid',
+      'timeout', '--signal=TERM', `--kill-after=${String(KILL_AFTER_SECONDS)}s`, String(request.deadline),
+      '/usr/bin/time', '-v', '-o', request.rusagePath,
+      'bash', '-c', request.run,
+    ], { cwd: root, stdout: log, stderr: log });
+  } finally {
+    closeSync(log);
+  }
 
   let peakPssKb = 0;
   let peakRunnable = 0;
