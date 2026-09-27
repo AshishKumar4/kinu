@@ -1020,9 +1020,7 @@ export abstract class ActorAgent extends Agent<Env> {
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider],
     reportModelCall: (report) => { this.reportModelCall(report); },
-    currentTurn: (reference) => (sameActorReference(reference, actorReferenceOf(this.actorHandle()))
-      ? this.actorSession.currentTurnId
-      : this.actorHost().hosted(reference)?.session.currentTurnId ?? null),
+    currentTurn: (reference) => this.currentTurnOf(reference),
   });
 
   // The bare prototype must read as sound.
@@ -1485,6 +1483,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Test-only deterministic cut point in the terminal sequence. Null in production. */
   protected terminalEffectFault: TerminalEffectFault | null = null;
+
+  protected currentTurnOf(reference: ActorReference): string | null {
+    return sameActorReference(reference, actorReferenceOf(this.actorHandle()))
+      ? this.actorSession.currentTurnId
+      : this.actorHost().hosted(reference)?.session.currentTurnId ?? null;
+  }
 
   /** Read at the start of a terminal sequence and carried through: the loop's live turn becomes
    *  the next one as soon as it opens, so a detached re-read could close the wrong claim. */
@@ -2996,6 +3000,7 @@ export abstract class ActorAgent extends Agent<Env> {
         reportModelCall: (report) => this.reportModelCall(report),
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         resolveProfile: () => this.routingProfile(),
+        currentTurn: (reference) => this.currentTurnOf(reference),
         contextPlane: {
           actorId: this.actorHandle().actorId,
           claims: () => this.claims,

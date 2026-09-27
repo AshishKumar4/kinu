@@ -638,6 +638,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       env: this.env,
       ctx: this.ctx,
       agent: this,
+      currentTurn: (reference) => this.currentTurnOf(reference),
       exec: this.boundExec(),
       sql: this.boundSql,
       directory: this.workspaceActors(),
