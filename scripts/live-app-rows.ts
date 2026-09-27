@@ -1,4 +1,13 @@
-/** Real Worker, client and browser; scripted model. The combined row exceeded 480 s alone on 2026-09-26. */
+/**
+ * Real Worker, client and browser; scripted model. The combined row exceeded 480 s alone on 2026-09-26.
+ *
+ * SCOPE. These rows own only what a rendered document can prove: geometry,
+ * node identity, and what the DOM shows after a real interaction. The
+ * behavioural half of the old draft — a subagent chat opening and answering,
+ * text rendering before the tool card it preceded — is RPC and data shape,
+ * provable inside the workerd pool without a DOM, and lives there (the
+ * cloudflare-os in-pool session harness); it is deliberately NOT here.
+ */
 
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
@@ -38,7 +47,12 @@ async function shoot(page: Page, name: string): Promise<string> {
   return path;
 }
 
-/** Fixed names mixed two runs' durable transcripts on the local server, 2026-09-17. */
+/** This run's own workspace suffix, and the mark the state row reads a roster
+ *  by. A deployment keeps its Durable Objects between runs, so a fixed name
+ *  would have each comprehensive row reading the previous run's transcript,
+ *  cards and journal as if they were the product's first state (measured
+ *  2026-09-17 on the local server, back when it inherited the checkout's
+ *  state too: two runs put both runs' sent messages in one root transcript). */
 const RUN_ID = crypto.randomUUID().slice(0, 8);
 
 async function openWorkspace(newPage: LiveApp['newPage'], origin: string, workspace: string): Promise<Page> {
@@ -47,12 +61,15 @@ async function openWorkspace(newPage: LiveApp['newPage'], origin: string, worksp
   await page.setViewport(DESKTOP);
   await recordDeadEnds(page);
 
+  // 'load', not 'networkidle0': the app holds its event socket open from
+  // first paint, so there is never a zero-connection window to wait for.
   await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
   await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
 
   return page;
 }
 
+/** Click the control; an absent control throws, and that is the finding. */
 const ClickScripts = {
   lastAgentTab: `(() => {
     // Tabs by their own hook, not by element: the OPEN tab is a div (it hosts
@@ -379,7 +396,6 @@ export const RAIL_SHUT_PX = 64;
 
 const SHUT_NAMES = 'hide|collapse|close';
 
-/** The header's task state, by the name its status carries; its text is the state's word. */
 const TASK_STATE = '[role="status"][aria-label="Task state"]';
 
 /** Every 20 ms from install: whether the chat column offers Stop, how many live states it draws, and the header's
@@ -409,7 +425,6 @@ const INSTALL_LIVE_SAMPLER = `(() => {
 
 const READ_LIVE_SAMPLES = `(() => { clearInterval(window.__liveSampler); return window.__liveSamples; })()`;
 
-/** The newest sample, the sampler left running. */
 const LAST_LIVE_SAMPLE = 'window.__liveSamples.at(-1) ?? null';
 
 const LiveSampleSchema = v.object({ t: v.number(), stop: v.boolean(), states: v.number(), task: v.nullable(v.string()) });
@@ -876,10 +891,8 @@ async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): 
   return verdict;
 }
 
-/** The label of the inspector tab marked current, or null while none is. */
 const MARKED_TAB = `(document.querySelector('#inspector .p-tabstrip [aria-current="true"]')?.getAttribute('aria-label') ?? null)`;
 
-/** Record every change of the marked inspector tab from now on. */
 const RECORD_MARKS = `(() => {
   const marks = [${MARKED_TAB}];
   window.__keptTabMarks = marks;
@@ -1084,7 +1097,6 @@ async function watchTurns(page: Page): Promise<TurnWatch> {
   };
 }
 
-/** The header and the composer disagree: one says a turn runs and the other says nothing does. */
 const disagrees = (sample: v.InferOutput<typeof LiveSampleSchema>): boolean =>
   (sample.stop && sample.task === 'idle') || (!sample.stop && sample.task === 'working');
 
@@ -1153,7 +1165,6 @@ async function measureOpenedMidTurn(
   }
 }
 
-/** Every socket the page opens, how many replays have completed on them, and what the server answered on them. */
 const RECORD_SOCKETS = `(() => {
   window.__sockets = [];
   window.__replaysComplete = 0;
@@ -1289,7 +1300,6 @@ async function measureObservedReconnect(newPage: LiveApp['newPage'], origin: str
   }
 }
 
-/** The reconnect turn has answered and closed. */
 const TURN_ANSWERED = `(${ANSWER_BLOCKS}).at(-1) === 'P:Done.' && !(${STOP_OFFERED})`;
 
 /** What a page's sockets have heard, counted before it sleeps so the answers to its waking are told apart. */
@@ -1444,7 +1454,6 @@ async function measureAnswered(
   }
 }
 
-/** The inspector strip's Work tab. */
 const WORK_TAB = `document.querySelector('#inspector .p-tabstrip [aria-label="Work"]')`;
 
 /** Row 8: the inspector never moves its selection on its own. In a new
@@ -1552,7 +1561,7 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
   const counter = await countRpc(page);
   const reads = await frameLedger(page);
 
-  const fetchOlderPage = async (): Promise<void> => {
+  const fetchOlderPage = async (): Promise<boolean> => {
     const before = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
     const rows = v.parse(v.number(), await page.evaluate(CHAT_ROWS));
 
@@ -1567,13 +1576,19 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
     await page.mouse.move(box.x, box.y);
 
     while ((counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) === before) {
+      const wasAtTop = await page.evaluate(`(${CHAT_SCROLLER})?.scrollTop === 0`);
       await page.mouse.wheel({ deltaY: -box.height / 2 });
       await painted(page);
+
+      if (wasAtTop && await page.evaluate(`(${CHAT_SCROLLER})?.scrollTop === 0`)
+        && (counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) === before) return false;
     }
 
     await waitOn(page, 'the history page response', settledAfter(page, reads, HISTORY_PAGE_METHOD));
     await until(page, 'the older messages to render', `${CHAT_ROWS} > ${String(rows)}`);
     await settled(page, SCROLL_METRICS);
+
+    return true;
   };
 
   try {
@@ -1588,11 +1603,11 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
 
     const beforeTop = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
 
-    await fetchOlderPage();
+    const fetched = await fetchOlderPage();
 
     const pagesOnScrollToTop = (counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) - beforeTop;
 
-    if (!(await page.evaluate(`[...document.querySelectorAll('#chat [data-scroll-edge]')].some(edge => edge.textContent?.includes('Beginning of the conversation') === true)`))) await fetchOlderPage();
+    if (fetched && !(await page.evaluate(`[...document.querySelectorAll('#chat [data-scroll-edge]')].some(edge => edge.textContent?.includes('Beginning of the conversation') === true)`))) await fetchOlderPage();
     await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = el.scrollHeight - el.clientHeight - 600; })()`);
     await painted(page);
     await page.evaluate(`document.querySelector('a[href="/workspace/${other}"]')?.click()`);
@@ -1611,7 +1626,6 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
   }
 }
 
-/** What each page of a thinking turn showed as a stream error, and what the page reported to the server for it. */
 interface MidThoughtVerdict {
   readonly reconnectedErrors: readonly string[];
   readonly joinedErrors: readonly string[];
@@ -1621,12 +1635,10 @@ interface MidThoughtVerdict {
   readonly probe: string;
 }
 
-/** The chat's stream-error card text, if the page shows one. */
 const STREAM_ERROR_TEXT = `[...document.querySelectorAll('[data-chat-error]')].map((node) => (node.textContent ?? '').trim()).filter(Boolean)`;
 
 const ReportBodySchema = v.looseObject({ event: v.string() });
 
-/** Every client error report the page posts, with the server's answer. */
 function recordReports(page: Page, into: { status: number; event: string; refusal: string }[]): void {
   page.on('response', async (response) => {
     const request = response.request();
