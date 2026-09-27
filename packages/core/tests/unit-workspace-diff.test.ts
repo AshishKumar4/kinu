@@ -641,6 +641,38 @@ describe('workspace diff lifecycle', () => {
     expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: false });
   });
 
+  test('a review that fails after a later one finished keeps the later one undoable', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    const earlier = await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('gate.txt', 'held');
+    const gate = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const { vfs } = rt.storage;
+    const read = vfs.readFile.bind(vfs);
+    let held = false;
+
+    Reflect.set(vfs, 'readFile', async (path: string) => {
+      if (!held && path.endsWith('gate.txt')) {
+        held = true;
+        reached.resolve();
+        await gate.promise;
+        throw new Error('forced read failure');
+      }
+
+      return await read(path);
+    });
+
+    const first = resetWorkspaceBaseline(rt);
+    await reached.promise;
+    await resetWorkspaceBaseline(rt);
+    gate.resolve();
+
+    await expect(first).rejects.toThrow('could not read');
+    expect(restoreWorkspaceBaseline(rt)).toEqual({ ok: true, capturedAt: earlier.capturedAt });
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added gate.txt']);
+  });
+
   test('a directory traversal failure is surfaced instead of becoming an empty diff', async () => {
     const { rt } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);

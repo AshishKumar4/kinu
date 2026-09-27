@@ -338,10 +338,15 @@ function replacedGeneration(rt: WorkspaceBaselineRuntime): string | null {
     WHERE actor_id = ${rt.actor.actorId} AND active = 0 AND path = '' LIMIT 1`[0]?.generation ?? null;
 }
 
-/** Drops every inactive generation but `kept`, then the bodies nothing names. */
+/** Generations a capture is still writing: an overlapping review or Undo must not prune them mid-walk. */
+const capturing = new Set<string>();
+
+/** Drops every inactive generation but `kept` and those still being written, then the bodies nothing names. */
 function pruneBaselines(rt: WorkspaceBaselineRuntime, kept: string | null): void {
+  const writing = JSON.stringify([...capturing]);
+
   void rt.storage.sql`DELETE FROM vfs_baseline_manifest WHERE actor_id = ${rt.actor.actorId} AND active = 0
-    AND generation IS NOT ${kept}`;
+    AND generation IS NOT ${kept} AND generation NOT IN (SELECT value FROM json_each(${writing}))`;
   void rt.storage.sql`DELETE FROM vfs_baseline_blob
     WHERE hash NOT IN (SELECT hash FROM vfs_baseline_manifest WHERE hash IS NOT NULL)`;
 }
@@ -363,7 +368,9 @@ async function capture(rt: WorkspaceBaselineRuntime, held: BaselineManifest | nu
   const generation = nanoid();
   const capturedAt = Date.now();
   const entries = new Map<string, ManifestEntry>();
-  let survivor = replacedGeneration(rt);
+  let flipped = false;
+
+  capturing.add(generation);
 
   try {
     await walkWorkspaceFiles(rt, async (path, st) => {
@@ -396,10 +403,11 @@ async function capture(rt: WorkspaceBaselineRuntime, held: BaselineManifest | nu
     void rt.storage.sql`UPDATE vfs_baseline_manifest
       SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END
       WHERE actor_id = ${actorId}`;
-    survivor = held?.generation ?? null;
+    flipped = true;
   } finally {
-    // A failed partial write goes with the older generations; the error propagates.
-    pruneBaselines(rt, survivor);
+    capturing.delete(generation);
+    // A failed partial write goes; the undo target is read now, because another review may have finished meanwhile.
+    pruneBaselines(rt, flipped ? held?.generation ?? null : replacedGeneration(rt));
   }
 
   return { capturedAt, generation, entries };
