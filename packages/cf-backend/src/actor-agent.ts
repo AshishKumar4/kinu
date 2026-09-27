@@ -1611,8 +1611,6 @@ export abstract class ActorAgent extends Agent<Env> {
     this.logActivity(activity, compactionLogDetail(message, detail));
   }
 
-  /** Registered from the root's schema init: its plan port resolves this actor's handle, which needs the
-   *  directory row that init creates. */
   /** Handed to every turn; core adds the inbox's own turn extension itself. */
   private _compactionExtension: KinuExtension | null = null;
 
