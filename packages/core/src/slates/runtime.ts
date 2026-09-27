@@ -58,6 +58,8 @@ export interface WorkspaceSlatesDeps {
 export class WorkspaceSlates {
   constructor(private readonly deps: WorkspaceSlatesDeps) {}
 
+  // The vendored runtime requires each seam even though Kinu stores no deployment, resource
+  // or preview; each refuses only when that operation is attempted.
   readonly provider: SlateProvider = {
     deploy: () => settleSync(Effect.fail(unsupported('deployment'))),
     reconcileDeployment: () => settleSync(Effect.fail(unsupported('deployment'))),

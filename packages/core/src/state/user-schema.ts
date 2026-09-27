@@ -206,7 +206,9 @@ export function initUserTables(sql: SqlExec): void {
       last_seen_at    INTEGER,
       expires_at      INTEGER,
       revoked_at      INTEGER,
-      -- When a second socket took this device's live slot.
+      -- When a second socket took this device's live slot. Rendered in Account
+      -- settings: a silent takeover by a copied device.json shows as a
+      -- replacement the owner did not cause.
       replaced_at     INTEGER,
       -- The directory the owner ran "kinu connect" in, and the machine's own
       -- home, both reported on HELLO. The consented directory is the one place

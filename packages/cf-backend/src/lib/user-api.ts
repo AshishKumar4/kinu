@@ -262,6 +262,7 @@ export interface UserDevice {
   lastSeenAt: number | null;
   /** Measured from the last rotation (every accepted connect), so a machine in use never reaches it. */
   expiresAt: number | null;
+  /** A stolen `device.json` shows up here as a replacement nobody caused. */
   replacedAt: number | null;
   revokedAt: number | null;
   unstoppedAt: number | null;
