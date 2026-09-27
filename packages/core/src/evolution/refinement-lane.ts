@@ -34,7 +34,7 @@ import { routeSkill, settleSkillApproval } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { renderIssues } from '../utils/json';
-import { renderThrownChain, tolerate, type ErrorCode } from '../obs/index';
+import { renderThrownChain, toKinuError, tolerate, type ErrorCode } from '../obs/index';
 import type { TemporaryRunRequest } from '../subordinates/temporary';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -268,7 +268,17 @@ async function plan(
     }
 
     if (!claim.held()) return null;
-    routes.push(await routeEdit(deps, { edit, request, reviewed }));
+    let routed: RefinementRoute;
+
+    try {
+      routed = await routeEdit(deps, { edit, request, reviewed });
+    } catch (cause) {
+      const failure = toKinuError({ doing: `routing the ${edit.kind} edit`, cause, otherwise: 'io' });
+
+      return refuse(`${failure.code}: ${failure.message}`);
+    }
+
+    routes.push(routed);
 
     // Persist after each route so a crash between owner writes keeps them recorded.
     if (!claim.record({ routes })) return null;

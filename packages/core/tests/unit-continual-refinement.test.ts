@@ -760,6 +760,25 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(row.stage).toBe('refused');
   });
 
+  test('a staging write that fails refuses the request with its reason, and owes no wake', async () => {
+    // A throw left the request planning with its answer stored, so the wake fold read it as due forever.
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const { port } = scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL)));
+    const deps = fx.deps(port);
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    const root = refinementStagingPath(opened.id, 'brevity').split('/').slice(0, -2).join('/');
+    await fx.rt.storage.vfs.mkdir(root.split('/').slice(0, -1).join('/'), { recursive: true });
+    await fx.rt.storage.vfs.writeFile(root, 'a regular file where the staging folder goes');
+
+    await advanceRefinementLane(deps);
+
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
+    expect(row.stage).toBe('refused');
+    expect(row.detail).toContain('skill');
+    expect(nextEvolutionAnswerAt(fx.rt.storage.sql, fx.rt.actor.actorId)).toBeNull();
+  });
+
   test('a skill edit stages OUTSIDE discovery — zero prompt influence before approval', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
