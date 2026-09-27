@@ -1446,14 +1446,12 @@ describe('LocalAgentHost', () => {
       return row?.stage ?? null;
     };
 
-    const answered = Promise.withResolvers<void>();
+    const routed = Promise.withResolvers<void>();
     host.subscribe((agent, event) => {
-      if (agent !== 'root' && event.type === 'turn-end') answered.resolve();
+      if (agent === 'root' && event.type === 'evolution' && event.event === 'refinement') routed.resolve();
     });
     await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
-    await answered.promise;
-
-    for (let lap = 0; lap < 1000 && stage() === 'requested'; lap++) await new Promise((resolve) => { setImmediate(resolve); });
+    await routed.promise;
     await host.close();
 
     expect(stage()).not.toBe('requested');
