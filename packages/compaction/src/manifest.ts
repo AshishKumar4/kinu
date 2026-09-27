@@ -89,13 +89,13 @@ export function renderArchiveManifest(ranges: readonly ArchiveRange[]): string {
   return [
     '## Compaction Archive',
     'Ranges folded out of this conversation, archived verbatim. To recover exact prior wording or ' +
-      'raw tool output, read the range\'s file with workspace.readFile inside eval — or name ' +
+      'raw tool output, read the range\'s file with workspace.readFile inside eval, or name ' +
       'its path in the message of a lifetime:"task" agents hire when it is large, so that agent reads ' +
       'it instead of you. Each file ' +
       'holds the whole conversation up to ' +
       'its range end, so the file cited on a range is the smallest archive containing it.',
     ...(elided > 0
-      ? [`- (${elided} earlier range${elided === 1 ? '' : 's'} elided — the last file below still contains every one of them)`]
+      ? [`- (${elided} earlier range${elided === 1 ? '' : 's'} elided: the last file below still contains every one of them)`]
       : []),
     ...rendered.map(formatRange),
   ].join('\n');
@@ -126,7 +126,7 @@ function formatRange(range: ArchiveRange): string {
 
   const ask = range.firstUserAsk ? `"${range.firstUserAsk}"` : '(no user ask)';
 
-  return `- ${span} (${range.userTurns} user / ${range.assistantTurns} assistant) — ${ask} — ${range.path}`;
+  return `- ${span} (${range.userTurns} user / ${range.assistantTurns} assistant), ${ask}, ${range.path}`;
 }
 
 function askSnippet(turn: Turn): string {
@@ -136,5 +136,5 @@ function askSnippet(turn: Turn): string {
     .replace(/\s+/g, ' ')
     .trim();
 
-  return text.length > ASK_SNIPPET_CHARS ? `${text.slice(0, ASK_SNIPPET_CHARS - 1)}…` : text;
+  return text.length > ASK_SNIPPET_CHARS ? `${text.slice(0, ASK_SNIPPET_CHARS - 3)}...` : text;
 }

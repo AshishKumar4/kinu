@@ -84,7 +84,7 @@ export function createAgentTracing(deps: {
         if (!live) {
           throw new KinuError(
             'unsupported',
-            `span ${JSON.stringify(childName)} was opened after ${scope.label} settled — the work escaped `
+            `span ${JSON.stringify(childName)} was opened after ${scope.label} settled: the work escaped `
               + `its ${scope.unit}, so the span would claim coverage of time nothing measured`,
           );
         }

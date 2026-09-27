@@ -98,7 +98,7 @@ describe('deriveArchiveRange', () => {
     const long = turn('t0', 'user', `first\nline ${'detail '.repeat(60)}`);
     const derived = present(deriveArchiveRange([long], 'h1', '/archive/h1.md', []), 'the single-turn derivation');
     expect(derived.range.firstUserAsk).toHaveLength(120);
-    expect(derived.range.firstUserAsk).toEndWith('…');
+    expect(derived.range.firstUserAsk).toEndWith('...');
     expect(derived.range.firstUserAsk).not.toInclude('\n');
   });
 });
@@ -115,8 +115,8 @@ describe('renderArchiveManifest', () => {
     ]);
 
     expect(rendered).toStartWith('## Compaction Archive\n');
-    expect(rendered).toInclude('- turns 1-4 (2 user / 2 assistant) — "message 0" — .kinu/compaction/S/h0.md');
-    expect(rendered).toInclude('- turn 5 (1 user / 0 assistant) — (no user ask) — /a/h1.md');
+    expect(rendered).toInclude('- turns 1-4 (2 user / 2 assistant), "message 0", .kinu/compaction/S/h0.md');
+    expect(rendered).toInclude('- turn 5 (1 user / 0 assistant), (no user ask), /a/h1.md');
   });
 
   test('a long index keeps the newest ranges and says how many it elided', () => {

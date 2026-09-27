@@ -302,7 +302,7 @@ const RULES: Rule[] = [
     pattern: /\b169\.254\.169\.254\b/,
     decision: 'deny',
     name: 'cloud-metadata-ip',
-    why: 'AWS/GCP/Azure cloud-metadata endpoint — common SSRF target.',
+    why: 'AWS/GCP/Azure cloud-metadata endpoint: common SSRF target.',
     harm: 'reaches_out',
   },
   {
@@ -726,7 +726,7 @@ export function reviewCommand(command: string, filesOwner: FilesOwner): Approval
 /** Human-readable result for approval prompts and deny errors. */
 export function formatApproval(result: ApprovalResult): string {
   if (result.decision === 'allow') return '';
-  const lines = result.hits.map((h) => `• ${h.rule} (${h.decision}): ${h.explanation}`);
+  const lines = result.hits.map((h) => `- ${h.rule} (${h.decision}): ${h.explanation}`);
 
   return [`Approval review: ${result.decision}`, ...lines].join('\n');
 }
@@ -850,7 +850,7 @@ async function decideApproval(
   let spent: ApprovalSpend | undefined;
 
   if (review.decision === 'deny') {
-    return refuse('denied', `${APPROVAL_DENIED} — ${formatApproval(review)}`);
+    return refuse('denied', `${APPROVAL_DENIED}: ${formatApproval(review)}`);
   }
 
   if (review.decision === 'gate') {
@@ -877,14 +877,14 @@ async function decideApproval(
         if (!parked) {
           // Do not say "nobody to ask" under deny_all; it would invite re-asking.
           return mode === 'deny_all'
-            ? refuse('denied', `NOT RUN — refused by standing policy (deny_all) — ${formatApproval(review)}`)
-            : refuse('unavailable', `NOT RUN — needs owner approval, nobody to ask — ${formatApproval(review)}`);
+            ? refuse('denied', `NOT RUN: refused by standing policy (deny_all): ${formatApproval(review)}`)
+            : refuse('unavailable', `NOT RUN: needs owner approval, nobody to ask: ${formatApproval(review)}`);
         }
 
         // A parked grant was just spent; execute and carry the spend out.
         spent = parked.spent;
       } else if (!approvalGrants(outcome)) {
-        return refuse('denied', `${APPROVAL_DENIED} by the owner — ${formatApproval(review)}`);
+        return refuse('denied', `${APPROVAL_DENIED} by the owner: ${formatApproval(review)}`);
       } else if (outcome === 'allow_always') {
         policy.remember?.(gatedGrants(review, executor));
       }
@@ -893,7 +893,7 @@ async function decideApproval(
 
   if (review.decision === 'warn') {
     if (mode === 'deny_all') {
-      return refuse('denied', `${APPROVAL_DENIED} (deny_all mode) — ${formatApproval(review)}`);
+      return refuse('denied', `${APPROVAL_DENIED} (deny_all mode): ${formatApproval(review)}`);
     }
 
     diagnostics.failure(

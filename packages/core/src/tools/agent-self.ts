@@ -90,7 +90,7 @@ const BACKGROUND_DESCRIPTION =
   + `(${BACKGROUND_POLICY.interactive.detachAfterMs / 1000}s on a chat turn a human is watching, `
   + `${BACKGROUND_POLICY['one-shot'].detachAfterMs / 1000}s on an autonomous turn woken by an event, `
   + 'a timer or a job). Either way the call hands back { jobId } and you are WOKEN with the result '
-  + 'when the job settles — the wake is the delivery. Call this for the job a wake named, or to '
+  + 'when the job settles: the wake is the delivery. Call this for the job a wake named, or to '
   + 're-read an old result; a job still running has no result to read.';
 
 /** A running job reads as the wake contract, not an empty row, so a poll loop has nothing to spin on. */
@@ -111,7 +111,7 @@ function formatJobRead(job: BackgroundJob | null): BackgroundJob | RunningJobRea
     label: job.label ?? undefined,
     status: 'running',
     note:
-      'Not settled yet — there is no result to read, and reading again will not make it finish. '
+      'Not settled yet: there is no result to read, and reading again will not make it finish. '
       + 'You are woken automatically with the full result the moment this job settles. '
       + 'Do other work if you have any; otherwise end your turn and let the wake bring the result.',
   };
@@ -176,7 +176,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         },
       },
       proposeScaffold: {
-        description: 'Propose a new version of your own agentic-loop scaffold. Routed through the 4-gate validation + misevolution gate + shadow evaluation; only goes live after winning the promotion gate. rationale ≥ 50 chars; code must export async function* run(rt, task) and use the host.* bridge. Optional baseVersion branches from an archived variant.',
+        description: 'Propose a new version of your own agentic-loop scaffold. Routed through the 4-gate validation + misevolution gate + shadow evaluation; only goes live after winning the promotion gate. rationale at least 50 chars; code must export async function* run(rt, task) and use the host.* bridge. Optional baseVersion branches from an archived variant.',
         execute: async (...args: unknown[]) => {
           const [rationale, code, baseVersion] = args;
           const rationaleText = argument(NonEmptyStringSchema, { value: rationale }, 'agent.proposeScaffold: rationale must be a non-empty string');
@@ -187,7 +187,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         },
       },
       scaffoldVersions: {
-        description: 'Read-only scaffold archive: versions with status, lineage (parent_version) and shadow-eval record — the stepping stones proposeScaffold can branch from.',
+        description: 'Read-only scaffold archive: versions with status, lineage (parent_version) and shadow-eval record: the stepping stones proposeScaffold can branch from.',
         execute: async (...args: unknown[]) => {
           return await host.listScaffoldVersions(argument(OptionalNumberSchema, { value: args[0] }, 'agent.scaffoldVersions: limit must be a number when given'));
         },
@@ -258,7 +258,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         },
       },
       replayEvals: {
-        description: 'Read your replay-eval loss curve (newest first): past outcome-labeled turns re-run against the current config, scored against how they originally landed. Each entry carries the 95% confidence interval on its mean score — a move inside the interval is noise, not progress.',
+        description: 'Read your replay-eval loss curve (newest first): past outcome-labeled turns re-run against the current config, scored against how they originally landed. Each entry carries the 95% confidence interval on its mean score: a move inside the interval is noise, not progress.',
         execute: async (...args: unknown[]) => {
           return await host.getReplayEvals(argument(OptionalNumberSchema, { value: args[0] }, 'agent.replayEvals: limit must be a number when given'));
         },

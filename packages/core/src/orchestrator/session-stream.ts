@@ -12,7 +12,7 @@ interface StreamPart {
   readonly number: number;
   readonly kind: string;
   opened: boolean;
-  /** Written ahead of the part's next non-delta update, or dropped by the step's seal, which writes the final text whole. */
+  /** Written before the part's next non-delta update, or dropped by the step's seal. */
   buffered: string;
   bufferedDeltas: number;
   bufferedBytes: number;
@@ -85,6 +85,12 @@ function isLifecyclePart(part: TextStreamPart<ToolSet>): part is LifecyclePart {
 
 const STREAM_DIVERGED = 'session.stream_final_diverged';
 
+interface DurableCall {
+  readonly held: ReturnType<typeof Promise.withResolvers<void>>;
+  awaited: boolean;
+  failed: { readonly reason: unknown } | null;
+}
+
 interface StreamContainer {
   readonly id: string;
   readonly role: 'assistant' | 'tool';
@@ -115,6 +121,7 @@ export class SessionStream {
   /** Writers run one at a time in arrival order, so two cannot reach one container's seal together. */
   private queue: Promise<void> = Promise.resolve();
   private readonly calls = new Map<string, { messageId: string; part: number }>();
+  private readonly durableCalls = new Map<string, DurableCall>();
   private sourceOrder = 0;
   private requestId: string;
   private assistant: StreamContainer;
@@ -152,7 +159,47 @@ export class SessionStream {
 
     if (isLifecyclePart(part)) return Promise.resolve();
 
-    return this.exclusive(() => this.writePart(part));
+    return this.witnessCall(part.type === 'tool-call' ? part.toolCallId : null, this.exclusive(() => this.writePart(part)));
+  }
+
+  /** Resolves once the call's part is durable. */
+  durable(callId: string, signal?: AbortSignal): Promise<void> {
+    const call = this.durableCall(callId);
+
+    call.awaited = true;
+
+    if (call.failed !== null) call.held.reject(call.failed.reason);
+    const aborted = (): void => { call.held.reject(signal?.reason); };
+
+    signal?.addEventListener('abort', aborted, { once: true });
+
+    return call.held.promise.finally(() => { signal?.removeEventListener('abort', aborted); });
+  }
+
+  private durableCall(callId: string): DurableCall {
+    const call = this.durableCalls.get(callId) ?? { held: Promise.withResolvers<void>(), awaited: false, failed: null };
+
+    this.durableCalls.set(callId, call);
+
+    return call;
+  }
+
+  private async witnessCall(callId: string | null, write: Promise<void>): Promise<void> {
+    if (callId === null) return await write;
+    const call = this.durableCall(callId);
+    const [outcome] = await Promise.allSettled([write]);
+
+    if (outcome?.status === 'fulfilled') {
+      call.held.resolve();
+
+      return;
+    }
+
+    call.failed = { reason: outcome?.reason };
+
+    if (call.awaited) call.held.reject(outcome?.reason);
+
+    return await write;
   }
 
   private async writePart(part: Exclude<TextStreamPart<ToolSet>, LifecyclePart>): Promise<void> {
@@ -253,7 +300,7 @@ export class SessionStream {
   observe(event: ChatEvent): Promise<void> {
     if (this.nativeProducer) return Promise.resolve();
 
-    return this.exclusive(() => this.observeScaffold(event));
+    return this.witnessCall(event.type === 'tool-call' ? event.toolCallId : null, this.exclusive(() => this.observeScaffold(event)));
   }
 
   private async observeScaffold(event: ChatEvent): Promise<void> {

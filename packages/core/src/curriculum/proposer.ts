@@ -102,12 +102,12 @@ function buildPrompt(
     .join('\n') || '(no crafted skills yet)';
 
   const recentList = ctx.recent.slice(0, 10)
-    .map(r => `- [${r.succeeded ? '✓' : '✗'}] ${r.task.slice(0, 120)}`)
+    .map(r => `- [${r.succeeded ? 'ok' : 'failed'}] ${r.task.slice(0, 120)}`)
     .join('\n') || '(no recent turns)';
 
   return `You are proposing the NEXT tasks for a self-improving agent to attempt. The
 goal is to maximize *learnability*: tasks that the agent will barely succeed
-at (predicted success ${window[0]}–${window[1]}) — too-easy doesn't teach,
+at (predicted success ${window[0]}-${window[1]}): too-easy doesn't teach,
 too-hard doesn't either.
 
 Current crafted skills:
@@ -119,7 +119,7 @@ ${recentList}
 Propose ${count} candidate tasks. Each should:
 1. Exercise or extend at least one existing skill, OR build a clearly useful
    new capability that composes with existing skills.
-2. Be concretely formulated (no "explore X further" — give a specific task).
+2. Be concretely formulated (no "explore X further": give a specific task).
 3. Have predictedSuccess in the "barely succeeds" window.
 
   JSON shape:

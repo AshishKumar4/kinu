@@ -99,7 +99,7 @@ export async function runExperienceAction(
           const candidates = await listPublishable(sources);
 
           return candidates.length === 0
-            ? { publishable: [], note: 'Nothing here has earned publication yet — a craft needs real uses, a lesson needs corroboration, a fact needs confidence, a scaffold needs a promotion it earned and graded turns behind it.' }
+            ? { publishable: [], note: 'Nothing here has earned publication yet: a craft needs real uses, a lesson needs corroboration, a fact needs confidence, a scaffold needs a promotion it earned and graded turns behind it.' }
             : { publishable: candidates.map(summarizeCandidate), note: 'Publish one with kind + key.' };
         }
 

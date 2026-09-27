@@ -65,7 +65,7 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
     covers: ['runScaffoldGepaOptimization'],
     async run({ surface }) {
       expect(await surface.runScaffoldGepaOptimization({ maxIterations: 1 })).toEqual({
-        ok: false, error: 'no outcome-labeled turns yet — chat with the agent first',
+        ok: false, error: 'no outcome-labeled turns yet: chat with the agent first',
       });
     },
   },

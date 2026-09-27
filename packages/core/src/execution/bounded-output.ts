@@ -57,7 +57,7 @@ export class BoundedOutput {
     const tailStart = firstUtf8Start(tail);
     const omitted = this.total - headEnd - (tail.length - tailStart);
     const decoder = new TextDecoder();
-    const kept = `${decoder.decode(head.subarray(0, headEnd))}\n[… ${String(omitted)} bytes omitted …]\n${decoder.decode(tail.subarray(tailStart))}`;
+    const kept = `${decoder.decode(head.subarray(0, headEnd))}\n[... ${String(omitted)} bytes omitted ...]\n${decoder.decode(tail.subarray(tailStart))}`;
     const saved = this.spill?.close();
     let where = `the full ${stream} was not kept`;
 

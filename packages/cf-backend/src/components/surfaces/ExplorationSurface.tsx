@@ -14,7 +14,7 @@ import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core"
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript, statusDot } from "@/components/NodeTranscript";
 import type { HeadDeltas } from "@kinu.run/core";
-import { cleanNodeLabel, type ExplorerSelection } from "@kinu.run/core";
+import { cleanNodeLabel, type ExplorerSelection } from "@kinu.run/core/swarm-view";
 import { explorationForkTree, type MctsRow } from "@kinu.run/core";
 import type { ForkNode, Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -29,10 +29,7 @@ import {
   forkParamRows, FORK_REVALIDATE_MS, judgeEnsembleLabel,
   useExplorationCanvas, type ExplorationFrontier, type ForkParamRow,
 } from "./fork-runs";
-import {
-  fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf,
-  type RunLevel, type RunLiveness, type RunRefusal, type SwarmAxis, type SwarmResolution,
-} from "@kinu.run/core";
+import { fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf, type RunLevel, type RunLiveness, type RunRefusal, type SwarmAxis, type SwarmResolution } from "@kinu.run/core/swarm-view";
 
 export interface ExplorationSurfaceProps {
   /** Live trees from `mcts-progress`, keyed by search; they replace polled rows so a

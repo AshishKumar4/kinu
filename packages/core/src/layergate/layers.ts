@@ -328,7 +328,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'context-assembly/tool-index-is-family-neutral',
-        asserts: 'every model family gets the same tool index — no family branch in the catalogue',
+        asserts: 'every model family gets the same tool index: no family branch in the catalogue',
         observe: (s) => {
           const section = (id: string, provider: string) => {
             const prompt = s.buildSystemPromptSync({
@@ -449,7 +449,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'volatile-context/empty-state-is-null',
-        asserts: 'nothing to say renders nothing — an empty block never enters the stream',
+        asserts: 'nothing to say renders nothing: an empty block never enters the stream',
         observe: (s) => ({
           empty: s.renderDynamicContextBlock({}),
           blank: s.renderDynamicContextBlock({ factsBlock: '   ', memoryTail: '' }),
@@ -568,7 +568,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'step-pipeline',
-    owns: 'the per-step message pipeline both backends share: extension chain → tool-output pruning → dynamic-context weave → prompt-cache markers',
+    owns: 'the per-step message pipeline both backends share: extension chain -> tool-output pruning -> dynamic-context weave -> prompt-cache markers',
     subjects: [
       'composePrepareStep',
       'pruneStepToolOutputs',
@@ -642,7 +642,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'step-pipeline/compose-noop-is-undefined',
-        asserts: 'nothing to change ⇒ no step override at all (the SDK keeps its own array)',
+        asserts: 'nothing to change => no step override at all (the SDK keeps its own array)',
         observe: async (s) => s.composePrepareStep({}, { stepNumber: 0, messages: shortHistory(), steps: [] }),
       },
       {
@@ -738,7 +738,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'context-budget/clamp-under-budget-passthrough',
-        asserts: 'a result inside the shared budget is returned identically — no marker, no offload',
+        asserts: 'a result inside the shared budget is returned identically: no marker, no offload',
         observe: async (s) => {
           const text = 'small output';
 
@@ -809,7 +809,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'compaction/latest-ask-is-verbatim',
-        asserts: 'the most recent user ask is handed in mechanically — verbatim within the stored budget, windowed head+tail with a named omission beyond it',
+        asserts: 'the most recent user ask is handed in mechanically: verbatim within the stored budget, windowed head+tail with a named omission beyond it',
         observe: (s) => {
           const inBudget = s.buildCompactionSummaryPrompt({
             transcript: 't',
@@ -835,7 +835,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'compaction/checkpoint-roundtrip',
-        asserts: 'wrap→strip returns the body, and stripping an unwrapped summary is a no-op trim',
+        asserts: 'wrap->strip returns the body, and stripping an unwrapped summary is a no-op trim',
         observe: (s) => {
           const body = '## Active Task\nfix auth';
           const wrapped = s.wrapCompactionSummary(body);
@@ -857,7 +857,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     probes: [
       {
         id: 'event-drain/self-emitted-never-wakes',
-        asserts: 'the agent\'s own events never drain into a turn — the anti-self-wake invariant',
+        asserts: 'the agent\'s own events never drain into a turn: the anti-self-wake invariant',
         observe: (s) => ({
           selfOnly: s.buildDrainBatch([
             event({ id: 'a', ingress: 'self_emit', variant: 'internal', payload: { kind: 'note', data: 'x' } }),
@@ -962,7 +962,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'mid-turn-injection/one-delivery-time',
-        asserts: 'every signal lands on the next step when a turn is running, and starts a turn when none is — the kind never changes the answer',
+        asserts: 'every signal lands on the next step when a turn is running, and starts a turn when none is: the kind never changes the answer',
         observe: async (s) => {
           const run = async (turnInFlight: boolean) => {
             const queued: string[] = [];
@@ -1009,7 +1009,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'mid-turn-injection/one-card-per-signal',
-        asserts: 'the user\'s card opens where the signal ARRIVED and moves where the agent took it in — one card, both paths, whatever the kind',
+        asserts: 'the user\'s card opens where the signal ARRIVED and moves where the agent took it in: one card, both paths, whatever the kind',
         observe: async (s) => {
           const run = async (turnInFlight: boolean) => {
             const ids: string[] = [];
@@ -1096,7 +1096,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'safety-gate/mentioned-is-not-invoked',
-        asserts: 'a rule fires on the binary a line runs, not on one it quotes — except where an interpreter is handed the program',
+        asserts: 'a rule fires on the binary a line runs, not on one it quotes: except where an interpreter is handed the program',
         observe: (s) => ({
           quoted: s.reviewCommand('grep -rn "rm -rf" scripts/', 'user').decision,
           echoed: s.reviewCommand('echo "remember to sudo"', 'user').decision,
@@ -1228,7 +1228,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'evolution-gate/promotion-ladder',
-        asserts: 'the trial ladder — too few trials continues, thresholds decide, the ceiling forces a call',
+        asserts: 'the trial ladder: too few trials continues, thresholds decide, the ceiling forces a call',
         observe: (s) => [
           { trialsSoFar: 0, pendingWins: 0, currentWins: 0, ties: 0 },
           { trialsSoFar: 3, pendingWins: 3, currentWins: 0, ties: 0 },
@@ -1288,7 +1288,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'memory-retrieval/hybrid-degrades-to-lexical',
-        asserts: 'no vector store ⇒ lexical-only results, not an error and not an empty list',
+        asserts: 'no vector store => lexical-only results, not an error and not an empty list',
         observe: async (s) => s.hybridSearch(
           'auth',
           async () => [lexicalHit('m1', 3.2), lexicalHit('m2', 1.1)],
@@ -1311,7 +1311,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'delegation',
-    owns: 'the process evidence a turn leaves behind — how much work was delegated out versus ground through inline',
+    owns: 'the process evidence a turn leaves behind: how much work was delegated out versus ground through inline',
     subjects: ['delegationFeatures', 'renderDelegationFeatures'],
     probes: [
       {
@@ -1359,7 +1359,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'tool-contract/every-builtin-renders',
-        asserts: 'every shipped built-in renders its summary and notes — none silently blank',
+        asserts: 'every shipped built-in renders its summary and notes: none silently blank',
         observe: (s) => BUILTIN_TOOLS.map((name) => [name, s.renderToolSchemaDescription(BUILTIN_TOOL_SPECS[name])]),
       },
     ],
@@ -1367,7 +1367,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'file-plane',
-    owns: 'the exact-match file editor and the honest read behind the `file` tool (core tools/file-edit.ts) — ' +
+    owns: 'the exact-match file editor and the honest read behind the `file` tool (core tools/file-edit.ts): ' +
       'an edit lands exactly once or not at all, and no read is ever clipped without saying how to continue it; ' +
       'and the mount table that extends that one plane with /pc and /sandbox (vfs/mounts.ts)',
     subjects: ['applyFileEdits', 'scanFileWindow', 'formatFileSlice', 'withMountTable'],
@@ -1532,7 +1532,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'craft-fitness/prose-is-not-a-call',
-        asserts: 'a tool named inside a string or comment — the createTool body case — is never scored as invoked, but a template interpolation is real code',
+        asserts: 'a tool named inside a string or comment (the createTool body case) is never scored as invoked, but a template interpolation is real code',
         observe: (s) => [
           'await workspace.createTool("w", "d", "async () => tools.summarize(1)")',
           '// tools.summarize(1)',
@@ -1551,7 +1551,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'craft-fitness/turn-usage-is-the-call-site-scan',
-        asserts: 'the turn reports as crafted-tool use exactly what the call-site scan saw — an MCP or native tool call contributes nothing, and a run with evolution off reports none',
+        asserts: 'the turn reports as crafted-tool use exactly what the call-site scan saw: an MCP or native tool call contributes nothing, and a run with evolution off reports none',
         observe: () => {
           const ledger: CraftLedger = { names: () => ['sum', 'fmt'], observe: () => [] };
 
@@ -1606,7 +1606,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   // Declared, not measured: these score `null`, never 1.
   {
     id: 'tool-construction',
-    owns: 'buildBuiltinTools + buildActorTools — the per-turn decision of which tools exist, and the crafted-tool surfacing policy',
+    owns: 'buildBuiltinTools + buildActorTools: the per-turn decision of which tools exist, and the crafted-tool surfacing policy',
     subjects: [],
     probes: [],
     unmeasuredBecause:
@@ -1617,7 +1617,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   },
   {
     id: 'compaction-ladder',
-    owns: 'the @better-compact ladder that actually rewrites history — codec, plan, transformTurns',
+    owns: 'the @better-compact ladder that actually rewrites history: codec, plan, transformTurns',
     subjects: [],
     probes: [],
     unmeasuredBecause:
@@ -1629,7 +1629,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     id: 'backend-turn-driver',
     owns: 'the shared turn spine both drivers delegate to: the run-event bracket, the CompletedTurn snapshot, ' +
       'the measured prompt-token trigger, and failure classification + applied overflow recovery ' +
-      '(core orchestrator/turn-lifecycle.ts + turn-failure.ts — hoisted from the two inline drivers)',
+      '(core orchestrator/turn-lifecycle.ts + turn-failure.ts: hoisted from the two inline drivers)',
     subjects: [
       'classifyTurnFailure',
       'planOverflowRecovery',
@@ -1682,7 +1682,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'backend-turn-driver/run-bracket-never-throws',
-        asserts: 'a broken recorder is swallowed — losing a history row must not fail a turn',
+        asserts: 'a broken recorder is swallowed: losing a history row must not fail a turn',
         observe: (s) => {
           const broken = { emit: () => { throw new Error('db locked'); } };
           s.openTurnRun(broken, 'r', { agentId: 'a', causedBy: 'chat', userMessage: 'm', turnIndex: 0 });
@@ -1765,7 +1765,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'backend-turn-driver/overflow-recovery-plan',
-        asserts: 'a context overflow plans force-compaction and exactly one retry — never a second',
+        asserts: 'a context overflow plans force-compaction and exactly one retry, never a second',
         observe: (s) => [
           s.planOverflowRecovery({ error: undefined, turnWasOverflowRetry: false }),
           s.planOverflowRecovery({ error: 'prompt is too long', turnWasOverflowRetry: false }),
@@ -1778,7 +1778,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'subordinate-runtime',
-    owns: 'the facet inherited-context digest — what a spawned head/subordinate sees of its parent conversation ' +
+    owns: 'the facet inherited-context digest: what a spawned head/subordinate sees of its parent conversation ' +
       '(core orchestrator/heads-support.ts); spawn/assign/dismiss ordering stays in cf-backend behind this digest',
     subjects: [
       'serializeContentForHeads',
@@ -1798,7 +1798,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'subordinate-runtime/file-parts-never-inherit-payloads',
-        asserts: 'attachment data URLs reduce to filename/mediaType references — heads never inherit base64 payloads',
+        asserts: 'attachment data URLs reduce to filename/mediaType references: heads never inherit base64 payloads',
         observe: (s) => ({
           plain: s.serializeContentForHeads('plain text'),
           withFile: s.serializeContentForHeads([

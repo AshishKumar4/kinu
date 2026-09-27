@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { composerVisibleRows } from '@kinu.run/core';
+import { composerVisibleRows } from '@kinu.run/core/tui';
 
 function observedCap(): number {
   let prev = composerVisibleRows(1);

@@ -94,7 +94,7 @@ function tools(
     escalations,
     craftedToolExecute: nodeCraftedExecute,
     codemode: nodeCodemodeBuilder,
-    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
   });
 }
 
@@ -210,7 +210,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       agents: { mode: 'build', team: stubTeam, peers: stubPeers },
       report: stubReport,
       // Wired over the same SQL the backends use, not a stand-in that records nothing.
-      effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
+      effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
     });
 
     const names = Object.keys(t);
@@ -547,7 +547,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
           return nodeCodemodeBuilder(surface);
         },
-        effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
+        effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
       });
     } finally {
       restore();

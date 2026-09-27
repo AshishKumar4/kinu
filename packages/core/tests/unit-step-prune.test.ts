@@ -85,7 +85,7 @@ describe('pruneStepToolOutputs', () => {
       const text = outputText(part);
       expect(text.length).toBeLessThan(2_200);
       expect(text.startsWith('output-')).toBe(true);
-      expect(text).toContain('…[truncated: full output was');
+      expect(text).toContain('...[truncated: full output was');
       expect(text).toContain('; re-run the tool if needed]');
       // The marker reports the original serialized size.
       expect(text).toContain(`${outputText(resultPart(messages[idx])).length} chars`);
@@ -112,7 +112,7 @@ describe('pruneStepToolOutputs', () => {
 
     // This fixture crosses a batch line, so the boundary advances; no truncated part ever un-truncates.
     expect(prunedN[8]).toBe(stepN[8]);
-    expect(outputText(resultPart(prunedN1[8]))).toContain('…[truncated:');
+    expect(outputText(resultPart(prunedN1[8]))).toContain('...[truncated:');
     expect(prunedN1.length).toBe(stepN1.length);
   });
 
@@ -124,7 +124,7 @@ describe('pruneStepToolOutputs', () => {
   test('re-pruning already-truncated outputs keeps identical bytes', () => {
     const pruned = present(pruneStepToolOutputs(bigTurn(), budgetFor(WINDOW)), 'pruned step');
     const first = outputText(resultPart(pruned[2]));
-    expect(first).toContain('…[truncated:');
+    expect(first).toContain('...[truncated:');
     const grown = [...pruned, ...toolExchange(6, 40_000), ...toolExchange(7, 40_000), ...toolExchange(8, 40_000)];
     const repruned = present(pruneStepToolOutputs(grown, budgetFor(WINDOW)), 'pruned step');
     expect(outputText(resultPart(repruned[2]))).toBe(first);
@@ -143,7 +143,7 @@ describe('pruneStepToolOutputs', () => {
     const pruned = present(pruneStepToolOutputs(messages, budgetFor(WINDOW)), 'pruned step');
     const part = resultPart(pruned[2]);
     expect(part.output.type).toBe('error-text');
-    expect(outputText(part)).toContain('…[truncated:');
+    expect(outputText(part)).toContain('...[truncated:');
   });
 
   // The SDK rebuilds every step from the original history, so the pass never sees its own output;
@@ -200,7 +200,7 @@ describe('composePrepareStep with pruning', () => {
     const messages = bigTurn();
     const result = present(await composePrepareStep({ prune: budgetFor(WINDOW) }, { stepNumber: 3, messages, steps: [] }), 'prepared step');
     expect(result.messages.length).toBe(messages.length);
-    expect(outputText(resultPart(result.messages[2]))).toContain('…[truncated:');
+    expect(outputText(resultPart(result.messages[2]))).toContain('...[truncated:');
   });
 
   test('under budget with no extensions → no step override at all', async () => {
@@ -230,7 +230,7 @@ describe('composePrepareStep with pruning', () => {
       dynamic: { ledger, snapshot: () => ({}) },
     }, { stepNumber: 3, messages, steps: [] }), 'prepared step');
 
-    expect(outputText(resultPart(result.messages[2]))).toContain('…[truncated:');
+    expect(outputText(resultPart(result.messages[2]))).toContain('...[truncated:');
   });
 
   test('a caller-supplied prune reserve adds to the ledger overhead', async () => {
@@ -239,7 +239,7 @@ describe('composePrepareStep with pruning', () => {
     for (let i = 0; i < 6; i++) messages.push(...toolExchange(i, 28_000));
     const callerReserve = { ...budgetFor(WINDOW), reservedTokens: 5_000 };
     const bare = present(await composePrepareStep({ prune: callerReserve }, { stepNumber: 1, messages, steps: [] }), 'prepared step');
-    expect(outputText(resultPart(bare.messages[2]))).toContain('…[truncated:');
+    expect(outputText(resultPart(bare.messages[2]))).toContain('...[truncated:');
     const ledger = new DynamicContextLedger();
 
     const result = present(await composePrepareStep({
@@ -247,14 +247,14 @@ describe('composePrepareStep with pruning', () => {
       dynamic: { ledger, snapshot: () => ({}) },
     }, { stepNumber: 1, messages, steps: [] }), 'prepared step');
 
-    expect(outputText(resultPart(result.messages[2]))).toContain('…[truncated:');
+    expect(outputText(resultPart(result.messages[2]))).toContain('...[truncated:');
   });
 
   test('cache markers land LAST, on the pruned array', async () => {
     const messages = bigTurn();
     const result = present(await composePrepareStep({ cache: { strategy: { kind: 'anthropic' } }, prune: budgetFor(WINDOW) }, { stepNumber: 3, messages, steps: [] }), 'prepared step');
     const out = result.messages;
-    expect(outputText(resultPart(out[2]))).toContain('…[truncated:');
+    expect(outputText(resultPart(out[2]))).toContain('...[truncated:');
 
     // Tail breakpoints ride the final two messages.
     const marked = out.filter((m) =>

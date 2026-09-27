@@ -185,7 +185,7 @@ export const BEHAVIOR_RULES: ReadonlyArray<BehaviorRule> = [
   {
     name: 'resumed',
     label: 'unclear',
-    meaning: 'the follow-up just asks to carry on — a veto, not a verdict',
+    meaning: 'the follow-up just asks to carry on: a veto, not a verdict',
     fires: onFollowup(asksToResume),
   },
 ];
@@ -453,7 +453,7 @@ export async function runCorpusEval(input: CorpusEvalInput): Promise<CorpusEvalR
 /** Every number in a report is conditional on these two caveats. */
 const CAVEAT = [
   '> **Selection bias.** A rule fires only on an unambiguous act, so these are the',
-  '> clearest turns in the corpus — the interrupts, the refusals, the one-word',
+  '> clearest turns in the corpus: the interrupts, the refusals, the one-word',
   '> approvals. Every number below is conditional on a rule having fired, and a',
   '> rater looks better here than it does on the ambiguous middle the rules abstain',
   '> on.',
@@ -462,14 +462,14 @@ const CAVEAT = [
   '> and toolset than the ledger the classifier runs on, and calibration does not',
   '> transport across distributions. Nothing here licenses a corrected rate, and',
   '> nothing here substitutes for the on-distribution hand-labeling pass',
-  '> (`kinu label export`). This is a second, free, independent read — not a',
+  '> (`kinu label export`). This is a second, free, independent read, not a',
   '> replacement for the first one.',
 ].join('\n');
 
 function kappaText(estimate: KappaEstimate | null): string {
   return estimate === null
     ? 'undefined at these marginals'
-    : `${estimate.value.toFixed(2)} (95% CI ${estimate.lo.toFixed(2)}–${estimate.hi.toFixed(2)}, n=${estimate.n})`;
+    : `${estimate.value.toFixed(2)} (95% CI ${estimate.lo.toFixed(2)} to ${estimate.hi.toFixed(2)}, n=${estimate.n})`;
 }
 
 function raterSection(score: RaterScore): string[] {
@@ -477,7 +477,7 @@ function raterSection(score: RaterScore): string[] {
     `### ${score.name}`,
     '',
     `- answered ${score.answered}${score.failed > 0 ? `, failed on ${score.failed}` : ''}`,
-    `- κ vs the rules: ${kappaText(score.kappa)}`,
+    `- kappa vs the rules: ${kappaText(score.kappa)}`,
   ];
 
   if (score.accuracy !== null) {
@@ -553,7 +553,7 @@ export function renderCorpusReport(
   ];
 
   if (raters.length === 0) {
-    lines.push('## Raters', '', 'No rater was run — this is the mining half only.', '');
+    lines.push('## Raters', '', 'No rater was run: this is the mining half only.', '');
 
     return lines.join('\n');
   }
@@ -580,7 +580,7 @@ export function renderCorpusReport(
       `| **total** | ${report.cost.reduce((sum, row) => sum + row.usage.calls, 0)} | | |` +
         ` ${tokens} | $${usd.toFixed(4)} |`,
       '',
-      'Tokens are estimated from characters and priced at the repo\'s blended rate —' +
+      'Tokens are estimated from characters and priced at the repo\'s blended rate -' +
       ' a size, not an invoice.',
       '',
     );

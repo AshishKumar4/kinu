@@ -75,7 +75,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     const userId = this.options.getOwnerUserId();
 
     if (!userId && this.options.ownerRequired) {
-      throw new Error('Agent has no owner_user_id yet — Worker must call claimOwner before any model use.');
+      throw new Error('Agent has no owner_user_id yet: Worker must call claimOwner before any model use.');
     }
 
     const userDOStub = userId

@@ -183,7 +183,7 @@ export function validateMcpServerInput(input: JsonValue): McpServerInput {
   // Credentials belong in sealed `headers`; `serverUrl` is plaintext and Workers `fetch`
   // rejects URLs with userinfo.
   if (parsed.username !== '' || parsed.password !== '') {
-    throw new KinuError('bad_input', '`serverUrl` must not carry a username or password — put credentials in `headers`.');
+    throw new KinuError('bad_input', '`serverUrl` must not carry a username or password: put credentials in `headers`.');
   }
 
   const parsedTransport = v.safeParse(v.nullish(McpTransportSchema), obj.transport);
@@ -200,13 +200,13 @@ export function validateMcpServerInput(input: JsonValue): McpServerInput {
     const parsedHeaderObject = v.safeParse(RawMcpServerInputSchema, obj.headers);
 
     if (!parsedHeaderObject.success) {
-      throw new KinuError('bad_input', '`headers` must be a flat object of string→string.');
+      throw new KinuError('bad_input', '`headers` must be a flat object of string->string.');
     }
 
     const collected: Record<string, string> = {};
 
     for (const [k, value] of Object.entries(parsedHeaderObject.output)) {
-      if (k.length === 0 || k.length > 128) throw new KinuError('bad_input', `headers.${k} — key length out of range.`);
+      if (k.length === 0 || k.length > 128) throw new KinuError('bad_input', `headers.${k}: key length out of range.`);
       const parsedValue = v.safeParse(v.string(), value);
 
       if (!parsedValue.success) throw new KinuError('bad_input', `headers.${k} must be a string.`);
@@ -266,7 +266,7 @@ export function validateMcpServerName(name: JsonValue): string {
   if (!parsed.success || !parsed.output.trim()) throw new KinuError('bad_input', '`name` is required.');
   const trimmed = parsed.output.trim();
 
-  if (trimmed.length > 64) throw new KinuError('bad_input', '`name` must be ≤ 64 characters.');
+  if (trimmed.length > 64) throw new KinuError('bad_input', '`name` must be <= 64 characters.');
 
   return trimmed;
 }

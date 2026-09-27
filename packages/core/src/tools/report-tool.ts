@@ -55,7 +55,7 @@ function handoffOf(args: ReportToolInput): SubordinateReportHandoff {
   if (charged > SUBORDINATE_REPORT_HANDOFF_MAX_CHARS) {
     throw new KinuError(
       'bad_input',
-      `report handoff fields hold ${charged} characters, over the ${SUBORDINATE_REPORT_HANDOFF_MAX_CHARS}-character budget they share — `
+      `report handoff fields hold ${charged} characters, over the ${SUBORDINATE_REPORT_HANDOFF_MAX_CHARS}-character budget they share: `
       + 'keep each entry to one line and put the detail in `content` or a workspace path.',
     );
   }

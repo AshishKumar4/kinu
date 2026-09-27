@@ -63,7 +63,7 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 }
 
 function absentError(mount: VfsMount, path: string): Error {
-	return makeVfsError('ENXIO', `/${mount.name} — ${mount.absentReason()}`, path);
+	return makeVfsError('ENXIO', `/${mount.name}: ${mount.absentReason()}`, path);
 }
 
 /** Native mutations the composite plane forwards where the routed tree has them. */
@@ -112,7 +112,7 @@ export async function readBoundedWithVfsOps(
 		throw makeVfsError(
 			'EPERM',
 			`this file plane has no ranged read, so ${size === null ? 'a file of unknown size' : `${String(size)} bytes`}`
-			+ ` cannot be previewed within ${String(limit)} — download it instead`,
+			+ ` cannot be previewed within ${String(limit)}: download it instead`,
 			path,
 		);
 	}
@@ -259,7 +259,7 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 	if (sourceStat.isDir) {
 		throw makeVfsError(
 			'EPERM',
-			'a directory cannot be renamed here — this plane has no native rename, and only a file\'s bytes can be carried',
+			'a directory cannot be renamed here: this plane has no native rename, and only a file\'s bytes can be carried',
 			from.path,
 		);
 	}
@@ -551,7 +551,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 			if (!st) throw makeVfsError('ENOENT', 'no such file or directory', oldPath);
 
 			if (st.isDir) {
-				throw makeVfsError('EPERM', 'a directory cannot be renamed here — this route has no native rename, and only a file\'s bytes can be carried', oldPath);
+				throw makeVfsError('EPERM', 'a directory cannot be renamed here: this route has no native rename, and only a file\'s bytes can be carried', oldPath);
 			}
 
 			await carryFileWithVfsOps(

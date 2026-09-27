@@ -232,7 +232,7 @@ describe('publishing is gated on local evidence', () => {
     });
 
     expect(await findPublishable(sources, 'lesson', provisional)).toEqual({
-      refused: `lesson "${provisional}" is still provisional — it is kept out of this workspace's own `
+      refused: `lesson "${provisional}" is still provisional: it is kept out of this workspace's own `
         + 'MEMORY.md until a real outcome corroborates it, so it is not shareable either',
     });
 
@@ -557,7 +557,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     const proposed = await modifyScaffold(alpha.rt, SCAFFOLD_RATIONALE, scaffoldSrc('v1'));
     expect(proposed.ok).toBe(true);
     expect(await findPublishable(sources, 'scaffold', '1')).toEqual({
-      refused: 'scaffold v1 is pending, not the version this workspace runs — '
+      refused: 'scaffold v1 is pending, not the version this workspace runs: '
         + 'only a loop the local shadow gate promoted has been proven here',
     });
 
@@ -565,7 +565,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
       refused: 'no scaffold version v9 in this workspace',
     });
     expect(await findPublishable(sources, 'scaffold', 'latest')).toEqual({
-      refused: '"latest" is not a scaffold version — a scaffold is published by its version number',
+      refused: '"latest" is not a scaffold version: a scaffold is published by its version number',
     });
   });
 
@@ -619,7 +619,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     const refused = await findPublishable(publishSources(alpha), 'scaffold', String(version));
     expect('refused' in refused && refused.refused).toBe(
       `scaffold v1 drew 1 misevolution veto during its ${DEFAULT_SHADOW_CONFIG.minTrials}-turn `
-      + 'probation here — a loop that evolves unsafe artifacts is not one to hand another workspace',
+      + 'probation here: a loop that evolves unsafe artifacts is not one to hand another workspace',
     );
   });
 
@@ -636,7 +636,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     const refused = await findPublishable(publishSources(alpha), 'scaffold', String(version), vetoAt + 1000);
     expect('refused' in refused && refused.refused).toBe(
       `scaffold v1 drew 1 misevolution veto during its ${DEFAULT_SHADOW_CONFIG.minTrials}-turn `
-      + 'probation here — a loop that evolves unsafe artifacts is not one to hand another workspace',
+      + 'probation here: a loop that evolves unsafe artifacts is not one to hand another workspace',
     );
   });
 
@@ -655,7 +655,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
       const refused = await findPublishable(publishSources(alpha), 'scaffold', String(version));
       expect('refused' in refused && refused.refused).toBe(
         `scaffold v1 drew 1 misevolution veto during its ${DEFAULT_SHADOW_CONFIG.minTrials}-turn `
-        + 'probation here — a loop that evolves unsafe artifacts is not one to hand another workspace',
+        + 'probation here: a loop that evolves unsafe artifacts is not one to hand another workspace',
       );
       expect(log.emitted.map((line) => line.event)).toContain('experience.publishable_veto_unreadable');
       await expect(listPublishable(publishSources(alpha))).resolves.toEqual([]);

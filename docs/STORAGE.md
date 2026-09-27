@@ -8,8 +8,7 @@ idempotently. No shadow VFS or sync path runs between files and actor state.
 
 Only `OrchestratorAgent` holds actors. Every subordinate, head, swarm node, and
 MCTS branch is a logical actor, one `workspace_actors` row inside the
-workspace's own SQLite (`packages/cf-backend/src/subordinate-hosting.ts`,
-`packages/cf-backend/src/exploration-hosting.ts`). None is a second object or a
+workspace's own SQLite (`packages/cf-backend/src/hosted-actors.ts`). None is a second object or a
 second database. The other Durable Object classes in `wrangler.jsonc` keep
 databases of their own. The one with user data is `UserDO`: it holds the
 per-user `user_*` and `device_*` tables and the owner's `experience_library`.

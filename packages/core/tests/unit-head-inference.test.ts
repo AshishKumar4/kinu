@@ -55,7 +55,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     inheritedContext: [{ id: 'm1', role: 'user', content: 'the prior user message', createdAt: 1 }],
     budget: { maxDepth: 2, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('head'),
+    loop: defaultLoopOrigin('run'),
     ...overrides,
   };
 }
@@ -66,7 +66,7 @@ const deps = async (
   over?: Partial<HeadInferenceDeps>,
 ): Promise<HeadInferenceDeps> => {
   const { rt, testSql } = createTestRuntime();
-  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-under-test', 'head');
+  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-under-test', 'run');
 
   return {
     actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,

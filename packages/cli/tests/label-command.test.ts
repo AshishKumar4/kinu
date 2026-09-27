@@ -170,7 +170,7 @@ describe('kinu label', () => {
 
     const before = await runCli(home, ['alignment', 'demo']);
     expect(before.stdout).toContain('K_align');
-    expect(before.stdout).toContain('uncalibrated — no hand-labeled turns yet');
+    expect(before.stdout).toContain('uncalibrated: no hand-labeled turns yet');
     expect(before.stdout).toContain('600 classifier-graded turns are waiting to be checked');
 
     await runCli(home, ['label', 'export', 'demo', '--out', file]);

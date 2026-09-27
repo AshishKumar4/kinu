@@ -115,7 +115,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     "search_memory",
     {
       description:
-        "Hybrid search over the agent's long-term memory — FTS5 (lexical) + Vectorize " +
+        "Hybrid search over the agent's long-term memory: FTS5 (lexical) + Vectorize " +
         "(semantic) merged via Reciprocal Rank Fusion when Vectorize is configured; " +
         "FTS5-only otherwise. Returns matching passages with merged scores.",
       inputSchema: {
@@ -178,7 +178,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
         lines.push(`## Crafted (${out.crafted.length})`);
 
         for (const c of out.crafted) {
-          lines.push(`- ${c.name} (q=${c.qualityScore.toFixed(2)}, uses=${c.usageCount}) — ${c.description}`);
+          lines.push(`- ${c.name} (q=${c.qualityScore.toFixed(2)}, uses=${c.usageCount}): ${c.description}`);
         }
 
         return { content: [{ type: "text", text: lines.join("\n") }] };
@@ -250,11 +250,11 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
       try {
         const agent = await mcpClient(resolveAgent, agentName);
         const page = await agent.listRuns({ limit: limit ?? 20, cursor: after ? { after } : undefined });
-        const lines = page.items.map((r) => `- ${r.runId} — ${r.eventCount} events @ ${r.lastTs}`);
+        const lines = page.items.map((r) => `- ${r.runId}: ${r.eventCount} events @ ${r.lastTs}`);
 
         if (lines.length === 0) return { content: [{ type: "text", text: "(no runs yet)" }] };
         lines.push(page.status === 'more'
-          ? `(more runs before these — call again with after: ${JSON.stringify(page.next.after)})`
+          ? `(more runs before these: call again with after: ${JSON.stringify(page.next.after)})`
           : "(that is every run)");
 
         return { content: [{ type: "text", text: lines.join("\n") }] };
@@ -297,10 +297,10 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     "run_task",
     {
       description:
-        "Enqueue a task for the agent: inject a user turn into its serialized loop — the exact " +
-        "path the event→turn reactor and background-job wake use. Fire-and-forget; the turn runs " +
+        "Enqueue a task for the agent: inject a user turn into its serialized loop; the exact " +
+        "path the event->turn reactor and background-job wake use. Fire-and-forget; the turn runs " +
         "asynchronously. Returns whether it was queued or skipped (a newer turn pre-empted it, " +
-        "or the turn queue rejected it — either way nothing ran).",
+        "or the turn queue rejected it: either way nothing ran).",
       inputSchema: { text: z.string().min(1).describe("The task / instruction for the agent to act on.") },
     },
     async ({ text }) => {
@@ -309,8 +309,8 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
         const result: EnqueueTurnResult = await agent.runTaskFromMcp(text);
 
         const msg = result.status === "queued"
-          ? "Task queued — the agent will run it on its turn loop."
-          : "Task skipped — a newer turn pre-empted it, or the turn queue rejected it. Nothing ran.";
+          ? "Task queued: the agent will run it on its turn loop."
+          : "Task skipped: a newer turn pre-empted it, or the turn queue rejected it. Nothing ran.";
 
         return { content: [{ type: "text", text: msg }] };
       } catch (err) {
@@ -324,7 +324,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     {
       description:
         "Send a fire-and-forget message to one of the owner's other agents over the peer transport. " +
-        "The target must be a peer on the owner's roster (see list_peers) — cross-owner messaging is refused.",
+        "The target must be a peer on the owner's roster (see list_peers): cross-owner messaging is refused.",
       inputSchema: {
         agent: z.string().describe("Peer agent name (from list_peers)."),
         message: z.string().describe("Message body."),
@@ -353,7 +353,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
   server.registerTool(
     "list_peers",
     {
-      description: "List the owner's other agents (this agent excluded) — the valid targets for send_peer.",
+      description: "List the owner's other agents (this agent excluded): the valid targets for send_peer.",
       inputSchema: {},
     },
     async () => {
