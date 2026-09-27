@@ -749,7 +749,8 @@ describe('LocalAgentHost', () => {
       event.type === 'broadcast' && event.event.type === 'subordinate_event')).toBe(true);
 
     const status = v.parse(TeamStatusSchema, await team.status({ name: 'researcher' }));
-    expect(status.roster.status).toBe('working');
+    // The child's turn ended with a relayed answer: idle, with the assignment kept for a later `completed`.
+    expect(status.roster.status).toBe('idle');
     expect(status.roster.currentTask).toBe('Find the root cause and report it.');
 
     await team.dismiss({ name: 'researcher', requestedBy: 'user' });

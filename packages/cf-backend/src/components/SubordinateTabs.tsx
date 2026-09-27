@@ -6,7 +6,7 @@ import { tabCls, tabStripH } from "./ui/form";
 import { InlineRenameTitle } from "./WorkspaceBar";
 import { CaretDownIcon, CaretRightIcon, HouseIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
-import { codenameFor } from "@kinu.run/core";
+import { codenameFor, ownerFacingSubordinate } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
 import { renderThrownChain, settleLogged } from "@kinu.run/core/obs";
 import { useWheelScrollsSideways } from "@/hooks/use-wheel-scrolls-sideways";
@@ -21,7 +21,7 @@ export function agentTitle(entry: Pick<SubordinateRosterEntry, "name" | "display
 
 interface SubordinateTabsProps {
   workspace: string;
-  /** Every retained agent, dismissed included: a dismissed one keeps its conversation, so its tab must stay reachable. */
+  /** Every retained agent, dismissed included; the strip drops internal helpers itself. */
   subordinates: readonly SubordinateRosterEntry[];
   activeName?: string;
   /** WorkspacePage owns the action and its failure banner: the sidebar can invoke it while this strip is unmounted. */
@@ -58,8 +58,9 @@ export function SubordinateTabs({
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   // Open on a dismissed agent, so a deep link finds its tab.
-  const dismissed = subordinates.filter((entry) => entry.status === "dismissed");
-  const employable = subordinates.filter((entry) => entry.status !== "dismissed");
+  const owned = subordinates.filter(ownerFacingSubordinate);
+  const dismissed = owned.filter((entry) => entry.status === "dismissed");
+  const employable = owned.filter((entry) => entry.status !== "dismissed");
   const [showDismissed, setShowDismissed] = useState(false);
   const dismissedOpen = showDismissed || dismissed.some((entry) => entry.name === activeName);
 

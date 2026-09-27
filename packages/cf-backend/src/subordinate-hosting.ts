@@ -44,6 +44,8 @@ export interface HostedReportLedger {
  * `model`/`profile` resolution (a second lookup can land a different digest than the claim).
  */
 export interface HostedTaskTurn {
+  /** The assignment row's id: keys this turn's claim and effects. */
+  readonly turnId: string;
   readonly actor: HostedActor;
   readonly runtime: CFRuntime;
   readonly reports: HostedReportLedger;
@@ -294,7 +296,7 @@ export async function runHostedTask(
     const capture = new HeadCapture();
 
     const turn: HostedTaskTurn = {
-      actor, runtime, reports, input, capture,
+      turnId: task.sequenceId, actor, runtime, reports, input, capture,
       model: seams.resolveModel(resolved.profile.tier.model),
       profile: resolved,
     };

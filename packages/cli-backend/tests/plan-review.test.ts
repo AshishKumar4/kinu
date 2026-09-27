@@ -19,7 +19,7 @@ const USAGE = {
 } as const;
 
 type Step =
-  | { readonly call: string; readonly input: JsonObject }
+  | { readonly call: string; readonly input: JsonObject; readonly waitFor?: Promise<void>; readonly onTaken?: () => void }
   | { readonly answer: string; readonly waitFor?: Promise<void>; readonly onTaken?: () => void };
 
 /** Replays `steps` one per request, then answers, so an extra request ends the turn instead of re-running a tool. */
@@ -40,6 +40,9 @@ function scriptedSteps(steps: readonly Step[]) {
         usage: USAGE, warnings: [],
       };
     }
+
+    step.onTaken?.();
+    await step.waitFor;
 
     return {
       content: [{
@@ -232,6 +235,32 @@ describe('LocalAgentSession — plan review', () => {
     }
   });
 
+  test('a plan-mode harness turn carrying a refiner\'s proposal cannot submit it as a plan', async () => {
+    const proposal = '{"scope":"workspace","edits":[{"kind":"prompt_section","sectionId":"state/output-format","source":"Stop after one line."}]}';
+
+    const { db, agent, events } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: `# Prompt edits\n${proposal}` }] } },
+      { answer: 'Could not submit.' },
+    ]);
+
+    try {
+      await agent.enqueueTurn({
+        text: `1 event arrived while you were idle.\n- [subordinate_report] from subordinate (ask-refiner-a1): completed: ${proposal}`,
+        idempotencyKey: 'drain:refiner', metadata: { kinuEvent: 'event_drain', kinuMode: 'plan' },
+      });
+      await agent.settleBackgroundWork();
+
+      expect(turnModes(agent)).toEqual(['plan']);
+      expect(events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan'))
+        .toMatchObject({ output: { ok: false } });
+      expect(await agent.getActivePlanReview()).toBeNull();
+      expect(planBroadcasts(events)).toEqual([]);
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
   test('dismissing a pending plan lifts the hold with no handoff turn', async () => {
     const { db, agent, events, taken } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
@@ -294,6 +323,40 @@ describe('LocalAgentSession — plan review', () => {
         await agent.end();
         db.close();
       }
+    }
+  });
+
+  test('dismissing a sent-back plan while its revision turn runs stops that turn, and no new plan appears', async () => {
+    // Being held in Plan was the complaint: Dismiss never refuses, and a revision already running files nothing.
+    const revising = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+
+    const { db, agent, taken } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+      { answer: 'Plan submitted for review.' },
+      // The revision turn is running and about to file its revision when the dismiss lands.
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: '# The revised plan' }] }, waitFor: revising.promise, onTaken: started.resolve },
+      { answer: 'Revision submitted.' },
+    ]);
+
+    try {
+      await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
+      const plan = await agent.getActivePlanReview();
+
+      if (!plan) throw new Error('the submitted plan was not stored');
+      const decided = agent.decidePlanReview(plan.id, 1, 'request_changes', 'Say what happens to the audit trail.');
+      await started.promise;
+
+      expect(await agent.dismissPlanReview(plan.id, 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+      revising.resolve();
+      await decided;
+      await agent.settleBackgroundWork();
+
+      expect(await agent.getActivePlanReview()).toMatchObject({ id: plan.id, revision: 1, status: 'dismissed' });
+      expect(taken.length).toBeLessThanOrEqual(3);
+    } finally {
+      await agent.end();
+      db.close();
     }
   });
 

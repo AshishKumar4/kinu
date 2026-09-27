@@ -1,7 +1,7 @@
 // Identity
 export { initFiberTable, tableExists } from './identity/schema';
 
-export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './subordinates/inspection';
+export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
 
 export { inspectSubordinateStorage, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
 
@@ -617,7 +617,7 @@ export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self'
 export { agentSelfHost } from './orchestrator/agent-self-host';
 
 // Platform-neutral: a backend supplies only SubordinateRuntime.
-export { SubordinateRosterStore, initSubordinateRosterTable } from './subordinates/roster';
+export { SubordinateRosterStore, initSubordinateRosterTable, subordinateTitle } from './subordinates/roster';
 
 export {
   SubordinateIdentityStore,
@@ -1387,7 +1387,7 @@ export {
   listPendingPlanReviews,
   workModeUnderReview,
   planHandoffStillOwed,
-  planDismissable,
+  planReviewAwaitingDecision,
   planTitle,
   validatePlanEdits,
   type PlanDecisionOutcome,
@@ -1663,7 +1663,7 @@ export {
   type StepLike, type ToolResultLike, type TurnSinks,
 } from './orchestrator/turn-accumulator';
 
-export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle } from './read-models/workspace-work';
+export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema } from './read-models/workspace-work';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
 
@@ -2145,7 +2145,7 @@ export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
   type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
-  type TabPresence, type ToolInfo,
+  type TabPresence, type ToolInfo, ownerFacingSubordinate,
 } from './protocol';
 
 export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';
@@ -2469,6 +2469,7 @@ export {
   isForeignAgentNamespacePath,
   hostedActorRoute,
   hostedActorSocketPath,
+  HOSTED_ACTOR_ID_HEADER,
 } from './http/agent-routing';
 
 export {

@@ -477,7 +477,7 @@ export class AgentOrchestrator {
 
     try {
       const pending = this.deps.eventLog.pending({ resolve_deferred: { now: Date.now(), phase: 'idle' } });
-      batch = buildDrainBatch(pending);
+      batch = buildDrainBatch(pending, this.deps.eventLog.isEvolutionReport);
 
       if (!batch) return;
 
