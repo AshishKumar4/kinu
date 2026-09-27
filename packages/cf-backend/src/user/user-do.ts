@@ -1731,7 +1731,6 @@ export class UserDO extends Agent<Env> {
       input.agentName,
       input.cliTokenHash,
       JSON.stringify(capabilities),
-      now,
       expiresAt,
     );
 
