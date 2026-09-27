@@ -48,7 +48,7 @@ import {
   type SleepTimeUpdate,
   type EgressSecretBinding,
 } from '@kinu.run/core';
-import { HARNESS_AGENT, harnessFibersRunning, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
+import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
 import { GATEWAY_MODEL, openingOf, platformGatewayEnv, type RecordedGatewayRun, type StubbedAiBinding } from './platform-gateway';
@@ -578,8 +578,9 @@ export function nextTurn(): Promise<void> {
 /**
  * Runs the object's wake until `holds()`. Detached work is observed by its effect, the way an operator would see it,
  * and a condition that never holds fails by name rather than hanging the suite: `failure` is thrown once the object has
- * nothing left to run (no owed work, no fiber in flight), or once every running turn waits either on a scripted model
- * call the script has not answered or on a task helper of its own, so nothing but the suite could move it. No lap count.
+ * nothing left to run (no owed work, no fiber in flight), or once every running turn waits either on the suite (a
+ * scripted model call not yet answered, a planted hold) or on a task helper of its own, so nothing else could move it.
+ * No lap count.
  */
 export async function driveUntil(
   workspace: ActorHarness<HarnessOrchestratorAgent>, failure: string, holds: () => boolean,
@@ -591,12 +592,16 @@ export async function driveUntil(
     if (holds()) return;
 
     if (!workspace.agent.harnessWorkRemains() && !harnessFibersRunning()) throw new Error(failure);
-    const unanswered = workspace.agent.harnessUnansweredModelCalls();
+
+    const suiteHeld = [
+      ...workspace.agent.harnessUnansweredModelCalls().map((run) => `model call ${JSON.stringify(openingOf(run).slice(0, 80))}`),
+      ...harnessHolds().map((name) => `hold ${JSON.stringify(name)}`),
+    ];
+
     const running = workspace.agent.harnessTurnsInFlight();
 
-    if (running > 0 && unanswered.length > 0 && unanswered.length + workspace.agent.harnessTurnsWaitingOnDelegates() >= running) {
-      throw new Error(`${failure}: every running turn waits on a model call the script has not answered, or on its hire `
-        + `(${unanswered.map((run) => JSON.stringify(openingOf(run).slice(0, 80))).join(', ')})`);
+    if (running > 0 && suiteHeld.length > 0 && suiteHeld.length + workspace.agent.harnessTurnsWaitingOnDelegates() >= running) {
+      throw new Error(`${failure}: every running turn waits on the suite or on its own hire (${suiteHeld.join(', ')})`);
     }
   }
 }
