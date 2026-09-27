@@ -16,7 +16,7 @@ import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellAp
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, rmSync, chmodSync, writeSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
-import { join, resolve as resolvePath } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
@@ -56,7 +56,7 @@ import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
-import { createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
+import { agentViewMount, createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
 import { BRANCH_CREDENTIAL_ENV, createBranchSpawner } from './branch-process';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
@@ -363,7 +363,6 @@ export function createCLIRuntime(
   const agentStateVfs = workspace.vfs;
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
   const cwd = config.cwd ? resolvePath(config.cwd) : null;
-  const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints) : agentStateVfs;
 
   const memoryStore = new MemoryStore(agentStateVfs, sql);
   memoryStore.ensureSchema();
@@ -382,6 +381,9 @@ export function createCLIRuntime(
     requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
     get deferrals() { return approvalDeferrals ?? undefined; },
   };
+
+  // Past the directory, the file tool answers to the same policy as the shell.
+  const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints, approvalPolicy) : agentStateVfs;
 
   // A directory-bound shell runs on the user's machine and may mutate the tree, so it
   // snapshots first; the in-SQLite shell is the agent's own and serves the mount table.
@@ -440,6 +442,8 @@ export function createCLIRuntime(
     ...standardMounts((name) => executionRouter.getProvider(name)),
     sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
+    // Unplaced, the agent's own state is the plane itself.
+    ...(cwd === null ? [] : [agentViewMount(agentStateVfs, 'scaffold')]),
     // `/context`: this actor's own working history, keyed on its own id.
     contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
@@ -725,6 +729,7 @@ async function buildCLIHeadRuntime(
     ...standardMounts((name) => executionRouter.getProvider(name)),
     sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
+    ...(cwdPlane === null ? [] : [agentViewMount(agentStateVfs, dirname(actorScaffoldPath(opts.actorBinding)))]),
     contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
     }),

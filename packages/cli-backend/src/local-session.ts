@@ -1700,7 +1700,8 @@ export class LocalAgentSession {
       // A session with no roster substrate never advertises the temporary rung.
       temporaryAsk: this.teamDeps?.temporary !== undefined,
       externalTools,
-      backend: 'cli-local',
+      // Placed in a directory, the workspace is the machine; unplaced, it lives only in its database.
+      backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
       roleSection: profile.role,
       model: { id: this.effectiveModelSpec() },
       cwd: this.cwd,
@@ -2364,7 +2365,7 @@ export class LocalAgentSession {
     const memoryTail = await readMemoryTail(this.rt.memory);
 
     const systemPrompt = buildSystemPromptSync(this.rt, {
-      backend: 'cli-local',
+      backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
       model: { id: this.effectiveModelSpec() },
       currentDate: currentDateForPrompt(),
     });

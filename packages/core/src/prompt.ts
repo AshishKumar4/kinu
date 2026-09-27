@@ -83,7 +83,6 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
   cwd?: string;
   /** Discovered AGENTS.md sources, root-most first, plus the ones too large to carry. */
   agentsMd?: AgentsMdSources;
-  /** Date-only (see currentDateForPrompt) so the prompt cache prefix survives the day. */
   currentDate?: string;
   /** Promoted section replacements, read by the backend once per activation; this builder does no I/O. Absent
    *  renders built-in sources, which the layergate prefix digest is locked against. */
@@ -169,7 +168,6 @@ function renderToolsSection(surface: PromptSurface, render: RenderSection): stri
   });
 }
 
-/** From `worker.isolate.memory`, so prose cannot drift from the catalog. */
 const WORKSPACE_MEMORY_MB = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / (1000 * 1000);
 
 /** The user's own name for the device, else a neutral phrase ("device" reads as an API namespace). */
@@ -184,11 +182,11 @@ function renderExecutorLine(
   render: RenderSection,
   backend?: PromptBackend,
 ): string {
-  const cliLocal = backend === 'cli-local';
-
   switch (exec.name) {
       case 'workspace':
-        return render(WORKSPACE_EXECUTOR_LINE, { cliLocal, memoryMb: String(WORKSPACE_MEMORY_MB) });
+        return render(WORKSPACE_EXECUTOR_LINE, {
+          cliLocal: backend === 'cli-local', cliVfs: backend === 'cli-vfs', memoryMb: String(WORKSPACE_MEMORY_MB),
+        });
       case 'sandbox':
         return render(SANDBOX_EXECUTOR_LINE, {});
       case 'device':
