@@ -281,7 +281,8 @@ On hosted, `cf-backend/src/workspace-host.ts` calls it over the orchestrator's
 `ctx.storage.sql`, and `core/src/execution/nimbus.ts` maps the resulting
 workspace box to Kinu's executor contract. On local, `cli-backend/src/runtime.ts`
 imports it as `createWorkspaceFilesystem` and calls it over `bun:sqlite` in the
-session's own database.
+agent's own database (`~/.kinu/<name>/agent.db`). There it holds the agent's
+state; the project directory is the workspace (see "Local and cloud construction").
 
 Nimbus owns those bytes and their tables. `core/src/conformance/manifest.ts`
 declares the exact set, which is what `NimbusWorkspace.destroy()` drops. An
@@ -319,6 +320,45 @@ Memory indexing reads through the active VFS on either backend, so relational
 One table named `vfs_files` still appears in the tree, in
 `packages/cli/tests/export-import.test.ts`. The test creates it as a blob
 fixture for the archive reader. No product path creates or reads it.
+
+### Local and cloud construction
+
+The owner's first local idea (m1290, 2026-09-15) was the cloud shape on a
+laptop: a Nimbus workspace over `bun:sqlite` as the agent's whole world, with
+the machine's working directory mounted at `/pc`. His later messages the same
+day replaced it (m1326, m1328, m1329): the CLI is like oh-my-pi or pi, it runs
+in the directory it was started in, and that machine is the workspace. The
+Nimbus plane is the agent's own space for state, memory, slates and codemode.
+The device runtime is a cloud concept; a local CLI registers no `device`
+executor and needs no sandbox. m1705 (2026-09-24) asked which messages
+overturned the single-SQLite local plane; these are they.
+
+| | Cloud (`cf-backend/src/runtime.ts`) | Local, placed in a directory (`cli-backend/src/runtime.ts`) | Local with no directory (evals, `cwd: null`) |
+|---|---|---|---|
+| Nimbus plane | `createWorkspace` over the Durable Object's `ctx.storage.sql` (`workspace-host.ts`) | `createWorkspace` over `agent.db`; holds agent state only | `createWorkspace` over `agent.db`; also the workspace |
+| `file` tool plane | the Nimbus plane | `createCwdPlaneVFS(cwd)` (`cli-backend/src/host-mount.ts`): the directory through `node:fs`; `/home/main`, `/home/user` and `/workspace` name the directory, `/slates` its `slates/`, and a path outside it is `EACCES` | the Nimbus plane |
+| Shell | Nimbus `runtime-bash` in the box (`nimbusSessionShell`) | the host shell rooted in the directory (`createHostShell`), behind the approval gate, with a shadow-git checkpoint at most once per turn before a command runs | Nimbus `runtime-bash` |
+| Mounts on the file plane | `/pc`, `/sandbox`, `/skills`, `/shared` (Drive), `/context` | the same table; `/pc`, `/sandbox` and `/shared` answer `ENXIO`, as no local device, container or Drive is bound | same as placed |
+| Mounts in the shell | the same table, through `mountedAuthority` | none: `/pc` in the host shell is the machine's own path | the same table, through `workspace.mountTable` |
+
+Both backends mount through one Kinu API: `withMountTable(base, mounts)`
+(`core/src/vfs/mounts.ts`) gives the `file` tool its view.
+`WorkspaceBundle.mountTable(plane, cred)` (`core/src/vfs/nimbus-workspace.ts`)
+hands the same table to the shell, whose `MountedAuthority`
+(`core/src/vfs/shell-mounts.ts`) extends Nimbus's `SqliteFilesystemAuthority`.
+A mount is a `VfsMount`: a name, a `files()` read at every call, an absent
+reason and an owner.
+
+Nimbus's own `kernel.vfs.mount(path, provider)` is not used. Its
+`MountProvider` (`substrate/lifo/kernel/vfs/types.d.ts` at `@nimbus-sh/core`
+0.12.0) is synchronous: `readFile` returns bytes and `writeFile` returns
+`void`. Every Kinu mount is a network hop (device tunnel, container, Mossaic
+Drive) or a store read, so none can be a `MountProvider`. An async mount
+contract in Nimbus would let Kinu hand the table to Nimbus and delete
+`shell-mounts.ts`; no such contract exists at 0.12.0.
+
+`agent-utils`'s old `SqliteFS` is gone: `agent-utils/src/vfs/` holds only the
+`VFS` interface and path addressing (30 lines).
 
 ## MemoryStore (FTS5 search)
 
