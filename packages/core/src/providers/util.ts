@@ -6,10 +6,11 @@ import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { withCallAccount } from './quota';
 import { evidenceWindow } from '../utils/evidence-window';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
 import {
-  KinuError, classifyErrorCode, diagnostics, tolerate, type ErrorCode,
+  KinuError, classifyErrorCode, diagnostics, settle, tolerate, type ErrorCode,
 } from '../obs/index';
 
 export interface AuthedFetchOptions {
@@ -104,24 +105,24 @@ export class StaleModelList extends KinuError {
   }
 }
 
-export async function settleModelList(
-  list: Promise<ModelInfo[]> | ModelInfo[],
-): Promise<{ readonly models: readonly ModelInfo[]; readonly stale: StaleModelList | null }> {
-  try {
-    return { models: await list, stale: null };
-  } catch (error) {
-    if (!(error instanceof StaleModelList)) throw error;
+type SettledModelList = { readonly models: readonly ModelInfo[]; readonly stale: StaleModelList | null };
 
-    return { models: error.models, stale: error };
-  }
+export async function settleModelList(list: Promise<ModelInfo[]> | ModelInfo[]): Promise<SettledModelList> {
+  return settle(modelList(list));
+}
+
+function modelList(list: Promise<ModelInfo[]> | ModelInfo[]): Effect.Effect<SettledModelList> {
+  return Effect.tryPromise({ try: async (): Promise<SettledModelList> => ({ models: await list, stale: null }), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => (failed.cause instanceof StaleModelList
+      ? Effect.succeed({ models: failed.cause.models, stale: failed.cause })
+      : Effect.die(failed.cause))),
+  );
 }
 
 export async function mapModelList(list: Promise<ModelInfo[]>, map: (models: readonly ModelInfo[]) => ModelInfo[]): Promise<ModelInfo[]> {
-  const { models, stale } = await settleModelList(list);
-
-  if (stale !== null) throw new StaleModelList(map(models), { reason: stale.reason, cause: stale.cause });
-
-  return map(models);
+  return settle(Effect.flatMap(modelList(list), ({ models, stale }) => (stale === null
+    ? Effect.succeed(map(models))
+    : Effect.fail(new StaleModelList(map(models), { reason: stale.reason, cause: stale.cause })))));
 }
 
 export function cloneModelInfos(models: readonly ModelInfo[] | undefined): ModelInfo[] {

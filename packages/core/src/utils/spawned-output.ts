@@ -1,5 +1,7 @@
 // Child stdout reader shared by the `claude` and `opencode` bridges.
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { settle } from '../obs/effect';
 
 async function readAll(stream: AsyncIterable<Uint8Array | string>): Promise<string> {
   const decoder = new TextDecoder();
@@ -21,9 +23,8 @@ async function readAll(stream: AsyncIterable<Uint8Array | string>): Promise<stri
 export async function readAllOutcome(
   stream: AsyncIterable<Uint8Array | string>,
 ): Promise<{ text: string } | { error: unknown }> {
-  try {
-    return { text: await readAll(stream) };
-  } catch (error) {
-    return { error };
-  }
+  return settle(Effect.match(Effect.tryPromise({ try: () => readAll(stream), catch: (cause) => ({ cause }) }), {
+    onSuccess: (text): { text: string } | { error: unknown } => ({ text }),
+    onFailure: (failed): { text: string } | { error: unknown } => ({ error: failed.cause }),
+  }));
 }

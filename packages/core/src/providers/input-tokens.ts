@@ -5,7 +5,8 @@
 
 import type { ModelMessage, ToolSet } from 'ai';
 import type { ModelProvider, ProviderDeps } from './types';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, renderThrownChain, settle, toKinuError } from '../obs/index';
 
 /** The assembled request a count is about. `tools` is required: tool definitions are a large share of every request. */
 export interface CountableRequest {
@@ -38,15 +39,15 @@ export async function countRequestInputTokens(
 
   if (!count) return { kind: 'unsupported', provider: provider.id, reason: NO_COUNT_ENDPOINT };
 
-  try {
-    return await count(modelId, deps, request);
-  } catch (error) {
-    diagnostics.failure(
-      'admission.count_failed',
-      toKinuError({ doing: 'count the assembled request before submitting it', cause: error, otherwise: 'io' }),
-      { provider: provider.id, model: modelId },
-    );
+  return settle(Effect.tryPromise({ try: () => count(modelId, deps, request), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => {
+      diagnostics.failure(
+        'admission.count_failed',
+        toKinuError({ doing: 'count the assembled request before submitting it', cause: failed.cause, otherwise: 'io' }),
+        { provider: provider.id, model: modelId },
+      );
 
-    return { kind: 'unsupported', provider: provider.id, reason: renderThrownChain({ cause: error }) };
-  }
+      return Effect.succeed<InputTokenCount>({ kind: 'unsupported', provider: provider.id, reason: renderThrownChain(failed) });
+    }),
+  ));
 }

@@ -293,7 +293,7 @@ describe('v2 e2e: approval gate', () => {
 
         return `ran:${cmd}`;
       },
-      (msg) => `DENIED:${msg}`,
+      (msg) => `DENIED:${msg.message}`,
       { name: 'device', filesOwner: 'user' },
       { policy: { mode: () => 'strict', requestApproval: async () => 'allow' } },
     );

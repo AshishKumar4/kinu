@@ -2,6 +2,8 @@
 // Rides the Workers AI binding (pre-authenticated, same account). User-billed providers must not:
 // a binding call would move their spend onto this account.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo, ProviderEnv, WorkersAIBinding } from './types';
 import { createGatewayBindingFetch, parseGatewayTarget, type GatewayTarget } from './gateway-binding-fetch';
@@ -28,7 +30,7 @@ export function resolvePlatformGateway(env: ProviderEnv): PlatformGateway {
   const binding = env.AI;
 
   if (!binding) {
-    return { reason: 'Workers AI binding (env.AI) missing — add "ai": { "binding": "AI" } to wrangler.jsonc.' };
+    return { reason: 'Workers AI binding (env.AI) missing: add "ai": { "binding": "AI" } to wrangler.jsonc.' };
   }
 
   return { target, binding };
@@ -59,18 +61,18 @@ export function createAIGatewayProvider(): ModelProvider {
     createModel(modelId, deps): LanguageModel {
       const resolved = resolvePlatformGateway(deps.env);
 
-      if ('reason' in resolved) throw new Error(`ai-gateway unavailable: ${resolved.reason}`);
-
-      return createOpenAICompatible({
-        name: AI_GATEWAY_PROVIDER_ID,
-        // Never fetched: the transport parses the SDK's URL into the binding's {gateway, provider, endpoint}.
-        baseURL: String(deps.env.AI_GATEWAY_URL),
-        fetch: withRateLimitRetry(createGatewayBindingFetch(resolved), {
-          provider: AI_GATEWAY_PROVIDER_ID,
-          modelId,
-          ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
-        }),
-      }).chatModel(modelId);
+      return settleSync('reason' in resolved
+        ? Effect.die(new Error(`ai-gateway unavailable: ${resolved.reason}`))
+        : Effect.sync(() => createOpenAICompatible({
+          name: AI_GATEWAY_PROVIDER_ID,
+          // Never fetched: the transport parses the URL into the binding's {gateway, provider, endpoint}.
+          baseURL: String(deps.env.AI_GATEWAY_URL),
+          fetch: withRateLimitRetry(createGatewayBindingFetch(resolved), {
+            provider: AI_GATEWAY_PROVIDER_ID,
+            modelId,
+            ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
+          }),
+        }).chatModel(modelId)));
     },
   };
 }

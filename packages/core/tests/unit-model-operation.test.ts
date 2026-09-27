@@ -11,6 +11,7 @@ import {
 } from '../src/index';
 import { present, testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
+import { KinuError } from '../src/obs/error';
 
 function setup() {
   const db = new Database(':memory:');
@@ -168,6 +169,33 @@ describe('the production seams open the frame before the request', () => {
     expect(rows.every((row) => row.spec === 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813')).toBe(true);
     expect(rows[1].usage).toEqual({ input: 41, output: 7 });
   });
+
+  test('createCompletionLLM has no stream: asking for one throws unsupported, and writes no operation row', () => {
+    const { recorder } = setup();
+    const sink = recordModelOperations(recorder, () => WORKSPACE_RUN_ID);
+
+    const llm = createCompletionLLM({
+      model: textModel(),
+      spec: 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813',
+      stage: 'judge',
+      spend: { source: 'judge', report: () => {}, operations: sink },
+    });
+
+    let thrown: unknown;
+
+    try {
+      llm.stream({ system: '', messages: [] });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).toBeInstanceOf(KinuError);
+    expect(thrown).toMatchObject({ code: 'unsupported' });
+    expect(thrown).toMatchObject({ message: 'createCompletionLLM(workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813) has no streaming path' });
+    expect(operationsOf(recorder, WORKSPACE_RUN_ID)).toEqual([]);
+  });
+
   test('createVercelAILLM.complete closes the frame as failed when the endpoint dies', async () => {
     // This factory really dials its baseURL, so an unroutable stub makes this the transport-failure case.
     const { recorder } = setup();

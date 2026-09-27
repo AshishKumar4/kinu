@@ -9,7 +9,8 @@ import { quotaWindowText, withCallAccount } from './quota';
 import { withRateLimitRetry } from './rate-limit-retry';
 import type { AuthResolution, ModelProvider, ProviderDeps } from './types';
 import { accountOf } from '../credentials/accounts';
-import { diagnostics, KinuError, tolerate } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, KinuError, settleSync, tolerate } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
 import { JsonObjectSchema, JsonValueSchema, parseJsonObject, parseJsonValue } from '../utils/json';
 import { xxHash64 } from '../utils/xxhash64';
@@ -527,16 +528,16 @@ export function createClaudeProvider(): ModelProvider {
     unavailableReason() { return NOT_CONNECTED; },
     listModels: (deps) => listAnthropicModels(deps),
     createModel(modelId, deps): LanguageModel {
-      if (RETIRED_CLI_MODELS.has(modelId)) {
-        throw new KinuError('bad_input', `Claude has no model ${modelId}: that name came from the retired claude binary. Pick a Claude model with /model.`);
-      }
+      return settleSync(RETIRED_CLI_MODELS.has(modelId)
+        ? Effect.fail(new KinuError('bad_input', `Claude has no model ${modelId}: that name came from the retired claude binary. Pick a Claude model with /model.`))
+        : Effect.sync(() => {
+          const affinity = deps.sessionAffinity;
+          const headerSessionId = affinity === undefined ? undefined : claudeSessionId(affinity);
+          const call: ClaudeCall = { deps, modelId, version, sessionId: headerSessionId ?? crypto.randomUUID(), headerSessionId };
+          const provider = createAnthropic({ apiKey: 'oauth-placeholder', fetch: asFetchFunction((_input, init) => claudeCall(call, init ?? {})) });
 
-      const affinity = deps.sessionAffinity;
-      const headerSessionId = affinity === undefined ? undefined : claudeSessionId(affinity);
-      const call: ClaudeCall = { deps, modelId, version, sessionId: headerSessionId ?? crypto.randomUUID(), headerSessionId };
-      const provider = createAnthropic({ apiKey: 'oauth-placeholder', fetch: asFetchFunction((_input, init) => claudeCall(call, init ?? {})) });
-
-      return provider.languageModel(modelId);
+          return provider.languageModel(modelId);
+        }));
     },
   };
 }
