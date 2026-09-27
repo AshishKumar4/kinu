@@ -48,6 +48,21 @@ describe('conversationCount — the default chat alone', () => {
     expect(conversationCount(s.sql, s.actor)).toBe(2);
   });
 
+  // 2026-09-27 (MSG-COUNT-0927): the Agent tab and fork modal counted every stored row, rewound branches included.
+  test('counts the chat the head reads, not a branch a rewind left behind', async () => {
+    const s = setup();
+    await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
+    await s.history.record(CHAT_SESSION_ID, { id: 'u2', parentId: 'a1', origin: 'input', message: { role: 'user', content: 'second ask' } });
+    await s.history.record(CHAT_SESSION_ID, { id: 'a2', parentId: 'u2', origin: 'output', message: { role: 'assistant', content: 'second answer' } });
+    s.history.revertTo(CHAT_SESSION_ID, 'u2', () => {});
+
+    expect(conversationCount(s.sql, s.actor)).toBe(2);
+
+    await s.history.record(CHAT_SESSION_ID, { id: 'u3', parentId: 'a1', origin: 'input', message: { role: 'user', content: 'another ask' } });
+
+    expect(conversationCount(s.sql, s.actor)).toBe(3);
+  });
+
   test('an empty workspace counts nothing rather than failing', () => {
     const s = setup();
     expect(conversationCount(s.sql, s.actor)).toBe(0);

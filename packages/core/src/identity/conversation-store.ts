@@ -1,4 +1,4 @@
-/** Flat reads over `conversation_entries` for graders, fork preflight and recovery. */
+/** Reads over `conversation_entries` for graders, fork preflight and recovery. */
 
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
@@ -7,17 +7,30 @@ import type { SessionTranscriptReader } from '../session/transcript';
 
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 
-/** Fork-cut preflight by primary key only, before any workspace is reserved or ancestry read. */
+/** Fork-cut preflight by primary key, before any workspace is reserved. */
 export function forkPointExists(sql: SqlExecutor, actor: ActorHandle, messageId: string): boolean {
   actor.assertCurrent();
 
   return sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${actor.actorId} AND session_id=${CHAT_SESSION_ID} AND id=${messageId} LIMIT 1`.length > 0;
 }
 
+/** Head's ancestry only: rewound branches are not counted. */
 export function conversationCount(sql: SqlExecutor, actor: ActorHandle): number {
   actor.assertCurrent();
 
-  return sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries WHERE actor_id=${actor.actorId} AND session_id=${CHAT_SESSION_ID}`[0]?.c ?? 0;
+  return sql<{ c: number }>`WITH RECURSIVE head(id) AS (
+      SELECT CASE WHEN EXISTS(SELECT 1 FROM conversation_heads WHERE actor_id=${actor.actorId} AND session_id=${CHAT_SESSION_ID})
+        THEN (SELECT entry_id FROM conversation_heads WHERE actor_id=${actor.actorId} AND session_id=${CHAT_SESSION_ID})
+        ELSE (SELECT e.id FROM conversation_entries e WHERE e.actor_id=${actor.actorId} AND e.session_id=${CHAT_SESSION_ID}
+          AND NOT EXISTS(SELECT 1 FROM conversation_entries c WHERE c.actor_id=e.actor_id AND c.session_id=e.session_id AND c.parent_id=e.id)
+          ORDER BY e.rowid DESC LIMIT 1) END),
+    chain(id, parent_id) AS (
+      SELECT e.id, e.parent_id FROM conversation_entries e JOIN head ON e.id = head.id
+        WHERE e.actor_id=${actor.actorId} AND e.session_id=${CHAT_SESSION_ID}
+      UNION ALL
+      SELECT e.id, e.parent_id FROM conversation_entries e JOIN chain ON e.id = chain.parent_id
+        WHERE e.actor_id=${actor.actorId} AND e.session_id=${CHAT_SESSION_ID})
+    SELECT COUNT(*) AS c FROM chain`[0]?.c ?? 0;
 }
 
 /** The user→assistant pair behind a completed turn. */
@@ -35,7 +48,7 @@ export interface ConversationTurnPair {
 const DrainTurnMetadataSchema = v.object({ drainTurnId: v.optional(v.string()) });
 
 /**
- * The durable answer to each drain turn, found via the assistant child of the user entry carrying `drainTurnId`.
+ * The durable answer to each drain turn: the assistant child of the user entry carrying `drainTurnId`.
  * Empty answers are omitted: replying with nothing would close a delivery the sender still awaits.
  */
 export async function answersForDrainTurns(
