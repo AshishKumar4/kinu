@@ -88,6 +88,7 @@ export interface SubordinateHostSeams {
   scheduleDrain(actor: HostedActor): void;
   /** Arm the wake chain that reaches `drainAdmittedDelegations`; the admitting request must not run it. */
   armWake(): void;
+  rederiveWake(): void;
   /** Lives on the parent: `ask` parks a waiter and the report ingress resolves it. */
   temporary(actor: BoundActor): TemporaryAgentPort;
 }
@@ -214,6 +215,7 @@ export async function relayHostedReport(
     transaction: (body) => seams.transaction(body),
     announce: () => { seams.announce(hirer); },
     onAdmitted: () => { seams.scheduleDrain(hirer); },
+    onEvolutionAnswer: () => { seams.rederiveWake(); },
     // A temporary child's answer goes first to the `agents.ask` waiter, via the port that parked it.
     temporary: seams.temporary(hirer),
   }, { fromSubordinate: name, ...report }, Date.now()));

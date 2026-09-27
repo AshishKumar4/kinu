@@ -83,6 +83,34 @@ function breakScheduleWrites(agent: HarnessOrchestratorAgent): void {
   });
 }
 
+describe('a refiner answer stored with no waiter', () => {
+  test('arms the Kinu wake at once, and the tick routes it so the workspace owes nothing after', async () => {
+    // After an eviction the answer used to wait for the owner's next message.
+    const workspace = orchestratorHarness();
+    const now = Date.now();
+    const { requests } = await workspace.agent.listRefinements(1);
+    expect(requests).toEqual([]);
+
+    const actorId = harnessActorId(workspace.db);
+    workspace.db.prepare(`INSERT INTO refinement_requests
+      (actor_id, id, trigger, scope, stage, claim, session_id, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
+      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
+    workspace.db.prepare(`INSERT INTO evolution_helpers
+      (actor_id, name, lane, lane_request_id, task_event_id, answer_status, answer, created_at)
+      VALUES (?, 'ask-refiner-x1', 'refinement', 'refine-1', 'evt-1', 'completed', ?, ?)`)
+      .run(actorId, 'Nothing to change.\n\n{"scope":"workspace","summary":"nothing","edits":[]}', now);
+
+    await workspace.agent.activateActor();
+    await until(() => held(workspace.db, `SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '${KINU_TIMER_CALLBACK}'`) > 0,
+      'the stored answer armed the Kinu wake');
+
+    await workspace.agent._kinuTimerTick();
+    await joinHarnessFibers();
+
+    expect((await workspace.agent.listRefinements(1)).requests[0]?.stage).not.toBe('requested');
+  });
+});
+
 describe('the workspace keeps exactly one wake row', () => {
   test('the stale sweep spares the Kinu wake and still drops a dead continuation', async () => {
     // KINU-N027: the sweep runs before the SDK reads due rows, so it must not delete an overdue Kinu wake.

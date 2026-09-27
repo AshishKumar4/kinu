@@ -1049,6 +1049,7 @@ export class LocalAgentHost {
         ));
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
+      onEvolutionAnswer: () => this.advanceLane(parent),
       // A temporary child's answer goes to the waiting `agents.ask` port, never as an event waking this parent.
       temporary: parent.temporary,
     }, {
@@ -1456,6 +1457,23 @@ export class LocalAgentHost {
   }
 
   /** Drain after an inbox wake, bracketed like every converting operation. */
+  private advanceLane(entry: HostEntry): void {
+    if (this.closed) return;
+    queueMicrotask(async () => {
+      if (this.closed) return;
+
+      try {
+        await this.drive(entry, () => entry.session.runRefinementLane());
+      } catch (cause) {
+        diagnostics.failure(
+          'host.refinement_lane_failed',
+          toKinuError({ doing: 'routing a refiner answer the lane was waiting on', cause, otherwise: 'unavailable' }),
+          { agent: entry.key },
+        );
+      }
+    });
+  }
+
   private wake(entry: HostEntry, source: string): void {
     // Wakes can outlive close(); driving after close() would use a closed handle.
     if (this.closed) return;

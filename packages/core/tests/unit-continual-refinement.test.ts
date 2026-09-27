@@ -39,7 +39,7 @@ import type {
 } from '../src/subordinates/temporary';
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, RefinementProposalSchema,
-  createRefinementStore, evolutionDebt, initRefinementTables, refinementStagingPath,
+  createRefinementStore, evolutionDebt, initRefinementTables, nextEvolutionAnswerAt, refinementStagingPath,
   type RefinementDeps, type RefinementEdit, type RefinementProposal, type RefinementRoute,
 } from '../src/evolution/refinement';
 import { extractJsonObject } from '../src/providers/structured';
@@ -196,6 +196,7 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
 
 interface Fixture {
   rt: AgentRuntime;
+  db: Database;
   stores: AgentStores;
   facts: FactsStore;
   approvals: InstructionApprovalStore;
@@ -203,7 +204,7 @@ interface Fixture {
 }
 
 function fixture(): Fixture {
-  const { rt, stores } = createTestRuntime();
+  const { rt, db, stores } = createTestRuntime();
   initAllTables(rt.storage.execRaw, rt.storage.sql);
   initTurnOutcomeTables(rt.storage.execRaw);
   initGepaTables(rt.storage.execRaw);
@@ -218,6 +219,7 @@ function fixture(): Fixture {
 
   return {
     rt,
+    db,
     stores,
     facts,
     approvals,
@@ -2205,12 +2207,14 @@ describe('promotion never half-lands — the read-back is what allows the unlink
 });
 
 /** One workspace database for the roster and the root's rail, as both hosts keep them. */
-function refinerRail() {
-  const db = new Database(':memory:');
+/** `over`: the lane's own database, so the helper's parent is the actor whose lane asked it, as in a workspace. */
+function refinerRail(over?: { readonly db: Database; readonly workspaceId: string }) {
+  const db = over?.db ?? new Database(':memory:');
+  const workspaceId = over?.workspaceId ?? 'refiner-workspace';
   const exec = makeSqlExec(db);
   initEventsHubTables(exec);
-  createTestActor(makeSql(db), makeExecRaw(db), 'refiner-workspace', 'main');
-  const directory = new WorkspaceActorDirectory(makeSql(db), { workspaceId: 'refiner-workspace', ownerUserId: '' });
+  createTestActor(makeSql(db), makeExecRaw(db), workspaceId, 'main');
+  const directory = new WorkspaceActorDirectory(makeSql(db), { workspaceId, ownerUserId: '' });
   const root = directory.main();
   const roster = new SubordinateRosterStore(exec, root);
   roster.ensureSchema();
@@ -2231,6 +2235,7 @@ function refinerRail() {
   const port = () => createTemporaryAgentPort({ roster, runtime, createName: (role) => `${role}-a1b2c3`, now: () => SEED_EPOCH });
 
   return {
+    root,
     roster,
     log,
     port,
@@ -2246,6 +2251,21 @@ function refinerRail() {
   };
 }
 
+/** A port whose activation dies once its refiner is assigned: the run it started, and its waiter, outlive it. */
+function evictedAfterAssign(rail: ReturnType<typeof refinerRail>, evicted: TemporaryAgentPort): TemporaryAgentPort {
+  const lost: Promise<unknown>[] = [];
+
+  return {
+    ...evicted,
+    run: async (request) => {
+      lost.push(evicted.run(request));
+
+      for (let attempt = 0; attempt < 50 && !rail.roster.get(rail.helper)?.taskEventId; attempt++) await Promise.resolve();
+      throw new Error('the activation was evicted');
+    },
+  };
+}
+
 describe('a refiner answer that outlives its waiter returns to the lane, never to the root', () => {
   test('after an eviction the answer is stored, the row released, and the next pass routes it', async () => {
     const fx = fixture();
@@ -2255,17 +2275,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
 
     // The activation dies once the refiner is assigned: its pass unwinds, and the run it started
     // (with its waiter) is held by nothing that survives.
-    const lost: Promise<unknown>[] = [];
-
-    const dying: TemporaryAgentPort = {
-      ...evicted,
-      run: async (request) => {
-        lost.push(evicted.run(request));
-
-        for (let attempt = 0; attempt < 50 && !rail.roster.get(rail.helper)?.taskEventId; attempt++) await Promise.resolve();
-        throw new Error('the activation was evicted');
-      },
-    };
+    const dying = evictedAfterAssign(rail, evicted);
 
     const opened = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
     await expect(advanceRefinementLane(fx.deps(dying))).rejects.toThrow('the activation was evicted');
@@ -2299,5 +2309,45 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     expect(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)?.stage).toBe('applied');
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(rail.reports()).toEqual([]);
+  });
+
+  test('a stored answer owes the lane a pass at once, and the pass that routes it clears that', async () => {
+    // Without it, an answer stored after an eviction waits for the owner's next turn.
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
+    const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
+    const evicted = rail.port();
+    const dying = evictedAfterAssign(rail, evicted);
+
+    await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
+    await expect(advanceRefinementLane(fx.deps(dying))).rejects.toThrow('the activation was evicted');
+    expect(owed()).toBeNull();
+
+    const resumed = rail.port();
+    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
+    const due = owed();
+
+    expect(due).not.toBeNull();
+    expect(due ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(Date.now());
+
+    expect((await advanceRefinementLane(fx.deps(resumed))).step).toBe('planned');
+    expect(owed()).toBeNull();
+  });
+
+  test('it owes nothing while an older request is ahead in the lane, which the next pass would take instead', async () => {
+    // A due source the pass will not route would re-arm the wake at once, lap after lap.
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
+    const evicted = rail.port();
+    const dying = evictedAfterAssign(rail, evicted);
+
+    await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
+    await expect(advanceRefinementLane(fx.deps(dying))).rejects.toThrow('the activation was evicted');
+    await rail.deliver(rail.port(), proposalText(FACT_PROPOSAL));
+    createRefinementStore(fx.rt.storage.sql, fx.rt.actor).open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 });
+
+    expect(nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId)).toBeNull();
   });
 });

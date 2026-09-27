@@ -96,7 +96,7 @@ import {
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
   previewScaffoldLive, runScaffoldCaptureText, runScaffoldGepaOptimization,
   advancePromptSectionLane,
-  decideRefinementRoute, listRefinements, refinementPass, requestOwnerRefinement, showRefinementRoute,
+  decideRefinementRoute, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementRequestView, type RefinementScope,
@@ -774,6 +774,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       announce: () => { this.broadcastSubordinatesChanged(); },
       scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
       armWake: () => { this.armDelegationWake(); },
+      rederiveWake: () => { this.armDurableWake(); },
       temporary: () => this.temporaryAgentPort(),
     };
   }
@@ -1564,6 +1565,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.peerHub.nextRetryAt(),
       this.emailOutbox.nextRetryAt(),
       this.eventLog.nextPendingDrainAt(now),
+      nextEvolutionAnswerAt(this.boundSql, this.actorHandle().actorId),
       // Prompt-cache warm; its tick phase is `alarm.cache_warm`.
       this.cacheWarming.nextWarmAt(),
       // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
@@ -3170,6 +3172,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           span.fail(failure);
           diagnostics.failure('event.wake_drain_failed', failure);
+        }
+      });
+
+      await tick.span('alarm.evolution_answer', async (span) => {
+        const dueAt = nextEvolutionAnswerAt(this.boundSql, this.actorHandle().actorId);
+        span.setAttribute('kinu.evolution_answer_due', dueAt !== null && dueAt <= now);
+
+        if (dueAt === null || dueAt > now) return;
+
+        try {
+          await refinementPass(this.refinementDeps);
+        } catch (err) {
+          const failure = toKinuError({ doing: 'routing a refiner answer this wake was armed for', cause: err, otherwise: 'unavailable' });
+
+          span.fail(failure);
+          diagnostics.failure('refinement.answer_wake_failed', failure);
         }
       });
 

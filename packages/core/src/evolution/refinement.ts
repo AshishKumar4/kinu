@@ -277,6 +277,19 @@ export function initRefinementTables(execRaw: RawSqlExec): void {
            ON refinement_requests(actor_id, stage, created_at)`);
 }
 
+const EvolutionAnswerAtSchema = v.object({ at: v.nullable(v.number()) });
+
+export function nextEvolutionAnswerAt(sql: SqlExecutor, actorId: string): number | null {
+  const [row] = sql<{ at: number | null }>`SELECT MIN(h.created_at) AS at FROM (
+      SELECT id FROM refinement_requests WHERE actor_id = ${actorId} AND stage IN ('requested', 'planning')
+      ORDER BY created_at ASC, id ASC LIMIT 1
+    ) r
+    JOIN evolution_helpers h ON h.actor_id = ${actorId} AND h.lane = 'refinement' AND h.lane_request_id = r.id
+    WHERE h.answer_status IS NOT NULL`;
+
+  return v.parse(EvolutionAnswerAtSchema, row ?? { at: null }).at;
+}
+
 export interface OpenRefinementInput {
   readonly trigger: RefinementTrigger;
   readonly scope: RefinementScope;
