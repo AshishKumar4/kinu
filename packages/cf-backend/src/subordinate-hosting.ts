@@ -86,7 +86,7 @@ export interface SubordinateHostSeams {
   dynamic(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext;
   mission(actor: HostedActor): MissionScope | null;
   announce(actor: BoundActor): void;
-  /** Drain on a reaction (a child's report). Never for an assignment: `wakesADrain` excludes it. */
+  /** Drain on a reaction (a child's report), after the actor's turn. Never for an assignment. */
   scheduleDrain(actor: HostedActor): void;
   /** Arm the wake chain that reaches the delegation runners; the admitting request must not run it. */
   armWake(): void;
@@ -222,10 +222,8 @@ export async function relayHostedReport(
     temporary: seams.temporary(hirer),
   }, { fromSubordinate: name, ...report }, Date.now());
 
-  // A task child's hirer waits inside the hire, holding its queue; a durable child's report lands between turns.
-  if (hostedLifetime(child.record) === 'task') return await receive(await seams.host.acquire(parent));
-
-  return await seams.whileWaiting(child.record.actorId, seams.host.run(parent, receive));
+  // Never the hirer's queue: a hirer mid-turn may wait on this child's.
+  return await receive(await seams.host.acquire(parent));
 }
 
 export async function retireStalledTask(

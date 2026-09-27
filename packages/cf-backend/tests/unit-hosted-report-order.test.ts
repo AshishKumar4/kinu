@@ -1,67 +1,15 @@
 /**
- * Where a hosted child's report lands on its hosted hirer. A durable child's report waits out the hirer's turn, so the
- * hirer's drain meets it between turns; a report written mid-turn sat past the drain until the stranded-delivery grace.
+ * Where a hosted child's report lands on its hosted hirer. A durable child's report is written at once, and the hirer
+ * acts on it after its own turn ends; a drain signalled mid-turn left the report stranded until the delivery grace.
  */
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
 import { gatewayWorkspace, hostedSubordinateHarness, nextTurn, wakeForDelegatedTask } from './helpers/actor-harness';
-import { joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
-
-test("a durable helper's report reaches its working hirer after the hirer's turn, not during it", async () => {
-  const parked = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-
-  const workspace = gatewayWorkspace(stubAiBinding(async (run) => {
-    const { messages } = requestOf(run);
-    // Keyed on the user turns; the hirer's are checked first, since its context names the helper's mission.
-    const opening = JSON.stringify(messages.filter((message) => message.role === 'user'));
-    const answered = messages.some((message) => message.role === 'tool');
-
-    if (opening.includes('Middle task.')) {
-      if (!answered) return toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: 'Grandchild task.' } }, 'call_hire');
-
-      // The hirer, its hire made, is still in its turn.
-      parked.resolve();
-      await release.promise;
-
-      return chatCompletion(run, 'Done.');
-    }
-
-    // The helper's own durable hire reports once, then ends its turn.
-    if (opening.includes('Grandchild task.')) {
-      return answered ? chatCompletion(run, 'Reported.') : toolCallCompletion(run, { tool: 'report', args: { status: 'completed', content: 'news' } }, 'call_report');
-    }
-
-    return chatCompletion(run, 'Done.');
-  }));
-
-  await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
-
-  const middle = await hostedSubordinateHarness(workspace, {
-    name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
-  });
-
-  const reports = (): number => sqlOver(workspace.db)<{ n: number }>`
-    SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ${middle.actor.handle.actorId} AND variant = 'subordinate_report'`[0]?.n ?? 0;
-
-  await wakeForDelegatedTask(workspace, middle.actor.handle.actorId, 'Middle task.');
-  await parked.promise;
-  // The wake the hire armed: it starts the grandchild's turn beside the parked hirer.
-  await workspace.agent.terminalRetryPass();
-
-  // Laps enough for the grandchild's turn and an unqueued ingress; the hirer's turn stays parked throughout.
-  for (let lap = 0; lap < 500 && reports() === 0; lap++) await nextTurn();
-
-  expect(reports()).toBe(0);
-  release.resolve();
-  await joinHarnessFibers();
-  expect(reports()).toBe(1);
-});
 
 // One turn slot (DELEGATED_TURN_SLOTS): a helper waiting on its task hire frees the slot; its durable hire must not
 // then hold that slot while its report queues behind the waiting helper, or the task hire never runs.
-test("a helper waiting on its task hire still gets its answer while its durable hire reports", async () => {
+test("a helper waiting on its task hire gets its answer, then takes up the report its durable hire made meanwhile", async () => {
   const workspace = gatewayWorkspace(stubAiBinding((run) => {
     const { messages } = requestOf(run);
     const opening = JSON.stringify(messages.filter((message) => message.role === 'user'));
@@ -96,6 +44,17 @@ test("a helper waiting on its task hire still gets its answer while its durable 
   }
 
   expect(middleDone()).toBe(true);
+
+  // The durable hire reported while the helper waited: the helper takes it up in a turn of its own.
+  const turns = (): number => sqlOver(workspace.db)<{ n: number }>`
+    SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middle.actor.handle.actorId} AND type = 'run_start'`[0]?.n ?? 0;
+
+  for (let lap = 0; lap < 300 && turns() < 2; lap++) {
+    await workspace.agent.terminalRetryPass();
+    await nextTurn();
+  }
+
+  expect(turns()).toBe(2);
 });
 
 // One turn slot: a helper that holds it and asks its durable hire anything that waits on that hire's queue must free
@@ -107,8 +66,14 @@ const ASKS = {
   dismiss: (agent: string) => ({ action: 'dismiss', agent }),
 } as const;
 
-for (const [verb, args] of Object.entries(ASKS)) {
-  test(`a helper's ${verb} to its durable hire, while that hire waits on its own task hire, still finishes`, async () => {
+// The last case: the hire also notes its progress with the report tool, mid-turn, while its hirer's msg waits on it.
+const CASES = [
+  ...Object.entries(ASKS).map(([verb, args]) => ({ verb, args, notes: false })),
+  { verb: 'msg', args: ASKS.msg, notes: true },
+];
+
+for (const { verb, args, notes } of CASES) {
+  test(`a helper's ${verb} to its durable hire, while that hire waits on its own task hire${notes ? ' and then reports progress' : ''}, still finishes`, async () => {
     let parked = false;
     const release = Promise.withResolvers<void>();
 
@@ -133,6 +98,8 @@ for (const [verb, args] of Object.entries(ASKS)) {
       }
 
       if (users.some((user) => user.includes('Durable task.'))) {
+        if (notes && results === 1) return toolCallCompletion(run, { tool: 'report', args: { status: 'progress', content: 'halfway' } }, 'call_note');
+
         if (results > 0) return chatCompletion(run, 'Durable done.');
         parked = true;
         await release.promise;
