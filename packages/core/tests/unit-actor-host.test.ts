@@ -36,6 +36,7 @@ interface Fixture {
   child(name: string, creationId: string, kind: 'subordinate' | 'head'): ActorReference;
   /** A new host over the same database, as a root eviction leaves. */
   rebuild(): Fixture;
+  readonly released: string[];
 }
 
 /** A real per-actor scaffold identity, since the host seeds every actor's loop pointer and bytes. */
@@ -74,8 +75,15 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
   // Shared runtime fields come from the template; actor-owned fields are replaced below.
   const template = createTestRuntime().rt;
   const planes = new Map<string, VFS>();
+  const released: string[] = [];
 
-  const orchestrationFor = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => ({
+  const orchestrationFor = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => {
+    if (bound.record.name === 'unorchestrated') throw new Error('orchestration failed');
+
+    return orchestrationFor0(bound);
+  };
+
+  const orchestrationFor0 = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => ({
     // Its own broadcast, event log and session window.
     host: {
       broadcast: () => { throw new Error(`${bound.record.name} broadcast outside a turn`); },
@@ -119,6 +127,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
         storage: { vfs: plane, sql, execRaw, transactionSync: (write) => db.transaction(write)() },
         agentStateVfs: plane,
         identity: scaffoldIdentity(bound.record.name, plane, sql, bound.record.actorId),
+        release: () => { released.push(bound.record.name); },
       };
     },
     loopFor: () => ({ origin: { kind: 'builtin' }, parent: null }),
@@ -128,7 +137,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
   });
 
   return {
-    db, sql, host, directory,
+    db, sql, host, directory, released,
     main: { actorId: mainHandle.actorId, workspaceId: mainHandle.workspaceId, parentActorId: null },
     child: (name, creationId, kind) => {
       const handle = directory.create({
@@ -253,6 +262,27 @@ describe('one workspace database, many logical actors', () => {
     expect(() => claims.read('t')).toThrow(/released by its root/);
     // The rows survive releasing the runtime objects.
     expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${ref.actorId}`[0]?.n).toBe(1);
+  });
+
+  test('every way out of the host lets the actor go exactly once', async () => {
+    const fx = build();
+    const [a, b, c] = [fx.child('alpha', 'c-alpha', 'subordinate'), fx.child('beta', 'c-beta', 'subordinate'), fx.child('gamma', 'c-gamma', 'subordinate')];
+
+    for (const ref of [a, b, c]) await fx.host.acquire(ref);
+    fx.host.release(a);
+    fx.host.release(a);
+    await fx.host.retire(fx.main, { reference: b, name: 'beta', destroy: false, interrupt: false });
+    fx.host.releaseAll();
+    fx.host.releaseAll();
+
+    expect(fx.released).toEqual(['alpha', 'beta', 'gamma']);
+  });
+
+  test('an actor whose build fails after its runtime exists lets that runtime go', async () => {
+    const fx = build();
+
+    await expect(fx.host.acquire(fx.child('unorchestrated', 'c-un', 'subordinate'))).rejects.toThrow('orchestration failed');
+    expect(fx.released).toEqual(['unorchestrated']);
   });
 
   test('re-acquiring an actor does not revive the binding that was released', async () => {

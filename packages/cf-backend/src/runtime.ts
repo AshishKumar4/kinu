@@ -38,6 +38,7 @@ import {
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
 import { withHostedNodeExecution, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { ActorReference, HostedNodeHome } from '@kinu.run/core';
+import { mountActorFiles } from './workspace-host';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
@@ -367,8 +368,7 @@ export function createCFRuntime(
   }
 
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
-  // The shell this actor runs as serves its file tool's mount points.
-  workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred);
+  const unmount = mountActorFiles(workspaceBox, agentFileVfs, { rootActor: actor.rootActor, cred: hooks.workspaceExecution?.cred });
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     shellSession,
@@ -534,6 +534,8 @@ export function createCFRuntime(
     vectorStore,
     sandboxHandle,
   };
+
+  if (unmount !== undefined) runtime.release = unmount;
 
   return runtime;
 }

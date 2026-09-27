@@ -137,8 +137,6 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
   const runtimes = new WeakMap<ActorHandle, CFRuntime>();
   /** Per-activation round-trip saver; provisioning is idempotent, so never a source of truth. */
   const homes = new Map<string, Promise<HostedNodeHome>>();
-  /** Bumped per attempt so a failing provision only clears the entry it wrote. */
-  const homeGeneration = new Map<string, number>();
   let host: ActorHost | null = null;
 
   const homeFor = (record: WorkspaceActor, reference: ActorReference): Promise<HostedNodeHome> | null => {
@@ -148,12 +146,12 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     const held = homes.get(record.actorId);
 
     if (held) return held;
-    // Cleanup rethrows so the stored promise still rejects for the acquire awaiting it;
-    // the generation stamp keeps a failure from clearing a newer attempt's entry.
-    const generation = (homeGeneration.get(record.actorId) ?? 0) + 1;
-    homeGeneration.set(record.actorId, generation);
 
-    const provisioning = (async (): Promise<HostedNodeHome> => {
+    // Cleanup rethrows so the stored promise still rejects for the acquire awaiting it; the identity
+    // check keeps a failure from clearing a newer attempt's entry.
+    let provisioning: Promise<HostedNodeHome> | null = null;
+
+    provisioning = (async (): Promise<HostedNodeHome> => {
       try {
         const home = await provisionHostedActorHome(seams, record, reference, kind);
 
@@ -161,7 +159,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
         return { home: home.home, tmp: home.tmp, cred: home.cred };
       } catch (cause) {
-        if (homeGeneration.get(record.actorId) === generation) homes.delete(record.actorId);
+        if (homes.get(record.actorId) === provisioning) homes.delete(record.actorId);
         throw cause;
       }
     })();

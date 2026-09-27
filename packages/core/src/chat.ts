@@ -342,12 +342,15 @@ class ProviderCall {
     const account = callAccountOf(step.response);
     const egress = step.response.headers?.[EGRESS_ROUTE_HEADER];
     const { modelId } = step.response;
+    const { body } = step.request;
+    // The SDK keeps each step record.
+    Reflect.deleteProperty(step.request, 'body');
 
     this.pendingStepEvents.push({
       stepIndex, responseMessages: this.responseSoFar,
       finishReason: step.finishReason, text: step.text,
       toolCalls: step.toolCalls.map((call) => ({ toolName: call.toolName })), toolResults: step.toolResults,
-      request: { body: step.request.body, sentAt: this.stepSentAt },
+      request: { body, sentAt: this.stepSentAt },
       ...(usageReported(usage) && { usage }),
       ...(account !== undefined && { account }),
       ...(egress !== undefined && { egress }),
