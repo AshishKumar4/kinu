@@ -1,5 +1,7 @@
 import type { LanguageModel } from 'ai';
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { settleSync } from '../obs/effect';
 import type { ModelCallSpend } from '../events/model-call';
 import { generateReported, type GenerateRequest } from './model-invocation';
 import { parseJsonArray, parseJsonObject, type JsonObject, type JsonValue } from '../utils/json';
@@ -32,20 +34,20 @@ export function jsonArrayOnlyInstruction(): string {
 }
 
 export function extractJsonObject(text: string): JsonObject {
-  return parseJsonObject(extractBalancedJson(text, '{', '}'));
+  return settleSync(Effect.map(balancedJson(text, '{', '}'), parseJsonObject));
 }
 
 export function extractJsonArray(text: string): JsonValue[] {
-  return parseJsonArray(extractBalancedJson(text, '[', ']'));
+  return settleSync(Effect.map(balancedJson(text, '[', ']'), parseJsonArray));
 }
 
-function extractBalancedJson(text: string, open: '{' | '[', close: '}' | ']'): string {
+function balancedJson(text: string, open: '{' | '[', close: '}' | ']'): Effect.Effect<string> {
   const fenced = text.match(JSON_FENCE);
   const inner = fenced?.[1] ?? '';
   const src = inner.includes(open) ? inner : text;
   const start = src.indexOf(open);
 
-  if (start === -1) throw new SyntaxError(`no JSON ${open === '{' ? 'object' : 'array'} in model output`);
+  if (start === -1) return Effect.die(new SyntaxError(`no JSON ${open === '{' ? 'object' : 'array'} in model output`));
 
   let depth = 0;
   let inString = false;
@@ -63,10 +65,10 @@ function extractBalancedJson(text: string, open: '{' | '[', close: '}' | ']'): s
 
     if (ch === '"') inString = true;
     else if (ch === open) depth++;
-    else if (ch === close && --depth === 0) return src.slice(start, i + 1);
+    else if (ch === close && --depth === 0) return Effect.succeed(src.slice(start, i + 1));
   }
 
-  throw new SyntaxError(`unterminated JSON ${open === '{' ? 'object' : 'array'} in model output`);
+  return Effect.die(new SyntaxError(`unterminated JSON ${open === '{' ? 'object' : 'array'} in model output`));
 }
 
 /** Uses plain `generateText` + extraction because `generateObject`'s synthetic tool call fails on some
