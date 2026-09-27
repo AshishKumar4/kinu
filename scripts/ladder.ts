@@ -1529,9 +1529,8 @@ export const LADDER: readonly Gate[] = [
       + 'drive core and the CLI\'s local session in-process, so a defect that only '
       + 'appears in workerd — a rejected cross-DO RPC inside background work that only '
       + 'console.warns — is invisible to them by construction. That is the workerd '
-      + 'layer\'s job. It is also blind to whether an assertion is STRONG: '
-      + '`E2E Full Lifecycle` steps 4 and 5 assert only that the reply is non-empty, so '
-      + 'they pass on any prose the model returns. And it cannot tell contention from a '
+      + 'layer\'s job. Reply grading is task-specific: lifecycle checks a numeric answer '
+      + 'and executed output, not general prose quality. And it cannot tell contention from a '
       + 'deployment fault: two live tiers on one account produce the same '
       + '`detached_work_failed / Request Timeout` signature as an outage.',
     inputs: { kind: 'live', why: 'spends live model turns as the eval identity; its evidence is behavioural and dated, never a function of the tree alone.' },

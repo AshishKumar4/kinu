@@ -51,10 +51,8 @@ const TEST_DIR = join(tmpdir(), 'kinu-e2e-full-' + Date.now());
 
 const DB_PATH = join(TEST_DIR, 'agent.db');
 
-/** The note steps 5 and 6 write and then read back. One constant, because a
- *  second copy of the string is a second thing that can drift out of step with
- *  the assertion that looks for it. */
-const MEMORY_FACT = 'the project uses bun:sqlite for its database layer';
+/** Durability of an opaque value, not the model's capitalization or surrounding prose. */
+const MEMORY_CODE = 'lifecycle-amber-9c7d2';
 
 /**
  * WHERE the fact actually landed, across both memory write surfaces.
@@ -87,7 +85,7 @@ function actionName(args: JsonObject): string {
 }
 
 function storedMemoryFact(db: Database, memoryFile: string | null): string | null {
-  if (memoryFile?.includes(MEMORY_FACT)) return 'memory/MEMORY.md';
+  if (memoryFile?.includes(MEMORY_CODE)) return 'memory/MEMORY.md';
   // The workspace is reopened from disk here, so the actor whose facts these
   // are has to be named the way an operator names it: the workspace's MAIN
   // actor, issued through the production directory. That is the actor the
@@ -95,7 +93,7 @@ function storedMemoryFact(db: Database, memoryFile: string | null): string | nul
   const sql = makeSql(db);
 
   const fact = createFactsStore(sql, openWorkspaceMainActor(sql)).all()
-    .find((row) => JSON.stringify(row.value).includes(MEMORY_FACT));
+    .find((row) => JSON.stringify(row.value).includes(MEMORY_CODE));
 
   return fact ? `agent_facts[${fact.key}]` : null;
 }
@@ -263,7 +261,6 @@ describe('E2E Full Lifecycle', () => {
     const turn = await chatTurn(model, rt, tools, 'What is 2+2? Answer briefly.');
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 120)}`);
     console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
-    expect(turn.assistantResponse.length).toBeGreaterThan(0);
     // The extracted integer, not a substring: any '4' anywhere in the reply
     // would satisfy `toContain`, including one from the question's echo.
     expect(finalIntegerAnswer(turn.assistantResponse)).toBe(4);
@@ -275,7 +272,8 @@ describe('E2E Full Lifecycle', () => {
     const turn = await chatTurn(
       model, rt, tools,
       'Use eval to write and run a JS prime checker for 7, 10, and 13. '
-        + 'Print exactly JSON.stringify({7:true,10:false,13:true}), then summarize.',
+        + 'Print the results as one JSON object mapping each input to a boolean. '
+        + 'Summarize which inputs are prime, then end your answer with their total count as a standalone integer.',
     );
 
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
@@ -285,7 +283,7 @@ describe('E2E Full Lifecycle', () => {
     expect(execution, 'the model did not use eval').toBeDefined();
     const output = v.parse(v.object({ logs: v.array(v.string()) }), execution?.result);
     expect(output.logs).toContain('{"7":true,"10":false,"13":true}');
-    expect(turn.assistantResponse.length).toBeGreaterThan(0);
+    expect(finalIntegerAnswer(turn.assistantResponse)).toBe(2);
   }, 300_000);
 
   // ── Step 5: Chat turn 3 — persist a memory note ───────────────
@@ -293,7 +291,7 @@ describe('E2E Full Lifecycle', () => {
   liveTest('5. chat turn 3: save note to memory', async () => {
     const turn = await chatTurn(
       model, rt, tools,
-      `Use the memory tool to save this exact fact: ${MEMORY_FACT}`,
+      `The project's recovery identifier is ${MEMORY_CODE}. Use the memory tool to save it for a later conversation.`,
     );
 
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
