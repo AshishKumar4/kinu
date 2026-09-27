@@ -282,8 +282,7 @@ async function durableRows(db: Database, norm: ParityNormalizer, transcript: Ses
   }));
 
   const pendingSteerFiles = db.query<{ steer_id: string; filename: string; media_type: string; url: string }, []>(
-    `SELECT p.id AS steer_id, f.value ->> 'filename' AS filename, f.value ->> 'mediaType' AS media_type, f.value ->> 'url' AS url
-     FROM pending_steers p, json_each(p.files_json) f ORDER BY p.seq, f.key`,
+    `SELECT steer_id, filename, media_type, url FROM pending_steer_files ORDER BY seq`,
   ).all().map((row) => ({ steerId: norm.text(row.steer_id), filename: row.filename, mediaType: row.media_type, url: row.url }));
 
   const agentLog = db.query<{

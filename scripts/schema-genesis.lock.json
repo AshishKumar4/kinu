@@ -801,6 +801,14 @@
     "answer TEXT NOT NULL",
     "PRIMARY KEY (actor_id, effect_key)"
   ],
+  "pending_steer_files@packages/core/src/orchestrator/inbox.ts": [
+    "seq INTEGER PRIMARY KEY AUTOINCREMENT",
+    "actor_id TEXT NOT NULL",
+    "steer_id TEXT NOT NULL",
+    "filename TEXT NOT NULL",
+    "media_type TEXT NOT NULL",
+    "url TEXT NOT NULL"
+  ],
   "pending_steers@packages/core/src/orchestrator/inbox.ts": [
     "seq INTEGER PRIMARY KEY AUTOINCREMENT",
     "actor_id TEXT NOT NULL",
@@ -808,7 +816,6 @@
     "turn_id TEXT",
     "mode TEXT NOT NULL CHECK (mode IN ('plan','build'))",
     "text TEXT NOT NULL",
-    "files_json TEXT",
     "metadata_json TEXT",
     "UNIQUE (actor_id, id)"
   ],

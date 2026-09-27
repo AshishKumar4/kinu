@@ -170,7 +170,7 @@ describe('two real turns over the HTTP model seam', () => {
   it('re-delivers a mid-turn attachment with real file data through a cold reset and replay', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('attach-cold-driver'));
 
-    // The replay must re-bind the reservation's files.
+    // The reservation spans pending_steers + pending_steer_files; the replay must re-bind both.
     // A distinct mode keeps its workspace separate from the warm attach test's.
     const prepared = v.parse(PreparedConversationSchema, await root.prepareQueuedConversation('attach-cold'));
     expect(prepared.steerFiles).toHaveLength(1);
