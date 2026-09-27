@@ -247,7 +247,7 @@ export class SessionContext {
         if (exists === undefined) throw new KinuError('missing', 'fork source revision does not exist');
       }
 
-      void this.sql`INSERT INTO actor_contexts(actor_id,context_id,fork_context_id,fork_revision) VALUES(${actorId},${contextId},${source?.contextId ?? null},${source?.revision ?? null})`;
+      void this.sql`INSERT INTO actor_contexts(actor_id,context_id) VALUES(${actorId},${contextId})`;
       void this.sql`INSERT INTO context_revisions(actor_id,context_id,revision,author,cause,recorded_at) VALUES(${actorId},${contextId},0,${actorId},'fork',${Date.now()})`;
 
       for (const entry of source === null ? [] : this.entries(source)) void this.sql`INSERT INTO context_memberships(actor_id,context_id,entry_id,from_revision,position,message_id)

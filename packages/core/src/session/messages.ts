@@ -338,8 +338,8 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     this.actor.assertCurrent();
     this.assertUnrecorded(prepared.id);
     const { payload } = prepared.content;
-    void this.sql`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,recorded_at,envelope_json,sealed_at,content_json,content_path,content_digest)
-      VALUES(${this.actor.actorId},${prepared.id},${prepared.role},${prepared.contentKind},${origin},${identity.requestId ?? null},${identity.slot ?? null},${identity.ingressId ?? null},${Date.now()},${JSON.stringify(prepared.envelope)},${Date.now()},${payload.json},${payload.path},${payload.digest})`;
+    void this.sql`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,envelope_json,sealed_at,content_json,content_path,content_digest)
+      VALUES(${this.actor.actorId},${prepared.id},${prepared.role},${prepared.contentKind},${origin},${identity.requestId ?? null},${identity.slot ?? null},${identity.ingressId ?? null},${JSON.stringify(prepared.envelope)},${Date.now()},${payload.json},${payload.path},${payload.digest})`;
 
     return { messageId: prepared.id };
   }
@@ -347,8 +347,8 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   open(role: 'assistant' | 'tool', id: string, origin: MessageOrigin, stream: StreamedMessage = {}): MessageReference {
     this.actor.assertCurrent();
     this.assertUnrecorded(id);
-    void this.sql`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,recorded_at,envelope_json)
-      VALUES(${this.actor.actorId},${id},${role},'parts',${origin},${stream.requestId ?? null},${stream.slot ?? null},${null},${Date.now()},${JSON.stringify(stream.envelope ?? {})})`;
+    void this.sql`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,envelope_json)
+      VALUES(${this.actor.actorId},${id},${role},'parts',${origin},${stream.requestId ?? null},${stream.slot ?? null},${null},${JSON.stringify(stream.envelope ?? {})})`;
 
     return { messageId: id };
   }

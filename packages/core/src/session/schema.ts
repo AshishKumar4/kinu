@@ -7,7 +7,6 @@ export function initSessionContextTables(exec: RawSqlExec): void {
     native_content_kind TEXT NOT NULL CHECK(native_content_kind IN ('string','parts')),
     origin TEXT NOT NULL CHECK(origin IN ('input','output','edit','context_transform','render')),
     request_id TEXT, output_slot INTEGER, ingress_id TEXT,
-    recorded_at INTEGER NOT NULL,
     envelope_json TEXT NOT NULL,
     sealed_at INTEGER, content_json TEXT, content_path TEXT, content_digest TEXT,
     PRIMARY KEY(actor_id,message_id), UNIQUE(actor_id,request_id,output_slot),
@@ -34,9 +33,8 @@ export function initSessionContextTables(exec: RawSqlExec): void {
       OR (segment = 0 AND ((descriptor_json IS NOT NULL AND descriptor_path IS NULL AND descriptor_digest IS NULL)
         OR (descriptor_json IS NULL AND descriptor_path IS NOT NULL AND descriptor_digest IS NOT NULL)))))`);
   exec(`CREATE TABLE IF NOT EXISTS actor_contexts (
-    actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), context_id TEXT NOT NULL, fork_context_id TEXT, fork_revision INTEGER,
-    PRIMARY KEY(actor_id,context_id), CHECK((fork_context_id IS NULL) = (fork_revision IS NULL)),
-    FOREIGN KEY(actor_id,fork_context_id,fork_revision) REFERENCES context_revisions(actor_id,context_id,revision))`);
+    actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), context_id TEXT NOT NULL,
+    PRIMARY KEY(actor_id,context_id))`);
   exec(`CREATE TABLE IF NOT EXISTS actor_context_selection (
     actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id), context_id TEXT NOT NULL,
     FOREIGN KEY(actor_id,context_id) REFERENCES actor_contexts(actor_id,context_id))`);
@@ -63,7 +61,7 @@ export function initSessionContextTables(exec: RawSqlExec): void {
     actor_id TEXT NOT NULL, proposal_id TEXT NOT NULL, context_id TEXT NOT NULL, base_revision INTEGER NOT NULL,
     author TEXT NOT NULL, via TEXT NOT NULL, cause TEXT NOT NULL, turn_id TEXT, build_identity TEXT,
     status TEXT NOT NULL CHECK(status IN ('pending','applied','closed')),
-    deferred_reason TEXT, deferred_at INTEGER, closed_reason TEXT, recorded_at INTEGER NOT NULL,
+    deferred_reason TEXT, closed_reason TEXT, recorded_at INTEGER NOT NULL,
     PRIMARY KEY(actor_id,proposal_id),
     FOREIGN KEY(actor_id,context_id,base_revision) REFERENCES context_revisions(actor_id,context_id,revision))`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS context_pending_proposal ON context_proposals(actor_id,context_id) WHERE status='pending'`);
@@ -75,14 +73,6 @@ export function initSessionContextTables(exec: RawSqlExec): void {
     FOREIGN KEY(actor_id,proposal_id) REFERENCES context_proposals(actor_id,proposal_id),
     FOREIGN KEY(actor_id,expected_message_id) REFERENCES session_messages(actor_id,message_id),
     FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id))`);
-  exec(`CREATE TABLE IF NOT EXISTS context_proposal_sources (
-    actor_id TEXT NOT NULL, proposal_id TEXT NOT NULL, output_message_id TEXT NOT NULL, output_part_no INTEGER NOT NULL,
-    source_entry_id TEXT NOT NULL, source_message_id TEXT NOT NULL, source_part_no INTEGER NOT NULL,
-    PRIMARY KEY(actor_id,proposal_id,output_message_id,output_part_no,source_entry_id,source_message_id,source_part_no),
-    CHECK(output_part_no >= 0), CHECK(source_part_no >= 0),
-    FOREIGN KEY(actor_id,proposal_id) REFERENCES context_proposals(actor_id,proposal_id),
-    FOREIGN KEY(actor_id,output_message_id) REFERENCES session_messages(actor_id,message_id),
-    FOREIGN KEY(actor_id,source_message_id) REFERENCES session_messages(actor_id,message_id))`);
   exec(`CREATE TABLE IF NOT EXISTS actor_requests (
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), request_id TEXT NOT NULL, turn_id TEXT NOT NULL, run_id TEXT NOT NULL,
     epoch INTEGER NOT NULL, step_index INTEGER, revision INTEGER NOT NULL,
