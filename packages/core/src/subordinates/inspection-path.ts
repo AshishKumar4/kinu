@@ -15,9 +15,7 @@ import { actorReadHandle } from '../read-models/workspace-work';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 
 export interface SubordinateInspectionAuthority {
-  /** The owner the transport authenticated. */
   readonly owner: string;
-  /** The workspace the transport addressed, by name. */
   readonly workspace: string;
 }
 
@@ -61,7 +59,7 @@ export async function inspectSubordinateStorage(
     target = child;
   }
 
-  if ((input.view === 'history' || input.view === 'children') && input.actor !== undefined) {
+  if ('actor' in input && input.actor !== undefined) {
     const kept = retainedDescendant(access, target, input.actor);
 
     return kept === null ? missing() : readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: kept.actor, transcriptFor: () => kept.transcript }, input);
