@@ -18,11 +18,11 @@ export class OrchestratorAgent extends Product {
 
   /** Registers and acquires `count` heads, then releases each: what a swarm's settled nodes leave behind. */
   async hostHeads(tag: string, count: number): Promise<void> {
-    const seams = this.explorationSeams();
+    const seams = this.hostedSeams();
     const references = [];
 
     for (let at = 0; at < count; at++) {
-      const reference = await seams.register({ creationId: `${tag}-${String(at)}`, kind: 'head' });
+      const reference = await seams.register({ creationId: `${tag}-${String(at)}`, toolProfile: 'full' });
       await seams.host.acquire(reference);
       references.push(reference);
     }

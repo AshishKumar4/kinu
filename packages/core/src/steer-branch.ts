@@ -82,7 +82,7 @@ export async function startBranchHead(
     budget: { ...BRANCH_HEAD_BUDGET, spawnedAt },
     model: input.model,
     mergeStrategy: 'best_of',
-    loop: defaultLoopOrigin('head'),
+    loop: defaultLoopOrigin('run'),
     ...forkMission(input.missionLabels),
   };
 

@@ -8,6 +8,7 @@
 import type { ModelMessage, ToolSet } from 'ai';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy } from '../prompting/attachment-sanitizer';
 import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls';
+import type { LostToolCall } from '../tools/effect-claim';
 import { stepContextLimit, type ResolvedModelWindow } from '../context-window';
 import { turnInputStart } from '../prompting/volatile-context';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
@@ -31,6 +32,7 @@ export interface TurnContextInput {
   trigger: CompactionTrigger;
   abortSignal?: AbortSignal | undefined;
   admission?: TurnAdmission;
+  lostToolCall?: ((call: { readonly toolCallId: string; readonly toolName: string }) => LostToolCall | null) | undefined;
 }
 
 export interface AssembledTurn {
@@ -125,7 +127,7 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Ass
 
     const assembled = [...(transformed ?? history)];
 
-    return located(settleUnpairedToolCalls(assembled) ?? assembled);
+    return located(settleUnpairedToolCalls(assembled, input.lostToolCall) ?? assembled);
   };
 
   const assembled = await assemble(input.trigger);

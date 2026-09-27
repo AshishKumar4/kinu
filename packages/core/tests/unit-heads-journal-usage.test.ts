@@ -45,7 +45,7 @@ const spawn = (id: string, rootId: string): HeadInput => ({
   id, rootId, parentId: null, depth: 0, task: `task ${id}`, rationale: 'r',
   mode: 'build', inheritedContext: [], budget: { maxDepth: 3, spawnedAt: 1 },
   mergeStrategy: 'synthesize',
-  loop: defaultLoopOrigin('head'),
+  loop: defaultLoopOrigin('run'),
 });
 
 const report = (id: string, usage: HeadReport['usage']): HeadReport => ({

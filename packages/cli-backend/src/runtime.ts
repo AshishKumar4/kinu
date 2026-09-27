@@ -587,7 +587,9 @@ export async function buildLocalActorRuntime(
   const binding = bindLocalActorReference(parent.actor, bound.reference);
   adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
 
-  if (binding.kind === 'head' && swarmSeat === true) {
+  const run = binding.kind === 'run' && binding.toolProfile === 'full';
+
+  if (run && swarmSeat === true) {
     if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
 
     return await parent.nodeRuntime(
@@ -596,7 +598,7 @@ export async function buildLocalActorRuntime(
     );
   }
 
-  if (binding.kind === 'head') {
+  if (run) {
     const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {
       parentRuntime: parent, actorBinding: binding, actor: bound.handle,
     };
@@ -628,7 +630,7 @@ async function buildCLIHeadRuntime(
   const { parentRuntime: parent } = opts;
   const sql = parent.storage.sql;
 
-  if (opts.actorBinding.kind !== 'head') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
+  if (opts.actorBinding.kind !== 'run' || opts.actorBinding.toolProfile !== 'full') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
   const physicalName = headAgentName(actor.storageKey);
 

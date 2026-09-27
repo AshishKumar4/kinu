@@ -429,7 +429,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return {
       spawnHead: async (input: HeadInput) => {
         // The `exp:`-marked name `hostHead` registers; a head has no database of its own.
-        await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, kind: 'head', lifetime: 'task' });
+        await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, kind: 'run', lifetime: 'task' });
 
         return {
           id: input.id,
@@ -1628,11 +1628,11 @@ export async function hostedSubordinateHarness(
 
 export async function hostedExplorationHarness(
   workspace: ActorHarness<HarnessOrchestratorAgent>,
-  kind: 'head' | 'branch',
+  toolProfile: 'full' | 'toolless',
   id: string,
 ): Promise<HostedActorHarness> {
   const entry = await workspace.agent.actorDirectory({
-    action: 'register', creationId: id, name: `exp:${id}`, kind, lifetime: 'task',
+    action: 'register', creationId: id, name: `exp:${id}`, kind: 'run', toolProfile, lifetime: 'task',
   });
 
   const actor = await workspace.agent.observeActorHost().acquire(entry.reference);

@@ -18,7 +18,7 @@ import { answeringGateway, GATEWAY_MODEL } from './helpers/platform-gateway';
 import type { ScriptedAnswer } from './helpers/turn-harness';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { createHeadRuntime } from '../src/head-runtime';
-import type { ExplorationHostSeams } from '../src/exploration-hosting';
+import type { HostedActorSeams } from '../src/hosted-actors';
 import type { ModelMessage, ToolSet, UIMessage } from 'ai';
 import { jsonSchema, streamText, tool } from 'ai';
 import * as v from 'valibot';
@@ -52,7 +52,7 @@ const RoleResultSchema = v.object({ role: v.string() });
 
 
 /** Fails loud on any member access: a merge must never reach the exploration substrate. */
-const noExplorationHost: ExplorationHostSeams = new Proxy(Object.create(null), {
+const noExplorationHost: HostedActorSeams = new Proxy(Object.create(null), {
   get: (_target, key) => {
     throw new Error(`the head merge reached the exploration substrate: ${String(key)}`);
   },
@@ -338,8 +338,8 @@ describe('turn-pipeline correctness wiring', () => {
     await hostedMainActor(workspace);
     const rootFiles = workspaceFiles(workspace.agent);
     await rootFiles.writeFile('/home/main/shared-proof.md', 'registered workspace bytes');
-    const head = await hostedExplorationHarness(workspace, 'head', 'head-a1');
-    expect(head.actor.record.kind).toBe('head');
+    const head = await hostedExplorationHarness(workspace, 'full', 'head-a1');
+    expect(head.actor.record.kind).toBe('run');
     const headFiles = head.actor.runtime.storage.vfs;
     expect(await headFiles.readFile('/home/main/shared-proof.md', { encoding: 'utf8' }))
       .toBe('registered workspace bytes');

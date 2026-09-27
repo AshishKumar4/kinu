@@ -64,7 +64,7 @@ describe('OwnedModelServices', () => {
     const source = (file: string) => readFileSync(join(import.meta.dir, '..', 'src', file), 'utf8');
     const actor = source('actor-agent.ts');
     const orchestrator = source('orchestrator.ts');
-    const hosting = source('exploration-hosting.ts');
+    const hosting = source('hosted-actors.ts');
 
     expect(actor).toContain("appTitle: 'Kinu',\n    ownerRequired: true,");
     expect(actor).toContain('return this.ownedModelServices.providerRegistry();');
