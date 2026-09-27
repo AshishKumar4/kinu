@@ -337,7 +337,8 @@ files through the ordinary file plane, then call
 `workspace.slates.<id>.$preview()` to boot a live preview.
 `workspace.slates.<id>.<method>(...args)` calls a class method with JSON
 arguments, as the slate's own client does. `$commit()` freezes source,
-`$history()` reads versions, `workspace.slates.$fork(version)` copies a committed
+`$history(after?)` reads versions a page at a time, oldest first, and names the
+cursor for the next page, `workspace.slates.$fork(version)` copies a committed
 version into a new slate, and `$restore(version)` restores a version's tree.
 `$`-named members are lifecycle, which no class method can shadow. Running
 previews live as long as the isolate and are not durable records. These members

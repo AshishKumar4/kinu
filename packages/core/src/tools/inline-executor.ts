@@ -427,7 +427,8 @@ declare namespace workspace {
     $methods(): Promise<string[] | Refusal>;
     /** Freeze its source as a version. */
     $commit(): Promise<SlateValue | Refusal>;
-    $history(): Promise<SlateValue | Refusal>;
+    /** Oldest first; pass the answer's next cursor to continue. */
+    $history(after?: string): Promise<SlateValue | Refusal>;
     $restore(version: string): Promise<SlateValue | Refusal>;
     /** End its process, URL, storage and files; committed versions stay. */
     $remove(): Promise<SlateValue | Refusal>;

@@ -72,7 +72,7 @@ describe('a trial\'s evidence', () => {
     expect(new Uint8Array(readFileSync(join(directory, 'files/home/main/exports/q3.zip')))).toEqual(binary);
     expect(existsSync(join(directory, 'files/home/main/node_modules'))).toBe(false);
     expect(JSON.parse(readFileSync(join(directory, 'slates.json'), 'utf8')).histories)
-      .toEqual([{ id: 'exchange', history: { ok: true, value: { versions: [{ id: 'v-1' }] } } }]);
+      .toEqual([{ id: 'exchange', history: [{ ok: true, value: { versions: [{ id: 'v-1' }] } }] }]);
     expect(JSON.parse(readFileSync(join(directory, 'data.json'), 'utf8'))).toEqual([
       { slate: 'exchange', method: 'book', input: { symbol: 'ACME' }, answer: { ok: true, value: { bids: [], asks: [] } } },
       { slate: 'exchange', method: 'trades', input: { symbol: 'ACME' }, answer: { ok: false, reason: 'bad_input', error: 'Slate compilation failed' } },
