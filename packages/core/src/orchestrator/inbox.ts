@@ -353,7 +353,7 @@ export class Inbox implements AgentInbox {
     if (!busy) return this.queue(delivered);
     this.pending.push(delivered);
     this.openCard(delivered, stepBody(delivered));
-    this.logActivity?.('signal_injected', `${signal.kind} → live turn`);
+    this.logActivity?.('signal_injected', `${signal.kind} -> live turn`);
 
     return Promise.resolve('mid-turn');
   }

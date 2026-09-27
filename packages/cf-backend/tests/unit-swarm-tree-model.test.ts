@@ -3,11 +3,7 @@ import { describe, test, expect } from 'bun:test';
 import type { ForkNode } from '@kinu.run/core';
 import type { HeadRunView } from '@kinu.run/core';
 import { explorationForkTree, type MctsRow } from '@kinu.run/core';
-import {
-  ancestorIds, cleanNodeLabel, clipToWidth, findForkNode, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits,
-  NODE_R_MAX, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats,
-  viewNoteFor,
-} from '@kinu.run/core';
+import { ancestorIds, cleanNodeLabel, clipToWidth, findForkNode, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats, viewNoteFor } from '@kinu.run/core/swarm-view';
 import { present } from '@kinu.run/test-utils';
 
 let seq = 0;

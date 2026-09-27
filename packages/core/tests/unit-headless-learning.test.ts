@@ -27,7 +27,7 @@ function headInput(): HeadInput {
     inheritedContext: [{ id: 'm1', role: 'user', content: 'the prior user message', createdAt: 1 }],
     budget: { maxDepth: 2, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('head'),
+    loop: defaultLoopOrigin('run'),
   };
 }
 
@@ -149,7 +149,7 @@ describe('a headless actor runs the step clock only', () => {
     const { llm, reflections } = reflectingLlm();
     const { rt, testSql } = createTestRuntime({ llm });
     const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true });
-    const seat = await seats.seat('head-under-test', 'head');
+    const seat = await seats.seat('head-under-test', 'run');
     const actor = seat.actor.handle;
     const capture = new HeadCapture();
 
@@ -192,7 +192,7 @@ describe('a headless actor runs the step clock only', () => {
     const { llm, reflections } = reflectingLlm();
     const { rt, testSql } = createTestRuntime({ llm });
     const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true });
-    const seat = await seats.seat('recovering-head', 'head');
+    const seat = await seats.seat('recovering-head', 'run');
     const actor = seat.actor.handle;
 
     const failing = CONSECUTIVE_FAILURES_BEFORE_STEER;

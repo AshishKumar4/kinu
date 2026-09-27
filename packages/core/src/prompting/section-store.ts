@@ -153,10 +153,10 @@ function checkPromptSizeRule(input: PromptSizeRuleInput): PromptSizeVerdict {
 
   return {
     ok: false,
-    reason: `+${String(grown)} bytes (${String(input.incumbentBytes)} → ${String(input.candidateBytes)}) `
+    reason: `+${String(grown)} bytes (${String(input.incumbentBytes)} to ${String(input.candidateBytes)}) `
       + `for a score of ${input.candidateScore.mean.toFixed(3)} whose interval `
       + `(lo ${input.candidateScore.lo.toFixed(3)}) does not clear the incumbent's `
-      + `${input.incumbentScore.mean.toFixed(3)} — a longer section needs a strictly better score`,
+      + `${input.incumbentScore.mean.toFixed(3)}: a longer section needs a strictly better score`,
   };
 }
 
@@ -197,7 +197,7 @@ export function proposePromptSection(
   }
 
   if (rationale.length < MIN_RATIONALE_LENGTH) {
-    return { ok: false, code: 'rationale_too_short', error: `Rationale must be ≥${String(MIN_RATIONALE_LENGTH)} chars` };
+    return { ok: false, code: 'rationale_too_short', error: `Rationale must be at least ${String(MIN_RATIONALE_LENGTH)} chars` };
   }
 
   const incumbent = incumbentSectionSource(sql, actor, section);
@@ -223,7 +223,7 @@ export function proposePromptSection(
     || wanted.flags.join('|') !== offered.flags.join('|')) {
     return {
       ok: false, code: 'slot_contract',
-      error: `slot contract changed — the builder supplies {slots: ${wanted.slots.join(', ') || '(none)'}; `
+      error: `slot contract changed: the builder supplies {slots: ${wanted.slots.join(', ') || '(none)'}; `
         + `flags: ${wanted.flags.join(', ') || '(none)'}}, the candidate declares `
         + `{slots: ${offered.slots.join(', ') || '(none)'}; flags: ${offered.flags.join(', ') || '(none)'}}`,
     };

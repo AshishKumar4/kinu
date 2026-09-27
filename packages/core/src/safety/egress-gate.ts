@@ -91,8 +91,8 @@ export function reviewEgressBinding(
       rule: egressSecretRule(binding.id),
       explanation:
         `Lets the agent's container spend the secret "${binding.label}" on requests to `
-        + `${binding.host}. The container never holds the secret itself — it holds a `
-        + 'placeholder, substituted outside the container on the way out — but every '
+        + `${binding.host}. The container never holds the secret itself: it holds a `
+        + 'placeholder, substituted outside the container on the way out, but every '
         + `request it makes to ${binding.host} can carry the owner's credential.`,
     }],
   };

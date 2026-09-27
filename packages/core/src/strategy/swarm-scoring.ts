@@ -58,7 +58,7 @@ export function reportGate(input: {
 
       if (measurement.kind === 'unmeasurable') {
         return `the verifier ran and could not measure what you reported: ${measurement.detail}. `
-          + 'Fix the answer and report again — a report the instrument cannot read is a '
+          + 'Fix the answer and report again: a report the instrument cannot read is a '
           + 'candidate the search cannot score.';
       }
 

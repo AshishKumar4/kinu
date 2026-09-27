@@ -227,7 +227,7 @@ export function buildLongHorizonQuestions(spec: LongHorizonSpec): LongHorizonQue
   const verbatimTarget = marked.find((e) => e.part === 1);
 
   if (verbatimTarget === undefined) {
-    throw new Error('long-horizon corpus planted no marker in part 1 — the verbatim ask has no target');
+    throw new Error('long-horizon corpus planted no marker in part 1: the verbatim ask has no target');
   }
 
   return [
@@ -278,7 +278,7 @@ export function buildLongHorizonAsks(spec: LongHorizonSpec): LongHorizonAsks {
     return {
       asks: [[
         `\`${LONGHORIZON_CORPUS_DIR}/\` holds ${spec.entries} log entries across ${files.length} files`,
-        `(${chars} characters in total — far more than fits in one request).`,
+        `(${chars} characters in total: far more than fits in one request).`,
         '',
         answerInstruction(questions),
       ].join('\n')],
@@ -293,13 +293,13 @@ export function buildLongHorizonAsks(spec: LongHorizonSpec): LongHorizonAsks {
     const partFiles = files.filter((f) => f.part === part);
     const dir = longHorizonPartDir(spec, part);
     asks.push([
-      `Part ${part} of ${spec.parts} of the log is in \`${dir}/\` — ${partFiles.length} file(s),`,
+      `Part ${part} of ${spec.parts} of the log is in \`${dir}/\`: ${partFiles.length} file(s),`,
       `${partFiles.reduce((s, f) => s + f.text.length, 0)} characters.`,
       '',
       'Read it and keep whatever you will need to answer these later, once it is gone:',
       ...questions.map((q) => `  ${q.id}: ${q.text}`),
       '',
-      `\`${dir}/\` is DELETED as soon as you finish this message — nothing in it is readable again.`,
+      `\`${dir}/\` is DELETED as soon as you finish this message: nothing in it is readable again.`,
       'Reply `noted` when you are done.',
     ].join('\n'));
     removeAfterAsk.push(dir);
@@ -460,7 +460,7 @@ export function decodeLongHorizonSpec(encoded: string): LongHorizonSpec {
 export function assertLongHorizonSpec(spec: LongHorizonSpec): void {
   const positiveInt = (name: string, value: number, min: number) => {
     if (!Number.isInteger(value) || value < min) {
-      throw new Error(`long-horizon spec.${name} must be an integer ≥ ${min}, got ${value}`);
+      throw new Error(`long-horizon spec.${name} must be an integer >= ${min}, got ${value}`);
     }
   };
 
@@ -477,6 +477,6 @@ export function assertLongHorizonSpec(spec: LongHorizonSpec): void {
   if (spec.mode === 'digest' && spec.parts !== 1) throw new Error('long-horizon digest mode has exactly one part');
 
   if (spec.markers < spec.parts) {
-    throw new Error(`long-horizon spec plants ${spec.markers} markers over ${spec.parts} parts — every part must plant at least one, or the final ask does not depend on it`);
+    throw new Error(`long-horizon spec plants ${spec.markers} markers over ${spec.parts} parts: every part must plant at least one, or the final ask does not depend on it`);
   }
 }

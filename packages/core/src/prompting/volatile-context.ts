@@ -362,7 +362,7 @@ const ENTRY_CHARS = 120;
 function clip(text: string, max = ENTRY_CHARS): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();
 
-  return oneLine.length > max ? `${oneLine.slice(0, max - 1).trimEnd()}…` : oneLine;
+  return oneLine.length > max ? `${oneLine.slice(0, max - 3).trimEnd()}...` : oneLine;
 }
 
 interface SectionRow {
@@ -394,7 +394,7 @@ function rosterSection<T>(
   const lines = roster.items.slice(0, listing.cap).map(line);
   const elided = roster.total - lines.length;
 
-  if (elided > 0) lines.push(`- …and ${elided} more, not shown`);
+  if (elided > 0) lines.push(`- ...and ${elided} more, not shown`);
 
   return { text: [title, ...lines].join('\n'), rows: lines.map((row) => rowOf(row, listing.keyed)) };
 }

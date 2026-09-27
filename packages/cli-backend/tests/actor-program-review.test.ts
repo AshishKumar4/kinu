@@ -38,7 +38,7 @@ function headInput(): HeadInput {
   return { id: 'review-head', rootId: 'review-root', parentId: null, depth: 0,
     task: 'go', rationale: 'exercise real program boundaries', mode: 'build', inheritedContext: [],
     budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('head') };
+    loop: defaultLoopOrigin('run') };
 }
 
 async function runtime(source: string, version = 1) {

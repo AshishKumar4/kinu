@@ -58,7 +58,7 @@ export interface ConversationSummary {
 
 function truncate(text: string, maxChars = MAX_MESSAGE_CHARS): string {
   return text.length > maxChars
-    ? `${text.slice(0, maxChars)}… [+${text.length - maxChars} chars — pass max_chars to read the full message]`
+    ? `${text.slice(0, maxChars)}... [+${text.length - maxChars} chars: pass max_chars to read the full message]`
     : text;
 }
 
@@ -310,7 +310,7 @@ export class ConversationSearchStore {
   private runFtsQuery(ftsQuery: string, limit: number): HitRow[] {
     return this.sql<HitRow>`
       SELECT msg_id, session_id, role, created_at,
-             snippet(conversation_fts, 0, '[', ']', '…', ${SNIPPET_TOKENS}) AS snip
+             snippet(conversation_fts, 0, '[', ']', '...', ${SNIPPET_TOKENS}) AS snip
       FROM conversation_fts
       WHERE conversation_fts MATCH ${ftsQuery}
         AND role IN ('user', 'assistant')

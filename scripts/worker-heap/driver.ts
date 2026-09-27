@@ -53,7 +53,17 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepping: false, arrived: 0, released: 0 };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0 };
+
+/** The text of every user message a request carries. */
+function userTexts(messages: readonly object[]): string[] {
+  return messages.flatMap((message) => ('role' in message && message.role === 'user' && 'content' in message ? [JSON.stringify(message.content)] : []));
+}
+
+/** Steps each hired helper works before it answers. */
+const HELPER_STEPS = 4;
+
+const USAGE = `data: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`;
 
 /** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
 export class ScriptedAI extends WorkerEntrypoint {
@@ -72,6 +82,40 @@ export class ScriptedAI extends WorkerEntrypoint {
     // A timer is I/O to the runtime; a bare pending promise would be cancelled as a hung request.
     while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
     model.parked -= 1;
+
+    // Hiring: the root turn hires `hires` task helpers; each helper answers one page and is done.
+
+    if (model.hires > 0) {
+      const users = userTexts(inputs.messages ?? []);
+      const messages = inputs.messages ?? [];
+      const root = users.some((text) => text.includes('HIRE-ROOT'));
+      const asked = messages.findLastIndex((message) => 'content' in message && JSON.stringify(message.content).includes('HIRE-ROOT'));
+      const hiring = root && !messages.slice(asked).some((message) => 'role' in message && message.role === 'tool');
+
+      if (!root) {
+        const steps = messages.filter((message) => 'role' in message && message.role === 'tool').length;
+
+        // A helper works a page per step, with a cheap tool call, then answers in one word.
+        if (steps < HELPER_STEPS) {
+          const page = 'word '.repeat(Math.ceil(model.answerBytes / 5)).slice(0, model.answerBytes);
+          const call = { id: `work-${String(model.calls)}`, name: 'tasks', arguments: { action: 'list' } };
+
+          return new Response(`data: ${JSON.stringify({ response: page, tool_calls: [call] })}\n\n${USAGE}data: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+        }
+
+        model.helpersAnswered += 1;
+
+        return new Response(`data: ${JSON.stringify({ response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+      }
+
+      const calls = hiring
+        ? Array.from({ length: model.hires }, (_, at) => ({ id: `hire-${String(model.calls)}-${String(at)}`, name: 'agents',
+          arguments: { action: 'hire', role: 'task', lifetime: 'task', mission: `Helper ${String(at)}: write one page, then stop.` } }))
+        : [];
+
+      return new Response(`data: ${JSON.stringify(calls.length > 0 ? { response: '', tool_calls: calls } : { response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`,
+        { headers: { 'content-type': 'text/event-stream' } });
+    }
 
     if (model.toolSteps > 0) {
       model.toolSteps -= 1;
@@ -110,7 +154,13 @@ export default {
 
       if (url.searchParams.has('released')) model.released = Number(url.searchParams.get('released'));
 
-      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived });
+      if (url.searchParams.has('hires')) {
+        model.hires = Number(url.searchParams.get('hires'));
+        model.helpersAnswered = 0;
+        model.stepping = false;
+      }
+
+      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered });
     }
 
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');

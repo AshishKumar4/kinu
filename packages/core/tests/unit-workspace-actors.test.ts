@@ -147,14 +147,40 @@ describe('one workspace actor directory', () => {
     expect(current.directory.resolveChild(replacement, 'reader')).toBeNull();
   });
 
-  test('an actor of kind node cannot be stored or registered', () => {
+  test.each(['node', 'head', 'branch'])('an actor of kind %s cannot be stored or registered', (kind) => {
     const { directory, sql } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
     const actorId = crypto.randomUUID();
 
-    expect(() => sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, lifetime, created_at, creation_id)
-      VALUES (${actorId}, 'workspace', ${main.actorId}, 'exp:node', ${actorId}, 'node', 'task', ${Date.now()}, 'c-node')`).toThrow('CHECK constraint failed');
-    expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-new', name: 'exp:node-new', kind: 'node', lifetime: 'task' }))))
+    expect(() => sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
+      VALUES (${actorId}, 'workspace', ${main.actorId}, ${`exp:${kind}`}, ${actorId}, ${kind}, 'full', 'task', ${Date.now()}, 'c-old')`).toThrow('CHECK constraint failed');
+    expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-new', name: `exp:${kind}-new`, kind, lifetime: 'task' }))))
       .toThrow(expect.objectContaining({ code: 'bad_input' }));
+  });
+
+  test('a toolless run actor is only a run, and creates no child', () => {
+    const { directory } = workspace('workspace', 'owner');
+    const main = directory.createMain({ name: 'main' });
+
+    expect(() => directory.apply(main, [], { action: 'register', creationId: 'c-hire', name: 'reader', kind: 'subordinate', toolProfile: 'toolless', lifetime: 'durable' }))
+      .toThrow(expect.objectContaining({ code: 'bad_input' }));
+
+    const branch = directory.apply(main, [], { action: 'register', creationId: 'c-branch', name: 'exp:branch-1', kind: 'run', toolProfile: 'toolless', lifetime: 'task' });
+    const head = directory.apply(main, [], { action: 'register', creationId: 'c-head', name: 'exp:head-1', kind: 'run', lifetime: 'task' });
+
+    expect([branch.toolProfile, head.toolProfile]).toEqual(['toolless', 'full']);
+    const caller = directory.open(branch.reference.actorId);
+
+    expect(() => directory.apply(caller, directory.storagePath(branch.reference), { action: 'register', creationId: 'c-child', name: 'exp:child-1', kind: 'run', lifetime: 'task' }))
+      .toThrow(expect.objectContaining({ code: 'denied' }));
+    // A full run actor creates only full run actors.
+    const headCaller = directory.open(head.reference.actorId);
+    const headPath = directory.storagePath(head.reference);
+
+    expect(() => directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-hire2', name: 'reader', kind: 'subordinate', lifetime: 'durable' }))
+      .toThrow(expect.objectContaining({ code: 'denied' }));
+    expect(() => directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-branch2', name: 'exp:branch-2', kind: 'run', toolProfile: 'toolless', lifetime: 'task' }))
+      .toThrow(expect.objectContaining({ code: 'denied' }));
+    expect(directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-head2', name: 'exp:head-2', kind: 'run', lifetime: 'task' }).toolProfile).toBe('full');
   });
 });

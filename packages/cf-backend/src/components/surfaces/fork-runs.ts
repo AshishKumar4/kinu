@@ -8,7 +8,8 @@ import type {
 } from "@kinu.run/core";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
-import { explorationForkTree, swarmResolutionOf } from "@kinu.run/core";
+import { explorationForkTree } from "@kinu.run/core";
+import { swarmResolutionOf } from "@kinu.run/core/swarm-view";
 import type { ForkNode, Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 

@@ -8,6 +8,6 @@ index 15268086d..99a0217d0 100644
  
 -  if (rationale.length < minRationaleLength) {
 +  if (code.length < minRationaleLength) {
-     return { ok: false, stage: 1, error: `Rationale must be ≥${minRationaleLength} chars` };
+     return { ok: false, stage: 1, error: `Rationale must be >=${minRationaleLength} chars` };
    }
  

@@ -156,7 +156,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     },
 
     editFile: {
-      description: 'Replace exact text inside a file — old_text must occur exactly once and match what a prior readFile/writeFile/editFile here showed; refused if the file was never read/written in this scope or has changed since.',
+      description: 'Replace exact text inside a file: old_text must occur exactly once and match what a prior readFile/writeFile/editFile here showed; refused if the file was never read/written in this scope or has changed since.',
       execute: async (...args: unknown[]) => {
         const path = parseInput(StringSchema, { value: args[0] });
 
@@ -195,7 +195,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description:
         'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
         + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops, variables and a working directory that persists across calls. '
-        + 'Available binaries and process features are listed in this workspace provider’s capabilities; use sandbox or device only when the task needs that separate machine.',
+        + 'Available binaries and process features are listed in this workspace provider\'s capabilities; use sandbox or device only when the task needs that separate machine.',
       execute: async (...args: unknown[]) => {
         const command = parseInput(StringSchema, { value: args[0] });
 
@@ -291,7 +291,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
         if (isReservedCraftToolName(toolName)) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',
-            `Tool name "${toolName}" is reserved — it collides with a built-in tool or the mcp_ prefix owned by MCP tools. Pick a different name.`)) };
+            `Tool name "${toolName}" is reserved: it collides with a built-in tool or the mcp_ prefix owned by MCP tools. Pick a different name.`)) };
         }
 
         // Admission precedes every write: normalize to one expression and prove it parses.

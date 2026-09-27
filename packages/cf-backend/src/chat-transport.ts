@@ -66,14 +66,13 @@ interface LiveStream {
   accumulator: StreamAccumulator;
   readonly open: OpenParts;
   readonly cadence: PartialFlushCadence;
-  taken: boolean;
   /** The relay broke before the stream ended, so the accumulated parts are not the answer. */
   broken: boolean;
   /** Why the turn failed, sent as the frame that ends it. */
   failure: string | null;
 }
 
-/** A chunk's meaning to the loop's `partialFlushCadence`, so reconnects and continuations read the same amount. */
+/** A chunk's meaning to `partialFlushCadence`: reconnects and continuations read the same amount. */
 function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
   if (chunk.type === 'tool-output-available' || chunk.type === 'tool-output-error' || chunk.type === 'tool-output-denied') return 'settled';
 
@@ -139,9 +138,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   private readonly continuation = new ContinuationState<Connection>();
   private readonly requests = new Map<string, string>();
   private live: LiveStream | null = null;
-  /** Answers whose stream closed before the transcript took them. Production persists before
-   *  `turn-end`; this holds the other order. */
-  private readonly answers = new Map<string, UIMessage>();
 
   constructor(private readonly wire: ChatWire) {}
 
@@ -165,27 +161,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         isConnectionPresent: (id) => this.wire.getConnection(id) !== undefined,
       }),
     };
-  }
-
-  answer(id: string): UIMessage | null {
-    const message = this.streamed(id);
-
-    if (message !== null) {
-      this.answers.delete(id);
-
-      if (this.live?.accumulator.messageId === id) this.live.taken = true;
-    }
-
-    return message;
-  }
-
-  /** Read without spending: the roster declares turn-end over it before the transcript persists it. */
-  streamed(id: string): UIMessage | null {
-    const live = this.live;
-
-    if (live !== null && !live.broken && live.accumulator.messageId === id && live.accumulator.parts.length > 0) return live.accumulator.toMessage();
-
-    return this.answers.get(id) ?? null;
   }
 
   /** The connect frame is the pane's only seed, so a socket opening mid-turn gets the current window. */
@@ -327,7 +302,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.releaseWaiters();
     const streamId = this.resume?.resumable.start(requestId, { messageId: turn.messageId }) ?? requestId;
 
-    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), taken: false, broken: false, failure: null };
+    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), broken: false, failure: null };
 
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
   }
@@ -339,7 +314,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     if (live === null) return;
     this.live = null;
 
-    if (!live.taken && !live.broken && live.accumulator.parts.length > 0) this.answers.set(live.accumulator.messageId, live.accumulator.toMessage());
     const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
     this.resume?.resumable.complete(live.streamId);
@@ -419,7 +393,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         // The provider's own words: the sender's chat would keep them as its error, and the turn's classified
         // failure follows as the frame that ends it.
         if (chunk.type === 'error') continue;
-        const { action } = live.accumulator.applyChunk(chunk);
+        live.accumulator.applyChunk(chunk);
 
         if (!live.open.admits(chunk)) {
           this.degradeRelay(live, toKinuError({
@@ -431,8 +405,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           return;
         }
 
-        // Stamp the persisted row id: a provider emitting no `start.messageId` leaves the tab two copies.
-        if (chunk.type === 'start' && action?.type === 'start' && action.messageId === undefined) chunk.messageId = live.accumulator.messageId;
+        // The row id on every `start`: a missing or SDK-minted one draws the answer twice.
+        if (chunk.type === 'start') chunk.messageId = live.accumulator.messageId;
 
         const body = JSON.stringify(chunk);
         const resume = this.resume;
@@ -443,7 +417,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           if (live.cadence.flushes(flushSignal(chunk))) resume.resumable.flushBuffer();
         }
 
-        // Stored above, so a tab still joining reads it in its replay, in order; sent to it now it would run ahead of the parts the replay opens.
+        // A joining tab reads it in its replay; sent now, it would run ahead of the parts the replay opens.
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
       }
     } catch (cause) {
@@ -466,7 +440,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.pendingResume.clear();
   }
 
-  /** The relay broke; the turn did not. The tab gets our classification; the SDK's words go to diagnostics. */
+  /** The relay broke, not the turn: the tab gets our classification, diagnostics the SDK's words. */
   private degradeRelay(live: LiveStream, error: KinuError): void {
     diagnostics.failure('chat.stream_observe_failed', error);
     live.broken = true;

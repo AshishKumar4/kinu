@@ -2792,7 +2792,7 @@ export class UserDO extends Agent<Env> {
   }
 
   private sandboxRefusal(deviceId: string, sandbox: DeviceSandboxStatus, cause: string): string {
-    return `${SANDBOX_UNAVAILABLE}: ${this.deviceLabel(deviceId)} cannot run commands — `
+    return `${SANDBOX_UNAVAILABLE}: ${this.deviceLabel(deviceId)} cannot run commands: `
       + `its Kinu daemon could not start a sandbox (${cause}), and Kinu never runs a command `
       + `unsandboxed unless the owner asked for that. ${sandboxReasonFix(sandbox.reason)} `
       + 'The owner can also turn Sandbox off for this device on the Devices page, '
@@ -3987,7 +3987,7 @@ export class UserDO extends Agent<Env> {
        WHERE id = 1 AND settled_at IS NULL`,
     )[0];
 
-    if (!row) return { connected: false, error: 'No device flow in progress — call startCodexDeviceFlow first.' };
+    if (!row) return { connected: false, error: 'No device flow in progress: call startCodexDeviceFlow first.' };
     // Both fences must be read before the provider wait.
     const generation = row.generation;
     const revision = this.credentialRevision(CODEX_CRED_KEY);
@@ -4009,7 +4009,7 @@ export class UserDO extends Agent<Env> {
 
         return {
           connected: false,
-          error: 'That Codex sign-in was superseded before it completed — start the connection again.',
+          error: 'That Codex sign-in was superseded before it completed: start the connection again.',
         };
       }
 
@@ -5032,7 +5032,7 @@ export class UserDO extends Agent<Env> {
         return {
           server: r.name,
           reason: `not connected when this turn opened, so its tools are absent from this turn. They are `
-            + `installed by the next turn once the connection completes — a turn's tool set is fixed `
+            + `installed by the next turn once the connection completes: a turn's tool set is fixed `
             + `when the turn opens.`,
         };
       }), ...refused];

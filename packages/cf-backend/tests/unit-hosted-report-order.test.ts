@@ -4,7 +4,7 @@
  */
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
-import { GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, wakeForDelegatedTask } from './helpers/actor-harness';
+import { GATEWAY_CATALOG, driveUntil, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask } from './helpers/actor-harness';
 import { abandonHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
@@ -38,23 +38,13 @@ test("a helper waiting on its task hire gets its answer, then takes up the repor
 
   await wakeForDelegatedTask(workspace, middle.actor.handle.actorId, 'Middle task.');
 
-  // Bounded: a deadlock fails here by name instead of hanging the suite.
-  for (let lap = 0; lap < 300 && !middleDone(); lap++) {
-    await workspace.agent.terminalRetryPass();
-    await nextTurn();
-  }
-
-  expect(middleDone()).toBe(true);
+  await driveUntil(workspace, 'the helper\'s turn never ended', middleDone);
 
   // The durable hire reported while the helper waited: the helper takes it up in a turn of its own.
   const turns = (): number => sqlOver(workspace.db)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middle.actor.handle.actorId} AND type = 'run_start'`[0]?.n ?? 0;
 
-  for (let lap = 0; lap < 300 && turns() < 2; lap++) {
-    await workspace.agent.terminalRetryPass();
-    await nextTurn();
-  }
-
+  await driveUntil(workspace, 'the helper never took up the report in a turn of its own', () => turns() >= 2);
   expect(turns()).toBe(2);
 });
 
@@ -123,12 +113,7 @@ for (const { verb, args, notes } of CASES) {
 
     await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
 
-    for (let lap = 0; lap < 300 && !parked; lap++) {
-      await workspace.agent.terminalRetryPass();
-      await nextTurn();
-    }
-
-    if (!parked) throw new Error('the durable hire never started its turn');
+    await driveUntil(workspace, 'the durable hire never started its turn', () => parked);
 
     const durable = sql<{ name: string }>`SELECT name FROM actor_subordinates WHERE actor_id = ${middleId} AND lifetime = 'durable'`[0]?.name;
 
@@ -137,12 +122,7 @@ for (const { verb, args, notes } of CASES) {
     await wakeForDelegatedTask(workspace, middleId, `Second: ${durable}`);
     release.resolve();
 
-    // Bounded: a deadlock fails here by name instead of hanging the suite.
-    for (let lap = 0; lap < 300 && turnsEnded() < 2; lap++) {
-      await workspace.agent.terminalRetryPass();
-      await nextTurn();
-    }
-
+    await driveUntil(workspace, 'the helper never ended both its turns', () => turnsEnded() >= 2);
     expect(turnsEnded()).toBe(2);
   });
 }
@@ -193,12 +173,9 @@ test("a report its durable hire made during a helper's turn is taken up though t
 
   await wakeForDelegatedTask(first, middleId, 'Middle task.');
 
-  for (let lap = 0; lap < 300 && pendingReports() === 0; lap++) {
-    await first.agent.terminalRetryPass();
-    await nextTurn();
-  }
-
+  await driveUntil(first, 'the durable hire never reported mid-turn', () => pendingReports() > 0);
   expect(pendingReports()).toBe(1);
+
   abandonHarnessFibers();
 
   const second = await reactivateOrchestratorHarness(first.db, undefined, {
@@ -206,11 +183,6 @@ test("a report its durable hire made during a helper's turn is taken up though t
     beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
   });
 
-  // Bounded: a report the helper never takes up fails here by name.
-  for (let lap = 0; lap < 300 && !takenUp; lap++) {
-    await second.agent.terminalRetryPass();
-    await nextTurn();
-  }
-
+  await driveUntil(second, 'the helper never took up the report after the reset', () => takenUp);
   expect(takenUp).toBe(true);
 });
