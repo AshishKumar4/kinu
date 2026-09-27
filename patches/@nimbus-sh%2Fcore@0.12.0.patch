@@ -1,3 +1,25 @@
+diff --git a/dist/runtime/esbuild-service.js b/dist/runtime/esbuild-service.js
+index 63d95d3d58301dd2b1c498814277b7825a15c8a5..cb1195d836e1bf3df42f0c96b62fb4c2a5862d0a 100644
+--- a/dist/runtime/esbuild-service.js
++++ b/dist/runtime/esbuild-service.js
+@@ -1040,7 +1040,6 @@
+         warnings: [],
+     };
+ }
+-import esbuildWasmUrl from 'esbuild-wasm/esbuild.wasm';
+ /**
+  * Cached reference to the esbuild namespace. Populated on first
+  * `loadEsbuild()` call; nullable until then so module-load code paths
+@@ -1205,6 +1204,9 @@
+             try {
+                 const esb = await loadEsbuild();
+                 this._esbuild = esb;
++                // Kinu patch, Nimbus ask N27: imported here, not at the top of the module. Every module that reads a
++                // constant from this one would otherwise instantiate the 11.9 MB esbuild.wasm in every isolate at load.
++                const { default: esbuildWasmUrl } = await import('esbuild-wasm/esbuild.wasm');
+                 // The supervisor loads esbuild-wasm via wrangler's static-import
+                 // resolution (`import esbuildWasmUrl from 'esbuild-wasm/esbuild.wasm'`
+                 // at the top of this file). At deploy time wrangler bundles the
 diff --git a/dist/shell/unix-commands.js b/dist/shell/unix-commands.js
 index ab583395295c780d5b86dfba29fca3fb4593f322..0d71413ba779217bb1a7828374b4dc24c4bd5406 100644
 --- a/dist/shell/unix-commands.js

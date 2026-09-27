@@ -963,7 +963,7 @@ type DbWrite =
  * each statement is built from these arguments against the table's declared columns. \`scope: 'actor'\`
  * rows are yours alone, \`scope: 'workspace'\` rows are shared with every agent here. \`where: {}\` matches
  * every row you can reach; an object with \`op\` is a predicate, so compare a JSON document with
- * \`{ op: '=', value: { … } }\`.
+ * \`{ op: '=', value: { ... } }\`.
  */
 export declare const db: {
   /** Re-declaring the same shape does nothing; a different shape under an existing name is refused.
