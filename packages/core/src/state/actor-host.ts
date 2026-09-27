@@ -244,7 +244,6 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
       return { actor: { ...bound, runtime, session }, fence };
     } finally {
-      // A failed build still lets its runtime go.
       if (!built) runtime.release?.();
     }
   };
