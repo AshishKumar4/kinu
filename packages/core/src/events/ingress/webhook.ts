@@ -263,7 +263,6 @@ export async function acceptWebhookDelivery(
     event_id: 'pending',
     kind: 'http_pending',
     holder_addr: `delivery:${delivery_id}`,
-    payload_policy: 'redact',
   }, opts.now);
 
   // Spill after the auth and rate gates so a rejected delivery never writes a file.
