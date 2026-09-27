@@ -226,6 +226,7 @@ import {
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
 import { Hono, type Context } from 'hono';
+import { WakeArms } from '@kinu.run/core';
 import { rawPath, rethrow } from './api/context';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
@@ -1320,6 +1321,7 @@ export abstract class ActorAgent extends Agent<Env> {
       // has its own terminal claim; see {@link turnMayStillRun}.
       turnIsLive: (turnId) => this.turnMayStillRun(turnId),
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
+      settled: () => this.restWhenIdle(),
     });
 
     return this._terminalTransitions;
@@ -1339,11 +1341,20 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private readonly runningWakeRows = new Set<string>();
 
+  private readonly wakeArms = new WakeArms();
+
+  /** Set by the last maintenance pass. */
+  protected maintenanceUnfinished = false;
+
   /**
    * Soonest-wins arm of one wake row per `callback`. A due row counts (it fires now) unless its tick is
    * running, since the SDK deletes that one. Re-reads after its write so racers converge.
    */
   protected async armWakeRow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
+    return await this.wakeArms.arm(() => this.armWakeRowNow(callback, atMs, pace));
+  }
+
+  private async armWakeRowNow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
     const nowSec = Math.floor(Date.now() / 1000);
     // Round up: the SDK stores whole seconds, and waking early would re-arm and busy-spin the alarm.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
@@ -1392,7 +1403,19 @@ export abstract class ActorAgent extends Agent<Env> {
     }
   }
 
-  /** One soonest-wins row per actor; returns the surviving row's id so a caller can release it. */
+  /** Nothing owed: a turn's arms go. */
+  private async restWhenIdle(): Promise<void> {
+    await this.wakeArms.release({
+      rows: async () => (await this.listSchedules())
+        .filter((row) => row.callback === TERMINAL_RETRY_CALLBACK && !this.runningWakeRows.has(row.id))
+        .map((row) => row.id),
+      idle: () => this._chatLoop?.pumping !== true && !this.owedWorkExists(),
+      cancel: async (id) => { await this.cancelSchedule(id); },
+      rearm: async () => { await this.scheduleTerminalRetry(Date.now()); },
+    });
+  }
+
+  /** One soonest-wins row per actor; returns its id. */
   protected scheduleTerminalRetry(atMs: number, pace?: WakePace): Promise<string> {
     return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs, pace);
   }
@@ -1425,6 +1448,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // so a pass that keeps answering unfinished settles at the ceiling, not a one-second loop.
     const sweepsUnfinished = this.maintenanceSweeps();
     const recoveryUnfinished = await this.maintenanceWork();
+    this.maintenanceUnfinished = sweepsUnfinished || recoveryUnfinished;
     await this.owedDeliveryWork();
     // Re-entered here because `maintenanceWork` is activation-scoped: later ticks in a warm
     // isolate never reach the job sweep, and a deferred job's wake would find nothing to recover.
@@ -1462,7 +1486,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected owedWorkExists(): boolean {
-    return this.owedUntimedWork() || this.nextOwedAt() !== null;
+    return this.maintenanceUnfinished || this.owedUntimedWork() || this.nextOwedAt() !== null;
   }
 
   /** While true, the tick keeps its lap-paced row. Base owns no rosters; subclasses override. */
@@ -1851,7 +1875,10 @@ export abstract class ActorAgent extends Agent<Env> {
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
-          quiet: () => { this.overviewChanged(); },
+          quiet: () => {
+            this.overviewChanged();
+            this.detachOwned(() => this.restWhenIdle());
+          },
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
             config: this.config,

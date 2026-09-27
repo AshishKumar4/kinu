@@ -16,6 +16,8 @@ export {
   type TerminalTransition, type TerminalDisposition, type TerminalTransitionDeps,
 } from './orchestrator/terminal-transition';
 
+export { WakeArms } from './orchestrator/wake-arms';
+
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
