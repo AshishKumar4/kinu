@@ -37,10 +37,10 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   let clears = 0;
   const connections = new Map<string, Connection>();
   const frames = new Map<string, string[]>();
-  /** Everything a socket was handed, in order: its own sends and each broadcast that did not exclude it. */
+  /** Everything a socket was handed, in order: its sends and broadcasts that included it. */
   const received = new Map<string, string[]>();
 
-  /** A socket the SDK's protocol helpers can drive; every other platform-socket member throws, so a reach past them names itself. */
+  /** Drivable by the SDK's protocol helpers; any other member throws, naming itself. */
   const connection = (id: string): Connection => {
     const socketFrames: string[] = [];
     const heard: string[] = [];
@@ -95,7 +95,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   };
 }
 
-/** A request to an idle loop, answered once its turn has run; tests drive the turn's events, then settle the landing last. */
+/** A request to an idle loop, answered once its turn has run; the landing settles last. */
 function openRequest(landing: SendLanding | HarnessRefusal = 'turn', loadHistory?: () => Promise<UIMessage[]>) {
   const settled = Promise.withResolvers<SendLanding>();
   const h = harness(settled.promise, loadHistory);

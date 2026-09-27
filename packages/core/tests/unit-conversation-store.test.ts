@@ -1,11 +1,13 @@
 /** Conversation store reads, seeded through the canonical writers. */
 
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import { answersForDrainTurns, conversationCount, conversationTurnPair, forkPointExists } from '../src/identity/conversation-store';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { SessionHistory } from '../src/session/history';
 import type { SessionTranscript } from '../src/session/transcript';
 import type { ActorHandle } from '../src/identity/actor-handle';
+import type { SqlExecutor, SqlValue } from '../src/types/primitives';
 import { createTestActor, createTestWorkspace, type TestWorkspace } from './helpers';
 import { present } from '@kinu.run/test-utils';
 
@@ -61,6 +63,39 @@ describe('conversationCount — the default chat alone', () => {
     await s.history.record(CHAT_SESSION_ID, { id: 'u3', parentId: 'a1', origin: 'input', message: { role: 'user', content: 'another ask' } });
 
     expect(conversationCount(s.sql, s.actor)).toBe(3);
+  });
+
+  // 2026-09-27: each ancestor re-scanned the chat (10k entries: 4.4 s).
+  test.each([true, false])('each ancestor is one primary-key read (head row: %p)', (withHead) => {
+    const s = setup();
+    const insert = s.db.prepare('INSERT INTO conversation_entries(actor_id,session_id,id,parent_id,role,recorded_at) VALUES(?,?,?,?,?,?)');
+
+    for (let i = 0; i < 3; i++) insert.run(s.actor.actorId, CHAT_SESSION_ID, `e${i}`, i === 0 ? null : `e${i - 1}`, 'user', i);
+
+    if (withHead) s.transcript.setHead('e2');
+
+    const asked: { strings: TemplateStringsArray; values: SqlValue[] }[] = [];
+
+    const recording: SqlExecutor = <T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+      asked.push({ strings, values });
+
+      return s.sql<T>(strings, ...values);
+    };
+
+    expect(conversationCount(recording, s.actor)).toBe(3);
+    const [count] = asked;
+
+    if (count === undefined) throw new Error('conversationCount asked nothing');
+
+    const explain = [`EXPLAIN QUERY PLAN ${count.strings[0] ?? ''}`, ...count.strings.slice(1)];
+
+    const plan = v.parse(v.array(v.object({ id: v.number(), parent: v.number(), detail: v.string() })),
+      s.sql(Object.assign(explain, { raw: explain }), ...count.values));
+
+    const step = plan.find((row) => row.detail === 'RECURSIVE STEP');
+
+    expect(plan.filter((row) => row.parent === step?.id && /^(SCAN|SEARCH) e\b/.test(row.detail)).map((row) => row.detail))
+      .toEqual([expect.stringMatching(/USING (INDEX|PRIMARY KEY|COVERING INDEX) \S+ \(actor_id=\? AND session_id=\? AND id=\?\)$/)]);
   });
 
   test('an empty workspace counts nothing rather than failing', () => {

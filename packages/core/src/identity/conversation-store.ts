@@ -28,8 +28,8 @@ export function conversationCount(sql: SqlExecutor, actor: ActorHandle): number 
       SELECT e.id, e.parent_id FROM conversation_entries e JOIN head ON e.id = head.id
         WHERE e.actor_id=${actor.actorId} AND e.session_id=${CHAT_SESSION_ID}
       UNION ALL
-      SELECT e.id, e.parent_id FROM conversation_entries e JOIN chain ON e.id = chain.parent_id
-        WHERE e.actor_id=${actor.actorId} AND e.session_id=${CHAT_SESSION_ID})
+      SELECT e.id, e.parent_id FROM chain CROSS JOIN conversation_entries e
+        ON e.actor_id=${actor.actorId} AND e.session_id=${CHAT_SESSION_ID} AND e.id = chain.parent_id)
     SELECT COUNT(*) AS c FROM chain`[0]?.c ?? 0;
 }
 
