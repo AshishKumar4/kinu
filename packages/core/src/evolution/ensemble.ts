@@ -415,7 +415,7 @@ export function renderEnsembleReport(report: EnsembleReport): string {
 
   const kappa = (estimate: KappaEstimate | null): string => estimate === null
     ? 'undefined at these marginals'
-    : `${estimate.value.toFixed(2)} (95% CI ${estimate.lo.toFixed(2)}-${estimate.hi.toFixed(2)})`;
+    : `${estimate.value.toFixed(2)} (95% CI ${estimate.lo.toFixed(2)} to ${estimate.hi.toFixed(2)})`;
 
   lines.push(
     `  Judges: ${report.members.map((m) => `${m.model}: kappa vs you ${kappa(m.kappa)}`).join('\n          ')}`,
@@ -468,7 +468,7 @@ function standInVerdict(
       met: pair !== null && pair.lo >= STAND_IN_THRESHOLDS.kappa,
       detail: pair === null
         ? 'kappa is undefined at these marginals'
-        : `${pair.value.toFixed(2)} (95% CI ${pair.lo.toFixed(2)}-${pair.hi.toFixed(2)})`,
+        : `${pair.value.toFixed(2)} (95% CI ${pair.lo.toFixed(2)} to ${pair.hi.toFixed(2)})`,
     },
     {
       name: 'the panel tracks you at least as well as the classifier does',

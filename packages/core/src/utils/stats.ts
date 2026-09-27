@@ -54,7 +54,7 @@ export function lossInterval(score: ScoreInterval): ScoreInterval {
   return { mean: 1 - score.mean, lo: 1 - score.hi, hi: 1 - score.lo, n: score.n };
 }
 
-/** `0.75 (95% CI 0.30–0.95)`: the one rendering of a reported score. */
+/** `0.75 (95% CI 0.30 to 0.95)`: the one rendering of a reported score. */
 export function formatScoreInterval(interval: ScoreInterval, digits = 2): string {
-  return `${interval.mean.toFixed(digits)} (95% CI ${interval.lo.toFixed(digits)}-${interval.hi.toFixed(digits)})`;
+  return `${interval.mean.toFixed(digits)} (95% CI ${interval.lo.toFixed(digits)} to ${interval.hi.toFixed(digits)})`;
 }

@@ -70,7 +70,7 @@ describe('scoreInterval / lossInterval / formatScoreInterval', () => {
   });
 
   test('one rendering, everywhere', () => {
-    expect(formatScoreInterval(wilsonInterval(3, 4))).toBe('0.75 (95% CI 0.30-0.95)');
-    expect(formatScoreInterval(wilsonInterval(3, 4), 3)).toBe('0.750 (95% CI 0.301-0.954)');
+    expect(formatScoreInterval(wilsonInterval(3, 4))).toBe('0.75 (95% CI 0.30 to 0.95)');
+    expect(formatScoreInterval(wilsonInterval(3, 4), 3)).toBe('0.750 (95% CI 0.301 to 0.954)');
   });
 });

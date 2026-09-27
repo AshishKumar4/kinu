@@ -175,7 +175,7 @@ export function alignmentConvergence(sql: SqlExecutor, actor: ActorHandle): Alig
 
 function formatRate(rate: RateInterval): string {
   return `${rate.per100.toFixed(1)} per 100 turns ` +
-    `(95% CI ${rate.lowPer100.toFixed(1)}-${rate.highPer100.toFixed(1)}${rate.reliable ? '' : ', too wide to read'})`;
+    `(95% CI ${rate.lowPer100.toFixed(1)} to ${rate.highPer100.toFixed(1)}${rate.reliable ? '' : ', too wide to read'})`;
 }
 
 export function renderAlignmentConvergence(k: AlignmentConvergence): string {

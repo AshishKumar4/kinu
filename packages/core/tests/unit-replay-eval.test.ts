@@ -212,7 +212,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     const replayEvents = events.filter((e) => e.type === 'replay_eval');
     expect(replayEvents).toHaveLength(1);
     // The loss is reported with the interval it deserves at two instances.
-    expect(replayEvents[0].message).toContain('loss 0.20 (95% CI 0.02-0.78)');
+    expect(replayEvents[0].message).toContain('loss 0.20 (95% CI 0.02 to 0.78)');
     expect(listReplayEvals(rt.storage.sql, rt.actor)).toHaveLength(1);
   });
 

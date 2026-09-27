@@ -469,7 +469,7 @@ const CAVEAT = [
 function kappaText(estimate: KappaEstimate | null): string {
   return estimate === null
     ? 'undefined at these marginals'
-    : `${estimate.value.toFixed(2)} (95% CI ${estimate.lo.toFixed(2)}-${estimate.hi.toFixed(2)}, n=${estimate.n})`;
+    : `${estimate.value.toFixed(2)} (95% CI ${estimate.lo.toFixed(2)} to ${estimate.hi.toFixed(2)}, n=${estimate.n})`;
 }
 
 function raterSection(score: RaterScore): string[] {

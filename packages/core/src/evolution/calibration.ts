@@ -525,7 +525,7 @@ function per100(value: number): string {
 
 function renderRate(rate: CorrectedRate): string {
   return `${per100(rate.corrected.mean)} per 100 turns ` +
-    `(95% CI ${per100(rate.corrected.lo)}-${per100(rate.corrected.hi)})` +
+    `(95% CI ${per100(rate.corrected.lo)} to ${per100(rate.corrected.hi)})` +
     `: the classifier said ${per100(rate.raw)}, off by ${rate.bias >= 0 ? '+' : ''}${per100(rate.bias)}`;
 }
 
@@ -559,7 +559,7 @@ export function renderCalibrationReport(report: CalibrationReport): string {
       `   Specificity: ${formatScoreInterval(report.accuracy.specificity)}`,
     report.kappa === null
       ? "  Cohen's kappa: undefined at these marginals"
-      : `  Cohen's kappa: ${report.kappa.value.toFixed(2)} (95% CI ${report.kappa.lo.toFixed(2)}-${report.kappa.hi.toFixed(2)})`,
+      : `  Cohen's kappa: ${report.kappa.value.toFixed(2)} (95% CI ${report.kappa.lo.toFixed(2)} to ${report.kappa.hi.toFixed(2)})`,
     `  Corrected correction rate: ${renderRate(report.overall)}`,
   );
 
