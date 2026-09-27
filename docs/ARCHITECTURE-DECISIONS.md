@@ -454,6 +454,66 @@ Hypothesis until production shows it: `alarm exceededWallTime` stops for
 delegated turns once this shape is deployed. miniflare enforces no alarm wall,
 so only Workers Logs can confirm it.
 
+D8. An agent that needs memory of its own runs in a Worker Loader isolate, not
+in an Agents SDK sub-agent. `this.subAgent(Cls, name)` builds its facet from
+`ctx.exports`, and that facet shares the parent's isolate and its one 128 MB
+limit. Decided 2026-09-27 on the measurements below. The hosting shape of the
+subagent design (per-agent loader isolate, where each agent's durable state
+lives) is the owner's decision on these numbers and is not settled here.
+Measured 2026-09-27 on a throwaway Worker built from main 7dd73e1ac9 with the
+whole product bundle (6.3 MB entry, 180 modules, 5.7 MB gzip, startup 245 ms)
+plus probe classes, on the production Workers account; deleted after the run.
+Heap was read as headroom: the largest held allocation that survived.
+- Sub-agent facet: its module-scope boot id equals the parent's. With 90 MB
+  held it lived; at 95 MB the platform answered "Durable Object's isolate
+  exceeded its memory limit and was reset", and the parent and every sibling
+  came back with a new boot id. The parent alone: 90 MB lived, 95 MB reset. So
+  the idle object with the full bundle holds about 33-38 MB of the 128 MB, and a
+  facet adds no budget. 30 facets on one object shared one boot id. First call
+  to a new facet 72 ms p50 (68-107, n=5); restart after `abortSubAgent`
+  10-13 ms. Facet to parent through `parentAgent`, p50 over three runs: RPC
+  no-op 2-5 ms, `stat` 2-5 ms, 4 KB `readFile` 2-5 ms, 1 MB `readFile` 4-11 ms,
+  `echo hi` through the hosted workspace's named shell 2-7 ms. DelegationTree's
+  104 MB parent beside a 104 MB facet on the same day was a loader facet.
+- Loader facet, one loader id per agent, full bundle: its own boot id. 90 MB
+  lived; 95, 100 and 110 MB reset that isolate only, and the parent kept its
+  boot id. Idle about 33-38 MB. Cold start 1,460 ms p50 (1,321-1,755, n=5;
+  3,201 ms for the first, which also fetched the modules). Facets on one shared
+  loader id share its isolate (34 ms for each after the first). Facet to parent
+  through a loopback `WorkerEntrypoint`, p50: no-op 7-10 ms, `stat` 7-11 ms,
+  4 KB 9-10 ms, 1 MB 11-12 ms, exec 10-11 ms.
+- Loader facet, agent-only bundle (the core barrel and `ai`, 3.3 MB minified,
+  1.0 MB gzip): cold start 360 ms p50 (273-460, n=6) one at a time; ten started
+  at once took 4.1-6.5 s together. Idle about 13-18 MB: 110 MB lived, 115 MB
+  reset. `stat` round trip 7 ms p50, 10 ms p90.
+- The platform caps one incoming request at 10 concurrent dynamic-worker
+  invocations ("Dynamic worker concurrency limit exceeded: each request may
+  have up to 10"). The eleventh is refused at once, not queued: 15 of 25
+  parallel calls failed. Three concurrent requests to one object ran 10 each.
+  A call that returns while its facet keeps working (`ctx.waitUntil`) frees its
+  slot: after 10 such calls, 10 concurrent calls and 25 new isolates one after
+  another in the same request all succeeded, and the 10 background tasks
+  finished (20 s and 60 s waits, 10 of 10 each). Starting 25 of them at once
+  still hit the cap, since a slot is held through the cold start.
+- Background work does not keep the parent alive. Three 150 s background waits
+  in loader facets, with no request reaching the parent meanwhile: 0 of 3
+  finished, and the parent's next call was a cold start (952 ms). The same
+  three under the parent's SDK `keepAlive()`: 3 of 3 finished.
+- 30 live isolates on one object: agent-only bundle, 30 x 60 MB and 30 x 80 MB
+  held, all 30 still held after 30 s. Full bundle, 30 x 80 MB: after 20 s, 20 of
+  the 30 isolates had been replaced (held 0); the parent was untouched.
+- Alarms: on one object, two sub-agent SDK schedules (10 s, 30 s) and two
+  instants from a `LifecycleCapability`'s `getNextAlarm` (20 s, 40 s) all fired
+  in order. The SDK ones fired up to 0.6 s early (whole-second times), the
+  capability's 1 ms late; the alarm moved to the next source each time and was
+  null after the last.
+- Storage per turn (workerd, complexity gate, "orchestrator, a long turn after
+  twenty long answers", 7dd73e1ac9): 5,087 SQL statements, of which 2,035 name
+  `sqlite_master`, 1,023 `workspace_actors` and 1,018 `workspace_identity`;
+  about 1,000 touch the turn's own tables. At 5-10 ms a hop, storage that stays
+  in the workspace object and is reached one statement at a time would cost a
+  loader-hosted turn 5-50 s.
+
 
 ## Deploy ladder
 
