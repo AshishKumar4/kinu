@@ -45,9 +45,10 @@ export const STEP_LIVE_BOUND_BYTES = 5_500_000;
 export const HEADS_RETAINED_BOUND_BYTES = 1_500_000;
 
 /** Measured 2026-09-27 at {@link LONG_TURN}, after the setup, step and heads above in the same isolate: 104-116 MB
- *  used over 3 runs on main 20cacf3423, 99-115 MB over 8 once no step keeps its request body. The collector decides
- *  when garbage goes, hence the spread; 120 MB leaves 8 MB under the 128 MB isolate. */
-export const LONG_TURN_PEAK_BOUND_BYTES = 120_000_000;
+ *  used over 3 runs on main 20cacf3423, 99-117 MB over 10 once no step keeps its request body. The collector decides
+ *  when garbage goes, hence the spread; this row trips only as the peak nears the 128 MB isolate, and the growth row
+ *  below is the one that pins what a turn keeps. */
+export const LONG_TURN_PEAK_BOUND_BYTES = 124_000_000;
 
 /** Measured 2026-09-27 at {@link LONG_TURN}: 7.7 MB on main 20cacf3423, where the AI SDK's record of every step
  *  kept its request body, a full copy of the message list; 3.6-4.0 MB over 10 runs once the body stays off the record. */
