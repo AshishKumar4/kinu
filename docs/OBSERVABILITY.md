@@ -11,7 +11,10 @@ spend. `AGENTS.md` § Errors and Logs points here. The source of truth is
 | `tolerate` / `tolerateAsync` / `classify`: the tolerable-failure signatures | built | `obs/expected-failure.ts` |
 | `Tracer` / `ScopedSpan`: the span interface | built | `obs/tracer.ts` |
 | `AgentTracing` / `TracedInvocation`: the scoping rules | built, wired at two invocation sites and every actor turn | `obs/agent-tracing.ts`, `cf-backend/src/obs/cf-tracer.ts` |
-| `ErrorCode` / `KinuError` / `toKinuError` | built | `obs/error.ts` |
+| `ErrorCode` / `KinuError` / `toKinuError` | built; `KinuError` is an Effect `Data.TaggedError` since 2026-09-23 | `obs/error.ts` |
+| `attempt` / `settle` / `toWire`: the Effect boundary | built 2026-09-23; first caller `answerParentRpc`, the answer both hosts give a fork | `obs/effect.ts` |
+| `gate:error-model`: legacy failure mechanisms per file, shrink-only | built, locked 2026-09-23 | `scripts/error-model.ts` |
+| `gate:effect-diagnostics`: the pinned `@effect/tsgo` over every project that imports `effect` | built, with a planted floating effect as its red half | `scripts/effect-diagnostics.ts` |
 | `renderCauseChain` / `renderThrownChain`: the chain for an unnarrowed value | built; the count of chain-dropping copies it replaced is not measured | `obs/error.ts` |
 | `CommandResult` / `commandResult`: command output or a structured refusal | built, used by all five executors | `execution/exec-result.ts` |
 | `ToolOutcome`: the recorded outcome of a native tool invocation | built | `core/src/types/tool-outcome.ts`, `core/src/tools/outcome.ts` |
@@ -522,6 +525,68 @@ nest under `fields`, so none can overwrite an envelope key.
 crosses namespace boundaries, and native invocations use the SDK's thrown-error
 channel. `KinuError` keeps the native `cause` and any process exit metadata the
 producer observed.
+
+## The Effect channel
+
+Owner decision, 2026-09-23: every failure path moves to Effect 4's typed
+failure channel, one slice at a time, with `KinuError` as its only typed
+failure. `effect` is pinned exactly to 4.0.0-rc.117, because 4.0.0 is still a
+release candidate.
+
+A function that can fail returns `Effect<A, KinuError>`. A defect is anything
+else thrown or died; readers render it as reason `null`, as they do today. The
+boundary is `obs/effect.ts`:
+
+| Function | What it does |
+| --- | --- |
+| `attempt({ doing, otherwise }, run)` | A Promise-returning call as an effect. A rejection becomes `toKinuError`, so it keeps its cause and its class. |
+| `settle(effect, { signal, interrupted })` | The only runner. It resolves the value, or rejects with the `KinuError` or the defect unchanged. An abort interrupts the run and rejects with `cancelled`. |
+| `toWire(effect, encode)` | An outcome as a `Wire<T, F>` union, the value RPC can carry. |
+
+`settle` runs on a microtask scheduler. Effect's default scheduler yields to a
+macrotask every 2,048 steps and on every fork. Measured 2026-09-23 under workerd
+(miniflare 5.20260903.0-alpha, compatibility dates 2025-12-01 and 2026-04-21):
+a 5,000-step effect on the default scheduler let 20 of 20 concurrent RPCs into
+its Durable Object mid-run, in 5 runs of 5; on the microtask scheduler, 0.
+`cf-backend/tests/workerd/effect-atomicity.test.ts` holds both halves.
+
+Outcomes cross RPC as values because nothing else survives. A returned `Exit`
+fails structured clone (`DataCloneError`). A thrown `KinuError` arrives as a
+plain `Error` named in its message, with no `code`, at compatibility date
+2025-12-01, the date `wrangler.jsonc` sets; at 2026-04-21 its `name`, `code` and
+`cause` survive and `instanceof` still fails. Same probe, same date.
+`answerParentRpc` (`execution/parent.ts`) is the first caller: the Durable
+Object over RPC and the CLI in process both answer a fork's file and shell
+calls through it, so the parent's errno and cause chain reach the fork the same
+way from either host.
+
+`JSON.stringify` of a `KinuError` writes `code`, `name`, `execution` and a
+subclass's own fields, as before the change. `Data.Error`'s own `toJSON` also
+writes `message` and `cause`, and a cause chain may carry a credential, so
+`KinuError` overrides it; `core/tests/unit-obs-effect.test.ts` pins that.
+
+Effect is the failure channel only. Effect Schema, Layer, Context, Effect
+logging, tracing and timers stay out, each because this repository already has
+one system for it: valibot, `AgentRuntime`, `Logger`, `Tracer`, and no elapsed
+deadlines. A pending Effect timer is a `setTimeout`, which also keeps a Durable
+Object from hibernating.
+
+Four checks hold the model:
+
+- `anti-slop/effect-run-in-adapter`: `Effect.run*`, `forkDetach`,
+  `ManagedRuntime` and `Scheduler` only in a declared adapter.
+- `anti-slop/no-effect-swallow`: no `ignore`, `orElseSucceed` or `option`, and
+  no catch-all handler that never reads what it caught. `catchTag` and
+  `catchIf` name what they tolerate and pass.
+- `anti-slop/effect-restricted-api`: the owner's split above.
+- `gate:effect-diagnostics`: the pinned `@effect/tsgo` 0.45.0 over every
+  typechecked project that imports `effect`. A floating effect compiles and
+  runs nothing; its planted copy must be reported or the gate is red.
+
+`gate:error-model` counts, per product file, what the migration removes:
+`throw`, `catch`, promise rejections, `{ ok }` and `{ success }` literals and
+types, and `Error` subclasses. A file's number only falls, a new file starts
+at zero, and `settle`'s own file is declared as the boundary.
 
 ## Invocation outcomes
 
