@@ -1,44 +1,23 @@
-/**
- * The live-app e2e suite: the real product in a real browser, before publish.
- *
- * The suite boots the local dev server itself (vite dev = real Worker in
- * workerd, real Durable Objects, real client) through live-app-harness, plus a
- * local scripted model the workspaces are configured to use, so the visual rows
- * have live content to render. The rows a deployment must also pass are the
- * product flows (`scripts/product-flows.ts`), which run against both origins.
- *
- * SCOPE. This suite owns only what a rendered document can prove: geometry,
- * node identity, and what the DOM shows after a real interaction. The
- * behavioural half of the old draft — a subagent chat opening and answering,
- * text rendering before the tool card it preceded — is RPC and data shape,
- * provable inside the workerd pool without a DOM, and lives there (the
- * cloudflare-os in-pool session harness); it is deliberately NOT here.
- *
- * Every assertion is geometry, identity or counts — never a copied sentence,
- * never a source-text match.
- */
+/** Real Worker, client and browser; scripted model. The combined row exceeded 480 s alone on 2026-09-26. */
 
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hostedActorSocketPath, TurnClaimFrameSchema } from '@kinu.run/core';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
-import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
   CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, NEW_AGENT, OPEN_NAMES, recordDeadEnds,
-  openInspector, painted, pressUntil, settled, typeIntoComposer, until, waitOn,
+  frameLedger, openInspector, painted, pressUntil, recordRenderTasks, rendered, settled, settledAfter, typeIntoComposer, until, waitOn,
   type ControlAttempt,
 } from './product-flows';
-import { rowVerdicts } from './row-verdicts';
+import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import {
-  KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_SILENCE_MS, PACED_TURN_ANSWER,
-  ANSWERED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLATE_TITLE,
+  KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER,
+  ANSWERED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK,
   SLEPT_TURN_ASK, TOLD_BACK_ASK, WATCHED_SLEPT_TURN_ASK, toldBackTurn,
   heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
   startScriptedModel, type HeldCall,
@@ -59,12 +38,7 @@ async function shoot(page: Page, name: string): Promise<string> {
   return path;
 }
 
-/** This run's own workspace suffix, and the mark the state row reads a roster
- *  by. A deployment keeps its Durable Objects between runs, so a fixed name
- *  would have each comprehensive row reading the previous run's transcript,
- *  cards and journal as if they were the product's first state (measured
- *  2026-09-17 on the local server, back when it inherited the checkout's
- *  state too: two runs put both runs' sent messages in one root transcript). */
+/** Fixed names mixed two runs' durable transcripts on the local server, 2026-09-17. */
 const RUN_ID = crypto.randomUUID().slice(0, 8);
 
 async function openWorkspace(newPage: LiveApp['newPage'], origin: string, workspace: string): Promise<Page> {
@@ -73,15 +47,12 @@ async function openWorkspace(newPage: LiveApp['newPage'], origin: string, worksp
   await page.setViewport(DESKTOP);
   await recordDeadEnds(page);
 
-  // 'load', not 'networkidle0': the app holds its event socket open from
-  // first paint, so there is never a zero-connection window to wait for.
   await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
   await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
 
   return page;
 }
 
-/** Click the control; an absent control throws, and that is the finding. */
 const ClickScripts = {
   lastAgentTab: `(() => {
     // Tabs by their own hook, not by element: the OPEN tab is a div (it hosts
@@ -319,7 +290,7 @@ interface KeptTabVerdict {
   readonly workPresence: readonly boolean[];
 }
 
-interface TierVerdicts {
+export interface TierVerdicts {
   bootFailure: string | null;
   liveIndicator: LiveIndicatorVerdict | null;
   openedMidTurn: OpenedMidTurnVerdict | null;
@@ -346,11 +317,6 @@ const StripGeometrySchema = v.object({
   chatRuleBottom: v.number(), activeBottom: v.number(), mode: v.string(),
 });
 
-const observed: TierVerdicts = {
-  liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
-  bootFailure: null, panel: null, planTabs: null, geometry: null,
-  controls: null, stamped: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, state: null,
-};
 
 /** The lane the rail occupies, measured as the space left of the content
  *  column: `main`'s own left edge in the shell's flex row. Read this way on
@@ -409,7 +375,7 @@ async function sendInChat(page: Page, text: string): Promise<SendSite> {
 }
 
 /** A collapsed rail: an icon strip at most. Its open lane is 240px (`w-60`). */
-const RAIL_SHUT_PX = 64;
+export const RAIL_SHUT_PX = 64;
 
 const SHUT_NAMES = 'hide|collapse|close';
 
@@ -959,8 +925,7 @@ const ChatResponseSchema = v.looseObject({
  *  request's turn has closed, and rejects when the turn fails or the words land
  *  in a turn already running. Only that request's frames count: the socket also
  *  carries every other request's, a resent or a probing one included. The page
- *  asks that read from the effect that follows the turn's last render and every
- *  5 s after (use-kinu `refreshLiveData`), so it comes whatever the turn did,
+ *  asks that read from the effect that follows the turn's last render (`refreshLiveData`),
  *  after the page drew it, and it is final for that turn: a row waits on it,
  *  never on the value it hopes for. */
 interface TurnWatch {
@@ -1119,17 +1084,6 @@ async function watchTurns(page: Page): Promise<TurnWatch> {
   };
 }
 
-/** Counts, on `window`, every presence read the page asks from install on: the page's own refresh cadence. */
-const COUNT_PRESENCE_ASKS = `(() => {
-  const asks = new RegExp('"method":"(${[...PRESENCE_READS].join('|')})"');
-  const send = WebSocket.prototype.send;
-  window.__presenceAsks = 0;
-  WebSocket.prototype.send = function (data) {
-    if (typeof data === 'string' && asks.test(data)) window.__presenceAsks += 1;
-    return send.call(this, data);
-  };
-})()`;
-
 /** The header and the composer disagree: one says a turn runs and the other says nothing does. */
 const disagrees = (sample: v.InferOutput<typeof LiveSampleSchema>): boolean =>
   (sample.stop && sample.task === 'idle') || (!sample.stop && sample.task === 'working');
@@ -1146,10 +1100,12 @@ async function measureOpenedMidTurn(
 
   const page = await newPage();
   const turns = await watchTurns(page);
+  const reads = await frameLedger(page);
 
   try {
     await page.setViewport(DESKTOP);
     await recordDeadEnds(page);
+    await recordRenderTasks(page);
     await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
     await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
 
@@ -1163,23 +1119,19 @@ async function measureOpenedMidTurn(
     if (outcome !== 'held') throw new Error("the workspace's first turn closed before it reached its model");
 
     // Loaded again now that the turn is admitted and waiting on its model: the page a new workspace opens on.
+    reads.restart();
     await page.reload({ waitUntil: 'load' });
     await until(page, 'the workspace page, reloaded', `document.querySelector('textarea') !== null`);
     await until(page, "the header's task state", `document.querySelector(${JSON.stringify(TASK_STATE)}) !== null`);
     await page.evaluate(INSTALL_LIVE_SAMPLER);
-    await page.evaluate(COUNT_PRESENCE_ASKS);
-    await until(page, "the reloaded page's first presence read", 'window.__presenceAsks > 0');
-    await painted(page);
+    await waitOn(page, 'the reloaded page\'s snapshot', settledAfter(page, reads, 'getWorkspaceSnapshot'));
+    await rendered(page);
 
     const held = v.parse(v.nullable(LiveSampleSchema), await page.evaluate(LAST_LIVE_SAMPLE));
 
     firstTurn.release();
     await waitOn(page, "the workspace's first turn to close", closed);
-
-    const asked = v.parse(v.number(), await page.evaluate('window.__presenceAsks'));
-
-    await until(page, "the page's next presence read after the turn closed", `window.__presenceAsks > ${String(asked)}`);
-    await painted(page);
+    await rendered(page);
 
     const samples = v.parse(v.array(LiveSampleSchema), await page.evaluate(READ_LIVE_SAMPLES));
     const last = samples.at(-1);
@@ -1195,6 +1147,7 @@ async function measureOpenedMidTurn(
     };
   } finally {
     firstTurn.release();
+    await reads.stop();
     await turns.stop();
     await page.close();
   }
@@ -1245,18 +1198,18 @@ const ANSWER_BLOCKS = `[...document.querySelectorAll('#chat .prose-chat, #chat [
     ? 'T:' + (node.querySelector('strong')?.textContent ?? '').trim()
     : 'P:' + (node.textContent ?? '').trim().slice(0, 40))`;
 
-/** A workspace's page that records its sockets and counts its presence reads, once its first turn has ended. */
+/** A workspace's page that records its sockets and queued render work, once its first turn has ended. */
 async function openRecorded(newPage: LiveApp['newPage'], origin: string, workspace: string): Promise<Page> {
   const page = await newPage();
 
   await page.setViewport(DESKTOP);
   await recordDeadEnds(page);
   await page.evaluateOnNewDocument(RECORD_SOCKETS);
+  await recordRenderTasks(page);
   await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
   await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
   await until(page, "the workspace's first turn to end", FIRST_TURN_ENDED);
   await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
-  await page.evaluate(COUNT_PRESENCE_ASKS);
 
   return page;
 }
@@ -1283,12 +1236,7 @@ async function answerAfterReplay(page: Page): Promise<string[]> {
   if (v.parse(v.number(), await page.evaluate(DROP_SOCKETS)) === 0) throw new Error('the page held no open socket to drop');
 
   await until(page, 'the replay after the page reconnected', `window.__replaysComplete > ${String(replays)}`);
-
-  // The replay is batched and throttled into the thread; the page's next presence read comes after it is drawn.
-  const asked = v.parse(v.number(), await page.evaluate('window.__presenceAsks'));
-
-  await until(page, "the page's next presence read after the replay", `window.__presenceAsks > ${String(asked)}`);
-  await painted(page);
+  await rendered(page);
 
   return answerOf(page);
 }
@@ -1577,6 +1525,8 @@ const FROM_BOTTOM = `(() => { const el = ${CHAT_SCROLLER}; return el === undefin
 
 const SCROLL_METRICS = `(() => { const el = ${CHAT_SCROLLER}; return el === undefined ? '' : String(el.scrollHeight) + ':' + String(el.scrollTop); })()`;
 
+const CHAT_ROWS = `(() => { const el = ${CHAT_SCROLLER}; return el === undefined ? 0 : [...el.children].filter(row => !row.hasAttribute('data-scroll-edge')).length; })()`;
+
 /** History pages asked for between two reads, the second taken once the view has stopped growing: a
  *  runaway walk keeps it growing, so it cannot read settled early. */
 async function pagesUntilSettled(page: Page, counter: RpcCounter): Promise<number> {
@@ -1600,6 +1550,31 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
 
   const page = await openWorkspace(newPage, origin, long);
   const counter = await countRpc(page);
+  const reads = await frameLedger(page);
+
+  const fetchOlderPage = async (): Promise<void> => {
+    const before = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
+    const rows = v.parse(v.number(), await page.evaluate(CHAT_ROWS));
+
+    const box = v.parse(v.object({ x: v.number(), y: v.number(), height: v.number() }), await page.evaluate(`(() => {
+      const el = ${CHAT_SCROLLER};
+      if (el === undefined) return null;
+      const rect = el.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, height: el.clientHeight };
+    })()`));
+
+    reads.restart();
+    await page.mouse.move(box.x, box.y);
+
+    while ((counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) === before) {
+      await page.mouse.wheel({ deltaY: -box.height / 2 });
+      await painted(page);
+    }
+
+    await waitOn(page, 'the history page response', settledAfter(page, reads, HISTORY_PAGE_METHOD));
+    await until(page, 'the older messages to render', `${CHAT_ROWS} > ${String(rows)}`);
+    await settled(page, SCROLL_METRICS);
+  };
 
   try {
     await until(page, 'the newest turn to render', `(document.querySelector('#chat')?.textContent ?? '').includes('Long chat turn ${String(LONG_CHAT_TURNS)}.')`);
@@ -1613,17 +1588,11 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
 
     const beforeTop = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
 
-    await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = 0; })()`);
-    await until(page, 'the older page to land', `(${CHAT_SCROLLER})?.scrollTop > 0`);
-    await settled(page, SCROLL_METRICS);
+    await fetchOlderPage();
 
     const pagesOnScrollToTop = (counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) - beforeTop;
 
-    // A second page further up, then a spot just above the live edge: an offset from the top the reopened chat,
-    // which holds only its newest window, is too short to reach.
-    await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = 0; })()`);
-    await until(page, 'the second older page to land', `(${CHAT_SCROLLER})?.scrollTop > 0`);
-    await settled(page, SCROLL_METRICS);
+    if (!(await page.evaluate(`[...document.querySelectorAll('#chat [data-scroll-edge]')].some(edge => edge.textContent?.includes('Beginning of the conversation') === true)`))) await fetchOlderPage();
     await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = el.scrollHeight - el.clientHeight - 600; })()`);
     await painted(page);
     await page.evaluate(`document.querySelector('a[href="/workspace/${other}"]')?.click()`);
@@ -1637,6 +1606,7 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
     return { pagesIdleAfterOpen, openFromBottom, pagesOnScrollToTop, pagesIdleAfterReturn, returnFromBottom };
   } finally {
     await counter.stop();
+    await reads.stop();
     await page.close();
   }
 }
@@ -1737,314 +1707,98 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
   };
 }
 
-const { attempt, verdictOf, broken } = rowVerdicts('live-app-tier', () => observed.bootFailure);
+/** A row a file can run, by the name its log line carries, in the order the suite ran them. */
+export const LIVE_ROWS = [
+  'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
+  'panel', 'plan-tabs', 'geometry', 'controls', 'stamped', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought',
+  'state',
+] as const;
 
-async function run(): Promise<void> {
-  // The script answers the live-indicator row's paced turn, the paced first
-  // turn of the mid-turn row, the kept-tab row's two asks, every row's
-  // throwaway turn with prose and the walkthrough's turns with the plan and
-  // the slate — one server, decided per request.
-  const firstTurn = heldCall();
-  const reconnectHeld = heldCall();
-  const observedHeld = heldCall();
-  const sleptHeld = heldCall();
-  const answeredHeld = heldCall();
-  const watchedSleptHeld = heldCall();
-  const toldBack = Promise.withResolvers<ScriptedRequest>();
+export type LiveRow = (typeof LIVE_ROWS)[number];
 
-  const model = await startScriptedModel((request) => toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
-    ?? pacedFirstTurn(request, firstTurn) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
-    ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
-    ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
-    ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planWalkthrough(request));
-
-  await withLiveApp(async (app) => {
-    const { newPage, origin } = app;
-
-    await registerScriptedModel(origin, model.baseURL);
-    observed.liveIndicator = await attempt('live-indicator', () => measureLiveIndicator(newPage, origin));
-    observed.openedMidTurn = await attempt('opened-mid-turn', () => measureOpenedMidTurn(newPage, origin, firstTurn));
-    observed.reconnect = await attempt('reconnect', () => measureReconnect(newPage, origin, reconnectHeld));
-    observed.observedReconnect = await attempt('observed-reconnect', () => measureObservedReconnect(newPage, origin, observedHeld));
-    observed.slept = await attempt('slept', () => measureSlept(newPage, origin, sleptHeld));
-    observed.watchedSlept = await attempt('watched-slept', () => measureWatchedSlept(newPage, origin, watchedSleptHeld));
-    observed.answered = await attempt('answered', () => measureAnswered(newPage, origin, answeredHeld, toldBack.promise));
-    observed.panel = await attempt('panel', () => measurePanel(newPage, origin));
-    observed.planTabs = await attempt('plan-tabs', () => measurePlanTabs(newPage, origin));
-    observed.geometry = await attempt('geometry', () => measureGeometry(newPage, origin));
-    observed.controls = await attempt('controls', () => measureControls(newPage, origin));
-    observed.stamped = await attempt('stamped', () => measureStampedCard(newPage, origin));
-    observed.walkthrough = await attempt('walkthrough', () => measureWalkthrough(newPage, origin));
-    observed.keptTab = await attempt('kept-tab', () => measureKeptTab(newPage, origin));
-    observed.chatScroll = await attempt('chat-scroll', () => measureChatScroll(newPage, origin));
-    observed.midThought = await attempt('mid-thought', () => measureMidThought(newPage, origin));
-    observed.state = await attempt('state', () => measureState(app));
-  });
-
-  await model.stop();
+/** What a row file holds: every verdict (null until its row ran), the reader that turns a missing one into the
+ *  failure it names, and the boot that runs the file's rows before its first test. */
+export interface LiveRows extends Pick<RowVerdicts, 'verdictOf'> {
+  readonly observed: TierVerdicts;
+  readonly boot: () => Promise<void>;
 }
 
-beforeAll(async () => {
-  try {
-    await run();
-  } catch (cause) {
-    observed.bootFailure = renderThrownChain({ cause });
+/**
+ * The rows `rows` names, run in `LIVE_ROWS` order against one dev server and one scripted model, as `suite`. The
+ * script answers every row's turns, whichever run (the live-indicator row's paced turn, the mid-turn row's paced
+ * first turn, the kept-tab row's two asks, every row's throwaway turn with prose, the walkthrough's turns with the
+ * plan and the slate): one server, decided per request.
+ */
+export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
+  const observed: TierVerdicts = {
+    liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
+    bootFailure: null, panel: null, planTabs: null, geometry: null,
+    controls: null, stamped: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, state: null,
+  };
+
+  const { attempt, verdictOf, broken } = rowVerdicts(suite, () => observed.bootFailure);
+
+  async function run(): Promise<void> {
+    const firstTurn = heldCall();
+    const reconnectHeld = heldCall();
+    const observedHeld = heldCall();
+    const sleptHeld = heldCall();
+    const answeredHeld = heldCall();
+    const watchedSleptHeld = heldCall();
+    const toldBack = Promise.withResolvers<ScriptedRequest>();
+
+    const model = await startScriptedModel((request) => toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
+      ?? pacedFirstTurn(request, firstTurn) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
+      ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
+      ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
+      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planWalkthrough(request));
+
+    await withLiveApp(async (app) => {
+      const { newPage, origin } = app;
+
+      const measures: Record<LiveRow, () => Promise<void>> = {
+        'live-indicator': async () => { observed.liveIndicator = await attempt('live-indicator', () => measureLiveIndicator(newPage, origin)); },
+        'opened-mid-turn': async () => { observed.openedMidTurn = await attempt('opened-mid-turn', () => measureOpenedMidTurn(newPage, origin, firstTurn)); },
+        'reconnect': async () => { observed.reconnect = await attempt('reconnect', () => measureReconnect(newPage, origin, reconnectHeld)); },
+        'observed-reconnect': async () => {
+          observed.observedReconnect = await attempt('observed-reconnect', () => measureObservedReconnect(newPage, origin, observedHeld));
+        },
+        'slept': async () => { observed.slept = await attempt('slept', () => measureSlept(newPage, origin, sleptHeld)); },
+        'watched-slept': async () => { observed.watchedSlept = await attempt('watched-slept', () => measureWatchedSlept(newPage, origin, watchedSleptHeld)); },
+        'answered': async () => { observed.answered = await attempt('answered', () => measureAnswered(newPage, origin, answeredHeld, toldBack.promise)); },
+        'panel': async () => { observed.panel = await attempt('panel', () => measurePanel(newPage, origin)); },
+        'plan-tabs': async () => { observed.planTabs = await attempt('plan-tabs', () => measurePlanTabs(newPage, origin)); },
+        'geometry': async () => { observed.geometry = await attempt('geometry', () => measureGeometry(newPage, origin)); },
+        'controls': async () => { observed.controls = await attempt('controls', () => measureControls(newPage, origin)); },
+        'stamped': async () => { observed.stamped = await attempt('stamped', () => measureStampedCard(newPage, origin)); },
+        'walkthrough': async () => { observed.walkthrough = await attempt('walkthrough', () => measureWalkthrough(newPage, origin)); },
+        'kept-tab': async () => { observed.keptTab = await attempt('kept-tab', () => measureKeptTab(newPage, origin)); },
+        'chat-scroll': async () => { observed.chatScroll = await attempt('chat-scroll', () => measureChatScroll(newPage, origin)); },
+        'mid-thought': async () => { observed.midThought = await attempt('mid-thought', () => measureMidThought(newPage, origin)); },
+        'state': async () => { observed.state = await attempt('state', () => measureState(app)); },
+      };
+
+      await registerScriptedModel(origin, model.baseURL);
+
+      for (const row of LIVE_ROWS.filter((name) => rows.includes(name))) await measures[row]();
+    });
+
+    await model.stop();
   }
 
-  // Every measured number into the run's own log, the ones no assertion reads
-  // included: a red is read with its figures, and a green prints what it saw.
-  process.stderr.write(`live-app-tier verdicts: ${JSON.stringify({ observed, broke: broken() }, null, 2)}\n`);
-});
+  return {
+    observed,
+    verdictOf,
+    boot: async () => {
+      try {
+        await run();
+      } catch (cause) {
+        observed.bootFailure = renderThrownChain({ cause });
+      }
 
-afterAll(() => {
-  if (observed.bootFailure !== null) throw new Error(observed.bootFailure);
-});
-
-describe('the right panel keeps its Work, Files and Env state when the chat tab changes', () => {
-  test('the Files surface DOM node identity and scroll position survive', () => {
-    const panel = verdictOf(observed.panel, 'panel');
-
-    expect(panel.nodeSurvives).toBe(true);
-    expect(panel.scrollSurvives).toBe(true);
-  });
-
-  test('no refetch of the workspace-scoped reads occurs on either switch', () => {
-    const panel = verdictOf(observed.panel, 'panel');
-
-    expect(panel.workspaceReadsOnSwitch).toBe(0);
-    expect(panel.workspaceReadsOnBack).toBe(0);
-  });
-
-  test("the '+' tab's own actor socket answered its pane", () => {
-    expect(verdictOf(observed.panel, 'panel').agentSocketFrames).toBeGreaterThan(0);
-  });
-});
-
-describe('a long chat pages older history only when the reader scrolls for it', () => {
-  test('it opens at its newest message and asks for no older page while the reader sits still', () => {
-    const scroll = verdictOf(observed.chatScroll, 'chat-scroll');
-
-    expect(scroll.openFromBottom).toBeLessThan(60);
-    expect(scroll.pagesIdleAfterOpen).toBe(0);
-  });
-
-  test('a scroll to the top asks for exactly one page', () => {
-    expect(verdictOf(observed.chatScroll, 'chat-scroll').pagesOnScrollToTop).toBe(1);
-  });
-
-  test('a return to a spot the reopened chat does not hold opens at the newest message, fetching nothing', () => {
-    const scroll = verdictOf(observed.chatScroll, 'chat-scroll');
-
-    expect(scroll.pagesIdleAfterReturn).toBe(0);
-    expect(scroll.returnFromBottom).toBeLessThan(60);
-  });
-});
-
-describe('a page that joins a reasoning turn part-way reads it whole', () => {
-  test('after its socket drops mid-thought', () => {
-    expect(verdictOf(observed.midThought, 'mid-thought').reconnectedErrors).toEqual([]);
-  });
-
-  test('when it opens on a slow link mid-thought', () => {
-    expect(verdictOf(observed.midThought, 'mid-thought').joinedErrors).toEqual([]);
-  });
-
-  test('a stream-error report the page posts is accepted, not refused in silence', () => {
-    const thought = verdictOf(observed.midThought, 'mid-thought');
-
-    expect(thought.probe).toMatch(/^202 /u);
-    expect(thought.reports.filter((report) => report.status >= 300)).toEqual([]);
-  });
-});
-
-describe('a running turn draws exactly one live state', () => {
-  test("the pane was sampled through the paced turn's four silences", () => {
-    expect(verdictOf(observed.liveIndicator, 'live-indicator').runningMs).toBeGreaterThanOrEqual(4 * PACED_SILENCE_MS);
-  });
-
-  test('Stop never stands over a pane that draws nothing happening', () => {
-    expect(verdictOf(observed.liveIndicator, 'live-indicator').blank).toBe(0);
-  });
-
-  test('Thinking never stands beside a part that draws itself live', () => {
-    expect(verdictOf(observed.liveIndicator, 'live-indicator').doubled).toBe(0);
-  });
-});
-
-describe('a page opened during a turn stops showing it once the turn ends', () => {
-  test('while the turn runs, the composer offers Stop and the header says working', () => {
-    expect(verdictOf(observed.openedMidTurn, 'opened-mid-turn').held).toEqual({ stop: true, task: 'working' });
-  });
-
-  test('the composer offers no Stop and the thread draws no live state', () => {
-    const ended = verdictOf(observed.openedMidTurn, 'opened-mid-turn');
-
-    expect({ stop: ended.stop, states: ended.states }).toEqual({ stop: false, states: 0 });
-  });
-
-  test('every sample reads the header, and the header never disagrees with the composer', () => {
-    const verdict = verdictOf(observed.openedMidTurn, 'opened-mid-turn');
-
-    expect({ headerless: verdict.headerless, disagreed: verdict.disagreed }).toEqual({ headerless: 0, disagreed: 0 });
-  });
-});
-
-describe('a page whose socket drops mid-turn keeps its answer in order', () => {
-  test("the turn's steps were drawn before the drop", () => {
-    expect(verdictOf(observed.reconnect, 'reconnect').before.filter((block) => block.startsWith('T:'))).toHaveLength(RECONNECT_STEPS);
-  });
-
-  test('the replay after the reconnect draws the answer as it stood', () => {
-    const { before, after } = verdictOf(observed.reconnect, 'reconnect');
-
-    expect(after).toEqual(before);
-  });
-
-  test('so does a page that only watched the turn another tab sent', () => {
-    const { before, after } = verdictOf(observed.observedReconnect, 'observed-reconnect');
-
-    expect(before.filter((block) => block.startsWith('T:'))).toHaveLength(RECONNECT_STEPS);
-    expect(after).toEqual(before);
-  });
-
-  test('an answer keeps each step\'s text where it streamed, once the turn ends and after a reload', () => {
-    const { live, ended, reloaded } = verdictOf(observed.answered, 'answered');
-
-    expect(live.filter((block) => block.startsWith('P:Step'))).toHaveLength(RECONNECT_STEPS);
-    expect({ ended, reloaded }).toEqual({ ended: [...live, 'P:Done.'], reloaded: [...live, 'P:Done.'] });
-  });
-
-  test('the model\'s next request carries each step\'s text and the answer', () => {
-    const { told } = verdictOf(observed.answered, 'answered');
-
-    expect(told.filter((text) => text.startsWith('Step ') || text === 'Done.')).toEqual([
-      'Step 1: listing the workspace.', 'Step 2: listing scaffold.', 'Step 3: listing the workspace.', 'Done.',
-    ]);
-  });
-
-  test('a page asleep while its turn ends wakes to the finished answer, with nothing left running', () => {
-    const { truth, after, stopAfter } = verdictOf(observed.slept, 'slept');
-
-    expect(truth.at(-1)).toBe('P:Done.');
-    expect({ after, stopAfter }).toEqual({ after: truth, stopAfter: false });
-  });
-
-  test('so does a page that only watched the turn, asleep from part-way through its final text', () => {
-    const { truth, after, stopAfter } = verdictOf(observed.watchedSlept, 'watched-slept');
-
-    expect(truth.at(-1)).toBe('P:Done.');
-    expect({ after, stopAfter }).toEqual({ after: truth, stopAfter: false });
-  });
-});
-
-describe('plans have one owner in the inspector column', () => {
-  test('no second plan-bearing tab or filter stands beside the first', () => {
-    expect(verdictOf(observed.planTabs, 'plan-tabs').planBearing.length).toBeLessThanOrEqual(1);
-  });
-});
-
-describe("the tab strip's rule is continuous and the active underline sits on it", () => {
-  test('dark: one rule, reaching the column edge, the underline on it', () => {
-    const dark = verdictOf(observed.geometry, 'geometry').dark;
-
-    expect(dark.mode).toBe('dark');
-    expect(dark.ruleBottom).toBe(dark.stripBottom);
-    expect(Math.abs(dark.ruleRight - dark.panelRight)).toBeLessThanOrEqual(1);
-    expect(Math.abs(dark.activeBottom - dark.ruleBottom)).toBeLessThanOrEqual(1);
-  });
-
-  test('light: one rule, reaching the column edge, the underline on it', () => {
-    const light = verdictOf(observed.geometry, 'geometry').light;
-
-    expect(light.mode).toBe('light');
-    expect(light.ruleBottom).toBe(light.stripBottom);
-    expect(Math.abs(light.ruleRight - light.panelRight)).toBeLessThanOrEqual(1);
-    expect(Math.abs(light.activeBottom - light.ruleBottom)).toBeLessThanOrEqual(1);
-  });
-
-  test('the chat and inspector rules are one line across the two columns', () => {
-    const geometry = verdictOf(observed.geometry, 'geometry');
-
-    expect(Math.abs(geometry.dark.chatRuleBottom - geometry.dark.ruleBottom)).toBeLessThanOrEqual(1);
-    expect(Math.abs(geometry.light.chatRuleBottom - geometry.light.ruleBottom)).toBeLessThanOrEqual(1);
-  });
-});
-
-describe('a collapsed right panel can be reopened and the left rail can be collapsed', () => {
-  test("the reader's own control shuts it", () => {
-    const controls = verdictOf(observed.controls, 'controls');
-
-    expect(controls.inspectorWidthOpened).toBeGreaterThan(INSPECTOR_SHUT_PX);
-    expect(controls.inspectorWidthShut).toBeLessThanOrEqual(INSPECTOR_SHUT_PX);
-  });
-
-  test('a control reopens the column the reader collapsed', () => {
-    expect(verdictOf(observed.controls, 'controls').inspectorWidthReopened).toBeGreaterThan(INSPECTOR_SHUT_PX);
-  });
-
-  test('a control collapses the left rail', () => {
-    const lane = verdictOf(observed.controls, 'controls').railLaneAfter;
-
-    expect(lane).toBeGreaterThanOrEqual(0);
-    expect(lane).toBeLessThanOrEqual(RAIL_SHUT_PX);
-  });
-});
-
-describe("a pane renders its own transcript and no other actor's", () => {
-  test("the root's own turn stays out of a new actor's pane", () => {
-    expect(verdictOf(observed.stamped, 'stamped').rootMarkerInActorPane).toBe(0);
-  });
-
-  test("words sent on the actor's tab stay out of the root transcript", () => {
-    expect(verdictOf(observed.stamped, 'stamped').actorMarkerInRootPane).toBe(0);
-  });
-});
-
-describe('the plan review flow end to end', () => {
-  test('a plan comes back for review, with its decision reachable by role', () => {
-    const flow = verdictOf(observed.walkthrough, 'walkthrough');
-
-    expect(flow.planReviewShown).toBeTrue();
-    expect(flow.approveControl).toMatch(/approve/iu);
-  });
-
-  test('the inspector opens on the plan and not before it', () => {
-    const flow = verdictOf(observed.walkthrough, 'walkthrough');
-
-    expect(flow.inspectorBeforePlan).toBeLessThanOrEqual(INSPECTOR_SHUT_PX);
-    expect(flow.inspectorOnPlan).toBeGreaterThan(INSPECTOR_SHUT_PX);
-  });
-
-  test('approving records the decision and enqueues the turn that implements it', () => {
-    const flow = verdictOf(observed.walkthrough, 'walkthrough');
-
-    expect(flow.planStatus).toBe('Approved');
-    expect(flow.toolCardsAfterImplement).toBeGreaterThan(flow.toolCardsBeforeApproval);
-  });
-
-  test("the slate that turn wrote stands in the strip under its own title", () => {
-    expect(verdictOf(observed.walkthrough, 'walkthrough').stripLabels).toContain(SLATE_TITLE);
-  });
-});
-
-describe('the inspector never moves its selection on its own', () => {
-  test('a new workspace resolves to Files, and the one change after is the reader\'s click', () => {
-    // The row itself ends unless the product read Work filled after the first turn and empty after the second.
-    expect(verdictOf(observed.keptTab, 'kept-tab').marks).toEqual(['Files', 'Work']);
-  });
-});
-
-describe('the live app boots on its own Durable Object state', () => {
-  test("the dev server persisted under this run's scratch, never the checkout", () => {
-    const state = verdictOf(observed.state, 'state');
-
-    expect(state.root).toStartWith(join(tmpdir(), SCRATCH_ROOT_PREFIX));
-    // The plugin's own tree there, not just a directory the harness named:
-    // UserDO is the namespace every row's roster and credential goes through.
-    expect(state.namespaces).toContain('kinu-UserDO');
-  });
-
-  test('nothing but this run stood in that state', () => {
-    expect(verdictOf(observed.state, 'state').foreign).toEqual([]);
-  });
-});
+      // Every measured number into the run's own log, the ones no assertion reads
+      // included: a red is read with its figures, and a green prints what it saw.
+      process.stderr.write(`${suite} verdicts: ${JSON.stringify({ observed, broke: broken() }, null, 2)}\n`);
+    },
+  };
+}

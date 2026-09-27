@@ -36,7 +36,7 @@ import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
-import { QUIET_LOAD, readCosts } from './gate-cost';
+import { COST_TABLE, QUIET_LOAD, readCosts } from './gate-cost';
 
 const root = resolve(import.meta.dir, '..');
 
@@ -93,7 +93,10 @@ const AFTER_CI_SUITES = {
   'evals/tasks/order-book.eval.ts': 'bun run evals',
   'evals/tasks/request-logs.eval.ts': 'bun run evals',
   'scripts/deadline-capability.test.ts': 'bun test --timeout=0 scripts/deadline-capability.test.ts',
-  'scripts/live-app-tier.test.ts': 'bun test --timeout=0 scripts/live-app-tier.test.ts',
+  'scripts/live-app-layout.test.ts': 'bun test --timeout=0 scripts/live-app-layout.test.ts',
+  'scripts/live-app-plans.test.ts': 'bun test --timeout=0 scripts/live-app-plans.test.ts',
+  'scripts/live-app-sleep.test.ts': 'bun test --timeout=0 scripts/live-app-sleep.test.ts',
+  'scripts/live-app-turns.test.ts': 'bun test --timeout=0 scripts/live-app-turns.test.ts',
   'scripts/product-flows.test.ts': 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
 } satisfies Record<string, string>;
 
@@ -164,6 +167,22 @@ describe('the ladder measures something', () => {
       .map((gate) => ladderOrder.indexOf(gate.run)));
   });
 
+  test('a concurrent row whose figure is of a failed run has no measured cost, and the plan refuses it', () => {
+    const real = readCosts();
+    // Every figure green but the one planted, so the refusal names the plant whatever the committed table holds.
+    const green = { ...real, rows: Object.fromEntries(Object.entries(real.rows).map(([run, cost]) => [run, { ...cost, exit: 0 }])) };
+    const [planted] = deployPlan(green).filter((row) => row.phase === 'source');
+
+    if (planted === undefined) throw new Error('the deploy plan has no concurrent row to plant a failed run on');
+    const cost = green.rows[planted.run];
+
+    if (cost === undefined) throw new Error(`${planted.run} has no figure to plant a failed run on`);
+
+    expect(() => deployPlan({ ...green, rows: { ...green.rows, [planted.run]: { ...cost, exit: 1 } } }))
+      .toThrow(`${planted.run} is scheduled in the concurrent source wave and has no measured cost in ${COST_TABLE}: `
+        + 'its figure is of a run that exited 1');
+  });
+
   // THE COST TABLE IS THE WAVE'S ONE SET OF FIGURES, and a figure for a row
   // that no longer exists is the same defect as a row with no figure: both are
   // a scheduler deciding from something nobody measured. `deployPlan()`
@@ -174,6 +193,9 @@ describe('the ladder measures something', () => {
     const runs = new Set(LADDER.map((gate) => gate.run));
     const stale = Object.keys(costs.rows).filter((run) => !runs.has(run));
     expect(stale, 'measured figures kept for rows that are no longer gates').toEqual([]);
+
+    const failed = Object.entries(costs.rows).filter(([, cost]) => cost.exit !== 0).map(([run, cost]) => `${run}: exit ${String(cost.exit)}`);
+    expect(failed, 'figures taken from runs that failed, so short by whatever they never ran').toEqual([]);
 
     const unmeasured = deployPlan()
       .filter((row) => row.phase === 'source' && costs.rows[row.run] === undefined)
@@ -331,7 +353,10 @@ describe('the ladder measures something', () => {
       'Chat infinite scroll',
       'Gate self-tests: secrets, corpus, preflight',
       'Live and first-run suites, credential-free',
-      'Live app in a browser',
+      'Live app in a browser: a long chat and its plans',
+      'Live app in a browser: a page that loses the turn',
+      'Live app in a browser: a running turn',
+      'Live app in a browser: the inspector column\'s layout',
       'Product flows in a browser, on the local dev server',
       'Public pages render',
       'React runtime identity',
