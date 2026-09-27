@@ -50,7 +50,7 @@ interface Rig {
   readonly relayed: v.InferOutput<typeof RelayRequestSchema>[];
   readonly model: LanguageModel;
   /** Attach the owner's machine; `answers` says what its daemon does with a relay call. */
-  readonly attachMachine: (answers: 'relay' | 'too-old') => Promise<{ readonly deviceId: string; readonly close: () => Promise<void> }>;
+  readonly attachMachine: (answers: 'relay' | 'too-old', label?: string) => Promise<{ readonly deviceId: string; readonly close: () => Promise<void> }>;
 }
 
 async function rig(upstream: Upstream): Promise<Rig> {
@@ -99,8 +99,8 @@ async function rig(upstream: Upstream): Promise<Rig> {
 
   return {
     harness, forwarded, relayed, model: registry.resolveModel('codex/gpt-5.5'),
-    attachMachine: async (answers) => {
-      const { deviceId } = await harness.userDO.registerDevice(owner, 'studio');
+    attachMachine: async (answers, label = 'studio') => {
+      const { deviceId } = await harness.userDO.registerDevice(owner, label);
       machines.set(deviceId, answers);
       const daemon = harness.attachDaemon(deviceId);
 
@@ -156,12 +156,12 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
 
   test('a turn goes out from the online machine with the login\'s access token, and the container is not asked', async () => {
     const { harness, forwarded, relayed, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'from the machine'));
-    await attachMachine('relay');
+    const machine = await attachMachine('relay');
 
     const done = finished(await step(model, newTurn()));
 
     expect(done.text).toBe('from the machine');
-    expect(done.egress).toBe('device studio');
+    expect(done.egress).toBe(`device ${machine.deviceId}`);
     expect(relayed.map((request) => [request.method, request.url])).toEqual([['POST', 'https://chatgpt.com/backend-api/codex/responses']]);
     expect(new Headers(relayed[0]?.headers).get('authorization')).toBe(`Bearer ${ACCESS_1}`);
     expect(forwarded).toHaveLength(0);
@@ -200,7 +200,7 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     const machine = await attachMachine('relay');
     const turn = newTurn();
 
-    expect(finished(await step(model, turn)).egress).toBe('device studio');
+    expect(finished(await step(model, turn)).egress).toBe(`device ${machine.deviceId}`);
     await harness.joinFibers();
     await machine.close();
 
@@ -224,10 +224,10 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     const turn = newTurn();
 
     expect(finished(await step(model, turn)).egress).toBe('relay');
-    await attachMachine('relay');
+    const machine = await attachMachine('relay');
     expect(finished(await step(model, turn)).egress).toBe('relay');
     expect(relayed).toHaveLength(0);
-    expect(finished(await step(model, newTurn())).egress).toBe('device studio');
+    expect(finished(await step(model, newTurn())).egress).toBe(`device ${machine.deviceId}`);
     await harness.joinFibers();
     harness.close();
   });
@@ -260,6 +260,20 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
 
     expect(finished(await step(model, sameTurn)).egress).toBe('relay');
     expect(relayed).toHaveLength(0);
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('a machine named with any characters still serves the turn, and the step names which machine', async () => {
+    const label = 'Ashish’s 💻\nstudio';
+    const { harness, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'from the machine'));
+    const machine = await attachMachine('relay', label);
+
+    const done = finished(await step(model, newTurn()));
+
+    expect(done.text).toBe('from the machine');
+    // The record names the machine by id; its label is read where it is shown, so a rename never rewrites history.
+    expect(done.egress).toBe(`device ${machine.deviceId}`);
     await harness.joinFibers();
     harness.close();
   });

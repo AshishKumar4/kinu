@@ -25,7 +25,6 @@ type CodexRoute = { readonly kind: 'device'; readonly id: string; readonly label
 
 const CONTAINER: CodexRoute = { kind: 'container' };
 
-/** Per actor: latest turn and route. */
 const PINNED = new Map<string, { readonly turn: string; readonly route: Promise<CodexRoute> }>();
 
 interface TurnKey {
@@ -184,6 +183,6 @@ export function codexRouteFetch(input: {
       throw deviceLost({ cause }) ? lostDevice({ cause }) : cause;
     }
 
-    return stamped(namingLoss(response, lostDevice), `device ${route.label}`);
+    return stamped(namingLoss(response, lostDevice), `device ${route.id}`);
   });
 }
