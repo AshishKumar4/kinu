@@ -2,19 +2,11 @@
  * Where a hosted child's report lands on its hosted hirer. A durable child's report is written at once, and the hirer
  * acts on it after its own turn ends; a drain signalled mid-turn left the report stranded until the delivery grace.
  */
-import { test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
-import { GATEWAY_CATALOG, type ActorHarness, type HarnessOrchestratorAgent, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, wakeForDelegatedTask } from './helpers/actor-harness';
+import { GATEWAY_CATALOG, driveUntil, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask } from './helpers/actor-harness';
 import { abandonHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
-
-/** Runs the object's wake while `pending`: no lap count, so a deadlock hangs and the hang is the report. */
-async function driveWhile(workspace: ActorHarness<HarnessOrchestratorAgent>, pending: () => boolean): Promise<void> {
-  while (pending()) {
-    await workspace.agent.terminalRetryPass();
-    await nextTurn();
-  }
-}
 
 // One turn slot (DELEGATED_TURN_SLOTS): a helper waiting on its task hire frees the slot; its durable hire must not
 // then hold that slot while its report queues behind the waiting helper, or the task hire never runs.
@@ -46,16 +38,14 @@ test("a helper waiting on its task hire gets its answer, then takes up the repor
 
   await wakeForDelegatedTask(workspace, middle.actor.handle.actorId, 'Middle task.');
 
-  // Bounded: a deadlock fails here by name instead of hanging the suite.
-  await driveWhile(workspace, () => !middleDone());
-
+  await driveUntil(workspace, 'the helper\'s turn never ended', middleDone);
 
   // The durable hire reported while the helper waited: the helper takes it up in a turn of its own.
   const turns = (): number => sqlOver(workspace.db)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middle.actor.handle.actorId} AND type = 'run_start'`[0]?.n ?? 0;
 
-  await driveWhile(workspace, () => turns() < 2);
-
+  await driveUntil(workspace, 'the helper never took up the report in a turn of its own', () => turns() >= 2);
+  expect(turns()).toBe(2);
 });
 
 // One turn slot: a helper that holds it and asks its durable hire anything that waits on that hire's queue must free
@@ -123,7 +113,7 @@ for (const { verb, args, notes } of CASES) {
 
     await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
 
-    await driveWhile(workspace, () => !parked);
+    await driveUntil(workspace, 'the durable hire never started its turn', () => parked);
 
     const durable = sql<{ name: string }>`SELECT name FROM actor_subordinates WHERE actor_id = ${middleId} AND lifetime = 'durable'`[0]?.name;
 
@@ -132,9 +122,8 @@ for (const { verb, args, notes } of CASES) {
     await wakeForDelegatedTask(workspace, middleId, `Second: ${durable}`);
     release.resolve();
 
-    // Bounded: a deadlock fails here by name instead of hanging the suite.
-    await driveWhile(workspace, () => turnsEnded() < 2);
-
+    await driveUntil(workspace, 'the helper never ended both its turns', () => turnsEnded() >= 2);
+    expect(turnsEnded()).toBe(2);
   });
 }
 
@@ -184,7 +173,8 @@ test("a report its durable hire made during a helper's turn is taken up though t
 
   await wakeForDelegatedTask(first, middleId, 'Middle task.');
 
-  await driveWhile(first, () => pendingReports() === 0);
+  await driveUntil(first, 'the durable hire never reported mid-turn', () => pendingReports() > 0);
+  expect(pendingReports()).toBe(1);
 
   abandonHarnessFibers();
 
@@ -193,7 +183,6 @@ test("a report its durable hire made during a helper's turn is taken up though t
     beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
   });
 
-  // Bounded: a report the helper never takes up fails here by name.
-  await driveWhile(second, () => !takenUp);
-
+  await driveUntil(second, 'the helper never took up the report after the reset', () => takenUp);
+  expect(takenUp).toBe(true);
 });
