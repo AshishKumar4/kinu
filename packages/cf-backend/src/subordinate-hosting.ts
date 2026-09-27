@@ -208,10 +208,8 @@ export async function relayHostedReport(
   });
 
   const name = child.record.name;
-  // Not `host.run`: a hirer waiting on its task hire holds that queue until this report lands.
-  const hirer = await seams.host.acquire(parent);
 
-  return await receiveSubordinateEvent({
+  const receive = (hirer: HostedActor): Promise<SubordinateEventResult> => receiveSubordinateEvent({
     log: new EventLog(seams.exec, hirer.handle),
     roster: seams.roster(hirer),
     vfs: seams.vfs(),
@@ -221,6 +219,11 @@ export async function relayHostedReport(
     // A temporary child's answer goes first to the `agents.ask` waiter, via the port that parked it.
     temporary: seams.temporary(hirer),
   }, { fromSubordinate: name, ...report }, Date.now());
+
+  // A task child's hirer waits inside the hire, holding its queue; a durable child's report lands between turns.
+  if (hostedLifetime(child.record) === 'task') return await receive(await seams.host.acquire(parent));
+
+  return await seams.host.run(parent, receive);
 }
 
 export async function retireStalledTask(

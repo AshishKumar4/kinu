@@ -16,13 +16,13 @@ import {
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
-  mintSubordinateName, withHeadCaptureRecording, createTemporaryAgentPort,
+  mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners,
   type ActorHost, type ActorToolsetDeps, type AgentsSwarmDeps, type AgentsToolDeps, type ResumableActorTurn,
   type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
   type LoopOrigin, type NimbusSandboxHandle, type NodeHomeHost,
-  type SqlExec, type SqlValue, type TeamToolDeps, type TemporaryAgentPort, type WorkspaceActor, type WriteObserver,
+  type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { isWorkspaceTerminal, publicText, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
@@ -776,31 +776,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       announce: () => { this.broadcastSubordinatesChanged(); },
       scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
       armWake: () => { this.armDelegationWake(); },
-      temporary: (actor) => this.temporaryAgentPortFor(actor),
+      temporary: (actor) => this.temporaryAgentPort(actor.reference),
     };
-  }
-
-  /** Keyed by the hosted slot, so a released actor's port goes with it. */
-  private readonly hostedTemporaryPorts = new WeakMap<BoundActor, TemporaryAgentPort>();
-
-  /** One port per hirer: a waiter is found only through the port that parked it. */
-  private temporaryAgentPortFor(actor: BoundActor): TemporaryAgentPort {
-    if (actor.record.parentActorId === null) return this.temporaryAgentPort();
-    const known = this.hostedTemporaryPorts.get(actor);
-
-    if (known !== undefined) return known;
-    const seams = this.subordinateSeams();
-
-    const port = createTemporaryAgentPort({
-      roster: seams.roster(actor),
-      runtime: hostedSubordinateRuntime(seams, () => actor),
-      now: () => Date.now(),
-      createName: mintSubordinateName,
-    });
-
-    this.hostedTemporaryPorts.set(actor, port);
-
-    return port;
   }
 
   /**
@@ -954,7 +931,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       delegation,
       roster,
       runtime: hostedSubordinateRuntime(seams, () => actor),
-      temporary: this.temporaryAgentPortFor(actor),
+      temporary: seams.temporary(actor),
       now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(actor.handle),
       originContext: async () => actor.session.history,
@@ -1182,12 +1159,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  /** One runner per actor: its own turns serial, actors concurrent, so a waiting hirer never blocks its child. */
-  private readonly actorRunners = new Map<string, Promise<void>>();
-
-  private readonly actorRunnersAgain = new Set<string>();
-
-  private _delegationLane: Promise<void> | null = null;
+  private readonly delegatedTurns = new DelegatedTurnRunners({
+    pass: (record) => this.drainActorAssignments(record),
+    holdLane: async (body) => {
+      await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
+        ctx.stash({ lane: DELEGATION_LANE_FIBER });
+        await body();
+      });
+    },
+    failed: (record, error) => {
+      diagnostics.failure('subordinate.delegation_drain_failed', error, { workspace: this.name, ...(record !== null && { actor: record.name }) });
+    },
+  });
 
   /**
    * Admitted delegated turns run on a fiber, off the wake: inside it a turn held the alarm to its
@@ -1200,61 +1183,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id });
     }
 
-    for (const record of hires) this.startActorRunner(record);
-
-    this.startDelegationLane();
-  }
-
-  private startActorRunner(record: WorkspaceActor): void {
-    const id = record.actorId;
-
-    if (this.actorRunners.has(id)) {
-      this.actorRunnersAgain.add(id);
-
-      return;
-    }
-
-    const runner = (async () => {
-      try {
-        let again = true;
-
-        while (again) {
-          this.actorRunnersAgain.delete(id);
-          again = await this.drainActorAssignments(record) || this.actorRunnersAgain.has(id);
-        }
-      } catch (cause) {
-        diagnostics.failure('subordinate.delegation_drain_failed', toKinuError({
-          doing: 'reading a hired actor\'s admitted delegations', cause, otherwise: 'io',
-        }), { workspace: this.name, actor: record.name });
-      } finally {
-        this.actorRunners.delete(id);
-      }
-    })();
-
-    this.actorRunners.set(id, runner);
-  }
-
-  private startDelegationLane(): void {
-    if (this._delegationLane !== null || this.actorRunners.size === 0) return;
-
-    this._delegationLane = (async () => {
-      try {
-        await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
-          ctx.stash({ lane: DELEGATION_LANE_FIBER });
-
-          for (let live = [...this.actorRunners.values()]; live.length > 0; live = [...this.actorRunners.values()]) {
-            await Promise.all(live);
-          }
-        });
-      } catch (cause) {
-        diagnostics.failure('subordinate.delegation_drain_failed', toKinuError({
-          doing: 'draining the delegated turns this workspace admitted', cause, otherwise: 'io',
-        }), { workspace: this.name });
-      } finally {
-        this._delegationLane = null;
-        this.startDelegationLane();
-      }
-    })();
+    this.delegatedTurns.start(hires);
   }
 
   private async drainActorAssignments(record: WorkspaceActor): Promise<boolean> {

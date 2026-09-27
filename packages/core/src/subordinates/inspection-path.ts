@@ -15,7 +15,9 @@ import { actorReadHandle } from '../read-models/workspace-work';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 
 export interface SubordinateInspectionAuthority {
+  /** The owner the transport authenticated. */
   readonly owner: string;
+  /** The workspace the transport addressed, by name. */
   readonly workspace: string;
 }
 

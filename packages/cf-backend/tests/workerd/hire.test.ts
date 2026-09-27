@@ -6,6 +6,7 @@
 
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import { DELEGATION_MAX_DEPTH } from '@kinu.run/core';
 import { CHILD_ANSWER, HIRE_MISSION, NEST_RELAY, type HireObservation, type LogRow } from './hire-shapes';
 
 /** Re-acquired per use: the id survives an eviction, a stub does not. */
@@ -58,6 +59,50 @@ describe('hire', () => {
     expect(hired.filter((row) => row.actorId === observed.rootActorId)).toHaveLength(1);
     expect(hired.filter((row) => row.actorId !== observed.rootActorId)).toHaveLength(1);
     expect(hired.every((row) => row.status === 'dismissed')).toBe(true);
+  });
+
+  it('a helper\'s own task child that notes its progress still answers the helper waiting on it', async () => {
+    const workspace = 'hire-nested-progress';
+
+    await probe(workspace).setup(workspace, 'hire-root', 'nest-progress');
+    // Hangs while the note queues behind the helper that waits on the child: nothing else answers it.
+    await probe(workspace).openHire(workspace, 'Hire one auditor that hires one of its own, which notes its progress.');
+    await probe(workspace).callerObserved();
+
+    const observed: HireObservation = await probe(workspace).observe(workspace);
+
+    expect(observed.toolResults.join(' ')).toContain(NEST_RELAY);
+    expect(observed.toolResults.join(' ')).toContain(CHILD_ANSWER);
+  });
+
+  it('a chain of helpers each hiring its own stops at the depth cap and still answers the root', async () => {
+    const workspace = 'hire-chain';
+
+    await probe(workspace).setup(workspace, 'hire-root', 'chain');
+    await probe(workspace).openHire(workspace, 'Hire one auditor; each hires one of its own.');
+    await probe(workspace).callerObserved();
+
+    const observed: HireObservation = await probe(workspace).observe(workspace);
+    const hired = observed.actors.filter((row) => row.kind === 'subordinate');
+
+    expect(hired).toHaveLength(DELEGATION_MAX_DEPTH);
+    expect(observed.toolResults.join(' ').split(NEST_RELAY).length - 1).toBeGreaterThanOrEqual(DELEGATION_MAX_DEPTH);
+  });
+
+  it('dismissing a helper while it waits on its own task hire interrupts the helper it hired', async () => {
+    const workspace = 'hire-nested-dismiss';
+
+    await probe(workspace).setup(workspace, 'hire-root', 'nest-park');
+    await probe(workspace).openHire(workspace, 'Hire one durable auditor that hires one of its own; the owner dismisses it.');
+
+    await probe(workspace).childSpoke();
+    // Hangs while the retirement waits out the parked grandchild: nothing below releases it.
+    await probe(workspace).dismissChild(workspace);
+
+    const observed: HireObservation = await probe(workspace).observe(workspace);
+
+    expect(observed.toolResults.join(' ')).not.toContain(CHILD_ANSWER);
+    expect(observed.roster.every((row) => row.status === 'dismissed')).toBe(true);
   });
 
   it('a child whose turn throws still settles its caller', async () => {

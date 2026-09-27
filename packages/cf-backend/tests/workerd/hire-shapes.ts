@@ -18,7 +18,7 @@ export const HIRE_DURABLE_MODEL = 'hire-root-durable';
 /** The catalog's default tier: not what the child runs on (the workspace pin), but every tier slot must be offered by `/v1/models`. */
 export const HIRE_CHILD_MODEL = 'hire-child';
 
-export type ChildScript = 'answer' | 'throw' | 'park' | 'nest';
+export type ChildScript = 'answer' | 'throw' | 'park' | 'nest' | 'nest-park' | 'nest-progress' | 'chain';
 
 export interface LogRow {
   readonly actorId: string;

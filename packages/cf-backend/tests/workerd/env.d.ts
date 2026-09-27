@@ -128,7 +128,7 @@ interface CodexEgressRecordsRpc extends Rpc.WorkerEntrypointBranded {
 }
 
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
-  setup(workspace: string, model: string, script: 'answer' | 'throw' | 'park' | 'nest'): Promise<void>;
+  setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
   releaseChild(): Promise<void>;
   childSpoke(): Promise<void>;
   callerObserved(): Promise<void>;

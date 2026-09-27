@@ -59,7 +59,6 @@ const TASK_ENDING_REPORT = {
     + 'produced; its transcript holds what it had done.',
 } as const satisfies Record<TaskTurnEnding, string | null>;
 
-/** The report a child's settled turn owes its caller. */
 export interface OwedReport {
   readonly status: SubordinateReportStatus;
   readonly content: string;
@@ -220,12 +219,12 @@ export function createTemporaryAgentPort(deps: {
       });
 
       /** Archive the row and retire the actor; history is always kept. */
-      const release = async (): Promise<void> => {
+      const release = async (interrupt: boolean): Promise<void> => {
         const actor = deps.roster.requireExisting(name).actorReference;
 
         if (!actor) throw new KinuError('missing', 'The temporary actor has no confirmed identity.');
         deps.roster.dismiss(name, deps.now());
-        await deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor);
+        await deps.runtime.dismiss(name, { keepHistory: true, interrupt }, actor);
       };
 
       const creationId = crypto.randomUUID();
@@ -260,7 +259,7 @@ export function createTemporaryAgentPort(deps: {
       }
 
       const settlement = await waiter.promise;
-      await release();
+      await release(settlement === 'cancelled');
 
       if (settlement === 'cancelled') {
         return failure('cancelled', 'the caller cancelled this hire before the agent answered.');
