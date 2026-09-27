@@ -262,11 +262,11 @@ describe('notes sent from the Changes tab', () => {
 
   const CHANGES = { source: 'workspace', label: 'Workspace', mode: 'vfs-baseline' } as const;
 
-  /** The sends the workspace still owes, and the metadata rows kept for them. */
+  /** The sends the workspace still owes, and how many of them carry metadata. */
   function owed(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'db'>) {
-    const count = (table: string): number => harness.db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n ?? -1;
+    const count = (where: string): number => harness.db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM pending_steers WHERE ${where}`).get()?.n ?? -1;
 
-    return { sends: count('pending_steers'), metadata: count('pending_steer_metadata') };
+    return { sends: count('1'), metadata: count('metadata_json IS NOT NULL') };
   }
 
   test('notes sent during a turn and evicted before their own arrive once, with their card, and never come back', async () => {
@@ -304,10 +304,10 @@ describe('notes sent from the Changes tab', () => {
     const { agent } = harness;
     await agent.activateActor();
     await agent.saveChangeNotes('workspace', [CLAMP]);
-    // A storage fault in the reservation's last write, after the send's own row is in: the card has nowhere to go.
-    harness.db.run('DROP TABLE pending_steer_metadata');
+    // A storage fault on the reservation's write: the card has nowhere to go.
+    harness.db.run(`CREATE TRIGGER refuse_reservation BEFORE INSERT ON pending_steers BEGIN SELECT RAISE(ABORT, 'reservation refused'); END`);
 
-    await expect(agent.sendChangeNotes(CHANGES)).rejects.toThrow('pending_steer_metadata');
+    await expect(agent.sendChangeNotes(CHANGES)).rejects.toThrow('reservation refused');
     expect((await agent.getChangeNotes('workspace')).map((each) => each.id)).toEqual(['clamp']);
     expect(harness.db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM pending_steers').get()?.n).toBe(0);
   });

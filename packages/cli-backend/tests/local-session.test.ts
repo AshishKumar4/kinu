@@ -2777,14 +2777,13 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     ).get()?.c === 1);
 
     const row = db.query<{
-      outcome: string; source: string; turn_id: string; session_id: string; followup: string;
+      outcome: string; source: string; turn_id: string; followup: string;
     }, []>(`SELECT * FROM turn_outcomes`).get();
 
     if (!row) throw new Error('turn outcome row is missing');
     expect(row.outcome).toBe('corrected');
     expect(row.source).toBe('classifier');
     expect(row.followup).toContain('STAGING');
-    expect(row.session_id).toBe('default');
 
     const firstAssistant = (await transcript(rt)).find((entry) => entry.role === 'assistant');
 
@@ -3968,7 +3967,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
       name: 'local_helper', description: 'a locally crafted helper',
-      code: 'async () => 1', params: null, scope: 'local',
+      code: 'async () => 1',
     });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                         VALUES (${rt.actor.actorId}, 'editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
@@ -3990,7 +3989,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
   test('revert by id forgets the fact for real; a crafted tool is informational and has no revert', async () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
-      name: 'kept_tool', description: 'stays', code: 'async () => 2', params: null, scope: 'local',
+      name: 'kept_tool', description: 'stays', code: 'async () => 2',
     });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                         VALUES (${rt.actor.actorId}, 'stale', '"value"', 1.0, NULL, ${Date.now()})`;

@@ -388,8 +388,8 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
     // recordTakePick already wrote the turn's explicit preference row.
     void rt.storage.sql`INSERT INTO turn_outcomes
-        (actor_id, id, turn_id, session_id, outcome, confidence, source, user_message, assistant_response, followup, created_at)
-      VALUES (${rt.actor.actorId}, 'outc-pick', 'msg-1', 'default', 'corrected', 1, 'take_pick', 'q', 'a', 'the chosen take', 1)`;
+        (actor_id, id, turn_id, outcome, confidence, source, user_message, assistant_response, followup, created_at)
+      VALUES (${rt.actor.actorId}, 'outc-pick', 'msg-1', 'corrected', 1, 'take_pick', 'q', 'a', 'the chosen take', 1)`;
 
     const turn = makeTurn();
     await engine.reviewTurn(turn, 'follow-up that would have classified as accepted');

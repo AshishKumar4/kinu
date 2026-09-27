@@ -211,13 +211,9 @@ describe('a message typed while the agent is working', () => {
 
     // Written through SQL as an eviction leaves them; the next activation's loop is the restore/sweep entry point.
     h.db.query(
-      `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
-       VALUES (?, 'steer-dead-file', 'turn-dead', 'build', 'attach this too')`,
-    ).run(actorId);
-    h.db.query(
-      `INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
-       VALUES (?, 'steer-dead-file', 'chart.png', 'image/png', 'data:image/png;base64,AAAA')`,
-    ).run(actorId);
+      `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text, files_json)
+       VALUES (?, 'steer-dead-file', 'turn-dead', 'build', 'attach this too', ?)`,
+    ).run(actorId, JSON.stringify([{ filename: 'chart.png', mediaType: 'image/png', url: 'data:image/png;base64,AAAA' }]));
 
     const restarted = await reactivateOrchestratorHarness(h.db);
     const rerun = await chatSessionTurns(restarted.agent).resume();
