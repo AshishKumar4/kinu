@@ -508,23 +508,6 @@ export function cloudflareReconnectPath(returnTo: string): string {
 
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';
 
-export type McpConnectionStatus =
-  | 'connecting' | 'authenticating' | 'connected'
-  | 'ready' | 'discovering' | 'failed' | 'unknown';
-
-export interface McpServerSummary {
-  id: string;
-  name: string;
-  serverUrl: string;
-  transport: McpTransport;
-  status: McpConnectionStatus;
-  error: string | null;
-  toolsCount: number;
-  authUrl: string | null;
-  allowedTools: string[] | null;
-  presetId: string | null;
-}
-
 export interface McpServerInput {
   name?: string;
   serverUrl?: string;
@@ -541,8 +524,9 @@ export const McpServerSummarySchema = v.object({
   status: v.picklist(['connecting', 'authenticating', 'connected', 'ready', 'discovering', 'failed', 'unknown']),
   error: v.nullable(v.string()), toolsCount: v.number(), authUrl: v.nullable(v.string()),
   allowedTools: v.nullable(v.array(v.string())), presetId: v.nullable(v.string()),
-  createdAt: v.number(), updatedAt: v.number(),
 });
+
+export type McpServerSummary = v.InferOutput<typeof McpServerSummarySchema>;
 
 export const listMcpServers = () => api(v.array(McpServerSummarySchema), 'GET', '/mcp/servers');
 
