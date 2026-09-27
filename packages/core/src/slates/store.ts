@@ -23,7 +23,7 @@ interface OwnedRecord {
   readonly slateId: SlateId;
 }
 
-/** Versions one history call decodes: a page of rows at the SQLite row ceiling still fits one RPC answer. */
+/** One RPC answer holds this many rows at the SQLite row ceiling. */
 const SLATE_HISTORY_PAGE = Math.floor(PLATFORM_CATALOG['rpc.arg_bytes'].limit.value / PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
 
 function binary(bytes: Uint8Array): ArrayBuffer {
@@ -120,7 +120,6 @@ export class SqliteSlateStore extends SlateStore {
   getVersion(id: SlateVersionId): SlateVersion | undefined { return this.get('slate_versions', id, SlateVersion.codec); }
   listVersions(id: SlateId): readonly SlateVersion[] { return this.list('slate_versions', id, SlateVersion.codec); }
 
-  /** Oldest first, `SLATE_HISTORY_PAGE` at a time; `next` is the cursor for the page after, null on the last. */
   versionPage(id: SlateId, after?: string) {
     return settleSync(Effect.map(this.cursorRow(id, after), (from) => this.versionsFrom(id, from)));
   }

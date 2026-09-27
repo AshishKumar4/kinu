@@ -141,7 +141,6 @@ function withoutNullContent(message: JsonObject): JsonObject {
   return message.content === null ? { ...message, content: '' } : message;
 }
 
-/** A request that asked for a whole completion. */
 async function completedResponse(
   answer: Response | ReadableStream<Uint8Array> | JsonObject,
   model: string,
@@ -158,7 +157,6 @@ async function completedResponse(
   return openAICompletion(v.parse(JsonObjectSchema, JSON.parse(text)), model);
 }
 
-/** A request that asked to stream. */
 async function streamedResponse(
   answer: Response | ReadableStream<Uint8Array> | JsonObject,
   model: string,

@@ -33,7 +33,7 @@
  * hooks installed at all.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
@@ -2531,12 +2531,6 @@ export const LADDER: readonly Gate[] = [
     run: 'bash scripts/product-flows-tier.sh',
     label: 'Product flows in a browser, on the deployment',
     phase: 'post-publish',
-    deadline: {
-      seconds: 300,
-      why: 'nine rows in one browser over the public edge, each turn played by the scripted '
-        + 'model\'s Worker: 47s to 51s against staging 7dd73e1ac9 on 2026-09-27, the account '
-        + 'setup included. About six times the wall, for a cold edge and a slow container start.',
-    },
     alone: 'runs in the post-publish wave, after the upload and the smoke gate, beside the '
       + 'other tiers whose subject is the build that just shipped. It acts as the `scripted` '
       + 'eval account, as the first-run cases do; its workspaces carry the eval prefix and are '
@@ -3432,7 +3426,14 @@ function recordProof(
   return refused === undefined;
 }
 
+/** The scratch drive's temp root on the owner's box (AGENTS.md, Owner Preferences): unset, TMPDIR is the /tmp RAM
+ *  disk, where every hook and `bun run gate:*` wrote its scratch until 2026-09-27. */
+const SCRATCH_TMPDIR = '/mnt/scratch/kinu/tmp';
+
 if (import.meta.main) {
+  // Before any gate spawns: TMPDIR is a base name of every gate's environment (ladder-cache.ts), so each inherits it.
+  if (process.env.TMPDIR === undefined && existsSync(SCRATCH_TMPDIR)) process.env.TMPDIR = SCRATCH_TMPDIR;
+
   // A CLOSED REPORTING CHANNEL IS NOT A FAILED TIER.
   //
   // Gates run with `stdout: 'inherit'`, so under `git push` the whole tier

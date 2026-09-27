@@ -63,7 +63,6 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
     if (fixture !== undefined) return;
     let live = true;
 
-    // History answers one page at a time, oldest first; the picker offers every version.
     const versionIds = async (): Promise<string[]> => {
       let page = answered(await rpc<SlateAnswer<unknown>>("slate", [{ op: "history", id: slate }]), HistorySchema);
       const ids = page.versions.map((entry) => entry.id);
