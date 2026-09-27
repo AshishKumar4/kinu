@@ -12,6 +12,7 @@
     "./workspace-birth": "./src/workspace-birth.ts",
     "./obs": "./src/obs/index.ts",
     "./protocol": "./src/protocol.ts",
+    "./tui": "./src/tui/index.ts",
     "./slates": "./src/slates/index.ts",
     "./control-plane": "./src/control-plane/index.ts",
     "./control-plane/store": "./src/control-plane/store.ts",

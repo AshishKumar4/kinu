@@ -5,17 +5,8 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import {
-  buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,
-  executeChangelogRevert, revertChangelogEntryById,
-  initScaffoldTables, initShadowTables, initTurnOutcomeTables, initReplayTables,
-  initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
-  startGepaRun, finishGepaRun,
-  recordTurnOutcome, recordShadowEvaluation,
-  modifyScaffold, applyPromotionDecision, getPendingScaffold,
-  EvolutionEngine,
-  type AgentRuntime, type EvolutionEvent,
-} from '../src/index';
+import { buildChangelog, countUnseenChangelog, listUnseenChangelog, executeChangelogRevert, revertChangelogEntryById, initScaffoldTables, initShadowTables, initTurnOutcomeTables, initReplayTables, initFactsTable, createFactsStore, initGepaTables, initRunEventTables, startGepaRun, finishGepaRun, recordTurnOutcome, recordShadowEvaluation, modifyScaffold, applyPromotionDecision, getPendingScaffold, EvolutionEngine, type AgentRuntime, type EvolutionEvent } from '../src/index';
+import { renderChangelogText } from '../src/tui/index';
 import { describePathology } from '../src/evolution/pathology';
 import { createRefinementStore, initRefinementTables } from '../src/evolution/refinement';
 import { createTestRuntime } from './helpers';

@@ -1,9 +1,10 @@
-import { TUI_MARKS, type ReasoningEffort, type ResolvedTurnProfile } from '@kinu.run/core';
+import { type ReasoningEffort, type ResolvedTurnProfile } from '@kinu.run/core';
+import { TUI_MARKS } from '@kinu.run/core/tui';
 
 import type { AgentClientMode } from '../agent-client';
 import { useKeybindingRegistry } from './actions';
-import { formatContextUsage, modelDisplayName } from '@kinu.run/core';
-import { clipText } from '@kinu.run/core';
+import { formatContextUsage, modelDisplayName } from '@kinu.run/core/tui';
+import { clipText } from '@kinu.run/core/tui';
 import { useTuiTheme } from './theme';
 import { useSceneWidth } from './tui-shell';
 

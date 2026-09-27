@@ -239,7 +239,7 @@ export {
 } from './evolution/session-window';
 
 export {
-  buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog,
   executeChangelogRevert, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
   type ChangelogRevertAction,
@@ -1433,17 +1433,6 @@ export {
   type PlatformQuantity,
 } from './platform-catalog';
 
-// Terminal chrome vocabulary, shared so depictions of the TUI cannot drift.
-export {
-  CHANGE_KIND_GLYPH,
-  composerVisibleRows,
-  TUI_ADVERTISED_PRESET_BINDINGS,
-  TUI_ADVERTISED_HINTS,
-  TUI_COMPOSER_PLACEHOLDER,
-  TUI_COMPOSER_STEERING_PLACEHOLDER,
-  TUI_MARKS,
-} from './tui-presentation';
-
 // Safety
 export {
   reviewCommand,
@@ -2425,18 +2414,6 @@ export {
   normalizeModelMenu,
   contextWindowForSpec,
 } from './providers/model-menu';
-
-export {
-  modelDisplayName,
-  formatContextUsage,
-} from './tui/context-status';
-
-export {
-  clipText,
-  terminalText,
-  literalText,
-  agentDisplayLabel,
-} from './tui/format';
 
 export {
   ESC_ESC_BEAT_MS,

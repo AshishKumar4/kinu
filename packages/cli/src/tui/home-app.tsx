@@ -32,7 +32,7 @@ import { createKeyDispatcher, openTuiKeyBindings, type KeyScope, type TuiActionI
 import { GuidedOnboarding, type OnboardingRoleChoice, type TuiOnboardingOperations } from './onboarding';
 import { createFileTuiPreferenceStore, type WorkspaceLocationChoice } from './preferences';
 import { DeviceConnectOverlay, ModelPickerOverlay } from './overlays';
-import { clipText } from '@kinu.run/core';
+import { clipText } from '@kinu.run/core/tui';
 import { useDeviceConnectPrompt } from './use-device-connect';
 import { useTuiTheme, type TuiThemeColors } from './theme';
 import {

@@ -17,7 +17,7 @@ import {
 } from '@agentclientprotocol/sdk';
 import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
-import { literalText } from '@kinu.run/core';
+import { literalText } from '@kinu.run/core/tui';
 import type { AgentClient, AgentClientEvent } from '../agent-client';
 import { toAgentPrompt } from './prompt';
 import * as v from 'valibot';

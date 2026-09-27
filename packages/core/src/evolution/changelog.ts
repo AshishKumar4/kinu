@@ -5,7 +5,6 @@
  */
 
 import * as v from 'valibot';
-import { CHANGE_KIND_GLYPH } from '../tui-presentation';
 import type { SqlExecutor } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -574,36 +573,6 @@ export function listUnseenChangelog(
 
 export function countUnseenChangelog(sql: SqlExecutor, actor: ActorHandle, seenAt: number): number {
   return listUnseenChangelog(sql, actor, seenAt).length;
-}
-
-// Glyphs come from tui-presentation.ts; its import of ChangelogEntryKind is
-// type-only, so there is no runtime cycle.
-
-export function renderChangelogText(
-  entries: ReadonlyArray<ChangelogEntry>,
-  opts: { unseenCount?: number } = {},
-): string {
-  if (entries.length === 0) {
-    return 'Evolution changelog is empty — no self-changes recorded yet.';
-  }
-
-  const header = `Evolution changelog (${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}` +
-    (opts.unseenCount ? ` · ${opts.unseenCount} unseen` : '') + ')';
-
-  const lines = [header];
-
-  for (const [i, e] of entries.entries()) {
-    const when = new Date(e.at).toISOString().slice(0, 16).replace('T', ' ');
-    lines.push(`${String(i + 1).padStart(3)}. ${CHANGE_KIND_GLYPH[e.kind]} ${e.summary}`);
-    lines.push(`      ${when}${e.evidence ? ` · ${e.evidence}` : ''}${e.revert ? ' · revertable' : ''}`);
-
-    for (const item of e.items ?? []) {
-      lines.push(`      - ${item.summary}`);
-      lines.push(`        ${item.evidence}`);
-    }
-  }
-
-  return lines.join('\n');
 }
 
 export interface ChangelogRevertContext {
