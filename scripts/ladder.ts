@@ -2532,30 +2532,30 @@ export const LADDER: readonly Gate[] = [
     label: 'Product flows in a browser, on the deployment',
     phase: 'post-publish',
     deadline: {
-      seconds: 900,
-      why: 'six rows, four of them waiting on a real model turn over the public edge: 329s '
-        + 'against b220f59f8 on 2026-09-23, the slate turn alone 240s. About three times the '
-        + 'wall, so a slow model answers rather than being killed as a hang.',
+      seconds: 300,
+      why: 'nine rows in one browser over the public edge, each turn played by the scripted '
+        + 'model\'s Worker: 47s to 51s against staging 7dd73e1ac9 on 2026-09-27, the account '
+        + 'setup included. About six times the wall, for a cold edge and a slow container start.',
     },
     alone: 'runs in the post-publish wave, after the upload and the smoke gate, beside the '
-      + 'other tiers whose subject is the build that just shipped. Its workspaces carry the '
-      + 'eval prefix and are torn down by the row that made them, and it attaches no machine, '
-      + 'so it stands outside the device fleet the first-run tier counts.',
+      + 'other tiers whose subject is the build that just shipped. It acts as the `scripted` '
+      + 'eval account, as the first-run cases do; its workspaces carry the eval prefix and are '
+      + 'torn down by the row that made them, and it attaches no machine, so it stands outside '
+      + 'the device fleet the first-run tier counts.',
     tier: 'deploy',
-    // 329s against b220f59f8 on 2026-09-23 with the slate row (66s to 128s without
-    // it); the model turns are the spread.
-    seconds: 329,
+    // 47s to 51s against staging 7dd73e1ac9 on 2026-09-27, three runs, 18/18 each.
+    seconds: 51,
     catches: 'a flow a person runs in the page that breaks on the DEPLOYED build: the same rows '
       + 'the pre-publish run drives against `vite dev`, in real Chrome against the deployment '
-      + 'as the eval identity, asserting only what the page shows. The first-run tier reads '
+      + 'as the `scripted` eval account on the scripted model, asserting only what the page shows. The first-run tier reads '
       + 'the deployment over its API and socket and the eval suite drives the model, so '
       + 'neither loads the page a person loads; #13 was an API-green workspace whose reloaded '
       + 'page showed no agents.',
     blind: 'a flow no row drives, and the look of the page: rows read presence and text, never '
       + 'pixels. It reports on a build that is already serving, so a red here is a red users '
-      + 'have now. The model is real, so a row that needs an answer reads that one arrived, '
-      + 'never its words.',
-    inputs: { kind: 'live', why: 'drives the DEPLOYED build in real Chrome as the eval identity and spends real model turns.' },
+      + 'have now. The model is scripted, so whether a real model makes the calls a row names is '
+      + 'the evals\' question, not this tier\'s.',
+    inputs: { kind: 'live', why: 'drives the DEPLOYED build in real Chrome as the `scripted` eval account and the scripted model\'s Worker.' },
   },
 ];
 
