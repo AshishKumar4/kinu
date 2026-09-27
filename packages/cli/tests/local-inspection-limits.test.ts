@@ -28,11 +28,11 @@ function seed(rows: number): void {
 
   for (let i = 0; i < rows; i++) {
     db.run('INSERT INTO agent_log (actor_id, id, kind, trace_id, payload, received_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [actorId, `log-${i}`, 'step', `trace-${i}`, '{}', 1000 + i]);
+      [actorId, `log-${i}`, 'reply_attempt', `trace-${i}`, '{}', 1000 + i]);
     db.run('INSERT INTO evolution_events (actor_id, id, type, message, created_at) VALUES (?, ?, ?, ?, ?)',
       [actorId, `ev-${i}`, 'note', `m${i}`, 1000 + i]);
-    db.run('INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [`c-${i}`, `memory/n${i}.md`, 1, 2, `h${i}`, `wrangler staging note ${i}`, 1000 + i]);
+    db.run('INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text) VALUES (?, ?, ?, ?, ?, ?)',
+      [`c-${i}`, `memory/n${i}.md`, 1, 2, `h${i}`, `wrangler staging note ${i}`]);
   }
 
   db.close();

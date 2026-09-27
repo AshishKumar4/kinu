@@ -359,8 +359,6 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             name: toolName,
             description: desc,
             code: codeStr,
-            scope: 'local',
-            params: null,
           });
 
           // Column defaults seed the neutral prior in the same INSERT, so decay and injection floor see the tool.

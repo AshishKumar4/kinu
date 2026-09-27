@@ -191,8 +191,7 @@ describe('workspace diff lifecycle', () => {
     await rt.storage.vfs.writeFile('logo.png', PNG);
     await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
     await resetWorkspaceBaseline(rt);
-    // What that capture wrote: no generation row, and no row for a binary file.
-    db.exec('DELETE FROM vfs_baseline_generation');
+    // What that capture wrote: no row for a binary file.
     db.exec(`DELETE FROM vfs_baseline_manifest WHERE path = 'logo.png'`);
     await rt.storage.vfs.writeFile('hello.py', 'print(43)\n');
 

@@ -24,7 +24,7 @@ const shim = await import(shimPath);
 function makeCraftStore(tools: Array<{ name: string; code: string; description?: string }>): CraftStore {
   const rows: CraftedTool[] = tools.map((t) => ({
     name: t.name, code: t.code, description: t.description ?? "",
-    params: null, scope: "local", createdAt: 0, updatedAt: 0,
+    createdAt: 0, updatedAt: 0,
   }));
 
   const unsupported = (): never => { throw new Error("unused CraftStore operation"); };
