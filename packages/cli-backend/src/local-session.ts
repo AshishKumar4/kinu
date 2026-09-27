@@ -3,6 +3,7 @@
  * orchestration through the BackendHost seam. Both CLI frontends drive one via send()/end().
  */
 
+import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { sameActorReference, testModel, type ModelTestResult } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
@@ -86,7 +87,7 @@ import { TierIdSchema,
   AdvisorRecoverySnapshotSchema,
   ADVISOR_LANE_FIBER, reviewRecordedTurn,
   advisorWorkspaceGuidance,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type Clock, type WebSearchProvider,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   createAgentsCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider,
@@ -2231,9 +2232,10 @@ export class LocalAgentSession {
     if (this._webSearchProvider) return this._webSearchProvider;
     const getAuth = this.modelResolver?.getAuth;
 
-    const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
+    const options: DefaultWebSearchProviderDeps = {
       fetch: globalThis.fetch,
       clock: REAL_CLOCK,
+      resolve: async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((answer) => answer.address),
     };
 
     if (getAuth) options.getAuth = getAuth;

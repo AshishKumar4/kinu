@@ -1,7 +1,10 @@
 /**
  * SSRF and secret-exfiltration guards for outbound web fetches. The destination judgment lives in
- * `safety/egress-destination.ts` and must not be duplicated here. No DNS resolution (TOCTOU; none on Workers):
- * checks are scheme + hostname + IP literal, failing closed on any parse error.
+ * `safety/egress-destination.ts` and must not be duplicated here. {@link assertSafeUrl} judges scheme, hostname and
+ * IP literal, failing closed on any parse error; {@link refusedResolution} judges the addresses a name resolves
+ * to, where the backend can resolve (the CLI). A Worker cannot, and needs not: measured 2026-09-27 on a deployed
+ * Worker, a fetch of a public name resolving to 127.0.0.1, 10/8, 192.168/16 or 169.254.169.254 answered the
+ * platform's 403 `error code: 1002` and connected nowhere (docs/CRAFT-ARCHITECTURE.md, "Names that resolve inward").
  */
 
 import { refusedHostname } from '../safety/egress-destination';
@@ -45,6 +48,36 @@ export function assertSafeUrl(url: string): URL {
   if (refusal) throw new UnsafeUrlError(refusal.error);
 
   return parsed;
+}
+
+/** Every address a hostname resolves to, as the OS resolver answers it. */
+export type HostResolver = (hostname: string) => Promise<readonly string[]>;
+
+/** An address as the classifier reads it: WHATWG-canonical, IPv6 bracketed; null when it does not parse. */
+function canonicalAddress(address: string): string | null {
+  const url = `http://${address.includes(':') ? `[${address}]` : address}/`;
+
+  return URL.canParse(url) ? new URL(url).hostname : null;
+}
+
+/**
+ * Why `url`'s name may not be fetched, from the addresses it resolves to; null when every one may be. The fetch that
+ * follows resolves again, so a name that changes its answer in between (DNS rebinding) is not caught here.
+ */
+export async function refusedResolution(url: URL, resolve: HostResolver): Promise<string | null> {
+  const host = url.hostname;
+
+  // An address literal was judged by assertSafeUrl and resolves to itself.
+  if (host.startsWith('[') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return null;
+
+  for (const address of await resolve(host)) {
+    const canonical = canonicalAddress(address);
+    const refusal = canonical === null ? `an unparseable address ${address}` : refusedHostname(canonical)?.error;
+
+    if (refusal !== undefined) return `${host} resolves to ${address}: ${refusal}`;
+  }
+
+  return null;
 }
 
 /** Only an unsafe URL answers false; any other error is rethrown, never counted as a pass. */

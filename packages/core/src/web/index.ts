@@ -10,7 +10,7 @@ export {
 
 export { buildCfWebSearchProvider } from './provider-factory';
 
-export { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety';
+export { refusedResolution, assertSafeUrl, isSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
 
 export { htmlToMarkdown, stripBase64Images, looksLikeHtml } from './markdown';
 

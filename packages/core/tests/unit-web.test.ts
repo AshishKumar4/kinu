@@ -290,6 +290,31 @@ describe('web provider — fetch', () => {
     await expect(provider.fetch('https://example.com/missing')).rejects.toMatchObject({ message: expect.stringContaining('404'), retriable: false });
   });
 
+  test('SECURITY: a public name that resolves to a private, loopback or metadata address is refused before connecting', async () => {
+    const answers = new Map<string, readonly string[]>(Object.entries({
+      'loop.example': ['127.0.0.1'],
+      'meta.example': ['93.184.216.34', '169.254.169.254'],
+      'mapped.example': ['::ffff:10.1.2.3'],
+      'bounce.example': ['93.184.216.34'],
+      'public.example': ['93.184.216.34', '2606:2800:220:1::1'],
+    }));
+
+    const { fetch, calls } = stubFetch((url): StubResponse => (url.includes('bounce.example')
+      ? { status: 302, body: '', headers: { location: 'http://loop.example/next' } }
+      : { body: 'ok', headers: { 'content-type': 'text/plain' } }));
+
+    const provider = createDefaultWebSearchProvider({ fetch, resolve: async (host) => answers.get(host) ?? [] });
+
+    for (const url of ['http://loop.example/', 'https://meta.example/latest/meta-data/', 'http://mapped.example/']) {
+      await expect(provider.fetch(url)).rejects.toMatchObject({ name: 'WebFetchError', message: expect.stringContaining('resolves to') });
+    }
+
+    expect(calls).toEqual([]);
+    await expect(provider.fetch('http://bounce.example/')).rejects.toMatchObject({ message: expect.stringContaining('resolves to') });
+    expect(calls.map((call) => call.url)).toEqual(['http://bounce.example/']);
+    expect((await provider.fetch('https://public.example/')).markdown).toBe('ok');
+  });
+
   test('SECURITY: a redirect to a private/metadata address is refused before the second hop', async () => {
     // Models the platform: redirect:'follow' chases Location itself; 'manual' returns the 302.
     const calls: string[] = [];
