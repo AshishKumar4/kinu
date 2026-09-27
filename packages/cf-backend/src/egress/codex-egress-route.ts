@@ -2,7 +2,7 @@ import { APICallError } from 'ai';
 import {
   activeOperationProfile, asFetchFunction, WORKSPACE_RUN_ID, abortCause, EGRESS_REFUSAL_HEADER, EGRESS_ROUTE_HEADER, refusalError,
   isDeviceNotConnectedError, isDeviceUnknownMethodError, DEVICE_UNRESPONSIVE,
-  type OperationProfile, type UserCaller,
+  type ActorReference, type OperationProfile, type UserCaller,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import type { CodexEgress } from './codex-egress';
@@ -25,22 +25,16 @@ type CodexRoute = { readonly kind: 'device'; readonly id: string; readonly label
 
 const CONTAINER: CodexRoute = { kind: 'container' };
 
-interface ActorPin {
-  turn: string;
-  route: Promise<CodexRoute> | null;
-  /** Late calls pick unwritten. */
-  readonly replaced: Set<string>;
-}
-
-const PINNED = new Map<string, ActorPin>();
+const PINNED = new Map<string, { readonly turn: string; readonly route: Promise<CodexRoute> }>();
 
 interface TurnKey {
   readonly actor: string;
   readonly turn: string;
 }
 
-function turnOf(operation: OperationProfile | undefined): TurnKey | null {
-  if (operation === undefined || operation.turnId === WORKSPACE_RUN_ID) return null;
+/** Only live-turn calls pin. */
+function liveTurnOf(operation: OperationProfile | undefined, currentTurn: (actor: ActorReference) => string | null): TurnKey | null {
+  if (operation === undefined || operation.turnId === WORKSPACE_RUN_ID || currentTurn(operation.actor) !== operation.turnId) return null;
   const { actor } = operation;
 
   return { actor: JSON.stringify([actor.workspaceId, actor.actorId, actor.parentActorId]), turn: JSON.stringify([operation.runId, operation.turnId]) };
@@ -114,8 +108,9 @@ export function codexRouteFetch(input: {
   readonly container: typeof fetch;
   readonly hub: CodexRelayHub;
   readonly caller: () => Promise<UserCaller>;
+  readonly currentTurn?: (actor: ActorReference) => string | null;
 }): typeof fetch {
-  const { container, hub, caller } = input;
+  const { container, hub, caller, currentTurn = () => null } = input;
 
   const pick = async (): Promise<CodexRoute> => {
     const device = await hub.codexRelayDevice(await caller());
@@ -127,13 +122,7 @@ export function codexRouteFetch(input: {
     if (turn === null) return pick();
     const held = PINNED.get(turn.actor);
 
-    if (held?.turn === turn.turn && held.route !== null) return held.route;
-
-    if (held?.replaced.has(turn.turn) === true) return pick();
-    const pin = held ?? { turn: turn.turn, route: null, replaced: new Set<string>() };
-
-    if (pin.turn !== turn.turn) pin.replaced.add(pin.turn);
-    pin.turn = turn.turn;
+    if (held?.turn === turn.turn) return held.route;
 
     const picking = (async () => {
       try {
@@ -142,13 +131,12 @@ export function codexRouteFetch(input: {
 
         return route;
       } catch (cause) {
-        if (pin.turn === turn.turn) pin.route = null;
+        if (PINNED.get(turn.actor)?.turn === turn.turn) PINNED.delete(turn.actor);
         throw new KinuError('unavailable', 'could not ask the account which machine carries Codex', { cause });
       }
     })();
 
-    pin.route = picking;
-    PINNED.set(turn.actor, pin);
+    PINNED.set(turn.actor, { turn: turn.turn, route: picking });
 
     return picking;
   };
@@ -156,7 +144,7 @@ export function codexRouteFetch(input: {
   const viaContainer = async (request: RequestInfo | URL, init: RequestInit | undefined): Promise<Response> => stamped(await container(request, init), 'relay');
 
   return asFetchFunction(async (request, init) => {
-    const turn = turnOf(activeOperationProfile());
+    const turn = liveTurnOf(activeOperationProfile(), currentTurn);
     const route = await routeOf(turn);
 
     if (route.kind === 'container') return viaContainer(request, init);
@@ -188,9 +176,7 @@ export function codexRouteFetch(input: {
     } catch (cause) {
       // Nothing left: re-pinned, not switched.
       if (isDeviceUnknownMethodError({ cause })) {
-        const pin = turn === null ? undefined : PINNED.get(turn.actor);
-
-        if (pin !== undefined && pin.turn === turn?.turn) pin.route = Promise.resolve(CONTAINER);
+        if (turn !== null && PINNED.get(turn.actor)?.turn === turn.turn) PINNED.set(turn.actor, { turn: turn.turn, route: Promise.resolve(CONTAINER) });
         diagnostics.event('codex.route_pinned', { route: 'container', device: '', reason: 'daemon_without_relay' });
 
         return viaContainer(request, init);

@@ -107,6 +107,7 @@ async function rig(upstream: Upstream): Promise<Rig> {
 
   const registry = createAgentProviderRegistry({
     env: { CodexEgress: container }, ownerUserId: 'user-1', userDO: { stub: harness.userDO, caller: owner },
+    currentTurn: (actor) => (actor.actorId === 'main' ? liveTurn : null),
   });
 
   return {
@@ -124,8 +125,12 @@ async function rig(upstream: Upstream): Promise<Rig> {
 
 let turnSeq = 0;
 
+/** The actor's in-flight turn, as its session reports it: the newest turn started. */
+let liveTurn: string | null = null;
+
 function newTurn(): OperationProfile {
   turnSeq += 1;
+  liveTurn = `turn-${turnSeq}`;
 
   return captureOperationProfile({
     actor: { actorId: 'main', workspaceId: 'workspace-a', parentActorId: null },
@@ -336,6 +341,27 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     // The earlier turn's job is no longer inside a turn, so it may pick afresh.
     expect(finished(await step(model, earlier)).egress).toBe(`device ${machine.deviceId}`);
     expect(finished(await step(model, live)).egress).toBe('relay');
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('jobs from two earlier turns, interleaved with the live one, never move it', async () => {
+    const { harness, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'ok'));
+    const first = newTurn();
+    const second = newTurn();
+    const live = newTurn();
+
+    expect(finished(await step(model, first)).egress).toBe('relay');
+    expect(finished(await step(model, live)).egress).toBe('relay');
+    expect(finished(await step(model, second)).egress).toBe('relay');
+    const machine = await attachMachine('relay');
+
+    expect(finished(await step(model, second)).egress).toBe(`device ${machine.deviceId}`);
+    expect(finished(await step(model, live)).egress).toBe('relay');
+    expect(finished(await step(model, first)).egress).toBe(`device ${machine.deviceId}`);
+    expect(finished(await step(model, live)).egress).toBe('relay');
+    // The next turn picks afresh.
+    expect(finished(await step(model, newTurn())).egress).toBe(`device ${machine.deviceId}`);
     await harness.joinFibers();
     harness.close();
   });

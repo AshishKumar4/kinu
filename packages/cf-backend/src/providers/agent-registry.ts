@@ -13,7 +13,7 @@ import { createWorkersAIProvider } from '@kinu.run/core';
 import { createMyGatewayProvider } from '@kinu.run/core';
 import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from '@kinu.run/core';
 import type { CredentialSummary } from '../user/user-do';
-import type { UserCaller } from '@kinu.run/core';
+import type { ActorReference, UserCaller } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
 import { codexEgressFetch, codexRouteFetch, type CodexEgressNamespace, type CodexRelayHub } from '../egress/codex-egress-route';
 
@@ -55,6 +55,7 @@ export interface AgentProviderDeps {
   appTitle?: string;
   sessionAffinity?: string;
   accountFor?: (providerId: string) => string | undefined;
+  currentTurn?: (actor: ActorReference) => string | null;
 }
 
 export interface AgentProviderRegistry {
@@ -109,7 +110,10 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
 
   const codexEgress = source === null
     ? container
-    : codexRouteFetch({ container: container ?? opts.fetch ?? fetch, hub: source.stub, caller: () => resolveCaller(source) });
+    : codexRouteFetch({
+      container: container ?? opts.fetch ?? fetch, hub: source.stub, caller: () => resolveCaller(source),
+      ...(opts.currentTurn !== undefined && { currentTurn: opts.currentTurn }),
+    });
 
   registry.register(createCodexProvider(codexEgress === undefined ? {} : { egress: codexEgress }));
   registry.register(createClaudeProvider());

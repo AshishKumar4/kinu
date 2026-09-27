@@ -52,7 +52,7 @@ import {
 } from "./user/mcp";
 
 import {
-  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, createDbCodemodeProvider,
+  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference, createDbCodemodeProvider,
   type EvolutionConfig, type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
@@ -1020,6 +1020,9 @@ export abstract class ActorAgent extends Agent<Env> {
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider],
     reportModelCall: (report) => { this.reportModelCall(report); },
+    currentTurn: (reference) => (sameActorReference(reference, actorReferenceOf(this.actorHandle()))
+      ? this.actorSession.currentTurnId
+      : this.actorHost().hosted(reference)?.session.currentTurnId ?? null),
   });
 
   // The bare prototype must read as sound.

@@ -162,6 +162,10 @@ export class ActorSession {
   private mode: WorkMode = 'build';
   private restoration: Promise<void> = Promise.resolve();
 
+  get currentTurnId(): string | null {
+    return this.active?.lease.turnId ?? null;
+  }
+
   constructor(private readonly options: ActorSessionOptions) {
     this.actorId = options.runtime.actor.actorId;
     this.runtime = options.runtime;
