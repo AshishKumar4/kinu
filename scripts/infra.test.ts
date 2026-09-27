@@ -30,6 +30,7 @@ import {
   supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
 import { confirmationPhrase, partition } from './infra-teardown';
+import { POLL_SECONDS, settle, type SettleClock } from './edge-settled';
 import { plan, putSecret, type SecretIo } from './infra-provision';
 import { isProductSource, readMatching } from './sources';
 
@@ -1128,3 +1129,52 @@ describe('the synthetic identity\'s secret, as provisioning installs it', () => 
   });
 });
 
+/**
+ * The smoke step's wait for the deployment's names. Staging's first deploy started its tiers while the certificate
+ * for `*.staging.kinu.run` was still being issued; the wait is for the certificate to verify, asked again and again,
+ * never for a length of time.
+ */
+describe('the deployment\'s names are waited for until each answers over verified TLS', () => {
+  const edge = deriveInfrastructure('staging').resources
+    .filter((resource) => resource.kind === 'custom-domain' || resource.kind === 'zone-route')
+    .map((resource) => ({ ...resource, kind: resource.kind === 'custom-domain' ? 'custom-domain' as const : 'zone-route' as const }));
+
+  const [domain, wildcard] = [edge.find((resource) => resource.kind === 'custom-domain'), edge.find((resource) => resource.name.startsWith('*.'))];
+
+  /** A clock the wait spends without waiting. */
+  function handClock(): SettleClock & { readonly elapsed: () => number } {
+    let at = 0;
+
+    return { now: () => at, sleep: async (milliseconds) => { at += milliseconds; }, elapsed: () => at };
+  }
+
+  test('a name whose certificate is still being issued is asked again until it verifies, and a verified one is not', async () => {
+    if (domain === undefined || wildcard === undefined) throw new Error('staging declares no Custom Domain and wildcard route to wait for');
+    let wildcardAsks = 0;
+    const clock = handClock();
+
+    const { unsettled, asked } = await settle([domain, wildcard], async (resource) => {
+      if (resource.id !== wildcard.id) return { state: 'present', detail: 'HTTP 200 from the edge' };
+      wildcardAsks += 1;
+
+      return wildcardAsks < 3
+        ? { state: 'unknown', reason: 'the TLS handshake failed, and asked again it ended ERR_TLS_CERT_ALTNAME_INVALID' }
+        : { state: 'present', detail: 'HTTP 404 from the edge' };
+    }, clock);
+
+    expect(unsettled.size).toBe(0);
+    expect(Object.fromEntries(asked)).toEqual({ [domain.id]: 1, [wildcard.id]: 3 });
+    expect(clock.elapsed()).toBe(2 * POLL_SECONDS * 1000);
+  });
+
+  test('a name that never verifies fails the wait at its bound, with what it last answered', async () => {
+    if (wildcard === undefined) throw new Error('staging declares no wildcard route to wait for');
+    const refused = { state: 'absent' as const, detail: 'the edge refused the TLS handshake with handshake_failure' };
+    const clock = handClock();
+
+    const { unsettled } = await settle([wildcard], async () => refused, clock, 60);
+
+    expect(Object.fromEntries(unsettled)).toEqual({ [wildcard.id]: refused });
+    expect(clock.elapsed()).toBeLessThanOrEqual(60 * 1000);
+  });
+});

@@ -21,8 +21,8 @@ import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL, WORKSPACE_ROOT, WORKSPACE_SOUL_DDL,
-  createParentExecutor, createParentWorkspaceVfs,
-  type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
+  answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
+  type ParentWorkspaceHandle, type ParentRpcWrite,
   DefaultExecutionRouter, createInlineExecutor,
   withMountTable, standardMounts, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
   withApprovalGatedShell, createShellSession, shellCwd, holdsGrant,
@@ -668,45 +668,27 @@ async function buildCLIHeadRuntime(
   executionRouter.register(createInlineExecutor(inlineOptions));
 
   const parentVfs = parent.storage.vfs;
-  const ok = <T>(value: T): ParentRpcResult<T> => ({ ok: true, value });
-
-  const fail = <T>(input: { path: string; error: unknown }): ParentRpcResult<T> => {
-    const parsed = v.safeParse(v.object({ code: v.optional(v.string()) }), input.error);
-
-    return {
-      ok: false,
-      error: {
-        code: parsed.success && parsed.output.code === 'ENOENT' ? 'ENOENT' : 'EIO',
-        message: input.error instanceof Error ? input.error.message : String(input.error),
-        path: input.path,
-      },
-    };
-  };
-
-  const attempt = async <T>(path: string, fn: () => Promise<T>): Promise<ParentRpcResult<T>> => {
-    try { return ok(await fn()); } catch (error) { return fail<T>({ path, error }); }
-  };
 
   const parentHandle: ParentWorkspaceHandle = {
-    read: (path) => attempt(path, async () => {
+    read: (path) => answerParentRpc(path, async () => {
       const content = await parentVfs.readFile(path);
 
       return content instanceof Uint8Array ? content : new TextEncoder().encode(content);
     }),
-    write: (input: ParentRpcWrite) => attempt(input.path, async () => {
+    write: (input: ParentRpcWrite) => answerParentRpc(input.path, async () => {
       if (input.kind === 'file') await parentVfs.writeFile(input.path, input.data);
       else await parentVfs.mkdir(input.path, { recursive: input.recursive });
 
       return null;
     }),
-    list: (path) => attempt(path, () => parentVfs.readdir(path)),
-    stat: (path) => attempt(path, () => parentVfs.stat(path)),
-    delete: (path) => attempt(path, async () => {
+    list: (path) => answerParentRpc(path, () => parentVfs.readdir(path)),
+    stat: (path) => answerParentRpc(path, () => parentVfs.stat(path)),
+    delete: (path) => answerParentRpc(path, async () => {
       await parentVfs.unlink(path);
 
       return null;
     }),
-    exec: (command) => attempt('', async () => {
+    exec: (command) => answerParentRpc('', async () => {
       if (!parent.shell) throw new Error('the parent workspace has no shell');
 
       return parent.shell.exec(command);

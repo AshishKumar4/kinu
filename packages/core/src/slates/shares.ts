@@ -1,7 +1,9 @@
 /** A blueprint exists exactly while its row stands unrevoked; every read asks this table again (S6). */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import { SHARE_KINDS, type ShareKind, type SlateShareRecord } from './sharing';
 
 export function initSlateShareTables(execRaw: RawSqlExec): void {
@@ -50,13 +52,13 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
 
   /** Present and unrevoked, re-read on this call. */
   live(id: string): Rec {
-    const share = this.get(id);
+    return settleSync(Effect.suspend(() => {
+      const share = this.get(id);
 
-    if (share === undefined) throw new KinuError('missing', this.table.missing);
+      if (share === undefined) return Effect.fail(new KinuError('missing', this.table.missing));
 
-    if (share.revokedAt !== null) throw new KinuError('denied', this.table.revoked);
-
-    return share;
+      return share.revokedAt === null ? Effect.succeed(share) : Effect.fail(new KinuError('denied', this.table.revoked));
+    }));
   }
 
   list(): Rec[] {
@@ -69,15 +71,17 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
   }
 
   revoke(id: string): Rec {
-    const share = this.get(id);
+    return settleSync(Effect.suspend(() => {
+      const share = this.get(id);
 
-    if (share === undefined) throw new KinuError('missing', this.table.missing);
+      if (share === undefined) return Effect.fail(new KinuError('missing', this.table.missing));
 
-    if (share.revokedAt !== null) return share;
-    const revokedAt = this.now();
-    this.db.exec(`UPDATE ${this.table.shares} SET revoked_at = ? WHERE id = ?`, revokedAt, id);
+      if (share.revokedAt !== null) return Effect.succeed(share);
+      const revokedAt = this.now();
+      this.db.exec(`UPDATE ${this.table.shares} SET revoked_at = ? WHERE id = ?`, revokedAt, id);
 
-    return { ...share, revokedAt };
+      return Effect.succeed({ ...share, revokedAt });
+    }));
   }
 
   addUsers(id: string, users: readonly ShareUser[]): Rec {

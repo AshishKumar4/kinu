@@ -420,6 +420,26 @@ describe('one workspace database, many logical actors', () => {
     fx.db.close();
   });
 
+  test('a claim whose request record is missing is settled once, not owed on every later wake', async () => {
+    const fx = build();
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
+    const source = 'export default async function main() { return "retained"; }';
+    await actor.runtime.storage.vfs.writeFile(`${actor.runtime.identity.scaffold.path}.v1`, source);
+
+    await actor.stores.claims.admit({
+      runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
+      program: { kind: 'scaffold', version: 1, digest: sha256Hex(source), build: null },
+    });
+    // The claim stands; the request it names is gone.
+    fx.db.exec("DELETE FROM actor_requests WHERE turn_id = 'turn-a'");
+
+    expect(await recoverActorTurns(fx.host)).toMatchObject({ failed: ['turn-a'], unreadable: [], verified: [] });
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'error' });
+    expect(await recoverActorTurns(fx.host)).toMatchObject({ failed: [], unreadable: [], verified: [] });
+    fx.host.releaseAll();
+    fx.db.close();
+  });
+
   /** A turn whose program verifies, and one run of it: admitted again on `installedBuild`, its model called at each
    *  of `steps`, and left open there, as a run a memory or wall reset of its activation ended. */
   async function interruptedRuns(hostBuild?: string | null): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null) => Promise<void>; fx: Fixture }> {

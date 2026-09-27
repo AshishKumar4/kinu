@@ -6,7 +6,8 @@ import { MODEL_INPUT_MODALITIES } from './types';
 import { cloneModelInfos, positiveInteger, StaleModelList } from './util';
 import { nonEmptyString } from '../utils/json';
 import type { JsonValue } from '../utils/json';
-import { diagnostics, renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, renderThrownChain, settle } from '../obs/index';
 import { knownReasoningEfforts } from './reasoning-effort';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
@@ -137,35 +138,35 @@ export async function listModelsDevProviderModels(
     return new StaleModelList(cloneModelInfos(opts.fallback), failure);
   };
 
-  let data: Record<string, ModelsDevProvider>;
+  return settle(Effect.gen(function* () {
+    const data = yield* Effect.tryPromise({ try: () => getModelsDevCatalog(deps.fetch, opts.ttlMs ?? DEFAULT_TTL_MS), catch: (cause) => ({ cause }) }).pipe(
+      Effect.catch((failed) => Effect.fail(stale({ reason: 'models.dev could not be read', cause: failed.cause }))),
+    );
 
-  try {
-    data = await getModelsDevCatalog(deps.fetch, opts.ttlMs ?? DEFAULT_TTL_MS);
-  } catch (cause) {
-    throw stale({ reason: 'models.dev could not be read', cause });
-  }
+    const models = data[providerId]?.models;
 
-  const models = data[providerId]?.models;
+    if (!models) {
+      if (opts.fallback === undefined) return [];
 
-  if (!models) {
-    if (opts.fallback === undefined) return [];
-    throw stale({ reason: `models.dev lists no ${providerId} models` });
-  }
+      return yield* Effect.fail(stale({ reason: `models.dev lists no ${providerId} models` }));
+    }
 
-  const out: ModelInfo[] = [];
+    const out: ModelInfo[] = [];
 
-  for (const [key, model] of Object.entries(models)) {
-    const info = modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true);
+    for (const [key, model] of Object.entries(models)) {
+      const info = modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true);
 
-    if (info) out.push(info);
-  }
+      if (info) out.push(info);
+    }
 
-  if (out.length === 0) {
-    if (opts.fallback === undefined) return [];
-    throw stale({ reason: `models.dev lists no usable ${providerId} models` });
-  }
+    if (out.length === 0) {
+      if (opts.fallback === undefined) return [];
 
-  return orderModels(out, opts.preferredIds);
+      return yield* Effect.fail(stale({ reason: `models.dev lists no usable ${providerId} models` }));
+    }
+
+    return orderModels(out, opts.preferredIds);
+  }));
 }
 
 /** Provider metadata, or null when not in the catalog; an unreadable catalog throws rather than returning null. */

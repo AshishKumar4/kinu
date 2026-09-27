@@ -2,7 +2,8 @@ import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { OAuthTokenError } from './oauth-token-error';
 import { nonEmptyString } from '../utils/json';
 import type { OAuthCredential } from '../credentials/store';
-import { diagnostics, KinuError, toKinuError } from '../obs/index';
+import { Cause, Effect } from 'effect';
+import { diagnostics, KinuError, settle, settleSync, toKinuError } from '../obs/index';
 import * as v from 'valibot';
 
 const CloudflareAccountSchema = v.object({ id: v.string(), name: v.optional(v.string()) });
@@ -64,49 +65,56 @@ export function cloudflareClientAuth(env: CloudflareOAuthEnv): { fields: Record<
     : { fields: { client_id: clientId }, headers: { authorization: `Basic ${base64(`${clientId}:${clientSecret}`)}` } };
 }
 
-async function requestCloudflareOAuthToken(
-  env: CloudflareOAuthEnv,
-  fields: Record<string, string>,
-): Promise<JsonObject> {
-  const client = cloudflareClientAuth(env);
+function requestCloudflareOAuthToken(env: CloudflareOAuthEnv, fields: Record<string, string>): Effect.Effect<JsonObject> {
+  return Effect.gen(function* () {
+    const client = cloudflareClientAuth(env);
 
-  if (client === null) throw new Error('Cloudflare OAuth client id is not configured.');
+    if (client === null) return yield* Effect.die(new Error('Cloudflare OAuth client id is not configured.'));
 
-  const body = new URLSearchParams({ ...client.fields, ...fields });
+    const body = new URLSearchParams({ ...client.fields, ...fields });
 
-  const headers = new Headers({
-    accept: 'application/json',
-    'content-type': 'application/x-www-form-urlencoded',
-    ...client.headers,
+    const headers = new Headers({
+      accept: 'application/json',
+      'content-type': 'application/x-www-form-urlencoded',
+      ...client.headers,
+    });
+
+    const response = yield* Effect.promise(() => fetch(CLOUDFLARE_TOKEN_URL, { method: 'POST', headers, body }));
+    const payload = yield* jsonObjectOf(response, 'Cloudflare token endpoint');
+
+    if (!response.ok) {
+      const code = stringField(payload, 'error') ?? `http_${response.status}`;
+      const reason = stringField(payload, 'error_description') ?? stringField(payload, 'error') ?? `HTTP ${response.status}`;
+
+      return yield* Effect.die(new OAuthTokenError('cloudflare', code, `Cloudflare token refresh failed: ${reason}`));
+    }
+
+    return payload;
   });
-
-  const response = await fetch(CLOUDFLARE_TOKEN_URL, { method: 'POST', headers, body });
-  const payload = await readJsonObject(response, 'Cloudflare token endpoint');
-
-  if (!response.ok) {
-    const code = stringField(payload, 'error') ?? `http_${response.status}`;
-    const reason = stringField(payload, 'error_description') ?? stringField(payload, 'error') ?? `HTTP ${response.status}`;
-    throw new OAuthTokenError('cloudflare', code, `Cloudflare token refresh failed: ${reason}`);
-  }
-
-  return payload;
 }
 
-async function fetchCloudflareAccounts(accessToken: string): Promise<CloudflareAccount[]> {
-  const response = await fetch(`${CLOUDFLARE_API}/accounts`, {
-    headers: {
-      accept: 'application/json',
-      authorization: `Bearer ${accessToken}`,
-    },
+function fetchCloudflareAccounts(accessToken: string): Effect.Effect<CloudflareAccount[]> {
+  return Effect.gen(function* () {
+    const response = yield* Effect.promise(() => fetch(`${CLOUDFLARE_API}/accounts`, {
+      headers: {
+        accept: 'application/json',
+        authorization: `Bearer ${accessToken}`,
+      },
+    }));
+
+    const payload = yield* jsonObjectOf(response, 'Cloudflare accounts endpoint');
+
+    if (!response.ok) {
+      const reason = stringField(payload, 'error_description') ?? firstCloudflareError(payload) ?? `HTTP ${response.status}`;
+
+      return yield* Effect.die(new Error(`Cloudflare account lookup failed: ${reason}`));
+    }
+
+    return accountsIn(payload);
   });
+}
 
-  const payload = await readJsonObject(response, 'Cloudflare accounts endpoint');
-
-  if (!response.ok) {
-    const reason = stringField(payload, 'error_description') ?? firstCloudflareError(payload) ?? `HTTP ${response.status}`;
-    throw new Error(`Cloudflare account lookup failed: ${reason}`);
-  }
-
+function accountsIn(payload: JsonObject): CloudflareAccount[] {
   const result = v.safeParse(v.array(CloudflareAccountSchema), payload.result);
 
   if (!result.success) return [];
@@ -128,21 +136,24 @@ export async function cloudflareTokenToCredential(
 ): Promise<OAuthCredential> {
   const accessToken = nonEmptyString({ value: token.access_token });
 
-  if (!accessToken) throw new Error('Cloudflare OAuth did not return an access token.');
+  if (!accessToken) return settle(Effect.die(new Error('Cloudflare OAuth did not return an access token.')));
 
-  const refreshToken = nonEmptyString({ value: token.refresh_token });
   // A failed account lookup still stores the credential; a missing account already says so.
-  let accounts: CloudflareAccount[] = [];
+  return settle(Effect.map(fetchCloudflareAccounts(accessToken).pipe(
+    Effect.catchCause((cause) => {
+      diagnostics.failure('oauth.cloudflare_account_lookup_failed', toKinuError({
+        doing: "looking up the Cloudflare login's accounts",
+        cause: Cause.squash(cause),
+        otherwise: 'unavailable',
+      }));
 
-  try {
-    accounts = await fetchCloudflareAccounts(accessToken);
-  } catch (err) {
-    diagnostics.failure('oauth.cloudflare_account_lookup_failed', toKinuError({
-      doing: "looking up the Cloudflare login's accounts",
-      cause: err,
-      otherwise: 'unavailable',
-    }));
-  }
+      return Effect.succeed<CloudflareAccount[]>([]);
+    }),
+  ), (accounts) => credentialOf(token, accessToken, accounts)));
+}
+
+function credentialOf(token: CloudflareTokenPayload, accessToken: string, accounts: CloudflareAccount[]): OAuthCredential {
+  const refreshToken = nonEmptyString({ value: token.refresh_token });
 
   const metadata: JsonObject = {
     tokenType: nonEmptyString({ value: token.token_type }) ?? 'bearer',
@@ -175,12 +186,15 @@ export async function refreshCloudflareCredential(
   env: CloudflareOAuthEnv,
   current: OAuthCredential,
 ): Promise<OAuthCredential> {
-  if (!current.refreshToken) throw new Error('Cloudflare OAuth credential has no refresh token. Reconnect Cloudflare.');
+  if (!current.refreshToken) return settle(Effect.die(new Error('Cloudflare OAuth credential has no refresh token. Reconnect Cloudflare.')));
 
-  const token: CloudflareTokenPayload = await requestCloudflareOAuthToken(env, {
+  return settle(Effect.map(requestCloudflareOAuthToken(env, {
     grant_type: 'refresh_token',
     refresh_token: current.refreshToken,
-  });
+  }), (token) => refreshedCredential(current, token)));
+}
+
+function refreshedCredential(current: OAuthCredential, token: CloudflareTokenPayload): OAuthCredential {
 
   const accessToken = nonEmptyString({ value: token.access_token }) ?? current.accessToken;
   const refreshToken = nonEmptyString({ value: token.refresh_token }) ?? current.refreshToken;
@@ -234,22 +248,29 @@ export async function fetchCloudflareAIGateways(
   accessToken: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<CloudflareAIGatewaySummary[]> {
-  const response = await fetchImpl(
-    `${CLOUDFLARE_API}/accounts/${encodeURIComponent(accountId)}/ai-gateway/gateways?per_page=50`,
-    { headers: { accept: 'application/json', authorization: `Bearer ${accessToken}` } },
-  );
+  return settle(Effect.gen(function* () {
+    const response = yield* Effect.promise(() => fetchImpl(
+      `${CLOUDFLARE_API}/accounts/${encodeURIComponent(accountId)}/ai-gateway/gateways?per_page=50`,
+      { headers: { accept: 'application/json', authorization: `Bearer ${accessToken}` } },
+    ));
 
-  const payload = await readJsonObject(response, 'Cloudflare AI Gateway list endpoint');
+    const payload = yield* jsonObjectOf(response, 'Cloudflare AI Gateway list endpoint');
 
-  if (!response.ok) {
-    const reason = firstCloudflareError(payload) ?? `HTTP ${response.status}`;
+    if (!response.ok) {
+      const reason = firstCloudflareError(payload) ?? `HTTP ${response.status}`;
 
-    const hint = response.status === 401 || response.status === 403
-      ? ' Reconnect Cloudflare to grant AI Gateway access.'
-      : '';
+      const hint = response.status === 401 || response.status === 403
+        ? ' Reconnect Cloudflare to grant AI Gateway access.'
+        : '';
 
-    throw new Error(`Cloudflare AI Gateway listing failed: ${reason}.${hint}`);
-  }
+      return yield* Effect.die(new Error(`Cloudflare AI Gateway listing failed: ${reason}.${hint}`));
+    }
+
+    return gatewaysIn(payload);
+  }));
+}
+
+function gatewaysIn(payload: JsonObject): CloudflareAIGatewaySummary[] {
 
   const result = v.safeParse(v.array(CloudflareGatewaySchema), payload.result);
 
@@ -303,12 +324,9 @@ export function cloudflareAccountsFromCredential(credential: OAuthCredential): C
 export function withCloudflareAccount(credential: OAuthCredential, accountId: string): OAuthCredential {
   const account = cloudflareAccountsFromCredential(credential).find((row) => row.id === accountId);
 
-  if (!account) throw new KinuError('bad_input', 'That Cloudflare account is not one this login can see. Reconnect Cloudflare and try again.');
-
-  return {
-    ...credential,
-    metadata: { ...credential.metadata, accountId: account.id, accountName: account.name },
-  };
+  return settleSync(account
+    ? Effect.succeed({ ...credential, metadata: { ...credential.metadata, accountId: account.id, accountName: account.name } })
+    : Effect.fail(new KinuError('bad_input', 'That Cloudflare account is not one this login can see. Reconnect Cloudflare and try again.')));
 }
 
 export function isCloudflareCredentialUsable(credential: OAuthCredential, skewMs = 60_000): boolean {
@@ -383,14 +401,13 @@ function firstCloudflareError(obj: JsonObject): string | null {
 
 /** A JSON object answer, or a named failure carrying the upstream status and parse cause. */
 export async function readJsonObject(response: Response, label: string): Promise<JsonObject> {
-  try {
-    return v.parse(JsonObjectSchema, await response.json());
-  } catch (error) {
-    throw new Error(
-      `${label} returned HTTP ${response.status} with a body that is not JSON.`,
-      { cause: error },
-    );
-  }
+  return settle(jsonObjectOf(response, label));
+}
+
+function jsonObjectOf(response: Response, label: string): Effect.Effect<JsonObject> {
+  return Effect.tryPromise({ try: async () => v.parse(JsonObjectSchema, await response.json()), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => Effect.die(new Error(`${label} returned HTTP ${response.status} with a body that is not JSON.`, { cause: failed.cause }))),
+  );
 }
 
 function isCloudflareAccountId(value: string): boolean {

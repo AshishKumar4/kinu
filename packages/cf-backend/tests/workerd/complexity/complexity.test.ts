@@ -37,6 +37,14 @@ interface Subject {
 }
 
 const SUBJECTS: readonly Subject[] = [{
+  name: 'activation, the open-turn lookup',
+  unit: 'finished turns',
+  sizes: [50, 1_000],
+  run: async (probe, size) => await probe.openTurnLookup(size),
+  rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
+  why: 'an activation asks it before any request (kinu-logs/onstart/DESIGN.md, S2): a pointer written with the '
+    + 'turn\'s start and removed with its end answers it, whatever number of turns finished before',
+}, {
   name: 'session store, one turn',
   unit: 'turns of history',
   sizes: [50, 300],

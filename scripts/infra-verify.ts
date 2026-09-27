@@ -214,6 +214,21 @@ function unobservableRow(resource: Resource): Row {
 const routeHost = (pattern: string): string =>
   pattern.replace(/^\*\./u, '').replace(/\/.*$/u, '');
 
+/** The kinds of resource the edge serves a name for: each is asked over HTTPS. */
+export const EDGE_KINDS = ['custom-domain', 'zone-route'] as const satisfies readonly Resource['kind'][];
+
+/**
+ * Whether the edge serves a name for `resource` over HTTPS with a certificate that verifies. A custom domain and an
+ * exact route must reach THIS Worker; a wildcard route is asked whether ANYTHING answers under it, because a preview
+ * host with no live preview answers 404 on purpose.
+ */
+export async function observeEdge(resource: Resource & { readonly kind: (typeof EDGE_KINDS)[number] }): Promise<Observation> {
+  if (resource.kind === 'custom-domain') return servesWorker(resource.name);
+  const host = routeHost(resource.name);
+
+  return resource.name.startsWith('*.') ? edgeResponds(`${PROBE_LABEL}.${host}`) : servesWorker(host);
+}
+
 /** A container application, or the namespace its class's live binding names and the application holding it. */
 function observedContainer(resource: Resource, live: Deployment): Observation {
   if (resource.kind === 'container') return container(resource.name, /image (\S+)$/u.exec(resource.purpose)?.[1] ?? '');
@@ -284,18 +299,8 @@ async function observe(
     case 'binding':
       return observedRow(resource, bound(resource.binding ?? '', undefined));
     case 'custom-domain':
-      return observedRow(resource, await servesWorker(resource.name));
-    case 'zone-route': {
-      const host = routeHost(resource.name);
-
-      // A wildcard route is asked whether ANYTHING answers under it, because a
-      // preview host with no live preview answers 404 on purpose. An exact route
-      // claims one origin, so it is asked the stronger question the custom
-      // domain is asked: does this hostname reach THIS Worker.
-      return observedRow(resource, resource.name.startsWith('*.')
-        ? await edgeResponds(`${PROBE_LABEL}.${host}`)
-        : await servesWorker(host));
-    }
+    case 'zone-route':
+      return observedRow(resource, await observeEdge({ ...resource, kind: resource.kind }));
 
     case 'wildcard-dns':
       return observedRow(resource, await wildcardDns(routeHost(resource.name)));
