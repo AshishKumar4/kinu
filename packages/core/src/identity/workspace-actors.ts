@@ -95,6 +95,12 @@ function requiredIdentity(value: string): string {
   return value;
 }
 
+function mayCreate(owner: WorkspaceActor, child: { readonly kind: WorkspaceActor['kind']; readonly toolProfile?: WorkspaceActor['toolProfile'] }): boolean {
+  if (owner.kind !== 'run') return true;
+
+  return owner.toolProfile === 'full' && child.kind === 'run' && child.toolProfile !== 'toolless';
+}
+
 /** Deletion outranks retirement. */
 function actorState(actor: WorkspaceActor): ActorDirectoryResult['state'] {
   if (actor.deletedAt !== null) return 'deleted';
@@ -374,7 +380,7 @@ export class WorkspaceActorDirectory {
     if (input.action === 'register' || input.action === 'cancelCreation') {
       const owner = this.describe(parent);
 
-      if (owner.kind === 'run' && (owner.toolProfile === 'toolless' || input.kind !== 'run')) {
+      if (!mayCreate(owner, input)) {
         throw new KinuError('denied', 'This actor kind cannot create the requested child kind.');
       }
 

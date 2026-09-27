@@ -173,10 +173,14 @@ describe('one workspace actor directory', () => {
 
     expect(() => directory.apply(caller, directory.storagePath(branch.reference), { action: 'register', creationId: 'c-child', name: 'exp:child-1', kind: 'run', lifetime: 'task' }))
       .toThrow(expect.objectContaining({ code: 'denied' }));
-    // A full run actor creates only run actors.
+    // A full run actor creates only full run actors.
     const headCaller = directory.open(head.reference.actorId);
+    const headPath = directory.storagePath(head.reference);
 
-    expect(() => directory.apply(headCaller, directory.storagePath(head.reference), { action: 'register', creationId: 'c-hire2', name: 'reader', kind: 'subordinate', lifetime: 'durable' }))
+    expect(() => directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-hire2', name: 'reader', kind: 'subordinate', lifetime: 'durable' }))
       .toThrow(expect.objectContaining({ code: 'denied' }));
+    expect(() => directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-branch2', name: 'exp:branch-2', kind: 'run', toolProfile: 'toolless', lifetime: 'task' }))
+      .toThrow(expect.objectContaining({ code: 'denied' }));
+    expect(directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-head2', name: 'exp:head-2', kind: 'run', lifetime: 'task' }).toolProfile).toBe('full');
   });
 });

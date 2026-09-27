@@ -572,6 +572,9 @@ export class LocalAgentHost {
     ws: LocalHostedAgent,
     record: WorkspaceActor,
   ): Promise<void> {
+    // A toolless run actor has no home to release.
+    if (record.toolProfile === 'toolless') return;
+
     const agentName = record.kind === 'run'
       ? headAgentName(record.storageKey)
       : subordinateAgentName(record.storageKey);
