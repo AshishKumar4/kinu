@@ -236,7 +236,7 @@ title, description, declared bindings by kind, the file tree, and one action,
 **Data.** Workspace object: `slate_live_shares` (id, slate, visibility, handle,
 grant, created, revoked), `slate_live_share_users` (share id, user id, email)
 and `slate_viewer_requests` (share id, viewer, path, calls, outcome, created,
-settled; the newest 1,000 per share), all in `packages/core/src/slates/live-shares.ts`. Blueprints:
+settled), all in `packages/core/src/slates/live-shares.ts`. Blueprints:
 `slate_shares` and `slate_share_users` in `packages/core/src/slates/shares.ts`,
 used by `packages/core/src/slates/blueprints.ts`. User object:
 `user_shares_received`, for the Drive's "Shared with you". There is no public

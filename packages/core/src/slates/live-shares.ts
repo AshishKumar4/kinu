@@ -31,9 +31,6 @@ const LiveShareRow = v.object({
   handle: v.string(), grant_json: v.string(), created_at: v.number(), revoked_at: v.nullable(v.number()),
 });
 
-/** The newest requests of one share that `requests` answers; opening a request drops the ones before them. */
-const VIEWER_REQUESTS_KEPT = 1_000;
-
 const RequestRow = v.object({
   id: v.number(), share_id: v.string(), viewer: v.string(), slate_id: v.string(), path: v.string(),
   calls: v.string(), outcome: v.string(), created_at: v.number(), settled_at: v.nullable(v.number()),
@@ -94,13 +91,7 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
       input.share, input.viewer, input.path, '[]', 'open', createdAt,
     ).toArray()[0];
 
-    const id = v.parse(v.object({ id: v.number() }), row).id;
-    this.db.exec(
-      'DELETE FROM slate_viewer_requests WHERE share_id = ? AND id <= (SELECT id FROM slate_viewer_requests WHERE share_id = ? ORDER BY id DESC LIMIT 1 OFFSET ?)',
-      input.share, input.share, VIEWER_REQUESTS_KEPT,
-    );
-
-    return id;
+    return v.parse(v.object({ id: v.number() }), row).id;
   }
 
   recordCall(request: number, call: ViewerCall): void {
