@@ -82,7 +82,7 @@ import {
   nanoid, type HeadRunView,
   // Delegation runner shared with the local host: an assignment is a whole turn input
   // and no reactor may digest it.
-  drainAssignments,
+  drainAssignments, delegatedTaskMetadata, type AdmittedAssignment,
   appendMemoryNote,
   parseMemoryNotes,
   type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview, answerParts,
@@ -1201,7 +1201,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const room = this.chatRooms.hostedRoom(record.actorId);
         const answerId = crypto.randomUUID();
 
-        await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
+        // A hirer's delivery opens the chat as an event naming the hirer; a chat send wrote its own row.
+        if (task.messageId === undefined) await this.recordDelegatedTask(reference, record, task);
+
+        // Every delivery has its opening row now, so open panes are sent the transcript holding it.
+        await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: true, carried: [] });
 
         try {
           await runHostedTask(seams, reference, task, {
@@ -1923,6 +1927,28 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Records a hosted turn's answer into that actor's own chat; `runHeadInference` writes only the
    *  run ledger. */
+  /** The task row cli-backend's host writes too (`delegatedTaskMetadata`), under the delivery's own id. */
+  private async recordDelegatedTask(reference: ActorReference, record: WorkspaceActor, task: AdmittedAssignment): Promise<void> {
+    const bound = this.actorHost().bindStores(reference);
+    const history = bound.stores.history;
+    const rows = history.transcript(CHAT_SESSION_ID);
+
+    if (rows.has(task.sequenceId)) return;
+    const hirer = record.parentActorId === null ? null : this.workspaceActors().list().find((actor) => actor.actorId === record.parentActorId);
+    const from = hirer === undefined || hirer === null || hirer.parentActorId === null ? MAIN_AGENT : hirer.name;
+
+    const message = await history.admitInput({
+      id: task.sequenceId, turnId: task.sequenceId, message: turnInputMessage({ text: task.body }),
+      assertOwner: () => bound.handle.assertCurrent(),
+    });
+
+    const prepared = await rows.prepareUser({
+      id: task.sequenceId, turnId: task.sequenceId, message, metadata: delegatedTaskMetadata(from, task.mode),
+    });
+
+    this.ctx.storage.transactionSync(() => rows.appendUser(prepared));
+  }
+
   private async recordHostedChatAnswer(reference: ActorReference, id: string, completion: HeadReport['canonicalCompletion']): Promise<void> {
     if (completion === undefined) return;
     const history = this.actorHost().bindStores(reference).stores.history;
