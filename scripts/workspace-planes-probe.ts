@@ -35,7 +35,7 @@ try {
     // (`agent-host/host.ts` hire, `buildLocalActorRuntime` head). No probe-only
     // shortcut, so what this prints is what a real actor of each kind gets.
     const node = registerLocalNode(runtime.actor, { nodeId: 'node-probe', rootId: 'node-probe', depth: 1 });
-    const head = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: explorationActorKey('head-probe'), creationId: 'head-probe', kind: 'head', lifetime: 'task' }));
+    const head = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: explorationActorKey('head-probe'), creationId: 'head-probe', kind: 'run', lifetime: 'task' }));
     const subordinate = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: 'sub-probe', creationId: 'sub-probe', kind: 'subordinate', lifetime: 'durable' }));
 
     const identities = [

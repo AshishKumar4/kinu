@@ -572,7 +572,7 @@ export class LocalAgentHost {
     ws: LocalHostedAgent,
     record: WorkspaceActor,
   ): Promise<void> {
-    const agentName = record.kind === 'head'
+    const agentName = record.kind === 'run'
       ? headAgentName(record.storageKey)
       : subordinateAgentName(record.storageKey);
 

@@ -338,8 +338,8 @@ describe('turn-pipeline correctness wiring', () => {
     await hostedMainActor(workspace);
     const rootFiles = workspaceFiles(workspace.agent);
     await rootFiles.writeFile('/home/main/shared-proof.md', 'registered workspace bytes');
-    const head = await hostedExplorationHarness(workspace, 'head', 'head-a1');
-    expect(head.actor.record.kind).toBe('head');
+    const head = await hostedExplorationHarness(workspace, 'full', 'head-a1');
+    expect(head.actor.record.kind).toBe('run');
     const headFiles = head.actor.runtime.storage.vfs;
     expect(await headFiles.readFile('/home/main/shared-proof.md', { encoding: 'utf8' }))
       .toBe('registered workspace bytes');

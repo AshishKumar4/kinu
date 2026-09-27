@@ -772,7 +772,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * Each actor's home is provisioned in this isolate by the host (`actor-hosting.ts` →
-   * `hostedActorAgentName`); its identity is its `workspace_actors` row, so there is no facet port.
+   * `hostedHomeName`); its identity is its `workspace_actors` row, so there is no facet port.
    */
 
   /**

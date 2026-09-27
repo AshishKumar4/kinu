@@ -157,7 +157,7 @@ import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from './runtime';
-import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, localActorMission } from './actor-identity';
+import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, localActorMission, type LocalActorBinding } from './actor-identity';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
@@ -2845,29 +2845,47 @@ export class LocalAgentSession {
    * release, retirement. Public so callers without a session (bench panel, eval arm) can seat heads.
    */
   async hostHead(input: HeadInput, writes: WriteObserver): Promise<HostedHeadSeat> {
-    const binding = registerLocalActor(this.rt.actor, {
-      name: explorationActorKey(input.id), creationId: input.id, kind: 'head', lifetime: 'task',
+    // Both named before acquire: the host seeds the loop and builds the runtime while building the actor.
+    const { binding, seat } = await this.seatRunActor(input.id, (actorId) => {
+      this.loopOrigins.set(actorId, input.loop);
+      this.actorWrites.set(actorId, writes);
     });
 
-    const agentName = headAgentName(binding.storageKey);
-    // Both named before acquire: the host seeds the loop and builds the runtime while building the actor.
-    this.loopOrigins.set(binding.reference.actorId, input.loop);
-    this.actorWrites.set(binding.reference.actorId, writes);
-    const actor = await this.actorHost.acquire(binding.reference);
-
     return {
-      actor,
-      runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
-      profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
-      dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
+      ...seat,
       release: async () => {
         this.actorHost.release(binding.reference);
         this.loopOrigins.delete(binding.reference.actorId);
         this.actorWrites.delete(binding.reference.actorId);
         await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
+          const agentName = headAgentName(binding.storageKey);
+
           if (this.rt.cwd) cleanupFacetCwdScratch(this.rt.cwd, agentName);
           else if (this.rt.nodeHome) await facetHomeReleaser(this.rt.nodeHome())(agentName);
         });
+      },
+    };
+  }
+
+  /** One run actor's seat, for a head or a swarm node; `declare` runs before the host builds it. */
+  private async seatRunActor(creationId: string, declare: (actorId: string) => void): Promise<{
+    readonly binding: LocalActorBinding;
+    readonly seat: HostedNodeSeat;
+  }> {
+    const binding = registerLocalActor(this.rt.actor, {
+      name: explorationActorKey(creationId), creationId, kind: 'run', lifetime: 'task',
+    });
+
+    declare(binding.reference.actorId);
+    const actor = await this.actorHost.acquire(binding.reference);
+
+    return {
+      binding,
+      seat: {
+        actor,
+        runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
+        profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
+        dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
       },
     };
   }
@@ -2883,20 +2901,8 @@ export class LocalAgentSession {
    * retirement belongs to the owning search. Public so an eval can seat nodes through this session.
    */
   async hostNode(node: NodeIdentity): Promise<HostedNodeSeat> {
-    const binding = registerLocalActor(this.rt.actor, {
-      name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'head', lifetime: 'task',
-    });
-
-    // Declared before the host builds it: only this slot marks a head row as a node.
-    this.nodeSeats.add(binding.reference.actorId);
-    const actor = await this.actorHost.acquire(binding.reference);
-
-    return {
-      actor,
-      runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
-      profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
-      dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
-    };
+    // Declared before the host builds it: only this slot marks a run actor as a node.
+    return (await this.seatRunActor(node.nodeId, (actorId) => { this.nodeSeats.add(actorId); })).seat;
   }
 
   /** Profile for one claimed hosted-actor turn, via the same authority as chat turns. */

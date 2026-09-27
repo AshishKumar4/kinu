@@ -27,11 +27,11 @@ import { KinuError } from '@kinu.run/core/obs';
 import { isCFRuntime, type CFRuntime } from './runtime';
 import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting';
 
-/** A swarm node's actor is a head in swarm mode, so only the toolless branch stays apart. */
+/** Heads, swarm nodes and steer branches are full run actors; an MCTS branch is a toolless one. */
 export interface ExplorationActorRequest {
   readonly creationId: string;
-  readonly kind: 'head' | 'branch';
-  /** Absent lets `defaultLoopOrigin` stand (`inherit` for both kinds). */
+  readonly toolProfile: 'full' | 'toolless';
+  /** Absent lets `defaultLoopOrigin` stand (`inherit`). */
   readonly loop?: LoopOrigin;
 }
 
@@ -92,6 +92,16 @@ export interface ExplorationHostSeams {
   split(actor: HostedActor, runtime: CFRuntime, input: HeadInput): (request: HeadSplitRequest) => Promise<HeadSplitResult>;
 }
 
+/** One run actor: registered (or re-found) under its creation id, retired when its run settles. */
+async function hostRunActor(seams: ExplorationHostSeams, request: ExplorationActorRequest): Promise<{
+  readonly reference: ActorReference;
+  readonly retire: () => Promise<void>;
+}> {
+  const reference = await seams.register(request);
+
+  return { reference, retire: () => retireExploration(seams, reference, explorationActorKey(request.creationId)) };
+}
+
 /** Retire an exploration actor. `observed` travels when a live claim was seen, so the host settles it. */
 async function retireExploration(
   seams: ExplorationHostSeams, reference: ActorReference, name: string,
@@ -140,8 +150,7 @@ function explorationDynamicContext(actor: HostedActor, profile: ResolvedTurnProf
 
 /** A branching head, hosted. The actor is retired when `run()` settles. */
 export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): Promise<SpawnedHead> {
-  const reference = await seams.register({ creationId: input.id, kind: 'head', loop: input.loop });
-  const name = explorationActorKey(input.id);
+  const { reference, retire } = await hostRunActor(seams, { creationId: input.id, toolProfile: 'full', loop: input.loop });
   /** The caller's explicit stop; a socket close or evicted isolate must leave this false. */
   let stopped: string | null = null;
 
@@ -197,7 +206,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
         });
       } finally {
         unwatch();
-        await retireExploration(seams, reference, name);
+        await retire();
       }
     },
     /** Explicit stop: records the reason and interrupts the live turn. Not reachable from a transport close. */
@@ -215,8 +224,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
 export async function hostNodeSeat(
   seams: ExplorationHostSeams, node: NodeIdentity,
 ): Promise<HostedNodeSeat> {
-  // Kind fold retired `node`: a seat is a head row; stored `node` rows load via the directory's read translation.
-  const reference = await seams.register({ creationId: node.nodeId, kind: 'head' });
+  const { reference } = await hostRunActor(seams, { creationId: node.nodeId, toolProfile: 'full' });
   const actor = await seams.host.acquire(reference);
 
   return {
@@ -293,8 +301,7 @@ export async function hostBranch(
   branchId: string,
   deps: BranchRunnerDeps,
 ): Promise<BranchHandle> {
-  const reference = await seams.register({ creationId: branchId, kind: 'branch' });
-  const name = explorationActorKey(branchId);
+  const { reference, retire } = await hostRunActor(seams, { creationId: branchId, toolProfile: 'toolless' });
   /** Held in memory for the reflection that may follow; the handle's life is the window. */
   let trace = '';
 
@@ -333,7 +340,7 @@ export async function hostBranch(
 
       return { text: answer.text, usage: answer.usage };
     }),
-    release: () => retireExploration(seams, reference, name),
+    release: retire,
   };
 }
 
@@ -344,6 +351,5 @@ export async function hostBranch(
 export async function abortHostedBranch(
   seams: ExplorationHostSeams, branchId: string,
 ): Promise<void> {
-  const reference = await seams.register({ creationId: branchId, kind: 'branch' });
-  await retireExploration(seams, reference, explorationActorKey(branchId));
+  await (await hostRunActor(seams, { creationId: branchId, toolProfile: 'toolless' })).retire();
 }

@@ -699,9 +699,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected explorationSeams(): ExplorationHostSeams {
     return {
       host: this.actorHost(),
-      register: async ({ creationId, kind, loop }) => {
+      register: async ({ creationId, toolProfile, loop }) => {
         const entry = await this.actorDirectory({
-          action: 'register', creationId, name: explorationActorKey(creationId), kind, lifetime: 'task',
+          action: 'register', creationId, name: explorationActorKey(creationId), kind: 'run', toolProfile, lifetime: 'task',
         });
 
         if (loop) this._chosenLoopOrigins.set(entry.reference.actorId, loop);
@@ -723,7 +723,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // disclosed boundary and its real credential are the same fact.
       nodeHome: (actor) => provisionHostedActorHome(
         { homeHost: () => this.facetHomeHost(), directory: this.workspaceActors() },
-        actor.record, actor.reference, 'head',
+        actor.record, actor.reference,
       ),
       codemodeTool: (runtime, webSearch) => {
         const factory = createCodemodeToolFactory({
