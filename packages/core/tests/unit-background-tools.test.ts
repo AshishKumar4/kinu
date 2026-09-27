@@ -1,4 +1,4 @@
-// Spawn-shaped work (`agents` fork) detaches on spawn announcement where a wake can deliver the
+// Spawn-shaped work (`agents` swarm) detaches on spawn announcement where a wake can deliver the
 // result; result-shaped work (`shell`, `eval`) always rides the timed race.
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
@@ -17,7 +17,7 @@ function gate() {
 
 type TestToolResult = object | string;
 
-interface ForkInput { action: string; task?: string }
+interface SwarmInput { action: string; task?: string }
 
 interface ShellToolInput { command: string }
 
@@ -45,10 +45,10 @@ function fakeJobRunner(
 }
 
 /** Announces its spawn (readSpawnStarted) before a long exploration, like agents-tool.ts. */
-function fakeForkTool(exploration: Promise<void>, onExplored?: () => void): ToolSet[string] {
+function fakeSwarmTool(exploration: Promise<void>, onExplored?: () => void): ToolSet[string] {
   return tool({
     description: 'agents',
-    inputSchema: jsonSchema<ForkInput>({
+    inputSchema: jsonSchema<SwarmInput>({
       type: 'object', properties: { action: { type: 'string' }, task: { type: 'string' } },
       required: ['action'],
     }),
@@ -57,7 +57,7 @@ function fakeForkTool(exploration: Promise<void>, onExplored?: () => void): Tool
       await exploration;
       onExplored?.();
 
-      return { strategy: 'merge', text: 'merged fork answer' };
+      return { strategy: 'merge', text: 'merged swarm answer' };
     },
   });
 }
@@ -81,17 +81,17 @@ function executeTool(tools: ToolSet, name: string) {
 
   if (!entry) throw new Error(`Expected ${name} tool to be registered`);
 
-  return toolExecute<ForkInput | ShellToolInput, TestToolResult>(entry);
+  return toolExecute<SwarmInput | ShellToolInput, TestToolResult>(entry);
 }
 
-describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-shaped', () => {
+describe('wrapToolsForBackground — swarm is spawn-shaped, run/eval are result-shaped', () => {
   test('BACKGROUNDABLE_TOOLS declares the completion axis: agents=spawn, run/eval=result', () => {
     expect(BACKGROUNDABLE_TOOLS.agents?.completion).toBe('spawn');
     expect(BACKGROUNDABLE_TOOLS.shell?.completion).toBe('result');
     expect(BACKGROUNDABLE_TOOLS.eval?.completion).toBe('result');
   });
 
-  test('on the interactive surface, a fork detaches the instant it spawns — not after the 30s threshold', async () => {
+  test('on the interactive surface, a swarm detaches the instant it spawns — not after the 30s threshold', async () => {
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
     let explored = false;
@@ -102,26 +102,26 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
       exploringAtDetach.push(!explored);
       detached.push(promise);
 
-      return { detached: true, jobId: 'job-fork' };
+      return { detached: true, jobId: 'job-swarm' };
     });
 
     expect(jobRunner.policy.wakesAfterTurn).toBe(true);
 
     const exploration = gate();
-    const raw: ToolSet = { agents: fakeForkTool(exploration.held, () => { explored = true; }) };
+    const raw: ToolSet = { agents: fakeSwarmTool(exploration.held, () => { explored = true; }) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const out = await executeTool(wrapped, 'agents')({ action: 'fork', task: 't' });
+    const out = await executeTool(wrapped, 'agents')({ action: 'swarm', task: 't' });
 
     expect(crossings).toEqual(['agents']);
     // An ordering, not a wall-clock bound: the exploration is still held at detach.
     expect(exploringAtDetach).toEqual([true]);
-    expect(out).toMatchObject({ background: true, jobId: 'job-fork', kind: 'agents' });
+    expect(out).toMatchObject({ background: true, jobId: 'job-swarm', kind: 'agents' });
     exploration.release();
     await Promise.all(detached);
   });
 
-  test('on the one-shot surface a fork NEVER detaches — even one that far outruns the threshold returns its own answer', async () => {
-    // Without a wake, a detached fork's result has nowhere to go, so it must answer inline.
+  test('on the one-shot surface a swarm NEVER detaches — even one that far outruns the threshold returns its own answer', async () => {
+    // Without a wake, a detached swarm's result has nowhere to go, so it must answer inline.
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
 
@@ -129,22 +129,22 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
 
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
-      recordDetach(crossings, detached, 'job-fork-osh'),
+      recordDetach(crossings, detached, 'job-swarm-osh'),
       timer,
     );
 
     expect(jobRunner.policy.wakesAfterTurn).toBe(false);
 
     const exploration = gate();
-    const raw: ToolSet = { agents: fakeForkTool(exploration.held) };
+    const raw: ToolSet = { agents: fakeSwarmTool(exploration.held) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const pending = executeTool(wrapped, 'agents')({ action: 'fork', task: 't' });
+    const pending = executeTool(wrapped, 'agents')({ action: 'swarm', task: 't' });
     timer.tick();
     exploration.release();
     const out = await pending;
 
     expect(crossings).toEqual([]);
-    expect(out).toEqual({ strategy: 'merge', text: 'merged fork answer' });
+    expect(out).toEqual({ strategy: 'merge', text: 'merged swarm answer' });
     await Promise.all(detached);
   });
 
@@ -172,13 +172,13 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
     await Promise.all(detached);
   });
 
-  test('a non-fork agents action (hire/ask/list) is not detachable — always runs inline, on either surface', async () => {
+  test('a non-swarm agents action (hire/ask/list) is not detachable — always runs inline, on either surface', async () => {
     let ran = false;
 
     const raw: ToolSet = {
       agents: tool({
         description: 'agents',
-        inputSchema: jsonSchema<ForkInput>({
+        inputSchema: jsonSchema<SwarmInput>({
           type: 'object', properties: { action: { type: 'string' } }, required: ['action'],
         }),
         execute: async () => {
@@ -190,7 +190,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-s
     };
 
     const jobRunner = fakeJobRunner(BACKGROUND_POLICY.interactive, () => {
-      throw new Error('must not cross the threshold for a non-fork action');
+      throw new Error('must not cross the threshold for a non-swarm action');
     });
 
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });

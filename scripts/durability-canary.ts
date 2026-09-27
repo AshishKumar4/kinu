@@ -20,6 +20,7 @@ import * as v from 'valibot';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 import { resolvePublicSessionPlan } from '../evals/src/session';
 import { CANARY_PREFIX, canaryAsk, canaryMarker, type CanaryLoad } from './canary-script';
+import type { RunEvent } from '../packages/core/src/index';
 
 function flag(name: string, fallback: string): string {
   const at = process.argv.indexOf(`--${name}`);
@@ -67,14 +68,71 @@ const TimelineSchema = v.looseObject({
   sampling: v.number(),
 });
 
-/** One object's telemetry over a window, read through `prod-logs.ts timeline`, which owns the query shapes. */
-function timeline(from: number, to: number): v.InferOutput<typeof TimelineSchema> {
-  const run = spawnSync('bun', ['scripts/prod-logs.ts', 'timeline', session.workspace, '--worker', worker,
+/** One object's telemetry over a window, read through `prod-logs.ts timeline`, which owns the query shapes. The
+ *  target is the workspace's name while the object id is unknown: a window with no startup (a resting tail) cannot
+ *  resolve a name, so the tail is read by the id the active window named. A failed read is reported, not thrown, so
+ *  the ledger half of the report still prints. */
+function timeline(target: string, from: number, to: number): v.InferOutput<typeof TimelineSchema> | { readonly failed: string } {
+  const run = spawnSync('bun', ['scripts/prod-logs.ts', 'timeline', target, '--worker', worker,
     '--since', new Date(from).toISOString(), '--until', new Date(to).toISOString(), '--json'], { encoding: 'utf8' });
 
-  if (run.status !== 0) throw new Error(`prod-logs timeline failed: ${run.stderr.slice(0, 500)}`);
+  if (run.status !== 0) return { failed: run.stderr.slice(-500) };
 
   return v.parse(TimelineSchema, JSON.parse(run.stdout));
+}
+
+/** The canary's root runs, oldest first: a resumed turn may continue under a run of its own. */
+function canaryRuns(events: readonly RunEvent[]): { readonly runId: string; readonly start: string; readonly end: RunEvent | undefined }[] {
+  return events
+    .filter((event) => event.type === 'run_start' && event.userMessage?.startsWith(CANARY_PREFIX) === true)
+    .map((start) => ({
+      runId: start.runId,
+      start: start.timestamp,
+      end: events.find((event) => event.runId === start.runId && event.type === 'run_end'),
+    }));
+}
+
+/** The canary's own run starts it has seen, by run id. */
+const known = new Map<string, { readonly start: string; cursor: number; end: RunEvent | undefined }>();
+
+/**
+ * Waits until the canary's newest run ends as completed, or until no run of it has been open for `quietMs`. It reads
+ * the run list and each canary run's new events once per `pollMs`: nobody watches the turn meanwhile, and a poll every
+ * five minutes is sparser than the platform's idle eviction, so it keeps nothing alive the product would not.
+ */
+async function waitForCompletion(pollMs: number, quietMs: number): Promise<void> {
+  let quietSince = Date.now();
+
+  for (;;) {
+    for (const runId of await session.runIds()) {
+      const seen = known.get(runId);
+
+      if (seen?.end !== undefined) continue;
+      const added = await session.runEventsOf(runId, seen === undefined ? 0 : seen.cursor + 1);
+      const start = added.find((event) => event.type === 'run_start');
+
+      if (seen === undefined && (start?.type !== 'run_start' || start.userMessage?.startsWith(CANARY_PREFIX) !== true)) continue;
+      const entry = seen ?? { start: start?.timestamp ?? '', cursor: 0, end: undefined };
+
+      for (const event of added) {
+        entry.cursor = Math.max(entry.cursor, event.eventIndex);
+
+        if (event.type === 'run_end') entry.end = event;
+      }
+
+      known.set(runId, entry);
+    }
+
+    const runs = [...known.values()].sort((a, b) => a.start.localeCompare(b.start));
+    const newest = runs.at(-1);
+
+    if (newest?.end?.type === 'run_end' && newest.end.reason === 'completed') return;
+
+    if (runs.some((run) => run.end === undefined)) quietSince = Date.now();
+    else if (Date.now() - quietSince > quietMs) return;
+
+    await Bun.sleep(pollMs);
+  }
 }
 
 try {
@@ -88,20 +146,7 @@ try {
   session.disconnect();
   console.log(`canary ${session.workspace}: run ${opened.runId} open; client gone at ${new Date().toISOString()}`);
 
-  let cursor = 0;
-  let ended = false;
-
-  while (!ended) {
-    for await (const event of session.followRun(opened.runId, cursor)) {
-      cursor = event.eventIndex;
-      ended = event.type === 'run_end';
-
-      if (ended) break;
-    }
-
-    // The follow stream ends when the object does; the next follow resumes at the cursor.
-    if (!ended) await Bun.sleep(5_000);
-  }
+  await waitForCompletion(5 * 60_000, 20 * 60_000);
 
   const endedAt = Date.now();
   console.log(`canary ${session.workspace}: run ended at ${new Date(endedAt).toISOString()}; idle tail ${String(tailMs / 60_000)} min`);
@@ -111,30 +156,43 @@ try {
 
   await session.connect();
   const events = await session.runEvents();
+  const runs = canaryRuns(events);
+  const runIds = new Set(runs.map((run) => run.runId));
 
   const inline = markerCounts(events
-    .filter((event) => event.runId === opened.runId && event.type === 'tool_call_end')
+    .filter((event) => runIds.has(event.runId) && event.type === 'tool_call_end')
     .map((event) => JSON.stringify(event.type === 'tool_call_end' ? event.result ?? null : null)));
 
   const expected = Array.from({ length: load.steps }, (_, step) => canaryMarker('root', step));
   const jobs = await session.backgroundJobs();
   const jobMarkers = markerCounts(jobs.map((job) => job.result ?? ''));
 
-  const runStart = events.find((event) => event.runId === opened.runId && event.type === 'run_start');
-  const runEnd = events.find((event) => event.runId === opened.runId && event.type === 'run_end');
-  const runMs = runStart !== undefined && runEnd !== undefined ? Date.parse(runEnd.timestamp) - Date.parse(runStart.timestamp) : 0;
-  const active = timeline(startedAt, endedAt);
-  const idle = timeline(endedAt + 30_000, endedAt + tailMs);
+  const last = runs.at(-1)?.end;
+  const runMs = runs.length > 0 && last !== undefined ? Date.parse(last.timestamp) - Date.parse(runs[0].start) : 0;
+  const stepsLost = expected.filter((marker) => !inline.has(marker)).length;
+  const stepsBoughtTwice = [...inline.entries(), ...jobMarkers.entries()].filter(([, n]) => n > 1).map(([marker, n]) => ({ marker, n }));
+
+  // The ledger half first: it needs nothing but the object's own rows.
+  console.log(JSON.stringify({
+    ledger: {
+      runs: runs.map((run) => ({ runId: run.runId, start: run.start, end: run.end?.type === 'run_end' ? run.end.reason : null })),
+      stepsLost, stepsBoughtTwice, jobs: jobs.map((job) => job.status),
+    },
+  }));
+
+  const active = timeline(session.workspace, startedAt, endedAt);
+  const object = 'failed' in active ? null : active.object;
+  const idle = object === null ? { failed: 'no object id from the active window' } : timeline(object, endedAt + 30_000, endedAt + tailMs);
   const hours = (endedAt - startedAt) / 3_600_000;
-  const resumed = active.topEvents.find((e) => e.event === 'turn.resumed')?.count ?? 0;
+  const resumed = 'failed' in active ? null : active.topEvents.find((e) => e.event === 'turn.resumed')?.count ?? 0;
 
   const report = {
     workspace: session.workspace,
-    object: active.object,
+    object,
     load,
     activeHours: Number(hours.toFixed(2)),
     autonomy: {
-      runEnded: runEnd !== undefined,
+      completed: last?.type === 'run_end' && last.reason === 'completed',
       runsOpened: events.filter((e) => e.type === 'run_start' && e.userMessage?.startsWith(CANARY_PREFIX) === true).length,
       // The inline workload held the turn open for its planned length, or it measured something else.
       runMinutes: Number((runMs / 60_000).toFixed(1)),
@@ -147,15 +205,14 @@ try {
       statuses: jobs.map((job) => job.status),
       markersSeen: Array.from({ length: load.jobs }, (_, j) => canaryMarker('job', j)).filter((marker) => jobMarkers.has(marker)).length,
     },
-    disruptions: {
+    disruptions: 'failed' in active ? active : {
       resumed,
-      perHour: Number((resumed / hours).toFixed(2)),
+      perHour: Number(((resumed ?? 0) / hours).toFixed(2)),
       outcomes: active.outcomes.filter((o) => o.outcome !== 'ok'),
     },
-    stepsLost: expected.filter((marker) => !inline.has(marker)).length,
-    stepsBoughtTwice: [...inline.entries(), ...jobMarkers.entries()].filter(([, n]) => n > 1).map(([marker, n]) => ({ marker, n })),
-    idleStartups: idle.startupsByHour.reduce((sum, h) => sum + h.startups, 0),
-    sampling: Math.max(active.sampling, idle.sampling),
+    stepsLost,
+    stepsBoughtTwice,
+    idleStartups: 'failed' in idle ? idle : idle.startupsByHour.reduce((sum, h) => sum + h.startups, 0),
   };
 
   console.log(JSON.stringify(report, null, 1));

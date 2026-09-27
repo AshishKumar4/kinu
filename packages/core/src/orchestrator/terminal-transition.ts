@@ -48,6 +48,8 @@ export interface TerminalTransitionDeps {
   readonly turnIsLive?: (turnId: string) => boolean;
   /** A past instant means due now. */
   readonly scheduleRetry: (atMs: number) => Promise<void>;
+  /** Called once a transition closes with nothing left to retry, so the host can let its arms go. */
+  readonly settled?: () => Promise<void>;
 }
 
 /** Owns the ordering: claim before the first effect, disposition before release, close only on an empty owed set, prune after close. */
@@ -191,6 +193,8 @@ export class TerminalTransitions {
     hold(transition, async () => {
       await run.reported;
       this.end(transition);
+
+      if (this.nextRetryAt() === null) await this.deps.settled?.();
     });
   }
 

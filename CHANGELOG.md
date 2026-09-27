@@ -21,6 +21,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **Interrupted helper work resumes and runs once.** A helper's task that a workspace restart cut off now runs again on the next start, without waiting for something else to wake the workspace; a task whose answer had already reached the agent that asked for it before the restart is marked done instead of run a second time; each of a helper's tasks keeps its own record of what it has already done, so a second task that makes the same call as the first now runs it. A workspace that has kept failing to recover the same interrupted request since it was lost now closes it once and rests. Two one-time costs of the deploy that brings this, accepted because a schema change is a reset: a helper task in flight during the deploy may repeat the actions it had already taken, once; and a conversation turn open across the deploy is not picked up again, so its answer has to be asked for again.
 - The Effect diagnostic gate resolves its compiler from the pinned package. Dependency analysis includes its executable floating-effect fixture.
 
 - Credential key configuration failures are `unavailable`; unusable credential records, mismatched credential kinds and unretainable slate entries are `bad_input`. Unconfigured checkpoint reads and completion-only model streaming are `unsupported`. Synchronous refusals remain synchronous, and decryption failures retain their cause.
