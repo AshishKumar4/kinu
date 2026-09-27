@@ -32,7 +32,7 @@ const PROMPT = '\x1b[32m$\x1b[0m ';
 
 const CONTINUATION = '\x1b[32m>\x1b[0m ';
 
-export const BUSY = '\x1b[2m⋯ running\x1b[0m';
+export const BUSY = '\x1b[2m... running\x1b[0m';
 
 export function writePrompt(term: TerminalWriter) {
   term.write(PROMPT);
@@ -364,7 +364,7 @@ function writeClipNote(term: TerminalWriter, stream: string, shown: number, stor
   const withheld = stored - shown;
 
   if (withheld <= 0) return;
-  term.write(`\x1b[2m… ${withheld.toLocaleString()} more ${stream} characters are stored and not shown here\x1b[0m\r\n`);
+  term.write(`\x1b[2m... ${withheld.toLocaleString()} more ${stream} characters are stored and not shown here\x1b[0m\r\n`);
 }
 
 /**

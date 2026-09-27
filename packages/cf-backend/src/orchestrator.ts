@@ -1482,7 +1482,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private requireOwnerUserId(): string {
     const userId = this.getOwnerUserId();
 
-    if (!userId) throw new KinuError('unavailable', 'Agent has no owner yet — peer messaging needs an owned agent.');
+    if (!userId) throw new KinuError('unavailable', 'Agent has no owner yet: peer messaging needs an owned agent.');
 
     return userId;
   }
@@ -1985,11 +1985,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const requirePeer = async (agent: string): Promise<void> => {
       this.requireOwnerUserId();
 
-      if (agent === this.name) throw new KinuError('bad_input', 'that is this agent — pick another peer (action:"list")');
+      if (agent === this.name) throw new KinuError('bad_input', 'that is this agent: pick another peer (action:"list")');
       const { stub, caller } = await this.userHub();
       const known = await stub.hasWorkspace(caller, agent);
 
-      if (!known) throw new KinuError('missing', `unknown peer "${agent}" — list your team with action:"list"`);
+      if (!known) throw new KinuError('missing', `unknown peer "${agent}": list your team with action:"list"`);
     };
 
     return {
@@ -2092,7 +2092,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     if (current !== userId) {
-      throw new KinuError('denied', `Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
+      throw new KinuError('denied', `Agent owned by a different user (stored=${current.slice(0, 8)}..., caller=${userId.slice(0, 8)}...)`);
     }
 
     // No scaffold probe here: this runs on every authenticated request. An interrupted bootstrap
@@ -3462,7 +3462,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (!task) throw new KinuError('bad_input', 'branchTurn requires the redirect text');
 
     if (!this._inFlight) {
-      return { accepted: false, reason: 'No turn is running — send it as a normal message instead.' };
+      return { accepted: false, reason: 'No turn is running: send it as a normal message instead.' };
     }
 
     if (this.turnWorkMode() === 'plan') {
@@ -5398,7 +5398,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         VALUES (${this.actorHandle().actorId}, 'reflection', ${
           `Auto-GEPA enabled by the autonomous default (every ${everyN} turns of new traces). ` +
           `A disable set before autonomy defaults flipped on was stored as "unset" and is ` +
-          `superseded by this default — run setAutoGepa(0) to disable again.`
+          `superseded by this default: run setAutoGepa(0) to disable again.`
         }, ${Date.now()})`;
     }
 

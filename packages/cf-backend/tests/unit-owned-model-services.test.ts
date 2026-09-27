@@ -89,7 +89,7 @@ describe('OwnedModelServices', () => {
     });
 
     expect(() => services.providerRegistry()).toThrow(
-      'Agent has no owner_user_id yet — Worker must call claimOwner before any model use.',
+      'Agent has no owner_user_id yet: Worker must call claimOwner before any model use.',
     );
   });
 

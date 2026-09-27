@@ -98,7 +98,7 @@ export async function connectMcpServers(
       refused.push(...refusals);
       clients.set(serverName, client);
       connectionDiagnostics.push({ server: serverName, status: 'connected', toolCount: listed.tools.length });
-      onLog?.(`mcp: ${serverName} → ${listed.tools.length} tool(s)`);
+      onLog?.(`mcp: ${serverName} -> ${listed.tools.length} tool(s)`);
     } catch (err) {
       // A failed close on the half-open transport means a leaked child; report it, never drop it.
       const reasons = [renderThrownChain({ cause: err })];

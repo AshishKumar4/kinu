@@ -204,7 +204,7 @@ const SHOWN = { user: 400, response: 500, followup: 700 } as const;
 function clip(text: string, limit: number): string {
   const trimmed = text.trim();
 
-  return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit)}… [truncated]`;
+  return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit)}... [truncated]`;
 }
 
 const BLOCK_HEADER = /^###\s+\d+\s*\/\s*\d+\s+(\S+)\s*$/;
@@ -224,16 +224,16 @@ export function renderLabelingEvidence(item: LabelingItem): string {
     clip(item.assistantResponse, SHOWN.response),
     '',
     "USER'S NEXT MESSAGE",
-    item.followup === null ? '(none — the session ended here)' : clip(item.followup, SHOWN.followup),
+    item.followup === null ? '(none: the session ended here)' : clip(item.followup, SHOWN.followup),
   ].join('\n');
 }
 
 export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
   const lines = [
-    `# Kinu outcome calibration — ${items.length} turn${items.length === 1 ? '' : 's'}`,
+    `# Kinu outcome calibration: ${items.length} turn${items.length === 1 ? '' : 's'}`,
     '#',
     "# For each turn, judge what the user's FOLLOW-UP shows about how the agent's",
-    '# answer landed. Put ONE letter after `verdict:` —',
+    '# answer landed. Put ONE letter after `verdict:`, one of:',
     '#',
     ...LABEL_KEYS.map(([key, label]) => `#   ${key}  ${label.padEnd(12)}${OUTCOME_LABEL_HELP[label]}`),
     '#',
@@ -312,7 +312,7 @@ export function parseLabelingFile(text: string): ParsedLabelFile {
     const label = byKey.get(raw.toLowerCase());
 
     if (label === undefined) {
-      errors.push(`line ${i + 1}: "${raw}" is not a verdict — use ${[...byKey.keys()].join(', ')}`);
+      errors.push(`line ${i + 1}: "${raw}" is not a verdict: use ${[...byKey.keys()].join(', ')}`);
 
       continue;
     }
@@ -320,7 +320,7 @@ export function parseLabelingFile(text: string): ParsedLabelFile {
     labels.push({ outcomeId: current, label });
   }
 
-  if (blocks === 0) errors.push('no turns found — is this a Kinu labeling file?');
+  if (blocks === 0) errors.push('no turns found: is this a Kinu labeling file?');
 
   return { labels, skipped: verdicts - labels.length, errors };
 }
@@ -525,20 +525,20 @@ function per100(value: number): string {
 
 function renderRate(rate: CorrectedRate): string {
   return `${per100(rate.corrected.mean)} per 100 turns ` +
-    `(95% CI ${per100(rate.corrected.lo)}–${per100(rate.corrected.hi)})` +
-    ` — the classifier said ${per100(rate.raw)}, off by ${rate.bias >= 0 ? '+' : ''}${per100(rate.bias)}`;
+    `(95% CI ${per100(rate.corrected.lo)} to ${per100(rate.corrected.hi)})` +
+    `: the classifier said ${per100(rate.raw)}, off by ${rate.bias >= 0 ? '+' : ''}${per100(rate.bias)}`;
 }
 
 /** With no labels, says so in one line: the number is never approximated or defaulted. */
 export function renderCalibrationReport(report: CalibrationReport): string {
   const lines = [
-    'Judge calibration — the turn-outcome classifier, measured against hand labels',
+    'Judge calibration: the turn-outcome classifier, measured against hand labels',
   ];
 
   if (report.gap !== null || report.accuracy === null || report.overall === null) {
     const gap = report.gap;
     lines.push(
-      `  ${gap === null ? 'uncalibrated — no hand-labeled turns yet' : describeCalibrationGap(gap)}`,
+      `  ${gap === null ? 'uncalibrated: no hand-labeled turns yet' : describeCalibrationGap(gap)}`,
       `  ${report.universe} classifier-graded turn${report.universe === 1 ? '' : 's'} are waiting to be checked; ` +
         `${report.labeled} labeled so far.`,
       '  Draw a calibration set with:  kinu label export <agent>',
@@ -552,14 +552,14 @@ export function renderCalibrationReport(report: CalibrationReport): string {
       (report.unclear > 0 ? `, ${report.unclear} unclear (excluded)` : '') +
       (report.orphaned > 0 ? `, ${report.orphaned} orphaned` : '') +
       ` over ${report.universe} classifier-graded turns` +
-      (report.labelers.length > 0 ? ` — by ${report.labelers.join(', ')}` : '') +
+      (report.labelers.length > 0 ? `: by ${report.labelers.join(', ')}` : '') +
       // A profile measured against an older model says nothing about the current one.
       (report.lastLabeledAt === null ? '' : `, last on ${new Date(report.lastLabeledAt).toISOString().slice(0, 10)}`),
     `  Sensitivity: ${formatScoreInterval(report.accuracy.sensitivity)}` +
       `   Specificity: ${formatScoreInterval(report.accuracy.specificity)}`,
     report.kappa === null
-      ? "  Cohen's κ: undefined at these marginals"
-      : `  Cohen's κ: ${report.kappa.value.toFixed(2)} (95% CI ${report.kappa.lo.toFixed(2)}–${report.kappa.hi.toFixed(2)})`,
+      ? "  Cohen's kappa: undefined at these marginals"
+      : `  Cohen's kappa: ${report.kappa.value.toFixed(2)} (95% CI ${report.kappa.lo.toFixed(2)} to ${report.kappa.hi.toFixed(2)})`,
     `  Corrected correction rate: ${renderRate(report.overall)}`,
   );
 
@@ -572,7 +572,7 @@ export function renderCalibrationReport(report: CalibrationReport): string {
     }
   }
 
-  lines.push('  Sensitivity is a ratio estimate and runs ~1–2 points high at 100 labels; the corrected rate does not.');
+  lines.push('  Sensitivity is a ratio estimate and runs ~1-2 points high at 100 labels; the corrected rate does not.');
 
   return lines.join('\n');
 }

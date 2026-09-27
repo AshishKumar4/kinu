@@ -463,6 +463,6 @@ export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: Alter
   return (
     `${framing}\n\n` +
     `${evidenceWindow(chosen.text, EVIDENCE_BUDGETS.takeChosen)}\n\n` +
-    `Please continue with this approach — briefly acknowledge the switch, then carry the work forward from it.`
+    `Please continue with this approach: briefly acknowledge the switch, then carry the work forward from it.`
   );
 }

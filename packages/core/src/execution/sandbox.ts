@@ -183,7 +183,7 @@ function normalize(res: { output?: string; stdout?: string; stderr?: string; exi
 /** Worded distinctly from the adapter's own cancellation, which names the process it killed. */
 function notDispatched(): Error {
   return new DOMException(
-    'sandbox exec cancelled before dispatch — no container process was started',
+    'sandbox exec cancelled before dispatch: no container process was started',
     'AbortError',
   );
 }
@@ -236,9 +236,9 @@ export function createSandboxExecutor(
         supported: false,
         reason: `nothing is listening on port ${port} inside the sandbox. `
           + `Start your server FIRST with a SUPERVISED process, then call sandbox.exposePort again. Examples:\n`
-          + `  • Static site: await sandbox.startProcess("python3 -m http.server ${port} --directory /workspace/<app-dir>")\n`
-          + `  • Node:        await sandbox.startProcess("node server.js", {cwd:"/workspace/<app-dir>"})\n`
-          + `Supervision is what makes the process survive a container restart; a bare \`nohup … &\` does not and will be lost.`,
+          + `  - Static site: await sandbox.startProcess("python3 -m http.server ${port} --directory /workspace/<app-dir>")\n`
+          + `  - Node:        await sandbox.startProcess("node server.js", {cwd:"/workspace/<app-dir>"})\n`
+          + `Supervision is what makes the process survive a container restart; a bare \`nohup ... &\` does not and will be lost.`,
       };
     }
 
@@ -342,7 +342,7 @@ export function createSandboxExecutor(
     },
     listFiles: {
       planAllowed: true,
-      description: 'List files in a directory — the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
+      description: 'List files in a directory: the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
         if (!handle) return notConfigured();
         const path = parseInput(OptionalStringSchema, { value: args[0] });
@@ -374,7 +374,7 @@ export function createSandboxExecutor(
     },
     readdir: {
       planAllowed: true,
-      description: 'Alias for listFiles — list entries in a directory.',
+      description: 'Alias for listFiles: list entries in a directory.',
       execute: async (...args: unknown[]) => tools.listFiles.execute(args[0]),
     },
     deleteFile: {
@@ -398,7 +398,7 @@ export function createSandboxExecutor(
     },
     exists: {
       planAllowed: true,
-      description: 'Check if a path exists — uses shell test.',
+      description: 'Check if a path exists: uses shell test.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
         if (!handle) return notConfigured();
         const path = parseInput(PathSchema, { value: args[0] });
@@ -423,7 +423,7 @@ export function createSandboxExecutor(
         'Expose a TCP port from the sandbox. Returns the public preview URL, then one line: "verified" when a ' +
         'request to the URL reaches the container port, or "not reached" naming the preview-route gate that ' +
         'refused; that check never calls your server. PRE-REQUISITE: a SUPERVISED server must already be ' +
-        'listening on the port — start it with sandbox.startProcess, never a bare `nohup … &` (unsupervised ' +
+        'listening on the port: start it with sandbox.startProcess, never a bare `nohup ... &` (unsupervised ' +
         'children die with the container and do not come back). Nothing listening is refused with the fix.',
       execute: async (...args: unknown[]): Promise<string | Refusal> => {
         if (!handle) return notConfigured();
@@ -488,7 +488,7 @@ export function createSandboxExecutor(
     startProcess: {
       description:
         'Start a SUPERVISED background process in the sandbox. Supervision records a restart ' +
-        'spec, so the process COMES BACK when the container restarts; a bare `nohup … &` does ' +
+        'spec, so the process COMES BACK when the container restarts; a bare `nohup ... &` does ' +
         'not and is lost. Returns JSON {processId}. Prefer this over `exec "cmd &"` for any ' +
         'long-running server.',
       execute: async (...args: unknown[]): Promise<CommandResult> => {

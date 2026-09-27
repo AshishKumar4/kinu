@@ -318,7 +318,7 @@ describe('`{preset, task}` is a complete call on every row', () => {
 
     if (!kindRefusal) throw new Error('an unregistered kind must be refused');
     expect(kindRefusal.error).toContain('exec-ratio');
-    expect(kindRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"…"}');
+    expect(kindRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"..."}');
 
     // An empty spec is refused once, naming every field.
     const empty = resolveSwarm({
@@ -335,7 +335,7 @@ describe('`{preset, task}` is a complete call on every row', () => {
       expect(specRefusal.error).toContain(field);
     }
 
-    expect(specRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"…"}');
+    expect(specRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"..."}');
   });
 
   test('the documented spec fields are exactly the fields the registry binds', () => {

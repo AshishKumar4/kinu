@@ -47,7 +47,7 @@ export function selectInjectableCraftedTools(
 
     if (isReservedCraftToolName(source.name)) {
       diagnostics.failure('craft.tool_skipped', new KinuError('bad_input',
-        `Crafted tool "${source.name}" is reserved — it collides with a built-in tool or the mcp_ prefix owned by MCP tools`),
+        `Crafted tool "${source.name}" is reserved: it collides with a built-in tool or the mcp_ prefix owned by MCP tools`),
       { tool: source.name });
 
       return [];

@@ -217,7 +217,7 @@ function renderToolCall(call: ToolCallRecord): string {
 
   const result = call.result === undefined
     ? ''
-    : `\n    → ${evidenceWindow(stableStringify(obfuscateAdvisorSecrets(call.result)), EVIDENCE_BUDGETS.patternToolCall)}`;
+    : `\n    result: ${evidenceWindow(stableStringify(obfuscateAdvisorSecrets(call.result)), EVIDENCE_BUDGETS.patternToolCall)}`;
 
   const outcome = call.outcome === undefined ? 'unmeasured' : stableStringify(call.outcome);
 
@@ -254,9 +254,9 @@ export function buildAdvisorPrompt(
     '- "missed-capability": a capability it HAD and did not use, where using it was the',
     '  right shape for the work: parallel or exploratory work ground through serially, or',
     '  deep work answered thinly, while a delegation or search capability sat unused. Name the',
-    '  capability and the moment it should have been used. Only from the reachable list below —',
+    '  capability and the moment it should have been used. Only from the reachable list below:',
     '  if the capability is not on that list the agent did not have it, and there is nothing to say.',
-    '- "dissatisfaction": visible dissatisfaction from the user in this turn — explicit',
+    '- "dissatisfaction": visible dissatisfaction from the user in this turn: explicit',
     '  frustration, or a correction that spells out what they wanted.',
     '  QUOTE the user\'s own words in the note.',
     '  Their wording is the evidence, and a paraphrase loses what they actually asked for.',
@@ -273,7 +273,7 @@ export function buildAdvisorPrompt(
     '- Anything the agent has already read: a failing test, a type error, a lint message in the record.',
     '',
     'Judge what the record below shows. Arguments and results are windowed, and what a window drops is',
-    'UNKNOWN — never assert a value the record does not show. Do not guess at what is not there, and',
+    'UNKNOWN: never assert a value the record does not show. Do not guess at what is not there, and',
     'do not ask for reassurance.',
     '',
     'Silence is the normal answer. Most turns are fine.',
@@ -292,7 +292,7 @@ export function buildAdvisorPrompt(
     '',
     'Severities:',
     '- "nit": worth recording, not worth interrupting for.',
-    '  e.g. "The three sequential writes to the same module could have been one edit. Nothing to redo — worth knowing next time."',
+    '  e.g. "The three sequential writes to the same module could have been one edit. Nothing to redo: worth knowing next time."',
     '- "concern": the agent should weigh this before its next step.',
     '  e.g. "The recorded run outcome failed with execution.exitCode 3, but you treated it as successful. Fix the command failure before relying on its result."',
     '- "blocker": continuing without addressing this wastes the work.',
@@ -355,7 +355,7 @@ async function reviewCompletedTurn(deps: {
 /** A runtime-authored message says so (as {@link COMPLETION_GATE_HEADER}): the model only has the prose, and would
  *  obey an advisory it read as the user's instruction. */
 export const ADVISOR_HEADER =
-  '[Advisor — a second model reviewed the turn you just finished. This is the Kinu '
+  '[Advisor: a second model reviewed the turn you just finished. This is the Kinu '
   + 'runtime, not the user. Weigh it against what you know; it may be wrong.]';
 
 function advisorSignalText(note: AdvisorNote): string {

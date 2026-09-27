@@ -229,22 +229,22 @@ export class DeferredApprovalStore {
 const COMMAND_ECHO_MAX_CHARS = 160;
 
 function clip(text: string): string {
-  return text.length <= COMMAND_ECHO_MAX_CHARS ? text : `${text.slice(0, COMMAND_ECHO_MAX_CHARS)}…`;
+  return text.length <= COMMAND_ECHO_MAX_CHARS ? text : `${text.slice(0, COMMAND_ECHO_MAX_CHARS)}...`;
 }
 
 /** A parked action's one-line result: nothing ran, which rule, which machine, the id. Returned through
  *  `denyResult`; the doctrine lives in the system prompt. */
 function queuedActionMessage(action: DeferredApproval): string {
-  return `NOT RUN — queued for owner approval (${action.id}): ${ruleNames(action)} on ${action.executor}. `
+  return `NOT RUN: queued for owner approval (${action.id}): ${ruleNames(action)} on ${action.executor}. `
     + 'A decision will wake you.';
 }
 
 /** Result for re-issuing a refused command; mirrors safety/device-consent.ts. */
 function deniedActionMessage(action: DeferredApproval): string {
-  return `NOT RUN — the owner refused this (${action.id}). Not a timeout; find another way.`;
+  return `NOT RUN: the owner refused this (${action.id}). Not a timeout; find another way.`;
 }
 
-const SHOWN_HIT = /^• ([\w-]+) \((\w+)\): /gm;
+const SHOWN_HIT = /^- ([\w-]+) \((\w+)\): /gm;
 
 /** The hits {@link formatApproval} showed the owner. */
 function shownHits(action: DeferredApproval): Array<{ rule: string; decision: string }> {
@@ -266,13 +266,13 @@ function decisionWakeMessage(decided: readonly DeferredApproval[]): string {
 
   // Repeat "still not run": the exact mistake an agent makes on waking.
   if (approved.length > 0) {
-    lines.push('APPROVED, still not run — re-issue once:',
-      ...approved.map((a) => `  ${a.id} — ${clip(a.command)}`));
+    lines.push('APPROVED, still not run: re-issue once:',
+      ...approved.map((a) => `  ${a.id}: ${clip(a.command)}`));
   }
 
   if (denied.length > 0) {
-    lines.push('DENIED — do not re-issue:',
-      ...denied.map((a) => `  ${a.id} — ${clip(a.command)}`));
+    lines.push('DENIED: do not re-issue:',
+      ...denied.map((a) => `  ${a.id}: ${clip(a.command)}`));
   }
 
   return lines.join('\n');

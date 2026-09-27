@@ -218,7 +218,7 @@ function unprovisionedAdvice(runtimeKey: string): string {
   }
 
   if (runtimeKey === 'sandbox') {
-    return 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use — retry.';
+    return 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use: retry.';
   }
 
   return `Runtime "${runtimeKey}" is not registered.`;
@@ -246,7 +246,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   tools.eval = isExecutableToolEntry(prebuilt) ? prebuilt.value : tool({
     description:
       BUILTIN_TOOL_DESCRIPTIONS.eval +
-      ' (NOT CONFIGURED — no eval builder on this runtime)',
+      ' (NOT CONFIGURED: no eval builder on this runtime)',
     inputSchema: codemodeInputSchema(),
     execute: async (): Promise<JsonValue> => {
       throw new KinuError('unsupported', 'eval is not configured on this runtime. The backend must supply '
@@ -441,7 +441,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       description: [
         'Submit the current Markdown implementation plan for interactive owner review.',
         'On the first call, write the full plan with one edit starting at line 1. After changes are requested, use the line numbers in the feedback turn to make targeted edits.',
-        'Line numbers are one-indexed and inclusive; omit end to replace through the end of the plan. Do not implement after submission — end the turn and await the owner decision.',
+        'Line numbers are one-indexed and inclusive; omit end to replace through the end of the plan. Do not implement after submission: end the turn and await the owner decision.',
       ].join('\n'),
       inputSchema: PlanEditsInputSchema,
       execute: async ({ edits }) => {
@@ -465,7 +465,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     if (isMcpToolKey(name)) {
       throw new Error(
         `Builtin tool name '${name}' starts with the reserved 'mcp_' prefix. ` +
-        `That prefix is owned by per-user MCP tools — pick a different name.`,
+        `That prefix is owned by per-user MCP tools: pick a different name.`,
       );
     }
   }

@@ -38,7 +38,7 @@ export async function converge(
   const argmaxWinner = population[0];
 
   if (!argmaxWinner) {
-    throw new Error('No viable nodes — all branches failed or were pruned');
+    throw new Error('No viable nodes: all branches failed or were pruned');
   }
 
   const winner = mode === 'plan'
@@ -105,7 +105,7 @@ export async function converge(
   if (mode === 'build') {
     const summary = await rt.llm.complete(
       `Task: ${winner.task}\nResult: ${evidenceWindow(winner.observation, EVIDENCE_BUDGETS.convergenceObservation)}\nScore: ${winner.ownScore.toFixed(2)}\n\n` +
-      `Summarize in ≤3 bullet points what approach worked:`,
+      `Summarize in <=3 bullet points what approach worked:`,
     );
 
     await rt.memory.append(

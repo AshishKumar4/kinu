@@ -28,7 +28,7 @@ const OutcomeSchema = v.pipe(
     detail: v.pipe(v.string(), v.minLength(1)),
     measured: v.optional(v.record(v.string(), v.pipe(v.number(), v.finite()))),
   }),
-  v.check((o) => o.reached <= o.total, 'reached exceeds total — a score above 1.0 is not a score'),
+  v.check((o) => o.reached <= o.total, 'reached exceeds total: a score above 1.0 is not a score'),
   v.check((o) => Number.isInteger(o.reached), 'reached must be an integer count'),
 );
 
@@ -74,7 +74,7 @@ export function subgoalsOutcome(
   const reached = subgoals.filter((subgoal) => subgoal.reached).length;
 
   const detail = subgoals
-    .map((subgoal) => `${subgoal.what}: ${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`)
+    .map((subgoal) => `${subgoal.what}: ${subgoal.reached ? 'ok' : 'MISSED'}: ${subgoal.detail}`)
     .join('; ');
 
   return subgoalOutcome(reached, subgoals.length, detail, measured);
