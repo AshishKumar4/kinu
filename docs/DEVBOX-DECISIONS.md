@@ -1424,8 +1424,26 @@ Tests:
 - `core/tests/unit-background-job-runner.test.ts`: a re-driven job is in
   flight for its whole drive while its row reads deferred.
 
-Deployed re-proof owed: warm-forge-class boxes quiesce within `idleMs +
-quietConfirmMs` (40 minutes) of their last use.
+Deployed re-proof owed, to run after the first promote that carries D35
+(production served 2f660875cc on 2026-09-27, which predates it). Pass: every
+`KinuSandbox` whose container ran and then stopped being used logs
+`sandbox.destroy` within `idleMs + quietConfirmMs` (40 minutes) of its last
+`jsrpc` invocation, and no box shows `devbox.alarm.enter` with
+`running: true` more than 40 minutes after its last `jsrpc`. The query is
+Workers Observability telemetry with `$metadata.service = kinu`,
+`$workers.entrypoint = KinuSandbox`, grouped by `$workers.durableObjectId`,
+comparing the last `cf-worker-event` of `eventType` `jsrpc` against the first
+`sandbox.destroy` after it. Include `bcac5302…` (warm-forge's box, which ran
+for 30+ hours on 2026-09-25 and 26) if it still exists.
+
+Staging could not settle this. It ran D35 (build 6a27b7ef54, version
+ea064f37) from 2026-09-26 11:54Z to 2026-09-27 03:47Z. Over that window 58
+boxes existed, two of them started a container (203d4deb…, 2293879e…), and
+both were destroyed by their eval workspace's teardown 4 and 50 seconds after
+use. No container was ever left idle, so the idle path never ran. The window
+did confirm D34: each stopped box took one heartbeat that armed nothing
+(`devbox.schedule.exit` with no `nextSeconds`). There were 81 `KinuSandbox`
+alarm invocations in all, and none of the 58 boxes looped.
 
 ## Measurement contract for a strategy comparison
 
