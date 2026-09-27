@@ -285,7 +285,6 @@ async function nextFallback(
 const DEAD_STREAM = 'Model stream ended without output: the provider stream terminated prematurely '
   + '(no finish reason, no content). The turn did not complete.';
 
-
 /** One provider call's state, as the SDK's stream drains into it via {@link ProviderCall.consume}. */
 class ProviderCall {
   /** Set by `onAbort`, or by the drain when the provider threw the abort reason first. */
@@ -341,7 +340,7 @@ class ProviderCall {
     const account = callAccountOf(step.response);
     const { modelId } = step.response;
     const { body } = step.request;
-    // SDK keeps it.
+    // The SDK keeps each step record to the call's end.
     Reflect.deleteProperty(step.request, 'body');
 
     this.pendingStepEvents.push({

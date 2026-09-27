@@ -196,48 +196,57 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
   const build = async (reference: ActorReference): Promise<{ actor: HostedActor; fence: ReleaseFence }> => {
     const { bound, fence } = bind(reference);
     const runtime = await deps.runtimeFor(bound);
-    // Children need handle identity so release revokes every statement; the root's runtime is its
-    // opener's and never released alone, so the same actor id suffices.
-    const rootBinding = reference.parentActorId === null;
+    let built = false;
 
-    if (runtime.actor !== bound.handle
-      && !(rootBinding && runtime.actor.actorId === bound.handle.actorId)) {
-      throw new KinuError('denied', 'A hosted runtime must be built over the handle the host bound.');
+    try {
+      // Children need handle identity so release revokes every statement; the root's runtime is its
+      // opener's and never released alone, so the same actor id suffices.
+      const rootBinding = reference.parentActorId === null;
+
+      if (runtime.actor !== bound.handle
+        && !(rootBinding && runtime.actor.actorId === bound.handle.actorId)) {
+        throw new KinuError('denied', 'A hosted runtime must be built over the handle the host bound.');
+      }
+
+      // Seeded before the session so no turn is admitted without a program pointer.
+      const seed = await deps.loopFor({ ...bound, runtime });
+      await seedActorLoop(runtime, seed.parent, seed.origin);
+      const orchestration = await deps.orchestrationFor({ ...bound, runtime });
+
+      const tracing = deps.tracing;
+      const actor = { id: bound.record.actorId, kind: bound.record.kind };
+
+      const session = new ActorSession({
+        runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
+        ...(deps.workspace !== undefined && { workspace: deps.workspace }),
+        turns: tracing && (() => tracing().turns(actor)),
+        history: bound.stores.history,
+        events: deps.contextEvents(bound),
+        advisor: reference.parentActorId === null ? undefined : {
+          config: deps.directory.main().config,
+          workspace: async () => {
+            const root = await acquire(actorReferenceOf(deps.directory.main()));
+
+            return root.runtime.agentStateVfs ?? root.runtime.storage.vfs;
+          },
+          parent: async (signal) => {
+            const parentId = reference.parentActorId;
+
+            if (parentId === null) throw new KinuError('missing', 'A non-root advisor has no parent actor.');
+            const parent = await acquire(actorReferenceOf(deps.directory.open(parentId)));
+
+            return parent.session.orchestrator.inbox.send(signal);
+          },
+        },
+      });
+
+      built = true;
+
+      return { actor: { ...bound, runtime, session }, fence };
+    } finally {
+      // A failed build still lets its runtime go.
+      if (!built) runtime.release?.();
     }
-
-    // Seeded before the session so no turn is admitted without a program pointer.
-    const seed = await deps.loopFor({ ...bound, runtime });
-    await seedActorLoop(runtime, seed.parent, seed.origin);
-    const orchestration = await deps.orchestrationFor({ ...bound, runtime });
-
-    const tracing = deps.tracing;
-    const actor = { id: bound.record.actorId, kind: bound.record.kind };
-
-    const session = new ActorSession({
-      runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
-      ...(deps.workspace !== undefined && { workspace: deps.workspace }),
-      turns: tracing && (() => tracing().turns(actor)),
-      history: bound.stores.history,
-      events: deps.contextEvents(bound),
-      advisor: reference.parentActorId === null ? undefined : {
-        config: deps.directory.main().config,
-        workspace: async () => {
-          const root = await acquire(actorReferenceOf(deps.directory.main()));
-
-          return root.runtime.agentStateVfs ?? root.runtime.storage.vfs;
-        },
-        parent: async (signal) => {
-          const parentId = reference.parentActorId;
-
-          if (parentId === null) throw new KinuError('missing', 'A non-root advisor has no parent actor.');
-          const parent = await acquire(actorReferenceOf(deps.directory.open(parentId)));
-
-          return parent.session.orchestrator.inbox.send(signal);
-        },
-      },
-    });
-
-    return { actor: { ...bound, runtime, session }, fence };
   };
 
   const acquire = async (reference: ActorReference): Promise<HostedActor> => {

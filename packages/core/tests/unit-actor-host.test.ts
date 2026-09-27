@@ -77,7 +77,13 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
   const planes = new Map<string, VFS>();
   const released: string[] = [];
 
-  const orchestrationFor = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => ({
+  const orchestrationFor = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => {
+    if (bound.record.name === 'unorchestrated') throw new Error('orchestration failed');
+
+    return orchestrationFor0(bound);
+  };
+
+  const orchestrationFor0 = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => ({
     // Its own broadcast, event log and session window.
     host: {
       broadcast: () => { throw new Error(`${bound.record.name} broadcast outside a turn`); },
@@ -270,6 +276,13 @@ describe('one workspace database, many logical actors', () => {
     fx.host.releaseAll();
 
     expect(fx.released).toEqual(['alpha', 'beta', 'gamma']);
+  });
+
+  test('an actor whose build fails after its runtime exists lets that runtime go', async () => {
+    const fx = build();
+
+    await expect(fx.host.acquire(fx.child('unorchestrated', 'c-un', 'subordinate'))).rejects.toThrow('orchestration failed');
+    expect(fx.released).toEqual(['unorchestrated']);
   });
 
   test('re-acquiring an actor does not revive the binding that was released', async () => {
