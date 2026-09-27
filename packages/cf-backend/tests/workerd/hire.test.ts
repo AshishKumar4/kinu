@@ -6,7 +6,7 @@
 
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { CHILD_ANSWER, HIRE_MISSION, type HireObservation, type LogRow } from './hire-shapes';
+import { CHILD_ANSWER, HIRE_MISSION, NEST_RELAY, type HireObservation, type LogRow } from './hire-shapes';
 
 /** Re-acquired per use: the id survives an eviction, a stub does not. */
 const probe = (workspace: string) => env.HIRE_PROBE.get(env.HIRE_PROBE.idFromName(workspace));
@@ -37,6 +37,27 @@ describe('hire', () => {
     expect(hired[0]?.status).toBe('dismissed');
 
     expect(observed.transcript.join(' ')).toContain(CHILD_ANSWER);
+  });
+
+  // Owner, 2026-08-18: a hired agent hires its own helpers, to depth 4.
+  it('a helper\'s own task hire answers that helper, and the relayed answer reaches the root', async () => {
+    const workspace = 'hire-nested';
+
+    await probe(workspace).setup(workspace, 'hire-root', 'nest');
+    await probe(workspace).openHire(workspace, 'Hire one auditor that hires one of its own.');
+    await probe(workspace).callerObserved();
+
+    const observed: HireObservation = await probe(workspace).observe(workspace);
+    const answers = observed.toolResults.join(' ');
+
+    expect(answers).toContain(NEST_RELAY);
+    expect(answers).toContain(CHILD_ANSWER);
+
+    const hired = observed.roster.filter((row) => row.lifetime === 'task');
+
+    expect(hired.filter((row) => row.actorId === observed.rootActorId)).toHaveLength(1);
+    expect(hired.filter((row) => row.actorId !== observed.rootActorId)).toHaveLength(1);
+    expect(hired.every((row) => row.status === 'dismissed')).toBe(true);
   });
 
   it('a child whose turn throws still settles its caller', async () => {

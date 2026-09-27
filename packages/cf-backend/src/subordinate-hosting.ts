@@ -88,7 +88,7 @@ export interface SubordinateHostSeams {
   announce(actor: BoundActor): void;
   /** Drain on a reaction (a child's report). Never for an assignment: `wakesADrain` excludes it. */
   scheduleDrain(actor: HostedActor): void;
-  /** Arm the wake chain that reaches `drainAdmittedDelegations`; the admitting request must not run it. */
+  /** Arm the wake chain that reaches the delegation runners; the admitting request must not run it. */
   armWake(): void;
   /** Lives on the parent: `ask` parks a waiter and the report ingress resolves it. */
   temporary(actor: BoundActor): TemporaryAgentPort;
@@ -173,7 +173,7 @@ export async function admitHostedTask(
     }
 
     // Arm the wake, not the reactor: an assignment is not a `wakesADrain` row, and its runner
-    // `drainAdmittedDelegations` must not run in this request.
+    // The delegation runners must not start in this request.
     if (result.admitted) seams.armWake();
 
     return {
@@ -208,8 +208,10 @@ export async function relayHostedReport(
   });
 
   const name = child.record.name;
+  // Not `host.run`: a hirer waiting on its task hire holds that queue until this report lands.
+  const hirer = await seams.host.acquire(parent);
 
-  return await seams.host.run(parent, async (hirer) => receiveSubordinateEvent({
+  return await receiveSubordinateEvent({
     log: new EventLog(seams.exec, hirer.handle),
     roster: seams.roster(hirer),
     vfs: seams.vfs(),
@@ -218,7 +220,7 @@ export async function relayHostedReport(
     onAdmitted: () => { seams.scheduleDrain(hirer); },
     // A temporary child's answer goes first to the `agents.ask` waiter, via the port that parked it.
     temporary: seams.temporary(hirer),
-  }, { fromSubordinate: name, ...report }, Date.now()));
+  }, { fromSubordinate: name, ...report }, Date.now());
 }
 
 export async function retireStalledTask(

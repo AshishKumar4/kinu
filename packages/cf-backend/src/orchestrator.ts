@@ -16,13 +16,13 @@ import {
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
-  mintSubordinateName, withHeadCaptureRecording,
+  mintSubordinateName, withHeadCaptureRecording, createTemporaryAgentPort,
   type ActorHost, type ActorToolsetDeps, type AgentsSwarmDeps, type AgentsToolDeps, type ResumableActorTurn,
   type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
   type LoopOrigin, type NimbusSandboxHandle, type NodeHomeHost,
-  type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
+  type SqlExec, type SqlValue, type TeamToolDeps, type TemporaryAgentPort, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { isWorkspaceTerminal, publicText, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
@@ -776,8 +776,31 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       announce: () => { this.broadcastSubordinatesChanged(); },
       scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
       armWake: () => { this.armDelegationWake(); },
-      temporary: () => this.temporaryAgentPort(),
+      temporary: (actor) => this.temporaryAgentPortFor(actor),
     };
+  }
+
+  /** Keyed by the hosted slot, so a released actor's port goes with it. */
+  private readonly hostedTemporaryPorts = new WeakMap<BoundActor, TemporaryAgentPort>();
+
+  /** One port per hirer: a waiter is found only through the port that parked it. */
+  private temporaryAgentPortFor(actor: BoundActor): TemporaryAgentPort {
+    if (actor.record.parentActorId === null) return this.temporaryAgentPort();
+    const known = this.hostedTemporaryPorts.get(actor);
+
+    if (known !== undefined) return known;
+    const seams = this.subordinateSeams();
+
+    const port = createTemporaryAgentPort({
+      roster: seams.roster(actor),
+      runtime: hostedSubordinateRuntime(seams, () => actor),
+      now: () => Date.now(),
+      createName: mintSubordinateName,
+    });
+
+    this.hostedTemporaryPorts.set(actor, port);
+
+    return port;
   }
 
   /**
@@ -918,10 +941,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return deps;
   }
 
-  /**
-   * Built from this actor's own roster (the root's would land a hire of a hire beside its parent).
-   * No `temporary` port: it holds live `shell` promises that must outlive the turn. Null at the cap.
-   */
+  /** Built from this actor's own roster. Null at the cap. */
   private hostedTeamToolDeps(actor: HostedActor): TeamToolDeps | null {
     const seams = this.subordinateSeams();
     const delegation = hostedDelegationBudget(seams, actor);
@@ -934,6 +954,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       delegation,
       roster,
       runtime: hostedSubordinateRuntime(seams, () => actor),
+      temporary: this.temporaryAgentPortFor(actor),
       now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(actor.handle),
       originContext: async () => actor.session.history,
@@ -1161,31 +1182,68 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  /** One drain per isolate: a second would open two turns on one actor's chat room. */
-  private _delegationDrain: Promise<void> | null = null;
+  /** One runner per actor: its own turns serial, actors concurrent, so a waiting hirer never blocks its child. */
+  private readonly actorRunners = new Map<string, Promise<void>>();
 
-  private _delegationDrainAgain = false;
+  private readonly actorRunnersAgain = new Set<string>();
+
+  private _delegationLane: Promise<void> | null = null;
 
   /**
    * Admitted delegated turns run on a fiber, off the wake: inside it a turn held the alarm to its
    * 15-minute wall, whose reset closed every socket (warm-forge-4d6acc02, 2026-09-25).
    */
   private startDelegationDrain(): void {
-    if (this._delegationDrain !== null) {
-      this._delegationDrainAgain = true;
+    const hires = this.workspaceActors().list().filter((record) => record.kind === 'subordinate');
+
+    for (const orphan of dismissOrphanedAssignments(this.boundExec(), new Set(hires.map((record) => record.actorId)))) {
+      diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id });
+    }
+
+    for (const record of hires) this.startActorRunner(record);
+
+    this.startDelegationLane();
+  }
+
+  private startActorRunner(record: WorkspaceActor): void {
+    const id = record.actorId;
+
+    if (this.actorRunners.has(id)) {
+      this.actorRunnersAgain.add(id);
 
       return;
     }
 
-    const drain = (async () => {
+    const runner = (async () => {
+      try {
+        let again = true;
+
+        while (again) {
+          this.actorRunnersAgain.delete(id);
+          again = await this.drainActorAssignments(record) || this.actorRunnersAgain.has(id);
+        }
+      } catch (cause) {
+        diagnostics.failure('subordinate.delegation_drain_failed', toKinuError({
+          doing: 'reading a hired actor\'s admitted delegations', cause, otherwise: 'io',
+        }), { workspace: this.name, actor: record.name });
+      } finally {
+        this.actorRunners.delete(id);
+      }
+    })();
+
+    this.actorRunners.set(id, runner);
+  }
+
+  private startDelegationLane(): void {
+    if (this._delegationLane !== null || this.actorRunners.size === 0) return;
+
+    this._delegationLane = (async () => {
       try {
         await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
           ctx.stash({ lane: DELEGATION_LANE_FIBER });
-          let again = true;
 
-          while (again) {
-            this._delegationDrainAgain = false;
-            again = await this.drainAdmittedDelegations() || this._delegationDrainAgain;
+          for (let live = [...this.actorRunners.values()]; live.length > 0; live = [...this.actorRunners.values()]) {
+            await Promise.all(live);
           }
         });
       } catch (cause) {
@@ -1193,81 +1251,55 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           doing: 'draining the delegated turns this workspace admitted', cause, otherwise: 'io',
         }), { workspace: this.name });
       } finally {
-        this._delegationDrain = null;
+        this._delegationLane = null;
+        this.startDelegationLane();
       }
     })();
-
-    this._delegationDrain = drain;
   }
 
-  private async drainAdmittedDelegations(): Promise<boolean> {
+  private async drainActorAssignments(record: WorkspaceActor): Promise<boolean> {
     const seams = this.subordinateSeams();
-    const exec = this.boundExec();
-    const now = Date.now();
-    let budget = HOSTED_DELEGATION_DRAIN_BUDGET;
-    let truncated = false;
-    const hires = this.workspaceActors().list().filter((record) => record.kind === 'subordinate');
 
-    for (const orphan of dismissOrphanedAssignments(exec, new Set(hires.map((record) => record.actorId)))) {
-      diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id });
-    }
+    const reference: ActorReference = {
+      actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId,
+    };
 
-    for (const record of hires) {
-      if (budget <= 0) { truncated = true; break; }
+    // `bindStores` still refuses a retired or re-parented actor.
+    const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
 
-      const reference: ActorReference = {
-        actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId,
-      };
+    const swept = await drainAssignments(log, {
+      now: Date.now(), budget: HOSTED_DELEGATION_DRAIN_BUDGET, staleMs: STALE_EVENT_DELIVERY_MS,
+      run: async (task) => {
+        const room = this.chatRooms.hostedRoom(record.actorId);
+        const answerId = crypto.randomUUID();
 
-      try {
-        // `bindStores`, not `acquire`: only the child's handle is needed, and it still refuses a retired
-        // or re-parented actor, so reading a child's queue does not bypass membership.
-        const log = new EventLog(exec, this.actorHost().bindStores(reference).handle);
+        await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
 
-        const swept = await drainAssignments(log, {
-          now, budget, staleMs: STALE_EVENT_DELIVERY_MS,
-          run: async (task) => {
-            const room = this.chatRooms.hostedRoom(record.actorId);
-            const answerId = crypto.randomUUID();
+        try {
+          await runHostedTask(seams, reference, task, {
+            ...(room !== null && { observeStream: (chunks, call) => room.observe(chunks, call) }),
+            answered: async ({ completion, error }) => {
+              await this.recordHostedChatAnswer(reference, answerId, completion);
 
-            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
-
-            try {
-              await runHostedTask(seams, reference, task, {
-                ...(room !== null && { observeStream: (chunks, call) => room.observe(chunks, call) }),
-                answered: async ({ completion, error }) => {
-                  await this.recordHostedChatAnswer(reference, answerId, completion);
-
-                  if (error !== null) await room?.deliver({ type: 'error', message: error });
-                  await room?.closeTurn();
-                },
-              });
-            } catch (cause) {
-              await room?.deliver({ type: 'error', message: renderThrownChain({ cause }) });
-              throw cause;
-            } finally {
+              if (error !== null) await room?.deliver({ type: 'error', message: error });
               await room?.closeTurn();
-            }
-          },
-          onFailure: ({ cause }) => {
-            diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
-              doing: 'running a delegated turn this workspace admitted', cause, otherwise: 'io',
-            }), { workspace: this.name, actor: record.name });
-          },
-        });
-
-        budget -= swept.consumed;
-
-        if (swept.truncated) truncated = true;
-      } catch (cause) {
-        // One unreadable child must not end the sweep; same per-actor isolation as core recovery.
-        diagnostics.failure('subordinate.delegation_drain_failed', toKinuError({
-          doing: 'reading a hired actor\'s admitted delegations', cause, otherwise: 'io',
+            },
+          });
+        } catch (cause) {
+          await room?.deliver({ type: 'error', message: renderThrownChain({ cause }) });
+          throw cause;
+        } finally {
+          await room?.closeTurn();
+        }
+      },
+      onFailure: ({ cause }) => {
+        diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
+          doing: 'running a delegated turn this workspace admitted', cause, otherwise: 'io',
         }), { workspace: this.name, actor: record.name });
-      }
-    }
+      },
+    });
 
-    return truncated;
+    return swept.truncated;
   }
 
   /**

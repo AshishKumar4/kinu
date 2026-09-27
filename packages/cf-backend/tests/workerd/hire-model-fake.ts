@@ -6,7 +6,9 @@
  */
 
 import * as v from 'valibot';
-import { CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL } from './hire-shapes';
+import {
+  CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, NEST_MISSION, NEST_RELAY, type ChildScript,
+} from './hire-shapes';
 
 export interface HireCall {
   readonly model: string;
@@ -33,7 +35,7 @@ let childAskedTwice = Promise.withResolvers<void>();
 
 let childCalls = 0;
 
-let childScript: 'answer' | 'throw' | 'park' = 'answer';
+let childScript: ChildScript = 'answer';
 
 let childPark = Promise.withResolvers<void>();
 
@@ -208,7 +210,7 @@ function rootLane(body: OutboundBody, results: readonly string[]): Response {
     action: 'hire',
     lifetime: 'task',
     role: 'auditor',
-    mission: HIRE_MISSION,
+    mission: childScript === 'nest' ? NEST_MISSION : HIRE_MISSION,
   });
 }
 
@@ -246,8 +248,21 @@ async function durableLane(body: OutboundBody, results: readonly string[]): Prom
   return textBody(model, `ROOT-SAW-DURABLE ${name}`);
 }
 
-/** The child's closing prose is the report a task-lifetime child relays. */
-async function childLane(body: OutboundBody): Promise<Response> {
+/** The child's closing prose is the report a task-lifetime child relays; under `nest` it first hires its own. */
+async function childLane(body: OutboundBody, results: readonly string[]): Promise<Response> {
+  const model = body.model ?? HIRE_CHILD_MODEL;
+
+  if (childScript === 'nest' && lastUser(body).includes(NEST_MISSION)) {
+    if (results.length !== 0) return textBody(model, `${NEST_RELAY} ${results.join(' ')}`.slice(0, 600));
+
+    return toolCallBody(model, 'call_nested_hire_1', 'agents', {
+      action: 'hire',
+      lifetime: 'task',
+      role: 'auditor',
+      mission: HIRE_MISSION,
+    });
+  }
+
   childCalls += 1;
   childSpoke.resolve();
 
@@ -265,7 +280,7 @@ async function childLane(body: OutboundBody): Promise<Response> {
     return new Response(JSON.stringify({ error: { message: 'hire-child model refuses this turn' } }), { status: 500 });
   }
 
-  return textBody(body.model ?? HIRE_CHILD_MODEL, CHILD_ANSWER);
+  return textBody(model, CHILD_ANSWER);
 }
 
 /** Auto-title and sleep-time judge want non-streamed JSON; keyed by role: title leads with a system
@@ -296,7 +311,7 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
     const raw = await request.text();
 
     const spec = v.parse(
-      v.looseObject({ script: v.optional(v.picklist(['answer', 'throw', 'park'])) }),
+      v.looseObject({ script: v.optional(v.picklist(['answer', 'throw', 'park', 'nest'])) }),
       raw === '' ? {} : JSON.parse(raw),
     );
 
@@ -376,7 +391,7 @@ export async function hireOutbound(request: Request): Promise<Response> {
   if (body.stream !== true) return auxLane(body);
 
   // The child's lane: `report` is deps-gated (core's `DEPS_GATED_TOOLS`), so only a hired actor carries it.
-  if (toolNames(body).includes('report')) return await childLane(body);
+  if (toolNames(body).includes('report')) return await childLane(body, results);
 
   if (body.model === HIRE_DURABLE_MODEL) return await durableLane(body, results);
 
