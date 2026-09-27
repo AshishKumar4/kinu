@@ -2254,6 +2254,15 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
   const root = directory.main();
   const roster = new SubordinateRosterStore(exec, root);
   roster.ensureSchema();
+  // Resolved when the helper's task event is recorded on its row: the moment its answer can be keyed.
+  const assigned = Promise.withResolvers<void>();
+  const recordAssignment = roster.recordAssignmentEvent.bind(roster);
+
+  roster.recordAssignmentEvent = (name, eventId) => {
+    recordAssignment(name, eventId);
+    assigned.resolve();
+  };
+
   const log = new EventLog(exec, root);
   const handoff: SubordinateHandoff = { eventId: 'evt-refine', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
 
@@ -2275,6 +2284,7 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
     roster,
     log,
     port,
+    assigned: assigned.promise,
     helper: 'ask-refiner-a1b2c3',
     reports: () => log.pending().filter((event) => event.variant === 'subordinate_report'),
     deliver: (temporary: TemporaryAgentPort, content: string) => receiveSubordinateEvent({
@@ -2294,9 +2304,10 @@ function evictedAfterAssign(rail: ReturnType<typeof refinerRail>, evicted: Tempo
   return {
     ...evicted,
     run: async (request) => {
-      lost.push(evicted.run(request));
-
-      for (let attempt = 0; attempt < 50 && !rail.roster.get(rail.helper)?.taskEventId; attempt++) await Promise.resolve();
+      const run = evicted.run(request);
+      lost.push(run);
+      // A run that settles before it is assigned ends the wait too: a broken hire fails with its own error.
+      await Promise.race([rail.assigned, run]);
       throw new Error('the activation was evicted');
     },
   };
