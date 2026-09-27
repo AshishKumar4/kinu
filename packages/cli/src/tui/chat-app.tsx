@@ -409,7 +409,10 @@ function ChatScene({
 
     if (!controls) return;
 
+    const previous = parkedReadRef.current;
+
     parkedReadRef.current = (async () => {
+      await previous;
       const read = await readParkedNotice(controls, parkedSeenRef.current);
 
       if (!read.ok) addError({ cause: read.error });

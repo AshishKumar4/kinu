@@ -2,9 +2,9 @@ import { literalText, type DeferredApproval, type DeferredApprovalAnswer } from 
 import { attempt, settle, toWire, type KinuError, type Wire } from '@kinu.run/core/obs';
 import type { LocalSessionControls } from './agent-client';
 
-export const PARKED_USAGE = '/parked [approve|deny|always <id...|all>]';
+export const PARKED_USAGE = '/parked [approve|deny <id...|all> | always <id...>]';
 
-function answerFor(verb: string | undefined): DeferredApprovalAnswer | null {
+export function parkedAnswer(verb: string | undefined): DeferredApprovalAnswer | null {
   switch (verb) {
     case 'approve': return 'approved';
     case 'deny': return 'denied';
@@ -24,19 +24,30 @@ export function renderParked(actions: readonly DeferredApproval[]): string {
   return [
     `${String(actions.length)} command${actions.length === 1 ? '' : 's'} waiting for your approval, none run yet:`,
     ...actions.map(parkedLine),
-    `Decide with ${PARKED_USAGE}.`,
+    'Each waits until you decide it: none runs or expires on its own.',
+    `Decide with ${PARKED_USAGE}. \`always\` also stops asking about the same rules on that machine.`,
   ].join('\n');
 }
 
-export function parkedDecision(
-  words: readonly string[], actions: readonly DeferredApproval[],
-): { readonly answer: DeferredApprovalAnswer; readonly ids: string[] } | null {
-  const [verb, ...named] = words;
-  const answer = answerFor(verb);
+export const ALWAYS_NAMES_EACH = '`always` grants standing approval, so name each command it is for: /parked always <id...>.';
 
-  if (answer === null || named.length === 0) return null;
+export function renderParkedDecision(
+  decision: { readonly answer: DeferredApprovalAnswer; readonly ids: readonly string[] },
+  decided: readonly string[], parked: readonly DeferredApproval[],
+): string {
+  const lines = decision.answer === 'always'
+    ? parked.filter((action) => decided.includes(action.id)).map((action) =>
+      `Approved ${action.id}. From now on ${action.executor} runs commands that trip the same rules without asking: `
+        + literalText(action.reason))
+    : [`${decision.answer === 'denied' ? 'Denied' : 'Approved'}: ${decided.length === 0 ? 'none' : decided.join(', ')}.`];
 
-  return { answer, ids: named.includes('all') ? actions.map((action) => action.id) : named };
+  const missed = decision.ids.filter((id) => !decided.includes(id));
+
+  if (decision.answer === 'always' && decided.length === 0) lines.push('Approved: none.');
+
+  if (missed.length > 0) lines.push(`Not waiting, so nothing to decide: ${missed.join(', ')}.`);
+
+  return lines.join('\n');
 }
 
 function parkedNotice(actions: readonly DeferredApproval[], seen: ReadonlySet<string>): string | null {

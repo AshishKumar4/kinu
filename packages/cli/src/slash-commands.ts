@@ -10,7 +10,7 @@ import { readAllAccountUsage } from './account-usage';
 import { plural, renderAccountSpendLines, renderSearchTreeLines } from './display';
 import { conversationMarkdown, lastAnswer } from './conversation-export';
 import { listLocalAgentNames } from './agent-list';
-import { PARKED_USAGE, parkedDecision, renderParked } from './parked-actions';
+import { ALWAYS_NAMES_EACH, PARKED_USAGE, parkedAnswer, renderParked, renderParkedDecision } from './parked-actions';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -609,17 +609,16 @@ async function parkedCommand({ client, command, rest }: SlashContext): Promise<S
   const parked = await client.localControls.listDeferredApprovals();
 
   if (words.length === 0) return { kind: 'text', text: renderParked(parked) };
-  const decision = parkedDecision(words, parked);
+  const [verb, ...named] = words;
+  const answer = parkedAnswer(verb);
 
-  if (decision === null) return { kind: 'text', text: `Usage: ${PARKED_USAGE}` };
-  const { decided } = await client.localControls.decideDeferredApprovals(decision.ids, decision.answer);
-  const missed = decision.ids.filter((id) => !decided.includes(id));
-  const verdict = { approved: 'Approved', denied: 'Denied', always: 'Approved, and allowed from now on' }[decision.answer];
-  const lines = [`${verdict}: ${decided.length === 0 ? 'none' : decided.join(', ')}.`];
+  if (answer === null || named.length === 0) return { kind: 'text', text: `Usage: ${PARKED_USAGE}` };
 
-  if (missed.length > 0) lines.push(`Not waiting, so nothing to decide: ${missed.join(', ')}.`);
+  if (answer === 'always' && named.includes('all')) return { kind: 'text', text: ALWAYS_NAMES_EACH };
+  const ids = named.includes('all') ? parked.map((action) => action.id) : named;
+  const { decided } = await client.localControls.decideDeferredApprovals(ids, answer);
 
-  return { kind: 'text', text: lines.join('\n') };
+  return { kind: 'text', text: renderParkedDecision({ answer, ids }, decided, parked) };
 }
 
 function approvalCommand({ client, command, arg }: SlashContext): SlashOutcome {
