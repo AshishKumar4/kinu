@@ -104,6 +104,7 @@ import {
   type TuiAgentSummary,
 } from './tui-shell';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { readParkedNotice } from '../parked-actions';
 
 /** `local-peer` opens in place; `cloud-additional` runs server-side and is announced. */
 interface TuiCreatedAgent {
@@ -399,6 +400,30 @@ function ChatScene({
   const addError = useCallback((failure: CaughtFailure) => {
     addMessage({ role: 'system', content: errorLine(renderThrownChain(failure)) });
   }, [addMessage]);
+
+  const parkedSeenRef = useRef(new Set<string>());
+  const parkedReadRef = useRef<Promise<void> | null>(null);
+
+  const noteParked = useCallback(() => {
+    const controls = client.localControls;
+
+    if (!controls) return;
+
+    const previous = parkedReadRef.current;
+
+    parkedReadRef.current = (async () => {
+      await previous;
+      const read = await readParkedNotice(controls, parkedSeenRef.current);
+
+      if (!read.ok) addError({ cause: read.error });
+      else if (read.value !== null) addMessage({ role: 'system', content: read.value });
+    })();
+  }, [addError, addMessage, client]);
+
+  useEffect(() => {
+    parkedSeenRef.current = new Set();
+    noteParked();
+  }, [noteParked]);
 
   const pasteNote = useCallback((content: string) => addMessage({ role: 'system', content }), [addMessage]);
 
@@ -1324,6 +1349,12 @@ function ChatScene({
       return;
     }
 
+    if (event.event.type === 'pending_actions_changed') {
+      noteParked();
+
+      return;
+    }
+
     if (event.event.type === 'plan_updated' && event.event.plan) {
       addMessage({ role: 'system', content: renderPlanReview(event.event.plan) });
 
@@ -1350,7 +1381,7 @@ function ChatScene({
 
     // The settle/error line is the takes affordance; running state lives in the status bar.
     if (branchStatus.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(branchStatus) });
-  }, [addMessage, sealSegment, setBranchTasks]);
+  }, [addMessage, noteParked, sealSegment, setBranchTasks]);
 
   const handleClientEvent = useCallback(async (event: AgentClientEvent) => {
     switch (event.type) {

@@ -31,6 +31,8 @@ const EventQuerySchema = v.strictObject({
   limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(RUN_EVENT_LIMIT_MAX))),
 });
 
+const ActorIdSchema = v.optional(v.pipe(v.string(), v.nonEmpty()));
+
 export const WorkspacePlanReferenceSchema = v.strictObject({
   path: PathSchema, id: v.pipe(v.string(), v.nonEmpty()),
   revision: v.pipe(v.number(), v.integer(), v.minValue(1)),
@@ -42,10 +44,10 @@ export const SubordinateInspectionRequestSchema = v.variant('view', [
   v.strictObject({ path: PathSchema, view: v.literal('plans'), page: PageRequestSchema }),
   v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('plan') }),
   v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('planTasks') }),
-  v.strictObject({ path: PathSchema, view: v.literal('children'), page: PageRequestSchema, actor: v.optional(v.pipe(v.string(), v.nonEmpty())) }),
-  v.strictObject({ path: PathSchema, view: v.literal('history'), page: PageRequestSchema, actor: v.optional(v.pipe(v.string(), v.nonEmpty())) }),
-  v.strictObject({ path: PathSchema, view: v.literal('runs'), page: PageRequestSchema }),
-  v.strictObject({ path: PathSchema, view: v.literal('events'), runId: v.pipe(v.string(), v.nonEmpty()), query: EventQuerySchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('children'), page: PageRequestSchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('history'), page: PageRequestSchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('runs'), page: PageRequestSchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('events'), runId: v.pipe(v.string(), v.nonEmpty()), query: EventQuerySchema, actor: ActorIdSchema }),
 ]);
 
 export type SubordinateInspectionRequest = v.InferOutput<typeof SubordinateInspectionRequestSchema>;

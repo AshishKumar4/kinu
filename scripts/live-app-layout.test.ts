@@ -1,6 +1,3 @@
-/**
- * The inspector column's layout: the right panel's kept state across a chat-tab switch, the tab strip's rule in both themes, and the controls that collapse and reopen the columns. Its rows run in `live-app-rows.ts` against its own dev server and scripted model.
- */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

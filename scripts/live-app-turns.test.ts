@@ -1,6 +1,3 @@
-/**
- * A running turn: its one live state, a page opened mid-turn, a dropped socket's replay, an answer's steps after it ends, and a pane that shows no other actor's transcript. Its rows run in `live-app-rows.ts` against its own dev server and scripted model.
- */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

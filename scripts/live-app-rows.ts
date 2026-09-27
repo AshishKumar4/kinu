@@ -1,21 +1,4 @@
-/**
- * The live-app rows: the real product in a real browser, before publish. Each row file
- * (`live-app-turns`, `live-app-sleep`, `live-app-plans`, `live-app-layout`) boots the local dev server through
- * live-app-harness (vite dev = real Worker in workerd, real Durable Objects, real client), plus a
- * local scripted model the workspaces are configured to use, and measures its own rows here; its
- * tests read the verdicts. One file per row group, so each ends well inside its deadline alone: the
- * seventeen rows in one file took 375 s in a deploy and outran its 480 s alone (2026-09-26).
- *
- * SCOPE. These rows own only what a rendered document can prove: geometry,
- * node identity, and what the DOM shows after a real interaction. The
- * behavioural half of the old draft — a subagent chat opening and answering,
- * text rendering before the tool card it preceded — is RPC and data shape,
- * provable inside the workerd pool without a DOM, and lives there (the
- * cloudflare-os in-pool session harness); it is deliberately NOT here.
- *
- * Every assertion is geometry, identity or counts — never a copied sentence,
- * never a source-text match.
- */
+/** Real Worker, client and browser; scripted model. The combined row exceeded 480 s alone on 2026-09-26. */
 
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
@@ -28,7 +11,7 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
   CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, NEW_AGENT, OPEN_NAMES, recordDeadEnds,
-  frameLedger, openInspector, painted, pressUntil, settled, settledAfter, typeIntoComposer, until, waitOn,
+  frameLedger, openInspector, painted, pressUntil, recordRenderTasks, rendered, settled, settledAfter, typeIntoComposer, until, waitOn,
   type ControlAttempt,
 } from './product-flows';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
@@ -55,12 +38,7 @@ async function shoot(page: Page, name: string): Promise<string> {
   return path;
 }
 
-/** This run's own workspace suffix, and the mark the state row reads a roster
- *  by. A deployment keeps its Durable Objects between runs, so a fixed name
- *  would have each comprehensive row reading the previous run's transcript,
- *  cards and journal as if they were the product's first state (measured
- *  2026-09-17 on the local server, back when it inherited the checkout's
- *  state too: two runs put both runs' sent messages in one root transcript). */
+/** Fixed names mixed two runs' durable transcripts on the local server, 2026-09-17. */
 const RUN_ID = crypto.randomUUID().slice(0, 8);
 
 async function openWorkspace(newPage: LiveApp['newPage'], origin: string, workspace: string): Promise<Page> {
@@ -69,15 +47,12 @@ async function openWorkspace(newPage: LiveApp['newPage'], origin: string, worksp
   await page.setViewport(DESKTOP);
   await recordDeadEnds(page);
 
-  // 'load', not 'networkidle0': the app holds its event socket open from
-  // first paint, so there is never a zero-connection window to wait for.
   await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
   await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
 
   return page;
 }
 
-/** Click the control; an absent control throws, and that is the finding. */
 const ClickScripts = {
   lastAgentTab: `(() => {
     // Tabs by their own hook, not by element: the OPEN tab is a div (it hosts
@@ -1109,43 +1084,6 @@ async function watchTurns(page: Page): Promise<TurnWatch> {
   };
 }
 
-/** Observes the page's function timers without adding or advancing one: replay completion may leave a
- *  throttled render queued. String timers retain the browser's own semantics. */
-const RECORD_PAGE_TASKS = `(() => {
-  const schedule = window.setTimeout.bind(window);
-  const cancel = window.clearTimeout.bind(window);
-  const pending = new Map();
-  window.__pageTasks = pending;
-  window.setTimeout = function (handler, delay, ...args) {
-    if (typeof handler !== 'function') return schedule(handler, delay, ...args);
-    let finish;
-    const done = new Promise(resolve => { finish = resolve; });
-    const id = schedule(function () {
-      try { Reflect.apply(handler, window, args); }
-      finally { pending.delete(id); finish(); }
-    }, delay);
-    pending.set(id, { done, finish });
-    return id;
-  };
-  window.clearTimeout = function (id) {
-    const key = Number(id);
-    const held = pending.get(key);
-    cancel(id);
-    pending.delete(key);
-    held?.finish();
-  };
-})()`;
-
-/** Wait for already-queued work and its paint, never for the value the assertion expects. */
-async function rendered(page: Page): Promise<void> {
-  do {
-    await waitOn(page, 'the page\'s queued render callbacks', page.evaluate(`(async () => {
-      while (window.__pageTasks.size > 0) await Promise.all([...window.__pageTasks.values()].map(task => task.done));
-    })()`));
-    await painted(page);
-  } while (await page.evaluate('window.__pageTasks.size > 0'));
-}
-
 /** The header and the composer disagree: one says a turn runs and the other says nothing does. */
 const disagrees = (sample: v.InferOutput<typeof LiveSampleSchema>): boolean =>
   (sample.stop && sample.task === 'idle') || (!sample.stop && sample.task === 'working');
@@ -1167,7 +1105,7 @@ async function measureOpenedMidTurn(
   try {
     await page.setViewport(DESKTOP);
     await recordDeadEnds(page);
-    await page.evaluateOnNewDocument(RECORD_PAGE_TASKS);
+    await recordRenderTasks(page);
     await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
     await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
 
@@ -1267,7 +1205,7 @@ async function openRecorded(newPage: LiveApp['newPage'], origin: string, workspa
   await page.setViewport(DESKTOP);
   await recordDeadEnds(page);
   await page.evaluateOnNewDocument(RECORD_SOCKETS);
-  await page.evaluateOnNewDocument(RECORD_PAGE_TASKS);
+  await recordRenderTasks(page);
   await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
   await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
   await until(page, "the workspace's first turn to end", FIRST_TURN_ENDED);
@@ -1587,6 +1525,8 @@ const FROM_BOTTOM = `(() => { const el = ${CHAT_SCROLLER}; return el === undefin
 
 const SCROLL_METRICS = `(() => { const el = ${CHAT_SCROLLER}; return el === undefined ? '' : String(el.scrollHeight) + ':' + String(el.scrollTop); })()`;
 
+const CHAT_ROWS = `(() => { const el = ${CHAT_SCROLLER}; return el === undefined ? 0 : [...el.children].filter(row => !row.hasAttribute('data-scroll-edge')).length; })()`;
+
 /** History pages asked for between two reads, the second taken once the view has stopped growing: a
  *  runaway walk keeps it growing, so it cannot read settled early. */
 async function pagesUntilSettled(page: Page, counter: RpcCounter): Promise<number> {
@@ -1610,6 +1550,31 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
 
   const page = await openWorkspace(newPage, origin, long);
   const counter = await countRpc(page);
+  const reads = await frameLedger(page);
+
+  const fetchOlderPage = async (): Promise<void> => {
+    const before = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
+    const rows = v.parse(v.number(), await page.evaluate(CHAT_ROWS));
+
+    const box = v.parse(v.object({ x: v.number(), y: v.number(), height: v.number() }), await page.evaluate(`(() => {
+      const el = ${CHAT_SCROLLER};
+      if (el === undefined) return null;
+      const rect = el.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, height: el.clientHeight };
+    })()`));
+
+    reads.restart();
+    await page.mouse.move(box.x, box.y);
+
+    while ((counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) === before) {
+      await page.mouse.wheel({ deltaY: -box.height / 2 });
+      await painted(page);
+    }
+
+    await waitOn(page, 'the history page response', settledAfter(page, reads, HISTORY_PAGE_METHOD));
+    await until(page, 'the older messages to render', `${CHAT_ROWS} > ${String(rows)}`);
+    await settled(page, SCROLL_METRICS);
+  };
 
   try {
     await until(page, 'the newest turn to render', `(document.querySelector('#chat')?.textContent ?? '').includes('Long chat turn ${String(LONG_CHAT_TURNS)}.')`);
@@ -1623,17 +1588,11 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
 
     const beforeTop = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
 
-    await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = 0; })()`);
-    await until(page, 'the older page to land', `(${CHAT_SCROLLER})?.scrollTop > 0`);
-    await settled(page, SCROLL_METRICS);
+    await fetchOlderPage();
 
     const pagesOnScrollToTop = (counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) - beforeTop;
 
-    // A second page further up, then a spot just above the live edge: an offset from the top the reopened chat,
-    // which holds only its newest window, is too short to reach.
-    await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = 0; })()`);
-    await until(page, 'the second older page to land', `(${CHAT_SCROLLER})?.scrollTop > 0`);
-    await settled(page, SCROLL_METRICS);
+    if (!(await page.evaluate(`[...document.querySelectorAll('#chat [data-scroll-edge]')].some(edge => edge.textContent?.includes('Beginning of the conversation') === true)`))) await fetchOlderPage();
     await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = el.scrollHeight - el.clientHeight - 600; })()`);
     await painted(page);
     await page.evaluate(`document.querySelector('a[href="/workspace/${other}"]')?.click()`);
@@ -1647,6 +1606,7 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
     return { pagesIdleAfterOpen, openFromBottom, pagesOnScrollToTop, pagesIdleAfterReturn, returnFromBottom };
   } finally {
     await counter.stop();
+    await reads.stop();
     await page.close();
   }
 }

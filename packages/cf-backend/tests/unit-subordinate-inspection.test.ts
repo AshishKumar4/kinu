@@ -196,6 +196,26 @@ describe('owner reads of retained subordinate paths', () => {
     expect(await read(fixture, { path: [], view: 'history', page: {}, actor: 'not-an-actor' })).toMatchObject({ view: 'missing' });
   });
 
+  test('a finished helper\'s runs and their events read by its id, where its name no longer resolves', async () => {
+    const fixture = workspaceFixture();
+    const child = fixture.child(fixture.main, 'child');
+    const events = new RunEventRecorder(fixture.sql, child);
+    events.emit('kept', { type: 'run_start', agentId: 'child' });
+    events.emit('kept', { type: 'tool_call_end', name: 'agents', toolCallId: 'hire-1', args: { action: 'hire', lifetime: 'task' }, result: { status: 'completed', answer: 'deep' }, outcome: { success: true } });
+
+    for (const action of ['retire', 'release'] as const) {
+      fixture.directory.apply(actorReferenceOf(fixture.main), [], { action, name: 'child', reference: actorReferenceOf(child) });
+    }
+
+    expect(await read(fixture, { path: ['child'], view: 'runs', page: {} })).toMatchObject({ view: 'missing' });
+    expect(await read(fixture, { path: [], view: 'runs', page: {}, actor: child.actorId })).toMatchObject({
+      view: 'runs', page: { items: [{ runId: 'kept' }] },
+    });
+    expect(await read(fixture, { path: [], view: 'events', runId: 'kept', query: {}, actor: child.actorId })).toMatchObject({
+      view: 'events', page: { status: 'end', items: [{ type: 'run_start' }, { type: 'tool_call_end', result: { answer: 'deep' } }] },
+    });
+  });
+
   test('a released parent\'s roster reads by its id, so its helpers are still found', async () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');

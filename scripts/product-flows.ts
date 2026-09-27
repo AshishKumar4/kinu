@@ -484,6 +484,47 @@ export async function painted(page: Page): Promise<void> {
   }));
 }
 
+/** Observes the page's function timers without adding or advancing one: replay completion may leave a
+ *  throttled render queued. String timers retain the browser's own semantics. */
+const RECORD_PAGE_TASKS = `(() => {
+  const schedule = window.setTimeout.bind(window);
+  const cancel = window.clearTimeout.bind(window);
+  const pending = new Map();
+  window.__pageTasks = pending;
+  window.setTimeout = function (handler, delay, ...args) {
+    if (typeof handler !== 'function') return schedule(handler, delay, ...args);
+    let finish;
+    const done = new Promise(resolve => { finish = resolve; });
+    const id = schedule(function () {
+      try { Reflect.apply(handler, window, args); }
+      finally { pending.delete(id); finish(); }
+    }, delay);
+    pending.set(id, { done, finish });
+    return id;
+  };
+  window.clearTimeout = function (id) {
+    const key = Number(id);
+    const held = pending.get(key);
+    cancel(id);
+    pending.delete(key);
+    held?.finish();
+  };
+})()`;
+
+export async function recordRenderTasks(page: Page): Promise<void> {
+  await page.evaluateOnNewDocument(RECORD_PAGE_TASKS);
+}
+
+/** Wait for already-queued work and its paint, never for the value the assertion expects. */
+export async function rendered(page: Page): Promise<void> {
+  do {
+    await waitOn(page, 'the page\'s queued render callbacks', page.evaluate(`(async () => {
+      while (window.__pageTasks.size > 0) await Promise.all([...window.__pageTasks.values()].map(task => task.done));
+    })()`));
+    await painted(page);
+  } while (await page.evaluate('window.__pageTasks.size > 0'));
+}
+
 /** The composer of `agent`'s own pane, live: the pane that sends to that agent's chat. */
 function agentComposer(workspace: string, agent: string): string {
   return `document.querySelector(${JSON.stringify(`[data-agent-pane="${workspace}/agents/${agent}"] textarea:not([disabled])`)}) !== null`;
@@ -690,6 +731,7 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
   let workspace: string | null = null;
 
   try {
+    await recordRenderTasks(page);
     await page.goto(`${target.origin}/`, { waitUntil: 'load' });
     await until(page, "the home page's mission field", `document.querySelector('#workspace-mission:not([disabled])') !== null`);
 
@@ -708,6 +750,7 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
     const typed = v.parse(v.string(), await mission.evaluate((box) => (box instanceof HTMLTextAreaElement ? box.value : '')));
 
     if (typed !== MISSION) throw new Error(`the mission field holds ${JSON.stringify(typed)}, not the words typed into it`);
+    ledger.restart();
     await page.evaluate(`(() => {
       const create = [...document.querySelectorAll('button[type="submit"]')]
         .find((b) => (b.textContent ?? '').trim() === 'Create workspace');
@@ -729,11 +772,12 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
 
     const answers = v.parse(v.array(v.string()), await page.evaluate(ANSWERS));
 
-    // #21: the inspector opened once a "hello" turn ended, with nothing asking
-    // the person for anything. Read it after the page has re-read what waits
-    // on the person (every 5 s while connected).
-    ledger.restart();
-    await settledAfter(page, ledger, 'listPendingActions');
+    // #21: a hello turn must not open an inspector. The initial snapshot and turn-triggered refreshes
+    // supply its state; an idle page no longer polls listPendingActions.
+    do {
+      await waitOn(page, 'the workspace snapshot and its outstanding reads', settledAfter(page, ledger, 'getWorkspaceSnapshot'));
+      await rendered(page);
+    } while (!ledger.quiet());
 
     const inspectorWidth = v.parse(v.number(), await page.evaluate(INSPECTOR_WIDTH));
 

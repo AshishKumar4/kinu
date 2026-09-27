@@ -22,6 +22,7 @@ import {
 const PHASES = [
   'alarm.due_triggers',
   'alarm.event_drain',
+  'alarm.evolution_answer',
   'alarm.peer_dispatch',
   'alarm.email_reconcile',
   'alarm.cache_warm',
@@ -112,6 +113,7 @@ describe('alarm tick tracing', () => {
         `alarm.tick  [${base}]`,
         `  alarm.due_triggers  [${base} triggers_fired=0]`,
         `  alarm.event_drain  [${base} drain_due=false]`,
+        `  alarm.evolution_answer  [${base} evolution_answer_due=false]`,
         `  alarm.peer_dispatch  [${base}]`,
         `  alarm.email_reconcile  [${base}]`,
         `  alarm.cache_warm  [${base} cache_warmed=false]`,
