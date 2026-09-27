@@ -33,7 +33,7 @@
  * hooks installed at all.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
@@ -3432,7 +3432,14 @@ function recordProof(
   return refused === undefined;
 }
 
+/** The scratch drive's temp root on the owner's box (AGENTS.md, Owner Preferences): unset, TMPDIR is the /tmp RAM
+ *  disk, where every hook and `bun run gate:*` wrote its scratch until 2026-09-27. */
+const SCRATCH_TMPDIR = '/mnt/scratch/kinu/tmp';
+
 if (import.meta.main) {
+  // Before any gate spawns: TMPDIR is a base name of every gate's environment (ladder-cache.ts), so each inherits it.
+  if (process.env.TMPDIR === undefined && existsSync(SCRATCH_TMPDIR)) process.env.TMPDIR = SCRATCH_TMPDIR;
+
   // A CLOSED REPORTING CHANNEL IS NOT A FAILED TIER.
   //
   // Gates run with `stdout: 'inherit'`, so under `git push` the whole tier
