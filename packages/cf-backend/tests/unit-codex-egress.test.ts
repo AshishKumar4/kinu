@@ -170,7 +170,7 @@ describe('a Stop on a call bound for the owner\'s machine', () => {
         relayCodex: async (_caller, _device, callId) => {
           relayed.push(callId);
 
-          return new Promise<Response>(() => {});
+          throw new Error('relayed after a Stop, so the call ends and names the miss');
         },
         cancelCodexRelay: async (_caller, callId) => { cancelled.push(callId); },
       },
