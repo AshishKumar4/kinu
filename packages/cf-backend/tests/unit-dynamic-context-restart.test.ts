@@ -98,7 +98,8 @@ describe('the dynamic context across an object restart', () => {
     expect(messageOrder(after)).toEqual([
       expect.stringMatching(/^system:/u), 'dynamic', 'user:hello one', 'assistant:answer first', 'user:hello two',
     ]);
-    expect(after.slice(0, before.length)).toEqual(before);
+    // As bytes: `toEqual` ignores key order and undefined fields, which the wire does not.
+    expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
   });
 
   test('with the prompt cache expired, the stored blocks go and the state is stated once, before the new input', async () => {
