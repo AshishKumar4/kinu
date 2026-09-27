@@ -5,6 +5,8 @@
  * MAC input is NUL-separated, identities are grammar-checked before any MAC, nothing is decoded.
  */
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/index';
 import { hmacSha256Hex, timingSafeEqual } from '../utils/crypto';
 import { isUlid } from './hub/ulid';
 import { isWorkspaceName } from '../identity/naming';
@@ -57,10 +59,10 @@ export async function webhookRoutePath(
   secret: string, identity: WebhookRouteIdentity,
 ): Promise<string> {
   if (!routableIdentity(identity)) {
-    throw new Error(
+    return settleSync(Effect.die(new Error(
       `Cannot mint a webhook URL for workspace "${identity.workspaceName}" and trigger `
       + `"${identity.triggerId}": not a workspace name and trigger id this deployment issues.`,
-    );
+    )));
   }
 
   const capability = await routeCapability(secret, identity);

@@ -10,7 +10,8 @@ import { ulid } from './ulid';
 import type { SqlExec } from '../../types/primitives';
 import type { ActorHandle } from '../../identity/actor-handle';
 import { parseJsonValue, type JsonValue } from '../../utils/json';
-import { renderThrownChain } from '../../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settle } from '../../obs/index';
 
 const TTL_MS = {
   ws_session: 0,          // bound to holder, no clock expiry
@@ -158,31 +159,32 @@ export class ReplyChannelStore {
       return { outcome: 'no_dispatcher', kind: channel.kind };
     }
 
-    try {
-      const r = await dispatcher.dispatch(channel, payload);
+    return settle(Effect.tryPromise({ try: () => dispatcher.dispatch(channel, payload), catch: (cause) => ({ cause }) }).pipe(Effect.match({
+      onSuccess: (r): ReplyOutcome => {
+        if (r.delivered) {
+          this.sql.exec(
+            `UPDATE reply_channels
+               SET state = 'replied',
+                   reply_payload = ?,
+                   attempt_count = attempt_count + 1,
+                   updated_at = ?
+             WHERE actor_id = ? AND id = ?`,
+            JSON.stringify(payload ?? null), now, this.actorId, id,
+          );
 
-      if (r.delivered) {
-        this.sql.exec(
-          `UPDATE reply_channels
-             SET state = 'replied',
-                 reply_payload = ?,
-                 attempt_count = attempt_count + 1,
-                 updated_at = ?
-           WHERE actor_id = ? AND id = ?`,
-          JSON.stringify(payload ?? null), now, this.actorId, id,
-        );
+          return { outcome: 'delivered' };
+        }
 
-        return { outcome: 'delivered' };
-      }
+        this.bumpAttempt(id, now);
 
-      this.bumpAttempt(id, now);
+        return { outcome: 'failed', detail: r.detail };
+      },
+      onFailure: (failed): ReplyOutcome => {
+        this.bumpAttempt(id, now);
 
-      return { outcome: 'failed', detail: r.detail };
-    } catch (err) {
-      this.bumpAttempt(id, now);
-
-      return { outcome: 'failed', detail: renderThrownChain({ cause: err }) };
-    }
+        return { outcome: 'failed', detail: renderThrownChain(failed) };
+      },
+    })));
   }
 
   abort(id: ReplyChannelId, now: number, reason?: string): void {

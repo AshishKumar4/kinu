@@ -26,7 +26,8 @@ import {
 } from '../../utils/json';
 import { boundedInt, boundPageQuery } from '../../utils/bounds';
 import { SubordinateInheritedContextSchema } from '../../types/subordinates';
-import { diagnostics, toKinuError } from '../../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, settleSync, toKinuError, type KinuError } from '../../obs/index';
 
 const EVENT_SCHEMA_VERSION = 1;
 
@@ -425,19 +426,11 @@ export class EventLog {
     const rows = this.sql.exec(sql, ...bindings).toArray()
       .map((row) => v.parse(EventRowSchema, row));
 
-    let events = rows.flatMap((row) => {
-      const event = tryRowToEvent(row);
-
-      return event === null ? [] : [event];
-    });
-
     // A row whose revisit condition no longer parses is skipped, never resolved.
-    if (filter.resolve_deferred) {
-      const deferred = this.queryDeferred(filter.resolve_deferred);
-      events = events.concat(deferred);
-    }
+    const deferredCtx = filter.resolve_deferred;
 
-    return events;
+    return settleSync(Effect.map(readableEvents(rows), (events) =>
+      (deferredCtx ? events.concat(this.queryDeferred(deferredCtx)) : events)));
   }
 
   private queryDeferred(ctx: { now: number; phase: 'idle' | 'merging' }): KinuEvent[] {
@@ -651,11 +644,7 @@ export class EventLog {
     const rows = this.sql.exec(sql, ...bindings).toArray()
       .map((row) => v.parse(EventRowSchema, row));
 
-    return rows.flatMap((row) => {
-      const event = tryRowToEvent(row);
-
-      return event === null ? [] : [event];
-    });
+    return settleSync(readableEvents(rows));
   }
 
   get(eventId: EventId): KinuEvent | null {
@@ -777,18 +766,18 @@ function preserveDelegatedMode(
 }
 
 /** A corrupt row is reported and skipped so it cannot wedge the drain. */
-function tryRowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent | null {
-  try {
-    return rowToEvent(row);
-  } catch (err) {
-    const failure = toKinuError({ doing: 'decode an event row', cause: err, otherwise: 'bad_input' });
-
+function readableEvents(rows: ReadonlyArray<v.InferOutput<typeof EventRowSchema>>): Effect.Effect<KinuEvent[], KinuError> {
+  return Effect.map(Effect.forEach(rows, (row) => Effect.try({
+    try: (): KinuEvent[] => [rowToEvent(row)],
+    catch: (cause) => toKinuError({ doing: 'decode an event row', cause, otherwise: 'bad_input' }),
+  }).pipe(
     // Other failure classes are this read's own fault and propagate.
-    if (failure.code !== 'bad_input') throw failure;
-    diagnostics.failure('event.row_unreadable', failure, { id: row.id });
+    Effect.catchIf((failure) => failure.code === 'bad_input', (failure) => Effect.sync((): KinuEvent[] => {
+      diagnostics.failure('event.row_unreadable', failure, { id: row.id });
 
-    return null;
-  }
+      return [];
+    })),
+  )), (lists) => lists.flat());
 }
 
 function rowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent {

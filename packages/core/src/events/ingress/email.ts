@@ -11,7 +11,8 @@ import type { SqlExec, VFS } from '../../types/primitives';
 import type { MissingCapability } from '../../types/dynamic-context';
 import { argumentDigest } from '../../safety/argument-digest';
 import { tryConsumeWebhookRateLimit } from './rate-limit';
-import { diagnostics, toKinuError } from '../../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, settleSync, toKinuError } from '../../obs/index';
 
 /** All senders combined. Drops are announced so the agent is not silently deaf. */
 export const EMAIL_INBOUND_RATE_PER_MIN = 30;
@@ -276,9 +277,11 @@ export class EmailInbox {
     }, msg);
 
     if (!result.admitted) {
-      if (rateDrop) this.noteRateDrop(rateDrop, msg.now);
+      const refused: EmailAdmission = { admitted: false, reason: result.reason };
 
-      return { admitted: false, reason: result.reason };
+      if (!rateDrop) return refused;
+
+      return settleSync(Effect.as(this.noteRateDrop(rateDrop, msg.now), refused));
     }
 
     if (!result.duplicate) this.deps.onAdmitted();
@@ -304,7 +307,7 @@ export class EmailInbox {
     return inboundEmailDropNotice(EMAIL_INBOUND_RATE_PER_MIN, this.dropWindow, now);
   }
 
-  private noteRateDrop(drop: { limit: number; resetAt: number }, now: number): void {
+  private noteRateDrop(drop: { limit: number; resetAt: number }, now: number): Effect.Effect<void> {
     if (drop.resetAt !== this.dropWindow) {
       this.dropWindow = drop.resetAt;
       this.dropCount = 0;
@@ -312,9 +315,10 @@ export class EmailInbox {
 
     this.dropCount += 1;
 
-    if (this.dropCount > 1) return;
+    if (this.dropCount > 1) return Effect.void;
 
-    try {
+    return Effect.try({
+      try: () => {
       this.deps.log.publish({
         descriptor: {
           ingress: 'self_emit',
@@ -329,13 +333,11 @@ export class EmailInbox {
         now,
       });
       this.deps.onAdmitted();
-    } catch (err) {
-      diagnostics.failure(
-        'email.rate_drop_notice_failed',
-        toKinuError({ doing: 'publish the inbound-email rate-drop notice', cause: err, otherwise: 'io' }),
-        { limitPerMin: drop.limit },
-      );
-    }
+      },
+      catch: (cause) => toKinuError({ doing: 'publish the inbound-email rate-drop notice', cause, otherwise: 'io' }),
+    }).pipe(Effect.catch((failure) => Effect.sync(() => {
+      diagnostics.failure('email.rate_drop_notice_failed', failure, { limitPerMin: drop.limit });
+    })));
   }
 }
 
