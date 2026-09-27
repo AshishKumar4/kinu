@@ -1446,13 +1446,33 @@ describe('LocalAgentHost', () => {
       return row?.stage ?? null;
     };
 
-    const routed = Promise.withResolvers<void>();
-    host.subscribe((agent, event) => {
-      if (agent === 'root' && event.type === 'evolution' && event.event === 'refinement') routed.resolve();
-    });
+    // The answer's pass is held until close() has begun: close() must join it before ending the session.
+    const root = await host.acquire('root');
+    const runEvolutionAnswer = root.runEvolutionAnswer.bind(root);
+    const end = root.end.bind(root);
+    const held = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const order: string[] = [];
+
+    root.runEvolutionAnswer = async (at) => {
+      held.resolve();
+      await release.promise;
+      await runEvolutionAnswer(at);
+      order.push('answer routed');
+    };
+
+    root.end = async () => {
+      order.push('session ended');
+      await end();
+    };
+
     await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
-    await routed.promise;
-    await host.close();
+    await held.promise;
+    const closing = host.close();
+    release.resolve();
+    await closing;
+
+    expect(order).toEqual(['answer routed', 'session ended']);
 
     expect(stage()).not.toBe('requested');
   });

@@ -2392,6 +2392,27 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     expect(nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId)).toBeNull();
   });
 
+  test('a store read that throws while planning a stored answer refuses that request with its cause', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
+    const dying = evictedAfterAssign(rail, rail.port());
+    const opened = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    const resumed = rail.port();
+    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
+
+    // The reviewed turns are read synchronously, after the answer is taken and before any route.
+    void fx.rt.storage.sql`ALTER TABLE turn_outcomes RENAME TO turn_outcomes_away`;
+    await advanceRefinementLane(fx.deps(resumed));
+    void fx.rt.storage.sql`ALTER TABLE turn_outcomes_away RENAME TO turn_outcomes`;
+
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
+    expect(row.stage).toBe('refused');
+    expect(row.detail).toContain('turn_outcomes');
+    expect(nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId)).toBeNull();
+  });
+
   test('any throw in a pass holds the lane: its stored answer stops reading as due', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
