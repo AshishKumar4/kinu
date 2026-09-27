@@ -1,5 +1,7 @@
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import type { RawSqlExec, SqlExec, SqlExecRow } from '../types/primitives';
 import { JsonValueSchema, parseJsonValue, renderIssues, type JsonValue } from '../utils/json';
 import type { SlateBindingRequest } from './bindings';
@@ -33,51 +35,51 @@ export type SlateStorageOp =
   | { readonly op: 'delete'; readonly key: string }
   | { readonly op: 'list'; readonly prefix?: string; readonly limit?: number };
 
-function oneKey(request: SlateBindingRequest): string {
-  if (request.args.length !== 1) {
-    throw new KinuError('bad_input', `slate storage ${request.member} takes one key`);
-  }
+function oneKey(request: SlateBindingRequest): Effect.Effect<string, KinuError> {
+  if (request.args.length !== 1) return Effect.fail(new KinuError('bad_input', `slate storage ${request.member} takes one key`));
 
   const parsed = v.safeParse(Key, request.args[0]);
 
-  if (!parsed.success) {
-    throw new KinuError('bad_input', `slate storage ${request.member} takes one key: ${renderIssues(parsed.issues)}`);
-  }
-
-  return parsed.output;
+  return parsed.success
+    ? Effect.succeed(parsed.output)
+    : Effect.fail(new KinuError('bad_input', `slate storage ${request.member} takes one key: ${renderIssues(parsed.issues)}`));
 }
 
 /** Unknown members are `denied`; malformed arguments are `bad_input` naming the broken signature. */
 export function routeSlateStorageCall(request: SlateBindingRequest): SlateStorageOp {
+  return settleSync(storageOp(request));
+}
+
+function storageOp(request: SlateBindingRequest): Effect.Effect<SlateStorageOp, KinuError> {
   switch (request.member) {
-    case 'get': return { op: 'get', key: oneKey(request) };
-    case 'delete': return { op: 'delete', key: oneKey(request) };
+    case 'get': return Effect.map(oneKey(request), (key): SlateStorageOp => ({ op: 'get', key }));
+    case 'delete': return Effect.map(oneKey(request), (key): SlateStorageOp => ({ op: 'delete', key }));
     case 'put': {
-      if (request.args.length !== 2) throw new KinuError('bad_input', 'slate storage put takes key and value');
+      if (request.args.length !== 2) return Effect.fail(new KinuError('bad_input', 'slate storage put takes key and value'));
 
       const parsed = v.safeParse(v.tuple([Key, JsonValueSchema]), request.args);
 
       if (!parsed.success) {
-        throw new KinuError('bad_input', `slate storage put takes key and value: ${renderIssues(parsed.issues)}`);
+        return Effect.fail(new KinuError('bad_input', `slate storage put takes key and value: ${renderIssues(parsed.issues)}`));
       }
 
-      return { op: 'put', key: parsed.output[0], value: parsed.output[1] };
+      return Effect.succeed({ op: 'put', key: parsed.output[0], value: parsed.output[1] });
     }
 
     case 'list': {
-      if (request.args.length > 1) throw new KinuError('bad_input', 'slate storage list takes at most one { prefix?, limit? }');
+      if (request.args.length > 1) return Effect.fail(new KinuError('bad_input', 'slate storage list takes at most one { prefix?, limit? }'));
 
       const parsed = v.safeParse(ListOptions, request.args[0] ?? {});
 
       if (!parsed.success) {
-        throw new KinuError('bad_input', `slate storage list takes { prefix?, limit? }: ${renderIssues(parsed.issues)}`);
+        return Effect.fail(new KinuError('bad_input', `slate storage list takes { prefix?, limit? }: ${renderIssues(parsed.issues)}`));
       }
 
-      return { op: 'list', prefix: parsed.output.prefix, limit: parsed.output.limit };
+      return Effect.succeed({ op: 'list', prefix: parsed.output.prefix, limit: parsed.output.limit });
     }
 
     default:
-      throw new KinuError('denied', 'slate storage offers get, put, delete and list');
+      return Effect.fail(new KinuError('denied', 'slate storage offers get, put, delete and list'));
   }
 }
 

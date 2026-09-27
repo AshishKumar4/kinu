@@ -1,0 +1,101 @@
+/**
+ * A running turn: its one live state, a page opened mid-turn, a dropped socket's replay, an answer's steps after it ends, and a pane that shows no other actor's transcript. Its rows run in `live-app-rows.ts` against its own dev server and scripted model.
+ */
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
+import { PACED_SILENCE_MS, RECONNECT_STEPS } from './scripted-model';
+import { liveRows } from './live-app-rows';
+
+const { observed, verdictOf, boot } = liveRows('live-app-turns', ['live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'stamped', 'state']);
+
+beforeAll(boot);
+
+afterAll(() => {
+  if (observed.bootFailure !== null) throw new Error(observed.bootFailure);
+});
+
+describe('a running turn draws exactly one live state', () => {
+  test("the pane was sampled through the paced turn's four silences", () => {
+    expect(verdictOf(observed.liveIndicator, 'live-indicator').runningMs).toBeGreaterThanOrEqual(4 * PACED_SILENCE_MS);
+  });
+
+  test('Stop never stands over a pane that draws nothing happening', () => {
+    expect(verdictOf(observed.liveIndicator, 'live-indicator').blank).toBe(0);
+  });
+
+  test('Thinking never stands beside a part that draws itself live', () => {
+    expect(verdictOf(observed.liveIndicator, 'live-indicator').doubled).toBe(0);
+  });
+});
+
+describe('a page opened during a turn stops showing it once the turn ends', () => {
+  test('while the turn runs, the composer offers Stop and the header says working', () => {
+    expect(verdictOf(observed.openedMidTurn, 'opened-mid-turn').held).toEqual({ stop: true, task: 'working' });
+  });
+
+  test('the composer offers no Stop and the thread draws no live state', () => {
+    const ended = verdictOf(observed.openedMidTurn, 'opened-mid-turn');
+
+    expect({ stop: ended.stop, states: ended.states }).toEqual({ stop: false, states: 0 });
+  });
+
+  test('every sample reads the header, and the header never disagrees with the composer', () => {
+    const verdict = verdictOf(observed.openedMidTurn, 'opened-mid-turn');
+
+    expect({ headerless: verdict.headerless, disagreed: verdict.disagreed }).toEqual({ headerless: 0, disagreed: 0 });
+  });
+});
+
+describe('a page whose socket drops mid-turn keeps its answer in order', () => {
+  test("the turn's steps were drawn before the drop", () => {
+    expect(verdictOf(observed.reconnect, 'reconnect').before.filter((block) => block.startsWith('T:'))).toHaveLength(RECONNECT_STEPS);
+  });
+
+  test('the replay after the reconnect draws the answer as it stood', () => {
+    const { before, after } = verdictOf(observed.reconnect, 'reconnect');
+
+    expect(after).toEqual(before);
+  });
+
+  test('an answer keeps each step\'s text where it streamed, once the turn ends and after a reload', () => {
+    const { live, ended, reloaded } = verdictOf(observed.answered, 'answered');
+
+    expect(live.filter((block) => block.startsWith('P:Step'))).toHaveLength(RECONNECT_STEPS);
+    expect({ ended, reloaded }).toEqual({ ended: [...live, 'P:Done.'], reloaded: [...live, 'P:Done.'] });
+  });
+
+  test('the model\'s next request carries each step\'s text and the answer', () => {
+    const { told } = verdictOf(observed.answered, 'answered');
+
+    expect(told.filter((text) => text.startsWith('Step ') || text === 'Done.')).toEqual([
+      'Step 1: listing the workspace.', 'Step 2: listing scaffold.', 'Step 3: listing the workspace.', 'Done.',
+    ]);
+  });
+});
+
+describe("a pane renders its own transcript and no other actor's", () => {
+  test("the root's own turn stays out of a new actor's pane", () => {
+    expect(verdictOf(observed.stamped, 'stamped').rootMarkerInActorPane).toBe(0);
+  });
+
+  test("words sent on the actor's tab stay out of the root transcript", () => {
+    expect(verdictOf(observed.stamped, 'stamped').actorMarkerInRootPane).toBe(0);
+  });
+});
+
+describe('the live app boots on its own Durable Object state', () => {
+  test("the dev server persisted under this run's scratch, never the checkout", () => {
+    const state = verdictOf(observed.state, 'state');
+
+    expect(state.root).toStartWith(join(tmpdir(), SCRATCH_ROOT_PREFIX));
+    // The plugin's own tree there, not just a directory the harness named:
+    // UserDO is the namespace every row's roster and credential goes through.
+    expect(state.namespaces).toContain('kinu-UserDO');
+  });
+
+  test('nothing but this run stood in that state', () => {
+    expect(verdictOf(observed.state, 'state').foreign).toEqual([]);
+  });
+});

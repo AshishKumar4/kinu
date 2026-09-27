@@ -399,7 +399,7 @@ interface FrameLedger {
   stop(): Promise<void>;
 }
 
-async function frameLedger(page: Page): Promise<FrameLedger> {
+export async function frameLedger(page: Page): Promise<FrameLedger> {
   const cdp = await page.createCDPSession();
 
   await cdp.send('Network.enable');
@@ -470,7 +470,7 @@ async function frameLedger(page: Page): Promise<FrameLedger> {
 /** Resolves once every one of `methods` has been answered and the page has
  *  nothing unanswered across a painted frame: an answer that sets off a
  *  further ask (the roster read after the snapshot) keeps the wait going. */
-async function settledAfter(page: Page, ledger: FrameLedger, ...methods: readonly string[]): Promise<void> {
+export async function settledAfter(page: Page, ledger: FrameLedger, ...methods: readonly string[]): Promise<void> {
   do {
     await ledger.quietAfter(...methods);
     await painted(page);
