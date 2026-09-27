@@ -642,7 +642,7 @@ export class ActorSession {
       assertActive: input.assertActive,
       scaffoldStreamOptions: input.scaffoldStreamOptions,
       chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
-        lostToolCall: (call) => lostToolCall(this.runtime.storage.sql, this.runtime.actor, call),
+        lostToolCall: (call) => lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease.turnId, call),
         measureContext: true, trace: turn.trace,
         persistStreamPart: part => stream.nativePart(part),
         persistStep: messages => stream.nativeStep(messages),

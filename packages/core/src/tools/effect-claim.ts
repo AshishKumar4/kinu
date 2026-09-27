@@ -144,11 +144,15 @@ export type LostToolCall =
   | { readonly state: 'settled'; readonly result: JsonValue }
   | { readonly state: 'claimed'; readonly refusal: string };
 
-export function lostToolCall(sql: SqlExecutor, actor: ActorHandle, call: { readonly toolCallId: string; readonly toolName: string }): LostToolCall | null {
+/** Per turn (providers reuse call ids); an `<assignment>#<k>` round claims as its assignment. */
+export function lostToolCall(
+  sql: SqlExecutor, actor: ActorHandle, turnId: string, call: { readonly toolCallId: string; readonly toolName: string },
+): LostToolCall | null {
   actor.assertCurrent();
+  const [claimTurn = turnId] = turnId.split('#');
 
   const row = sql<{ result_json: string | null }>`SELECT result_json FROM tool_effect_claims
-    WHERE actor_id=${actor.actorId} AND normalized_call_id=${call.toolCallId} LIMIT 1`[0];
+    WHERE actor_id=${actor.actorId} AND turn_id IN (${turnId}, ${claimTurn}) AND normalized_call_id=${call.toolCallId} LIMIT 1`[0];
 
   if (row === undefined) return null;
 

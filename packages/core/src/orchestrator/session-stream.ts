@@ -12,7 +12,7 @@ interface StreamPart {
   readonly number: number;
   readonly kind: string;
   opened: boolean;
-  /** Written ahead of the part's next non-delta update, or dropped by the step's seal, which writes the final text whole. */
+  /** Written before the part's next non-delta update, or dropped by the step's seal. */
   buffered: string;
   bufferedDeltas: number;
   bufferedBytes: number;
@@ -169,9 +169,11 @@ export class SessionStream {
     call.awaited = true;
 
     if (call.failed !== null) call.held.reject(call.failed.reason);
-    signal?.addEventListener('abort', () => { call.held.reject(signal.reason); }, { once: true });
+    const aborted = (): void => { call.held.reject(signal?.reason); };
 
-    return call.held.promise;
+    signal?.addEventListener('abort', aborted, { once: true });
+
+    return call.held.promise.finally(() => { signal?.removeEventListener('abort', aborted); });
   }
 
   private durableCall(callId: string): DurableCall {

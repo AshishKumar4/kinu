@@ -120,11 +120,11 @@ describe('tool effect claims', () => {
     settleToolEffect(sql, actor, { turnId: 'turn-1', callId: 'call-settled', digest: 'd1' }, JSON.stringify({ sent: 'ops' }));
     claimToolEffect(sql, actor, { turnId: 'turn-1', callId: 'call-lost', digest: 'd2' });
 
-    expect(lostToolCall(sql, actor, { toolCallId: 'call-settled', toolName: 'run' })).toEqual({ state: 'settled', result: { sent: 'ops' } });
-    expect(lostToolCall(sql, actor, { toolCallId: 'call-lost', toolName: 'run' })).toEqual({
+    expect(lostToolCall(sql, actor, 'turn-1', { toolCallId: 'call-settled', toolName: 'run' })).toEqual({ state: 'settled', result: { sent: 'ops' } });
+    expect(lostToolCall(sql, actor, 'turn-1', { toolCallId: 'call-lost', toolName: 'run' })).toEqual({
       state: 'claimed', refusal: expect.stringContaining('may or may not have taken effect'),
     });
-    expect(lostToolCall(sql, actor, { toolCallId: 'call-never', toolName: 'run' })).toBeNull();
+    expect(lostToolCall(sql, actor, 'turn-1', { toolCallId: 'call-never', toolName: 'run' })).toBeNull();
 
     // In the request, each unpaired call gets that answer in place of "unknown".
     const repaired = settleUnpairedToolCalls([
@@ -133,13 +133,26 @@ describe('tool effect claims', () => {
         { type: 'tool-call', toolCallId: 'call-lost', toolName: 'run', input: {} },
         { type: 'tool-call', toolCallId: 'call-never', toolName: 'run', input: {} },
       ] },
-    ], (call) => lostToolCall(sql, actor, call));
+    ], (call) => lostToolCall(sql, actor, 'turn-1', call));
 
     expect(repaired?.[1]).toEqual({ role: 'tool', content: [
       { type: 'tool-result', toolCallId: 'call-settled', toolName: 'run', output: { type: 'json', value: { sent: 'ops' } } },
       { type: 'tool-result', toolCallId: 'call-lost', toolName: 'run', output: { type: 'error-text', value: expect.stringContaining('It is not being run again') } },
       { type: 'tool-result', toolCallId: 'call-never', toolName: 'run', output: { type: 'error-text', value: INTERRUPTED_TOOL_RESULT } },
     ] });
+  });
+
+  test('a lost call is read in its own turn: a reused provider id in another turn is not its answer', async () => {
+    const { sql, actor } = claimPlane();
+
+    claimToolEffect(sql, actor, { turnId: 'turn-earlier', callId: 'call_0', digest: 'd1' });
+    settleToolEffect(sql, actor, { turnId: 'turn-earlier', callId: 'call_0', digest: 'd1' }, JSON.stringify('an earlier answer'));
+
+    expect(lostToolCall(sql, actor, 'turn-resumed', { toolCallId: 'call_0', toolName: 'run' })).toBeNull();
+
+    // A delegated turn's later round claims under its assignment's id.
+    claimToolEffect(sql, actor, { turnId: 'assignment-1', callId: 'call_0', digest: 'd2' });
+    expect(lostToolCall(sql, actor, 'assignment-1#2', { toolCallId: 'call_0', toolName: 'run' })).toMatchObject({ state: 'claimed' });
   });
 
   test('a different call in the same turn is not a replay', async () => {
