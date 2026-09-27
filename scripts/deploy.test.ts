@@ -229,6 +229,8 @@ interface DeployRun {
   /** Record when each gate started and ended, each stub holding its slot for
    *  `spanSleep` seconds: the only way to see whether two rows overlapped. */
   readonly spans?: boolean;
+  /** What the operator types at the terminal. */
+  readonly typed?: string;
 }
 
 function runDeploy({
@@ -243,6 +245,7 @@ function runDeploy({
   threads,
   rssMb,
   spans = false,
+  typed = "",
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   const log = join(fixture, "events.log");
@@ -329,6 +332,7 @@ exit 87
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       SKIP_E2E: "1",
     }),
+    stdin: Buffer.from(typed),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -421,6 +425,22 @@ describe("deploy gate", () => {
     const combined = runDeploy({ option: "--rollback", options: ["--promote"] });
 
     expect([combined.status, combined.events]).toEqual([2, []]);
+  });
+
+  test("a production reset runs nothing until 'reset production' is typed", () => {
+    const RESET_PLAN = "bun scripts/reset.ts plan production";
+
+    for (const typed of ["", "yes\n", "reset staging\n"]) {
+      const refused = runDeploy({ option: "--promote", options: ["--reset"], typed });
+
+      expect([refused.status, refused.events], `typed ${JSON.stringify(typed)}`).toEqual([1, [RESET_PLAN]]);
+    }
+
+    const confirmed = runDeploy({ option: "--promote", options: ["--reset"], typed: "reset production\n" });
+
+    expect(confirmed.events.slice(0, 1 + phaseGates("preflight").length)).toEqual([RESET_PLAN, ...phaseGates("preflight")]);
+    expect(confirmed.events).toContain(PROMOTION_CHECK);
+    expect(runDeploy({ option: "--reset" }).events).toContain(WITHDRAW);
   });
 
   test("an ambient environment variable cannot point the account gate at the other deployment", () => {

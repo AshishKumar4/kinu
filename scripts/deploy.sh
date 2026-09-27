@@ -33,8 +33,8 @@
 # Step 3 asserts this from wrangler's own output rather than trusting it.
 #
 # Usage:
-#   bun run deploy [--promote | --rollback]
-#   bash scripts/deploy.sh [--promote] [--bootstrap] [--gates-only] [--all]
+#   bun run deploy [--promote | --rollback] [--reset]
+#   bash scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] [--all]
 #   bash scripts/deploy.sh --rollback
 #
 # `--promote` deploys production, and only the build staging verified: the
@@ -59,6 +59,12 @@
 # external prerequisite still refuses the deploy before the upload, and step 5
 # below re-checks everything with no tolerance whatever, whether this flag was
 # passed or not.
+#
+# `--reset` deletes every Durable Object class the Worker carries, with all its
+# storage, between the build and the upload, which then applies the migrations
+# from v1 (scripts/reset.ts). The Worker keeps its secrets and routes. The deploy
+# record names what was deleted. On production it asks for a typed confirmation
+# before anything runs.
 #
 # Idempotent: safe to re-run. Exits on first failure.
 set -uo pipefail
@@ -113,9 +119,10 @@ KINU_GATES_ONLY=0
 # changes what a red means: a deploy with any red gate publishes nothing.
 KINU_GATES_ALL=0
 # `--promote` is on the argv only, like `--gates-only`: no ambient variable can
-# turn a staging deploy into a production one.
+# turn a staging deploy into a production one. So is `--reset`.
 KINU_PROMOTE=0
 KINU_ROLLBACK=0
+KINU_RESET=0
 for option in "$@"; do
   case "$option" in
     --promote) KINU_PROMOTE=1 ;;
@@ -123,9 +130,10 @@ for option in "$@"; do
     --bootstrap) KINU_BOOTSTRAP=1 ;;
     --gates-only) KINU_GATES_ONLY=1 ;;
     --all) KINU_GATES_ALL=1 ;;
+    --reset) KINU_RESET=1 ;;
     *)
       echo -e "${RED}Unknown option '$option'.${NC}"
-      echo "Usage: scripts/deploy.sh [--promote] [--bootstrap] [--gates-only] [--all] | --rollback"
+      echo "Usage: scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] [--all] | --rollback"
       exit 2
       ;;
   esac
@@ -174,6 +182,25 @@ export KINU_INFRA_ENVIRONMENT="$KINU_ENV"
 KINU_WORKER=""
 KINU_URL=""
 
+# Asked before the gates, so the answer is given at the terminal and not an hour
+# into the run. Read from stdin: a run with nothing typed deletes nothing.
+if [ "$KINU_RESET" = "1" ]; then
+  if [ "$KINU_GATES_ONLY" = "1" ]; then
+    echo -e "${RED}--reset deletes storage at the upload, and --gates-only stops before the build.${NC}"
+    exit 2
+  fi
+  echo -e "${BOLD}RESET: this deploy deletes every Durable Object of $KINU_ENV, with all its storage:${NC}"
+  bun "$KINU_ROOT/scripts/reset.ts" plan "$KINU_ENV" || exit 1
+  if [ "$KINU_ENV" = "production" ]; then
+    KINU_RESET_ANSWER=""
+    read -r -p "Type 'reset production' to go on: " KINU_RESET_ANSWER || true
+    if [ "$KINU_RESET_ANSWER" != "reset production" ]; then
+      echo -e "${RED}Not confirmed. Nothing was deployed or deleted.${NC}"
+      exit 1
+    fi
+  fi
+fi
+
 # Captured during deploy for final summary
 KINU_VERSION=""
 # The one directory wrangler publishes as static assets (see header).
@@ -195,11 +222,15 @@ KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu $KINU_ENV $KINU_SHA")
 # Temp log file — trap cleans up on any exit. A promotion that fails after its
 # upload leaves production serving the red build, and says how to undo it.
 KINU_DEPLOY_LOG=""
+KINU_RESET_RECORD=""
 cleanup() {
   local status=$?
   [ -n "$KINU_DEPLOY_LOG" ] && rm -f "$KINU_DEPLOY_LOG"
   if [ "$status" -ne 0 ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ "$KINU_PROMOTE" = "1" ]; then
     echo -e "${RED}Production serves this red promotion. Return it to the build it took before: bun run deploy --rollback${NC}"
+  fi
+  if [ "$status" -ne 0 ] && [ -s "$KINU_RESET_RECORD" ] && [ "${DEPLOY_PUBLISHED:-0}" != "1" ]; then
+    echo -e "${RED}$KINU_WORKER is reset and serves the placeholder ($KINU_RESET_RECORD). Deploy again without --reset.${NC}"
   fi
 }
 trap cleanup EXIT INT TERM
@@ -794,6 +825,19 @@ if [ "$KINU_PROMOTE" != "1" ]; then
   echo -e "${GREEN}✅ Worker release artifact published to R2${NC}"
 fi
 
+# ── Step 2b: The reset ────────────────────────────────────────
+# After the build, so a red gate or a failed build deletes nothing; the upload
+# below is then the genesis deploy.
+KINU_RECORD_ARGS=()
+if [ "$KINU_RESET" = "1" ]; then
+  echo ""
+  echo -e "${BOLD}Step 2b: Resetting $KINU_WORKER${NC}"
+  KINU_RESET_RECORD="$(mktemp -t kinu-reset.XXXXXX.json)"
+  bun "$KINU_ROOT/scripts/reset.ts" wipe "$KINU_ENV" "$KINU_RESET_RECORD" \
+    || { echo -e "${RED}❌ the reset failed; its lines above say what it deleted before it stopped${NC}"; exit 1; }
+  KINU_RECORD_ARGS=("$KINU_RESET_RECORD")
+fi
+
 # ── Step 3: Deploy Kinu ───────────────────────────────────────
 echo ""
 echo -e "${BOLD}Step 3: Deploying $KINU_WORKER${NC}"
@@ -1101,9 +1145,9 @@ fi
 echo ""
 if [ "$KINU_ENV" = "staging" ]; then
   echo -e "${BOLD}Step 6: Recording $KINU_SHA as verified on staging${NC}"
-  bun "$KINU_ROOT/scripts/promote.ts" record "${KINU_VERSION:-unknown}" \
+  bun "$KINU_ROOT/scripts/promote.ts" record "${KINU_VERSION:-unknown}" "${KINU_RECORD_ARGS[@]}" \
     || { echo -e "${RED}❌ the record was not written, so this build cannot be promoted${NC}"; exit 1; }
-elif ! bun "$KINU_ROOT/scripts/promote.ts" promoted "${KINU_VERSION:-}"; then
+elif ! bun "$KINU_ROOT/scripts/promote.ts" promoted "${KINU_VERSION:-}" "${KINU_RECORD_ARGS[@]}"; then
   echo -e "${RED}❌ production serves $KINU_SHA, and its history does not hold it, so no rollback can return to it${NC}"
   exit 1
 elif ! command -v gh >/dev/null 2>&1; then
