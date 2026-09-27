@@ -401,16 +401,15 @@ const SPENT_WINDOWS = new Map([['five_hour', { header: '5h', measure: '300m' }],
 
 const RefusalSchema = v.looseObject({
   error: v.looseObject({
-    message: v.optional(v.string()),
     details: v.optional(v.looseObject({ error_code: v.optional(v.string()) })),
   }),
 });
 
-function spentWindowText(response: Response, message: string | undefined): string {
+function spentWindowText(response: Response): string {
   const window = SPENT_WINDOWS.get(response.headers.get('anthropic-ratelimit-unified-representative-claim') ?? '');
   const reset = Number(response.headers.get('anthropic-ratelimit-unified-reset'));
 
-  if (window === undefined || !Number.isFinite(reset) || reset <= 0) return message ?? 'the plan refused the call';
+  if (window === undefined || !Number.isFinite(reset) || reset <= 0) return 'the plan refused the call';
   const used = Number(response.headers.get(`anthropic-ratelimit-unified-${window.header}-utilization`) ?? '1');
 
   return quotaWindowText({ measure: window.measure, usedPercent: (Number.isFinite(used) ? used : 1) * 100, resetsAt: reset * 1_000 }, Date.now());
@@ -431,7 +430,7 @@ async function usageLimitReached(call: ClaudeCall, response: Response, paid: str
   diagnostics.failure('provider.claude_usage_limit', spent, { model: call.modelId, account });
 
   return new APICallError({
-    message: `Claude usage limit reached on the account ${account}: ${windowRejected ? spentWindowText(response, error?.message) : error?.message ?? 'usage credits are required'}.`,
+    message: `Claude usage limit reached on the account ${account}: ${windowRejected ? spentWindowText(response) : 'usage credits are required'}.`,
     url: CLAUDE_MESSAGES_URL,
     requestBodyValues: undefined,
     statusCode: 429,

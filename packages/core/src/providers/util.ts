@@ -173,7 +173,7 @@ const StatusFieldSchema = v.looseObject({
 
 /** Provider failure facts as fields, so consumers never re-match prose. */
 export interface ProviderFailureFacts {
-  /** Safe to show a user; never a raw response body. */
+  /** The provider's own words, for diagnostics: never shown to a user or passed over RPC (KINU-043). */
   readonly message: string;
   /** The provider's stable error code (`code`, else `type`), verbatim. */
   readonly providerCode?: string;
@@ -264,6 +264,20 @@ export function describeProviderError(failure: { readonly cause: unknown }): str
   return evidenceWindow(rendered, PROVIDER_ERROR_MAX_CHARS);
 }
 
+/** A code field carrying prose is dropped. */
+const PROVIDER_CODE = /^[A-Za-z0-9_.:-]{1,64}$/u;
+
+/** What a user may be shown of a provider failure: its HTTP status and its code, never its prose. */
+export function providerFailureTags(facts: ProviderFailureFacts): string[] {
+  const tags: string[] = [];
+
+  if (facts.status !== undefined) tags.push(`HTTP ${String(facts.status)}`);
+
+  if (facts.providerCode !== undefined && PROVIDER_CODE.test(facts.providerCode)) tags.push(facts.providerCode);
+
+  return tags;
+}
+
 /** HTTP status to `obs/error.ts` class; null when the status says nothing. */
 function codeForStatus(status: number): ErrorCode | null {
   if (status === 401 || status === 402 || status === 403) return 'denied';
@@ -293,11 +307,7 @@ export function toProviderError(input: {
     ?? (facts.status === undefined ? null : codeForStatus(facts.status))
     ?? 'unavailable';
 
-  const tags: string[] = [];
-
-  if (facts.status !== undefined) tags.push(`HTTP ${String(facts.status)}`);
-
-  if (facts.providerCode !== undefined) tags.push(facts.providerCode);
+  const tags = providerFailureTags(facts);
 
   if (input.provider !== undefined) tags.push(input.provider);
 

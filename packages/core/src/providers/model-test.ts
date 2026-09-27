@@ -1,6 +1,6 @@
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
-import { describeProviderError, providerFailureFacts, toProviderError } from './util';
+import { providerFailureFacts, providerFailureTags, toProviderError } from './util';
 import { abortCause } from '../utils/abort';
 import { renderThrownChain } from '../obs/index';
 import { streamTextReported } from './model-invocation';
@@ -74,12 +74,14 @@ function failed({ cause }: { readonly cause: unknown }): ModelTestResult {
   const classified = toProviderError({ doing: 'testing the model', cause });
   const facts = providerFailureFacts({ cause });
   const { status } = facts;
-  const message = describeProviderError({ cause });
+  const tags = providerFailureTags(facts);
+  const message = tags.length > 0 ? tags.join(', ') : 'the provider gave no status';
 
   const credits = status === 402 || /insufficient_(?:quota|credits)|credit_balance/u.test(facts.providerCode ?? '');
 
   if (classified.code === 'budget' || credits) {
-    const until = /until (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC/u.exec(message)?.[1];
+    // Kinu's own rate-limit wording, read as a time.
+    const until = /until (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC/u.exec(facts.message)?.[1];
 
     return { ok: false, failure: 'spent', message, ...(until !== undefined && { until: Date.parse(`${until.replace(' ', 'T')}Z`) }) };
   }
