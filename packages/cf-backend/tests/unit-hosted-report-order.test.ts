@@ -58,3 +58,42 @@ test("a durable helper's report reaches its working hirer after the hirer's turn
   await joinHarnessFibers();
   expect(reports()).toBe(1);
 });
+
+// One turn slot (DELEGATED_TURN_SLOTS): a helper waiting on its task hire frees the slot; its durable hire must not
+// then hold that slot while its report queues behind the waiting helper, or the task hire never runs.
+test("a helper waiting on its task hire still gets its answer while its durable hire reports", async () => {
+  const workspace = gatewayWorkspace(stubAiBinding((run) => {
+    const { messages } = requestOf(run);
+    const opening = JSON.stringify(messages.filter((message) => message.role === 'user'));
+    const results = messages.filter((message) => message.role === 'tool').length;
+
+    if (opening.includes('Middle task.')) {
+      if (results === 0) return toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable');
+
+      if (results === 1) return toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'task', mission: 'Task task.' } }, 'call_task');
+
+      return chatCompletion(run, 'Middle done.');
+    }
+
+    return chatCompletion(run, opening.includes('Durable task.') ? 'Durable done.' : 'Task done.');
+  }));
+
+  await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
+
+  const middle = await hostedSubordinateHarness(workspace, {
+    name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
+  });
+
+  const middleDone = (): boolean => (sqlOver(workspace.db)<{ n: number }>`
+    SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middle.actor.handle.actorId} AND type = 'run_end'`[0]?.n ?? 0) > 0;
+
+  await wakeForDelegatedTask(workspace, middle.actor.handle.actorId, 'Middle task.');
+
+  // Bounded: a deadlock fails here by name instead of hanging the suite.
+  for (let lap = 0; lap < 300 && !middleDone(); lap++) {
+    await workspace.agent.terminalRetryPass();
+    await nextTurn();
+  }
+
+  expect(middleDone()).toBe(true);
+});

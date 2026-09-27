@@ -92,6 +92,8 @@ export interface SubordinateHostSeams {
   armWake(): void;
   /** Lives on the parent: `ask` parks a waiter and the report ingress resolves it. */
   temporary(actor: BoundActor): TemporaryAgentPort;
+  /** An actor's turn slot is free while it waits on another actor's queue. */
+  whileWaiting<T>(actorId: string, waited: Promise<T>): Promise<T>;
 }
 
 export function hostedDelegationBudget(
@@ -223,7 +225,7 @@ export async function relayHostedReport(
   // A task child's hirer waits inside the hire, holding its queue; a durable child's report lands between turns.
   if (hostedLifetime(child.record) === 'task') return await receive(await seams.host.acquire(parent));
 
-  return await seams.host.run(parent, receive);
+  return await seams.whileWaiting(child.record.actorId, seams.host.run(parent, receive));
 }
 
 export async function retireStalledTask(

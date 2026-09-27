@@ -777,6 +777,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
       armWake: () => { this.armDelegationWake(); },
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
+      whileWaiting: (actorId, waited) => this.delegatedTurns.whileWaiting(actorId, waited),
     };
   }
 
