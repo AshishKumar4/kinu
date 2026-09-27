@@ -200,17 +200,10 @@
   // own — they live inside `OrchestratorAgent`, carry no binding and sit in
   // no tag, because they are reached by name rather than through one.
   //
-  // What an operator does before deploying this configuration: delete the
-  // deployed Worker whose migration history ends at tag `v3` (its Durable
-  // Object namespaces, and every object in them, go with it), or deploy under a
-  // fresh Worker name. Wrangler does not enforce that step. Read from
-  // node_modules/wrangler (`getMigrationsToUpload`, 2026-09-05): when the
-  // deployed Worker's last tag is missing from this list, wrangler warns and
-  // uploads every step here against that tag, and what the platform answers to
-  // a class declared new a second time is not measured here. Re-using `v3` as
-  // this list's last tag would be worse: wrangler would find it, send no
-  // migration at all, and the deploy would land on that Worker's storage
-  // with a schema that carries no path from it.
+  // A reset (`bun run deploy --reset`, scripts/reset.ts) leaves a `reset-…`
+  // tag this list lacks. Wrangler then warns and uploads every step here
+  // (`getMigrationsToUpload`, read 2026-09-05), so the upload after a reset
+  // starts from `v1`.
   "migrations": [
     {
       "tag": "v1",

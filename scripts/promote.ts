@@ -14,13 +14,13 @@
  * `rollback` returns production to the newest build older than the one it serves, and proves it serves that build's
  * downloads byte for byte.
  *
- *   bun scripts/promote.ts digest                   the artifact digest of packages/cf-backend/dist
- *   bun scripts/promote.ts forget                   staging's deploy, before it builds: HEAD is not verified
- *   bun scripts/promote.ts record <staging version> staging's deploy, after every post-deploy tier passed
- *   bun scripts/promote.ts check                    before promotion builds: HEAD is verified and staging serves it
- *   bun scripts/promote.ts adopt                    after the production build: downloads, digest, release tarball
- *   bun scripts/promote.ts promoted <version>       production's deploy, after every post-deploy tier passed
- *   bun scripts/promote.ts rollback                 production back to the build it took before the one it serves
+ *   bun scripts/promote.ts digest                                   the artifact digest of packages/cf-backend/dist
+ *   bun scripts/promote.ts forget                                   staging's deploy, before it builds: HEAD is not verified
+ *   bun scripts/promote.ts record <staging version> [reset record]  staging's deploy, after every post-deploy tier passed
+ *   bun scripts/promote.ts check                                    before promotion builds: HEAD is verified and staging serves it
+ *   bun scripts/promote.ts adopt                                    after the production build: downloads, digest, release tarball
+ *   bun scripts/promote.ts promoted <version> [reset record]        production's deploy, after every post-deploy tier passed
+ *   bun scripts/promote.ts rollback                                 production back to the build it took before the one it serves
  */
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -30,6 +30,7 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { deployment, environmentArgs, why, wrangler } from './infra-cloudflare';
 import { type InfraEnvironment, deriveInfrastructure } from './infra-manifest';
+import { type Reset, ResetSchema } from './reset';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -118,6 +119,7 @@ export const VerifiedSchema = v.object({
   stagingVersion: v.string(),
   recordedAt: v.string(),
   downloads: DownloadsSchema,
+  reset: v.optional(ResetSchema),
 });
 
 export type Verified = v.InferOutput<typeof VerifiedSchema>;
@@ -132,6 +134,7 @@ export const PromotionSchema = v.object({
   at: v.string(),
   downloads: DownloadsSchema,
   withdrawnAt: v.optional(v.string()),
+  reset: v.optional(ResetSchema),
 });
 
 export type Promotion = v.InferOutput<typeof PromotionSchema>;
@@ -361,6 +364,10 @@ function head(): string {
   return run.stdout.toString().trim();
 }
 
+function resetIn(file: string | undefined): { readonly reset?: Reset } {
+  return file === undefined ? {} : { reset: v.parse(ResetSchema, JSON.parse(readFileSync(file, 'utf8'))) };
+}
+
 /** The record staging wrote for `sha`; a commit staging never verified has none, and promotion refuses it. */
 function verified(bucket: string, sha: string): Verified {
   return v.parse(VerifiedSchema, JSON.parse(r2(['get', `${bucket}/${verifiedKey(sha)}`, '--pipe'])));
@@ -449,9 +456,10 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  if (command === 'record' && rest.length === 1) {
+  if (command === 'record' && (rest.length === 1 || rest.length === 2)) {
     const record: Verified = {
       sha, digest: artifactDigest(DIST), stagingVersion: rest[0] ?? '', recordedAt: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS),
+      ...resetIn(rest[1]),
     };
 
     await servedAs(origins.staging, sha, record.downloads);
@@ -500,11 +508,11 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  if (command === 'promoted' && rest.length === 1) {
+  if (command === 'promoted' && (rest.length === 1 || rest.length === 2)) {
     const version = rest[0] ?? '';
 
     if (!/^[0-9a-f-]{36}$/u.test(version)) throw new Error(`'${version}' is not a Worker version id, so no rollback could return to it`);
-    const promotion: Promotion = { sha, version, at: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS) };
+    const promotion: Promotion = { sha, version, at: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS), ...resetIn(rest[1]) };
     const serving = servingVersion();
 
     if (serving !== version) throw new Error(`production serves version ${serving}, not ${version}`);
@@ -532,7 +540,8 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  console.error('usage: bun scripts/promote.ts digest | forget | record <staging version> | check | adopt | promoted <version> | rollback');
+  console.error('usage: bun scripts/promote.ts digest | forget | record <staging version> [reset record] | check | adopt '
+    + '| promoted <version> [reset record] | rollback');
 
   return 2;
 }
