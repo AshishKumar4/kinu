@@ -47,7 +47,7 @@ export const OWNER_DESK_CASES: readonly SharedCase[] = [
       const command = 'git push --force origin main';
       // Parked as the gate parks it: the reason is the review the owner is shown.
       const reason = formatApproval(reviewCommand(command, 'agent'));
-      new DeferredApprovalStore(sql, actor).create({ id: 'defer-1', command, executor: 'workspace', reason, requestedAt });
+      new DeferredApprovalStore(sql, actor).create({ id: 'defer-1', command, executor: 'workspace', reason, requestedAt }, []);
 
       expect(await surface.listDeferredApprovals()).toEqual([{
         id: 'defer-1', command, executor: 'workspace', reason, status: 'queued', requestedAt, decidedAt: null,

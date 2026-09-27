@@ -40,7 +40,7 @@ describe('the folded tile', () => {
       executor: 'workspace',
       reason: formatApproval({ decision: 'gate', hits: [] }),
       requestedAt: Date.now(),
-    });
+    }, []);
 
     expect(parked.status).toBe('queued');
     const overview = await agent.foldOverview();

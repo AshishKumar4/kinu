@@ -102,7 +102,7 @@ function setup(opts: {
   };
 
   return {
-    queue, store, shell, executed, delivered, granted, audited, shellTool,
+    queue, store, sql, shell, executed, delivered, granted, audited, shellTool,
     advance: (ms: number) => { elapsed += ms; },
   };
 }
@@ -381,7 +381,9 @@ describe('what an approval actually buys', () => {
     await queue.decide(['defer-2'], 'approved');
 
     expect(store.get('defer-1')).toBeNull();
+    expect(store.hits('defer-1')).toEqual([]);
     expect(store.get('defer-2')?.status).toBe('approved');
+    expect(store.hits('defer-2')).toEqual([{ rule: 'package-publish', decision: 'gate' }]);
   });
 
   test('"always" runs this command AND stops the queue asking about that rule again', async () => {
@@ -413,6 +415,20 @@ describe('what an approval actually buys', () => {
     expect(executed).toEqual(['rm -rf dist']);
   });
 
+  test('the reason text is display only: rewording it keeps what "always" grants and what the agent is told', async () => {
+    // A row parked under older reason wording.
+    const { shellTool, queue, store, granted, sql } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    void sql`UPDATE deferred_approvals SET reason = ${'Needs approval: force-pushing rewrites the remote.'}`;
+
+    expect(store.get('defer-1')?.reason).toBe('Needs approval: force-pushing rewrites the remote.');
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('git-force-push') });
+
+    await queue.decide(['defer-1'], 'always');
+
+    expect(granted).toEqual(['git-force-push@workspace']);
+  });
+
   test('an "always" grant does not travel to another rule', async () => {
     const { shellTool, queue, executed, granted } = setup();
     await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
@@ -436,6 +452,7 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     ]);
     // The row is deleted, not flipped to a terminal status.
     expect(store.get('defer-1')).toBeNull();
+    expect(store.hits('defer-1')).toEqual([]);
   });
 
   test('one grant is one audit and one run — a re-issue parks, never replays', async () => {
@@ -454,7 +471,7 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     // While spent, the row is invisible to `standing()` and a second spend gets nothing.
     const { sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
-    store.create({ id: 'defer-s', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
+    store.create({ id: 'defer-s', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 }, []);
     expect(store.decide('defer-s', 'approved', 2)?.status).toBe('approved');
 
     const spent = store.spend('defer-s');
@@ -473,8 +490,8 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
   test('re-opening the workspace keeps parked and approved rows intact', () => {
     const { db, sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
-    store.create({ id: 'defer-parked', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
-    store.create({ id: 'defer-blessed', command: `${GATED} --twice`, executor: 'workspace', reason: 'gate', requestedAt: 2 });
+    store.create({ id: 'defer-parked', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 }, []);
+    store.create({ id: 'defer-blessed', command: `${GATED} --twice`, executor: 'workspace', reason: 'gate', requestedAt: 2 }, []);
     expect(store.decide('defer-blessed', 'approved', 3)?.status).toBe('approved');
 
     initDeferredApprovalsTable(makeExecRaw(db));
@@ -489,7 +506,7 @@ describe('the parked action stays visible until it is decided', () => {
   test('every step of the turn re-states that it has not happened', () => {
     // The per-step dynamic-context block carries the missing effect until the owner answers.
     const { queue, store } = setup();
-    store.create({ id: 'defer-x', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 10 });
+    store.create({ id: 'defer-x', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 10 }, []);
 
     expect(queue.approvals()).toEqual([
       { id: 'defer-x', kind: 'queued command (NOT run)', detail: GATED },
@@ -526,7 +543,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     // A parked action must survive DO eviction; a promise map would lose it.
     const { sql, actor } = approvalsDb();
     const first = new DeferredApprovalStore(sql, actor);
-    first.create({ id: 'defer-9', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
+    first.create({ id: 'defer-9', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 }, []);
 
     const reopened = new DeferredApprovalStore(sql, actor);
     const parked = reopened.listQueued();
@@ -539,7 +556,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     // The row is the record; the signal is only the notification.
     const { sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
-    store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
+    store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 }, []);
 
     const queue = new DeferredApprovalQueue({
       store,

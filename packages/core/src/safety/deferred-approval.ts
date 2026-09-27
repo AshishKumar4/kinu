@@ -50,7 +50,6 @@ export interface DeferredApproval {
   readonly reason: string;
   readonly status: DeferredApprovalStatus;
   readonly requestedAt: number;
-  /** When the owner answered, or null while it is still parked. */
   readonly decidedAt: number | null;
 }
 
@@ -101,6 +100,19 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
     ON deferred_approvals(actor_id, status, requested_at)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_command
     ON deferred_approvals(actor_id, command, executor, requested_at DESC)`);
+  // The tripped rules as data: `reason` is display text.
+  execRaw(`CREATE TABLE IF NOT EXISTS deferred_approval_hits (
+    actor_id    TEXT NOT NULL,
+    approval_id TEXT NOT NULL,
+    rule        TEXT NOT NULL,
+    decision    TEXT NOT NULL,
+    PRIMARY KEY (actor_id, approval_id, rule)
+  )`);
+}
+
+export interface DeferredApprovalHit {
+  readonly rule: string;
+  readonly decision: string;
 }
 
 /** The durable rows; pure storage. */
@@ -133,21 +145,43 @@ export class DeferredApprovalStore {
   sweepDenials(now: number): number {
     this.actor.assertCurrent();
 
-    return this.sql<{ id: string }>`
+    const swept = this.sql<{ id: string }>`
       DELETE FROM deferred_approvals
       WHERE actor_id = ${this.actorId} AND status = 'denied'
         AND decided_at <= ${now - DENIAL_STANDING_MS}
-      RETURNING id`.length;
+      RETURNING id`;
+
+    for (const { id } of swept) this.dropHits(id);
+
+    return swept.length;
   }
 
-  create(action: Omit<DeferredApproval, 'status' | 'decidedAt'>): DeferredApproval {
+  create(action: Omit<DeferredApproval, 'status' | 'decidedAt'>, hits: readonly DeferredApprovalHit[]): DeferredApproval {
     this.actor.assertCurrent();
     void this.sql`INSERT INTO deferred_approvals
         (actor_id, id, command, executor, reason, status, requested_at, decided_at)
       VALUES (${this.actorId}, ${action.id}, ${action.command}, ${action.executor}, ${action.reason},
         'queued', ${action.requestedAt}, NULL)`;
 
+    for (const hit of hits) {
+      void this.sql`INSERT OR IGNORE INTO deferred_approval_hits (actor_id, approval_id, rule, decision)
+        VALUES (${this.actorId}, ${action.id}, ${hit.rule}, ${hit.decision})`;
+    }
+
     return { ...action, status: 'queued', decidedAt: null };
+  }
+
+  hits(id: string): DeferredApprovalHit[] {
+    this.actor.assertCurrent();
+
+    return this.sql<DeferredApprovalHit>`
+      SELECT rule, decision FROM deferred_approval_hits
+      WHERE actor_id = ${this.actorId} AND approval_id = ${id}
+      ORDER BY rule`;
+  }
+
+  private dropHits(id: string): void {
+    void this.sql`DELETE FROM deferred_approval_hits WHERE actor_id = ${this.actorId} AND approval_id = ${id}`;
   }
 
   /** Record the owner's answer; reports the row only if this call changed it. Read and write have no
@@ -201,6 +235,8 @@ export class DeferredApprovalStore {
             AND status='spent' AND spend_seq = ${spent.spend}
           RETURNING id`;
 
+    if (outcome === 'spent') for (const { id } of rows) this.dropHits(id);
+
     return rows.length > 0;
   }
 
@@ -234,8 +270,8 @@ function clip(text: string): string {
 
 /** A parked action's one-line result: nothing ran, which rule, which machine, the id. Returned through
  *  `denyResult`; the doctrine lives in the system prompt. */
-function queuedActionMessage(action: DeferredApproval): string {
-  return `NOT RUN — queued for owner approval (${action.id}): ${ruleNames(action)} on ${action.executor}. `
+function queuedActionMessage(action: DeferredApproval, hits: readonly DeferredApprovalHit[]): string {
+  return `NOT RUN — queued for owner approval (${action.id}): ${ruleNames(hits)} on ${action.executor}. `
     + 'A decision will wake you.';
 }
 
@@ -244,18 +280,9 @@ function deniedActionMessage(action: DeferredApproval): string {
   return `NOT RUN — the owner refused this (${action.id}). Not a timeout; find another way.`;
 }
 
-const SHOWN_HIT = /^• ([\w-]+) \((\w+)\): /gm;
-
-/** The hits {@link formatApproval} showed the owner. */
-function shownHits(action: DeferredApproval): Array<{ rule: string; decision: string }> {
-  return [...action.reason.matchAll(SHOWN_HIT)].flatMap(([, rule, decision]) => (rule && decision ? [{ rule, decision }] : []));
-}
-
 /** The rules the review named, for a one-line result; full prose is in `action.reason`. */
-function ruleNames(action: DeferredApproval): string {
-  const names = shownHits(action).map((hit) => hit.rule);
-
-  return names.length > 0 ? names.join(', ') : 'needs approval';
+function ruleNames(hits: readonly DeferredApprovalHit[]): string {
+  return hits.length > 0 ? hits.map((hit) => hit.rule).join(', ') : 'needs approval';
 }
 
 /** The message on the turn a decision wakes: one for the whole batch. */
@@ -321,7 +348,7 @@ export class DeferredApprovalQueue {
           reason: verdict.outcome === 'denied' ? 'denied' : 'unavailable',
           message: verdict.outcome === 'denied'
             ? deniedActionMessage(verdict.action)
-            : queuedActionMessage(verdict.action),
+            : queuedActionMessage(verdict.action, this.deps.store.hits(verdict.action.id)),
         };
       },
       settle: (spent, outcome) => { this.settle(spent, outcome); },
@@ -354,7 +381,7 @@ export class DeferredApprovalQueue {
       executor: req.executor,
       reason: formatApproval(req.review),
       requestedAt: now,
-    });
+    }, req.review.hits.map(({ rule, decision }) => ({ rule, decision })));
 
     this.notify({ kind: 'queued', action });
 
@@ -401,7 +428,7 @@ export class DeferredApprovalQueue {
 
     if (answer === 'always') {
       // Not re-reviewed: that would lose the call's member and cwd.
-      this.deps.remember(decided.flatMap((a) => shownHits(a)
+      this.deps.remember(decided.flatMap((a) => this.deps.store.hits(a.id)
         .filter((hit) => hit.decision === 'gate').map((hit) => ({ rule: hit.rule, executor: a.executor }))));
     }
 
@@ -415,7 +442,6 @@ export class DeferredApprovalQueue {
     return decided;
   }
 
-  /** Everything still parked, oldest first. */
   list(): DeferredApproval[] {
     return this.deps.store.listQueued();
   }
