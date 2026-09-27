@@ -136,7 +136,6 @@ import {
   // Recovery has no live turn, so the owed answer is read from the transcript.
   answersForDrainTurns,
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
-  // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore, deviceFileCheckpoints,
   CommandResultSchema,
   type CheckpointAvailability, type FileCheckpointListing, type FileCheckpointReads,
@@ -1562,7 +1561,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.emailOutbox.nextRetryAt(),
       this.eventLog.nextPendingDrainAt(now),
       nextEvolutionAnswerAt(this.boundSql, this.actorHandle().actorId),
-      // Prompt-cache warm; its tick phase is `alarm.cache_warm`.
       this.cacheWarming.nextWarmAt(),
       // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
       // and the phase releases that record whenever it refuses.
@@ -1724,7 +1722,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Promotion-gate evidence runs on the cadence lane so rollouts don't block the chat queue.
         ...this.shadowTrialPorts,
       });
-      // The session-end changelog digest is also emailed to the owner.
       this._engine.onEvent((event) => {
         if (event.type !== 'changelog_digest') return;
         this.emailOwnerNotification('Evolution changelog digest', event.message);
@@ -4142,6 +4139,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * `steps` bounds only the telemetry sample; `spend` is summed in SQL over the whole log, never windowed.
    * `telemetry` is this agent's own turns; `spend` covers every producer in the workspace.
    */
+  /** The machine's name is read from the account, so it is current. */
+  private async codexRoute(egress: string | undefined, deviceId: string | null): Promise<NonNullable<ActivitySnapshot['latest']>['route']> {
+    if (egress === 'relay') return { kind: 'container' };
+
+    if (deviceId === null) return null;
+    const { stub, caller } = await this.userHub();
+    const status = await stub.deviceRuntimeStatus(caller);
+
+    return { kind: 'device', id: deviceId, name: status.devices?.find((device) => device.id === deviceId)?.name ?? null };
+  }
+
   @callable()
   async getActivitySnapshot(opts?: { steps?: number; logs?: number }): Promise<ActivitySnapshot> {
     const windowLimit = clampLimit(opts?.steps, ACTIVITY_STEP_WINDOW);
@@ -4157,6 +4165,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // something" is `usageReported` — never a presence check on the field.
     const measured = steps.filter((e) => usageReported(e.usage ?? {}));
     const newest = measured[measured.length - 1];
+    const deviceId = newest?.egress?.startsWith('device ') === true ? newest.egress.slice('device '.length) : null;
 
     return {
       latest: newest === undefined
@@ -4168,6 +4177,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           // Non-empty by construction: `measured` kept only reporting steps.
           usage: newest.usage ?? {},
           context: newest.context ?? null,
+          modelId: newest.modelId ?? null,
+          route: await this.codexRoute(newest.egress, deviceId),
         },
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
