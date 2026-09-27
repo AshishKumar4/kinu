@@ -1,5 +1,5 @@
 {
-  "reason": "gate:error-model joins the commit tier at 1.4s and gate:effect-diagnostics the push tier at 21.3s; the gate self-test row now names scripts/error-model.test.ts, re-keyed with its figure unchanged",
+  "reason": "gate:error-model joins commit at 1.4s and gate:effect-diagnostics joins push at 21.3s; its gate-self-test row is re-keyed with its figure unchanged. The live-app row splits into four files over live-app-rows.ts, recorded solo at 133/133/168/120s; no assertions or deadlines change.",
   "tiers": {
     "commit": {
       "seconds": 93.47,

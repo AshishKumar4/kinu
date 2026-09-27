@@ -104,6 +104,7 @@ function probeInputs(): CensusInputs {
   return {
     gateTests: new Set([GATE_TEST]),
     sources,
+    readModule: (file) => sources.get(file),
     nonPublic: nonPublicMembers(sources),
     generators: new Map([['prompt-golden.json', 'scripts/prompt-golden.ts']]),
     bridges: new Map(bridges.map((bridge) => [bridge.name, bridge])),
@@ -678,6 +679,69 @@ describeCategory('tautology_suspect', [
     expected: [],
   },
   {
+    name: 'RED: rendered text is checked against the product constant that supplied it',
+    source: `
+      import { PROMPT_BUDGET } from '../src/budget';
+      test('the dialog states the budget', async () => {
+        const text = await page.$eval('[data-limit]', element => element.textContent);
+        expect(text).toContain(String(PROMPT_BUDGET));
+      });
+    `,
+    expected: ['expected side copies a product constant'],
+  },
+  {
+    name: 'SILENT: a non-rendering boundary check is outside the rendered-text rule',
+    source: `
+      import { clampToBudget, PROMPT_BUDGET } from '../src/budget';
+      test('a prompt is cut at the budget', () => {
+        expect(clampToBudget('x'.repeat(5000))).toHaveLength(PROMPT_BUDGET);
+      });
+    `,
+    expected: [],
+  },
+  {
+    name: 'SILENT: an imported constant sizes the input, not the expected side',
+    source: `
+      import { clampToBudget, PROMPT_BUDGET } from '../src/budget';
+      test('a prompt past the budget is cut to it', () => {
+        expect(clampToBudget('x'.repeat(PROMPT_BUDGET + 904))).toHaveLength(4096);
+      });
+    `,
+    expected: [],
+  },
+  {
+    name: 'SILENT: a local parameter shadows the imported constant',
+    source: `
+      import { MARKER } from '../src/budget';
+      test.each(['required'])('a fixture field is rendered', async (MARKER) => {
+        const text = await page.$eval('[data-message]', element => element.textContent);
+        expect(text).toContain(MARKER);
+      });
+    `,
+    expected: [],
+  },
+  {
+    name: 'SILENT: an object key is not a read of the imported constant',
+    source: `
+      import { PROMPT_BUDGET } from '../src/budget';
+      test('the wire names the budget field', () => {
+        expect(readWire()).toEqual({ PROMPT_BUDGET: 4096 });
+      });
+    `,
+    expected: [],
+  },
+  {
+    name: 'SILENT: a product key selects the field whose independently stated value is checked',
+    source: `
+      import { MARKER } from '../src/budget';
+      test('the selected field records the operation', () => {
+        expect(readWire()).toMatchObject({ [MARKER]: 'recorded' });
+        expect(readWire()).toHaveProperty(MARKER, 'recorded');
+      });
+    `,
+    expected: [],
+  },
+  {
     name: 'SILENT: toThrow carrying the message it expects',
     source: `
       import { clampToBudget } from '../src/budget';
@@ -688,6 +752,62 @@ describeCategory('tautology_suspect', [
     expected: [],
   },
 ]);
+
+test('RED: a product literal reaches an expected side through a renamed package export', () => {
+  const barrel = 'packages/probe/src/index.ts';
+  const sources = new Map([[MODULE, MODULE_TEXT], [barrel, "export { MARKER as BUDGET_MARKER } from './budget';\n"]]);
+
+  const measured = measureFile(PROBE, `
+    import { BUDGET_MARKER as label } from '@kinu.run/probe';
+    test('the budget marker is rendered', async () => {
+      const text = await page.$eval('[data-marker]', element => element.innerText);
+      expect(text).toContain(label);
+    });
+  `, { ...inputs, sources, tracked: new Set([...inputs.tracked, barrel]) });
+
+  expect(measured.findings.tautology_suspect.map((finding) => finding.what)).toEqual(['expected side copies a product constant']);
+});
+
+test('rendered text follows an imported observer field without treating its geometry as text', () => {
+  const observer = 'packages/probe/tests/helpers/observe.ts';
+
+  const sources = new Map([...inputs.sources, [observer, `
+    export async function observe(page) {
+      const limitsStated = await page.$eval('[data-limits]', element => element.textContent.match(/\\d+/g).map(Number));
+      const width = await page.$eval('[data-limits]', element => element.getBoundingClientRect().width);
+      return { limitsStated, width };
+    }
+  `]]);
+
+  const measured = measureFile(PROBE, `
+    import { PROMPT_BUDGET } from '../src/budget';
+    import { observe } from './helpers/observe';
+    test('reads the dialog', async () => {
+      const seen = await observe(page);
+      expect(seen.limitsStated).toEqual([PROMPT_BUDGET]);
+      expect(seen.width).toBe(PROMPT_BUDGET);
+    });
+  `, { ...inputs, sources, tracked: new Set([...inputs.tracked, observer]) });
+
+  expect(measured.findings.tautology_suspect.map((finding) => finding.what)).toEqual(['expected side copies a product constant']);
+});
+
+test('a local function can shadow a scalar DOM-text observer', () => {
+  const observer = 'packages/probe/tests/helpers/title.ts';
+  const sources = new Map([...inputs.sources, [observer, `export const readTitle = page => page.$eval('h1', node => node.textContent);`]]);
+
+  const measured = measureFile(PROBE, `
+    import { MARKER } from '../src/budget';
+    import { readTitle } from './helpers/title';
+    test('the rendered title', async () => { expect(await readTitle(page)).toContain(MARKER); });
+    test('a non-rendering local reader', () => {
+      const readTitle = () => storage.read();
+      expect(readTitle()).toBe(MARKER);
+    });
+  `, { ...inputs, sources, tracked: new Set([...inputs.tracked, observer]) });
+
+  expect(measured.findings.tautology_suspect.map((finding) => finding.test)).toEqual(['the rendered title']);
+});
 
 describe('assertion_free and silent_skip', () => {
   test('RED: a test with no assertion at all', () => {

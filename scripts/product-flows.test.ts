@@ -8,7 +8,6 @@
  * the tests below read only what the page showed.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { SHARE_VIEWER_REQUESTS_PER_MINUTE } from '@kinu.run/core';
 import { resolveWebIdentity } from '../evals/src/session';
 import { withBrowser } from './live-app-harness';
 import {
@@ -194,7 +193,8 @@ describe('a slate with no bindings shares from its tile, and stops (#25)', () =>
     const shared = verdictOf(observed.slateShare, 'slate-share');
 
     expect(shared.reachRow).toBe(false);
-    expect(shared.limitsStated).toEqual([SHARE_VIEWER_REQUESTS_PER_MINUTE]);
+    // docs/SLATE-SHARING.md S5 specifies 120 requests per viewer per minute; this slate spends no model budget.
+    expect(shared.limitsStated).toEqual([120]);
   });
 
   test('the share is made, its link copies, and it is listed under Shared by you', () => {
