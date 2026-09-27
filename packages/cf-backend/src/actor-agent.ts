@@ -121,7 +121,7 @@ import {
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   readDeviceRequestChannel, type DeviceRequestChannel,
   cancelCurrentWork, getStoredModelSpec, setModel, getChatHistoryPage,
-  type CancelWorkOutcome, type ChatHistoryEntry, type Page, type PageRequest,
+  type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId, type MCTSProgressEvent,
   EventLog,
   resolveTurnSkills, filterToolNamesBySkills,
@@ -3520,7 +3520,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * The root's pane names none and reads this actor's conversation.
    */
   @callable()
-  async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<Page<ChatHistoryEntry>> {
+  async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<ChatHistoryPage> {
     const { actor, ...page } = request ?? {};
 
     return getChatHistoryPage(actor === undefined ? this.chatTranscript : this.subordinateChat(actor), page);

@@ -2015,7 +2015,7 @@ export type {
   InstructionSourceView,
 } from './read-models/instruction-approvals';
 
-export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/status';
+export { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
 
 export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
@@ -2252,7 +2252,7 @@ export {
 
 export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
-export { messagesUpTo, turnRows } from './read-models/fork-count';
+export { messagesUpTo, turnRows, unreadRows } from './read-models/fork-count';
 
 export {
   turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,
