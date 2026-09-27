@@ -64,7 +64,7 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     expect(inspection.warnings).toEqual([]);
 
     const published = answered(await owner.agent.slate({ op: 'publish', id: 'issues', version: committed.id, include: ['src'] }), PublishedBlueprintSchema);
-    expect(published.share).toMatchObject({ slate: 'issues', kind: 'blueprint', included: ['package.json', 'src'], revokedAt: null });
+    expect(published.share).toMatchObject({ slate: 'issues', included: ['package.json', 'src'], revokedAt: null });
     expect(answered(await owner.agent.slate({ op: 'shares' }), v.array(SlateShareRecordSchema)).map((share) => share.id)).toEqual([published.share.id]);
 
     const bundle = answered(await owner.agent.blueprintBundle(published.share.id), BlueprintBundleSchema);

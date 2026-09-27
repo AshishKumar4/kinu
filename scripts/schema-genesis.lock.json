@@ -395,16 +395,6 @@
     "bytes INTEGER",
     "user_agent TEXT"
   ],
-  "cp_public_shares@packages/core/src/control-plane/public-shares.ts": [
-    "owner_user_id TEXT NOT NULL",
-    "owner_email TEXT NOT NULL",
-    "workspace TEXT NOT NULL",
-    "share_id TEXT NOT NULL",
-    "kind TEXT NOT NULL",
-    "title TEXT NOT NULL",
-    "created_at INTEGER NOT NULL",
-    "PRIMARY KEY (owner_user_id, workspace, share_id)"
-  ],
   "cp_users@packages/core/src/control-plane/store.ts": [
     "user_id TEXT PRIMARY KEY",
     "email TEXT NOT NULL",
@@ -1017,16 +1007,6 @@
     "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "request_messages@packages/core/src/session/schema.ts": [
-    "actor_id TEXT NOT NULL",
-    "request_id TEXT NOT NULL",
-    "position INTEGER NOT NULL",
-    "message_id TEXT NOT NULL",
-    "PRIMARY KEY(actor_id,request_id,position)",
-    "CHECK(position >= 0)",
-    "FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id)",
-    "FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id)"
-  ],
   "request_renders@packages/core/src/session/schema.ts": [
     "actor_id TEXT NOT NULL",
     "request_id TEXT NOT NULL",
@@ -1144,20 +1124,6 @@
     "CHECK((request_id IS NULL) = (output_slot IS NULL))",
     "CHECK((sealed_at IS NULL AND content_json IS NULL AND content_path IS NULL AND content_digest IS NULL) OR (sealed_at IS NOT NULL AND ((content_json IS NOT NULL AND content_path IS NULL AND content_digest IS NULL) OR (content_json IS NULL AND content_path IS NOT NULL AND content_digest IS NOT NULL))))"
   ],
-  "slate_deployment_reservations@packages/core/src/state/workspace-schema.ts": [
-    "id TEXT PRIMARY KEY",
-    "workspace_id TEXT NOT NULL",
-    "slate_id TEXT NOT NULL",
-    "parent_id TEXT UNIQUE",
-    "bytes BLOB NOT NULL"
-  ],
-  "slate_deployments@packages/core/src/state/workspace-schema.ts": [
-    "id TEXT PRIMARY KEY",
-    "workspace_id TEXT NOT NULL",
-    "slate_id TEXT NOT NULL",
-    "parent_id TEXT",
-    "bytes BLOB NOT NULL"
-  ],
   "slate_file_manifest@packages/core/src/state/workspace-schema.ts": [
     "slate_id TEXT NOT NULL",
     "path TEXT NOT NULL",
@@ -1167,14 +1133,6 @@
     "content TEXT NOT NULL",
     "recorded_at INTEGER NOT NULL",
     "PRIMARY KEY (slate_id, path)"
-  ],
-  "slate_invocations@packages/core/src/state/workspace-schema.ts": [
-    "id TEXT PRIMARY KEY",
-    "slate_id TEXT NOT NULL",
-    "request TEXT NOT NULL",
-    "attempt INTEGER NOT NULL",
-    "owner_epoch TEXT NOT NULL",
-    "state TEXT NOT NULL"
   ],
   "slate_live_share_users@packages/core/src/slates/live-shares.ts": [
     "share_id TEXT NOT NULL",
@@ -1202,41 +1160,9 @@
     "capture_handle TEXT",
     "capture_until INTEGER"
   ],
-  "slate_previews@packages/core/src/state/workspace-schema.ts": [
-    "id TEXT PRIMARY KEY",
-    "workspace_id TEXT NOT NULL",
-    "slate_id TEXT NOT NULL",
-    "parent_id TEXT",
-    "bytes BLOB NOT NULL"
-  ],
   "slate_publications@packages/core/src/state/workspace-schema.ts": [
     "id TEXT PRIMARY KEY",
-    "workspace_id TEXT NOT NULL",
     "slate_id TEXT NOT NULL",
-    "parent_id TEXT",
-    "bytes BLOB NOT NULL"
-  ],
-  "slate_receipts@packages/core/src/state/workspace-schema.ts": [
-    "id TEXT PRIMARY KEY",
-    "invocation_id TEXT NOT NULL REFERENCES slate_invocations(id)",
-    "attempt INTEGER NOT NULL",
-    "outcome TEXT NOT NULL",
-    "error TEXT",
-    "finished_at INTEGER NOT NULL",
-    "UNIQUE (invocation_id, attempt)"
-  ],
-  "slate_resource_reservations@packages/core/src/state/workspace-schema.ts": [
-    "id TEXT PRIMARY KEY",
-    "workspace_id TEXT NOT NULL",
-    "slate_id TEXT NOT NULL",
-    "parent_id TEXT",
-    "bytes BLOB NOT NULL"
-  ],
-  "slate_resources@packages/core/src/state/workspace-schema.ts": [
-    "id TEXT PRIMARY KEY",
-    "workspace_id TEXT NOT NULL",
-    "slate_id TEXT NOT NULL",
-    "parent_id TEXT",
     "bytes BLOB NOT NULL"
   ],
   "slate_share_users@packages/core/src/slates/shares.ts": [
@@ -1249,7 +1175,6 @@
   "slate_shares@packages/core/src/slates/shares.ts": [
     "id TEXT PRIMARY KEY",
     "slate_id TEXT NOT NULL",
-    "kind TEXT NOT NULL CHECK (kind IN ('blueprint'))",
     "publication_id TEXT NOT NULL",
     "included_paths TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
@@ -1259,21 +1184,17 @@
     "slate_id TEXT NOT NULL",
     "key TEXT NOT NULL",
     "value TEXT NOT NULL",
-    "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (slate_id, key)"
   ],
   "slate_versions@packages/core/src/state/workspace-schema.ts": [
     "id TEXT PRIMARY KEY",
-    "workspace_id TEXT NOT NULL",
     "slate_id TEXT NOT NULL",
-    "parent_id TEXT",
     "bytes BLOB NOT NULL"
   ],
   "slate_viewer_requests@packages/core/src/slates/live-shares.ts": [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
     "share_id TEXT NOT NULL",
     "viewer TEXT NOT NULL",
-    "slate_id TEXT NOT NULL",
     "path TEXT NOT NULL",
     "calls TEXT NOT NULL",
     "outcome TEXT NOT NULL",
@@ -1599,14 +1520,6 @@
     "active INTEGER NOT NULL CHECK (active IN (0, 1))",
     "PRIMARY KEY (actor_id, generation, path)"
   ],
-  "vfs_baseline@packages/core/src/read-models/workspace-diff.ts": [
-    "actor_id TEXT NOT NULL",
-    "generation TEXT NOT NULL",
-    "path TEXT NOT NULL",
-    "content TEXT NOT NULL",
-    "active INTEGER NOT NULL CHECK (active IN (0, 1))",
-    "PRIMARY KEY (actor_id, generation, path)"
-  ],
   "webhook_rate_windows@packages/core/src/events/ingress/rate-limit.ts": [
     "trigger_id TEXT NOT NULL",
     "window_start INTEGER NOT NULL",
@@ -1676,10 +1589,10 @@
   ],
   "workspace_overviews@packages/core/src/state/user-schema.ts": [
     "name TEXT PRIMARY KEY",
-    "overview TEXT NOT NULL",
     "activity TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle'))",
     "decisions INTEGER NOT NULL",
-    "changed_at INTEGER NOT NULL"
+    "changed_at INTEGER NOT NULL",
+    "overview TEXT NOT NULL"
   ],
   "workspace_soul@packages/core/src/identity/schema.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
