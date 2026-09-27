@@ -38,6 +38,7 @@ import {
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
 import { withHostedNodeExecution, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { HostedNodeHome } from '@kinu.run/core';
+import { mountActorFiles } from './workspace-host';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
@@ -366,9 +367,7 @@ export function createCFRuntime(
   }
 
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
-  // The actor's shell serves its file tool's mounts. A branch has no uid, so no shell: it would take the root's table.
-  const ownsShell = actor.rootActor || hooks.workspaceExecution !== undefined;
-  const unmount = ownsShell ? workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred) : undefined;
+  const unmount = mountActorFiles(workspaceBox, agentFileVfs, { rootActor: actor.rootActor, cred: hooks.workspaceExecution?.cred });
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     shellSession,

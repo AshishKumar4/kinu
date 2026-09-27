@@ -15,7 +15,8 @@ import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/cor
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SUPERVISOR_OPS, type SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import type { ObjectNamespace } from '@kinu.run/core';
+import type { MountedVfs, ObjectNamespace } from '@kinu.run/core';
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
 import { clearPortCapability, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
@@ -534,4 +535,13 @@ function workspaceBox(deps: {
     },
     mountTable: deps.mountTable,
   };
+}
+
+/** An actor with no uid of its own (a branch) has no shell, so it must not take the session user's table. */
+export function mountActorFiles(
+  box: Pick<NimbusSandboxHandle, 'mountTable'>, files: MountedVfs, owner: { readonly rootActor: boolean; readonly cred: VfsCred | undefined },
+): (() => void) | undefined {
+  if (!owner.rootActor && owner.cred === undefined) return undefined;
+
+  return box.mountTable?.(files, owner.cred);
 }
