@@ -88,6 +88,8 @@ import {
   type ExplorationRecord,
   boundedInt,
   RUN_TIMELINE_MAX,
+  SCHEMA_GENESIS,
+  requireSchemaGenesis as requireGenesis,
   type Page,
   type RecordCellHandle,
   type RecordCellSummary,
@@ -99,7 +101,7 @@ import {
 } from '@kinu.run/core';
 import { classify } from '@kinu.run/core/obs';
 import {
-  makeSql, makeSqlExec, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
+  makeSql, makeSqlExec, schemaGenesisOf, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
   resolverModelPlane, type LocalModelResolver,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
@@ -812,7 +814,13 @@ function openLocalDb(name: string): SqliteDb {
 
   if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
 
-  return new Database(dbPath, { readonly: true });
+  const db = new Database(dbPath, { readonly: true });
+  const genesis = schemaGenesisOf(db);
+
+  if (genesis !== SCHEMA_GENESIS.slice(0, 7)) db.close();
+  requireGenesis(`Workspace "${name}"`, genesis);
+
+  return db;
 }
 
 function readMainActorTable<T>(name: string, table: string, absent: T, read: (sql: SqlExecutor, actor: ActorHandle) => T): T {

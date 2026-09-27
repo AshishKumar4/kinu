@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { RUN_TIMELINE_MAX, initWorkspaceSchema } from '@kinu.run/core';
-import { makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { makeWorkspaceSchemaSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import { agentDir } from '../src/config';
 import { listLocalTimeline, searchLocalMemory } from '../src/local-inspection';
@@ -25,6 +25,7 @@ function seed(rows: number): void {
   const db = new Database(DB_PATH);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const { actorId } = createTestActorsOver(db, { name: AGENT }).main;
+  stampSchemaGenesis(db);
 
   for (let i = 0; i < rows; i++) {
     db.run('INSERT INTO agent_log (actor_id, id, kind, trace_id, payload, received_at) VALUES (?, ?, ?, ?, ?, ?)',

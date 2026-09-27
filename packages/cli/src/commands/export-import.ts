@@ -19,6 +19,7 @@ import {
   type ArchivePage,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
+import { requireSchemaGenesis, stampSchemaGenesis } from '@kinu.run/cli-backend';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { workspaceArchiveTarget, type ArchiveFileTarget } from '@kinu.run/core';
 import {
@@ -108,7 +109,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     if (bareDatabase) {
       // A bare SQLite database, not an archive: copying the file is the restore.
       copyFileSync(file, partial);
-      restored = countRestored(partial);
+      restored = countRestored(partial, file);
     } else {
       const db = new Database(partial, { create: true });
 
@@ -120,6 +121,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
         });
 
         restored = { rows: result.rows, tables: result.tables };
+        stampSchemaGenesis(db);
       } finally {
         db.close();
       }
@@ -188,6 +190,7 @@ async function* localArchivePages(name: string, output: string): AsyncGenerator<
   const db = new Database(local.dbPath, { readonly: true });
 
   try {
+    requireSchemaGenesis(db, local.name);
     const sql = archiveSqlFromDatabase(db);
     let cursor: ArchiveCursor | null = null;
 
@@ -274,10 +277,12 @@ function nameFromFilename(file: string): string {
     .replace(/\.db$/, '');
 }
 
-function countRestored(dbPath: string): RestoredArchiveCounts {
+function countRestored(dbPath: string, source: string): RestoredArchiveCounts {
   const db = new Database(dbPath, { readonly: true });
 
   try {
+    requireSchemaGenesis(db, source);
+
     const tables = db.query<{ name: string }, []>(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
     ).all();

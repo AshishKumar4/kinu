@@ -327,8 +327,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
   async pendingSteerFileRows(): Promise<PendingSteerFile[]> {
     return this.actorState.storage.sql
-      .exec(`SELECT p.actor_id, p.id AS steer_id, f.value ->> 'filename' AS filename, f.value ->> 'mediaType' AS media_type,
-          f.value ->> 'url' AS url FROM pending_steers p, json_each(p.files_json) f ORDER BY p.actor_id, p.id, f.key`)
+      .exec('SELECT actor_id, steer_id, filename, media_type, url FROM pending_steer_files ORDER BY actor_id, steer_id, seq')
       .toArray()
       .map((row) => ({
         actorId: textColumn(row.actor_id),

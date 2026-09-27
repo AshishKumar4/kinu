@@ -371,6 +371,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // On cf created in the ActorAgent constructor, since `onStart` may not precede an RPC.
     // On the CLI `turn_id` is nullable: an idle-queued send is held by the queue.
     pending_steers: EVERYWHERE,
+    pending_steer_files: EVERYWHERE,
     // Created by `initWorkspaceSchema` (CLI) and the `ActorAgent` constructor (cf),
     // ahead of the `onStart` recovery sweep.
     actor_turn_claims: EVERYWHERE,

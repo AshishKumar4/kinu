@@ -18,6 +18,8 @@ export {
 
 export { openWorkspaceCLI, type WorkspaceInfo } from './open';
 
+export { requireSchemaGenesis, schemaGenesisOf, stampSchemaGenesis } from './schema-genesis';
+
 export { withConfigLock } from './config-lock';
 
 export { hostToolchainCapabilities } from './host-toolchain';
