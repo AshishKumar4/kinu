@@ -502,6 +502,15 @@ Heap was read as headroom: the largest held allocation that survived.
 - 30 live isolates on one object: agent-only bundle, 30 x 60 MB and 30 x 80 MB
   held, all 30 still held after 30 s. Full bundle, 30 x 80 MB: after 20 s, 20 of
   the 30 isolates had been replaced (held 0); the parent was untouched.
+- A WebSocket terminates inside a loader facet, routed from the parent's
+  `fetch` to the facet's: with `server.accept()`, and with the hibernation API
+  (`ctx.acceptWebSocket`, `webSocketMessage`). Open took 382-765 ms including
+  the cold start. After 90 s of silence the next message was answered by a new
+  facet instance in the same isolate, and the socket stayed open.
+- A loader isolate outlived idle gaps of 60, 120 and 180 s over 10 minutes (3
+  of 3 isolates kept their boot id at every check) while the parent got a
+  request every 20 s. The facet object itself was rebuilt after every gap of
+  60 s or more, so a wake after idle runs the constructor but no module load.
 - Alarms: on one object, two sub-agent SDK schedules (10 s, 30 s) and two
   instants from a `LifecycleCapability`'s `getNextAlarm` (20 s, 40 s) all fired
   in order. The SDK ones fired up to 0.6 s early (whole-second times), the
