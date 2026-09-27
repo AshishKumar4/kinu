@@ -177,10 +177,9 @@ import {
   type CFRuntime, type CFRuntimeHooks,
 } from "./runtime";
 import {
-  hostNodeSeat, hostBranch, abortHostedBranch, nodeCodemodeTool,
-  type ExplorationHostSeams, type BranchRunnerDeps,
-} from "./exploration-hosting";
-import { hostedSubordinateRuntime, type SubordinateHostSeams } from "./subordinate-hosting";
+  hostNodeSeat, hostBranch, abortHostedBranch, nodeCodemodeTool, hostedSubordinateRuntime,
+  type HostedActorSeams, type BranchRunnerDeps,
+} from "./hosted-actors";
 import {
   classifyRecoveredFiber, EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
   TERMINAL_LANE_FIBER,
@@ -766,9 +765,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Read directly by the inspection path and slate descent, which resolve actors by name. */
   protected abstract actorDirectoryStore(): WorkspaceActorDirectory;
 
-  protected abstract explorationSeams(): ExplorationHostSeams;
-
-  protected abstract subordinateSeams(): SubordinateHostSeams;
+  protected abstract hostedSeams(): HostedActorSeams;
 
   /**
    * Each actor's home is provisioned in this isolate by the host (`actor-hosting.ts` →
@@ -879,7 +876,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Memoized so the durable roster and the temporary register address the same actors. */
   protected subordinateRuntime(): SubordinateRuntime {
     this._subordinateRuntime ??= hostedSubordinateRuntime(
-      this.subordinateSeams(),
+      this.hostedSeams(),
       () => this.actorHost().bindStores(actorReferenceOf(this.actorHandle())),
     );
 
@@ -2754,7 +2751,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const actorDeps = this.actorToolDeps();
     // Seat factory is asked per node: node deps are shallow-copied per child, so one shared actor
     // would give a whole wave one claim ledger and loop pointer.
-    const seams = this.explorationSeams();
+    const seams = this.hostedSeams();
 
     // The one production construction site of `AgentsSwarmDeps` on this backend; the CLI's
     // `buildAgentsSwarmDeps` is its twin.
@@ -3033,8 +3030,8 @@ export abstract class ActorAgent extends Agent<Env> {
         },
         // Both members or neither: `requireBranches` refuses when the hook is absent.
         branches: {
-          spawn: (branchId) => hostBranch(this.explorationSeams(), branchId, this.branchRunnerDeps()),
-          abort: (branchId) => abortHostedBranch(this.explorationSeams(), branchId),
+          spawn: (branchId) => hostBranch(this.hostedSeams(), branchId, this.branchRunnerDeps()),
+          abort: (branchId) => abortHostedBranch(this.hostedSeams(), branchId),
         },
       };
 
@@ -3848,7 +3845,7 @@ export abstract class ActorAgent extends Agent<Env> {
       : { executor: this.rt.executor, explorer: this.rt.llm };
 
     this._cfHeadRuntime = createHeadRuntime({
-      host: this.explorationSeams(),
+      host: this.hostedSeams(),
       models: this.ownedModelServices,
       // The merge is a judge call: its model and effort come from the route table via this profile,
       // not from the actor's stored chat spec.
@@ -3862,7 +3859,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * `hostNodeSeat` (`exploration-hosting.ts`) is requested per node: search deps are shallow-copied
+   * `hostNodeSeat` (`hosted-actors.ts`) is requested per node: search deps are shallow-copied
    * per child, so a shared seat would give a whole wave one claim ledger and one loop pointer.
    */
 

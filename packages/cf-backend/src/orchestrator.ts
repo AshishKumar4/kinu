@@ -43,14 +43,10 @@ import {
   createWorkspaceActorHost, provisionHostedActorHome, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  hostNodeSeat, nodeCodemodeTool, reclaimSettledExplorationActors,
-  type ExplorationHostSeams,
-} from "./exploration-hosting";
-import {
   admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
-  reportSettlesRun, runHostedTask,
-  type HostedTaskProfile, type HostedTaskTurn, type SubordinateHostSeams,
-} from "./subordinate-hosting";
+  reportSettlesRun, runHostedTask, hostNodeSeat, nodeCodemodeTool, reclaimSettledExplorationActors,
+  type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
+} from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
 import { codemodeEgress } from "./codemode-egress";
 import type { ReportToolDeps } from "@kinu.run/core";
@@ -689,16 +685,34 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async enqueueHostedTurn(
     actor: BoundActor, input: ProgrammaticTurn,
   ): Promise<EnqueueTurnResult> {
-    const admitted = await admitHostedTask(this.subordinateSeams(), actor.reference, {
+    const admitted = await admitHostedTask(this.hostedSeams(), actor.reference, {
       kind: 'message', body: input.text, mode: workModeForTurnMetadata(input.metadata),
     });
 
     return { status: admitted.admitted ? 'queued' : 'skipped' };
   }
 
-  protected explorationSeams(): ExplorationHostSeams {
+  protected hostedSeams(): HostedActorSeams {
     return {
       host: this.actorHost(),
+      sql: this.boundSql,
+      exec: this.boundExec(),
+      directory: this.workspaceActors(),
+      transaction: (body) => this.ctx.storage.transactionSync(body),
+      roster: (actor) => new SubordinateRosterStore(this.ctx.storage.sql, actor.handle),
+      vfs: () => this.rt.storage.vfs,
+      // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
+      // surface are framed from it.
+      profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
+      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
+      priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
+      suggestTitle: (mission) => this.suggestTitle(mission),
+      taskProfile: (turn) => this.hostedTaskProfile(turn),
+      dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
+      announce: () => { this.broadcastSubordinatesChanged(); },
+      scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
+      armWake: () => { this.armDelegationWake(); },
+      temporary: () => this.temporaryAgentPort(),
       register: async ({ creationId, toolProfile, loop }) => {
         const entry = await this.actorDirectory({
           action: 'register', creationId, name: explorationActorKey(creationId), kind: 'run', toolProfile, lifetime: 'task',
@@ -713,11 +727,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return () => { this._actorWriteObservers.delete(reference.actorId); };
       },
-      // This actor's own role and tier, not the root's; the root's would leave a narrowed
-      // head unrestricted.
-      profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
-      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
-      priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       webSearch: () => this.ownedModelServices.getWebSearchProvider(),
       // The host's own provisioner, the one every hosted runtime is built over, so the node's
       // disclosed boundary and its real credential are the same fact.
@@ -755,30 +764,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  protected subordinateSeams(): SubordinateHostSeams {
-    return {
-      host: this.actorHost(),
-      sql: this.boundSql,
-      exec: this.boundExec(),
-      directory: this.workspaceActors(),
-      transaction: (body) => this.ctx.storage.transactionSync(body),
-      roster: (actor) => new SubordinateRosterStore(this.ctx.storage.sql, actor.handle),
-      vfs: () => this.rt.storage.vfs,
-      // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
-      // surface are framed from it.
-      profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
-      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
-      priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
-      suggestTitle: (mission) => this.suggestTitle(mission),
-      taskProfile: (turn) => this.hostedTaskProfile(turn),
-      dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
-      mission: () => null,
-      announce: () => { this.broadcastSubordinatesChanged(); },
-      scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
-      armWake: () => { this.armDelegationWake(); },
-      temporary: () => this.temporaryAgentPort(),
-    };
-  }
 
   /**
    * Full `buildActorTools` surface over the actor's own runtime, minus `peers` (it would
@@ -799,7 +784,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // A run-settling report is the answer.
         const settles = reportSettlesRun(input.status, 'report_tool');
 
-        const relayed = await relayHostedReport(this.subordinateSeams(), turn.actor, {
+        const relayed = await relayHostedReport(this.hostedSeams(), turn.actor, {
           status: input.status, content: input.content, origin: 'report_tool',
           mode: 'build', sequenceId: `live:${turn.actor.record.name}:${nanoid()}`,
           handoff: input.handoff,
@@ -883,7 +868,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * hire/ask/send/list/dismiss vanish from the enum rather than refusing.
    */
   private hostedAgentsToolDeps(turn: HostedTaskTurn): AgentsToolDeps {
-    const seams = this.explorationSeams();
+    const seams = this.hostedSeams();
 
     const swarm: AgentsSwarmDeps = {
       rt: turn.runtime,
@@ -925,7 +910,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * No `temporary` port: it holds live `shell` promises that must outlive the turn. Null at the cap.
    */
   private hostedTeamToolDeps(actor: HostedActor): TeamToolDeps | null {
-    const seams = this.subordinateSeams();
+    const seams = this.hostedSeams();
     const delegation = hostedDelegationBudget(seams, actor);
 
     if (delegationExhausted(delegation)) return null;
@@ -1203,7 +1188,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async drainAdmittedDelegations(): Promise<boolean> {
-    const seams = this.subordinateSeams();
+    const seams = this.hostedSeams();
     const exec = this.boundExec();
     const now = Date.now();
     let budget = HOSTED_DELEGATION_DRAIN_BUDGET;
@@ -1316,7 +1301,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       try {
         const child = await this.actorHost().acquire(actorReferenceOf(turn.record));
-        await retireStalledTask(this.subordinateSeams(), child, {
+        await retireStalledTask(this.hostedSeams(), child, {
           turnId: turn.claim.turnId, runs: turn.claim.epoch, workMode: turn.claim.workMode,
         });
       } catch (cause) {
@@ -1965,7 +1950,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         this.ctx.storage.transactionSync(() => rows.appendUser(prepared));
 
-        const handoff = await admitHostedTask(this.subordinateSeams(), reference, {
+        const handoff = await admitHostedTask(this.hostedSeams(), reference, {
           kind: 'message', body: input.text, mode: input.mode, messageId: input.id,
         });
 
@@ -3111,7 +3096,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   protected async reclaimSettledExplorationActors(): Promise<void> {
     try {
-      const { retired } = await reclaimSettledExplorationActors(this.explorationSeams(), {
+      const { retired } = await reclaimSettledExplorationActors(this.hostedSeams(), {
         readHead: (id) => this.headJournal.readHead(id),
         hasLiveExploration: () => this.hasLiveExploration(),
       });

@@ -178,7 +178,7 @@ export function findUnreachable(
   // reaches it under the PROPERTY's name in another file. `recordHeadStep` was
   // reported "no caller anywhere" while being installed at
   // `orchestrator.ts:716` as `ExplorationHostSeams.recordStep`, declared at
-  // `exploration-hosting.ts:155` and consumed at `:282` as `reportStep` — two
+  // `exploration-hosting.ts:155` (now `hosted-actors.ts`) and consumed at `:282` as `reportStep` — two
   // renames, which a name-keyed gate cannot follow. A recursive method that
   // happens to sit in an object literal now counts as reached, which is a far
   // narrower miss than calling a wired seam dead: this gate's whole purpose is
