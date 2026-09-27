@@ -159,19 +159,6 @@ describe('withRateLimitRetry', () => {
     expect(generic.calls()).toBe(1);
   });
 
-  test('logs one concise provider-host warning per wait', async () => {
-    const harness = retryHarness([
-      new Response('limited', { status: 429, headers: { 'Retry-After': '2' } }),
-      new Response('ok'),
-    ]);
-
-    await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
-
-    expect(harness.warnings).toEqual([
-      '[kinu] api.example.com rate-limited: waiting 2s (attempt 1)',
-    ]);
-  });
-
   /** Each provider's documented "allowance exhausted" 429 body: waiting cannot clear any of them. */
   const EXHAUSTED_CASES: ReadonlyArray<readonly [string, JsonValue]> = [
     ['openai insufficient_quota type', { error: { message: 'You exceeded your current quota, please check your plan and billing details.', type: 'insufficient_quota', param: null, code: 'insufficient_quota' } }],

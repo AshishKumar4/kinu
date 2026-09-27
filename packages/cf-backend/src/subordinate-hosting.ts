@@ -44,6 +44,8 @@ export interface HostedReportLedger {
  * `model`/`profile` resolution (a second lookup can land a different digest than the claim).
  */
 export interface HostedTaskTurn {
+  /** The assignment row's id: keys this turn's claim and effects. */
+  readonly turnId: string;
   readonly actor: HostedActor;
   readonly runtime: CFRuntime;
   readonly reports: HostedReportLedger;
@@ -197,6 +199,8 @@ export async function relayHostedReport(
     readonly sequenceId: string;
     /** Absent on the automatic turn-end relay. */
     readonly handoff?: SubordinateReportHandoff;
+    /** The assignment this report answers; closed on delivery. */
+    readonly answers?: string;
   },
 ): Promise<SubordinateEventResult> {
   // Past depth 1 the hiring parent is not the workspace.
@@ -206,17 +210,40 @@ export async function relayHostedReport(
   });
 
   const name = child.record.name;
+  const { answers, ...event } = report;
 
-  return await seams.host.run(parent, async (hirer) => receiveSubordinateEvent({
-    log: new EventLog(seams.exec, hirer.handle),
-    roster: seams.roster(hirer),
-    vfs: seams.vfs(),
-    transaction: (body) => seams.transaction(body),
-    announce: () => { seams.announce(hirer); },
-    onAdmitted: () => { seams.scheduleDrain(hirer); },
-    // A temporary child's answer goes first to the `agents.ask` waiter, via the port that parked it.
-    temporary: seams.temporary(hirer),
-  }, { fromSubordinate: name, ...report }, Date.now()));
+  const answered = (): void => {
+    if (answers !== undefined) new EventLog(seams.exec, child.handle).markAnswered(answers);
+  };
+
+  return await seams.host.run(parent, async (hirer) => {
+    const temporary = seams.temporary(hirer);
+
+    return await receiveSubordinateEvent({
+      log: new EventLog(seams.exec, hirer.handle),
+      roster: seams.roster(hirer),
+      vfs: seams.vfs(),
+      transaction: (body) => seams.transaction(() => {
+        const written = body();
+        answered();
+
+        return written;
+      }),
+      announce: () => { seams.announce(hirer); },
+      onAdmitted: () => { seams.scheduleDrain(hirer); },
+      // A task child's answer goes first to its waiter, and closes before the waiter retires the child.
+      temporary: {
+        ...temporary,
+        settle: (input) => {
+          const settled = temporary.settle(input);
+
+          if (settled) answered();
+
+          return settled;
+        },
+      },
+    }, { fromSubordinate: name, ...event }, Date.now());
+  });
 }
 
 export async function retireStalledTask(
@@ -294,7 +321,7 @@ export async function runHostedTask(
     const capture = new HeadCapture();
 
     const turn: HostedTaskTurn = {
-      actor, runtime, reports, input, capture,
+      turnId: task.sequenceId, actor, runtime, reports, input, capture,
       model: seams.resolveModel(resolved.profile.tier.model),
       profile: resolved,
     };
@@ -386,13 +413,17 @@ export async function runHostedTask(
         : null
     );
 
-    if (relayed === null) return { text: report.summary, relayed: null };
+    if (relayed === null) {
+      new EventLog(seams.exec, actor.handle).markAnswered(task.sequenceId);
+
+      return { text: report.summary, relayed: null };
+    }
 
     return {
       text: report.summary,
       relayed: await relayHostedReport(seams, actor, {
         status: relayed.status, content: relayed.content, origin: 'turn_end',
-        mode: task.mode, sequenceId: task.sequenceId,
+        mode: task.mode, sequenceId: task.sequenceId, answers: task.sequenceId,
       }),
     };
   });

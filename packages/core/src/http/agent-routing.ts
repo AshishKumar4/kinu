@@ -46,12 +46,12 @@ const HOSTED_ACTOR_PATH = new RegExp(
   `^${ROOT_AGENT_PATH}/[^/]+/${HOSTED_ACTOR_SEGMENT}/([^/]+)(.*)$`,
 );
 
-/** The hosted actor a public path addresses (logical name + transport suffix), or null for the workspace itself. */
-/** Client socket path tail for a hosted actor's chat; one definition shared with {@link hostedActorRoute}. */
-export function hostedActorSocketPath(name: string): string {
-  return `${HOSTED_ACTOR_SEGMENT}/${encodeURIComponent(name)}`;
+/** Client socket path tail for a hosted actor's chat; `target` is a name or a `/`-joined path, one encoded segment. */
+export function hostedActorSocketPath(target: string): string {
+  return `${HOSTED_ACTOR_SEGMENT}/${encodeURIComponent(target)}`;
 }
 
+/** The hosted actor a public path addresses (name or path, and transport suffix), or null for the workspace itself. */
 export function hostedActorRoute(pathname: string): { name: string; suffix: string } | null {
   if (isForeignAgentNamespacePath(pathname)) return null;
   const match = pathname.match(HOSTED_ACTOR_PATH);
@@ -61,14 +61,13 @@ export function hostedActorRoute(pathname: string): { name: string; suffix: stri
   return { name: decodeURIComponent(match[1]), suffix: match[2] };
 }
 
-/** Connection tag prefix recording which actor a socket addressed. */
+/** Set only by the edge, to the actor id it resolved; a client's own value is dropped. */
+export const HOSTED_ACTOR_ID_HEADER = 'x-kinu-hosted-actor';
+
 const ACTOR_CONNECTION_TAG_PREFIX = 'actor:';
 
-/** Connection tag for a socket on this path, or null for the root. Tags survive hibernation; in-memory maps do not. */
-export function actorConnectionTag(pathname: string): string | null {
-  const route = hostedActorRoute(pathname);
-
-  return route === null ? null : `${ACTOR_CONNECTION_TAG_PREFIX}${route.name}`;
+export function actorConnectionTag(actorId: string): string {
+  return `${ACTOR_CONNECTION_TAG_PREFIX}${actorId}`;
 }
 
 export function actorFromConnectionTags(tags: Iterable<string>): string | null {

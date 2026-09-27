@@ -13,6 +13,7 @@ import {
 import type { ActorHandle } from '../../identity/actor-handle';
 import { dedupeKeyForDescriptor } from './dedupe';
 import { wakesADrain } from './drain';
+import { EvolutionHelperStore } from '../../identity/evolution-helpers';
 import { deriveFields } from './trust';
 import { applyVisibilityForStorage } from './visibility';
 import { ulid } from './ulid';
@@ -297,10 +298,13 @@ export function dismissOrphanedAssignments(
 export class EventLog {
   private readonly actorId: string;
 
+  private readonly helpers: EvolutionHelperStore;
+
   /** `actorId` is captured once so a re-pointed handle cannot move the log; `assertCurrent()` runs
    *  before every statement so a retired actor stops at once. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
+    this.helpers = new EvolutionHelperStore(sql, actor);
   }
 
   /** Without `caused_by` the event roots its own trace. */
@@ -470,16 +474,21 @@ export class EventLog {
    */
   nextPendingDrainAt(now = Date.now()): number | null {
     const drainableNow = this.pending({ resolve_deferred: { now, phase: 'idle' } })
-      .some(wakesADrain);
+      .some((event) => wakesADrain(event, this.isEvolutionReport));
 
     if (drainableNow) return now;
 
     const scheduled = this.deferredRows()
-      .filter(({ event }) => wakesADrain(event))
+      .filter(({ event }) => wakesADrain(event, this.isEvolutionReport))
       .flatMap(({ cond }) => cond.kind === 'at' && cond.ts > now ? [cond.ts] : []);
 
     return scheduled.length === 0 ? null : Math.min(...scheduled);
   }
+
+  readonly isEvolutionReport = (event: KinuEvent): boolean =>
+    event.variant === 'subordinate_report'
+    && (event.payload_visibility === 'full' || event.payload_visibility === 'redact')
+    && this.helpers.has(event.payload.from_subordinate);
 
   markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number, now = Date.now()): void {
     this.actor.assertCurrent();
@@ -488,6 +497,21 @@ export class EventLog {
        WHERE actor_id = ? AND id = ? AND kind = 'event'`,
       turnId, stepIdx, now, this.actorId, eventId,
     );
+  }
+
+  /** An assignment whose answer was delivered closes as its completed turn would; a re-pend reads the close. */
+  markAnswered(eventId: EventId): void {
+    this.releaseLease(eventId, 'consumed_at = NULL');
+  }
+
+  isAnswered(eventId: EventId): boolean {
+    this.actor.assertCurrent();
+
+    return this.sql.exec(
+      `SELECT 1 FROM agent_log WHERE actor_id = ? AND id = ? AND kind = 'event'
+         AND turn_id IS NOT NULL AND consumed_at IS NULL`,
+      this.actorId, eventId,
+    ).toArray().length > 0;
   }
 
   markTurnCompleted(turnId: TurnId): void {
@@ -501,12 +525,12 @@ export class EventLog {
 
   /** Used by abort_replan to re-pend events. */
   unbind(eventId: EventId): void {
+    this.releaseLease(eventId, 'turn_id = NULL, step_idx = NULL, consumed_at = NULL');
+  }
+
+  private releaseLease(eventId: EventId, assignments: 'consumed_at = NULL' | 'turn_id = NULL, step_idx = NULL, consumed_at = NULL'): void {
     this.actor.assertCurrent();
-    this.sql.exec(
-      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
-       WHERE actor_id = ? AND id = ? AND kind = 'event'`,
-      this.actorId, eventId,
-    );
+    this.sql.exec(`UPDATE agent_log SET ${assignments} WHERE actor_id = ? AND id = ? AND kind = 'event'`, this.actorId, eventId);
   }
 
   /** Reports open leases; only the caller can tell re-pend from finish-the-reply. */

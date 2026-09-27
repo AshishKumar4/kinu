@@ -103,7 +103,7 @@ import type {
 import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import * as v from "valibot";
-import { galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -1520,7 +1520,12 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   getWorkspaceSnapshot: () => {
     const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get("getWorkspaceSnapshot"));
 
-    return { ...snapshot, activePlan: galleryAgentPlan, slates: gallerySlates().slates };
+    const status = v.parse(JsonObjectSchema, snapshot.status);
+
+    return {
+      ...snapshot, activePlan: galleryAgentPlan, slates: gallerySlates().slates,
+      status: HISTORY_ROWS > 0 ? { ...status, messageCount: seededGalleryChatRows() + HISTORY_ROWS } : status,
+    };
   },
   listSlates: gallerySlates,
   getActivePlanReview: () => galleryAgentPlan,
@@ -1528,7 +1533,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   // `dataset.workMoved`: a task written during an outage.
   listWorkspaceWork: () => ({
     plans: [{
-      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false },
+      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false, path: [] },
       plan: galleryAgentPlan, tasks: [],
     }],
     tasks: document.documentElement.dataset.workMoved === "1" ? [{
@@ -1605,7 +1610,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     const name = `agent-${++gallerySubSeq}`;
 
     const entry = {
-      name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", createdBy: "user",
+      name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     };
 
@@ -1671,7 +1676,58 @@ new MutationObserver(() => {
   galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getExposedPorts"] }));
 }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-preview-arrived", "data-sandbox-starting"] });
 
+/* `&history=N&historyLatency=ms`: N older rows, paged; `&historyHold=1` waits for `gallery:release-page`. */
+const HISTORY_ROWS = Number(new URLSearchParams(location.search).get("history") ?? 0);
+
+const HISTORY_LATENCY_MS = Number(new URLSearchParams(location.search).get("historyLatency") ?? 250);
+
+const HISTORY_HELD = new URLSearchParams(location.search).get("historyHold") === "1";
+
+/** `&historyUneven=1`: pages alternate row heights. */
+const HISTORY_UNEVEN = new URLSearchParams(location.search).get("historyUneven") === "1";
+
+const HISTORY_PICTURE = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220"><rect width="480" height="220" fill="#3a3530"/><text x="24" y="120" fill="#e8dcc4" font-size="28">chart</text></svg>')}`;
+
+function historyRow(index: number): ChatHistoryEntry {
+  const id = `hist-${String(index).padStart(5, "0")}`;
+  const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
+
+  if (index % 2 === 0) return { id, role: "user", content: `Question ${index}: what changed in the pricing guard this time?`, createdAt };
+
+  const kind = index % 10;
+  let content = `Answer ${index}. The guard now reads the campaign before it writes the cart.`;
+
+  if (kind === 1 || (HISTORY_UNEVEN && Math.floor(index / 40) % 2 === 0)) content += "\n\n" + "A longer explanation that wraps across several lines of the column. ".repeat(6);
+  else if (kind === 3) content += "\n\n```ts\nexport function guard(cart: Cart) {\n  if (cart.coupon?.archived) throw new Error('archived');\n  return apply(cart);\n}\n```";
+  else if (kind === 5) content += `\n\n![chart ${index}](${HISTORY_PICTURE})`;
+  else if (kind === 7) content += "\n\nslate://board";
+
+  return { id, role: "assistant", content, createdAt };
+}
+
+async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
+  const request = v.parse(v.tuple([v.object({ cursor: v.optional(v.object({ after: v.string() })), limit: v.number() })]), args);
+  const { cursor, limit } = request[0];
+  const held = cursor?.after.startsWith("hist-") ? Number(cursor.after.slice(5)) : HISTORY_ROWS;
+  const from = Math.max(0, held - limit);
+  const items = Array.from({ length: held - from }, (_, offset) => historyRow(from + offset));
+  const settled = Promise.withResolvers<void>();
+
+  if (HISTORY_HELD) window.addEventListener("gallery:release-page", () => { settled.resolve(); }, { once: true });
+  else setTimeout(settled.resolve, HISTORY_LATENCY_MS);
+  await settled.promise;
+  const first = items[0];
+
+  const walked = items.length;
+
+  return from === 0 || first === undefined
+    ? { status: "end", items, walked }
+    : { status: "more", items, next: { after: first.id }, walked };
+}
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getChatHistoryPage" && HISTORY_ROWS > 0) return rpcResult(await galleryHistoryPage(args)).json<T>();
+
   const plan = galleryPlanRpc(method, args);
 
   if (plan) return rpcResult(v.parse(JsonValueSchema, plan.value)).json<T>();
@@ -3508,11 +3564,11 @@ function All() {
 }
 
 const SUBORDINATES: Parameters<typeof SubordinateTabs>[0]["subordinates"] = [
-  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", createdBy: "orchestrator", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
-  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", createdBy: "orchestrator", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
-  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
+  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
+  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", nameOrigin: "user", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
   // A one-click agent the titler has not reached: blank name, shown as "New agent".
-  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
+  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
 ];
 
 /* The open tab is the strip's hook, so a gate can compare strips. */
@@ -3559,9 +3615,9 @@ type GalleryRosterEntry = Parameters<typeof SubordinateTabs>[0]["subordinates"][
 
 const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
   // Distinctive: the gate asserts it never renders; subordination shows as hierarchy, not a badge.
-  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", nameOrigin: "user", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
   // Agent-created: keeps the confirmation path, unlike the user-created seed.
-  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", createdBy: "orchestrator", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
+  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
 ];
 
 const AGENTCHATS_ROWS = 40;
@@ -3645,7 +3701,7 @@ function AgentChatsScene() {
     const name = `agent-${++counter.current}`;
     missions.current[name] = AGENTCHATS_MISSION;
     setRoster((current) => [...current, {
-      name, actorId: galleryActorId(name), displayName: "", role: "agent", createdBy: "user",
+      name, actorId: galleryActorId(name), displayName: "", role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     }]);
     await navigate(`/workspace/checkout-fixes/agents/${name}`);
@@ -4108,7 +4164,7 @@ const AGENT_TASKS = [
 const WORKSPACE_WORK = {
   plans: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false },
+      owner: { actorId: "actor-main", name: "main", retired: false, path: [] },
       plan: {
         id: "plan-gateway", sessionId: "default", revision: 3,
         content: "# Gateway timeout repair\n\nPatch the gateway timeout, then prove the expired-coupon branch.",
@@ -4118,7 +4174,7 @@ const WORKSPACE_WORK = {
       tasks: AGENT_TASKS.filter((task) => task.id === "t2"),
     },
     {
-      owner: { actorId: "actor-courier", name: "courier", retired: false },
+      owner: { actorId: "actor-courier", name: "courier", retired: false, path: ["courier"] },
       plan: {
         id: "plan-courier", sessionId: "default", revision: 1,
         content: "# Courier rollout\n\nStage the rollout and verify the receipt.",
@@ -4132,7 +4188,7 @@ const WORKSPACE_WORK = {
   ],
   tasks: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false }, plan: null,
+      owner: { actorId: "actor-main", name: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id !== "t2"),
     },
   ],
@@ -4355,7 +4411,7 @@ const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promis
   if (method === "listWorkspaceWork") return rpcResult({
     plans: [],
     tasks: [{
-      owner: { actorId: "actor-main", name: "main", retired: false }, plan: null,
+      owner: { actorId: "actor-main", name: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id === "t1"),
     }],
   }).json<T>();

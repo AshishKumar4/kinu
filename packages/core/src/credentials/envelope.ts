@@ -1,6 +1,8 @@
 /** Sealed envelope `pce1.<keyId>.<iv>.<ciphertext>` (AES-GCM, AAD binds DO id + record key) around `user_credentials.value`.
  *  No default key or plaintext fallback. Rotation: move current to `_PREVIOUS`, set new, drop old once every UserDO rewraps. */
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settle } from '../obs/effect';
 import { base64Url, hmacSha256Hex } from '../utils/crypto';
 
 const ENVELOPE_PREFIX = 'pce1.';
@@ -39,26 +41,12 @@ export interface CredentialEncryptionEnv {
 /** Cached by secret: removes an HKDF from every read with no added exposure. */
 const derived = new Map<string, Promise<{ keyId: string; key: CryptoKey }>>();
 
-/** Throws when no key is configured. */
 export async function createCredentialCipher(env: CredentialEncryptionEnv): Promise<CredentialCipher> {
-  const current = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
-
-  if (!current) {
-    throw new Error(`Credentials cannot be stored or read: no encryption key is configured. ${CREDENTIAL_ENCRYPTION_KEY_HINT}`);
-  }
-
-  if (current.length < MIN_SECRET_LENGTH) {
-    throw new Error(`CREDENTIAL_ENCRYPTION_KEY is too short to be a key (${current.length} chars). ${CREDENTIAL_ENCRYPTION_KEY_HINT}`);
-  }
-
-  const retired = (env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS ?? '')
-    .split(',').map((s) => s.trim()).filter((s) => s.length > 0);
-
-  return {
-    keyId: (await deriveKey(current)).keyId,
+  return settle(Effect.map(configuredKey(env), ({ current, retired, keyId }): CredentialCipher => ({
+    keyId,
 
     async seal(aad, plaintext) {
-      const { keyId, key } = await deriveKey(current);
+      const { keyId: sealedWith, key } = await deriveKey(current);
       const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
 
       const ciphertext = await crypto.subtle.encrypt(
@@ -67,47 +55,76 @@ export async function createCredentialCipher(env: CredentialEncryptionEnv): Prom
         utf8(plaintext),
       );
 
-      return `${ENVELOPE_PREFIX}${keyId}.${base64Url(iv)}.${base64Url(new Uint8Array(ciphertext))}`;
+      return `${ENVELOPE_PREFIX}${sealedWith}.${base64Url(iv)}.${base64Url(new Uint8Array(ciphertext))}`;
     },
 
-    async open(aad, stored) {
-      if (!isSealedCredential(stored)) {
-        throw new KinuError('bad_input', `Record "${aad}" is not a sealed envelope, and no secret is kept in the clear.`);
-      }
-
-      const [keyId, ivPart, ctPart] = stored.slice(ENVELOPE_PREFIX.length).split('.');
-
-      if (!keyId || !ivPart || !ctPart) {
-        throw new Error(`Record "${aad}" is stored in an envelope this build cannot parse.`);
-      }
-
-      for (const secret of [current, ...retired]) {
-        const candidate = await deriveKey(secret);
-
-        if (candidate.keyId !== keyId) continue;
-
-        try {
-          const plaintext = await crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv: unbase64url(ivPart), additionalData: utf8(aad) },
-            candidate.key,
-            unbase64url(ctPart),
-          );
-
-          return new TextDecoder().decode(plaintext);
-        } catch (error) {
-          throw new Error(
-            `Record "${aad}" failed to decrypt: the stored envelope does not match its key, or belongs to another store.`,
-            { cause: error },
-          );
-        }
-      }
-
-      throw new Error(
-        `Record "${aad}" was sealed with encryption key ${keyId}, which this deployment no longer has. `
-        + 'Restore it in CREDENTIAL_ENCRYPTION_KEY_PREVIOUS, or reconnect the provider.',
-      );
+    open(aad, stored) {
+      return settle(opened(aad, stored, current, retired));
     },
-  };
+  })));
+}
+
+interface ConfiguredKey {
+  readonly current: string;
+  readonly retired: string[];
+  readonly keyId: string;
+}
+
+function configuredKey(env: CredentialEncryptionEnv): Effect.Effect<ConfiguredKey, KinuError> {
+  return Effect.gen(function* () {
+    const current = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
+
+    if (!current) {
+      return yield* new KinuError('unavailable', `Credentials cannot be stored or read: no encryption key is configured. ${CREDENTIAL_ENCRYPTION_KEY_HINT}`);
+    }
+
+    if (current.length < MIN_SECRET_LENGTH) {
+      return yield* new KinuError('unavailable', `CREDENTIAL_ENCRYPTION_KEY is too short to be a key (${current.length} chars). ${CREDENTIAL_ENCRYPTION_KEY_HINT}`);
+    }
+
+    const retired = (env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS ?? '')
+      .split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+
+    return { current, retired, keyId: (yield* Effect.promise(() => deriveKey(current))).keyId };
+  });
+}
+
+function opened(aad: string, stored: string, current: string, retired: readonly string[]): Effect.Effect<string, KinuError> {
+  return Effect.gen(function* () {
+    if (!isSealedCredential(stored)) {
+      return yield* new KinuError('bad_input', `Record "${aad}" is not a sealed envelope, and no secret is kept in the clear.`);
+    }
+
+    const [sealedWith, ivPart, ctPart] = stored.slice(ENVELOPE_PREFIX.length).split('.');
+
+    if (!sealedWith || !ivPart || !ctPart) {
+      return yield* new KinuError('bad_input', `Record "${aad}" is stored in an envelope this build cannot parse.`);
+    }
+
+    for (const secret of [current, ...retired]) {
+      const candidate = yield* Effect.promise(() => deriveKey(secret));
+
+      if (candidate.keyId !== sealedWith) continue;
+
+      const plaintext = yield* Effect.tryPromise({
+        try: () => crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: unbase64url(ivPart), additionalData: utf8(aad) },
+          candidate.key,
+          unbase64url(ctPart),
+        ),
+        catch: (cause) => ({ cause }),
+      }).pipe(Effect.catch((failed) => Effect.fail(new KinuError('bad_input',
+        `Record "${aad}" failed to decrypt: the stored envelope does not match its key, or belongs to another store.`,
+        { cause: failed.cause },
+      ))));
+
+      return new TextDecoder().decode(plaintext);
+    }
+
+    return yield* new KinuError('bad_input',
+      `Record "${aad}" was sealed with encryption key ${sealedWith}, which this deployment no longer has. `
+      + 'Restore it in CREDENTIAL_ENCRYPTION_KEY_PREVIOUS, or reconnect the provider.');
+  });
 }
 
 export function isSealedCredential(stored: string): boolean {

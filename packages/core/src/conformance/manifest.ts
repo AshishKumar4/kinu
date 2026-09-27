@@ -156,6 +156,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     triggers: EVERYWHERE,
     run_events: EVERYWHERE,
     operator_requests: EVERYWHERE,
+    open_turns: EVERYWHERE,
 
     // Actor-private: the world model is the agent's own key space.
     agent_facts: EVERYWHERE,
@@ -288,6 +289,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     actor_subordinates: {
       'cf-orchestrator': WIRED,
       // SubordinateRosterStore creates it on first read.
+      'cf-subordinate': WIRED,
+      cli: WIRED,
+    },
+    evolution_helpers: {
+      'cf-orchestrator': WIRED,
       'cf-subordinate': WIRED,
       cli: WIRED,
     },

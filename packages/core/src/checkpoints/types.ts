@@ -1,4 +1,6 @@
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { KinuError, settleSync } from '../obs/index';
 // Shadow-git snapshots of a working directory before each turn's first mutation, for /undo. Covers only
 // the user's device plane: `workspace` and `@sandbox` turns have no checkpoint (see FileCheckpointListing).
 
@@ -93,18 +95,16 @@ export async function fileCheckpointListing(
   return { availability, entries: await reads.list(query) };
 }
 
-function requireCheckpointReads(reads: FileCheckpointReads | null): FileCheckpointReads {
-  if (reads === null) throw new Error(CHECKPOINTS_UNCONFIGURED);
-
-  return reads;
+function withCheckpointReads<A>(reads: FileCheckpointReads | null, call: (present: FileCheckpointReads) => A): Effect.Effect<A, KinuError> {
+  return reads === null ? Effect.fail(new KinuError('unsupported', CHECKPOINTS_UNCONFIGURED)) : Effect.sync(() => call(reads));
 }
 
 export function fileRestorePlan(reads: FileCheckpointReads | null, dir: string, id: string): Promise<FileRestorePlan> {
-  return requireCheckpointReads(reads).plan(dir, id);
+  return settleSync(withCheckpointReads(reads, (present) => present.plan(dir, id)));
 }
 
 export function fileCheckpointRestore(reads: FileCheckpointReads | null, dir: string, id: string): Promise<FileRestoreResult> {
-  return requireCheckpointReads(reads).restore(dir, id);
+  return settleSync(withCheckpointReads(reads, (present) => present.restore(dir, id)));
 }
 
 export interface FileCheckpoints extends FileCheckpointReads {

@@ -4,7 +4,8 @@ import { JsonObjectSchema, jsonObjectElements, readJsonObjectText, type JsonObje
 import { asFetchFunction } from './fetch-shim';
 import { toolCallIdFor } from './tool-call-id';
 import { withRateLimitRetry, type RateLimitRetryOptions } from './rate-limit-retry';
-import { KinuError, diagnostics, renderCauseChain, toKinuError, tolerate } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, diagnostics, renderCauseChain, settle, toKinuError, tolerate } from '../obs/index';
 import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
 import { createCachedUsageRepair } from './stream-usage-repair';
@@ -76,20 +77,13 @@ export function createDirectWorkersAIFetch(
   binding: DirectWorkersAIRunner,
   retry: RateLimitRetryOptions = {},
 ): typeof globalThis.fetch {
-  return withRateLimitRetry(directWorkersAIFetch(binding), retry);
-}
-
-function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis.fetch {
-  return asFetchFunction(async (input, init) => {
+  return withRateLimitRetry(asFetchFunction(async (input, init) => {
     const request = input instanceof Request ? input : null;
     const text = request === null ? init?.body : await request.text();
     const body = v.is(v.string(), text) ? readJsonObjectText(text) : null;
 
     if (body === null) return errorResponse(400, 'the request body is not JSON object text');
     const route = v.parse(ChatCompletionRouteSchema, { model: body.model, stream: body.stream });
-    const messages = jsonObjectElements(body.messages);
-
-    if (body.messages !== undefined && messages === null) throw new KinuError('bad_input', 'the request `messages` is not a list of objects');
     const signal = request?.signal ?? init?.signal;
 
     const options: DirectWorkersAIRunOptions = {
@@ -102,28 +96,29 @@ function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis
     if (affinity) options.extraHeaders = { 'x-session-affinity': affinity };
 
     const startedAt = Date.now();
-    let answer: Response | ReadableStream<Uint8Array> | JsonObject;
+    const messages = jsonObjectElements(body.messages);
 
-    try {
-      answer = await binding.run(route.model, bindingInputs(body, route, messages), options);
-    } catch (caught) {
-      const failure = toKinuError({
-        doing: `Workers AI binding inference for ${route.model}`,
-        cause: caught,
-        otherwise: 'io',
-      });
-
-      // A cancelled call is the caller's decision, not a provider failure.
-      if (failure.code === 'cancelled') throw caught;
-      diagnostics.failure('workers_ai.direct_call_failed', failure, { model: route.model });
-
-      return errorResponse(502, renderCauseChain(failure));
+    if (body.messages !== undefined && messages === null) {
+      return settle(Effect.fail(new KinuError('bad_input', 'the request `messages` is not a list of objects')));
     }
 
-    return route.stream
-      ? streamedResponse(answer, route.model, startedAt)
-      : completedResponse(answer, route.model);
-  });
+    return settle(Effect.tryPromise({ try: () => binding.run(route.model, bindingInputs(body, route, messages), options), catch: (cause) => ({ cause }) }).pipe(
+      Effect.matchEffect({
+        onSuccess: (answer) => Effect.promise(() => (route.stream
+          ? streamedResponse(answer, route.model, startedAt)
+          : completedResponse(answer, route.model))),
+        onFailure: (failed) => {
+          const failure = toKinuError({ doing: `Workers AI binding inference for ${route.model}`, cause: failed.cause, otherwise: 'io' });
+
+          // A cancelled call is the caller's decision, not a provider failure.
+          if (failure.code === 'cancelled') return Effect.die(failed.cause);
+          diagnostics.failure('workers_ai.direct_call_failed', failure, { model: route.model });
+
+          return Effect.succeed(errorResponse(502, renderCauseChain(failure)));
+        },
+      }),
+    ));
+  }), retry);
 }
 
 /** Tool-call ids are forwarded as-is: the upstream pairs on equality and re-keying would split pairs.

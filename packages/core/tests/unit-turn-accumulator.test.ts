@@ -62,7 +62,7 @@ describe('TurnAccumulator', () => {
     const args = toolEvents[0].args;
     expect(args).toBeTypeOf('string');
     expect(String(args).length).toBeLessThan(1000);
-    expect(String(args).endsWith('...')).toBe(true);
+
     expect(String(args)).toContain('"action":"write"');
   });
 

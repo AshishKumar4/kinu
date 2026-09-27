@@ -6,6 +6,7 @@ import type { WorkMode } from './turn';
 import type { RoleId } from './profile';
 import * as v from 'valibot';
 import type { SerializedMessage } from './heads';
+import type { EvolutionHelperAnswer, EvolutionLaneRequest } from '../identity/evolution-helpers';
 
 /**
  * The conversation a child is forked from. The `kind` tag stays because the value is persisted in
@@ -42,6 +43,8 @@ export interface TemporaryRunRequest {
   /** Workspace paths the child reads itself; programmatic callers only, not model-facing. */
   readonly contextRefs?: readonly string[];
   readonly mode: WorkMode;
+  /** An evolution helper: it answers this lane request only. */
+  readonly lane?: EvolutionLaneRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -87,4 +90,5 @@ export interface TemporaryAgentPort {
     readonly content: string;
     readonly origin: 'report_tool' | 'turn_end';
   }): boolean;
+  reclaim(request: EvolutionLaneRequest): EvolutionHelperAnswer | null;
 }

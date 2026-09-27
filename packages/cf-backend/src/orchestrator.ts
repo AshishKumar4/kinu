@@ -263,6 +263,8 @@ const READS_BY_STATEMENT = new WeakMap<TemplateStringsArray, readonly LiveRead[]
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 
+const LeasedRowSchema = v.object({ id: v.string() });
+
 /**
  * Row budget per sweep activation: each item is a full inference turn. A full pass
  * answers truncated and the wake drains the rest on the next frame.
@@ -385,6 +387,11 @@ function terminalRefusal(failure: { doing: string; cause: unknown }): string {
   diagnostics.failure('terminal.prepare_failed', error);
 
   return publicText(error);
+}
+
+interface HostedTarget {
+  readonly handle: ActorHandle;
+  readonly entry: NonNullable<ReturnType<SubordinateRosterStore['get']>>;
 }
 
 export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
@@ -651,14 +658,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       modelOperations: this.modelOperations,
       pricing: (spec) => this.modelCatalog.pricing(spec),
       hostedModel: (actor) => this.hostedModelOf(actor),
-      broadcast: (actorId, event) => {
-        // Stamped with the actor for the pane, and addressed to it so a subordinate's cards
-        // stay off other sockets. An actor the directory no longer names has no pane.
-        const name = this.actorHost().describe(actorId)?.name;
-
-        if (name === undefined) return;
-        this.broadcastToActor(name, JSON.stringify({ ...event, actorId }));
-      },
+      broadcast: (actorId, event) => { this.broadcastToActor(actorId, JSON.stringify({ ...event, actorId })); },
       turnClaimChanged: () => { this.overviewChanged(); },
       enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
       // Use the reference the host issued, never one rebuilt from an id: the root's parent is
@@ -796,16 +796,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const report: ReportToolDeps = {
       report: async (input) => {
+        // A run-settling report is the answer.
+        const settles = reportSettlesRun(input.status, 'report_tool');
+
         const relayed = await relayHostedReport(this.subordinateSeams(), turn.actor, {
           status: input.status, content: input.content, origin: 'report_tool',
           mode: 'build', sequenceId: `live:${turn.actor.record.name}:${nanoid()}`,
           handoff: input.handoff,
+          ...(settles && { answers: turn.turnId }),
         });
 
         turn.reports.spoke = true;
-        // Only a run-settling report counts as the answer, the same predicate the ingress
-        // settles a waiter on.
-        turn.reports.settled ||= reportSettlesRun(input.status, 'report_tool');
+        turn.reports.settled ||= settles;
 
         return { id: relayed.id, disposition: relayed.disposition };
       },
@@ -823,7 +825,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       effectClaims: {
         actor: turn.actor.handle,
         sql: turn.runtime.storage.sql,
-        turnId: () => turn.input.id,
+        turnId: () => turn.turnId,
       },
       codemode: ({ native }) => factory.toolFor(native),
       craftedToolExecute: null,
@@ -1146,6 +1148,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ).toArray().length > 0;
   }
 
+  /** A lease from before this activation lost its runner; effects dedupe on rerun. */
+  private rependDeadActivationLeases(): void {
+    const rows = this.boundExec().exec(
+      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
+       WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
+         AND consumed_at IS NOT NULL AND consumed_at < ?
+       RETURNING id`,
+      this.activationStartedAt,
+    ).toArray();
+
+    for (const row of rows) {
+      diagnostics.event('subordinate.assignment_repended', { workspace: this.name, assignment: v.parse(LeasedRowSchema, row).id, cause: 'dead_activation' });
+    }
+  }
+
   /** One drain per isolate: a second would open two turns on one actor's chat room. */
   private _delegationDrain: Promise<void> | null = null;
 
@@ -1212,7 +1229,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const swept = await drainAssignments(log, {
           now, budget, staleMs: STALE_EVENT_DELIVERY_MS,
           run: async (task) => {
-            const room = this.chatRooms.hostedRoom(record.name);
+            const room = this.chatRooms.hostedRoom(record.actorId);
             const answerId = crypto.randomUUID();
 
             await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
@@ -1274,7 +1291,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           parentActorId: turn.record.parentActorId,
         });
 
-        new EventLog(exec, bound.handle).unbind(turn.claim.turnId);
+        const log = new EventLog(exec, bound.handle);
+
+        if (log.isAnswered(turn.claim.turnId)) {
+          bound.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'completed');
+          continue;
+        }
+
+        log.unbind(turn.claim.turnId);
         diagnostics.event('subordinate.assignment_repended', {
           workspace: this.name, actor: turn.record.name, assignment: turn.claim.turnId,
         });
@@ -1847,25 +1871,55 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
 
-  /**
-   * Answers whether this workspace hosts a chat-reachable actor under this logical name; never a
-   * storage key. Checks both the directory (exists, belongs here) and the roster (not dismissed;
-   * dismissed keeps rows, not chat).
-   */
-  async resolveHostedActorRoute(name: string): Promise<{ ok: true } | Refusal> {
+  /** The edge's one resolution of a name or `/`-joined path to the actor id everything downstream keys on. */
+  async resolveHostedActorRoute(target: string): Promise<{ ok: true; actorId: string } | Refusal> {
     try {
       if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
-      const row = this.subordinateRoster.get(name);
+      const actor = this.hostedTarget(target);
 
-      if (!row || row.status === 'dismissed' || !row.actorReference) throw new KinuError('missing', 'The actor is not available for client execution.');
-      const actor = this.workspaceActors().apply(this.actorHandle(), [], { action: 'validate', name, reference: row.actorReference });
+      if (actor === null) throw new KinuError('missing', 'The actor is not available for client execution.');
 
-      if (actor.kind !== 'subordinate') throw new KinuError('denied', 'The roster name does not identify a chat-reachable actor.');
-
-      return { ok: true };
+      return { ok: true, actorId: actor.handle.actorId };
     } catch (cause) {
       return refusalOf(toKinuError({ doing: 'resolving a hosted actor chat path', cause, otherwise: 'io' }));
     }
+  }
+
+  /** Each step a live subordinate its parent's roster still employs: a dismissal keeps rows, not chat. */
+  private hostedTarget(target: string): HostedTarget | null {
+    const directory = this.workspaceActors();
+    let parent = this.actorHandle();
+    let found: HostedTarget | null = null;
+
+    for (const name of target.split('/')) {
+      const handle = directory.resolveChild(parent, name);
+      const entry = handle === null ? null : this.rosterOf(parent).get(name);
+
+      if (handle === null || entry === null || entry.status === 'dismissed' || entry.actorReference?.actorId !== handle.actorId) return null;
+
+      if (directory.retained(handle.actorId)?.kind !== 'subordinate') return null;
+      found = { handle, entry };
+      parent = handle;
+    }
+
+    return found;
+  }
+
+  private rosterOf(parent: ActorHandle): SubordinateRosterStore {
+    return parent.actorId === this.actorHandle().actorId ? this.subordinateRoster : new SubordinateRosterStore(this.ctx.storage.sql, parent);
+  }
+
+  protected override hostedWindowName(actorId: string): string | null {
+    const directory = this.workspaceActors();
+    const rootId = this.actorHandle().actorId;
+    const names: string[] = [];
+
+    for (let row = directory.retained(actorId); row?.actorId !== rootId; row = directory.retained(row.parentActorId ?? '')) {
+      if (row === null) return null;
+      names.unshift(row.name);
+    }
+
+    return names.length === 0 ? null : names.join('/');
   }
 
   /**
@@ -1876,18 +1930,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.actorHost().bindStores(actor).stores.history.transcript(CHAT_SESSION_ID);
   }
 
-  private hostedReference(name: string): ActorReference | null {
-    const row = this.subordinateRoster.get(name);
+  private hostedReference(actorId: string): ActorReference | null {
+    const path = this.hostedWindowName(actorId);
+    const actor = path === null ? null : this.hostedTarget(path);
 
-    return !row || row.status === 'dismissed' || !row.actorReference ? null : row.actorReference;
+    return actor?.handle.actorId === actorId ? actor.entry.actorReference : null;
   }
 
-  protected override hostedActorId(name: string): string | null {
-    return this.hostedReference(name)?.actorId ?? null;
-  }
-
-  protected override hostedChatWire(name: string): ChatWire | null {
-    const reference = this.hostedReference(name);
+  protected override hostedChatWire(actorId: string): ChatWire | null {
+    const reference = this.hostedReference(actorId);
 
     if (reference === null) return null;
     const bound = this.actorHost().bindStores(reference);
@@ -1897,7 +1948,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return {
       sql: null,
       getConnection: (id) => this.getConnection(id),
-      broadcast: (message, exclude) => { this.broadcastToActor(name, message, exclude); },
+      broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
       history: (limit) => rows.history(undefined, limit),
       admitted: (id) => rows.has(id),
       send: async (input) => {
@@ -2871,9 +2922,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // An unborn workspace owes nothing: its first claim writes it.
     if (this.storageRefusal !== undefined || this.nimbusSibling || !this.workspaceBorn()) return;
-    // Every budgeted sweep via the alarm-frame seam; row-budgeted because this is the init gate,
-    // and a truncated pass is drained by the wake below in alarm frames.
-    const sweepsTruncated = this.maintenanceSweeps();
+    this.rependDeadActivationLeases();
+    // Row-budgeted (init gate); a truncated pass drains under the wake below.
+    this.maintenanceUnfinished = this.maintenanceSweeps();
     // An activation is the only moment a workspace whose wake row was lost can notice.
     // Detached because arming a schedule row is I/O and this method runs inside the init gate.
     this.detachOwned(async () => {
@@ -2888,7 +2939,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // The activation only classifies and arms a wake; all dispatch runs under that durable wake,
     // because an activation launches no external work, awaited or detached.
-    if (sweepsTruncated || this.owedWorkExists()) {
+    if (this.owedWorkExists()) {
       this.armOwedWorkWake('reconcile');
     }
 
@@ -4041,15 +4092,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * so inspecting a retained actor starts nothing. Owner-gated and resolved through the directory.
    */
   /** Resolved through the directory under this root's handle, so a name only reaches this root's children. */
-  private hostedChild(name: string) {
+  private hostedChild(target: string) {
     if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
-    const entry = this.subordinateRoster.requireExisting(name);
+    const actor = this.hostedTarget(target);
 
-    const reference = this.actorDirectoryStore().apply(
-      actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name },
-    ).reference;
+    if (actor === null) throw new KinuError('missing', `"${target}" is not an agent of this workspace.`);
 
-    return { entry, child: this.actorHost().bindStores(reference) };
+    return { entry: actor.entry, child: this.actorHost().bindStores(actor.handle) };
   }
 
   @callable()

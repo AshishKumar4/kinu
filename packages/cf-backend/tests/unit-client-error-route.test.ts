@@ -311,6 +311,7 @@ describe('the route a report is addressed by', () => {
 
   test('a nested agent path resolves to the deeper template', () => {
     expect(routeTemplateOf('/workspace/acme/agents/scout')).toBe(APP_ROUTES.workspaceAgent);
+    expect(routeTemplateOf('/workspace/acme/agents/scout/ask-checker-a1')).toBe(APP_ROUTES.workspaceAgentPath);
   });
 
   test('the index route resolves, with or without a trailing slash', () => {

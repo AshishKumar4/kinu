@@ -1,8 +1,8 @@
 {
-  "reason": "merge: integration/0951 into lane/install-parity, the union of both sides' rows: the flake gate's commit row (0.3 s) and self-test row (4.1 s), and the ladder self-test row carrying install-parity.test.ts at its declared 1.3 s",
+  "reason": "gate:error-model joins the commit tier at 1.4s and gate:effect-diagnostics the push tier at 21.3s; the gate self-test row now names scripts/error-model.test.ts, re-keyed with its figure unchanged",
   "tiers": {
     "commit": {
-      "seconds": 92.07,
+      "seconds": 93.47,
       "measuredAt": "2026-09-26",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
@@ -41,11 +41,12 @@
         "bun run gate:scratch-ownership": 0.42,
         "bun run gate:agents-fields": 0.34,
         "bun run gate:bloat-budget": 0.6,
-        "bun scripts/flake-gate.ts": 0.3
+        "bun scripts/flake-gate.ts": 0.3,
+        "bun run gate:error-model": 1.4
       }
     },
     "push": {
-      "seconds": 457.17,
+      "seconds": 479.87,
       "measuredAt": "2026-09-26",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
@@ -85,7 +86,7 @@
         "bun scripts/secret-scan.ts": 18,
         "bun scripts/schema-drift.ts": 0.23,
         "bun scripts/gen-cli-docs.ts --check": 0.3,
-        "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts": 24,
+        "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts scripts/error-model.test.ts": 24,
         "bun test --timeout=0 scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": 0.1,
         "bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts": 1.3,
         "bun test --timeout=0 scripts/flake-gate.test.ts": 4.1,
@@ -108,6 +109,8 @@
         "bun run gate:agents-fields": 0.34,
         "bun run gate:bloat-budget": 0.6,
         "bun scripts/flake-gate.ts": 0.3,
+        "bun run gate:error-model": 1.4,
+        "bun run gate:effect-diagnostics": 21.3,
         "bun test --timeout=0 scripts/hammer.test.ts scripts/mutation-fences.test.ts": 0.4
       }
     }

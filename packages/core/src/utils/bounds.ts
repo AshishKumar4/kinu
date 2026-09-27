@@ -1,3 +1,6 @@
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
+
 /** Bounds a caller-supplied row count before SQL: SQLite reads `LIMIT -1` as no limit and rejects fractions/`NaN`. */
 
 /**
@@ -10,10 +13,9 @@ export function boundedInt(
   min: number,
   max: number,
 ): number {
-  if (min > max) throw new Error(`boundedInt: min ${min} exceeds max ${max}`);
-  const n = value !== undefined && Number.isFinite(value) ? Math.trunc(value) : fallback;
-
-  return Math.min(max, Math.max(min, n));
+  return settleSync(min > max
+    ? Effect.die(new Error(`boundedInt: min ${min} exceeds max ${max}`))
+    : Effect.succeed(Math.min(max, Math.max(min, value !== undefined && Number.isFinite(value) ? Math.trunc(value) : fallback))));
 }
 
 /** A surface's page policy: the default row count, and the most an untrusted caller may ask for. */

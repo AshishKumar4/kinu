@@ -1,5 +1,6 @@
+import { Effect } from 'effect';
 import * as v from 'valibot';
-import { classify, renderThrownChain } from '../obs/index';
+import { classify, renderThrownChain, settleSync } from '../obs/index';
 
 export type JsonPrimitive = string | number | boolean | null;
 
@@ -71,12 +72,10 @@ export function parseJsonValue(text: string): JsonValue {
 
 /** Text that is not JSON reads back as itself; any other failure throws. */
 export function safeJsonParse(text: string): JsonValue {
-  try { return parseJsonValue(text); }
-  catch (error) {
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
-
-    return text;
-  }
+  return settleSync(Effect.try({ try: () => parseJsonValue(text), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catchIf((failed) => classify(failed) === 'malformed-input', () => Effect.succeed<JsonValue>(text)),
+    Effect.catch((failed) => Effect.die(failed.cause)),
+  ));
 }
 
 export function parseJsonObject(text: string): JsonObject {
@@ -99,35 +98,40 @@ export function assertJsonValue(
 
 /** Omits `undefined` properties, maps `undefined` array elements to `null`; unrepresentable values still throw. */
 export function projectJsonValue(input: { value: unknown }): JsonValue {
-  try {
-    assertJsonValue(input);
+  return settleSync(projected(input));
+}
 
-    return input.value;
-  } catch (validationError) {
-    const array = v.safeParse(BoundaryArraySchema, input.value);
+function projected(input: { value: unknown }): Effect.Effect<JsonValue> {
+  const checked = { value: input.value };
 
-    if (array.success) {
-      return array.output.map((value) =>
-        v.safeParse(UndefinedSchema, value).success
-          ? null
-          : projectJsonValue({ value }));
-    }
+  return Effect.try({ try: (): JsonValue => {
+    assertJsonValue(checked);
 
-    const object = v.safeParse(BoundaryObjectSchema, input.value);
+    return checked.value;
+  }, catch: (cause) => ({ cause }) }).pipe(
+    Effect.matchEffect({ onSuccess: Effect.succeed, onFailure: (failed): Effect.Effect<JsonValue> => {
+      const array = v.safeParse(BoundaryArraySchema, input.value);
 
-    if (object.success) {
-      const projected: JsonObject = {};
-
-      for (const [key, value] of Object.entries(object.output)) {
-        if (v.safeParse(UndefinedSchema, value).success) continue;
-        projected[key] = projectJsonValue({ value });
+      if (array.success) {
+        return Effect.forEach(array.output, (item) => (v.safeParse(UndefinedSchema, item).success ? Effect.succeed(null) : projected({ value: item })));
       }
 
-      return projected;
-    }
+      const object = v.safeParse(BoundaryObjectSchema, input.value);
 
-    throw validationError;
-  }
+      if (!object.success) return Effect.die(failed.cause);
+
+      return Effect.gen(function* () {
+        const result: JsonObject = {};
+
+        for (const [key, item] of Object.entries(object.output)) {
+          if (v.safeParse(UndefinedSchema, item).success) continue;
+          result[key] = yield* projected({ value: item });
+        }
+
+        return result;
+      });
+    } }),
+  );
 }
 
 /** One truncation limit so durable records of the same call agree. */
@@ -144,15 +148,18 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
     return text.output.length > DIGEST_LIMIT ? text.output.slice(0, DIGEST_LIMIT) + '...' : text.output;
   }
 
-  try {
-    const projected = projectJsonValue(input);
-    const serialized = JSON.stringify(projected);
+  return settleSync(Effect.try({
+    try: (): JsonValue => {
+      const json = projectJsonValue(input);
+      const serialized = JSON.stringify(json);
 
-    return serialized.length <= DIGEST_LIMIT ? projected : serialized.slice(0, DIGEST_LIMIT) + '...';
-  } catch (error) {
+      return serialized.length <= DIGEST_LIMIT ? json : serialized.slice(0, DIGEST_LIMIT) + '...';
+    },
+    catch: (cause) => ({ cause }),
+  }).pipe(
     // `String()` would give "[object Object]"; the reason takes its place.
-    return `unserializable digest input: ${renderThrownChain({ cause: error })}`.slice(0, DIGEST_LIMIT);
-  }
+    Effect.catch((failed) => Effect.succeed(`unserializable digest input: ${renderThrownChain(failed)}`.slice(0, DIGEST_LIMIT))),
+  ));
 }
 
 /** A valibot failure as one line, `path: message` per issue. */

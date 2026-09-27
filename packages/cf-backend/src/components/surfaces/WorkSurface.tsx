@@ -56,7 +56,7 @@ export interface WorkSurfaceProps {
   changesFocus?: ChangesFocus | null;
   planOwner?: string;
   workspacePlanArrival?: WorkspacePlanArrival | null;
-  onReviewActor?: (name: string) => void | Promise<void>;
+  onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   onSurface: (s: SurfaceKind) => void;
   pinnedPorts: PinnedPort[];
   previewError: string | null;

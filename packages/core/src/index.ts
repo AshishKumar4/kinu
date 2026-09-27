@@ -1,7 +1,7 @@
 // Identity
 export { initFiberTable, tableExists } from './identity/schema';
 
-export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './subordinates/inspection';
+export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
 
 export { inspectSubordinateStorage, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
 
@@ -15,6 +15,8 @@ export {
   TerminalTransitions, TERMINAL_TRANSITION_CALL_ID,
   type TerminalTransition, type TerminalDisposition, type TerminalTransitionDeps,
 } from './orchestrator/terminal-transition';
+
+export { WakeArms } from './orchestrator/wake-arms';
 
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
@@ -617,7 +619,7 @@ export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self'
 export { agentSelfHost } from './orchestrator/agent-self-host';
 
 // Platform-neutral: a backend supplies only SubordinateRuntime.
-export { SubordinateRosterStore, initSubordinateRosterTable } from './subordinates/roster';
+export { SubordinateRosterStore, initSubordinateRosterTable, subordinateTitle } from './subordinates/roster';
 
 export {
   SubordinateIdentityStore,
@@ -1104,7 +1106,7 @@ export {
   unsandboxedCommandEnvironment,
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
-  createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
+  answerParentRpc, createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent, type DeviceFileScope,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './execution/index';
@@ -1386,7 +1388,7 @@ export {
   listPendingPlanReviews,
   workModeUnderReview,
   planHandoffStillOwed,
-  planDismissable,
+  planReviewAwaitingDecision,
   planTitle,
   validatePlanEdits,
   type PlanDecisionOutcome,
@@ -1651,7 +1653,7 @@ export {
   type StepLike, type ToolResultLike, type TurnSinks,
 } from './orchestrator/turn-accumulator';
 
-export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle } from './read-models/workspace-work';
+export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema } from './read-models/workspace-work';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
 
@@ -2002,7 +2004,7 @@ export type {
   InstructionSourceView,
 } from './read-models/instruction-approvals';
 
-export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/status';
+export { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
 
 export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
@@ -2133,7 +2135,7 @@ export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
   type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
-  type TabPresence, type ToolInfo,
+  type TabPresence, type ToolInfo, ownerFacingSubordinate,
 } from './protocol';
 
 export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';
@@ -2239,7 +2241,7 @@ export {
 
 export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
-export { messagesUpTo, turnRows } from './read-models/fork-count';
+export { messagesUpTo, turnRows, unreadRows } from './read-models/fork-count';
 
 export {
   turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,
@@ -2416,6 +2418,7 @@ export {
   isForeignAgentNamespacePath,
   hostedActorRoute,
   hostedActorSocketPath,
+  HOSTED_ACTOR_ID_HEADER,
 } from './http/agent-routing';
 
 export {

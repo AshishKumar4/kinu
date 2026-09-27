@@ -325,9 +325,11 @@ describe('agent status', () => {
     const recorded = transcript.read('a');
 
     if (recorded === null) throw new Error('the seeded user entry must be in the transcript');
+    // The tool row is walked but not shown: a reader sizing unread history counts both.
     expect(await getChatHistoryPage(transcript)).toEqual({
       status: 'end',
       items: [{ id: 'a', role: 'user', content: 'hello', createdAt: recorded.recordedAt }],
+      walked: 2,
     });
     w.db.close();
   });
@@ -355,6 +357,28 @@ describe('agent status', () => {
       content: '9 head(s) across 1 fork run(s)…', createdAt: recorded.recordedAt,
       metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
     }]);
+    w.db.close();
+  });
+
+  // 2026-09-26: a chat reserves the height of what it has not read, sized from the stored count; a page says how
+  // many entries it spanned, tool rows included, and never counts the row it only peeked to know there is more.
+  test('a page reports the entries it spanned, up to its oldest shown row', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    const toolRow = { role: 'tool' as const, content: [{ type: 'tool-result' as const, toolCallId: 'c', toolName: 'probe', output: { type: 'text' as const, value: 'x' } }] };
+
+    await history.record(CHAT_SESSION_ID, { id: 'u1', parentId: null, origin: 'input', message: { role: 'user', content: 'one' } });
+    await history.record(CHAT_SESSION_ID, { id: 't1', parentId: 'u1', origin: 'output', message: toolRow });
+    await history.record(CHAT_SESSION_ID, { id: 'a1', parentId: 't1', origin: 'output', message: { role: 'assistant', content: 'two' } });
+    await history.record(CHAT_SESSION_ID, { id: 't2', parentId: 'a1', origin: 'output', message: toolRow });
+    await history.record(CHAT_SESSION_ID, { id: 'u2', parentId: 't2', origin: 'input', message: { role: 'user', content: 'three' } });
+
+    // Newest first: u2, t2, a1 (the page's two rows), then the peeked t1, u1.
+    const page = await getChatHistoryPage(transcript, { limit: 2 });
+
+    expect(page).toMatchObject({ status: 'more', walked: 3 });
+    expect(page.items.map((entry) => entry.id)).toEqual(['a1', 'u2']);
+    expect(await getChatHistoryPage(transcript, { limit: 9 })).toMatchObject({ status: 'end', walked: 5 });
     w.db.close();
   });
 
