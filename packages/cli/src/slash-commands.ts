@@ -10,6 +10,7 @@ import { readAllAccountUsage } from './account-usage';
 import { plural, renderAccountSpendLines, renderSearchTreeLines } from './display';
 import { conversationMarkdown, lastAnswer } from './conversation-export';
 import { listLocalAgentNames } from './agent-list';
+import { PARKED_USAGE, parkedDecision, renderParked } from './parked-actions';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -72,6 +73,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/plan', description: 'Have the agent draft a plan, then approve it, send it back or dismiss it', usage: '/plan [<text>|show|approve [notes]|changes <feedback>|dismiss]', requires: 'plans', run: planCommand },
   { name: '/fork', description: 'Walk back: restart the conversation just before an earlier message', usage: '/fork [number]', run: forkCommand },
   { name: '/undo', description: 'Restore files to how they were n turns back, then offer to walk back the chat', usage: '/undo [n]', requires: 'checkpoints', run: undoCommand },
+  { name: '/parked', description: 'Approve or deny the commands the agent parked for you; none has run', usage: PARKED_USAGE, requires: 'localControls', run: parkedCommand },
   { name: '/approval', description: 'Show or set when shell commands need your approval', usage: '/approval strict|allow_all|deny_all', requires: 'localControls', run: approvalCommand },
   { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls', run: instructionsCommand },
   { name: '/always', description: 'Choose skills that are always active', usage: '/always <name...|none>', requires: 'localControls', run: alwaysCommand },
@@ -599,6 +601,25 @@ function undoCommand({ client, command, arg }: SlashContext): SlashOutcome {
   if (!client.checkpoints) return { kind: 'unknown', command };
 
   return { kind: 'undo', ref: arg || undefined };
+}
+
+async function parkedCommand({ client, command, rest }: SlashContext): Promise<SlashOutcome> {
+  if (!client.localControls) return { kind: 'unknown', command };
+  const words = rest.filter((word) => word);
+  const parked = await client.localControls.listDeferredApprovals();
+
+  if (words.length === 0) return { kind: 'text', text: renderParked(parked) };
+  const decision = parkedDecision(words, parked);
+
+  if (decision === null) return { kind: 'text', text: `Usage: ${PARKED_USAGE}` };
+  const { decided } = await client.localControls.decideDeferredApprovals(decision.ids, decision.answer);
+  const missed = decision.ids.filter((id) => !decided.includes(id));
+  const verdict = { approved: 'Approved', denied: 'Denied', always: 'Approved, and allowed from now on' }[decision.answer];
+  const lines = [`${verdict}: ${decided.length === 0 ? 'none' : decided.join(', ')}.`];
+
+  if (missed.length > 0) lines.push(`Not waiting, so nothing to decide: ${missed.join(', ')}.`);
+
+  return { kind: 'text', text: lines.join('\n') };
 }
 
 function approvalCommand({ client, command, arg }: SlashContext): SlashOutcome {
