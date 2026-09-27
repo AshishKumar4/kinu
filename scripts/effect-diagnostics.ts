@@ -12,6 +12,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import * as v from 'valibot';
 
 import { assertMeasured, finding } from './gate-ratchet';
@@ -19,7 +20,7 @@ import { isParseable, readMatching } from './sources';
 
 const root = new URL('..', import.meta.url).pathname;
 
-const TOOL = `${root}node_modules/.bin/effect-tsgo`;
+const TOOL = fileURLToPath(new URL('./dist/effect-tsgo.cjs', import.meta.resolve('@effect/tsgo/package.json')));
 
 const FIXTURE = 'scripts/fixtures/effect-diagnostics';
 
