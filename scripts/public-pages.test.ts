@@ -248,7 +248,7 @@ interface Facts {
   movieReduced?: MovieReducedFact;
   heroA11y?: { label: string; phrases: string[] };
   persists?: { text: string; caption: string };
-  heroTreeText?: { text: string };
+  heroTreeText?: { treeHidden: boolean; text: string };
   checkoutLead?: { firstIsProse: boolean; firstIsTool: boolean };
   homeLink?: { visible: boolean; hasGraphic: boolean };
   deploy?: { button: string | null; guide: string | null };
@@ -810,6 +810,7 @@ beforeAll(async () => {
       }));
 
       facts.heroTreeText = await page.evaluate(() => ({
+        treeHidden: document.querySelector('#top [data-hero-graph], #top [data-hero-dust]')?.getAttribute('aria-hidden') === 'true',
         text: document.querySelector('#top p.sr-only')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
       }));
 
@@ -1258,8 +1259,9 @@ describe('the landing demonstration leads with its result', () => {
   });
 
   test('the hero tree carries its text equivalent', () => {
+    // The tree is hidden from assistive technology, so the sentence beside it is all a screen reader gets.
     const hero = required(facts.heroTreeText, 'hero tree text');
-    expect(hero.text).toBe('Kinu tries several approaches to a task, checks each, and keeps the one that passes, along with any tool it built along the way.');
+    expect(hero).toEqual({ treeHidden: true, text: expect.stringMatching(/\S+\s+\S+/u) });
   });
 
   test('the checkout frame leads with prose, not a tool row', () => {

@@ -278,7 +278,7 @@ function whyUnused(refusal: SkillFileRefusal): string {
 }
 
 function NotUsed({ refusal }: { refusal: SkillFileRefusal }) {
-  return <span className="truncate p-warning" title={whyUnused(refusal)}>Not used</span>;
+  return <span className="truncate p-warning" title={whyUnused(refusal)} data-drive-unused={refusal.reason}>Not used</span>;
 }
 
 function SkillMeta({ entry, from }: { entry: DriveEntry; from: string | null }) {

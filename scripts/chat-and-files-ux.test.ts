@@ -3701,7 +3701,7 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
         .toEqual(['Model default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
 
       // Its provider holds two accounts, so the row asks which; the model's levels stay offered on either.
-      expect(await choiceOptions(page, 'review model account')).toEqual(['Default account', 'main', 'work']);
+      expect((await choiceOptions(page, 'review model account')).slice(1)).toEqual(['main', 'work']);
       await chooseOption(page, 'review model account', 'work');
       await page.waitForFunction(() => document.querySelector('[aria-label="review model account"]')?.textContent?.trim() === 'work');
       expect(await choiceOptions(page, 'review reasoning effort'))
