@@ -8,9 +8,11 @@ import { openWorkspaceMainActor, recoveryBackoffMs } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
-  hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness, tapDiagnostics, until,
+  gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
+  runDelegatedTask, tapDiagnostics, until,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
+import { answeringGateway } from './helpers/platform-gateway';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { present } from '@kinu.run/test-utils';
 
@@ -107,6 +109,38 @@ describe('a refiner answer stored with no waiter', () => {
     await workspace.agent._kinuTimerTick();
     await joinHarnessFibers();
 
+    expect((await workspace.agent.listRefinements(1)).requests[0]?.stage).not.toBe('requested');
+  });
+
+  test('an answer relayed after activation pulls the Kinu wake to now, and the tick routes it', async () => {
+    // The helper's own turn reports through the relay; nothing is seeded as already answered.
+    const workspace = gatewayWorkspace(answeringGateway('Nothing to change.\n\n{"scope":"workspace","summary":"nothing","edits":[]}'));
+    await workspace.agent.activateActor();
+    const actorId = harnessActorId(workspace.db);
+    const now = Date.now();
+    workspace.db.prepare(`INSERT INTO refinement_requests
+      (actor_id, id, trigger, scope, stage, claim, session_id, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
+      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
+
+    const refiner = await hostedSubordinateHarness(workspace, {
+      name: 'ask-refiner-x1', displayName: 'Refiner', nameOrigin: 'auto', mission: 'propose refinements',
+    });
+
+    // The row the `agents` tool writes when the lane hires its refiner.
+    workspace.db.prepare(`INSERT INTO actor_subordinates (actor_id, name, created_by, status, current_task, created_at, dismissed_at,
+      lifetime, task_event_id, actor_reference, birth_request, delete_requested)
+      VALUES (?, 'ask-refiner-x1', 'orchestrator', 'working', 'review', ?, NULL, 'task', 'evt-1', NULL, NULL, 0)`).run(actorId, now);
+    workspace.db.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane, lane_request_id, task_event_id, answer_status, answer, created_at)
+      VALUES (?, 'ask-refiner-x1', 'refinement', 'refine-1', NULL, NULL, NULL, ?)`).run(actorId, now);
+    const wakes = `SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '${KINU_TIMER_CALLBACK}'`;
+    expect(held(workspace.db, wakes)).toBe(0);
+
+    await runDelegatedTask(workspace, refiner.actor.handle.actorId, 'Review the recent turns.');
+    expect(held(workspace.db, `SELECT COUNT(*) AS held FROM evolution_helpers WHERE answer_status = 'completed'`)).toBe(1);
+    await until(() => held(workspace.db, wakes) > 0, 'the relayed answer armed the Kinu wake');
+
+    await workspace.agent._kinuTimerTick();
+    await joinHarnessFibers();
     expect((await workspace.agent.listRefinements(1)).requests[0]?.stage).not.toBe('requested');
   });
 });

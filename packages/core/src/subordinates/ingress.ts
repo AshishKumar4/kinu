@@ -51,7 +51,7 @@ export interface SubordinateIngressDeps {
   transaction<T>(body: () => T): T;
   announce(report: AdmittedSubordinateReport): void;
   onAdmitted(): void;
-  onEvolutionAnswer?(): void;
+  onEvolutionAnswer(): void;
   temporary?: TemporaryAgentPort;
 }
 
@@ -98,7 +98,7 @@ export async function receiveSubordinateEvent(
       );
       deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now);
     });
-    deps.onEvolutionAnswer?.();
+    deps.onEvolutionAnswer();
 
     return { id: '', disposition: 'admitted' };
   }

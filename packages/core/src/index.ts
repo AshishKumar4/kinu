@@ -1808,7 +1808,7 @@ export {
 
 export { type RefinementLaneStep } from './evolution/refinement-lane';
 
-export { listRefinements, refinementPass, requestOwnerRefinement } from './evolution/refinement-host';
+export { listRefinements, evolutionAnswerPass, refinementPass, requestOwnerRefinement } from './evolution/refinement-host';
 
 export {
   REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute,

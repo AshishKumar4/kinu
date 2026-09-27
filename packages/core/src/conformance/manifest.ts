@@ -262,6 +262,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
 
     // The Evolution Changelog reads it on every root.
     refinement_requests: EVERYWHERE,
+    refinement_lane_holds: EVERYWHERE,
 
     // The `state.*` sandbox namespace.
     actor_program_state: EVERYWHERE,

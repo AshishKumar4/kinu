@@ -528,16 +528,18 @@ async function routeEdit(
   try {
     return await routeEditOnce(deps, input);
   } catch (err) {
-    return { kind: edit.kind, owner: '', target: editTarget(edit), disposition: 'refused', reason: renderThrownChain({ cause: err }) };
+    const [owner, target] = editOwnerAndTarget(edit);
+
+    return { kind: edit.kind, owner, target, disposition: 'refused', reason: renderThrownChain({ cause: err }) };
   }
 }
 
-function editTarget(edit: RefinementEdit): string {
+function editOwnerAndTarget(edit: RefinementEdit): readonly [string, string] {
   switch (edit.kind) {
-    case 'fact': return edit.key;
-    case 'prompt_section': return edit.sectionId;
-    case 'skill': return edit.path;
-    case 'subagent_spec': return edit.role;
+    case 'fact': return ['agent_facts', edit.key];
+    case 'prompt_section': return ['prompt_section_versions', edit.sectionId];
+    case 'skill': return ['instruction_approvals', edit.path];
+    case 'subagent_spec': return ['', edit.role];
   }
 }
 
@@ -673,20 +675,11 @@ async function routePromptSection(
     return pendingReason(already.version, 'pending held-out trials (adopted from an earlier pass)');
   }
 
-  let measured;
-
-  try {
-    measured = await proposeMeasuredPromptSection(deps.control, {
-      sectionId: edit.sectionId,
-      source: edit.source,
-      rationale: edit.rationale,
-    });
-  } catch (err) {
-    return {
-      kind: 'prompt_section', owner, target: edit.sectionId,
-      disposition: 'refused', reason: renderThrownChain({ cause: err }),
-    };
-  }
+  const measured = await proposeMeasuredPromptSection(deps.control, {
+    sectionId: edit.sectionId,
+    source: edit.source,
+    rationale: edit.rationale,
+  });
 
   if (!measured.ok) {
     return {

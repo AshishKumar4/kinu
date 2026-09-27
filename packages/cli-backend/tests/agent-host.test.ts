@@ -1420,6 +1420,45 @@ describe('LocalAgentHost', () => {
     expect(rows).toEqual([{ status: 'dismissed', lifetime: 'task' }]);
   });
 
+  test('a refiner answer with no waiter runs the lane at once, without waiting for a turn', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const child = reportingChildModel('Nothing to change.\n\n{"scope":"workspace","summary":"nothing","edits":[]}');
+    const { host } = makeHost(state, child.model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const team = await host.team('root');
+    await team.spawn({ name: 'ask-refiner-x1', role: 'researcher', mission: 'Propose refinements.', mode: 'build' });
+
+    // The request and helper rows the lane writes when it hires its refiner; its waiter is gone.
+    const seed = new Database(dbPath);
+    const actorId = present(seed.query<{ actor_id: string }, []>('SELECT actor_id FROM actor_subordinates LIMIT 1').get(), 'the root').actor_id;
+    const now = Date.now();
+    seed.prepare(`INSERT INTO refinement_requests
+      (actor_id, id, trigger, scope, stage, claim, session_id, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
+      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
+    seed.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane, lane_request_id, task_event_id, answer_status, answer, created_at)
+      VALUES (?, 'ask-refiner-x1', 'refinement', 'refine-1', NULL, NULL, NULL, ?)`).run(actorId, now);
+    seed.close();
+
+    const stage = () => {
+      const view = new Database(dbPath, { readonly: true });
+      const row = view.query<{ stage: string }, []>("SELECT stage FROM refinement_requests WHERE id = 'refine-1'").get();
+      view.close();
+
+      return row?.stage ?? null;
+    };
+
+    const answered = Promise.withResolvers<void>();
+    host.subscribe((agent, event) => {
+      if (agent !== 'root' && event.type === 'turn-end') answered.resolve();
+    });
+    await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
+    await answered.promise;
+    // No daemon pass runs here, and close() joins the pass the answer started.
+    await host.close();
+
+    expect(stage()).not.toBe('requested');
+  });
+
   test("a subordinate's terminal report moves its parent's roster row off working", async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');

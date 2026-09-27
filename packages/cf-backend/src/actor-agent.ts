@@ -995,6 +995,7 @@ export abstract class ActorAgent extends Agent<Env> {
         this.broadcastSubordinateEvent({ ...report, kind: 'report' });
       },
       onAdmitted: () => { this.orch.scheduleDrain(); },
+      onEvolutionAnswer: () => { this.durableWakeOwner()?.(); },
       // A temporary child's answer belongs to the waiting `agents.ask` call, so the register gets
       // first refusal on the name through the port that parked the waiter.
       temporary: this.temporaryAgentPort(),

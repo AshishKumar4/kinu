@@ -227,6 +227,8 @@ export class LocalAgentHost {
   private readonly opening = new Map<string, Promise<HostEntry>>();
   private readonly trees = new Map<string, HostTree>();
   private closed = false;
+  /** Lane passes a stored answer started; close() joins them before it ends the sessions they write through. */
+  private readonly lanePasses = new Set<Promise<void>>();
 
   constructor(private readonly opts: LocalAgentHostOptions) {}
 
@@ -325,6 +327,7 @@ export class LocalAgentHost {
     if (this.closed) return;
     this.closed = true;
     const openings = await Promise.allSettled(this.opening.values());
+    await Promise.all(this.lanePasses);
 
     for (const opening of openings) {
       if (opening.status === 'rejected') {
@@ -1456,14 +1459,17 @@ export class LocalAgentHost {
     if (swept.truncated) this.wake(entry, 'assignment backlog');
   }
 
-  /** Drain after an inbox wake, bracketed like every converting operation. */
+  /** A stored refiner answer runs the lane now; a pass another process drives runs it there, from its own pass. */
   private advanceLane(entry: HostEntry): void {
     if (this.closed) return;
-    queueMicrotask(async () => {
-      if (this.closed) return;
 
+    const pass: Promise<void> = (async () => {
       try {
-        await this.drive(entry, () => entry.session.runRefinementLane());
+        const outcome = await this.drive(entry, () => entry.session.runEvolutionAnswer(Date.now()));
+
+        if (!outcome.ran) {
+          diagnostics.event('refinement.answer_deferred', { agent: entry.key, holder: outcome.heldBy.kind });
+        }
       } catch (cause) {
         diagnostics.failure(
           'host.refinement_lane_failed',
@@ -1471,9 +1477,12 @@ export class LocalAgentHost {
           { agent: entry.key },
         );
       }
-    });
+    })().then(() => { this.lanePasses.delete(pass); });
+
+    this.lanePasses.add(pass);
   }
 
+  /** Drain after an inbox wake, bracketed like every converting operation. */
   private wake(entry: HostEntry, source: string): void {
     // Wakes can outlive close(); driving after close() would use a closed handle.
     if (this.closed) return;

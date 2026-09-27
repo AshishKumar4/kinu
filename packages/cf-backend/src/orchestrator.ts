@@ -96,7 +96,7 @@ import {
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
   previewScaffoldLive, runScaffoldCaptureText, runScaffoldGepaOptimization,
   advancePromptSectionLane,
-  decideRefinementRoute, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
+  decideRefinementRoute, evolutionAnswerPass, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementRequestView, type RefinementScope,
@@ -3176,13 +3176,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       await tick.span('alarm.evolution_answer', async (span) => {
-        const dueAt = nextEvolutionAnswerAt(this.boundSql, this.actorHandle().actorId);
-        span.setAttribute('kinu.evolution_answer_due', dueAt !== null && dueAt <= now);
-
-        if (dueAt === null || dueAt > now) return;
-
         try {
-          await refinementPass(this.refinementDeps);
+          span.setAttribute('kinu.evolution_answer_due', (await evolutionAnswerPass(this.refinementDeps, now)) !== null);
         } catch (err) {
           const failure = toKinuError({ doing: 'routing a refiner answer this wake was armed for', cause: err, otherwise: 'unavailable' });
 

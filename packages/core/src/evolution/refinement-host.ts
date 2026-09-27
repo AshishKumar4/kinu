@@ -5,7 +5,7 @@ import {
   type RefinementLaneStep, type RequestRefinementInput,
 } from './refinement-lane';
 import {
-  createRefinementStore, holdRefinementLane, refinementRequestView, releaseRefinementLane,
+  createRefinementStore, holdRefinementLane, nextEvolutionAnswerAt, refinementRequestView, releaseRefinementLane,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
 } from './refinement';
 import { renderThrownChain } from '../obs/index';
@@ -34,11 +34,18 @@ export async function refinementPass(deps: RefinementDeps): Promise<RefinementLa
 
   try {
     await refinementDebtRequest(deps);
+
+    return await advanceRefinementLane(deps);
   } catch (err) {
     holdRefinementLane(sql, rt.actor.actorId, renderThrownChain({ cause: err }));
-
-    return { step: 'idle' };
+    throw err;
   }
+}
 
-  return advanceRefinementLane(deps);
+export async function evolutionAnswerPass(deps: RefinementDeps, now: number): Promise<RefinementLaneStep | null> {
+  const dueAt = nextEvolutionAnswerAt(deps.control.sql, deps.control.rt.actor.actorId);
+
+  if (dueAt === null || dueAt > now) return null;
+
+  return refinementPass(deps);
 }
