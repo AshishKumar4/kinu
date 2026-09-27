@@ -367,8 +367,6 @@ describe('ChatWireTransport', () => {
     expect(frames[8]).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
     // The SDK packs flushed chunks into segment rows, so the count is of segments.
     expect(h.chunkRows().length).toBeGreaterThan(0);
-    expect(h.transport.answer('msg-1')).toEqual({ id: 'msg-1', role: 'assistant', parts: [{ type: 'step-start' }, { type: 'text', text: 'hello', state: 'done' }] });
-    expect(h.transport.answer('msg-1')).toBeNull();
     expect(h.broadcasts.at(-1)?.frame.type).toBe('cf_agent_chat_messages');
   });
 
@@ -391,15 +389,10 @@ describe('ChatWireTransport', () => {
     await h.transport.observe(broken, { index: 0 });
 
     expect(h.responses().at(-1)).toMatchObject({ id: 'req-1', done: false, error: true, body: expect.stringContaining('the socket under the relay closed') });
-    // The transcript persists the loop's full text, so nothing offers the partial as the row.
-    expect(h.transport.streamed('msg-1')).toBeNull();
-    expect(h.transport.answer('msg-1')).toBeNull();
-
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hello', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
 
     expect(h.responses().at(-1)).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
-    expect(h.transport.answer('msg-1')).toBeNull();
     expect(h.broadcasts.at(-1)?.frame.type).toBe('cf_agent_chat_messages');
   });
 
@@ -428,7 +421,6 @@ describe('ChatWireTransport', () => {
     expect(relayed.some((body) => body.includes('tool-input-delta'))).toBe(false);
     expect(relayed.some((body) => body.includes('never relayed'))).toBe(false);
 
-    expect(h.transport.streamed('msg-1')).toBeNull();
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'reading it', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
     expect(h.responses().at(-1)).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
@@ -461,37 +453,6 @@ describe('ChatWireTransport', () => {
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 2, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
     expect(h.responses().at(-1)).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
-  });
-
-  test("a turn's second provider call cannot rename the answer: one message, under the row's id", async () => {
-    // A continuation after an output-limit cut is a second SDK stream whose `start` carries an SDK-minted
-    // message id; honouring it would key the rest on an id the loop never persisted.
-    const h = openRequest();
-    const conn = h.connection('c1');
-    const { answered } = await h.open(conn, 'req-1', 'hello');
-    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
-    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
-
-    await h.transport.observe(chunks([
-      { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
-      { type: 'text-delta', id: 't', delta: 'first half' }, { type: 'text-end', id: 't' },
-      { type: 'finish-step' }, { type: 'finish' },
-    ]), { index: 0 });
-    await h.transport.observe(chunks([
-      { type: 'start', messageId: 'sdk-minted-2' }, { type: 'start-step' }, { type: 'text-start', id: 'u' },
-      { type: 'text-delta', id: 'u', delta: ' and the rest' }, { type: 'text-end', id: 'u' },
-      { type: 'finish-step' }, { type: 'finish' },
-    ]), { index: 1 });
-
-    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'first half and the rest', toolCalls: [], steps: 2, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
-    await h.land(answered);
-
-    const answer = h.transport.answer('msg-1');
-    expect(answer?.id).toBe('msg-1');
-    expect(answer?.parts.filter((part) => part.type === 'text')).toEqual([
-      { type: 'text', text: 'first half', state: 'done' },
-      { type: 'text', text: ' and the rest', state: 'done' },
-    ]);
   });
 
   test('a reconnecting client is told what is resuming and gets the stored chunks replayed', async () => {

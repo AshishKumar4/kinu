@@ -66,7 +66,6 @@ interface LiveStream {
   accumulator: StreamAccumulator;
   readonly open: OpenParts;
   readonly cadence: PartialFlushCadence;
-  taken: boolean;
   /** The relay broke before the stream ended, so the accumulated parts are not the answer. */
   broken: boolean;
   /** Why the turn failed, sent as the frame that ends it. */
@@ -139,9 +138,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   private readonly continuation = new ContinuationState<Connection>();
   private readonly requests = new Map<string, string>();
   private live: LiveStream | null = null;
-  /** Answers whose stream closed before the transcript took them. Production persists before
-   *  `turn-end`; this holds the other order. */
-  private readonly answers = new Map<string, UIMessage>();
 
   constructor(private readonly wire: ChatWire) {}
 
@@ -165,27 +161,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         isConnectionPresent: (id) => this.wire.getConnection(id) !== undefined,
       }),
     };
-  }
-
-  answer(id: string): UIMessage | null {
-    const message = this.streamed(id);
-
-    if (message !== null) {
-      this.answers.delete(id);
-
-      if (this.live?.accumulator.messageId === id) this.live.taken = true;
-    }
-
-    return message;
-  }
-
-  /** Read without spending: the roster declares turn-end over it before the transcript persists it. */
-  streamed(id: string): UIMessage | null {
-    const live = this.live;
-
-    if (live !== null && !live.broken && live.accumulator.messageId === id && live.accumulator.parts.length > 0) return live.accumulator.toMessage();
-
-    return this.answers.get(id) ?? null;
   }
 
   /** The connect frame is the pane's only seed, so a socket opening mid-turn gets the current window. */
@@ -327,7 +302,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.releaseWaiters();
     const streamId = this.resume?.resumable.start(requestId, { messageId: turn.messageId }) ?? requestId;
 
-    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), taken: false, broken: false, failure: null };
+    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), broken: false, failure: null };
 
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
   }
@@ -339,7 +314,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     if (live === null) return;
     this.live = null;
 
-    if (!live.taken && !live.broken && live.accumulator.parts.length > 0) this.answers.set(live.accumulator.messageId, live.accumulator.toMessage());
     const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
     this.resume?.resumable.complete(live.streamId);
