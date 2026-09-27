@@ -2036,6 +2036,12 @@ export class LocalAgentSession {
         // deleted the live claim.
         turnIsLive: (turnId) => this.chat.pumping && this.chat.currentTurnId === turnId,
       scheduleRetry: (atMs) => this.scheduleTerminalRetry(atMs),
+      // The timer also wakes a deferred job; it goes only when neither ledger owes it.
+      settled: () => {
+        if (this.jobRunner.nextResumeAt() === null) this.clearTerminalRetry();
+
+        return Promise.resolve();
+      },
     });
 
     return this.terminalTransitions;

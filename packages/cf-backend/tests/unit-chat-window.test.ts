@@ -9,7 +9,7 @@ import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import type { ChatHistoryEntry, Page, Rpc } from '@kinu.run/core';
+import type { ChatHistoryEntry, ChatHistoryPage, Rpc } from '@kinu.run/core';
 
 import { useChatThread } from '../src/hooks/use-chat-thread';
 
@@ -87,9 +87,9 @@ describe('the older pages under a sliding window', () => {
   const stored: Rpc = async (_method, args) => {
     const [{ cursor }] = v.parse(Query, args);
 
-    const page: Page<ChatHistoryEntry> = JSON.stringify(cursor ?? null).includes('m41')
-      ? { status: 'end', items: Array.from({ length: 40 }, (_, index) => entry(`m${String(index + 1)}`)) }
-      : { status: 'end', items: [] };
+    const page: ChatHistoryPage = JSON.stringify(cursor ?? null).includes('m41')
+      ? { status: 'end', items: Array.from({ length: 40 }, (_, index) => entry(`m${String(index + 1)}`)), walked: 40 }
+      : { status: 'end', items: [], walked: 0 };
 
     return JSON.parse(JSON.stringify(page));
   };
