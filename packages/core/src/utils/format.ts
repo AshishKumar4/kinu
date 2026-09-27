@@ -1,6 +1,6 @@
 /** Compact token counts: 1.2M / 200k / 4.5k / 812. Undefined renders a dash, never "0". */
 export function fmtTokens(n: number | undefined): string {
-	if (n === undefined) return "—";
+	if (n === undefined) return "-";
 
 	const scaled = (value: number, suffix: string): string =>
 		`${Number(value.toFixed(1))}${suffix}`;
@@ -25,7 +25,7 @@ export function fmtUsd(n: number): string {
 
 /** A 0–1 rate as a percentage. Null in, dash out — an absent rate is not 0%. */
 export function fmtPct(rate: number | null, digits = 0): string {
-	return rate === null ? "—" : `${(rate * 100).toFixed(digits)}%`;
+	return rate === null ? "-" : `${(rate * 100).toFixed(digits)}%`;
 }
 
 /** The one relative-time wording the app uses. Kept out of `shared.tsx` to avoid loading the markdown renderer. */

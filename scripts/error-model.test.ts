@@ -7,7 +7,7 @@
 
 import { expect, test } from 'bun:test';
 
-import { type ErrorModelLock, judge, lower, measure } from './error-model';
+import { bridgeSites, type ErrorModelLock, judge, lower, measure } from './error-model';
 
 const FILE = 'packages/fixture/src/a.ts';
 
@@ -91,4 +91,42 @@ test('the boundary file grows in the mechanisms it declares and in no other', ()
 
   expect(keysOf(boundary)).toEqual([]);
   expect(keysOf(outcome)).toEqual([{ key: `${outcome}#throw`, value: 1 }]);
+});
+
+test('a bridge is `return settle(…)` or `return settleSync(…)` from an exported function or public member; elsewhere it is a finding', () => {
+  const bridged = `
+import { settle, settleSync as run } from '../obs/index';
+export function parse(text: string): number { return run(parseEffect(text)); }
+export async function load(): Promise<string> { return await settle(loadEffect()); }
+export const read = (): number => { return run(readEffect()); };
+export class Store {
+  open(): number { return run(openEffect()); }
+  private helper(): number { return run(helperEffect()); }
+}
+function local(): number { return run(localEffect()); }
+export function seam(): { open(): number } { return { open() { return run(openEffect()); } }; }
+function hidden(): { open(): number } { return { open() { return run(openEffect()); } }; }
+export function mapped(): Promise<{ open(): number }> { return settle(Effect.map(keyEffect(), () => ({ open() { return run(openEffect()); } }))); }
+export class Seams { readonly seam = { deploy: (r: number) => settle(deployEffect(r)) }; }
+const hiddenSeam = { deploy: (r: number) => settle(deployEffect(r)) };
+export function midway(): number { const n = run(countEffect()); return n + 1; }
+export function inner(): Effect.Effect<number, KinuError> { return Effect.succeed(1); }
+`;
+
+  // A local \`settle\` is not the runner, and a runner that is not returned is not the bridge shape.
+  const local = `
+function settle(value: number): number { return value; }
+export function done(): number { return settle(1); }
+`;
+
+  expect(bridgeSites(new Map([[FILE, bridged], ['packages/fixture/src/b.ts', local]]))).toEqual({
+    bridges: [`${FILE}:11`, `${FILE}:13`, `${FILE}:13`, `${FILE}:14`, `${FILE}:3`, `${FILE}:4`, `${FILE}:5`, `${FILE}:7`],
+    findings: [
+      `${FILE}:10: a runner returned outside an exported function or public member`,
+      `${FILE}:12: a runner returned outside an exported function or public member`,
+      `${FILE}:15: a runner returned outside an exported function or public member`,
+      `${FILE}:16: a runner called mid-body; the effect is run once, at the edge, as its return`,
+      `${FILE}:8: a runner returned outside an exported function or public member`,
+    ],
+  });
 });

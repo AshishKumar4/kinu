@@ -47,7 +47,7 @@ export {
   type Refusal,
 } from './error';
 
-export { attempt, settle, toWire, type Wire } from './effect';
+export { attempt, settle, settleSync, toWire, type Wire } from './effect';
 
 export {
   createCompositeLogger,

@@ -3,7 +3,9 @@
  * inline/block lists, one-level maps, `#` comments). Tabs and multi-line strings are rejected.
  */
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { settleSync } from '../obs/effect';
 import { isJsonObject, type JsonObject, type JsonValue } from './json';
 
 export interface MarkdownDoc {
@@ -25,27 +27,31 @@ export class MarkdownFrontmatterError extends Error {
 
 /** Throws on malformed front-matter; returns the whole source as body when there is none. */
 export function parseMarkdownFrontmatter(src: string): MarkdownDoc {
+  return settleSync(frontmatterDoc(src));
+}
+
+function frontmatterDoc(src: string): Effect.Effect<MarkdownDoc> {
   if (!src.startsWith('---')) {
-    return { frontmatter: {}, body: src };
+    return Effect.succeed({ frontmatter: {}, body: src });
   }
 
   if (src.length > 3 && src[3] !== '\n' && src[3] !== '\r') {
-    return { frontmatter: {}, body: src };
+    return Effect.succeed({ frontmatter: {}, body: src });
   }
 
   const closeMatch = src.match(/\n---\s*(\r?\n|$)/);
 
   if (!closeMatch || closeMatch.index === undefined) {
-    throw new MarkdownFrontmatterError({
+    return Effect.die(new MarkdownFrontmatterError({
       message: 'unterminated front-matter (missing closing `---`)',
       line: 1,
-    });
+    }));
   }
 
   const fmRaw = src.slice(4, closeMatch.index);              // skip "---\n"
   const body = src.slice(closeMatch.index + closeMatch[0].length);
 
-  return { frontmatter: parseFlatYaml(fmRaw), body };
+  return Effect.map(flatYaml(fmRaw), (frontmatter) => ({ frontmatter, body }));
 }
 
 /** Round-trips everything `parseMarkdownFrontmatter` can read. */
@@ -66,46 +72,66 @@ export function stringifyMarkdownFrontmatter(
   return lines.join('\n') + doc.body;
 }
 
-function parseFlatYaml(src: string): JsonObject {
-  const lines = src.split('\n');
-  const out: JsonObject = {};
-  let i = 0;
+function flatYaml(src: string): Effect.Effect<JsonObject> {
+  return Effect.gen(function* () {
+    const lines = src.split('\n');
+    const out: JsonObject = {};
+    let i = 0;
 
-  while (i < lines.length) {
-    const raw = lines[i];
-    const stripped = stripComment(raw);
+    while (i < lines.length) {
+      const raw = lines[i];
+      const stripped = stripComment(raw);
 
-    if (stripped.trim() === '') { i++; continue; }
+      if (stripped.trim() === '') { i++; continue; }
 
-    if (stripped.includes('\t')) {
-      throw new MarkdownFrontmatterError({ message: 'tabs not allowed (use spaces)', line: i + 1 });
-    }
+      if (stripped.includes('\t')) {
+        return yield* Effect.die(new MarkdownFrontmatterError({ message: 'tabs not allowed (use spaces)', line: i + 1 }));
+      }
 
-    const m = stripped.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
+      const m = stripped.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
 
-    if (!m) {
-      throw new MarkdownFrontmatterError({
-        message: `expected \`key: value\`, got ${JSON.stringify(raw)}`,
-        line: i + 1,
-      });
-    }
+      if (!m) {
+        return yield* Effect.die(new MarkdownFrontmatterError({
+          message: `expected \`key: value\`, got ${JSON.stringify(raw)}`,
+          line: i + 1,
+        }));
+      }
 
-    const key = m[1];
-    const inlineRest = m[2];
+      const key = m[1];
+      const inlineRest = m[2];
 
-    if (inlineRest !== '') {
-      out[key] = parseScalar(inlineRest);
-      i++;
-      continue;
-    }
+      if (inlineRest !== '') {
+        out[key] = parseScalar(inlineRest);
+        i++;
+        continue;
+      }
 
-    // Next non-blank line decides list (`- item`) vs nested map.
-    const peek = findNextIndentedLine(lines, i + 1);
+      // Next non-blank line decides list (`- item`) vs nested map.
+      const peek = findNextIndentedLine(lines, i + 1);
 
-    if (peek == null) { out[key] = null; i++; continue; }
+      if (peek == null) { out[key] = null; i++; continue; }
 
-    if (peek.kind === 'list') {
-      const items: JsonValue[] = [];
+      if (peek.kind === 'list') {
+        const items: JsonValue[] = [];
+        i++;
+
+        while (i < lines.length) {
+          const next = stripComment(lines[i]);
+
+          if (next.trim() === '') { i++; continue; }
+
+          const lm = next.match(/^\s+-\s+(.*)$/);
+
+          if (!lm) break;
+          items.push(parseScalar(lm[1].trim()));
+          i++;
+        }
+
+        out[key] = items;
+        continue;
+      }
+
+      const nested: JsonObject = {};
       i++;
 
       while (i < lines.length) {
@@ -113,38 +139,20 @@ function parseFlatYaml(src: string): JsonObject {
 
         if (next.trim() === '') { i++; continue; }
 
-        const lm = next.match(/^\s+-\s+(.*)$/);
+        const childMatch = next.match(/^(\s+)([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
 
-        if (!lm) break;
-        items.push(parseScalar(lm[1].trim()));
+        if (!childMatch) break;
+
+        if (childMatch[1].length < 2) break;
+        nested[childMatch[2]] = parseScalar(childMatch[3].trim());
         i++;
       }
 
-      out[key] = items;
-      continue;
+      out[key] = nested;
     }
 
-    const nested: JsonObject = {};
-    i++;
-
-    while (i < lines.length) {
-      const next = stripComment(lines[i]);
-
-      if (next.trim() === '') { i++; continue; }
-
-      const childMatch = next.match(/^(\s+)([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
-
-      if (!childMatch) break;
-
-      if (childMatch[1].length < 2) break;
-      nested[childMatch[2]] = parseScalar(childMatch[3].trim());
-      i++;
-    }
-
-    out[key] = nested;
-  }
-
-  return out;
+    return out;
+  });
 }
 
 interface PeekResult { kind: 'list' | 'map' }

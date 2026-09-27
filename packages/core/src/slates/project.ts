@@ -1,5 +1,7 @@
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import { TierIdSchema } from '../types/profile';
 import { renderIssues, type JsonPrimitive } from '../utils/json';
 import { SLATE_INLINE_HEIGHT } from './host-context';
@@ -52,24 +54,28 @@ export type SlateBinding = v.InferOutput<typeof Binding>;
 type PackageDocument = JsonPrimitive | readonly PackageDocument[] | { readonly [key: string]: PackageDocument };
 
 export function parseSlateProject(input: PackageDocument): SlateProject {
+  return settleSync(slateProject(input));
+}
+
+export function slateProject(input: PackageDocument): Effect.Effect<SlateProject, KinuError> {
   const parsed = v.safeParse(Project, input);
 
-  if (!parsed.success) throw new KinuError('bad_input', `package.json: ${renderIssues(parsed.issues)}`);
+  if (!parsed.success) return Effect.fail(new KinuError('bad_input', `package.json: ${renderIssues(parsed.issues)}`));
   const project = parsed.output;
 
   if (project.slate.runtime === 'worker' && project.main === undefined) {
-    throw new KinuError('bad_input', 'package.json main must name the module that exports class Slate extends SlateObject from kinu:slate');
+    return Effect.fail(new KinuError('bad_input', 'package.json main must name the module that exports class Slate extends SlateObject from kinu:slate'));
   }
 
   if (project.slate.runtime === 'node') {
-    if (project.slate.port === undefined) throw new KinuError('bad_input', 'package.json slate.port must name the server port');
+    if (project.slate.port === undefined) return Effect.fail(new KinuError('bad_input', 'package.json slate.port must name the server port'));
 
     if (project.scripts?.dev === undefined && project.scripts?.start === undefined) {
-      throw new KinuError('bad_input', 'package.json scripts.dev or scripts.start must start the server');
+      return Effect.fail(new KinuError('bad_input', 'package.json scripts.dev or scripts.start must start the server'));
     }
   }
 
-  return project;
+  return Effect.succeed(project);
 }
 
 export type SlateBindingKind = SlateBinding['kind'];

@@ -5,7 +5,8 @@ import type {
 } from './types';
 import { parseModelSpec } from './types';
 import { settleModelList, StaleModelList } from './util';
-import { diagnostics, KinuError, renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { accountCredentialKey, MAIN_ACCOUNT, storedAccounts } from '../credentials/accounts';
 
 export interface DynamicProviderSource {
@@ -59,6 +60,15 @@ async function chosenCredentialKey(deps: ProviderDeps, providerId: string, key: 
   const [only, ...others] = storedAccounts(key, await deps.listCredentialKeys?.() ?? []);
 
   return only === undefined || only === MAIN_ACCOUNT || others.length > 0 ? null : accountCredentialKey(key, only);
+}
+
+async function defaultSpecOf(p: ModelProvider, deps: ProviderDeps): Promise<string | null> {
+  const own = accountDeps(deps, p.id);
+
+  if (!(await p.isAvailable(own))) return null;
+  const modelId = p.defaultModel ?? (await settleModelList(p.listModels(own))).models[0]?.id;
+
+  return modelId ? `${p.id}/${modelId}` : null;
 }
 
 /** `named`, else `accountFor`'s, else `main`, else the only one; several unchosen: refused. */
@@ -185,13 +195,17 @@ export function createProviderRegistry(): ProviderRegistry {
 
   return {
     register(provider) {
-      if (byId.has(provider.id)) throw new Error(`Provider ${provider.id} already registered`);
-      byId.set(provider.id, provider);
-      ordered.push(provider);
+      return settleSync(byId.has(provider.id)
+        ? Effect.die(new Error(`Provider ${provider.id} already registered`))
+        : Effect.sync(() => {
+          byId.set(provider.id, provider);
+          ordered.push(provider);
+        }));
     },
     registerDynamic(source) {
-      if (dynamic) throw new Error('Dynamic provider source already registered');
-      dynamic = source;
+      return settleSync(dynamic
+        ? Effect.die(new Error('Dynamic provider source already registered'))
+        : Effect.sync(() => { dynamic = source; }));
     },
     get(id) { return byId.get(id); },
     canResolve(id) { return providerFor(id) !== undefined; },
@@ -269,12 +283,9 @@ export function createProviderRegistry(): ProviderRegistry {
       const parsed = parseModelSpec(spec);
       const provider = providerFor(parsed.provider);
 
-      if (!provider) {
-        const known = Array.from(byId.keys()).join(', ');
-        throw new Error(`Unknown provider ${JSON.stringify(parsed.provider)} (registered: ${known || 'none'}).`);
-      }
-
-      return provider.createModel(parsed.modelId, accountDeps(deps, parsed.provider, parsed.account));
+      return settleSync(provider
+        ? Effect.sync(() => provider.createModel(parsed.modelId, accountDeps(deps, parsed.provider, parsed.account)))
+        : Effect.die(new Error(`Unknown provider ${JSON.stringify(parsed.provider)} (registered: ${Array.from(byId.keys()).join(', ') || 'none'}).`)));
     },
 
     async credentialFor(spec, deps) {
@@ -286,21 +297,21 @@ export function createProviderRegistry(): ProviderRegistry {
 
     async defaultSpec(deps) {
       // Sequential first-match scan in preference order; a throwing provider is skipped.
-      for (const p of (await allProviders(deps)).providers) {
-        try {
-          const own = accountDeps(deps, p.id);
+      return settle(Effect.gen(function* () {
+        for (const p of (yield* Effect.promise(() => allProviders(deps))).providers) {
+          const spec = yield* Effect.tryPromise({ try: () => defaultSpecOf(p, deps), catch: (cause) => ({ cause }) }).pipe(
+            Effect.catch((failed) => {
+              diagnostics.event('providers.default_model_unavailable', { error: renderThrownChain(failed) });
 
-          if (!(await p.isAvailable(own))) continue;
-          const modelId = p.defaultModel ?? (await settleModelList(p.listModels(own))).models[0]?.id;
+              return Effect.succeed(null);
+            }),
+          );
 
-          if (modelId) return `${p.id}/${modelId}`;
-        } catch (error) {
-          diagnostics.event('providers.default_model_unavailable', { error: renderThrownChain({ cause: error }) });
-          continue;
+          if (spec !== null) return spec;
         }
-      }
 
-      return null;
+        return null;
+      }));
     },
   };
 }

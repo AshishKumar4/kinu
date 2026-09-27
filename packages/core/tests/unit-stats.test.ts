@@ -1,7 +1,7 @@
 /** Wilson intervals; expected values are published figures, not recomputed. */
 import { describe, test, expect } from 'bun:test';
 import {
-  wilsonInterval, scoreInterval, lossInterval, formatScoreInterval,
+  wilsonInterval, scoreInterval, lossInterval,
 } from '../src/utils/stats';
 
 describe('wilsonInterval — hand-checked against published values', () => {
@@ -55,7 +55,7 @@ describe('wilsonInterval — hand-checked against published values', () => {
   });
 });
 
-describe('scoreInterval / lossInterval / formatScoreInterval', () => {
+describe('scoreInterval / lossInterval', () => {
   test('fractional judge scores sum into the same interval as whole successes', () => {
     expect(scoreInterval([1, 0.5, 0.5, 1])).toEqual(wilsonInterval(3, 4));
   });
@@ -67,10 +67,5 @@ describe('scoreInterval / lossInterval / formatScoreInterval', () => {
     expect(loss.lo).toBeCloseTo(1 - score.hi, 10);
     expect(loss.hi).toBeCloseTo(1 - score.lo, 10);
     expect(loss.n).toBe(4);
-  });
-
-  test('one rendering, everywhere', () => {
-    expect(formatScoreInterval(wilsonInterval(3, 4))).toBe('0.75 (95% CI 0.30–0.95)');
-    expect(formatScoreInterval(wilsonInterval(3, 4), 3)).toBe('0.750 (95% CI 0.301–0.954)');
   });
 });

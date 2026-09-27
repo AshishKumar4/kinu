@@ -8,7 +8,7 @@
 import { describe, expect, test } from 'bun:test';
 import { inspect } from 'node:util';
 import { Effect } from 'effect';
-import { attempt, KinuError, settle } from '../src/obs/index';
+import { attempt, KinuError, settle, settleSync } from '../src/obs/index';
 
 describe('settle', () => {
   test('resolves the success value', async () => {
@@ -37,6 +37,51 @@ describe('settle', () => {
     controller.abort(reason);
     await expect(pending).rejects.toBeInstanceOf(KinuError);
     await expect(pending).rejects.toMatchObject({ code: 'cancelled', message: 'stopped before the answer', cause: reason });
+  });
+});
+
+describe('settleSync', () => {
+  test('returns the success value, in the same tick', () => {
+    expect(settleSync(Effect.succeed(3))).toBe(3);
+  });
+
+  test('throws the failed KinuError itself, and a defect unchanged', () => {
+    const failure = new KinuError('denied', 'the gate refused');
+    const bug = new TypeError('reading an absent field');
+
+    expect(() => settleSync(Effect.fail(failure))).toThrow(failure);
+    expect(() => settleSync(Effect.sync(() => {
+      throw bug;
+    }))).toThrow(bug);
+  });
+
+  test('an interruption is cancelled, as under settle', () => {
+    expect(() => settleSync(Effect.interrupt, { interrupted: 'stopped' })).toThrow(expect.objectContaining({ code: 'cancelled', message: 'stopped' }));
+  });
+
+  test('an async step inside is a defect, and the steps after it never run', async () => {
+    let thrown: unknown;
+    let written = false;
+    let release: () => void = () => {};
+
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const observed = gate.then(() => { /* the step the fiber awaited has settled; its next step would have run */ });
+
+    try {
+      settleSync(Effect.gen(function* () {
+        yield* Effect.promise(() => gate);
+        written = true;
+      }));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).not.toBeInstanceOf(KinuError);
+    expect(thrown).toMatchObject({ name: 'AsyncFiberError' });
+    release();
+    await observed;
+    await Promise.resolve();
+    expect(written).toBe(false);
   });
 });
 

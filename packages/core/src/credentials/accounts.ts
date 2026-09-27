@@ -1,5 +1,6 @@
 // An account is a stored key `<base>@<name>`; the bare key is `main`.
-import { KinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settleSync } from '../obs/index';
 
 export const MAIN_ACCOUNT = 'main';
 
@@ -41,22 +42,26 @@ function acceptsAccounts(baseKey: string): boolean {
 }
 
 export function accountCredentialKey(baseKey: string, account: string): string {
+  return settleSync(accountKey(baseKey, account));
+}
+
+export function accountKey(baseKey: string, account: string): Effect.Effect<string, KinuError> {
   if (baseCredentialKey(baseKey) !== baseKey) {
-    throw new KinuError('bad_input', `${baseKey} already names an account.`);
+    return Effect.fail(new KinuError('bad_input', `${baseKey} already names an account.`));
   }
 
-  if (account === MAIN_ACCOUNT) return baseKey;
+  if (account === MAIN_ACCOUNT) return Effect.succeed(baseKey);
 
   if (!isAccountName(account)) {
-    throw new KinuError('bad_input',
-      `"${account}" is not an account name: use a-z, 0-9 and dashes, up to 32 characters, starting with a letter or digit.`);
+    return Effect.fail(new KinuError('bad_input',
+      `"${account}" is not an account name: use a-z, 0-9 and dashes, up to 32 characters, starting with a letter or digit.`));
   }
 
   if (!acceptsAccounts(baseKey)) {
-    throw new KinuError('bad_input', `${baseKey} has one account: Cloudflare is one sign-in.`);
+    return Effect.fail(new KinuError('bad_input', `${baseKey} has one account: Cloudflare is one sign-in.`));
   }
 
-  return `${baseKey}@${account}`;
+  return Effect.succeed(`${baseKey}@${account}`);
 }
 
 export function storedAccounts(baseKey: string, keys: readonly string[]): string[] {
