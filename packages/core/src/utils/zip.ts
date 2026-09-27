@@ -2,7 +2,9 @@
  * Dependency-free zip read/write. Reads stored and deflated entries; writes stored only. Zip64, encryption
  * and other methods are `unsupported`; absolute or climbing entry names are `bad_input`.
  */
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settle, settleSync } from '../obs/effect';
 
 export interface ZipEntry {
   /** Forward-slashed, no leading slash. */
@@ -47,59 +49,65 @@ async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
 }
 
 /** End-of-central-directory offset: the last signature, since an archive comment may follow it. */
-function endOfCentral(view: DataView): number {
+function endOfCentral(view: DataView): Effect.Effect<number, KinuError> {
   for (let at = view.byteLength - 22; at >= Math.max(0, view.byteLength - 22 - 0xffff); at -= 1) {
-    if (view.getUint32(at, true) === END_OF_CENTRAL) return at;
+    if (view.getUint32(at, true) === END_OF_CENTRAL) return Effect.succeed(at);
   }
 
-  throw new KinuError('bad_input', 'not a zip archive: no end-of-central-directory record');
+  return Effect.fail(new KinuError('bad_input', 'not a zip archive: no end-of-central-directory record'));
 }
 
 export async function unpackZip(archive: Uint8Array): Promise<ZipEntry[]> {
-  const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
-  const end = endOfCentral(view);
-  const count = view.getUint16(end + 10, true);
-  const directoryOffset = view.getUint32(end + 16, true);
+  return settle(unpacked(archive));
+}
 
-  if (directoryOffset === ZIP64_MARK) throw new KinuError('unsupported', 'zip64 archives are not supported');
-  const decoder = new TextDecoder();
-  const entries: ZipEntry[] = [];
-  let at = directoryOffset;
+function unpacked(archive: Uint8Array): Effect.Effect<ZipEntry[], KinuError> {
+  return Effect.gen(function* () {
+    const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
+    const end = yield* endOfCentral(view);
+    const count = view.getUint16(end + 10, true);
+    const directoryOffset = view.getUint32(end + 16, true);
 
-  for (let index = 0; index < count; index += 1) {
-    if (view.getUint32(at, true) !== CENTRAL_HEADER) throw new KinuError('bad_input', 'corrupt zip: central directory entry expected');
-    const flags = view.getUint16(at + 8, true);
-    const method = view.getUint16(at + 10, true);
-    const compressedSize = view.getUint32(at + 20, true);
-    const size = view.getUint32(at + 24, true);
-    const nameLength = view.getUint16(at + 28, true);
-    const extraLength = view.getUint16(at + 30, true);
-    const commentLength = view.getUint16(at + 32, true);
-    const localOffset = view.getUint32(at + 42, true);
-    const name = decoder.decode(archive.subarray(at + 46, at + 46 + nameLength));
-    at += 46 + nameLength + extraLength + commentLength;
+    if (directoryOffset === ZIP64_MARK) return yield* new KinuError('unsupported', 'zip64 archives are not supported');
+    const decoder = new TextDecoder();
+    const entries: ZipEntry[] = [];
+    let at = directoryOffset;
 
-    if ((flags & 0x1) !== 0) throw new KinuError('unsupported', `zip entry ${JSON.stringify(name)} is encrypted`);
+    for (let index = 0; index < count; index += 1) {
+      if (view.getUint32(at, true) !== CENTRAL_HEADER) return yield* new KinuError('bad_input', 'corrupt zip: central directory entry expected');
+      const flags = view.getUint16(at + 8, true);
+      const method = view.getUint16(at + 10, true);
+      const compressedSize = view.getUint32(at + 20, true);
+      const size = view.getUint32(at + 24, true);
+      const nameLength = view.getUint16(at + 28, true);
+      const extraLength = view.getUint16(at + 30, true);
+      const commentLength = view.getUint16(at + 32, true);
+      const localOffset = view.getUint32(at + 42, true);
+      const name = decoder.decode(archive.subarray(at + 46, at + 46 + nameLength));
+      at += 46 + nameLength + extraLength + commentLength;
 
-    if (compressedSize === ZIP64_MARK || size === ZIP64_MARK || localOffset === ZIP64_MARK) {
-      throw new KinuError('unsupported', 'zip64 archives are not supported');
+      if ((flags & 0x1) !== 0) return yield* new KinuError('unsupported', `zip entry ${JSON.stringify(name)} is encrypted`);
+
+      if (compressedSize === ZIP64_MARK || size === ZIP64_MARK || localOffset === ZIP64_MARK) {
+        return yield* new KinuError('unsupported', 'zip64 archives are not supported');
+      }
+
+      if (name.endsWith('/')) continue;
+      const problem = entryNameProblem(name);
+
+      if (problem !== null) return yield* new KinuError('bad_input', `zip entry ${JSON.stringify(name)} ${problem}`);
+
+      if (view.getUint32(localOffset, true) !== LOCAL_HEADER) return yield* new KinuError('bad_input', 'corrupt zip: local header expected');
+      const dataStart = localOffset + 30 + view.getUint16(localOffset + 26, true) + view.getUint16(localOffset + 28, true);
+      const raw = archive.subarray(dataStart, dataStart + compressedSize);
+
+      if (method === STORED) entries.push({ path: name, bytes: raw });
+      else if (method === DEFLATED) entries.push({ path: name, bytes: yield* Effect.promise(() => inflate(raw)) });
+      else return yield* new KinuError('unsupported', `zip entry ${JSON.stringify(name)} uses compression method ${String(method)}`);
     }
 
-    if (name.endsWith('/')) continue;
-    const problem = entryNameProblem(name);
-
-    if (problem !== null) throw new KinuError('bad_input', `zip entry ${JSON.stringify(name)} ${problem}`);
-
-    if (view.getUint32(localOffset, true) !== LOCAL_HEADER) throw new KinuError('bad_input', 'corrupt zip: local header expected');
-    const dataStart = localOffset + 30 + view.getUint16(localOffset + 26, true) + view.getUint16(localOffset + 28, true);
-    const raw = archive.subarray(dataStart, dataStart + compressedSize);
-
-    if (method === STORED) entries.push({ path: name, bytes: raw });
-    else if (method === DEFLATED) entries.push({ path: name, bytes: await inflate(raw) });
-    else throw new KinuError('unsupported', `zip entry ${JSON.stringify(name)} uses compression method ${String(method)}`);
-  }
-
-  return entries;
+    return entries;
+  });
 }
 
 const CRC_TABLE = new Uint32Array(256).map((_, n) => {
@@ -120,6 +128,10 @@ function crc32(bytes: Uint8Array): number {
 
 /** Stored entries, in the order given. */
 export function packZip(files: readonly ZipEntry[]): Uint8Array {
+  return settleSync(packed(files));
+}
+
+function packed(files: readonly ZipEntry[]): Effect.Effect<Uint8Array, KinuError> {
   const encoder = new TextEncoder();
   const locals: Uint8Array[] = [];
   const centrals: Uint8Array[] = [];
@@ -128,7 +140,7 @@ export function packZip(files: readonly ZipEntry[]): Uint8Array {
   for (const file of files) {
     const problem = entryNameProblem(file.path);
 
-    if (problem !== null) throw new KinuError('bad_input', `zip entry ${JSON.stringify(file.path)} ${problem}`);
+    if (problem !== null) return Effect.fail(new KinuError('bad_input', `zip entry ${JSON.stringify(file.path)} ${problem}`));
     const name = encoder.encode(file.path);
     const crc = crc32(file.bytes);
     const local = new Uint8Array(30 + name.byteLength);
@@ -176,5 +188,5 @@ export function packZip(files: readonly ZipEntry[]): Uint8Array {
     at += part.byteLength;
   }
 
-  return archive;
+  return Effect.succeed(archive);
 }

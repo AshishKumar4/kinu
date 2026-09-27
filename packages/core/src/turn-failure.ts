@@ -11,7 +11,7 @@ export const OVERFLOW_RETRY_EVENT = 'overflow_retry';
 
 export const OVERFLOW_RETRY_TEXT =
   "The previous turn failed because the request exceeded the model's context window. " +
-  'The history has been compacted — continue the interrupted work from where it stopped.';
+  'The history has been compacted: continue the interrupted work from where it stopped.';
 
 const CONTEXT_LENGTH_PATTERNS: readonly RegExp[] = [
   /context[ _-]?length/i,

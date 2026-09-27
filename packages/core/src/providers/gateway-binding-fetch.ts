@@ -4,7 +4,8 @@
 // `shell` is the only binding call returning a `Response`, which the SDK `fetch` seam needs.
 import { asFetchFunction } from './fetch-shim';
 import type { GatewayRunRequest, WorkersAIBinding } from './types';
-import { renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settle, settleSync } from '../obs/index';
 import { copyHeaders } from './fetch-shim';
 
 /** An AI Gateway HTTPS base parsed into what the binding addresses; `AI_GATEWAY_URL` is the source for both. */
@@ -23,16 +24,14 @@ export type GatewayTargetResult = GatewayTarget | { reason: string };
 /** Parse `AI_GATEWAY_URL` into the gateway the binding addresses. */
 export function parseGatewayTarget(raw: string | undefined): GatewayTargetResult {
   if (!raw) return { reason: 'AI_GATEWAY_URL var missing.' };
-  let url: URL;
 
-  try {
-    url = new URL(raw);
-  } catch (cause) {
-    return {
-      reason: `AI_GATEWAY_URL is not a URL: ${renderThrownChain({ cause: cause })}`,
-    };
-  }
+  return settleSync(Effect.match(Effect.try({ try: () => new URL(raw), catch: (cause) => ({ cause }) }), {
+    onFailure: (failed): GatewayTargetResult => ({ reason: `AI_GATEWAY_URL is not a URL: ${renderThrownChain(failed)}` }),
+    onSuccess: (url) => targetAt(url, raw),
+  }));
+}
 
+function targetAt(url: URL, raw: string): GatewayTargetResult {
   const [version, account, id] = url.pathname.split('/').filter(Boolean);
 
   if (version !== 'v1' || !account || !id) {
@@ -63,53 +62,46 @@ export function createGatewayBindingFetch(opts: {
     const method = (init?.method ?? request?.method ?? 'GET').toUpperCase();
 
     // Anything this transport cannot express is a wiring bug, not passthrough traffic.
-    const reject = (why: string): never => {
-      throw new Error(
-        `ai-gateway binding transport cannot serve ${method} ${rawURL} (${why}). `
-        + `It serves only its own gateway, ${target.origin}${target.prefix}.`,
+    const reject = (why: string): Effect.Effect<never> => Effect.die(new Error(
+      `ai-gateway binding transport cannot serve ${method} ${rawURL} (${why}). `
+      + `It serves only its own gateway, ${target.origin}${target.prefix}.`,
+    ));
+
+    return settle(Effect.gen(function* () {
+      const url = yield* Effect.try({ try: () => new URL(rawURL), catch: (cause) => ({ cause }) }).pipe(
+        Effect.catch((failed) => reject(`unparseable URL: ${renderThrownChain(failed)}`)),
       );
-    };
 
-    let url: URL;
+      // Compare normalized origin + pathname so a lexical variant cannot split provider/endpoint differently.
+      if (url.origin !== target.origin || !url.pathname.startsWith(target.prefix)) {
+        return yield* reject('outside the configured gateway prefix');
+      }
 
-    try {
-      url = new URL(rawURL);
-    } catch (cause) {
-      return reject(`unparseable URL: ${renderThrownChain({ cause: cause })}`);
-    }
+      if (method !== 'POST') return yield* reject('the gateway binding accepts POST only');
 
-    // Compare normalized origin + pathname so a lexical variant cannot split provider/endpoint differently.
-    if (url.origin !== target.origin || !url.pathname.startsWith(target.prefix)) {
-      return reject('outside the configured gateway prefix');
-    }
+      const rest = url.pathname.slice(target.prefix.length);
+      const slash = rest.indexOf('/');
 
-    if (method !== 'POST') return reject('the gateway binding accepts POST only');
+      if (slash < 1) return yield* reject('no provider/endpoint in the path');
 
-    const rest = url.pathname.slice(target.prefix.length);
-    const slash = rest.indexOf('/');
+      const bodyText = yield* Effect.promise(() => readBodyText(request, init));
 
-    if (slash < 1) return reject('no provider/endpoint in the path');
+      if (bodyText === undefined) return yield* reject('no request body');
 
-    const bodyText = await readBodyText(request, init);
+      const query = yield* Effect.try({ try: (): GatewayRunRequest['query'] => JSON.parse(bodyText), catch: (cause) => ({ cause }) }).pipe(
+        Effect.catch((failed) => reject(`non-JSON request body: ${renderThrownChain(failed)}`)),
+      );
 
-    if (bodyText === undefined) return reject('no request body');
-    let query: unknown;
+      const signal = init?.signal ?? request?.signal ?? undefined;
 
-    try {
-      query = JSON.parse(bodyText);
-    } catch (cause) {
-      return reject(`non-JSON request body: ${renderThrownChain({ cause: cause })}`);
-    }
-
-    const signal = init?.signal ?? request?.signal ?? undefined;
-
-    return binding.gateway(target.id).run({
-      provider: rest.slice(0, slash),
-      // The query string belongs to the endpoint.
-      endpoint: rest.slice(slash + 1) + url.search,
-      headers: collectHeaders(request, init),
-      query,
-    }, signal ? { signal } : {});
+      return yield* Effect.promise(() => binding.gateway(target.id).run({
+        provider: rest.slice(0, slash),
+        // The query string belongs to the endpoint.
+        endpoint: rest.slice(slash + 1) + url.search,
+        headers: collectHeaders(request, init),
+        query,
+      }, signal ? { signal } : {}));
+    }));
   });
 }
 

@@ -1,0 +1,9 @@
+{
+  "//": "gate:effect-diagnostics runs @effect/tsgo over this project and fails unless planted.ts's floating effect is reported. It extends the base config so the Effect plugin entry it proves is the one every project inherits.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["planted.ts"]
+}

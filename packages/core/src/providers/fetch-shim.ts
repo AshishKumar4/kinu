@@ -1,3 +1,6 @@
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
+
 // The AI SDK's `fetch` type includes Bun's `preconnect`; this no-op stub satisfies it and is never called.
 export function asFetchFunction(
   fn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
@@ -11,14 +14,18 @@ function isHeaderIterable(value: HeadersInit): value is HeadersInit & Iterable<I
 
 /** Every HeadersInit form, past Bun's narrower `Headers` constructor. */
 export function copyHeaders(init: HeadersInit | undefined): Headers {
+  return settleSync(copied(init));
+}
+
+function copied(init: HeadersInit | undefined): Effect.Effect<Headers> {
   const headers = new Headers();
 
-  if (init === undefined) return headers;
+  if (init === undefined) return Effect.succeed(headers);
 
   if (init instanceof Headers) {
     for (const [name, value] of init) headers.append(name, value);
 
-    return headers;
+    return Effect.succeed(headers);
   }
 
   if (isHeaderIterable(init)) {
@@ -26,16 +33,16 @@ export function copyHeaders(init: HeadersInit | undefined): Headers {
       const [name, value] = pair;
 
       if (name === undefined || value === undefined) {
-        throw new Error('header pair must contain a name and value');
+        return Effect.die(new Error('header pair must contain a name and value'));
       }
 
       headers.append(name, value);
     }
 
-    return headers;
+    return Effect.succeed(headers);
   }
 
   for (const [name, value] of Object.entries(init)) headers.append(name, value);
 
-  return headers;
+  return Effect.succeed(headers);
 }
