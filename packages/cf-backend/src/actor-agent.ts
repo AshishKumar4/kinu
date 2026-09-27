@@ -1320,6 +1320,7 @@ export abstract class ActorAgent extends Agent<Env> {
       // has its own terminal claim; see {@link turnMayStillRun}.
       turnIsLive: (turnId) => this.turnMayStillRun(turnId),
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
+      settled: () => this.restWhenIdle(),
     });
 
     return this._terminalTransitions;
@@ -1392,7 +1393,17 @@ export abstract class ActorAgent extends Agent<Env> {
     }
   }
 
-  /** One soonest-wins row per actor; returns the surviving row's id so a caller can release it. */
+  /** Nothing owed: a turn's arms go. */
+  private async restWhenIdle(): Promise<void> {
+    for (const row of await this.listSchedules()) {
+      if (row.callback !== TERMINAL_RETRY_CALLBACK || this.runningWakeRows.has(row.id)) continue;
+
+      if (this._chatLoop?.pumping === true || this.owedWorkExists()) return;
+      await this.cancelSchedule(row.id);
+    }
+  }
+
+  /** One soonest-wins row per actor; returns its id. */
   protected scheduleTerminalRetry(atMs: number, pace?: WakePace): Promise<string> {
     return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs, pace);
   }
@@ -1851,7 +1862,10 @@ export abstract class ActorAgent extends Agent<Env> {
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
-          quiet: () => { this.overviewChanged(); },
+          quiet: () => {
+            this.overviewChanged();
+            this.detachOwned(() => this.restWhenIdle());
+          },
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
             config: this.config,

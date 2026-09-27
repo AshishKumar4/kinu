@@ -8,11 +8,12 @@ import { openWorkspaceMainActor, recoveryBackoffMs } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
-  hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness, tapDiagnostics, until,
+  catalogTurn, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness, tapDiagnostics, until,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { present } from '@kinu.run/test-utils';
+import { answeringGateway } from './helpers/platform-gateway';
 
 /** Journal, job registry and search ledger are actor-private: seeds must carry the owner the agent resolves. */
 function harnessActorId(db: Database): string {
@@ -633,6 +634,18 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.terminalRetryPass();
 
     expect(await agent.listSchedules()).toEqual([]);
+  });
+
+  test('a turn that settles with nothing owed leaves no wake armed', async () => {
+    // Rest: the turn-open arm and the terminal sequence's pre-attempt arm both go once nothing is owed, so no wake
+    // follows the turn only to find nothing (S4, kinu-logs/onstart/DESIGN.md).
+    const workspace = gatewayWorkspace(answeringGateway('done'));
+    await workspace.agent.activateActor();
+
+    await catalogTurn(workspace.agent, 'a turn with nothing after it');
+    await joinHarnessFibers();
+
+    expect(await workspace.agent.listSchedules()).toEqual([]);
   });
 
   test('a tick that cannot re-arm fails, so the runtime redelivers it', async () => {
