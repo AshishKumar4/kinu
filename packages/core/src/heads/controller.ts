@@ -60,7 +60,7 @@ export interface HeadJournalPort {
   recordSplit(rootId: HeadId, rationale: string, spawnedAt: number): void | Promise<void>;
   insertSpawn(input: HeadInput): void | Promise<void>;
   recordReport(report: HeadReport): void | Promise<void>;
-  cacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): void | Promise<void>;
+  cacheMerge(rootId: HeadId, narrative: string): void | Promise<void>;
 }
 
 /**
@@ -296,7 +296,7 @@ export class HeadController {
       headScores,
     });
 
-    if (opts.parentHeadId === null) await this.journal.cacheMerge(rootId, mergeResult, strategy);
+    if (opts.parentHeadId === null) await this.journal.cacheMerge(rootId, mergeResult.mergedNarrative);
     opts.onPhase?.({
       kind: 'merge',
       rootId,
