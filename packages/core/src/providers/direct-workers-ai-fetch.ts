@@ -4,7 +4,7 @@ import { JsonObjectSchema, jsonObjectElements, readJsonObjectText, type JsonObje
 import { asFetchFunction } from './fetch-shim';
 import { toolCallIdFor } from './tool-call-id';
 import { withRateLimitRetry, type RateLimitRetryOptions } from './rate-limit-retry';
-import { diagnostics, renderCauseChain, toKinuError, tolerate } from '../obs/index';
+import { KinuError, diagnostics, renderCauseChain, toKinuError, tolerate } from '../obs/index';
 import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
 import { createCachedUsageRepair } from './stream-usage-repair';
@@ -87,6 +87,9 @@ function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis
 
     if (body === null) return errorResponse(400, 'the request body is not JSON object text');
     const route = v.parse(ChatCompletionRouteSchema, { model: body.model, stream: body.stream });
+    const messages = jsonObjectElements(body.messages);
+
+    if (body.messages !== undefined && messages === null) throw new KinuError('bad_input', 'the request `messages` is not a list of objects');
     const signal = request?.signal ?? init?.signal;
 
     const options: DirectWorkersAIRunOptions = {
@@ -102,7 +105,7 @@ function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis
     let answer: Response | ReadableStream<Uint8Array> | JsonObject;
 
     try {
-      answer = await binding.run(route.model, bindingInputs(body, route), options);
+      answer = await binding.run(route.model, bindingInputs(body, route, messages), options);
     } catch (caught) {
       const failure = toKinuError({
         doing: `Workers AI binding inference for ${route.model}`,
@@ -125,10 +128,9 @@ function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis
 
 /** Tool-call ids are forwarded as-is: the upstream pairs on equality and re-keying would split pairs.
  *  Null `content` becomes `''` because the binding's message schema rejects null (AiError on tool-only turns). */
-function bindingInputs(body: JsonObject, route: ChatCompletionRoute): JsonObject {
+function bindingInputs(body: JsonObject, route: ChatCompletionRoute, messages: readonly JsonObject[] | null): JsonObject {
   const inputs: JsonObject = { ...body, stream: route.stream };
   delete inputs.model;
-  const messages = jsonObjectElements(body.messages);
 
   if (messages !== null) inputs.messages = messages.map(withoutNullContent);
 
