@@ -81,6 +81,7 @@ export interface EffectClaimDeps {
   readonly actor: ActorHandle;
   /** Read at call time: a toolset is built once and used across many turns. */
   readonly turnId: () => string;
+  readonly durable: (callId: string, signal?: AbortSignal) => Promise<void>;
 }
 
 /** Wraps every `claimed` tool; `safe` tools pass through untouched. Anything not proven safe is claimed. */
@@ -115,11 +116,13 @@ function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaim
         digest: argumentDigest({ tool: name, args: projectJsonValue({ value: input }) }),
       };
 
+      // Only a model's call streams a part; a program's carries no step messages.
+      if (options.messages.length > 0) await deps.durable(options.toolCallId, options.abortSignal);
       const claim = claimToolEffect(deps.sql, deps.actor, key);
 
       if (claim.kind === 'settled') return claim.result;
 
-      if (claim.kind === 'indeterminate') throw indeterminateEffect(name, key);
+      if (claim.kind === 'indeterminate') throw new KinuError('denied', indeterminateEffectMessage(name, key.callId));
       const output = await execute(input, options);
       // Durable before published: the row must exist before the caller reads this value.
       settleToolEffect(
@@ -131,12 +134,26 @@ function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaim
   };
 }
 
-/** `denied`: a replay could repeat an effect, so the harness declined. */
-function indeterminateEffect(name: string, key: ToolEffectKey): KinuError {
-  return new KinuError(
-    'denied',
-    `${name} was already started once in this turn and its outcome was never recorded, `
+/** A replay could repeat an effect, so the harness declines. */
+function indeterminateEffectMessage(name: string, callId: string): string {
+  return `${name} was already started once in this turn and its outcome was never recorded, `
     + `so it may or may not have taken effect. It is not being run again. Check the state `
-    + `it would have changed before calling it once more; the call is ${key.callId}.`,
-  );
+    + `it would have changed before calling it once more; the call is ${callId}.`;
+}
+
+export type LostToolCall =
+  | { readonly state: 'settled'; readonly result: JsonValue }
+  | { readonly state: 'claimed'; readonly refusal: string };
+
+export function lostToolCall(sql: SqlExecutor, actor: ActorHandle, call: { readonly toolCallId: string; readonly toolName: string }): LostToolCall | null {
+  actor.assertCurrent();
+
+  const row = sql<{ result_json: string | null }>`SELECT result_json FROM tool_effect_claims
+    WHERE actor_id=${actor.actorId} AND normalized_call_id=${call.toolCallId} LIMIT 1`[0];
+
+  if (row === undefined) return null;
+
+  return row.result_json === null
+    ? { state: 'claimed', refusal: indeterminateEffectMessage(call.toolName, call.toolCallId) }
+    : { state: 'settled', result: parseJsonValue(row.result_json) };
 }

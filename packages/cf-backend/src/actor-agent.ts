@@ -2391,6 +2391,7 @@ export abstract class ActorAgent extends Agent<Env> {
           actor: this.actorHandle(),
           sql: this.rt.storage.sql,
           turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID,
+          durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
         clamp: {
           vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
@@ -3786,6 +3787,7 @@ export abstract class ActorAgent extends Agent<Env> {
           turnId: claimScope === undefined
             ? () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID
             : () => claimScope,
+          durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
         // The sandbox declares the finished native surface, so core builds it last over all other tools.
         codemode: ({ native }) => this.getCodemodeToolFactory(mode, profileKey).toolFor(native),

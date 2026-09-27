@@ -1186,6 +1186,7 @@ export class LocalAgentSession {
         sql: this.rt.storage.sql,
         actor: this.rt.actor,
         turnId: () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
+        durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
       },
       clamp: {
         vfs: this.rt.storage.vfs,
@@ -2962,7 +2963,10 @@ export class LocalAgentSession {
       rt: this.rt,
       workMode: mode,
       history: this.stores.history,
-      effectClaims: { sql: this.rt.storage.sql, actor: this.rt.actor, turnId },
+      effectClaims: {
+        sql: this.rt.storage.sql, actor: this.rt.actor, turnId,
+        durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
+      },
       // Shell approval lives at the execution seam (execution/approval.ts), not per toolset.
       // Budget state lives on the accumulator so this model-lifetime toolset reads the live turn.
       contextBudget: this.actorSession.orchestrator.acc.context,

@@ -78,7 +78,7 @@ function createTestCodemodeBuilder(
 
 /** An actor surface over `rt` whose sandbox is `codemode`. */
 function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'craftedToolExecute' | 'codemode'>) {
-  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' }, ...deps, history: storesFor(rt).history });
+  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() }, ...deps, history: storesFor(rt).history });
 }
 
 function requiredCraftedTool(tools: CraftedToolSet, name: string) {

@@ -811,6 +811,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         actor: turn.actor.handle,
         sql: turn.runtime.storage.sql,
         turnId: () => turn.turnId,
+        durable: (callId, signal) => turn.actor.session.durableCall(callId, signal),
       },
       codemode: ({ native }) => factory.toolFor(native),
       craftedToolExecute: null,

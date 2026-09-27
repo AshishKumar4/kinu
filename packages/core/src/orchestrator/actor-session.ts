@@ -39,6 +39,7 @@ import { SessionHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
 import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
+import { lostToolCall } from '../tools/effect-claim';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
 
 /** A hosted actor shares workspace priorities, but delivers feedback to itself. */
@@ -508,6 +509,12 @@ export class ActorSession {
     });
   }
 
+  private liveStream: SessionStream | null = null;
+
+  durableCall(callId: string, signal?: AbortSignal): Promise<void> {
+    return this.liveStream?.durable(callId, signal) ?? Promise.resolve();
+  }
+
   private async run(
     lease: ActorTurnLease,
     input: ActorExecutionInput,
@@ -537,6 +544,7 @@ export class ActorSession {
 
       durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
       const stream = durableOutput;
+      this.liveStream = stream;
       const events = this.turnEvents({ lease, active, profile, input, trace, program, claim, stream, tally });
 
       for await (const event of events) {
@@ -553,6 +561,7 @@ export class ActorSession {
       await emit({ type: 'error', message: renderThrownChain({ cause }) });
     } finally {
       active.phase = 'settling';
+      this.liveStream = null;
       await this.settleOutput(active, durableOutput);
     }
 
@@ -629,6 +638,7 @@ export class ActorSession {
       assertActive: input.assertActive,
       scaffoldStreamOptions: input.scaffoldStreamOptions,
       chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
+        lostToolCall: (call) => lostToolCall(this.runtime.storage.sql, this.runtime.actor, call),
         measureContext: true, trace: turn.trace,
         persistStreamPart: part => stream.nativePart(part),
         persistStep: messages => stream.nativeStep(messages),
