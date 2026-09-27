@@ -197,6 +197,30 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(held(db, seededFibers)).toBe(0);
   });
 
+  test('a quiet turn keeps the wake a truncated sweep still needs', async () => {
+    // Unfinished maintenance is found only by running a pass, so a turn settling over it must not take its wake.
+    const workspace = gatewayWorkspace(answeringGateway('done'));
+    const { agent, db } = workspace;
+    await agent.listSchedules();
+    db.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
+      id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, snapshot TEXT, created_at INTEGER NOT NULL)`);
+
+    const insert = db.prepare(`INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)`);
+    const expired = Date.now() - 25 * 60 * 60 * 1000;
+
+    for (let i = 0; i < 4096 + 40; i++) insert.run(`fiber-${i}`, 'bg:stale', expired);
+
+    await agent.activateActor();
+    await until(() => wakeArmed(db), 'the truncated fiber sweep armed the maintenance wake');
+
+    await catalogTurn(agent, 'a turn over an unfinished sweep');
+    await joinHarnessFibers();
+
+    expect(wakeArmed(db)).toBe(true);
+    await agent.terminalRetryPass();
+    expect(held(db, `SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'fiber-%'`)).toBe(0);
+  });
+
   test('a hired child shares the workspace wake, and its backlog drains through it', async () => {
     // Hiring a child must not create a second wake: the root activation drains the shared database.
     const workspace = orchestratorHarness();

@@ -1340,11 +1340,17 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private readonly runningWakeRows = new Set<string>();
 
+  private wakeArms = 0;
+
+  /** Set by the last maintenance pass. */
+  protected maintenanceUnfinished = false;
+
   /**
    * Soonest-wins arm of one wake row per `callback`. A due row counts (it fires now) unless its tick is
    * running, since the SDK deletes that one. Re-reads after its write so racers converge.
    */
   protected async armWakeRow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
+    this.wakeArms += 1;
     const nowSec = Math.floor(Date.now() / 1000);
     // Round up: the SDK stores whole seconds, and waking early would re-arm and busy-spin the alarm.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
@@ -1395,11 +1401,20 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Nothing owed: a turn's arms go. */
   private async restWhenIdle(): Promise<void> {
-    for (const row of await this.listSchedules()) {
-      if (row.callback !== TERMINAL_RETRY_CALLBACK || this.runningWakeRows.has(row.id)) continue;
+    const arms = this.wakeArms;
+    let cancelled = false;
 
-      if (this._chatLoop?.pumping === true || this.owedWorkExists()) return;
-      await this.cancelSchedule(row.id);
+    try {
+      for (const row of await this.listSchedules()) {
+        if (row.callback !== TERMINAL_RETRY_CALLBACK || this.runningWakeRows.has(row.id)) continue;
+
+        if (this._chatLoop?.pumping === true || this.owedWorkExists() || this.wakeArms !== arms) return;
+        cancelled = true;
+        await this.cancelSchedule(row.id);
+      }
+    } finally {
+      // A concurrent arm may keep a cancelled row.
+      if (cancelled && this.wakeArms !== arms) await this.scheduleTerminalRetry(Date.now());
     }
   }
 
@@ -1436,6 +1451,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // so a pass that keeps answering unfinished settles at the ceiling, not a one-second loop.
     const sweepsUnfinished = this.maintenanceSweeps();
     const recoveryUnfinished = await this.maintenanceWork();
+    this.maintenanceUnfinished = sweepsUnfinished || recoveryUnfinished;
     await this.owedDeliveryWork();
     // Re-entered here because `maintenanceWork` is activation-scoped: later ticks in a warm
     // isolate never reach the job sweep, and a deferred job's wake would find nothing to recover.
@@ -1473,7 +1489,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected owedWorkExists(): boolean {
-    return this.owedUntimedWork() || this.nextOwedAt() !== null;
+    return this.maintenanceUnfinished || this.owedUntimedWork() || this.nextOwedAt() !== null;
   }
 
   /** While true, the tick keeps its lap-paced row. Base owns no rosters; subclasses override. */

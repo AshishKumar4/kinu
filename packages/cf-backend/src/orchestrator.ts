@@ -2923,9 +2923,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // An unborn workspace owes nothing: its first claim writes it.
     if (this.storageRefusal !== undefined || this.nimbusSibling || !this.workspaceBorn()) return;
     this.rependDeadActivationLeases();
-    // Every budgeted sweep via the alarm-frame seam; row-budgeted because this is the init gate,
-    // and a truncated pass is drained by the wake below in alarm frames.
-    const sweepsTruncated = this.maintenanceSweeps();
+    // Row-budgeted (init gate); a truncated pass drains under the wake below.
+    this.maintenanceUnfinished = this.maintenanceSweeps();
     // An activation is the only moment a workspace whose wake row was lost can notice.
     // Detached because arming a schedule row is I/O and this method runs inside the init gate.
     this.detachOwned(async () => {
@@ -2940,7 +2939,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // The activation only classifies and arms a wake; all dispatch runs under that durable wake,
     // because an activation launches no external work, awaited or detached.
-    if (sweepsTruncated || this.owedWorkExists()) {
+    if (this.owedWorkExists()) {
       this.armOwedWorkWake('reconcile');
     }
 
