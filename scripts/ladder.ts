@@ -992,7 +992,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1029,6 +1029,8 @@ export const LADDER: readonly Gate[] = [
     // self-tests: it proves the condition REVIEWED_ADVISORIES accepts extract-zip on,
     // and shipped with e20573386 claimed by no tier. Measured solo: 0.8s for 3 tests.
     // The row stays 24s.
+    // `error-model.test.ts` joins 2026-09-23: the red and green proofs of the
+    // error-model ratchet. Measured solo: 0.2s for 5 tests. The row stays 24s.
     seconds: 24,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
@@ -2108,6 +2110,41 @@ export const LADDER: readonly Gate[] = [
       why: 'its subject is the index, the test files the commit being made changes, which no hash over the tree '
         + 'stands for.',
     },
+  },
+  {
+    run: 'bun run gate:error-model',
+    label: 'Error-model ratchet',
+    // Measured 2026-09-23 on the 24-thread box under load 29: 1.30/1.32/1.35s
+    // wall, 690 MB peak, over 1,087 files. One AST walk per product file.
+    tier: 'commit',
+    seconds: 1.4,
+    catches: 'a legacy failure mechanism growing while the Effect migration removes them: a '
+      + '`throw`, a `catch`, a promise rejection handler, an `{ ok }` or `{ success }` literal '
+      + 'or type, or an `Error` subclass, counted per product file and mechanism. A key above '
+      + 'its number is red, a file the lock never held starts at zero, and `--lock` only '
+      + 'lowers a number, so each migration slice shows its sites falling.',
+    blind: 'a failure spelled as a string status, a returned `{ error }` with no `ok` field, '
+      + 'tests, scripts and tools, and a mechanism moved into a declared boundary file. All are '
+      + 'printed on the gate\'s green path.',
+    inputs: { kind: 'derived' },
+  },
+  {
+    run: 'bun run gate:effect-diagnostics',
+    label: 'Effect diagnostics',
+    // Measured 2026-09-23 on the 24-thread box under load 34: 21.3s wall, 38
+    // CPU-s, over 1,104 files in the two projects that import `effect`. The
+    // Effect language service reads every node's type, which is why it costs
+    // about 17 times a plain `tsc` of the same project, and why it runs at push.
+    tier: 'push',
+    seconds: 21.3,
+    catches: 'a floating effect: `Effect.succeed(x);` or any effect built and dropped without '
+      + '`yield*` compiles and runs nothing. The pinned @effect/tsgo reports it in every '
+      + 'typechecked project that imports `effect`, and the gate is red unless it also reports '
+      + 'the one planted in scripts/fixtures/effect-diagnostics, so a bump or a lost `plugins` '
+      + 'entry cannot turn the check off in silence.',
+    blind: 'warning- and suggestion-severity diagnostics; a project outside `bun run typecheck`; '
+      + 'a project that imports no `effect`. All are printed on the gate\'s green path.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test --timeout=0 scripts/hammer.test.ts scripts/mutation-fences.test.ts',

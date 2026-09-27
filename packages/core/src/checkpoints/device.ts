@@ -2,7 +2,8 @@
 // unattached case is checked first because `kinu connect` cannot fix a workspace with no owner.
 import * as v from 'valibot';
 import { isDeviceAmbiguityError, isDeviceNotConnectedError, isWorkspaceUnattachedError, WORKSPACE_HAS_NO_OWNER } from '../execution/device-tunnel';
-import { renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settle } from '../obs/index';
 import type { UserCaller } from '../safety/workspace-capability';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import {
@@ -26,6 +27,18 @@ const DEVICE_LIST_LIMIT_MAX = 500;
 
 const DEVICE_LIST_LIMIT_DEFAULT = 50;
 
+const isHubRefusal = (failed: { cause: unknown }): boolean =>
+  isWorkspaceUnattachedError(failed) || isDeviceNotConnectedError(failed) || isDeviceAmbiguityError(failed);
+
+function unavailableFor(failed: { cause: unknown }): CheckpointAvailability {
+  if (isWorkspaceUnattachedError(failed)) return { available: false, reason: WORKSPACE_HAS_NO_OWNER };
+
+  if (isDeviceNotConnectedError(failed)) return { available: false, reason: CHECKPOINTS_NO_DEVICE };
+
+  // Several live machines: report the hub's message (it names them), never silently pick one.
+  return { available: false, reason: renderThrownChain(failed) };
+}
+
 export function deviceFileCheckpoints(input: DeviceCheckpointsInput): FileCheckpointReads {
   const call = async <Schema extends v.GenericSchema>(method: string, params: JsonValue[], schema: Schema): Promise<v.InferOutput<Schema>> => {
     const { stub, caller } = await input.hub();
@@ -35,23 +48,13 @@ export function deviceFileCheckpoints(input: DeviceCheckpointsInput): FileCheckp
   };
 
   return {
-    async status(): Promise<CheckpointAvailability> {
-      if (!input.hasOwner()) return { available: false, reason: 'agent has no owner user yet' };
+    status(): Promise<CheckpointAvailability> {
+      if (!input.hasOwner()) return Promise.resolve({ available: false, reason: 'agent has no owner user yet' });
 
-      try {
-        return await call('checkpointStatus', [], CheckpointAvailabilitySchema);
-      } catch (cause) {
-        if (isWorkspaceUnattachedError({ cause })) return { available: false, reason: WORKSPACE_HAS_NO_OWNER };
-
-        if (isDeviceNotConnectedError({ cause })) {
-          return { available: false, reason: CHECKPOINTS_NO_DEVICE };
-        }
-
-        // Several live machines: report the hub's message (it names them), never silently pick one.
-        if (isDeviceAmbiguityError({ cause })) return { available: false, reason: renderThrownChain({ cause }) };
-
-        throw cause;
-      }
+      return settle(Effect.tryPromise({ try: () => call('checkpointStatus', [], CheckpointAvailabilitySchema), catch: (cause) => ({ cause }) }).pipe(
+        Effect.catchIf(isHubRefusal, (failed) => Effect.succeed(unavailableFor(failed))),
+        Effect.catch((failed) => Effect.die(failed.cause)),
+      ));
     },
     list: (opts) => call(
       'checkpointList',

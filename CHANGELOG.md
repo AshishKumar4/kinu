@@ -20,6 +20,12 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- The Effect diagnostic gate resolves its compiler from the pinned package. Dependency analysis includes its executable floating-effect fixture.
+
+- Credential key configuration failures are `unavailable`; unusable credential records, mismatched credential kinds and unretainable slate entries are `bad_input`. Unconfigured checkpoint reads and completion-only model streaming are `unsupported`. Synchronous refusals remain synchronous, and decryption failures retain their cause.
+
+- JSON projection and direct Workers AI binding failures now run through Effect at their public boundaries. JSON fallback values and cancellation errors are unchanged.
+
 - **A plan waiting for review no longer locks the conversation.** The composer no longer switches to Plan when a plan arrives, and Auto stays available: a message sent in Auto runs as a build turn, and the plan waits for its own decision. Background turns (event drains, jobs) keep their own mode. A plan can now be dismissed beside Approve and Request changes on the web, or with `/plan dismiss` in the CLI, at any point before it is carried out: a dismissed plan starts no turn, and a revision already running is stopped and files no new plan. In the TUI, where a message names no mode, a pending plan still holds messages in Plan until it is decided or dismissed.
 - **An error answer no longer quotes its internal cause.** Every HTTP route, the MCP door and the terminal routes answer a failure with its class and a message written for you (`{ error, code }`); the platform wording, file paths and tokens a cause chain can hold go to the logs only. A refusal of your input still names the field and what was wrong; an internal failure that used to answer 400 now answers with its own class (usually 500).
 - **Every page and socket outside `/api` is routed by one Hono app, and each Durable Object's forwarded paths by its own.** Same paths, methods, gates and answers; a path with a malformed escape (`/agents/orchestrator-agent/%ZZ`) now gets a JSON 500 instead of the platform error page.

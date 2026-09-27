@@ -2,7 +2,9 @@
  * What a slate could do if a viewer opened it: each grantable member classified read or mutating, with
  * per-visibility risk text. `app` bindings extend the walk; `slates` is the walk order.
  */
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import {
   memberEffect, MEMORY_MEMBER_EFFECTS, TASKS_MEMBER_EFFECTS, toolActionEffect, toolMembers,
   TOOL_ACTION_EFFECTS, WEB_MEMBER_EFFECTS,
@@ -244,10 +246,14 @@ export function slateCapabilityGraph(input: {
   readonly workspace: string;
   readonly catalog: SlateBindingCatalog;
 }): SlateCapabilityGraph {
+  return settleSync(capabilityGraph(input));
+}
+
+function capabilityGraph(input: Parameters<typeof slateCapabilityGraph>[0]): Effect.Effect<SlateCapabilityGraph, KinuError> {
   const { slate, workspace, catalog } = input;
   const root = Object.hasOwn(catalog.slates, slate) ? catalog.slates[slate] : undefined;
 
-  if (root === undefined) throw new KinuError('missing', `No slate named ${slate}`);
+  if (root === undefined) return Effect.fail(new KinuError('missing', `No slate named ${slate}`));
   const bindings: SlateGraphBinding[] = [];
   const slates: string[] = [];
   const walked = new Set<string>();
@@ -266,7 +272,7 @@ export function slateCapabilityGraph(input: {
 
   walk(slate, root);
 
-  return { slate, slates, bindings };
+  return Effect.succeed({ slate, slates, bindings });
 }
 
 /** Every read member plus each approved mutating member; approving an unknown or read member refuses. */
@@ -274,6 +280,10 @@ export function cutShareGrant(
   graph: SlateCapabilityGraph,
   approved: readonly { slate: string; binding: string; member: string }[],
 ): ShareGrant {
+  return settleSync(shareGrant(graph, approved));
+}
+
+function shareGrant(graph: SlateCapabilityGraph, approved: Parameters<typeof cutShareGrant>[1]): Effect.Effect<ShareGrant, KinuError> {
   const members: ShareGrantMember[] = [];
   const seen = new Set<string>();
 
@@ -297,13 +307,13 @@ export function cutShareGrant(
       ?.members.find((candidate) => candidate.member === entry.member);
 
     if (member === undefined || member.effect !== 'mutate') {
-      throw new KinuError('bad_input', `${entry.binding}.${entry.member} is not a mutating member of slate ${entry.slate}`);
+      return Effect.fail(new KinuError('bad_input', `${entry.binding}.${entry.member} is not a mutating member of slate ${entry.slate}`));
     }
 
     admit(entry.slate, entry.binding, entry.member, 'mutate');
   }
 
-  return { slates: [...graph.slates], members };
+  return Effect.succeed({ slates: [...graph.slates], members });
 }
 
 export function grantAdmits(grant: ShareGrant, slate: string, binding: string, member: string): ShareGrantMember | null {
