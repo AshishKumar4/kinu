@@ -13,6 +13,7 @@ import {
 import type { ActorHandle } from '../../identity/actor-handle';
 import { dedupeKeyForDescriptor } from './dedupe';
 import { wakesADrain } from './drain';
+import { EvolutionHelperStore } from '../../identity/evolution-helpers';
 import { deriveFields } from './trust';
 import { applyVisibilityForStorage } from './visibility';
 import { ulid } from './ulid';
@@ -297,10 +298,13 @@ export function dismissOrphanedAssignments(
 export class EventLog {
   private readonly actorId: string;
 
+  private readonly helpers: EvolutionHelperStore;
+
   /** `actorId` is captured once so a re-pointed handle cannot move the log; `assertCurrent()` runs
    *  before every statement so a retired actor stops at once. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
+    this.helpers = new EvolutionHelperStore(sql, actor);
   }
 
   /** Without `caused_by` the event roots its own trace. */
@@ -470,16 +474,21 @@ export class EventLog {
    */
   nextPendingDrainAt(now = Date.now()): number | null {
     const drainableNow = this.pending({ resolve_deferred: { now, phase: 'idle' } })
-      .some(wakesADrain);
+      .some((event) => wakesADrain(event, this.isEvolutionReport));
 
     if (drainableNow) return now;
 
     const scheduled = this.deferredRows()
-      .filter(({ event }) => wakesADrain(event))
+      .filter(({ event }) => wakesADrain(event, this.isEvolutionReport))
       .flatMap(({ cond }) => cond.kind === 'at' && cond.ts > now ? [cond.ts] : []);
 
     return scheduled.length === 0 ? null : Math.min(...scheduled);
   }
+
+  readonly isEvolutionReport = (event: KinuEvent): boolean =>
+    event.variant === 'subordinate_report'
+    && (event.payload_visibility === 'full' || event.payload_visibility === 'redact')
+    && this.helpers.has(event.payload.from_subordinate);
 
   markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number, now = Date.now()): void {
     this.actor.assertCurrent();

@@ -173,6 +173,7 @@ const temporaryPortStub = {
     elapsed_ms: 1,
   }),
   settle: () => false,
+  reclaim: () => null,
 };
 
 function makeTeam(

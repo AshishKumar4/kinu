@@ -389,6 +389,11 @@ function terminalRefusal(failure: { doing: string; cause: unknown }): string {
   return publicText(error);
 }
 
+interface HostedTarget {
+  readonly handle: ActorHandle;
+  readonly entry: NonNullable<ReturnType<SubordinateRosterStore['get']>>;
+}
+
 export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly addressedName: string;
 
@@ -653,14 +658,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       modelOperations: this.modelOperations,
       pricing: (spec) => this.modelCatalog.pricing(spec),
       hostedModel: (actor) => this.hostedModelOf(actor),
-      broadcast: (actorId, event) => {
-        // Stamped with the actor for the pane, and addressed to it so a subordinate's cards
-        // stay off other sockets. An actor the directory no longer names has no pane.
-        const name = this.actorHost().describe(actorId)?.name;
-
-        if (name === undefined) return;
-        this.broadcastToActor(name, JSON.stringify({ ...event, actorId }));
-      },
+      broadcast: (actorId, event) => { this.broadcastToActor(actorId, JSON.stringify({ ...event, actorId })); },
       turnClaimChanged: () => { this.overviewChanged(); },
       enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
       // Use the reference the host issued, never one rebuilt from an id: the root's parent is
@@ -1229,7 +1227,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const swept = await drainAssignments(log, {
           now, budget, staleMs: STALE_EVENT_DELIVERY_MS,
           run: async (task) => {
-            const room = this.chatRooms.hostedRoom(record.name);
+            const room = this.chatRooms.hostedRoom(record.actorId);
             const answerId = crypto.randomUUID();
 
             await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
@@ -1864,25 +1862,55 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
 
-  /**
-   * Answers whether this workspace hosts a chat-reachable actor under this logical name; never a
-   * storage key. Checks both the directory (exists, belongs here) and the roster (not dismissed;
-   * dismissed keeps rows, not chat).
-   */
-  async resolveHostedActorRoute(name: string): Promise<{ ok: true } | Refusal> {
+  /** The edge's one resolution of a name or `/`-joined path to the actor id everything downstream keys on. */
+  async resolveHostedActorRoute(target: string): Promise<{ ok: true; actorId: string } | Refusal> {
     try {
       if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
-      const row = this.subordinateRoster.get(name);
+      const actor = this.hostedTarget(target);
 
-      if (!row || row.status === 'dismissed' || !row.actorReference) throw new KinuError('missing', 'The actor is not available for client execution.');
-      const actor = this.workspaceActors().apply(this.actorHandle(), [], { action: 'validate', name, reference: row.actorReference });
+      if (actor === null) throw new KinuError('missing', 'The actor is not available for client execution.');
 
-      if (actor.kind !== 'subordinate') throw new KinuError('denied', 'The roster name does not identify a chat-reachable actor.');
-
-      return { ok: true };
+      return { ok: true, actorId: actor.handle.actorId };
     } catch (cause) {
       return refusalOf(toKinuError({ doing: 'resolving a hosted actor chat path', cause, otherwise: 'io' }));
     }
+  }
+
+  /** Each step a live subordinate its parent's roster still employs: a dismissal keeps rows, not chat. */
+  private hostedTarget(target: string): HostedTarget | null {
+    const directory = this.workspaceActors();
+    let parent = this.actorHandle();
+    let found: HostedTarget | null = null;
+
+    for (const name of target.split('/')) {
+      const handle = directory.resolveChild(parent, name);
+      const entry = handle === null ? null : this.rosterOf(parent).get(name);
+
+      if (handle === null || entry === null || entry.status === 'dismissed' || entry.actorReference?.actorId !== handle.actorId) return null;
+
+      if (directory.retained(handle.actorId)?.kind !== 'subordinate') return null;
+      found = { handle, entry };
+      parent = handle;
+    }
+
+    return found;
+  }
+
+  private rosterOf(parent: ActorHandle): SubordinateRosterStore {
+    return parent.actorId === this.actorHandle().actorId ? this.subordinateRoster : new SubordinateRosterStore(this.ctx.storage.sql, parent);
+  }
+
+  protected override hostedWindowName(actorId: string): string | null {
+    const directory = this.workspaceActors();
+    const rootId = this.actorHandle().actorId;
+    const names: string[] = [];
+
+    for (let row = directory.retained(actorId); row?.actorId !== rootId; row = directory.retained(row.parentActorId ?? '')) {
+      if (row === null) return null;
+      names.unshift(row.name);
+    }
+
+    return names.length === 0 ? null : names.join('/');
   }
 
   /**
@@ -1893,18 +1921,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.actorHost().bindStores(actor).stores.history.transcript(CHAT_SESSION_ID);
   }
 
-  private hostedReference(name: string): ActorReference | null {
-    const row = this.subordinateRoster.get(name);
+  private hostedReference(actorId: string): ActorReference | null {
+    const path = this.hostedWindowName(actorId);
+    const actor = path === null ? null : this.hostedTarget(path);
 
-    return !row || row.status === 'dismissed' || !row.actorReference ? null : row.actorReference;
+    return actor?.handle.actorId === actorId ? actor.entry.actorReference : null;
   }
 
-  protected override hostedActorId(name: string): string | null {
-    return this.hostedReference(name)?.actorId ?? null;
-  }
-
-  protected override hostedChatWire(name: string): ChatWire | null {
-    const reference = this.hostedReference(name);
+  protected override hostedChatWire(actorId: string): ChatWire | null {
+    const reference = this.hostedReference(actorId);
 
     if (reference === null) return null;
     const bound = this.actorHost().bindStores(reference);
@@ -1914,7 +1939,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return {
       sql: null,
       getConnection: (id) => this.getConnection(id),
-      broadcast: (message, exclude) => { this.broadcastToActor(name, message, exclude); },
+      broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
       history: (limit) => rows.history(undefined, limit),
       admitted: (id) => rows.has(id),
       send: async (input) => {
@@ -4059,15 +4084,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * so inspecting a retained actor starts nothing. Owner-gated and resolved through the directory.
    */
   /** Resolved through the directory under this root's handle, so a name only reaches this root's children. */
-  private hostedChild(name: string) {
+  private hostedChild(target: string) {
     if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
-    const entry = this.subordinateRoster.requireExisting(name);
+    const actor = this.hostedTarget(target);
 
-    const reference = this.actorDirectoryStore().apply(
-      actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name },
-    ).reference;
+    if (actor === null) throw new KinuError('missing', `"${target}" is not an agent of this workspace.`);
 
-    return { entry, child: this.actorHost().bindStores(reference) };
+    return { entry: actor.entry, child: this.actorHost().bindStores(actor.handle) };
   }
 
   @callable()

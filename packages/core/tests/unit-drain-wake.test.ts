@@ -12,6 +12,7 @@ import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evoluti
 import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import { makeSqlExec } from './helpers';
+import { EvolutionHelperStore } from '../src/identity/evolution-helpers';
 
 function newEventLog(): EventLog {
   const db = new Database(':memory:');
@@ -191,5 +192,53 @@ describe('every drain path re-establishes the wake', () => {
 
     expect(log.pending()).toEqual([]);
     expect(log.nextPendingDrainAt(now)).toBeNull();
+  });
+});
+
+/** A report on the rail, as `admitSubordinateReport` writes one. */
+function report(from: string, mode: 'plan' | 'build', content: string): IngressDescriptor {
+  return {
+    ingress: 'subordinate', variant: 'subordinate_report',
+    payload: { from_subordinate: from, status: 'completed', content, sequence_id: `${from}:1`, kinu_mode: mode },
+  };
+}
+
+const PROPOSAL = '{"scope":"workspace","edits":[{"kind":"prompt_section","source":"Stop after one line."}]}';
+
+function railWithHelper() {
+  const db = new Database(':memory:');
+  const sql = makeSqlExec(db);
+  initEventsHubTables(sql);
+  const main = createTestActorsOver(db).main;
+  new EvolutionHelperStore(sql, main).record('ask-refiner-x1', { lane: 'refinement', requestId: 'refine-1' }, 1);
+
+  return new EventLog(sql, main);
+}
+
+describe('an evolution helper report on the rail belongs to its lane, not the parent', () => {
+  test('alone, it wakes nothing and drains nothing', async () => {
+    const log = railWithHelper();
+    const now = Date.now();
+    log.publish({ descriptor: report('ask-refiner-x1', 'plan', PROPOSAL), now });
+    const { host, enqueued } = watchedHost();
+
+    expect(log.nextPendingDrainAt(now)).toBeNull();
+    await new AgentOrchestrator({ host, engine: inertEngine(), eventLog: log }).drainPendingEvents();
+    expect(enqueued).toEqual([]);
+  });
+
+  test("beside the owner's work it is left out, and the owner's mode holds", async () => {
+    const log = railWithHelper();
+    const now = Date.now();
+    log.publish({ descriptor: report('ask-refiner-x1', 'plan', PROPOSAL), now });
+    log.publish({ descriptor: report('researcher', 'build', 'Root cause found.'), now: now + 1 });
+    const { host, enqueued } = watchedHost();
+
+    await new AgentOrchestrator({ host, engine: inertEngine(), eventLog: log }).drainPendingEvents();
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0].metadata?.kinuMode).toBe('build');
+    expect(enqueued[0].text).toContain('researcher');
+    expect(enqueued[0].text).not.toContain('ask-refiner-x1');
+    expect(enqueued[0].text).not.toContain('"edits"');
   });
 });

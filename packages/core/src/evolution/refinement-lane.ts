@@ -2,8 +2,8 @@
 // authorities that already own them.
 //
 // `requestRefinement` opens the durable row with no model call and no artifact
-// write; `advanceRefinementLane` runs one step. The refiner is read-only, so
-// `resetStalePlanning` is the whole crash recovery.
+// write; `advanceRefinementLane` runs one step. Crash recovery is
+// `resetStalePlanning` plus the refiner's answer reclaimed from its helper row.
 //
 // The refiner is a temporary agent (`agents.ask`) with no write authority: it
 // returns prose, this module parses it, and every write is made here against a
@@ -231,6 +231,9 @@ async function plan(
   if (proposal === null) {
     const answered = await askRefiner(deps, request);
 
+    // An evicted pass's refiner is still working; a later pass takes its answer.
+    if (answered === 'running') return null;
+
     if (!answered.ok) return refuse(answered.error);
     proposal = answered.proposal;
   }
@@ -302,39 +305,53 @@ async function presentContextRefs(deps: RefinementDeps): Promise<string[]> {
 async function askRefiner(
   deps: RefinementDeps,
   request: RefinementRequest,
-): Promise<RefinerAnswer> {
+): Promise<RefinerAnswer | 'running'> {
   const refiner = deps.refiner;
 
   if (!refiner) return { ok: false, error: 'this host wires no refiner' };
-  const contextRefs = await presentContextRefs(deps);
+  const lane = { lane: 'refinement', requestId: request.id } as const;
+  const held = refiner.reclaim(lane);
 
-  // Annotated, not inlined: this is the only production site supplying
-  // `contextRefs`, and `gate:wired` cannot see a literal passed to a method.
-  const brief: TemporaryRunRequest = {
-    role: 'task',
-    roleLabel: 'refiner',
-    task: await renderRefinerBrief(deps, request, contextRefs),
-    contextRefs,
-    // Plan mode: a refiner that could write would be a second authority.
-    mode: 'plan',
-  };
+  if (held?.state === 'running') return 'running';
+  let answer: string;
 
-  const outcome = await refiner.run(brief);
+  if (held) {
+    if (held.status !== 'completed') return { ok: false, error: `the refiner did not answer (unavailable) — ${held.answer}` };
+    answer = held.answer;
+  } else {
+    const contextRefs = await presentContextRefs(deps);
 
-  if (!('status' in outcome)) {
-    return { ok: false, error: `the refiner could not start — ${outcome.error}` };
-  }
-
-  if (outcome.status !== 'completed') {
-    return {
-      ok: false,
-      error: `the refiner did not answer (${outcome.reason ?? 'unknown'}) — ${outcome.answer}`,
+    // Annotated, not inlined: this is the only production site supplying
+    // `contextRefs`, and `gate:wired` cannot see a literal passed to a method.
+    const brief: TemporaryRunRequest = {
+      role: 'task',
+      roleLabel: 'refiner',
+      task: await renderRefinerBrief(deps, request, contextRefs),
+      contextRefs,
+      // Plan mode: a refiner that could write would be a second authority.
+      mode: 'plan',
+      lane,
     };
+
+    const outcome = await refiner.run(brief);
+
+    if (!('status' in outcome)) {
+      return { ok: false, error: `the refiner could not start — ${outcome.error}` };
+    }
+
+    if (outcome.status !== 'completed') {
+      return {
+        ok: false,
+        error: `the refiner did not answer (${outcome.reason ?? 'unknown'}) — ${outcome.answer}`,
+      };
+    }
+
+    answer = outcome.answer;
   }
 
   const parsed = v.safeParse(
     RefinementProposalSchema,
-    tolerate(() => extractJsonObject(outcome.answer), 'malformed-input'),
+    tolerate(() => extractJsonObject(answer), 'malformed-input'),
   );
 
   if (!parsed.success) {
