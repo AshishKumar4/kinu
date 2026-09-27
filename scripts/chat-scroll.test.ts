@@ -119,6 +119,21 @@ async function untilProbe(page: Page, condition: string): Promise<void> {
   );
 }
 
+/** Probe reads in a row with nothing in flight before a walk that has not met its condition counts as stalled. */
+const IDLE_READS = 10;
+
+/** {@link untilProbe}, ended too by a walk that stalls, so a hook that stops asking fails its step instead of
+ *  hanging the suite; the caller checks which of the two ended it. */
+async function untilProbeOrIdle(page: Page, condition: string): Promise<void> {
+  await page.evaluate(() => { delete document.documentElement.dataset.probeIdle; });
+  await untilProbe(page, `(${condition}) || (() => {
+    const tally = document.documentElement.dataset;
+    const idle = state.loading ? 0 : Number(tally.probeIdle ?? 0) + 1;
+    tally.probeIdle = String(idle);
+    return idle >= ${IDLE_READS};
+  })()`);
+}
+
 /** A gallery frame, loaded twice: a first load can trip vite's dependency
  *  optimizer, which answers with a full reload and destroys the execution
  *  context of anything waiting on the page. */
@@ -216,7 +231,9 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
   // it, and waiting for a second one waits for a page a correct hook never
   // asks for.
 
-  await untilProbe(page, `state.ids.length > ${before.rows} && state.loading === false`);
+  await untilProbeOrIdle(page, `state.ids.length > ${before.rows} && state.loading === false`);
+
+  if ((await probe(page)).ids.length <= before.rows) throw new Error('no older page landed: the walk stopped asking');
   // The page has landed in state; the correction is a layout effect, so let the
   // browser commit a frame before measuring where anything is.
   await page.evaluate(() => {
@@ -334,8 +351,8 @@ interface Walked {
 
 /**
  * The workspace chat over a long history (owner, 2026-09-26: "the user shouldn't feel pagination"). What a reader
- * saw is read off painted frames (the CDP screencast), because the scroller's corrections run in a resize observer
- * after `requestAnimationFrame` and before paint: a rAF sample reports a move that was never drawn.
+ * saw is read per rendering step after the scroller's corrections, which run in a resize observer after
+ * `requestAnimationFrame` and before paint: a bare rAF sample reports a move that was never drawn.
  */
 const LongFrameSchema = v.object({
   realInView: v.boolean(), atStart: v.boolean(), scrollTop: v.number(), thumbPx: v.number(), anchorTop: v.nullable(v.number()),
@@ -347,6 +364,8 @@ interface LongChat {
   readonly refused: string | null;
   /** Per older page landing under a reader holding still: the painted frames from before it to after it. */
   readonly stillReader: readonly (readonly LongFrame[])[];
+  /** The same, over a history whose pages alternate short and long rows. */
+  readonly uneven: readonly (readonly LongFrame[])[];
   readonly fling: readonly LongFrame[];
   readonly reservedBeforeDrag: number;
   readonly drag: readonly LongFrame[];
@@ -442,7 +461,7 @@ async function measureBroken(newPage: Gallery['newPage'], origin: string): Promi
     // The edge gesture asks for the page — and this stub fails the FIRST
     // request, so the drive is what produces the error the scenario measures.
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
-    await untilProbe(page, 'state.error !== null');
+    await untilProbeOrIdle(page, 'state.error !== null');
     const failed = await probe(page);
     const boundary = await page.$eval(SCROLL, (el) => el.firstElementChild?.textContent ?? '');
     // The harness clears its own failure after one throw, so the retry the
@@ -451,7 +470,7 @@ async function measureBroken(newPage: Gallery['newPage'], origin: string): Promi
       const button = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Retry');
       button?.click();
     });
-    await untilProbe(
+    await untilProbeOrIdle(
       page, 'state.error === null && state.loading === false && state.ids.length > 3');
 
     return { refused: null, failed, boundary, retried: await probe(page) };
@@ -468,7 +487,7 @@ async function measureWalked(newPage: Gallery['newPage'], origin: string): Promi
   try {
     // depth=1 still needs the edge gesture to start the walk at all.
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
-    await untilProbe(page, 'state.exhausted === true');
+    await untilProbeOrIdle(page, 'state.exhausted === true');
 
     return {
       refused: null,
@@ -484,57 +503,109 @@ async function measureWalked(newPage: Gallery['newPage'], origin: string): Promi
 
 const LONG = '.p-thread-column.overflow-y-auto';
 
-/** One painted frame's reading: whether any transcript row is in view, the thumb's top in track pixels, and where
- *  the row marked `data-probe-anchor` sits in the viewport. */
-function readFrame(page: Page): Promise<LongFrame> {
-  return page.evaluate((selector) => {
+/**
+ * Every frame the page renders while `drive` runs, read in the page as it is presented: each rendering step is read
+ * in its `requestAnimationFrame` callback and read again from a resize observer created after the scroller's own, so
+ * the last reading of a step is taken after the scroller's corrections and before the paint. A step's reading is kept
+ * when the next step opens, so a one-frame move is recorded rather than sampled around.
+ */
+async function paintedFrames(page: Page, drive: () => Promise<void>): Promise<LongFrame[]> {
+  const recording = page.evaluate((selector) => new Promise<unknown[]>((resolve, reject) => {
     const scroller = document.querySelector<HTMLElement>(selector);
 
-    if (scroller === null) return { realInView: false, atStart: false, scrollTop: -1, thumbPx: -1, anchorTop: null };
+    if (scroller === null) {
+      reject(new Error(`no ${selector} to record`));
 
-    const box = scroller.getBoundingClientRect();
+      return;
+    }
 
-    const realInView = [...scroller.children].some((row) => {
-      if (row.hasAttribute('data-scroll-edge')) return false;
+    const read = () => {
+      const box = scroller.getBoundingClientRect();
 
-      const rect = row.getBoundingClientRect();
+      const realInView = [...scroller.children].some((row) => {
+        if (row.hasAttribute('data-scroll-edge')) return false;
+        const rect = row.getBoundingClientRect();
 
-      return rect.bottom > box.top && rect.top < box.bottom;
+        return rect.bottom > box.top && rect.top < box.bottom;
+      });
+
+      const anchor = scroller.querySelector('[data-probe-anchor]');
+
+      return {
+        realInView,
+        atStart: (scroller.textContent ?? '').includes('Beginning of the conversation'),
+        scrollTop: scroller.scrollTop,
+        thumbPx: (scroller.scrollTop / scroller.scrollHeight) * scroller.clientHeight,
+        anchorTop: anchor === null ? null : anchor.getBoundingClientRect().top - box.top,
+      };
+    };
+
+    const frames: ReturnType<typeof read>[] = [];
+    let step: ReturnType<typeof read> | null = null;
+
+    const resize = new ResizeObserver(() => { step = read(); });
+
+    const rows = new MutationObserver((changes) => {
+      for (const change of changes) for (const added of change.addedNodes) if (added instanceof Element) resize.observe(added);
     });
 
-    const anchor = scroller.querySelector('[data-probe-anchor]');
-
-    return {
-      realInView,
-      atStart: (scroller.textContent ?? '').includes('Beginning of the conversation'),
-      scrollTop: scroller.scrollTop,
-      thumbPx: (scroller.scrollTop / scroller.scrollHeight) * scroller.clientHeight,
-      anchorTop: anchor === null ? null : anchor.getBoundingClientRect().top - box.top,
+    const tick = () => {
+      if (step !== null) frames.push(step);
+      step = read();
+      raf = requestAnimationFrame(tick);
     };
-  }, LONG).then((raw) => v.parse(LongFrameSchema, raw));
-}
 
-/** Every frame the page paints while `drive` runs, read as it is presented. */
-async function paintedFrames(page: Page, drive: () => Promise<void>): Promise<LongFrame[]> {
-  const cdp = await page.createCDPSession();
-  const frames: LongFrame[] = [];
-  const reads: Promise<void>[] = [];
+    let raf = requestAnimationFrame(tick);
 
-  cdp.on('Page.screencastFrame', (frame) => {
-    reads.push(readFrame(page).then((read) => { frames.push(read); })
-      .then(() => cdp.send('Page.screencastFrameAck', { sessionId: frame.sessionId })));
-  });
-  await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 5, everyNthFrame: 1 });
+    for (const row of scroller.children) resize.observe(row);
+    rows.observe(scroller, { childList: true });
+    window.addEventListener('probe:stop', () => {
+      cancelAnimationFrame(raf);
+      resize.disconnect();
+      rows.disconnect();
+      resolve(frames);
+    }, { once: true });
+    document.documentElement.dataset.probeRecording = '';
+  }), LONG);
+
+  await page.waitForFunction(() => document.documentElement.dataset.probeRecording !== undefined);
 
   try {
     await drive();
   } finally {
-    await cdp.send('Page.stopScreencast');
-    await Promise.all(reads);
-    await cdp.detach();
+    await page.evaluate(() => {
+      delete document.documentElement.dataset.probeRecording;
+      window.dispatchEvent(new Event('probe:stop'));
+    });
   }
 
-  return frames;
+  return v.parse(v.array(LongFrameSchema), await recording);
+}
+
+/** Painted frames with no "Loading earlier messages" line in a row before a walk counts as stalled. */
+const IDLE_FRAMES = 10;
+
+/**
+ * Resolves once older history has landed (rows beyond `rowsBefore`, or the conversation's start when it is null), or
+ * once the chat has shown no loading line for {@link IDLE_FRAMES} frames running: a walk that stalls ends the wait,
+ * and the caller reports it, rather than the suite hanging to its deadline.
+ */
+async function untilLandedOrIdle(page: Page, rowsBefore: number | null): Promise<void> {
+  await page.evaluate(() => { delete document.documentElement.dataset.probeIdle; });
+  await page.waitForFunction((selector, before, idleFrames) => {
+    const scroller = document.querySelector<HTMLElement>(selector);
+    const tally = document.documentElement.dataset;
+
+    if (scroller === null) return true;
+    const text = scroller.textContent ?? '';
+
+    if (before === null ? text.includes('Beginning of the conversation') : scroller.children.length > before) return true;
+    const idle = text.includes('Loading earlier messages') ? 0 : Number(tally.probeIdle ?? 0) + 1;
+
+    tally.probeIdle = String(idle);
+
+    return idle >= idleFrames;
+  }, { polling: 'raf' }, LONG, rowsBefore, IDLE_FRAMES);
 }
 
 /** Resolves on the page's next two animation frames: whatever was committed has been painted. */
@@ -560,47 +631,56 @@ async function openLong(newPage: Gallery['newPage'], origin: string, query: stri
   return page;
 }
 
+/** Opens a held long chat and records `landings` older pages landing under a reader holding still. */
+async function stillReaderLandings(newPage: Gallery['newPage'], origin: string, query: string, into: LongFrame[][]): Promise<void> {
+  const held = await openLong(newPage, origin, `${query}&historyHold=1`);
+
+  await held.evaluate(() => { window.dispatchEvent(new Event('gallery:release-page')); });
+  await held.waitForFunction((selector) => !(document.querySelector(selector)?.textContent ?? '').includes('Loading earlier messages'), {}, LONG);
+
+  for (let landing = 0; landing < 2; landing++) {
+    // The reader stands on a real row just below the reserve, which asks for the next page; it is held.
+    await held.evaluate((selector) => {
+      const scroller = document.querySelector<HTMLElement>(selector);
+
+      if (scroller === null) return;
+      const reserved = scroller.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0;
+
+      scroller.scrollTop = reserved + 200;
+      scroller.querySelector('[data-probe-anchor]')?.removeAttribute('data-probe-anchor');
+      const box = scroller.getBoundingClientRect();
+      const anchor = [...scroller.children].find((row) => !row.hasAttribute('data-scroll-edge') && row.getBoundingClientRect().top >= box.top + 20);
+
+      anchor?.setAttribute('data-probe-anchor', '');
+    }, LONG);
+    await nextPaint(held);
+    const before = await held.$eval(LONG, (el) => el.children.length);
+
+    into.push(await paintedFrames(held, async () => {
+      await nextPaint(held);
+      await held.evaluate(() => { window.dispatchEvent(new Event('gallery:release-page')); });
+      await untilLandedOrIdle(held, before);
+      await nextPaint(held);
+      await nextPaint(held);
+    }));
+
+    if (await held.$eval(LONG, (el) => el.children.length) <= before) throw new Error(`older page ${landing + 1} never landed under a still reader (${query})`);
+  }
+
+  await held.close();
+}
+
 async function measureLong(newPage: Gallery['newPage'], origin: string): Promise<LongChat> {
   const stillReader: LongFrame[][] = [];
+  const uneven: LongFrame[][] = [];
   let fling: LongFrame[] = [];
   let drag: LongFrame[] = [];
   let reservedBeforeDrag = 0;
 
   try {
     // Held pages: each older page lands when released, and nothing lands between a painted frame and its reading.
-    const held = await openLong(newPage, origin, 'history=2000&historyHold=1');
-
-    await held.evaluate(() => { window.dispatchEvent(new Event('gallery:release-page')); });
-    await held.waitForFunction((selector) => !(document.querySelector(selector)?.textContent ?? '').includes('Loading earlier messages'), {}, LONG);
-
-    for (let landing = 0; landing < 2; landing++) {
-      // The reader stands on a real row just below the reserve, which asks for the next page; it is held.
-      await held.evaluate((selector) => {
-        const scroller = document.querySelector<HTMLElement>(selector);
-
-        if (scroller === null) return;
-        const reserved = scroller.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0;
-
-        scroller.scrollTop = reserved + 200;
-        scroller.querySelector('[data-probe-anchor]')?.removeAttribute('data-probe-anchor');
-        const box = scroller.getBoundingClientRect();
-        const anchor = [...scroller.children].find((row) => !row.hasAttribute('data-scroll-edge') && row.getBoundingClientRect().top >= box.top + 20);
-
-        anchor?.setAttribute('data-probe-anchor', '');
-      }, LONG);
-      await nextPaint(held);
-      const before = await held.$eval(LONG, (el) => el.children.length);
-
-      stillReader.push(await paintedFrames(held, async () => {
-        await nextPaint(held);
-        await held.evaluate(() => { window.dispatchEvent(new Event('gallery:release-page')); });
-        await held.waitForFunction((selector, count) => (document.querySelector(selector)?.children.length ?? 0) > count, {}, LONG, before);
-        await nextPaint(held);
-        await nextPaint(held);
-      }));
-    }
-
-    await held.close();
+    await stillReaderLandings(newPage, origin, 'history=2000', stillReader);
+    await stillReaderLandings(newPage, origin, 'history=2000&historyUneven=1', uneven);
 
     // A fling up a long chat: every painted frame shows transcript, never the reserve, while history remains.
     const flung = await openLong(newPage, origin, 'history=2000&historyLatency=250');
@@ -626,14 +706,14 @@ async function measureLong(newPage: Gallery['newPage'], origin: string): Promise
     reservedBeforeDrag = await dragged.$eval(LONG, (el) => el.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0);
     drag = await paintedFrames(dragged, async () => {
       await dragged.$eval(LONG, (el) => { el.scrollTop = 0; });
-      await dragged.waitForFunction((selector) => (document.querySelector(selector)?.textContent ?? '').includes('Beginning of the conversation'), {}, LONG);
+      await untilLandedOrIdle(dragged, null);
       await nextPaint(dragged);
     });
     await dragged.close();
 
-    return { refused: null, stillReader, fling, reservedBeforeDrag, drag };
+    return { refused: null, stillReader, uneven, fling, reservedBeforeDrag, drag };
   } catch (err) {
-    return { refused: firstLine({ cause: err }), stillReader, fling, reservedBeforeDrag, drag };
+    return { refused: firstLine({ cause: err }), stillReader, uneven, fling, reservedBeforeDrag, drag };
   }
 }
 
@@ -772,11 +852,12 @@ describe('a long workspace chat, as the reader sees it', () => {
   test('the scenarios were measured', () => {
     expect(observed.long.refused).toBeNull();
     expect(observed.long.stillReader).toHaveLength(2);
+    expect(observed.long.uneven).toHaveLength(2);
   });
 
   // 2026-09-26: a page landing moved the row being read by 344px for one painted frame.
   test('a reader holding still sees the row they read stay put on every painted frame as older pages land', () => {
-    for (const frames of observed.long.stillReader) {
+    for (const frames of [...observed.long.stillReader, ...observed.long.uneven]) {
       const tops = frames.flatMap((frame) => frame.anchorTop === null ? [] : [frame.anchorTop]);
 
       expect(tops.length).toBeGreaterThan(1);
@@ -784,8 +865,8 @@ describe('a long workspace chat, as the reader sees it', () => {
     }
   });
 
-  test('the scrollbar thumb moves at most a few pixels as a page replaces its estimate', () => {
-    for (const frames of observed.long.stillReader) {
+  test('the scrollbar thumb moves at most a few pixels as a page replaces its estimate, pages even or not', () => {
+    for (const frames of [...observed.long.stillReader, ...observed.long.uneven]) {
       const thumbs = frames.map((frame) => frame.thumbPx);
 
       expect(Math.max(...thumbs) - Math.min(...thumbs)).toBeLessThanOrEqual(4);

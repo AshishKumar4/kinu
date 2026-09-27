@@ -61,7 +61,6 @@ function slideWindow(prev: Slide, next: readonly UIMessage[]): Slide {
 export function useChatThread({
   rpc, live: frame, seeded, steerRuns = NO_STEER_RUNS, actor, total,
 }: ChatThreadInput): ChatThread {
-  const [walked, setWalked] = useState(0);
   const [slide, setSlide] = useState<Slide>(() => ({ live: frame, slid: NO_MESSAGES, gaps: 0 }));
   const current = slideWindow(slide, frame);
 
@@ -79,13 +78,7 @@ export function useChatThread({
     fetchPage: useCallback(
       (cursor, limit) => rpc<unknown>("getChatHistoryPage", [
         actor === undefined || actor === null ? { cursor, limit } : { cursor, limit, actor },
-      ]).then((raw) => {
-        const page = v.parse(ChatHistoryPageSchema, raw);
-
-        setWalked((before) => before + page.walked);
-
-        return page;
-      }),
+      ]).then((page) => v.parse(ChatHistoryPageSchema, page)),
       [rpc, actor],
     ),
     pageSize: CHAT_PAGE_SIZE,
@@ -100,7 +93,6 @@ export function useChatThread({
     if (current.gaps > 0) reset();
   }, [current.gaps, reset]);
 
-  if (history.fetched.length === 0 && !history.loading && walked !== 0) setWalked(0);
 
   // Minted once per entry, so a prepended page renders its own rows, not every row below.
   const minted = useRef(new WeakMap<ChatHistoryEntry, UIMessage>());
@@ -143,7 +135,7 @@ export function useChatThread({
     () => sealTranscript(extendTranscript(olderFold, live), steerRuns),
     [olderFold, live, steerRuns]);
 
-  const unread = unreadRows({ total, walked, shown: history.fetched.length, live: live.length, exhausted: history.exhausted });
+  const unread = unreadRows({ total, walked: history.walked, shown: history.fetched.length, live: live.length, exhausted: history.exhausted });
 
   return { history, transcript, thread, unread };
 }

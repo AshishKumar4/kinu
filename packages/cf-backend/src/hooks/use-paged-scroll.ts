@@ -12,7 +12,9 @@ export interface PagedScroll<Item> {
   error: string | null;
   /** A page said it was the last one. Never set by a failure. */
   exhausted: boolean;
-  /** Idempotent while a fetch is in flight; safe to call on every scroll tick. */
+  /** Stored entries the published pages span. */
+  walked: number;
+  /** Idempotent while a fetch is in flight. */
   loadMore: (urgent?: boolean) => void;
   /** Bumps the generation so an in-flight page from the old walk is discarded. */
   reset: () => void;
@@ -21,7 +23,7 @@ export interface PagedScroll<Item> {
 export interface PagedScrollOptions<Item> {
   /** Matches `useGrowingScroll`'s `grows`. */
   grows: "up" | "down";
-  fetchPage: (cursor: SeekCursor | undefined, limit: number) => Promise<Page<Item>>;
+  fetchPage: (cursor: SeekCursor | undefined, limit: number) => Promise<Page<Item> & { readonly walked?: number }>;
   pageSize?: number;
   /**
    * A thunk: the chat's first anchor is unknown until the socket delivers the live list.
@@ -54,10 +56,11 @@ export function usePagedScroll<Item>({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
+  const [walked, setWalked] = useState(0);
 
   // A ref, not state: several scroll handlers in one frame would all read the uncommitted `false`.
   const inFlight = useRef(false);
-  // Abandoned generations stay owned until settled; StrictMode retires the first walk while its request is pending.
+  // Abandoned walks stay owned until settled: StrictMode retires the first mid-request.
   const nextTaskId = useRef(0);
   const loadTasks = useRef(new Map<number, PageLoadOperation>());
   const cursor = useRef<SeekCursor | null>(null);
@@ -102,6 +105,7 @@ export function usePagedScroll<Item>({
 
         if (generation !== walk.current) return;
         setFetched((prev) => grows === "up" ? [...page.items, ...prev] : [...prev, ...page.items]);
+        setWalked((prev) => prev + (page.walked ?? page.items.length));
         setError(null);
 
         if (page.status === "end") setExhausted(true);
@@ -129,10 +133,11 @@ export function usePagedScroll<Item>({
     inFlight.current = false;
     cursor.current = null;
     setFetched([]);
+    setWalked(0);
     setLoading(false);
     setError(null);
     setExhausted(false);
   }, []);
 
-  return { fetched, loading, error, exhausted, loadMore, reset };
+  return { fetched, loading, error, exhausted, walked, loadMore, reset };
 }

@@ -1683,6 +1683,9 @@ const HISTORY_LATENCY_MS = Number(new URLSearchParams(location.search).get("hist
 
 const HISTORY_HELD = new URLSearchParams(location.search).get("historyHold") === "1";
 
+/** `&historyUneven=1`: pages alternate row heights. */
+const HISTORY_UNEVEN = new URLSearchParams(location.search).get("historyUneven") === "1";
+
 const HISTORY_PICTURE = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220"><rect width="480" height="220" fill="#3a3530"/><text x="24" y="120" fill="#e8dcc4" font-size="28">chart</text></svg>')}`;
 
 function historyRow(index: number): ChatHistoryEntry {
@@ -1694,7 +1697,7 @@ function historyRow(index: number): ChatHistoryEntry {
   const kind = index % 10;
   let content = `Answer ${index}. The guard now reads the campaign before it writes the cart.`;
 
-  if (kind === 1) content += "\n\n" + "A longer explanation that wraps across several lines of the column. ".repeat(6);
+  if (kind === 1 || (HISTORY_UNEVEN && Math.floor(index / 40) % 2 === 0)) content += "\n\n" + "A longer explanation that wraps across several lines of the column. ".repeat(6);
   else if (kind === 3) content += "\n\n```ts\nexport function guard(cart: Cart) {\n  if (cart.coupon?.archived) throw new Error('archived');\n  return apply(cart);\n}\n```";
   else if (kind === 5) content += `\n\n![chart ${index}](${HISTORY_PICTURE})`;
   else if (kind === 7) content += "\n\nslate://board";

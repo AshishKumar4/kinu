@@ -4,27 +4,35 @@ import { HISTORY_RESERVE_ATTRIBUTE, SCROLL_EDGE_ATTRIBUTE } from "@/hooks/use-gr
 
 const FIRST_ROW_PX = 120;
 
-const SAMPLE_ROWS = 40;
-
-
 export interface HistoryReserveSize {
   readonly ref: RefObject<HTMLDivElement | null>;
   readonly height: number;
 }
 
+/** Mean row pitch (gap included) over every row seen, each read once. */
 export function useHistoryReserve(unread: number): HistoryReserveSize {
   const ref = useRef<HTMLDivElement | null>(null);
+  const seen = useRef({ rows: new WeakSet<Element>(), pitch: 0, count: 0 });
   const [rowPx, setRowPx] = useState(FIRST_ROW_PX);
 
   useLayoutEffect(() => {
-    const rows: Element[] = [];
+    const tally = seen.current;
+    let row = ref.current?.nextElementSibling ?? null;
 
-    for (let row = ref.current?.nextElementSibling ?? null; row !== null && rows.length < SAMPLE_ROWS; row = row.nextElementSibling) {
-      if (!row.hasAttribute(SCROLL_EDGE_ATTRIBUTE)) rows.push(row);
+    while (row !== null) {
+      const next: Element | null = row.nextElementSibling;
+
+      if (!row.hasAttribute(SCROLL_EDGE_ATTRIBUTE)) {
+        if (tally.rows.has(row) || next === null) break;
+        tally.rows.add(row);
+        tally.pitch += next.getBoundingClientRect().top - row.getBoundingClientRect().top;
+        tally.count += 1;
+      }
+
+      row = next;
     }
 
-    if (rows.length === 0) return;
-    const measured = Math.round(rows.reduce((sum, row) => sum + row.getBoundingClientRect().height, 0) / rows.length);
+    const measured = tally.count === 0 ? rowPx : Math.round(tally.pitch / tally.count);
 
     if (measured > 0 && measured !== rowPx) setRowPx(measured);
   });
