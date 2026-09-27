@@ -2240,6 +2240,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
 });
 
 /** One workspace database for the roster and the root's rail, as both hosts keep them. */
+/** `over`: the lane's own database, so the helper's parent is the actor whose lane asked it, as in a workspace. */
 function refinerRail(over?: { readonly db: Database; readonly workspaceId: string }) {
   const db = over?.db ?? new Database(':memory:');
   const workspaceId = over?.workspaceId ?? 'refiner-workspace';
@@ -2292,7 +2293,7 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
   };
 }
 
-/** An activation evicted once its refiner is assigned. */
+/** A port whose activation dies once its refiner is assigned: the run it started, and its waiter, outlive it. */
 function evictedAfterAssign(rail: ReturnType<typeof refinerRail>, evicted: TemporaryAgentPort): TemporaryAgentPort {
   const lost: Promise<unknown>[] = [];
 
@@ -2301,6 +2302,7 @@ function evictedAfterAssign(rail: ReturnType<typeof refinerRail>, evicted: Tempo
     run: async (request) => {
       const run = evicted.run(request);
       lost.push(run);
+      // A run that settles before it is assigned ends the wait too: a broken hire fails with its own error.
       await Promise.race([rail.assigned, run]);
       throw new Error('the activation was evicted');
     },
@@ -2353,6 +2355,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
   });
 
   test('a stored answer owes the lane a pass at once, and the pass that routes it clears that', async () => {
+    // Without it, an answer stored after an eviction waits for the owner's next turn.
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
@@ -2376,6 +2379,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
   });
 
   test('it owes nothing while an older request is ahead in the lane, which the next pass would take instead', async () => {
+    // A due source the pass will not route would re-arm the wake at once, lap after lap.
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
@@ -2433,6 +2437,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
   });
 
   test('a pass that fails for no one request holds the lane with its cause, owing no wake until new input', async () => {
+    // Still due, every wake would re-run the same failing settle.
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
