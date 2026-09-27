@@ -1,5 +1,5 @@
 /**
- * `settle` is the one place an effect meets a Promise, and it accepts only `Effect<A, KinuError>`:
+ * `settle` is the one place an effect meets a Promise, and it accepts only `KinuError` or `VfsError` failures:
  * a string, a foreign tagged error, a plain `Error` or an unclassified `tryPromise` rejection would
  * reach callers with no class, and the classification every reader keys on would read `null`.
  * Compiles fixtures/effect-closed-failure with the repo's `tsc`: violations.ts must fail on each
