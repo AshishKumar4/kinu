@@ -201,6 +201,8 @@ export async function relayHostedReport(
     readonly sequenceId: string;
     /** Absent on the automatic turn-end relay. */
     readonly handoff?: SubordinateReportHandoff;
+    /** The assignment this report answers; closed on delivery. */
+    readonly answers?: string;
   },
 ): Promise<SubordinateEventResult> {
   // Past depth 1 the hiring parent is not the workspace.
@@ -210,20 +212,40 @@ export async function relayHostedReport(
   });
 
   const name = child.record.name;
+  const { answers, ...event } = report;
 
-  const receive = (hirer: HostedActor): Promise<SubordinateEventResult> => receiveSubordinateEvent({
+  const answered = (): void => {
+    if (answers !== undefined) new EventLog(seams.exec, child.handle).markAnswered(answers);
+  };
+
+  // Not the hirer's queue: it may wait on this child's.
+  const hirer = await seams.host.acquire(parent);
+  const temporary = seams.temporary(hirer);
+
+  return await receiveSubordinateEvent({
     log: new EventLog(seams.exec, hirer.handle),
     roster: seams.roster(hirer),
     vfs: seams.vfs(),
-    transaction: (body) => seams.transaction(body),
+    transaction: (body) => seams.transaction(() => {
+      const written = body();
+      answered();
+
+      return written;
+    }),
     announce: () => { seams.announce(hirer); },
     onAdmitted: () => { if (hirer.record.parentActorId === null || !hirer.session.inFlight) seams.scheduleDrain(hirer); },
-    // A temporary child's answer goes first to the `agents.ask` waiter, via the port that parked it.
-    temporary: seams.temporary(hirer),
-  }, { fromSubordinate: name, ...report }, Date.now());
+    // A task child's answer goes first to its waiter, and closes before the waiter retires the child.
+    temporary: {
+      ...temporary,
+      settle: (input) => {
+        const settled = temporary.settle(input);
 
-  // Not the hirer's queue: it may wait on this child's.
-  return await receive(await seams.host.acquire(parent));
+        if (settled) answered();
+
+        return settled;
+      },
+    },
+  }, { fromSubordinate: name, ...event }, Date.now());
 }
 
 export async function retireStalledTask(
@@ -394,6 +416,8 @@ export async function runHostedTask(
         : null
     );
 
+    if (relayed === null) new EventLog(seams.exec, actor.handle).markAnswered(task.sequenceId);
+
     return { actor, text: report.summary, relayed };
   });
 
@@ -403,7 +427,7 @@ export async function runHostedTask(
     text: ran.text,
     relayed: await relayHostedReport(seams, ran.actor, {
       status: ran.relayed.status, content: ran.relayed.content, origin: 'turn_end',
-      mode: task.mode, sequenceId: task.sequenceId,
+      mode: task.mode, sequenceId: task.sequenceId, answers: task.sequenceId,
     }),
   };
 }

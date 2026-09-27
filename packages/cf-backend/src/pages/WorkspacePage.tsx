@@ -17,6 +17,7 @@ import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useAutogrow } from "@/hooks/use-autogrow";
 import { useChatThread } from "@/hooks/use-chat-thread";
+import { HistoryReserve, useHistoryReserve } from "@/hooks/use-history-reserve";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
@@ -640,9 +641,12 @@ export default function WorkspacePage() {
 
   // `state.messages` is the SDK's bounded newest window plus streamed messages; older history is
   // paged from storage. An empty seed still starts the walk: an activation may fail to rebuild the window.
-  const { history, transcript, thread } = useChatThread({
+  const { history, transcript, thread, unread } = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, steerRuns: state.steerRuns,
+    total: state.agentStatus?.messageCount,
   });
+
+  const reserve = useHistoryReserve(unread);
 
   const messagesRef = useGrowingScroll({
     grows: "up",
@@ -964,6 +968,7 @@ export default function WorkspacePage() {
                 pending={<ConversationSkeleton />}
                 empty={<EmptyConversation mission={as?.purpose ?? ""} />}
               />
+              <HistoryReserve reserve={reserve} />
               {thread.entries.length > 0 && (
                 <HistoryBoundary
                   loading={history.loading} error={history.error}

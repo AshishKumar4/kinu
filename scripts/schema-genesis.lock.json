@@ -1628,7 +1628,7 @@
     "parent_actor_id TEXT REFERENCES workspace_actors(actor_id)",
     "name TEXT NOT NULL",
     "storage_key TEXT NOT NULL",
-    "kind TEXT NOT NULL CHECK (kind IN ('main','subordinate','head','node','branch'))",
+    "kind TEXT NOT NULL CHECK (kind IN ('main','subordinate','head','branch'))",
     "lifetime TEXT NOT NULL CHECK (lifetime IN ('durable','task'))",
     "created_at INTEGER NOT NULL",
     "creation_id TEXT NOT NULL",
