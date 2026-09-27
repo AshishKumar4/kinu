@@ -1,4 +1,4 @@
-/** Canonical conversation store flat reads, seeded through the canonical writers. */
+/** Conversation store reads, seeded through the canonical writers. */
 
 import { describe, test, expect } from 'bun:test';
 import { answersForDrainTurns, conversationCount, conversationTurnPair, forkPointExists } from '../src/identity/conversation-store';
@@ -48,7 +48,7 @@ describe('conversationCount — the default chat alone', () => {
     expect(conversationCount(s.sql, s.actor)).toBe(2);
   });
 
-  // 2026-09-27 (MSG-COUNT-0927): the Agent tab and fork modal counted every stored row, rewound branches included.
+  // MSG-COUNT-0927: a rewound branch was counted.
   test('counts the chat the head reads, not a branch a rewind left behind', async () => {
     const s = setup();
     await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
@@ -101,7 +101,6 @@ describe('conversationTurnPair — what a grader attributes from', () => {
     const s = setup();
     await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
 
-    // A turn is named by the answer it produced.
     expect(await conversationTurnPair(s.transcript, 'u1')).toBeUndefined();
     expect(await conversationTurnPair(s.transcript, 'nobody')).toBeUndefined();
   });

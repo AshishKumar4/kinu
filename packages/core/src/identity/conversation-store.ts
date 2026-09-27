@@ -80,7 +80,7 @@ export async function answersForDrainTurns(
   return answers;
 }
 
-/** The pair behind a turn, named by its assistant entry id; a root answer has a null request. */
+/** Named by its assistant entry id; a root answer has a null request. */
 export async function conversationTurnPair(
   transcript: SessionTranscriptReader,
   messageId: string,
