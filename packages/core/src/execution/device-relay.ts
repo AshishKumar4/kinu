@@ -2,6 +2,7 @@
 import * as v from 'valibot';
 import { base64ToBytes } from '../utils/base64';
 import { tolerate } from '../obs/expected-failure';
+import { toKinuError } from '../obs/error';
 
 export const DEVICE_RELAY = {
   method: 'codexRelay',
@@ -45,16 +46,16 @@ interface OpenRelay {
   headed: boolean;
 }
 
-export interface OpenedRelay {
-  readonly response: Promise<Response>;
-  readonly settle: (rpc: Promise<unknown>) => void;
-}
-
 /** A frame from any machine but the one asked is dropped. */
 export class DeviceRelays {
   readonly #open = new Map<string, OpenRelay>();
 
-  open(input: { readonly id: string; readonly deviceId: string; readonly cancel: () => void }): OpenedRelay {
+  open(input: {
+    readonly id: string;
+    readonly deviceId: string;
+    readonly cancel: () => void;
+    readonly answered: () => Promise<PromiseSettledResult<unknown>>;
+  }): Promise<Response> {
     const fail = (cause: Error): void => {
       if (this.#open.get(input.id) !== entry) return;
       this.#open.delete(input.id);
@@ -78,23 +79,22 @@ export class DeviceRelays {
 
     this.#open.set(input.id, entry);
 
-    return {
-      response: entry.head.promise,
-      settle: (rpc) => {
-        rpc.then(() => {
-          if (this.#open.get(input.id) !== entry) return;
+    const ended = input.answered().then((outcome) => {
+      if (this.#open.get(input.id) !== entry) return entry.head.promise;
 
-          if (!entry.headed) {
-            fail(new Error('the machine ended the relay without an answer'));
+      if (outcome.status === 'rejected') {
+        const reason: unknown = outcome.reason;
+        fail(reason instanceof Error ? reason : toKinuError({ doing: 'relaying a call through the machine', cause: reason, otherwise: 'unavailable' }));
+      } else if (!entry.headed) fail(new Error('the machine ended the relay without an answer'));
+      else {
+        this.#open.delete(input.id);
+        entry.body?.close();
+      }
 
-            return;
-          }
+      return entry.head.promise;
+    });
 
-          this.#open.delete(input.id);
-          entry.body?.close();
-        }, fail);
-      },
-    };
+    return Promise.race([entry.head.promise, ended]);
   }
 
   cancel(id: string): void {

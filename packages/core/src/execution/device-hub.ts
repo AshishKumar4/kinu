@@ -5,6 +5,8 @@
  */
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
+import { settle } from '../obs/effect';
+import { Effect } from 'effect';
 import type { JsonValue } from '../utils/json';
 import { DeviceTunnel, NO_DEVICE_CONNECTED, isDeviceUnknownMethodError, type TunnelSocket } from './device-tunnel';
 import { DEVICE_RELAY, DeviceRelays, parseDeviceRelayFrame, type DeviceRelayRequest } from './device-relay';
@@ -213,25 +215,21 @@ export class DeviceSocketHub {
   relay(deviceId: string, id: string, request: DeviceRelayRequest): Promise<Response> {
     const tunnel = this.tunnel(deviceId);
 
-    if (!tunnel) return Promise.reject(new KinuError('unavailable', NO_DEVICE_CONNECTED));
-
-    const relay = this.relays.open({
-      id, deviceId,
-      cancel: () => { if (tunnel.isConnected()) tunnel.notify({ type: DEVICE_RELAY.cancel, relay: id }); },
-    });
+    if (!tunnel) return settle(Effect.fail(new KinuError('unavailable', NO_DEVICE_CONNECTED)));
 
     const params: JsonValue = { method: request.method, url: request.url, headers: request.headers.map(([name, value]) => [name, value]), body: request.body };
 
-    relay.settle((async () => {
-      try {
-        return await tunnel.rpc(DEVICE_RELAY.method, [params], { requestId: id, timeoutMs: 0, extra: { deviceId } });
-      } catch (cause) {
-        if (isDeviceUnknownMethodError({ cause })) this.annotate(deviceId, { relay: RELAY_UNANSWERABLE });
-        throw cause;
-      }
-    })());
+    return this.relays.open({
+      id, deviceId,
+      cancel: () => { if (tunnel.isConnected()) tunnel.notify({ type: DEVICE_RELAY.cancel, relay: id }); },
+      answered: async () => {
+        const [outcome] = await Promise.allSettled([tunnel.rpc(DEVICE_RELAY.method, [params], { requestId: id, timeoutMs: 0, extra: { deviceId } })]);
 
-    return relay.response;
+        if (outcome.status === 'rejected' && isDeviceUnknownMethodError({ cause: outcome.reason })) this.annotate(deviceId, { relay: RELAY_UNANSWERABLE });
+
+        return outcome;
+      },
+    });
   }
 
   isConnected(deviceId: string): boolean {

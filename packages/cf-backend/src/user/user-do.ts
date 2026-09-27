@@ -3,6 +3,7 @@
  * Every privileged method takes a `UserCaller` first and gates on `requireTier` before anything else.
  */
 import { Agent, type AgentContext } from "agents";
+import { Effect } from "effect";
 import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from "../rpc-surface";
 import { ActivationGate, startBeforeRpc } from "../activation-gate";
 import { parseCliTokenUserId } from "../cli/auth-store";
@@ -77,6 +78,7 @@ import {
   diagnostics,
   KinuError,
   renderThrownChain,
+  settle,
   tolerate,
   toKinuError,
 } from '@kinu.run/core/obs';
@@ -2581,17 +2583,15 @@ export class UserDO extends Agent<Env> {
 
   async relayCodex(caller: UserCaller, deviceId: string, callId: string, request: Request): Promise<Response> {
     await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
-
-    if (!codexEgressAllowed({ method: request.method, url: request.url })) {
-      throw new KinuError('denied', `the Codex relay does not carry ${request.method} ${new URL(request.url).pathname}`);
-    }
-
-    const body = request.body === null ? null : await request.text();
+    const allowed = codexEgressAllowed({ method: request.method, url: request.url });
+    const body = allowed && request.body !== null ? await request.text() : null;
 
     // No await from here to the send.
-    if (!this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
+    if (!allowed) return settle(Effect.fail(new KinuError('denied', `the Codex relay does not carry ${request.method} ${new URL(request.url).pathname}`)));
 
-    return this._devices.relay(deviceId, callId, { method: request.method, url: request.url, headers: [...request.headers], body });
+    if (!this.isActiveDevice(deviceId)) return settle(Effect.fail(new KinuError('unavailable', NO_DEVICE_CONNECTED)));
+
+    return settle(Effect.promise(() => this._devices.relay(deviceId, callId, { method: request.method, url: request.url, headers: [...request.headers], body })));
   }
 
   async cancelCodexRelay(caller: UserCaller, callId: string): Promise<void> {
