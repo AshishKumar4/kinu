@@ -106,6 +106,7 @@
         "entry": [
           "scripts/*.ts!",
           "scripts/fixtures/*/worker.ts!",
+          "scripts/fixtures/effect-diagnostics/planted.ts!",
           "tools/oxlint/anti-slop/index.ts!",
           "evals/tasks/*.eval.ts",
           "evals/scripts/*.ts"

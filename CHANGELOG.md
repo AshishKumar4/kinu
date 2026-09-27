@@ -20,6 +20,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- The Effect diagnostic gate resolves its compiler from the pinned package. Dependency analysis includes its executable floating-effect fixture.
+
 - Credential key configuration failures are `unavailable`; unusable credential records, mismatched credential kinds and unretainable slate entries are `bad_input`. Unconfigured checkpoint reads and completion-only model streaming are `unsupported`. Synchronous refusals remain synchronous, and decryption failures retain their cause.
 
 - JSON projection and direct Workers AI binding failures now run through Effect at their public boundaries. JSON fallback values and cancellation errors are unchanged.
