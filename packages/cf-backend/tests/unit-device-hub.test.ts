@@ -360,6 +360,20 @@ describe('DeviceSocketHub Codex relay', () => {
     expect(hub.relayDevice()).toBe('dev-a');
   });
 
+  test('a reader that stops reading tells the machine to drop the upstream call', async () => {
+    const { hub, ws } = connected();
+    const relaying = hub.relay('dev-a', 'relay-6', REQUEST);
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.head, relay: 'relay-6', status: 200, headers: [] }));
+    const response = await relaying;
+
+    await response.body?.cancel(new DOMException('the reader left', 'AbortError'));
+    expect(ws.sent.map((frame) => JSON.parse(frame))).toContainEqual({ type: DEVICE_RELAY.cancel, relay: 'relay-6' });
+    // What the machine sent before it heard is dropped, not written into a cancelled body.
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.body, relay: 'relay-6', data: 'bGF0ZQ==' }));
+    hub.handleMessage('dev-a', JSON.stringify({ id: 'relay-6', result: { bytes: 4 } }));
+    expect(ws.sent.filter((frame) => frame.includes(DEVICE_RELAY.cancel))).toHaveLength(1);
+  });
+
   test('no machine online picks none', () => {
     expect(new DeviceSocketHub(fakeCtx()).relayDevice()).toBeNull();
   });

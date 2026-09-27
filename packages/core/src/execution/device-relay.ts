@@ -38,6 +38,8 @@ export function parseDeviceRelayFrame(data: string): DeviceRelayFrame | null {
 interface OpenRelay {
   readonly deviceId: string;
   readonly stop: () => void;
+  /** The reader left: the machine is told to stop, and later frames find no entry. */
+  readonly abandon: () => void;
   readonly head: ReturnType<typeof Promise.withResolvers<Response>>;
   body: ReadableStreamDefaultController<Uint8Array> | null;
   headed: boolean;
@@ -66,6 +68,11 @@ export class DeviceRelays {
       stop: () => {
         input.cancel();
         fail(new DOMException('the caller stopped the request', 'AbortError'));
+      },
+      abandon: () => {
+        if (this.#open.get(input.id) !== entry) return;
+        this.#open.delete(input.id);
+        input.cancel();
       },
     };
 
@@ -102,7 +109,7 @@ export class DeviceRelays {
     if (frame.type === DEVICE_RELAY.head) {
       if (entry.headed) return;
       entry.headed = true;
-      const body = new ReadableStream<Uint8Array>({ start: (controller) => { entry.body = controller; } });
+      const body = new ReadableStream<Uint8Array>({ start: (controller) => { entry.body = controller; }, cancel: entry.abandon });
       entry.head.resolve(new Response(nullBodyStatus(frame.status) ? null : body, { status: frame.status, headers: frame.headers }));
 
       return;
