@@ -774,12 +774,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       mission: () => null,
       announce: () => { this.broadcastSubordinatesChanged(); },
-      scheduleDrain: (actor) => {
-        this.detachOwned(async () => {
-          await this.actorHost().run(actor.reference, () => Promise.resolve());
-          actor.session.orchestrator.scheduleDrain();
-        });
-      },
+      scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
       armWake: () => { this.armDelegationWake(); },
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
       whileWaiting: (actorId, waited) => this.delegatedTurns.whileWaiting(actorId, waited),
@@ -1230,6 +1225,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           throw cause;
         } finally {
           await room?.closeTurn();
+          // Mid-turn reports drain here, a reset's re-run too.
+          (await this.actorHost().acquire(reference)).session.orchestrator.scheduleDrain();
         }
       }),
       onFailure: ({ cause }) => {

@@ -4,8 +4,9 @@
  */
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
-import { gatewayWorkspace, hostedSubordinateHarness, nextTurn, wakeForDelegatedTask } from './helpers/actor-harness';
-import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
+import { GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, wakeForDelegatedTask } from './helpers/actor-harness';
+import { abandonHarnessFibers } from './helpers/agents-sdk';
+import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 // One turn slot (DELEGATED_TURN_SLOTS): a helper waiting on its task hire frees the slot; its durable hire must not
 // then hold that slot while its report queues behind the waiting helper, or the task hire never runs.
@@ -145,3 +146,71 @@ for (const { verb, args, notes } of CASES) {
     expect(turnsEnded()).toBe(2);
   });
 }
+
+test("a report its durable hire made during a helper's turn is taken up though the workspace reset before that turn ended", async () => {
+  let takenUp = false;
+
+  // The first activation's leaf never answers: the helper's turn is still waiting on it when the reset comes.
+  const script = (leafAnswers: boolean) => async (run: RecordedGatewayRun): Promise<Response> => {
+    const { messages } = requestOf(run);
+    const users = messages.filter((message) => message.role === 'user').map((message) => JSON.stringify(message));
+    const results = messages.filter((message) => message.role === 'tool').length;
+
+    if (users.some((user) => user.includes('Durable done.'))) {
+      takenUp = true;
+
+      return chatCompletion(run, 'Noted.');
+    }
+
+    if (users.some((user) => user.includes('Middle task.'))) {
+      if (results === 0) return toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable');
+
+      if (results === 1) return toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'task', mission: 'Leaf task.' } }, 'call_task');
+
+      return chatCompletion(run, 'Middle done.');
+    }
+
+    if (users.some((user) => user.includes('Durable task.'))) return chatCompletion(run, 'Durable done.');
+
+    if (!leafAnswers) return await new Promise<Response>(() => {});
+
+    return chatCompletion(run, 'Leaf done.');
+  };
+
+  const world = { versionId: 'build-report-reset' };
+  const first = gatewayWorkspace(stubAiBinding(script(false)), world);
+  await first.agent.setSoul('# Purpose\n\nDo each task asked.');
+
+  const middle = await hostedSubordinateHarness(first, {
+    name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
+  });
+
+  const sql = sqlOver(first.db);
+  const middleId = middle.actor.handle.actorId;
+
+  const pendingReports = (): number => sql<{ n: number }>`
+    SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ${middleId} AND variant = 'subordinate_report' AND turn_id IS NULL`[0]?.n ?? 0;
+
+  await wakeForDelegatedTask(first, middleId, 'Middle task.');
+
+  for (let lap = 0; lap < 300 && pendingReports() === 0; lap++) {
+    await first.agent.terminalRetryPass();
+    await nextTurn();
+  }
+
+  expect(pendingReports()).toBe(1);
+  abandonHarnessFibers();
+
+  const second = await reactivateOrchestratorHarness(first.db, undefined, {
+    world: { ...world, aiGateway: stubAiBinding(script(true)) },
+    beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
+  });
+
+  // Bounded: a report the helper never takes up fails here by name.
+  for (let lap = 0; lap < 300 && !takenUp; lap++) {
+    await second.agent.terminalRetryPass();
+    await nextTurn();
+  }
+
+  expect(takenUp).toBe(true);
+});
