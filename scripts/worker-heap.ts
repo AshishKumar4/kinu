@@ -44,6 +44,15 @@ export const STEP_LIVE_BOUND_BYTES = 5_500_000;
  *  code compiled for the heads, neither of them per released actor. */
 export const HEADS_RETAINED_BOUND_BYTES = 1_500_000;
 
+/** Measured 2026-09-27 at {@link LONG_TURN}, after the setup, step and heads above in the same isolate: 104-116 MB
+ *  used over 3 runs on main 20cacf3423, 99-115 MB over 8 once no step keeps its request body. The collector decides
+ *  when garbage goes, hence the spread; 120 MB leaves 8 MB under the 128 MB isolate. */
+export const LONG_TURN_PEAK_BOUND_BYTES = 120_000_000;
+
+/** Measured 2026-09-27 at {@link LONG_TURN}: 7.7 MB on main 20cacf3423, where the AI SDK's record of every step
+ *  kept its request body, a full copy of the message list; 3.6-4.0 MB over 10 runs once the body stays off the record. */
+export const LONG_TURN_GROWTH_BOUND_BYTES = 5_000_000;
+
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request. */
 export const IDLE_RETAINED_BOUND_BYTES = 14_500_000;
 
@@ -220,6 +229,9 @@ async function inspect(port: number): Promise<{
 /** The swarm the release bound is about: WARM heads host every lazy module first, then COUNT come and go. */
 export const HEADS = { warm: 5, count: 200 } as const;
 
+/** The long turn the peak bound is about: STEPS model calls, each after a small `file stat` result. */
+export const LONG_TURN = { steps: 150 } as const;
+
 /** The step the heap bounds are about: TURNS turns of ANSWER_BYTES each, then one more parked on the model. */
 export const STEP = { turns: 12, answerBytes: 200_000 } as const;
 
@@ -232,6 +244,10 @@ export interface HeapMeasurement {
   readonly idleRetained: number;
   /** What a workspace holds live after {@link HEADS} heads were hosted and released, beyond before them. */
   readonly headsRetained: number;
+  /** The most used heap (uncollected) read at any model call of {@link LONG_TURN}. */
+  readonly longTurnPeak: number;
+  /** What {@link LONG_TURN} holds live at its last model call beyond its first. */
+  readonly longTurnGrowth: number;
   /** Each character above U+00FF in the requests, with the text before it; the scripted turns write none. */
   readonly wide: readonly string[];
 }
@@ -307,7 +323,27 @@ export async function measure(): Promise<HeapMeasurement> {
       await ask(`/heads?workspace=heads&tag=swarm&count=${String(HEADS.count)}`);
       const headsRetained = await inspector.liveHeap() - beforeHeads;
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, wide };
+      await ask('/?workspace=long');
+      await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}`);
+      const long = ask('/turn?workspace=long&text=long');
+      let longTurnPeak = 0;
+      let firstLive = 0;
+      let lastLive = 0;
+
+      // Each model call parks until released, so the read lands at every step of the turn.
+      for (let step = 1; step <= LONG_TURN.steps; step++) {
+        while (v.parse(v.object({ arrived: v.number() }), JSON.parse(await ask('/model'))).arrived < step) await Bun.sleep(2);
+        longTurnPeak = Math.max(longTurnPeak, await inspector.usedHeap());
+
+        if (step === 1) firstLive = await inspector.liveHeap();
+
+        if (step === LONG_TURN.steps) lastLive = await inspector.liveHeap();
+        await ask(`/model?released=${String(step)}`);
+      }
+
+      await long;
+
+      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, longTurnPeak, longTurnGrowth: lastLive - firstLive, wide };
     } finally {
       inspector.close();
     }
@@ -367,6 +403,14 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)} live, over ${mb(HEADS_RETAINED_BOUND_BYTES)}`);
   }
 
+  if (measured.longTurnGrowth > LONG_TURN_GROWTH_BOUND_BYTES) {
+    findings.push(`a ${String(LONG_TURN.steps)}-step turn holds ${mb(measured.longTurnGrowth)} more live at its last step than its first, over ${mb(LONG_TURN_GROWTH_BOUND_BYTES)}`);
+  }
+
+  if (measured.longTurnPeak > LONG_TURN_PEAK_BOUND_BYTES) {
+    findings.push(`a ${String(LONG_TURN.steps)}-step turn peaks at ${mb(measured.longTurnPeak)} used, over ${mb(LONG_TURN_PEAK_BOUND_BYTES)}`);
+  }
+
   if (findings.length > 0) {
     console.error(`${GATE}: ${String(findings.length)} finding(s)\n`);
 
@@ -377,8 +421,9 @@ async function main(args: readonly string[]): Promise<number> {
 
   console.log(`${GATE}: ok — ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
     + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
-    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}; no wasm on the static graph, every module ASCII, every request Latin-1`);
-  console.log('  blind: copies made and dropped within a step (garbage between collections), transcripts shaped unlike this one, and memory outside V8 (compiled wasm, SQLite pages)');
+    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
+    + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
+  console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; and memory outside V8 (compiled wasm, SQLite pages)');
 
   return 0;
 }
