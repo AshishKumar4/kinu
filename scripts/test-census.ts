@@ -51,7 +51,7 @@ export type Kind = 'unit' | 'integration' | 'e2e' | 'eval' | 'gate' | 'ui' | 'su
  *  GOOD directions, counted separately and never here. */
 export const CATEGORIES = [
   'source_text', 'mirror', 'tautology_suspect', 'private_reach', 'internal_mock',
-  'copy_pin',
+  'copy_pin', 'css_value',
   'assertion_free', 'silent_skip', 'golden_regenerated',
 ] as const;
 
@@ -62,7 +62,7 @@ export type Category = (typeof CATEGORIES)[number];
  *  source, restates product code, reaches a private member or mocks the tree's own
  *  module is rewritten at a public boundary or deleted; there is no deliberate
  *  exception to record. */
-export const BANNED: readonly Category[] = ['source_text', 'mirror', 'private_reach', 'internal_mock', 'copy_pin'];
+export const BANNED: readonly Category[] = ['source_text', 'mirror', 'private_reach', 'internal_mock', 'copy_pin', 'css_value'];
 
 /** The axis the lock pins, which only shrinks: a NEW instance fails by name. The
  *  three left out of both lists are debt a reviewer reads rather than debt a
@@ -93,6 +93,7 @@ export interface FileRow {
   readonly private_reach: number;
   readonly internal_mock: number;
   readonly copy_pin: number;
+  readonly css_value: number;
   readonly external_seam_mock: number;
   readonly assertion_free: number;
   readonly silent_skip: number;
@@ -1277,7 +1278,7 @@ function valueDependsOn(raw: Node, read: (node: Node | null | undefined) => bool
 }
 
 /** Observer fields are tied to their returning function; product implementations are not observers. */
-function renderedReader(parsed: ParsedFile, inputs: OracleInputs): (node: SyntaxNode) => boolean {
+function renderedReader(parsed: ParsedFile, inputs: OracleInputs, kind: 'text' | 'style'): (node: SyntaxNode) => boolean {
   const contexts = new Map<string, TextContext>();
   const pending = [parsed];
 
@@ -1414,7 +1415,7 @@ function renderedReader(parsed: ParsedFile, inputs: OracleInputs): (node: Syntax
     if (raw.type === 'MemberExpression') {
       const name = raw.computed ? undefined : chainText(raw.property);
 
-      const direct = name === 'textContent' || name === 'innerText';
+      const direct = kind === 'text' && (name === 'textContent' || name === 'innerText');
 
       const object = nodeAt(node, raw.object.start, raw.object.end);
 
@@ -1424,7 +1425,9 @@ function renderedReader(parsed: ParsedFile, inputs: OracleInputs): (node: Syntax
     if (raw.type === 'CallExpression') {
       const called = calleeName(node);
 
-      if (called === 'getAttribute' && stringArguments(node).some((name) => ['title', 'aria-label', 'placeholder'].includes(name))) return true;
+      if (kind === 'style' && (called === 'getComputedStyle' || called === 'getBoundingClientRect' || called === 'boundingBox')) return true;
+
+      if (kind === 'text' && called === 'getAttribute' && stringArguments(node).some((name) => ['title', 'aria-label', 'placeholder'].includes(name))) return true;
 
       if (raw.callee.type === 'MemberExpression' && child(raw.callee.object)) return true;
 
@@ -1591,12 +1594,13 @@ interface ExpectedValues {
   readonly requirements: readonly string[];
 }
 
-/** Exact product wording requires an independently named contract. */
+/** Literal oracles over rendered text and CSS require an independently named contract. */
 function renderedPins(
   parsed: ParsedFile, spans: readonly TestSpan[], inputs: OracleInputs,
-  rendered: (node: SyntaxNode) => boolean,
+  readers: { readonly text: (node: SyntaxNode) => boolean; readonly style: (node: SyntaxNode) => boolean },
 ) {
   const copy: Finding[] = [];
+  const css: Finding[] = [];
   const requirements = new Set<string>();
   const bindings = bindingsOf(parsed);
   const assigned = firstAssignments(parsed, bindings);
@@ -1670,6 +1674,7 @@ function renderedPins(
   };
 
   const exact = new Set(['toBe', 'toEqual', 'toStrictEqual', 'toMatchObject']);
+  const numeric = new Set(['toBeGreaterThan', 'toBeGreaterThanOrEqual', 'toBeLessThan', 'toBeLessThanOrEqual', 'toBeCloseTo']);
 
   for (const expectation of expectations(parsed)) {
     const [actual] = expectation.subject === undefined ? [] : argumentNodes(expectation.subject);
@@ -1680,17 +1685,29 @@ function renderedPins(
 
     for (const name of values.requirements) requirements.add(name);
 
-    if (!exact.has(expectation.matcher)) continue;
+    if (!exact.has(expectation.matcher) && !numeric.has(expectation.matcher)) continue;
 
-    if (!values.literals.some((value) => authoredCopy(inputs.sources).has(String(value)))) continue;
+    if (values.literals.length === 0) continue;
 
-    if (!rendered(actual)) continue;
+    const text = exact.has(expectation.matcher)
+      && values.literals.some((value) => authoredCopy(inputs.sources).has(String(value))) && readers.text(actual);
+
+    const style = readers.style(actual);
+
+    if (!text && !style) continue;
 
     const at = finderIn(parsed, spans);
-    copy.push(at(expectation.call, 'rendered copy has no named requirement', values.literals.map(String).join(', ')));
+
+    if (text) {
+      copy.push(at(expectation.call, 'rendered copy has no named requirement', values.literals.map(String).join(', ')));
+    }
+
+    if (style && values.literals.length > 0) {
+      css.push(at(expectation.call, 'rendered CSS value has no named requirement', values.literals.map(String).join(', ')));
+    }
   }
 
-  return { copy, requirements };
+  return { copy, css, requirements };
 }
 
 /** Names of functions imported from a LOCAL module that this node calls. */
@@ -2880,6 +2897,7 @@ export interface Findings {
   private_reach: Finding[];
   internal_mock: Finding[];
   copy_pin: Finding[];
+  css_value: Finding[];
   assertion_free: Finding[];
   silent_skip: Finding[];
   golden_regenerated: Finding[];
@@ -2905,6 +2923,7 @@ export interface PackageCounts {
   private_reach: number;
   internal_mock: number;
   copy_pin: number;
+  css_value: number;
   assertion_free: number;
   silent_skip: number;
   golden_regenerated: number;
@@ -3063,20 +3082,26 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
   const facts = localFacts(parsed, inputs.tracked);
   const { internal, external } = mocks(parsed, spans, inputs.scope);
   let textReader: ((node: SyntaxNode) => boolean) | undefined;
-  const rendered = (node: SyntaxNode): boolean => (textReader ??= renderedReader(parsed, inputs))(node);
+  let styleReader: ((node: SyntaxNode) => boolean) | undefined;
 
-  const pins = renderedPins(parsed, spans, inputs, rendered);
+  const readers = {
+    text: (node: SyntaxNode): boolean => (textReader ??= renderedReader(parsed, inputs, 'text'))(node),
+    style: (node: SyntaxNode): boolean => (styleReader ??= renderedReader(parsed, inputs, 'style'))(node),
+  };
+
+  const pins = renderedPins(parsed, spans, inputs, readers);
 
   const findings: Findings = {
     source_text: inputs.gateTests.has(file) ? [] : sourceText(parsed, spans, facts, inputs.tracked),
     mirror: mirrors(parsed, spans, local, inputs),
-    tautology_suspect: tautologies(parsed, spans, localNames, { inputs, rendered }),
+    tautology_suspect: tautologies(parsed, spans, localNames, { inputs, rendered: readers.text }),
     private_reach: [
       ...privateReaches(parsed, spans, inputs.nonPublic),
       ...bridgeReaches(parsed, spans, inputs.bridges),
     ],
     internal_mock: internal,
     copy_pin: pins.copy,
+    css_value: pins.css,
     assertion_free: assertionFree(parsed, spans, facts.asserting),
     silent_skip: silentSkips(parsed, spans),
     golden_regenerated: goldenReads(parsed, spans, inputs.generators),
@@ -3102,6 +3127,7 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
       private_reach: findings.private_reach.length,
       internal_mock: internal.length,
       copy_pin: findings.copy_pin.length,
+      css_value: findings.css_value.length,
       external_seam_mock: external.length,
       assertion_free: findings.assertion_free.length,
       silent_skip: findings.silent_skip.length,
@@ -3158,7 +3184,7 @@ export function censusInputs(tracked: readonly string[], runners: readonly Runne
 export function noFindings(): Findings {
   return {
     source_text: [], mirror: [], tautology_suspect: [], private_reach: [], internal_mock: [],
-    copy_pin: [],
+    copy_pin: [], css_value: [],
     assertion_free: [], silent_skip: [], golden_regenerated: [],
   };
 }
@@ -3264,7 +3290,7 @@ function blankCounts(): PackageCounts {
   return {
     files: 0, suites: 0, tests: 0, unit: 0, integration: 0, e2e: 0, eval: 0, gate: 0, ui: 0,
     support: 0, source_text: 0, mirror: 0, tautology_suspect: 0, private_reach: 0,
-    copy_pin: 0,
+    copy_pin: 0, css_value: 0,
     internal_mock: 0, assertion_free: 0, silent_skip: 0, golden_regenerated: 0,
     external_seam_mock: 0, public_surface_entry: 0, never_run: 0,
   };
@@ -3274,7 +3300,7 @@ function blankCounts(): PackageCounts {
 
 /** What this census CANNOT see, printed on the success path. Each line is a
  *  measured limitation of the reader above, not a caveat in general. */
-export const BLIND_SPOTS: readonly string[] = [
+const BLIND_SPOTS: readonly string[] = [
   'dynamic string assembly: a specifier, path or asserted string built by concatenation, '
   + '`join`, or a template with an expression is invisible to every literal comparison here',
   'tests generated at runtime: a `for (const case of CASES) test(...)` loop counts ONE test '
@@ -3300,6 +3326,8 @@ export const BLIND_SPOTS: readonly string[] = [
   + 'to their observer function, but nested field paths and dynamic property names are not resolved',
   'copy pins require an exact multi-word JSX-authored phrase and a DOM-text observation; fixture data, composed '
   + 'copy, substring matchers and terminal wording are outside that rule',
+  'CSS-value pins follow getComputedStyle and rectangle observations, not SVG presentation attributes, '
+  + 'stringified page programs or constants hidden behind general function calls. Relational geometry uses observations, not literal oracles',
   'named requirements carry a cited spec or dated owner ruling and must be used by an assertion; citation truth '
   + 'is reviewed, not inferred from a test needing a value',
   'private reach through destructuring, `Object.entries` over a private map, a public getter '
@@ -3663,7 +3691,7 @@ function main(argv: readonly string[]): number {
 
   if (banned.length > 0) {
     console.error('\ntest-census: banned coupling has no lock allowance. Assert the public behavior; '
-      + 'exact product wording needs a cited requirement, not a copied literal.');
+      + 'exact product wording and CSS values need cited requirements, not copied literals.');
   }
 
   if (argv.includes('--lock') || argv.includes('--ratchet')) {

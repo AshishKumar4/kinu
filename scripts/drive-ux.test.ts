@@ -29,6 +29,7 @@ import { scratchDir } from '@kinu.run/test-utils';
 import type { Page } from 'puppeteer';
 
 import { contrast, rgba, withGallery, type Gallery } from './gallery-harness';
+import { TEST_REQUIREMENTS } from './test-requirements';
 
 const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'drive-ux');
 
@@ -264,8 +265,7 @@ describe('the Drive', () => {
             getComputedStyle(bar.parentElement ?? bar).backgroundColor,
           ]);
 
-          // WCAG's floor for a graphic that carries meaning.
-          expect(contrast(rgba(sweep), rgba(ground))).toBeGreaterThanOrEqual(3);
+          expect(contrast(rgba(sweep), rgba(ground))).toBeGreaterThanOrEqual(TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum);
         } finally {
           await page.close();
         }

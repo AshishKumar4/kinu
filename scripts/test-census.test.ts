@@ -866,10 +866,38 @@ describeCategory('copy_pin', [
   },
 ]);
 
+describeCategory('css_value', [
+  {
+    name: 'RED: a computed style pinned to a literal',
+    source: `test('spacing', () => { const space = getComputedStyle(panel).padding; expect(space).toBe('16px'); });`,
+    expected: ['rendered CSS value has no named requirement'],
+  },
+  {
+    name: 'RED: a geometry threshold with no contract',
+    source: `test('height', () => { expect(panel.getBoundingClientRect().height).toBeGreaterThan(600); });`,
+    expected: ['rendered CSS value has no named requirement'],
+  },
+  {
+    name: 'SILENT: geometry compared with another observation',
+    source: `test('inside', () => { expect(control.getBoundingClientRect().bottom).toBeLessThanOrEqual(panel.getBoundingClientRect().bottom); });`,
+    expected: [],
+  },
+  {
+    name: 'SILENT: browser selector arguments are not expected CSS values',
+    source: `test('inside', async () => { const edge = await page.$eval('.box', el => el.getBoundingClientRect().bottom); expect(control.getBoundingClientRect().bottom).toBeLessThanOrEqual(edge); });`,
+    expected: [],
+  },
+  {
+    name: 'SILENT: visibility is a condition, not a CSS value pin',
+    source: `test('visible', () => { const visible = getComputedStyle(panel).display !== 'none'; expect(visible).toBe(true); });`,
+    expected: [],
+  },
+]);
+
 describe('the named-requirement registry', () => {
-  const caption = {
-    kind: 'copy', value: 'Untitled',
-    authority: { kind: 'owner', recordedOn: '2026-09-15', reference: 'fixture-ruling', requirement: 'The fallback title names an untitled workspace.' },
+  const contrast = {
+    kind: 'css', values: { minimum: 4.5 },
+    authority: { kind: 'spec', standard: 'WCAG 2.2', clause: '1.4.3', reference: 'https://www.w3.org/TR/WCAG22/#contrast-minimum' },
   };
 
   test('a requirement is read through an aliased import and local binding, not an unrelated object', () => {
@@ -888,8 +916,25 @@ describe('the named-requirement registry', () => {
   });
 
   test('a cited but unread requirement is rejected, and an unknown use is named', () => {
-    expect(judgeRequirements({ registry: { caption }, reads: new Set() })).toEqual({ invalid: [], unread: ['caption'], unknown: [] });
-    expect(judgeRequirements({ registry: { caption }, reads: new Set(['caption', 'madeUp']) })).toEqual({ invalid: [], unread: [], unknown: ['madeUp'] });
+    expect(judgeRequirements({ registry: { contrast }, reads: new Set() })).toEqual({ invalid: [], unread: ['contrast'], unknown: [] });
+    expect(judgeRequirements({ registry: { contrast }, reads: new Set(['contrast', 'madeUp']) })).toEqual({ invalid: [], unread: [], unknown: ['madeUp'] });
+  });
+
+  test('one named CSS bound does not excuse another literal in the assertion', () => {
+    const measured = measureFile(PROBE, `
+      import { TEST_REQUIREMENTS } from '../../../scripts/test-requirements';
+      test('legitimate', () => {
+        expect(contrast(rgba(getComputedStyle(panel).color), rgba(getComputedStyle(panel).backgroundColor)))
+          .toBeGreaterThanOrEqual(TEST_REQUIREMENTS.wcagTextContrast.values.normal);
+      });
+      test('extra pin', () => {
+        expect([panel.getBoundingClientRect().width, panel.getBoundingClientRect().height])
+          .toEqual([TEST_REQUIREMENTS.wcagTextContrast.values.normal, 600]);
+      });
+    `, { ...inputs, tracked: new Set([...inputs.tracked, 'scripts/test-requirements.ts']) });
+
+    expect(measured.findings.css_value.map((finding) => finding.test)).toEqual(['extra pin']);
+    expect([...measured.requirements]).toEqual(['wcagTextContrast']);
   });
 
   test('a named requirement does not excuse another literal in the assertion', () => {
@@ -905,9 +950,9 @@ describe('the named-requirement registry', () => {
   });
 
   test('a test-needs-it note supplies no authority', () => {
-    const rejected = judgeRequirements({ registry: { title: { kind: 'copy', value: 'Test title', authority: { reason: 'the test needs it' } } }, reads: new Set(['title']) });
+    const rejected = judgeRequirements({ registry: { padding: { kind: 'css', values: { minimum: 8 }, authority: { reason: 'the test needs it' } } }, reads: new Set(['padding']) });
 
-    expect(rejected.invalid.some((problem) => problem.startsWith('title.authority.kind:'))).toBe(true);
+    expect(rejected.invalid.some((problem) => problem.startsWith('padding.authority.kind:'))).toBe(true);
   });
 
   test('an owner requirement carries a dated ruling', () => {
@@ -916,6 +961,18 @@ describe('the named-requirement registry', () => {
     expect(judgeRequirements({ registry: { copy: { ...copy, authority: { ...copy.authority, recordedOn: '2026-09-15' } } }, reads: new Set(['copy']) }))
       .toEqual({ invalid: [], unread: [], unknown: [] });
   });
+});
+
+test('a style-bearing observer does not taint a same-named field returned by another observer', () => {
+  const measured = measureFile(PROBE, `
+    function dimensions() { return { value: getComputedStyle(panel).padding }; }
+    function title() { return { value: panel.textContent }; }
+    test('copy', () => { expect(title().value).toBe('The chosen title'); });
+    test('style', () => { expect(dimensions().value).toBe('16px'); });
+  `, inputs);
+
+  expect(measured.findings.copy_pin.map((finding) => finding.test)).toEqual(['copy']);
+  expect(measured.findings.css_value.map((finding) => finding.test)).toEqual(['style']);
 });
 
 describe('assertion_free and silent_skip', () => {

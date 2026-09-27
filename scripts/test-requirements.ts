@@ -7,7 +7,10 @@ const Authority = v.variant('kind', [
   v.object({ kind: v.literal('spec'), standard: Named, clause: Named, reference: Named }),
 ]);
 
-const Requirement = v.object({ kind: v.literal('copy'), value: v.string(), authority: Authority });
+const Requirement = v.variant('kind', [
+  v.object({ kind: v.literal('copy'), value: v.string(), authority: Authority }),
+  v.object({ kind: v.literal('css'), values: v.record(Named, v.union([v.string(), v.number()])), authority: Authority }),
+]);
 
 type TestRequirement = v.InferOutput<typeof Requirement>;
 
@@ -20,6 +23,26 @@ export const TEST_REQUIREMENTS = {
       recordedOn: '2026-09-15',
       reference: '269ff163c7df4fa1e6ed6c3e4ebcce83ad1c8f74',
       requirement: 'An unnamed workspace is labelled Untitled, never by its slug; retained by the owner-approved test audit, item 28.',
+    },
+  },
+  wcagTextContrast: {
+    kind: 'css',
+    values: { normal: 4.5, large: 3, largePixels: 24, largeBoldPixels: 14 * 96 / 72, boldWeight: 700 },
+    authority: {
+      kind: 'spec',
+      standard: 'WCAG 2.2',
+      clause: '1.4.3 Contrast (Minimum)',
+      reference: 'https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html',
+    },
+  },
+  wcagNonTextContrast: {
+    kind: 'css',
+    values: { minimum: 3 },
+    authority: {
+      kind: 'spec',
+      standard: 'WCAG 2.2',
+      clause: '1.4.11 Non-text Contrast',
+      reference: 'https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html',
     },
   },
 } as const satisfies Record<string, TestRequirement>;

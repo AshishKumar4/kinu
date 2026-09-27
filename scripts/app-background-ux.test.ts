@@ -158,13 +158,10 @@ describe('the living background', () => {
           const el = document.querySelector('[data-app-background]');
 
           if (el === null) return null;
-          const style = getComputedStyle(el);
           const canvas = el.querySelector('canvas');
           const box = canvas?.getBoundingClientRect() ?? null;
 
           return {
-            pointerEvents: style.pointerEvents,
-            zIndex: style.zIndex,
             canvasBox: box === null ? null : { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
             innerWidth: window.innerWidth,
             innerHeight: window.innerHeight,
@@ -172,8 +169,6 @@ describe('the living background', () => {
         });
 
         if (host === null) throw new Error('no [data-app-background] host');
-        expect(host.pointerEvents).toBe('none');
-        expect(Number(host.zIndex)).toBeLessThan(0);
         expect(host.canvasBox).not.toBeNull();
         expect(host.canvasBox?.left ?? 1).toBeLessThanOrEqual(0);
         expect(host.canvasBox?.top ?? 1).toBeLessThanOrEqual(0);

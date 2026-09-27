@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { contrast, rgba, withGallery, type Gallery } from './gallery-harness';
+import { TEST_REQUIREMENTS } from './test-requirements';
 import { THEMES, type Theme } from './computed-style';
 
 // The shared contract is dependency-free: this gate reads the handle shape
@@ -61,6 +62,7 @@ interface Contrast {
   readonly what: string;
   readonly ratio: number;
   readonly size: number;
+  readonly weight: number;
 }
 
 interface SurfaceFact {
@@ -285,31 +287,6 @@ function required<T>(value: T | undefined, label: string): T {
   if (value === undefined) throw new Error(`${label} was not measured`);
 
   return value;
-}
-
-function luminance(rgb: readonly [number, number, number]): number {
-  const linear = (channel: number): number => {
-    const c = channel / 255;
-
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  };
-
-  return 0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2]);
-}
-
-function contrastRatio(a: readonly [number, number, number], b: readonly [number, number, number]): number {
-  const high = Math.max(luminance(a), luminance(b));
-  const low = Math.min(luminance(a), luminance(b));
-
-  return (high + 0.05) / (low + 0.05);
-}
-
-function parseRgb(value: string): [number, number, number] {
-  const channels = value.match(/-?[\d.]+/g);
-
-  if (channels === null || channels.length < 3) throw new Error(`not a colour: ${value}`);
-
-  return [Number(channels[0]), Number(channels[1]), Number(channels[2])];
 }
 
 async function openLanding(
@@ -794,12 +771,13 @@ beforeAll(async () => {
           if (element === null) return [];
           const style = getComputedStyle(element);
 
-          return [{ what, ink: style.color, paper: background(element), size: parseFloat(style.fontSize) }];
+          return [{ what, ink: style.color, paper: background(element), size: parseFloat(style.fontSize), weight: parseFloat(style.fontWeight) }];
         });
       }).then((rows) => rows.map((row) => ({
         what: row.what,
         size: row.size,
-        ratio: contrastRatio(parseRgb(row.ink), parseRgb(row.paper)),
+        weight: row.weight,
+        ratio: contrast(rgba(row.ink), rgba(row.paper)),
       })));
 
       facts.persists = await page.evaluate(() => ({
@@ -1472,8 +1450,12 @@ describe('rendered landing text is readable', () => {
   test('sampled roles meet WCAG AA on their actual surfaces', () => {
     expect(facts.contrast.length).toBeGreaterThanOrEqual(8);
 
-    for (const { what, ratio, size } of facts.contrast) {
-      expect(ratio, `${what} at ${String(size)}px`).toBeGreaterThanOrEqual(size >= 24 ? 3 : 4.5);
+    const contract = TEST_REQUIREMENTS.wcagTextContrast.values;
+
+    for (const { what, ratio, size, weight } of facts.contrast) {
+      const large = size >= contract.largePixels || (size >= contract.largeBoldPixels && weight >= contract.boldWeight);
+
+      expect(ratio, `${what} at ${String(size)}px weight ${String(weight)}`).toBeGreaterThanOrEqual(large ? contract.large : contract.normal);
     }
   });
 });
