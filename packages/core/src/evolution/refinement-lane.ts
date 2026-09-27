@@ -35,7 +35,7 @@ import { routeSkill, settleSkillApproval } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { renderIssues } from '../utils/json';
-import { attempt, renderThrownChain, settle, tolerate, type ErrorCode, type KinuError } from '../obs/index';
+import { attempt, renderThrownChain, settle, toKinuError, tolerate, type ErrorCode, type KinuError } from '../obs/index';
 import type { TemporaryRunRequest } from '../subordinates/temporary';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -175,6 +175,7 @@ export function advanceRefinementLane(
     return yield* plan(deps, claimed).pipe(
       // Null: the claim was lost to recovery and this pass wrote nothing.
       Effect.map((planned): RefinementLaneStep => planned === null ? IDLE : { step: 'planned', request: planned }),
+      Effect.catchDefect((defect) => Effect.fail(toKinuError({ doing: `planning refinement ${owed.id}`, cause: defect, otherwise: 'unavailable' }))),
       Effect.catch((failure) => planFailed(deps, { store, claimed, owed }, failure)),
       // A claim left registered would make recovery skip a row nothing drives.
       Effect.ensuring(Effect.sync(() => { claimed.release(); })),

@@ -227,6 +227,8 @@ export class LocalAgentHost {
   private readonly opening = new Map<string, Promise<HostEntry>>();
   private readonly trees = new Map<string, HostTree>();
   private closed = false;
+  /** Passes a stored refiner answer started; close() joins them before ending the sessions they use. */
+  private readonly answerPasses = new Set<Promise<void>>();
 
   constructor(private readonly opts: LocalAgentHostOptions) {}
 
@@ -325,6 +327,7 @@ export class LocalAgentHost {
     if (this.closed) return;
     this.closed = true;
     const openings = await Promise.allSettled(this.opening.values());
+    await Promise.all(this.answerPasses);
 
     for (const opening of openings) {
       if (opening.status === 'rejected') {
@@ -1049,7 +1052,7 @@ export class LocalAgentHost {
         ));
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
-      onEvolutionAnswer: () => this.wake(parent, 'refiner answer'),
+      onEvolutionAnswer: () => this.answerWake(parent),
       // A temporary child's answer goes to the waiting `agents.ask` port, never as an event waking this parent.
       temporary: parent.temporary,
     }, {
@@ -1462,22 +1465,31 @@ export class LocalAgentHost {
     if (this.closed) return;
     queueMicrotask(async () => {
       if (this.closed) return;
-
-      try {
-        // A pass another process holds is reported by `drive`; its own pass drains and routes the same work.
-        await this.drive(entry, async () => {
-          await entry.session.flushPendingDrains();
-          await this.drainAssignedWork(entry);
-          await entry.session.runEvolutionAnswer(Date.now());
-        });
-      } catch (cause) {
-        diagnostics.failure(
-          'host.event_drain_failed',
-          toKinuError({ doing: 'draining hosted local events', cause, otherwise: 'io' }),
-          { agent: entry.key, source },
-        );
-      }
+      await this.drain(entry, source);
     });
+  }
+
+  private answerWake(entry: HostEntry): void {
+    if (this.closed) return;
+    const pass = this.drain(entry, 'refiner answer').then(() => { this.answerPasses.delete(pass); });
+
+    this.answerPasses.add(pass);
+  }
+
+  private async drain(entry: HostEntry, source: string): Promise<void> {
+    try {
+      await this.drive(entry, async () => {
+        await entry.session.flushPendingDrains();
+        await this.drainAssignedWork(entry);
+        await entry.session.runEvolutionAnswer(Date.now());
+      });
+    } catch (cause) {
+      diagnostics.failure(
+        'host.event_drain_failed',
+        toKinuError({ doing: 'draining hosted local events', cause, otherwise: 'io' }),
+        { agent: entry.key, source },
+      );
+    }
   }
 }
 
