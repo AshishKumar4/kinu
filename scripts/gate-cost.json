@@ -905,6 +905,17 @@
       "loadAtStart": 6.93,
       "exit": 0
     },
+    "bun run gate:worker-heap": {
+      "wallSeconds": 14.42,
+      "cpuSeconds": 28.53,
+      "peakRssMb": 3646.22,
+      "peakRunnable": 20,
+      "peakCpuThreads": 5.45,
+      "meanThreads": 1.98,
+      "samples": 92,
+      "loadAtStart": 11.54,
+      "exit": 0
+    },
     "bun test --timeout=0 scripts/deadline-capability.test.ts": {
       "wallSeconds": 0.33,
       "cpuSeconds": 0.28,

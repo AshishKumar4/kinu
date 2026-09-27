@@ -95,5 +95,5 @@ export function skillViewPath(name: string): string {
 export function workspaceSkillIndexLine(name: string, source: SkillSource = 'vfs'): string {
   const origin = source === 'shared' ? 'shared drive skill' : 'workspace skill';
 
-  return `- **${name}** \`${skillViewPath(name)}\` — ${origin}; reference material until the owner approves it`;
+  return `- **${name}** \`${skillViewPath(name)}\`: ${origin}; reference material until the owner approves it`;
 }
