@@ -797,16 +797,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const report: ReportToolDeps = {
       report: async (input) => {
+        // A run-settling report is the answer.
+        const settles = reportSettlesRun(input.status, 'report_tool');
+
         const relayed = await relayHostedReport(this.subordinateSeams(), turn.actor, {
           status: input.status, content: input.content, origin: 'report_tool',
           mode: 'build', sequenceId: `live:${turn.actor.record.name}:${nanoid()}`,
           handoff: input.handoff,
+          ...(settles && { answers: turn.turnId }),
         });
 
         turn.reports.spoke = true;
-        // Only a run-settling report counts as the answer, the same predicate the ingress
-        // settles a waiter on.
-        turn.reports.settled ||= reportSettlesRun(input.status, 'report_tool');
+        turn.reports.settled ||= settles;
 
         return { id: relayed.id, disposition: relayed.disposition };
       },
@@ -1290,7 +1292,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           parentActorId: turn.record.parentActorId,
         });
 
-        new EventLog(exec, bound.handle).unbind(turn.claim.turnId);
+        const log = new EventLog(exec, bound.handle);
+
+        if (log.isAnswered(turn.claim.turnId)) {
+          bound.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'completed');
+          continue;
+        }
+
+        log.unbind(turn.claim.turnId);
         diagnostics.event('subordinate.assignment_repended', {
           workspace: this.name, actor: turn.record.name, assignment: turn.claim.turnId,
         });
@@ -2915,9 +2924,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // An unborn workspace owes nothing: its first claim writes it.
     if (this.storageRefusal !== undefined || this.nimbusSibling || !this.workspaceBorn()) return;
     this.rependDeadActivationLeases();
-    // Every budgeted sweep via the alarm-frame seam; row-budgeted because this is the init gate,
-    // and a truncated pass is drained by the wake below in alarm frames.
-    const sweepsTruncated = this.maintenanceSweeps();
+    // Row-budgeted (init gate); a truncated pass drains under the wake below.
+    this.maintenanceUnfinished = this.maintenanceSweeps();
     // An activation is the only moment a workspace whose wake row was lost can notice.
     // Detached because arming a schedule row is I/O and this method runs inside the init gate.
     this.detachOwned(async () => {
@@ -2932,7 +2940,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // The activation only classifies and arms a wake; all dispatch runs under that durable wake,
     // because an activation launches no external work, awaited or detached.
-    if (sweepsTruncated || this.owedWorkExists()) {
+    if (this.owedWorkExists()) {
       this.armOwedWorkWake('reconcile');
     }
 

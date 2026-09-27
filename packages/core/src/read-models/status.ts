@@ -100,8 +100,10 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
 export async function getChatHistoryPage(
   transcript: SessionTranscriptReader,
   request: PageRequest = {},
-): Promise<Page<ChatHistoryEntry>> {
-  return mapPage(await transcript.page(request), rows => rows.flatMap(row => {
+): Promise<ChatHistoryPage> {
+  const page = await transcript.page(request);
+
+  return { ...mapPage(page, rows => rows.flatMap(row => {
     const role = normalizeUiRole(row.role);
 
     if (!role) return [];
@@ -116,8 +118,10 @@ export async function getChatHistoryPage(
     if (row.unavailable === true) entry.unavailable = true;
 
     return [entry];
-  }).reverse());
+  }).reverse()), walked: page.walked };
 }
+
+export type ChatHistoryPage = Page<ChatHistoryEntry> & { readonly walked: number };
 
 export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
   const crafted = craftStore.list().map((t) => {
