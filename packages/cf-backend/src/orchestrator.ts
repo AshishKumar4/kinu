@@ -347,6 +347,9 @@ const ACTIVITY_LOG_WINDOW = 200;
  * The clip is always declared, never silent; see {@link OrchestratorAgent.getExecutorOutput}. */
 const EXECUTOR_OUTPUT_CLIP = 16 * 1024;
 
+/** The terminal rows a reload shows per executor, and all `executor_output` keeps: an older row reaches no reader. */
+const EXECUTOR_HISTORY_ROWS = 50;
+
 /** `stdout_len`/`stderr_len` are the stored lengths, so a reader can tell a short command
  *  from a clipped one. */
 interface ExecutorOutputRow {
@@ -4527,14 +4530,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Streams are clipped to {@link EXECUTOR_OUTPUT_CLIP} chars with true length beside them.
    * Must filter by actor: executor ids are shared across actors in the workspace box.
    */
-  async getExecutorOutput(executorId: string, limit = 50) {
+  async getExecutorOutput(executorId: string) {
     return this.sql<ExecutorOutputRow>`SELECT id, executor, command,
         substr(stdout, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stdout, length(stdout) AS stdout_len,
         substr(stderr, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stderr, length(stderr) AS stderr_len,
         exit_code, created_at
       FROM executor_output
       WHERE actor_id = ${this.actorHandle().actorId} AND executor = ${executorId}
-      ORDER BY created_at DESC LIMIT ${limit}`;
+      ORDER BY created_at DESC, rowid DESC LIMIT ${EXECUTOR_HISTORY_ROWS}`;
+  }
+
+  private recordExecutorOutput(
+    executorId: string, command: string, output: { stdout: string | null; stderr: string; exitCode: number },
+  ): void {
+    const actorId = this.actorHandle().actorId;
+
+    void this.sql`INSERT INTO executor_output (actor_id, executor, command, stdout, stderr, exit_code)
+      VALUES (${actorId}, ${executorId}, ${command}, ${output.stdout}, ${output.stderr}, ${output.exitCode})`;
+    void this.sql`DELETE FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
+      AND rowid NOT IN (SELECT rowid FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
+        ORDER BY created_at DESC, rowid DESC LIMIT ${EXECUTOR_HISTORY_ROWS})`;
   }
 
   /** Seals reportless branch heads with an error report; the status change is the cursor.
@@ -4595,7 +4610,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
         name: e.name,
-        outputs: await this.getExecutorOutput(e.name, 50),
+        outputs: await this.getExecutorOutput(e.name),
       })),
     );
 
@@ -4786,8 +4801,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         ? { stdout: result, stderr: '', exitCode: 0 }
         : { stdout: result.error, stderr: result.error, exitCode: 1, refusal: result };
 
-      void this.sql`INSERT INTO executor_output (actor_id, executor, command, stdout, stderr, exit_code)
-        VALUES (${this.actorHandle().actorId}, ${executorId}, ${command}, ${output.stdout}, ${output.stderr}, ${output.exitCode})`;
+      this.recordExecutorOutput(executorId, command, output);
 
       this.broadcast(JSON.stringify({
         type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now(),
@@ -4797,8 +4811,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     } catch (err) {
       const refusal = refusalOf(toKinuError({ doing: 'execute on ' + executorId, cause: err, otherwise: 'io' }));
       const errMsg = refusal.error;
-      void this.sql`INSERT INTO executor_output (actor_id, executor, command, stderr, exit_code)
-        VALUES (${this.actorHandle().actorId}, ${executorId}, ${command}, ${errMsg}, ${1})`;
+      this.recordExecutorOutput(executorId, command, { stdout: null, stderr: errMsg, exitCode: 1 });
       // Broadcast errors too: the UI terminal renders only from broadcasts. (STABILITY-AUDIT §B4.)
       this.broadcast(JSON.stringify({
         type: 'executor-output', executor: executorId, command, stdout: '',
