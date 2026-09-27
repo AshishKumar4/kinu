@@ -34,6 +34,7 @@ import {
   DEVICE_PTY_EXIT,
   DEVICE_PTY_MAX_AXIS,
   NO_DEVICE_CONNECTED, SEVERAL_DEVICES_CONNECTED,
+  codexEgressAllowed,
   isDeviceUnknownMethodError,
   isWorkspaceName,
   ORCHESTRATOR_AGENT_SLUG,
@@ -2569,6 +2570,33 @@ export class UserDO extends Agent<Env> {
     if (stopping) this.recordToolPathCancellation(params, result);
 
     return result === undefined ? undefined : JSON.stringify(result);
+  }
+
+  /** docs/DEPLOYMENT.md § Codex egress. */
+  async codexRelayDevice(caller: UserCaller): Promise<{ readonly id: string; readonly label: string } | null> {
+    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
+    const deviceId = this._devices.relayDevice();
+
+    return deviceId === null || !this.isActiveDevice(deviceId) ? null : { id: deviceId, label: this.deviceLabel(deviceId) };
+  }
+
+  async relayCodex(caller: UserCaller, deviceId: string, callId: string, request: Request): Promise<Response> {
+    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
+
+    if (!codexEgressAllowed({ method: request.method, url: request.url })) {
+      throw new KinuError('denied', `the Codex relay does not carry ${request.method} ${new URL(request.url).pathname}`);
+    }
+
+    if (!this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
+
+    return this._devices.relay(deviceId, callId, {
+      method: request.method, url: request.url, headers: [...request.headers], body: request.body === null ? null : await request.text(),
+    });
+  }
+
+  async cancelCodexRelay(caller: UserCaller, callId: string): Promise<void> {
+    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
+    this._devices.cancelRelay(callId);
   }
 
   /** `agentHome` is empty only under the raw tier. */
