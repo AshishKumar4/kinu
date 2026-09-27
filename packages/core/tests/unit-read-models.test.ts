@@ -565,7 +565,7 @@ describe('executor file plane', () => {
     await rt.storage.vfs.writeFile('big', 'z'.repeat(512 * 1024 + 10));
 
     expect(await readExecutorFile(r, 'workspace', 'dir')).toEqual({ error: 'path is a directory' });
-    expect(await readExecutorFile(r, 'workspace', 'bin')).toEqual({ error: 'binary file — not previewable' });
+    expect(await readExecutorFile(r, 'workspace', 'bin')).toEqual({ error: 'binary file, not previewable' });
     // A plane without ranged read (seven base VFS methods) refuses an over-budget preview and names
     // the download.
     const refused = await readExecutorFile(r, 'workspace', 'big');

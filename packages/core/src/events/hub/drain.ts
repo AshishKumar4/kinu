@@ -63,7 +63,7 @@ export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
       && e.variant === 'peer_agent'
       && e.payload.reply_expected
     )
-      ? ` [the sender awaits your answer — answer it with agents({action:'msg', event_id:'${e.id}', message:...})]`
+      ? ` [the sender awaits your answer: answer it with agents({action:'msg', event_id:'${e.id}', message:...})]`
       : '';
 
     // One line per event: sender-controlled bodies are folded so they cannot fake extra entries.

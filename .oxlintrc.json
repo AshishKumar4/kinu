@@ -75,7 +75,6 @@
     "anti-slop/require-rpc-seal": "error",
     "anti-slop/require-super-alarm": "error",
     "anti-slop/no-tui-colour-literal": "error",
-    "anti-slop/no-wide-model-text": "error",
     "anti-slop/no-dynamic-model-import": "error",
     "anti-slop/require-variant-utility": "error",
     "anti-slop/no-cli-credential-flag": "error",

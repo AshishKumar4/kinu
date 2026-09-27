@@ -85,8 +85,8 @@ describe('runScaffoldGepa', () => {
       SELECT rationale FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} AND version = ${result.pendingVersion}`;
 
-    expect(rationale.rationale).toContain('0.900 (95% CI 0.279–0.995)');
-    expect(rationale.rationale).toContain('seed: 0.500 (95% CI 0.095–0.905)');
+    expect(rationale.rationale).toContain('0.900 (95% CI 0.279-0.995)');
+    expect(rationale.rationale).toContain('seed: 0.500 (95% CI 0.095-0.905)');
   });
 
   test('does NOT propose when winner equals seed', async () => {

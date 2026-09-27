@@ -16,7 +16,7 @@ export const COMPLETION_GATE_EVENT = 'completion_gate';
 
 /** The model must never read a harness check as something the user typed. */
 export const COMPLETION_GATE_HEADER =
-  '[Runtime check — a mechanical gate from Kinu, not written by the user.]';
+  '[Runtime check: a mechanical gate from Kinu, not written by the user.]';
 
 /** Read-only probes. A failing `git status` is dropped: it describes the probe, not the deliverable. */
 export const COMPLETION_PROBE_COMMANDS = ['pwd', 'ls -la', 'git status --short'] as const;
@@ -65,13 +65,13 @@ The state of your working directory right now, read by the harness after you sto
 
 ${opts.observed}
 
-Check it against what the task actually asked for — the files it named, the output format it specified, anything it said must not be left behind. If everything is there, say so in one line and stop. If anything is missing or wrong, fix it now.`;
+Check it against what the task actually asked for: the files it named, the output format it specified, anything it said must not be left behind. If everything is there, say so in one line and stop. If anything is missing or wrong, fix it now.`;
 }
 
 function truncate(text: string, maxChars: number): string {
   return text.length <= maxChars
     ? text
-    : `${text.slice(0, maxChars)}\n[… ${text.length - maxChars} chars of the task omitted; it is in full above in this conversation]`;
+    : `${text.slice(0, maxChars)}\n[... ${text.length - maxChars} chars of the task omitted; it is in full above in this conversation]`;
 }
 
 export interface TurnCompletionFacts {

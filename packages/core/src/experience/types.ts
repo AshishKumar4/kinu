@@ -70,7 +70,7 @@ function payloadText(payload: ExperiencePayload, factSeparator: string): string 
 export function describePayload(payload: ExperiencePayload, maxChars = 400): string {
   const text = payloadText(payload, ' = ');
 
-  return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+  return text.length > maxChars ? `${text.slice(0, maxChars)}...` : text;
 }
 
 /** Materialized into `search_text` so FTS5 ranks over the payload, not just the title. */

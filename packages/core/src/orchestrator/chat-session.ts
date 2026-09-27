@@ -631,7 +631,7 @@ export class ChatSession {
     this.emit({
       type: 'background',
       event: 'events_reclaimed',
-      message: `${reclaimed.length} event delivery/ies were bound to a turn a previous process did not finish — re-queued`,
+      message: `${reclaimed.length} event delivery/ies were bound to a turn a previous process did not finish: re-queued`,
     });
   }
 

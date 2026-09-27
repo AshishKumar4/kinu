@@ -130,7 +130,7 @@ describe('the command on screen is the one the server handed over', () => {
     const html = render(flow, []);
 
     for (const line of DEVICE_CONNECT_DISCLOSURE) {
-      expect(html).toContain(line.replaceAll('&', '&amp;'));
+      expect(html).toContain(line.replaceAll('&', '&amp;').replaceAll('>', '&gt;'));
     }
 
     expect(html).not.toContain('data-connect-command');

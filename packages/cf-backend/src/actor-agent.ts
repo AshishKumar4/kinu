@@ -3764,7 +3764,7 @@ export abstract class ActorAgent extends Agent<Env> {
       return this._cachedTools;
     }
 
-    this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} → ${cacheKey}`);
+    this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} -> ${cacheKey}`);
 
     try {
       // No registry sync: the eval sandbox reads craftStore.list() fresh at every execute.
@@ -3816,7 +3816,7 @@ export abstract class ActorAgent extends Agent<Env> {
         this._cachedToolsKey = cacheKey;
       }
 
-      this.logActivity("gettools_end", `rebuilt — ${Object.keys(tools).length} tools`);
+      this.logActivity("gettools_end", `rebuilt: ${Object.keys(tools).length} tools`);
 
       return tools;
     } catch (err) {
@@ -4685,7 +4685,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     throw new KinuError('io', 
       `settleBackgroundTasks: ${String(this._backgroundTasks.size)} task(s) still detached after 32 `
-      + 'laps — something keeps enqueuing work; join a narrower seam instead',
+      + 'laps: something keeps enqueuing work; join a narrower seam instead',
     );
   }
 

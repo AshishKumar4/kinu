@@ -131,11 +131,11 @@ function decideTrend(
 }
 
 function buildNote(segments: ReadonlyArray<AlignmentSegment>, gradedTurns: number, trend: AlignmentTrend): string {
-  if (gradedTurns === 0) return 'No graded turns recorded yet — K_align is undefined.';
+  if (gradedTurns === 0) return 'No graded turns recorded yet: K_align is undefined.';
 
   if (trend === 'insufficient') {
     return segments.some((s) => s.rate.reliable)
-      ? 'Only one scaffold version has enough graded turns to read — there is no before/after to compare yet.'
+      ? 'Only one scaffold version has enough graded turns to read: there is no before/after to compare yet.'
       : `Too few graded turns to read a rate: every scaffold segment's 95% interval is wider than ` +
         `±${(RELIABLE_INTERVAL_WIDTH / 2) * 100} points per 100 turns. Nothing here is a signal yet.`;
   }
@@ -175,20 +175,20 @@ export function alignmentConvergence(sql: SqlExecutor, actor: ActorHandle): Alig
 
 function formatRate(rate: RateInterval): string {
   return `${rate.per100.toFixed(1)} per 100 turns ` +
-    `(95% CI ${rate.lowPer100.toFixed(1)}–${rate.highPer100.toFixed(1)}${rate.reliable ? '' : ', too wide to read'})`;
+    `(95% CI ${rate.lowPer100.toFixed(1)}-${rate.highPer100.toFixed(1)}${rate.reliable ? '' : ', too wide to read'})`;
 }
 
 export function renderAlignmentConvergence(k: AlignmentConvergence): string {
   const delta = k.deltaPer100 === null ? '' :
     ` (${k.deltaPer100 > 0 ? '+' : ''}${k.deltaPer100.toFixed(1)} per 100 turns` +
-    `${k.comparedVersions ? `, v${k.comparedVersions.from ?? '?'} → v${k.comparedVersions.to ?? '?'}` : ''})`;
+    `${k.comparedVersions ? `, v${k.comparedVersions.from ?? '?'} -> v${k.comparedVersions.to ?? '?'}` : ''})`;
 
   const lines = [
-    'K_align — correction rate (corrected + frustrated), 95% Wilson intervals',
+    'K_align: correction rate (corrected + frustrated), 95% Wilson intervals',
     `Overall: ${formatRate(k.overall.rate)} over ${k.overall.turns} user-graded turns` +
       (k.overall.abandoned > 0 ? ` (+${k.overall.abandoned} abandoned, ungraded)` : '') +
       (k.overall.executionGraded > 0
-        ? ` (+${k.overall.executionGraded} execution-graded, not a user verdict — excluded)`
+        ? ` (+${k.overall.executionGraded} execution-graded, not a user verdict: excluded)`
         : ''),
     `Trend: ${k.trend}${delta}`,
     k.note,

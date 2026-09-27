@@ -1144,7 +1144,7 @@ describe('oversize subordinate reports stay reachable', () => {
     if (!path) throw new Error('expected spilled report path');
     expect(await vfs.readFile(path)).toBe(content);
 
-    expect(renderForLLM(event).brief).toEndWith(` — full report: ${path}`);
+    expect(renderForLLM(event).brief).toEndWith(`: full report: ${path}`);
     const batch = buildDrainBatch([event]);
 
     if (!batch) throw new Error('expected subordinate report drain batch');

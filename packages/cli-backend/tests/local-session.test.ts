@@ -1455,8 +1455,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     if (!parked) throw new Error('unattended command was not queued');
 
     expect(first.exitCode).not.toBe(0);
-    expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
-    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN — queued for owner approval');
+    expect(first.stderr).toContain(`NOT RUN: queued for owner approval (${parked.id})`);
+    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN: queued for owner approval');
     expect(await session.listDeferredApprovals()).toHaveLength(2);
     const sandboxAction = (await session.listDeferredApprovals()).find((action) => action.executor === 'sandbox');
 
@@ -1502,7 +1502,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       const first = await shell.exec('rm -rf build');
       const parked = present((await session.listDeferredApprovals())[0], 'the parked delete');
 
-      expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
+      expect(first.stderr).toContain(`NOT RUN: queued for owner approval (${parked.id})`);
       expect(existsSync(join(project, 'build'))).toBe(true);
       expect(await session.decideDeferredApprovals([parked.id], 'always')).toEqual({ decided: [parked.id] });
 

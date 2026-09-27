@@ -126,7 +126,7 @@ function renderTemporaryTaskBrief(input: {
 
   if (input.contextRefs && input.contextRefs.length > 0) {
     parts.push(
-      'Material for this question, by workspace path — read it yourself, in ranges when it is '
+      'Material for this question, by workspace path: read it yourself, in ranges when it is '
       + `large: ${input.contextRefs.join(', ')}.`,
     );
   }

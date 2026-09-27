@@ -95,7 +95,7 @@ export function compareSurface(
 
 const FINDING_ADVICE = {
   missing: 'wire it at this root, or declare it { absent: reason } in conformance/manifest.ts',
-  undeclared: 'declare it in conformance/manifest.ts — the Record type will force a decision for every root',
+  undeclared: 'declare it in conformance/manifest.ts: the Record type will force a decision for every root',
   contradicted: 'the wiring and the manifest disagree; whichever is right, make the other match',
 } satisfies Record<ConformanceFindingKind, string>;
 
@@ -104,7 +104,7 @@ export function renderConformanceFindings(report: ConformanceReport): string {
     .map((f) => {
       const stale = f.staleReason ? ` (recorded reason now stale: "${f.staleReason}")` : '';
 
-      return `[${f.root}] ${f.plane} "${f.name}" ${f.kind}${stale} — ${FINDING_ADVICE[f.kind]}`;
+      return `[${f.root}] ${f.plane} "${f.name}" ${f.kind}${stale}: ${FINDING_ADVICE[f.kind]}`;
     })
     .join('\n');
 }

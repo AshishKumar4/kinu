@@ -228,7 +228,7 @@ export function resolveEvalIdentity(env: EnvSource = ambientByName(Object.values
     return {
       kind: 'absent',
       reason: `no eval credential. Sign the isolated ${EVAL_SERVICE_ACCOUNT} session into ${origin} `
-        + `or export ${EVAL_IDENTITY_ENV.token} — a person's signed-in session is never borrowed, `
+        + `or export ${EVAL_IDENTITY_ENV.token}: a person's signed-in session is never borrowed, `
         + 'so without it every live suite skips.',
     };
   }

@@ -347,8 +347,8 @@ function layerIntegrityFailure(input: {
     && stored.objectVersion !== declared.objectVersion) {
     return `${label} archive is ${stored.bytes} bytes, exactly as recorded, and the store holds `
       + `version ${stored.objectVersion} where the record describes `
-      + `${declared.objectVersion}. Nothing here can compare content — the Workers multipart `
-      + 'API carries no checksum — and the object under this key was written by a different '
+      + `${declared.objectVersion}. Nothing here can compare content: the Workers multipart `
+      + 'API carries no checksum, and the object under this key was written by a different '
       + 'upload, so it is a different archive of the same length however its metadata reads.';
   }
 
@@ -1448,7 +1448,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (isOverlayMounted(mounts, DEVBOX_WORKDIR)) {
       await assertStandingComposition(mounts, state);
 
-      ports.log(`${DEVBOX_WORKDIR} already attached — attach skipped`);
+      ports.log(`${DEVBOX_WORKDIR} already attached: attach skipped`);
 
       return {
         kind: 'already-attached',

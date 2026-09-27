@@ -117,15 +117,6 @@ export const warning = { fg: roles.warning, border: roles.border };
 `,
   },
   {
-    rule: "no-wide-model-text",
-    // A tool description with an em dash: every request carrying it is stored two bytes per character.
-    at: "packages/core/src/tools",
-    bad: `export const description = "Search the docs \u2014 fast.";
-`,
-    good: `export const description = "Search the docs: fast.";
-`,
-  },
-  {
     rule: "no-dynamic-model-import",
     // A helper that loads the SDK at runtime: its call reaches no spend total.
     at: "packages/core/src",

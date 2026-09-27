@@ -47,6 +47,7 @@
     "gate:bloat-budget": "bun scripts/bloat-budget.ts",
     "gate:wired": "bun scripts/wired.ts",
     "gate:client-graph": "bun scripts/client-graph.ts",
+    "gate:model-text": "bun scripts/model-text.ts",
     "gate:core-layering": "bun scripts/core-layering.ts",
     "gate:vendor-schema": "bun scripts/vendor-schema.ts",
     "gate:reachability": "bun scripts/reachability.ts",

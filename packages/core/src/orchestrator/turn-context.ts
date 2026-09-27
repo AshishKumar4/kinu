@@ -61,7 +61,7 @@ function refuseOversizedRequest(tokens: number, limit: number): KinuError {
     'bad_input',
     `${ADMISSION_REFUSAL_MARK}: the assembled request measures ${tokens.toLocaleString('en-US')} input tokens, ` +
     `above the ${limit.toLocaleString('en-US')}-token allocation this model's window leaves for input after its answer reserve. ` +
-    'The history was compacted and re-measured, and still does not fit — nothing was sent to the provider. ' +
+    'The history was compacted and re-measured, and still does not fit: nothing was sent to the provider. ' +
     'Start a new conversation, or remove what this one is carrying, to continue.',
   );
 }

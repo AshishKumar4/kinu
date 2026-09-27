@@ -289,12 +289,12 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const items = present(outcomes.items, 'the graded-turn items');
 
     expect(items.map((i) => i.summary)).toEqual([
-      'accepted — "ship it"',
-      'corrected — "add pagination to the chat list"',
+      'accepted: "ship it"',
+      'corrected: "add pagination to the chat list"',
     ]);
     expect(items[1].evidence).toBe(
       "the user's reply read as corrected"
-      + ' — the user named a different list than the one that changed · confidence 75%',
+      + ': the user named a different list than the one that changed · confidence 75%',
     );
     expect(items[0].evidence).toBe('thumbs up from the user');
   });
@@ -417,13 +417,13 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(scaffold.evidence).toContain(`Promoted scaffold v${version}`);
     expect(scaffold.evidence).toContain(RATIONALE);
     const replay = present(entries.find((entry) => entry.id === 'replay:rpl-new'), 'the rpl-new entry');
-    expect(replay.summary).toBe('Self-test score held within noise at 0.75 (95% CI 0.30–0.95)');
-    expect(replay.evidence).toContain('loss 0.25 (95% CI 0.05–0.70)');
+    expect(replay.summary).toBe('Self-test score held within noise at 0.75 (95% CI 0.30-0.95)');
+    expect(replay.evidence).toContain('loss 0.25 (95% CI 0.05-0.70)');
     expect(replay.evidence).toContain(`scaffold v${version}`);
     expect(present(entries.find((entry) => entry.id === 'replay:rpl-hi'), 'the rpl-hi entry').summary)
-      .toBe('Self-test score improved to 0.95 (95% CI 0.83–0.99)');
+      .toBe('Self-test score improved to 0.95 (95% CI 0.83-0.99)');
     expect(present(entries.find((entry) => entry.id === 'replay:rpl-drop'), 'the rpl-drop entry').summary)
-      .toBe('Self-test score declined to 0.30 (95% CI 0.18–0.45)');
+      .toBe('Self-test score declined to 0.30 (95% CI 0.18-0.45)');
   });
 });
 

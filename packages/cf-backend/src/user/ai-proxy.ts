@@ -67,7 +67,7 @@ async function proxyChatCompletion<Id>(
   const workersAI = model.startsWith('@cf/');
 
   if (!workersAI && !model.includes('/')) {
-    return errorResponse(400, `Cannot route model "${model}" — use "@cf/{model}" (Workers AI) or "{provider}/{model}" (your AI Gateway).`);
+    return errorResponse(400, `Cannot route model "${model}": use "@cf/{model}" (Workers AI) or "{provider}/{model}" (your AI Gateway).`);
   }
 
   if (workersAI && env.DEV_USER_EMAIL) {

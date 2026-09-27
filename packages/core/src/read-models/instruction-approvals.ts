@@ -66,7 +66,7 @@ const DEFAULT_PREVIEW_CHARS = 2_000;
 export function previewInstruction(content: string, maxChars = DEFAULT_PREVIEW_CHARS): string {
   const safe = revealMisrepresenting(content);
 
-  return safe.length <= maxChars ? safe : `${safe.slice(0, maxChars)}…`;
+  return safe.length <= maxChars ? safe : `${safe.slice(0, maxChars)}...`;
 }
 
 const DEFAULT_INSTRUCTION_PAGE = 25;

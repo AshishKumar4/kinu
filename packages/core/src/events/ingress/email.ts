@@ -35,7 +35,7 @@ export function inboundEmailDropNotice(
   return {
     source: 'inbound email',
     reason:
-      `dropping mail right now — more than ${limitPerMin} messages arrived within one minute and the gate `
+      `dropping mail right now: more than ${limitPerMin} messages arrived within one minute and the gate `
       + `refuses the rest until ${new Date(windowResetsAt).toISOString()}. Mail sent in this window did not `
       + `reach you and was not stored: you have NOT seen your inbox.`,
   };

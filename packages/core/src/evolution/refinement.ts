@@ -634,11 +634,11 @@ export function evolutionDebt(
     owed,
     key: batch.length === 0 ? '' : fnv1a64(batch.join('\n')),
     summary: batch.length === 0
-      ? 'no unresolved corrections — nothing is owed a refinement'
+      ? 'no unresolved corrections: nothing is owed a refinement'
       : (owed
         ? `${String(batch.length)} unresolved correction${batch.length === 1 ? '' : 's'} `
           + 'are owed a refinement'
-        : `${String(batch.length)} unresolved correction${batch.length === 1 ? '' : 's'} — `
+        : `${String(batch.length)} unresolved correction${batch.length === 1 ? '' : 's'}: `
           + `a refinement opens at ${String(MIN_REFINEMENT_DEBT)}`)
       + (backlog > 0 ? `, and ${String(backlog)} more waiting behind this batch` : ''),
   };

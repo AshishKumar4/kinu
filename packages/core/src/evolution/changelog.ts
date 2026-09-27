@@ -154,7 +154,7 @@ function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[]
       kind: 'scaffold',
       at: Math.max(e.writtenAt, changedAt.get(e.version) ?? 0),
       summary: `${SCAFFOLD_SUMMARY[e.status]}${won}`,
-      evidence: `${SCAFFOLD_VERB[e.status]} v${e.version}${trial} — ${e.rationale} · ${record}${targeting}`,
+      evidence: `${SCAFFOLD_VERB[e.status]} v${e.version}${trial}: ${e.rationale} · ${record}${targeting}`,
       scaffoldVersion: e.version,
     };
 
@@ -182,7 +182,7 @@ function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
       kind: 'tool' as const,
       at,
       summary: `${verb === 'Crafted tool' ? 'Created' : 'Updated'} a tool: ${readableName}`,
-      evidence: `${verb} ${r.name}${r.description ? ` — ${r.description}` : ''} · ${score}`,
+      evidence: `${verb} ${r.name}${r.description ? `: ${r.description}` : ''} · ${score}`,
     };
   });
 }
@@ -282,7 +282,7 @@ function gepaEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): Chang
       at: r.endedAt ?? r.startedAt,
       summary: 'Tuned my own instructions',
       evidence: `GEPA self-optimization pass over ${r.target}` +
-        (r.winnerId ? ` — found a better candidate (${r.winnerId})` : ' — kept the current') +
+        (r.winnerId ? `: found a better candidate (${r.winnerId})` : ': kept the current') +
         ` · ${r.iterations} iterations · ${r.metricCalls} metric calls` +
         (r.stopReason ? ` · ${r.stopReason}` : ''),
     }));
@@ -309,7 +309,7 @@ function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: numbe
   return listPromptSectionVersions(sql, actor, limit).map((row) => {
     const bytes = Buffer.byteLength(row.source, 'utf8');
     const delta = bytes - row.incumbentBytes;
-    const size = `${delta >= 0 ? '+' : ''}${String(delta)} bytes (${String(row.incumbentBytes)} → ${String(bytes)})`;
+    const size = `${delta >= 0 ? '+' : ''}${String(delta)} bytes (${String(row.incumbentBytes)} -> ${String(bytes)})`;
     const record = trials.get(`${row.sectionId}:${String(row.version)}`);
 
     const trial = record && record.wins + record.losses + record.ties > 0
@@ -322,7 +322,7 @@ function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: numbe
       at: row.writtenAt,
       summary: `${SECTION_SUMMARY[row.status]} ${row.sectionId} guidance`,
       evidence:
-        `${SECTION_VERB[row.status]} ${row.sectionId} v${String(row.version)} — ${row.rationale} · ${size} · ${trial}`,
+        `${SECTION_VERB[row.status]} ${row.sectionId} v${String(row.version)}: ${row.rationale} · ${size} · ${trial}`,
     };
 
     // Rolled-back and historical rows are not in the prompt; nothing to revert.
@@ -379,14 +379,14 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
         id: `refinement:${request.id}:${String(index)}`,
         kind: 'refinement',
         at: request.updatedAt,
-        summary: `${route.kind} → ${route.target || '(no target)'} — `
+        summary: `${route.kind} -> ${route.target || '(no target)'}: `
           + REFINEMENT_DISPOSITION_PROSE[route.disposition],
         evidence: `${route.owner === '' ? 'no owning authority' : `owner ${route.owner}`}`
           + (route.reason === undefined ? '' : ` · ${route.reason}`)
           + (source === undefined
             ? ''
             : `\n${source.length > SOURCE_PREVIEW_CHARS
-              ? `${source.slice(0, SOURCE_PREVIEW_CHARS)}\n… +${String(source.length - SOURCE_PREVIEW_CHARS)} chars`
+              ? `${source.slice(0, SOURCE_PREVIEW_CHARS)}\n... +${String(source.length - SOURCE_PREVIEW_CHARS)} chars`
               : source}`),
       };
 
@@ -412,7 +412,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
       at: request.updatedAt,
       summary: REFINEMENT_STAGE_PROSE[request.stage],
       evidence: `${request.stage} · ${request.scope} scope · ${trigger} · reviewed ${turns}`
-        + (request.detail === '' ? '' : ` — ${request.detail}`),
+        + (request.detail === '' ? '' : `: ${request.detail}`),
       items,
     };
 
@@ -454,7 +454,7 @@ function replayEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): Cha
       kind: 'replay' as const,
       at: r.ranAt,
       summary: `Self-test score ${REPLAY_MOVE[direction]} ${formatScoreInterval(r.interval)}`,
-      evidence: `Replay eval — score ${formatScoreInterval(r.interval)} · ` +
+      evidence: `Replay eval: score ${formatScoreInterval(r.interval)} · ` +
         `loss ${formatScoreInterval(lossInterval(r.interval))}` +
         (r.scaffoldVersion != null ? ` on scaffold v${r.scaffoldVersion}` : '') +
         ` · ${r.sampleSize} labeled turns · ${r.acceptedCount} accepted / ${r.negativeCount} corrected`,
@@ -476,7 +476,7 @@ function outcomeItemEvidence(row: TurnOutcomeRow): string {
   switch (row.source) {
     case 'classifier':
       return `the user's reply read as ${row.outcome}`
-        + (row.evidence ? ` — ${row.evidence}` : '')
+        + (row.evidence ? `: ${row.evidence}` : '')
         + ` · confidence ${pct(row.confidence)}`;
     case 'execution':
       return row.evidence
@@ -524,7 +524,7 @@ function outcomeEntry(
         id: `outcome:${row.id}`,
         kind: 'outcomes' as const,
         at: row.createdAt,
-        summary: `${row.outcome} — "${request.length > 90 ? `${request.slice(0, 90)}…` : request || '(no recorded request)'}"`,
+        summary: `${row.outcome}: "${request.length > 90 ? `${request.slice(0, 90)}...` : request || '(no recorded request)'}"`,
         evidence: outcomeItemEvidence(row),
       };
     }),
@@ -612,7 +612,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
   }
 
   if (row.status !== 'current') {
-    return { ok: false, error: `scaffold v${version} is already ${row.status} — nothing to revert` };
+    return { ok: false, error: `scaffold v${version} is already ${row.status}: nothing to revert` };
   }
 
   // Pointer-first rollback: one statement retires this version and promotes its
@@ -660,7 +660,7 @@ function revertPromptSection(
   }
 
   if (row.status !== 'current') {
-    return { ok: false, error: `${sectionId} v${String(version)} is already ${row.status} — nothing to revert` };
+    return { ok: false, error: `${sectionId} v${String(version)} is already ${row.status}: nothing to revert` };
   }
 
   const prev = sql<{ version: number }>`
@@ -766,7 +766,7 @@ export async function revertChangelogEntryById(
 
   if (!entry) return { ok: false, error: `changelog entry ${id} not found` };
 
-  if (!entry.revert) return { ok: false, error: `changelog entry ${id} is informational — nothing to revert` };
+  if (!entry.revert) return { ok: false, error: `changelog entry ${id} is informational: nothing to revert` };
   const result = await executeChangelogRevert(ctx, entry.revert);
 
   // Recorded here, not by callers, so both backends log the reversal on the

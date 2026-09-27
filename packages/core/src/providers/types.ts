@@ -188,12 +188,12 @@ export function parseModelSpec(spec: string): ModelSpec {
   if (!s) throw new Error('Empty model spec');
   const parts = splitSpec(s);
 
-  if (parts === null) throw new Error(`Invalid model spec ${JSON.stringify(spec)} — expected "<provider>/<modelId>".`);
+  if (parts === null) throw new Error(`Invalid model spec ${JSON.stringify(spec)}: expected "<provider>/<modelId>".`);
 
   if (parts.account === null) return { provider: parts.provider, modelId: parts.modelId };
 
   if (!isAccountName(parts.account)) {
-    throw new Error(`Invalid model spec ${JSON.stringify(spec)} — "${parts.account}" is not an account name.`);
+    throw new Error(`Invalid model spec ${JSON.stringify(spec)}: "${parts.account}" is not an account name.`);
   }
 
   return { provider: parts.provider, modelId: parts.modelId, account: parts.account };

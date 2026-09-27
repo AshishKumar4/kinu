@@ -224,7 +224,7 @@ export class DeviceTunnel {
 
       if (deadline > 0) {
         stop = this.clock.after(deadline, () => settle(new Error(
-          `device RPC timeout after ${deadline}ms: ${method} — the call may still be running on the device`,
+          `device RPC timeout after ${deadline}ms: ${method}: the call may still be running on the device`,
         )));
       } else {
         this.openEnded.add(id);

@@ -2260,13 +2260,6 @@ export {
   createPlanAnnotationSaveQueue, type PlanAnnotationSaveQueue,
 } from './plans/plan-annotation-save';
 
-export {
-  swarmResolutionOf, swarmAxisRows, fanInArity, fanInVertices, nodeRationales,
-  runRefusal, runLiveness, formatEvidenceValue,
-  type SwarmAxis, type SwarmAxisRow, type SwarmResolution, type RunRefusal,
-  type RunLevel, type RunLiveness,
-} from './read-models/swarm-resolution';
-
 export { terminalChatError, type ChatTurnError, type TerminalFrame } from './utils/chat-turn-error';
 
 export {
@@ -2292,28 +2285,6 @@ export {
   type WorkersAIOptions,
   createWorkersAIProvider,
 } from './providers/workers-ai-provider';
-
-export {
-  scoreBand,
-  type ExplorerSelection,
-  cleanNodeLabel,
-  clipToWidth,
-  isCompeted,
-  principalVariation,
-  ancestorIds,
-  findForkNode,
-  terminalForkNode,
-  treeStats,
-  maxVisits,
-  subtreeCount,
-  losingBranchIds,
-  NODE_R_MAX,
-  NODE_R_UNSCORED,
-  nodeRadius,
-  linkWidth,
-  LABEL_MIN_SCALE,
-  viewNoteFor,
-} from './read-models/swarm-tree-model';
 
 export {
   type AnyToolPart,

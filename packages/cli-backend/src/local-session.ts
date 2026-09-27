@@ -2524,7 +2524,7 @@ export class LocalAgentSession {
     const { hash, status } = observeSystemPromptHash(this.lastSystemPromptHash, system);
 
     if (status === 'changed') {
-      this.emit({ type: 'evolution', event: 'system_prompt_hash', message: `changed → ${hash}` });
+      this.emit({ type: 'evolution', event: 'system_prompt_hash', message: `changed -> ${hash}` });
     }
 
     this.lastSystemPromptHash = hash;

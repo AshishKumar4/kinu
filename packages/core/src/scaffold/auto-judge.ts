@@ -250,7 +250,7 @@ async function judgeTrialOrderSwapped(opts: JudgeTrialOpts): Promise<ShadowTrial
   return {
     winner: agreed ? one.winner : 'tie',
     rationale: flipped
-      ? `Order-swap flip (${one.winner}, then ${two.winner}) — recorded as a tie. ${one.rationale} | ${two.rationale}`
+      ? `Order-swap flip (${one.winner}, then ${two.winner}): recorded as a tie. ${one.rationale} | ${two.rationale}`
       : `${one.rationale} | ${two.rationale}`,
     currentScore: (one.currentScore + two.currentScore) / 2,
     pendingScore: (one.pendingScore + two.pendingScore) / 2,
@@ -282,7 +282,7 @@ function buildJudgePrompt(opts: JudgeTrialOpts, pendingIsA: boolean): string {
 
   return [
     'You are judging two candidate responses to the SAME task.',
-    'They are shown in a random order and are deliberately unlabelled — their',
+    'They are shown in a random order and are deliberately unlabelled: their',
     'position tells you nothing about where they came from or how good they are.',
     // One score per response: asking per criterion led models to emit objects that fail validation.
     'Give each response ONE overall score from 0.0 to 1.0, weighing correctness,',

@@ -57,7 +57,7 @@ async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8
   if (!result.success || result.exitCode !== 0) {
     throw makeVfsError(
       'EIO',
-      `this file's bytes could not be read right now — try opening it again, or download it instead`,
+      `this file's bytes could not be read right now: try opening it again, or download it instead`,
       path,
     );
   }
@@ -290,12 +290,12 @@ function formatStartResult(result: NimbusStartResult): CommandResult {
   const lines = [
     running
       ? `started (long-running) pid=${result.pid}: ${result.command}`
-      : `started pid=${result.pid}: ${result.command} — already ${result.process.state}` +
+      : `started pid=${result.pid}: ${result.command}: already ${result.process.state}` +
         (result.process.exitCode != null ? ` (exit ${result.process.exitCode})` : ''),
   ];
 
   if (result.ports.length > 0) {
-    lines.push(`listening on port${result.ports.length > 1 ? 's' : ''} ${result.ports.map((p) => p.port).join(', ')} — workspace.exposePort(<port>) returns the preview URL and whether a request to it reaches the server`);
+    lines.push(`listening on port${result.ports.length > 1 ? 's' : ''} ${result.ports.map((p) => p.port).join(', ')}: workspace.exposePort(<port>) returns the preview URL and whether a request to it reaches the server`);
   }
 
   lines.push(`output: workspace.logs(${result.pid}) · stop: workspace.killProcess(${result.pid})`);
@@ -632,7 +632,7 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
       const result = await raceAbort(
         () => box.exec(command, execOptions),
         options?.signal,
-        'workspace exec aborted — the command may still finish in the session',
+        'workspace exec aborted: the command may still finish in the session',
       );
 
       const outcome = { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };

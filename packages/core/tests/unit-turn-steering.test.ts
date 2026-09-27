@@ -523,7 +523,7 @@ describe('execution-recovery detection (the failure ledger\'s second reader)', (
     expect(recovery.tool).toBe('shell');
     expect(recovery.failures).toBe(CONSECUTIVE_FAILURES_BEFORE_STEER);
     expect(recovery.failedArgs).toContain('npm test');
-    expect(recovery.failedArgs.length).toBeLessThanOrEqual(201);
+    expect(recovery.failedArgs.length).toBeLessThanOrEqual(203);
     expect(recovery.succeededArgs).toContain('bun test');
     expect(recovery.failedSignature.startsWith('shell')).toBe(true);
     expect(clean(steering, { command: 'bun lint' })).toBeNull();

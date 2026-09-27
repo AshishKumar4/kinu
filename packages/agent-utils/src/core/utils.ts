@@ -80,7 +80,7 @@ export async function raceAbort<T>(
 		try {
 			text = await terminate();
 		} catch (cause) {
-			const failure = new Error(`${message} — stopping the work failed`, { cause });
+			const failure = new Error(`${message}: stopping the work failed`, { cause });
 			failure.name = "AbortError";
 			throw failure;
 		}

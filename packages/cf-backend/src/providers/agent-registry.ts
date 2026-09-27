@@ -150,7 +150,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     if (!('reason' in platform)) return AI_GATEWAY_PROVIDER_ID;
     throw new Error(
       'No default provider available (need a UserDO credential stub for workers-ai, '
-      + `or a usable platform gateway — ${platform.reason})`,
+      + `or a usable platform gateway: ${platform.reason})`,
     );
   }
 

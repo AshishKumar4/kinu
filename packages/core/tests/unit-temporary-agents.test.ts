@@ -326,7 +326,7 @@ describe('a task-lifetime hire returns one completed answer', () => {
     if (inherited?.kind !== 'fork') throw new Error('No fork survived admission.');
     expect(inherited.messages).toHaveLength(51);
     expect(inherited.messages[0]).toEqual({ id: 'ctx-omitted', role: 'system', createdAt: -1,
-      content: '(2 earlier messages omitted from inherited context — durable state lives in the workspace files)' });
+      content: '(2 earlier messages omitted from inherited context: durable state lives in the workspace files)' });
     expect(inherited.messages.at(-1)).toEqual({ id: 'ctx-49', role: 'assistant', createdAt: 49,
       content: 'A'.repeat(800) + '\n[... 400 chars omitted from the middle ...]\n' + 'B'.repeat(800) });
     conversation.splice(0, conversation.length, { role: 'user', content: 'After the interruption.' });

@@ -13,6 +13,7 @@
     "./obs": "./src/obs/index.ts",
     "./protocol": "./src/protocol.ts",
     "./tui": "./src/tui/index.ts",
+    "./swarm-view": "./src/read-models/swarm-view.ts",
     "./slates": "./src/slates/index.ts",
     "./control-plane": "./src/control-plane/index.ts",
     "./control-plane/store": "./src/control-plane/store.ts",

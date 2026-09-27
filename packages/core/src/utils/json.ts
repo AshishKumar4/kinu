@@ -141,14 +141,14 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
   const text = v.safeParse(v.string(), input.value);
 
   if (text.success) {
-    return text.output.length > DIGEST_LIMIT ? text.output.slice(0, DIGEST_LIMIT) + '…' : text.output;
+    return text.output.length > DIGEST_LIMIT ? text.output.slice(0, DIGEST_LIMIT) + '...' : text.output;
   }
 
   try {
     const projected = projectJsonValue(input);
     const serialized = JSON.stringify(projected);
 
-    return serialized.length <= DIGEST_LIMIT ? projected : serialized.slice(0, DIGEST_LIMIT) + '…';
+    return serialized.length <= DIGEST_LIMIT ? projected : serialized.slice(0, DIGEST_LIMIT) + '...';
   } catch (error) {
     // `String()` would give "[object Object]"; the reason takes its place.
     return `unserializable digest input: ${renderThrownChain({ cause: error })}`.slice(0, DIGEST_LIMIT);
