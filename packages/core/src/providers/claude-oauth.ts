@@ -3,7 +3,8 @@ import { CLAUDE_CODE_SDK_VERSION } from './claude';
 import { OAuthTokenError } from './oauth-token-error';
 import type { OAuthCredential } from '../credentials/store';
 import { createPkcePair } from '../utils/crypto';
-import { KinuError, tolerate } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settle, settleSync, tolerate } from '../obs/index';
 import { parseJsonValue } from '../utils/json';
 
 /** Base64 so secret scanners stay quiet. */
@@ -56,17 +57,23 @@ export async function startClaudeSignIn(): Promise<ClaudeSignIn> {
 }
 
 export function claudeCodeFrom(returned: string, state: string): string {
+  return settleSync(signInCode(returned, state));
+}
+
+function signInCode(returned: string, state: string): Effect.Effect<string, KinuError> {
   const text = returned.trim();
   const address = URL.canParse(text) ? new URL(text) : null;
   const [code = '', carried = state] = address === null ? text.split('#') : [address.searchParams.get('code') ?? '', address.searchParams.get('state') ?? ''];
 
-  if (address?.searchParams.get('error') != null) throw new KinuError('denied', `Claude refused the sign-in: ${address.searchParams.get('error') ?? ''}`);
+  if (address?.searchParams.get('error') != null) {
+    return Effect.fail(new KinuError('denied', `Claude refused the sign-in: ${address.searchParams.get('error') ?? ''}`));
+  }
 
-  if (code === '') throw new KinuError('bad_input', 'that is not a Claude sign-in code or the address Claude sent you to');
+  if (code === '') return Effect.fail(new KinuError('bad_input', 'that is not a Claude sign-in code or the address Claude sent you to'));
 
-  if (carried !== state) throw new KinuError('bad_input', 'that code belongs to another sign-in; start it again');
+  if (carried !== state) return Effect.fail(new KinuError('bad_input', 'that code belongs to another sign-in; start it again'));
 
-  return code;
+  return Effect.succeed(code);
 }
 
 function credentialFrom(body: v.InferOutput<typeof TokenResponseSchema>, previous: OAuthCredential | null): OAuthCredential {
@@ -87,24 +94,28 @@ function credentialFrom(body: v.InferOutput<typeof TokenResponseSchema>, previou
   };
 }
 
-async function tokenRequest(fetchFn: typeof fetch, body: Readonly<Record<string, string>>, headers: Readonly<Record<string, string>>) {
-  const response = await fetchFn(TOKEN_URL, {
-    method: 'POST',
-    headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+function tokenRequest(
+  fetchFn: typeof fetch, body: Readonly<Record<string, string>>, headers: Readonly<Record<string, string>>,
+): Effect.Effect<v.InferOutput<typeof TokenResponseSchema>> {
+  return Effect.gen(function* () {
+    const response = yield* Effect.promise(() => fetchFn(TOKEN_URL, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }));
+
+    const text = yield* Effect.promise(() => response.text());
+
+    if (!response.ok) {
+      const rejection = v.safeParse(TokenErrorSchema, tolerate<unknown>(() => parseJsonValue(text), 'malformed-input'));
+      const code = rejection.success ? rejection.output.error ?? 'unknown' : 'unknown';
+      const reason = rejection.success ? rejection.output.error_description ?? code : `HTTP ${String(response.status)}`;
+
+      return yield* Effect.die(new OAuthTokenError('claude', code, `Claude's token endpoint refused the sign-in: ${reason}`));
+    }
+
+    return v.parse(TokenResponseSchema, parseJsonValue(text));
   });
-
-  const text = await response.text();
-
-  if (!response.ok) {
-    const rejection = v.safeParse(TokenErrorSchema, tolerate<unknown>(() => parseJsonValue(text), 'malformed-input'));
-    const code = rejection.success ? rejection.output.error ?? 'unknown' : 'unknown';
-    const reason = rejection.success ? rejection.output.error_description ?? code : `HTTP ${String(response.status)}`;
-
-    throw new OAuthTokenError('claude', code, `Claude's token endpoint refused the sign-in: ${reason}`);
-  }
-
-  return v.parse(TokenResponseSchema, parseJsonValue(text));
 }
 
 export interface ClaudeOAuthClient {
@@ -116,32 +127,28 @@ export interface ClaudeOAuthClient {
 export function createClaudeOAuthClient(fetchFn: typeof fetch = fetch): ClaudeOAuthClient {
   return {
     async exchange(signIn, code) {
-      const body = await tokenRequest(fetchFn, {
+      return settle(Effect.map(tokenRequest(fetchFn, {
         grant_type: 'authorization_code',
         client_id: CLIENT_ID,
         code,
         redirect_uri: CLAUDE_OAUTH_REDIRECT_URI,
         code_verifier: signIn.verifier,
         state: signIn.state,
-      }, {});
-
-      return credentialFrom(body, null);
+      }, {}), (body) => credentialFrom(body, null)));
     },
     async refresh(credential) {
       if (credential.refreshToken === undefined || credential.refreshToken === '') {
-        throw new OAuthTokenError('claude', 'invalid_grant', 'this Claude login holds no refresh token; sign in again');
+        return settle(Effect.die(new OAuthTokenError('claude', 'invalid_grant', 'this Claude login holds no refresh token; sign in again')));
       }
 
-      const body = await tokenRequest(fetchFn, {
+      return settle(Effect.map(tokenRequest(fetchFn, {
         grant_type: 'refresh_token',
         client_id: CLIENT_ID,
         refresh_token: credential.refreshToken,
       }, {
         'anthropic-beta': 'oauth-2025-04-20',
         'User-Agent': `anthropic-sdk-typescript/${CLAUDE_CODE_SDK_VERSION} userOAuthProvider`,
-      });
-
-      return credentialFrom(body, credential);
+      }), (body) => credentialFrom(body, credential)));
     },
   };
 }

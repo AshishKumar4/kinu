@@ -5,6 +5,6 @@
     "types": ["bun", "node"]
   },
   "include": ["src", "tests"],
-  "//": "tests/fixtures/log-ban and tests/fixtures/template-flags are deliberately uncompilable — they are the red halves of the reserved-log-field and typed-conditional proofs, and unit-obs-log-ban.test.ts / unit-prompt-template-flags.test.ts run tsc over their own projects to read the diagnostics.",
-  "exclude": ["tests/fixtures/log-ban", "tests/fixtures/template-flags"]
+  "//": "tests/fixtures/log-ban, tests/fixtures/template-flags and tests/fixtures/effect-closed-failure are deliberately uncompilable — they are the red halves of the reserved-log-field, typed-conditional and closed-failure proofs, and unit-obs-log-ban.test.ts / unit-prompt-template-flags.test.ts / unit-effect-closed-failure.test.ts run tsc over their own projects to read the diagnostics.",
+  "exclude": ["tests/fixtures/log-ban", "tests/fixtures/template-flags", "tests/fixtures/effect-closed-failure"]
 }

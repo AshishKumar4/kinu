@@ -9,7 +9,8 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ModelCallReport } from '../events/model-call';
 import type { CallAccount } from './quota';
-import { toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { settle, toKinuError } from '../obs/index';
 import * as v from 'valibot';
 import { isJsonObject, JsonObjectSchema, parseJsonObject, type JsonObject } from '../utils/json';
 
@@ -335,56 +336,54 @@ export class CacheWarmingLane {
 
   /** Run the warm this wake was armed for, if still owed; null when nothing was due. */
   async runDue(now: number): Promise<{ readonly usage: Usage } | null> {
-    const due = this.seams.store.due(now);
+    return settle(Effect.gen({ self: this }, function* () {
+      const due = this.seams.store.due(now);
 
-    if (due === null) return null;
-    const body = warmRequestBody(due.body);
+      if (due === null) return null;
+      const body = warmRequestBody(due.body);
 
-    if (body === null) {
-      this.seams.store.retire();
+      if (body === null) {
+        this.seams.store.retire();
 
-      return null;
-    }
+        return null;
+      }
 
-    const sentAt = this.seams.now();
-    let outcome: WarmOutcome | null;
+      const sentAt = this.seams.now();
 
-    try {
-      outcome = await this.seams.send({ modelSpec: due.modelSpec, body });
-    } catch (cause) {
-      // A failed warm is not retried, and the row is retired before the throw: a row left armed
+      // A failed warm is not retried, and the row is retired before the failure: a row left armed
       // with a past `due_at` turns a 429 into one request per second.
-      this.seams.store.retire();
+      const outcome = yield* Effect.tryPromise({ try: () => this.seams.send({ modelSpec: due.modelSpec, body }), catch: (cause) => ({ cause }) }).pipe(
+        Effect.tapError(() => Effect.sync(() => { this.seams.store.retire(); })),
+        Effect.catch((failed) => Effect.fail(toKinuError({ doing: 'warming the prompt-cache prefix', cause: failed.cause, otherwise: 'unavailable' }))),
+      );
 
-      throw toKinuError({ doing: 'warming the prompt-cache prefix', cause, otherwise: 'unavailable' });
-    }
+      if (outcome === null) {
+        this.seams.store.retire();
 
-    if (outcome === null) {
-      this.seams.store.retire();
+        return null;
+      }
 
-      return null;
-    }
+      const spec = formatModelSpec(due.modelSpec);
+      this.seams.spend({ source: 'warming', usage: outcome.usage, spec, modelId: due.modelSpec.modelId, account: outcome.account });
+      const refreshes = due.refreshes + 1;
 
-    const spec = formatModelSpec(due.modelSpec);
-    this.seams.spend({ source: 'warming', usage: outcome.usage, spec, modelId: due.modelSpec.modelId, account: outcome.account });
-    const refreshes = due.refreshes + 1;
+      const next = warmingPlan({
+        modelSpec: due.modelSpec,
+        lastResponse: {
+          requestSentAt: sentAt,
+          cacheRead: outcome.usage.cacheRead,
+          cacheWrite: outcome.usage.cacheWrite,
+          retention: due.retention,
+        },
+        idleRefreshes: refreshes,
+        now: sentAt,
+      });
 
-    const next = warmingPlan({
-      modelSpec: due.modelSpec,
-      lastResponse: {
-        requestSentAt: sentAt,
-        cacheRead: outcome.usage.cacheRead,
-        cacheWrite: outcome.usage.cacheWrite,
-        retention: due.retention,
-      },
-      idleRefreshes: refreshes,
-      now: sentAt,
-    });
+      this.seams.store.refreshed({ at: next?.at ?? null, refreshes });
 
-    this.seams.store.refreshed({ at: next?.at ?? null, refreshes });
+      if (next !== null) this.seams.wake(next.at);
 
-    if (next !== null) this.seams.wake(next.at);
-
-    return { usage: outcome.usage };
+      return { usage: outcome.usage };
+    }));
   }
 }

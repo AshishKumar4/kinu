@@ -3,6 +3,7 @@
  * nothing outside `obs/`; OOM signatures below are pinned to platform-catalog.ts by a test.
  */
 
+import { Data, Inspectable } from 'effect';
 import { z } from 'zod';
 import * as v from 'valibot';
 import { classify, errnoCode, scalarText } from './expected-failure';
@@ -62,19 +63,30 @@ export const CODE_WORK_DID_NOT_START = {
  * A classified failure chaining through native `cause`. The name carries the class: DO RPC keeps only
  * `name: message` (compat 2025-12-01; measured 2026-09-26, docs/OBSERVABILITY.md).
  */
-export class KinuError extends Error {
-  override readonly name: string = 'KinuError';
-  declare readonly execution?: { readonly exitCode: number };
-
+export class KinuError extends Data.TaggedError('KinuError')<{
+  readonly code: ErrorCode;
+  readonly message: string;
+  readonly execution?: { readonly exitCode: number };
+}> {
   constructor(
-    readonly code: ErrorCode,
+    code: ErrorCode,
     message: string,
     options?: ErrorOptions & { execution?: { readonly exitCode: number } },
   ) {
-    super(message, options);
+    super(options?.execution === undefined ? { code, message } : { code, message, execution: options.execution });
     this.name = `KinuError[${code}]`;
 
-    if (options?.execution !== undefined) this.execution = options.execution;
+    if (options !== undefined && 'cause' in options) {
+      Object.defineProperty(this, 'cause', { value: options.cause, writable: true, configurable: true });
+    }
+  }
+
+  override toJSON() {
+    return { code: this.code, name: this.name, ...Object.fromEntries(Object.entries(this).filter(([key]) => key !== '_tag')) };
+  }
+
+  override [Inspectable.NodeInspectSymbol](): this {
+    return this;
   }
 }
 

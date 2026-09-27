@@ -7,7 +7,9 @@ import type {
   AssistantModelMessage, DataContent, ToolResultPart, UserModelMessage,
 } from 'ai';
 import { asSchema, convertToBase64 } from '@ai-sdk/provider-utils';
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { settle } from '../obs/effect';
 import type { CountableRequest, InputTokenCount } from './input-tokens';
 import type { ProviderDeps } from './types';
 import { createAuthedFetch } from './util';
@@ -287,34 +289,36 @@ export async function countAnthropicInputTokens(input: {
   credKey: string;
   missingCredentialError: string;
 }): Promise<InputTokenCount> {
-  const converted = await toCountBody(input.modelId, input.request);
+  return settle(Effect.gen(function* () {
+    const converted = yield* Effect.promise(() => toCountBody(input.modelId, input.request));
 
-  if (!converted.ok) {
-    return {
-      kind: 'unsupported',
+    if (!converted.ok) {
+      return {
+        kind: 'unsupported',
+        provider: input.providerId,
+        reason: `the request carries ${converted.reason}, which the count endpoint's body cannot represent exactly`,
+      };
+    }
+
+    const authedFetch = createAuthedFetch(input.deps, {
       provider: input.providerId,
-      reason: `the request carries ${converted.reason}, which the count endpoint's body cannot represent exactly`,
-    };
-  }
+      modelId: input.modelId,
+      credKey: input.credKey,
+      missingCredentialError: input.missingCredentialError,
+    });
 
-  const authedFetch = createAuthedFetch(input.deps, {
-    provider: input.providerId,
-    modelId: input.modelId,
-    credKey: input.credKey,
-    missingCredentialError: input.missingCredentialError,
-  });
+    const response = yield* Effect.promise(() => authedFetch(`${input.baseURL}/messages/count_tokens`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'anthropic-version': ANTHROPIC_VERSION },
+      body: JSON.stringify(converted.value),
+    }));
 
-  const response = await authedFetch(`${input.baseURL}/messages/count_tokens`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'anthropic-version': ANTHROPIC_VERSION },
-    body: JSON.stringify(converted.value),
-  });
+    if (!response.ok) {
+      return yield* Effect.die(new Error(`count_tokens answered ${response.status}: ${(yield* Effect.promise(() => response.text())).slice(0, 400)}`));
+    }
 
-  if (!response.ok) {
-    throw new Error(`count_tokens answered ${response.status}: ${(await response.text()).slice(0, 400)}`);
-  }
+    const parsed = v.parse(CountResponseSchema, yield* Effect.promise(() => response.json()));
 
-  const parsed = v.parse(CountResponseSchema, await response.json());
-
-  return { kind: 'counted', tokens: parsed.input_tokens };
+    return { kind: 'counted', tokens: parsed.input_tokens };
+  }));
 }
