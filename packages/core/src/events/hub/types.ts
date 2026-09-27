@@ -71,7 +71,7 @@ export type TriggerId = string;
 
 export type ReplyChannelId = string;
 
-export type ReplyChannelKind = 'http_pending' | 'peer_back' | 'email_thread';
+export type ReplyChannelKind = 'peer_back' | 'email_thread';
 
 export interface ReplyChannelRef {
   id: ReplyChannelId;

@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS reply_channels (
   id                  TEXT    NOT NULL,
   event_id            TEXT    NOT NULL,
   kind                TEXT    NOT NULL
-                              CHECK(kind IN ('http_pending', 'peer_back', 'email_thread')),
+                              CHECK(kind IN ('peer_back', 'email_thread')),
   holder_addr         TEXT    NOT NULL DEFAULT '',
   ttl_expires_at      INTEGER NOT NULL,
   state               TEXT    NOT NULL DEFAULT 'open'

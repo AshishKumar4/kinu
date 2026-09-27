@@ -5,7 +5,6 @@
 
 import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
-import type { ReplyChannelStore } from '../hub/reply-channel';
 import type { TriggerRegistry } from '../hub/triggers';
 import { spillEventContent } from '../hub/content-spill';
 import { classify } from '../../obs/index';
@@ -58,7 +57,6 @@ export type WebhookDeliveryResult = {
 export interface WebhookIngressDeps {
   triggers: TriggerRegistry;
   log: EventLog;
-  replies: ReplyChannelStore;
   vfs: VFS;
   secrets: SecretStore;
   sql: SqlExec;
@@ -257,13 +255,6 @@ export async function acceptWebhookDelivery(
   }
 
   const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
-
-  // No `ttl_ms_override`: the `http_pending` TTL lives in reply-channel.ts.
-  deps.replies.open({
-    event_id: 'pending',
-    kind: 'http_pending',
-    holder_addr: `delivery:${delivery_id}`,
-  }, opts.now);
 
   // Spill after the auth and rate gates so a rejected delivery never writes a file.
   const bodySerialized = JSON.stringify(parsedBody) ?? String(parsedBody);

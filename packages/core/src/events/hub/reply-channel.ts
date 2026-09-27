@@ -13,7 +13,6 @@ import { parseJsonValue, type JsonValue } from '../../utils/json';
 import { renderThrownChain } from '../../obs/index';
 
 const TTL_MS = {
-  http_pending: 30_000,
   peer_back: 24 * 60 * 60 * 1000,
   email_thread: 24 * 60 * 60 * 1000,
 } satisfies Record<ReplyChannelKind, number>;
@@ -26,7 +25,7 @@ export interface ReplyDispatcher {
 const ReplyChannelRowSchema = v.object({
   id: v.string(),
   event_id: v.string(),
-  kind: v.picklist(['http_pending', 'peer_back', 'email_thread']),
+  kind: v.picklist(['peer_back', 'email_thread']),
   holder_addr: v.string(),
   ttl_expires_at: v.number(),
   state: v.picklist(['open', 'replied', 'expired', 'aborted']),
