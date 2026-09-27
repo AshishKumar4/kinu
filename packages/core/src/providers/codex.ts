@@ -84,7 +84,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
     async isAvailable(deps) { return deps.hasCredential(CODEX_CRED_KEY); },
     unavailableReason() {
-      return 'No Codex OAuth credential — connect ChatGPT via the device-code flow.';
+      return 'No Codex OAuth credential: connect ChatGPT via the device-code flow.';
     },
     async listModels(deps) {
       return settle(Effect.gen(function* () {

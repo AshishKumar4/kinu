@@ -30,7 +30,7 @@ export function resolvePlatformGateway(env: ProviderEnv): PlatformGateway {
   const binding = env.AI;
 
   if (!binding) {
-    return { reason: 'Workers AI binding (env.AI) missing — add "ai": { "binding": "AI" } to wrangler.jsonc.' };
+    return { reason: 'Workers AI binding (env.AI) missing: add "ai": { "binding": "AI" } to wrangler.jsonc.' };
   }
 
   return { target, binding };

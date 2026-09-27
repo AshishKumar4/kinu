@@ -9,7 +9,7 @@ export const DEFAULT_CHECKPOINT_KEEP = 50;
 
 export const CHECKPOINTS_UNAVAILABLE_NO_GIT = 'checkpoints unavailable: git not found';
 
-export const CHECKPOINTS_NO_DEVICE = 'no device connected — connect one with `kinu connect`';
+export const CHECKPOINTS_NO_DEVICE = 'no device connected: connect one with `kinu connect`';
 
 export interface CheckpointTurnMeta {
   turnId: string;

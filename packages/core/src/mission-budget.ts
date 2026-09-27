@@ -409,7 +409,7 @@ export class MissionGovernor {
       ? `${row.limitTokens} tokens`
       : `$${(row.limitUsd ?? 0).toFixed(2)}`;
 
-    const about = snapshot.pricing.source === 'catalog' ? '=' : '≈';
+    const about = snapshot.pricing.source === 'catalog' ? '=' : '~';
     const spent = `${snapshot.spent.tokens} tokens ${about} $${snapshot.spent.usd.toFixed(4)} against ${cap}`;
 
     return {

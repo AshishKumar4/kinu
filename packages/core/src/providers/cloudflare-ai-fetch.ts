@@ -127,9 +127,9 @@ export async function mapGatewayError(res: Response, modelId: string, gatewayId:
   let friendly: string | null = null;
 
   if (code === 2008 || /invalid provider/i.test(message ?? '')) {
-    friendly = `${gateway} cannot route "${modelId}" — the unified endpoint only accepts "{provider}/{model}" ids for providers it supports (got provider "${author}").`;
+    friendly = `${gateway} cannot route "${modelId}": the unified endpoint only accepts "{provider}/{model}" ids for providers it supports (got provider "${author}").`;
   } else if (code === 2021 || /invalid user credentials/i.test(message ?? '') || /insufficient.*(credit|balance)/i.test(message ?? '')) {
-    friendly = `${gateway} has no working credentials for "${author}" — add a ${author} key under AI Gateway → Provider Keys (BYOK), or load Unified Billing credits in your Cloudflare account.`;
+    friendly = `${gateway} has no working credentials for "${author}": add a ${author} key under AI Gateway -> Provider Keys (BYOK), or load Unified Billing credits in your Cloudflare account.`;
   } else if (res.status === 401) {
     // Still 401 after the forced-refresh retry, and no gateway code claimed it.
     friendly = DEAD_CLOUDFLARE_LOGIN;

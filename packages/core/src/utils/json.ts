@@ -145,7 +145,7 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
   const text = v.safeParse(v.string(), input.value);
 
   if (text.success) {
-    return text.output.length > DIGEST_LIMIT ? text.output.slice(0, DIGEST_LIMIT) + '…' : text.output;
+    return text.output.length > DIGEST_LIMIT ? text.output.slice(0, DIGEST_LIMIT) + '...' : text.output;
   }
 
   return settleSync(Effect.try({
@@ -153,7 +153,7 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
       const json = projectJsonValue(input);
       const serialized = JSON.stringify(json);
 
-      return serialized.length <= DIGEST_LIMIT ? json : serialized.slice(0, DIGEST_LIMIT) + '…';
+      return serialized.length <= DIGEST_LIMIT ? json : serialized.slice(0, DIGEST_LIMIT) + '...';
     },
     catch: (cause) => ({ cause }),
   }).pipe(

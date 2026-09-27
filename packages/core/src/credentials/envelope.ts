@@ -114,7 +114,7 @@ function opened(aad: string, stored: string, current: string, retired: readonly 
         ),
         catch: (cause) => ({ cause }),
       }).pipe(Effect.catch((failed) => Effect.fail(new KinuError('bad_input',
-        `Record "${aad}" failed to decrypt — the stored envelope does not match its key, or belongs to another store.`,
+        `Record "${aad}" failed to decrypt: the stored envelope does not match its key, or belongs to another store.`,
         { cause: failed.cause },
       ))));
 

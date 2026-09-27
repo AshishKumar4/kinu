@@ -194,12 +194,12 @@ function modelSpec(spec: string): Effect.Effect<ModelSpec> {
   if (!s) return Effect.die(new Error('Empty model spec'));
   const parts = splitSpec(s);
 
-  if (parts === null) return Effect.die(new Error(`Invalid model spec ${JSON.stringify(spec)} — expected "<provider>/<modelId>".`));
+  if (parts === null) return Effect.die(new Error(`Invalid model spec ${JSON.stringify(spec)}: expected "<provider>/<modelId>".`));
 
   if (parts.account === null) return Effect.succeed({ provider: parts.provider, modelId: parts.modelId });
 
   if (!isAccountName(parts.account)) {
-    return Effect.die(new Error(`Invalid model spec ${JSON.stringify(spec)} — "${parts.account}" is not an account name.`));
+    return Effect.die(new Error(`Invalid model spec ${JSON.stringify(spec)}: "${parts.account}" is not an account name.`));
   }
 
   return Effect.succeed({ provider: parts.provider, modelId: parts.modelId, account: parts.account });
