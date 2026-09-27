@@ -5062,6 +5062,8 @@ const ACTIVITY_LATEST = {
   stepIndex: 7,
   usage: { input: 148_204, output: 1_842, cacheRead: 131_072, reasoning: 604, neurons: 18_005 },
   context: ACTIVITY_CONTEXT,
+  modelId: "gpt-5.5",
+  route: { kind: "device", id: "dev-studio", name: "studio" },
 } satisfies NonNullable<ActivitySnapshot["latest"]>;
 
 const ACTIVITY_CACHE_HIT = {
