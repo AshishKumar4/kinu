@@ -50,7 +50,7 @@ describe('conversationCount — the default chat alone', () => {
     expect(conversationCount(s.sql, s.actor)).toBe(2);
   });
 
-  // MSG-COUNT-0927: a rewound branch was counted.
+  // MSG-COUNT-0927: the Agent tab and fork modal counted a rewound branch.
   test('counts the chat the head reads, not a branch a rewind left behind', async () => {
     const s = setup();
     await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
@@ -132,7 +132,7 @@ describe('conversationTurnPair — what a grader attributes from', () => {
     expect(pair.endedAtMs).toBeGreaterThanOrEqual(present(pair.startedAtMs, 'the pair start'));
   });
 
-  test('a turn id that names no answer has no pair', async () => {
+  test('a turn is named by its answer: the ask\'s id or an unknown one has no pair', async () => {
     const s = setup();
     await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
 
