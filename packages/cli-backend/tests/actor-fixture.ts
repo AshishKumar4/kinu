@@ -11,7 +11,7 @@ import {
 } from '@kinu.run/core';
 import { bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '../src/actor-identity';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
-import type { HostedHeadSeat } from '../src/head-runtime';
+import type { HeadSeat } from '@kinu.run/core';
 import { unobservedSpend } from '@kinu.run/test-utils';
 
 /** A head's runtime over its parent's database; a head has no store of its own. */
@@ -75,7 +75,7 @@ export function headSeatFactory(
   host: ActorHost,
   runId = 'fixture-run',
   writes?: Map<string, WriteObserver>,
-): (input: HeadInput, observer: WriteObserver) => Promise<HostedHeadSeat> {
+): (input: HeadInput, observer: WriteObserver) => Promise<HeadSeat> {
   return async (input, observer) => {
     const binding = registerLocalActor(parent.actor, {
       name: explorationActorKey(input.id), creationId: input.id, kind: 'run', lifetime: 'task',
@@ -209,7 +209,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
       subordinateDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),
     }),
-  } satisfies Omit<HostedHeadSeat, 'release'>;
+  } satisfies Omit<HeadSeat, 'release'>;
 }
 
 /** Per-node seat factory: each call registers its own node actor, so wave children never share a claim ledger. */

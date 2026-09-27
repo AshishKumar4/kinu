@@ -10,7 +10,7 @@
 import { REAL_CLOCK, type HeadReport, type ObserveStream } from '@kinu.run/core';
 import type { LanguageModel, Tool, ToolSet } from 'ai';
 import {
-  EventLog, HeadCapture, runHeadInference, titleActorFromMessage, buildHeadToolSet,
+  EventLog, HeadCapture, runHeadInference, titleActorFromMessage, spawnSeatedHead,
   admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus,
   receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles,
   subordinateForkContext, type SubordinateInheritedContext,
@@ -653,71 +653,56 @@ function explorationDynamicContext(actor: HostedActor, profile: ResolvedTurnProf
   });
 }
 
-/** A branching head, hosted. The actor is retired when `run()` settles. */
+/** A branching head, hosted on the one head runner. The actor is retired when `run()` settles. */
 export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promise<SpawnedHead> {
   const { reference, retire } = await hostRunActor(seams, { creationId: input.id, toolProfile: 'full', loop: input.loop });
-  /** The caller's explicit stop; a socket close or evicted isolate must leave this false. */
-  let stopped: string | null = null;
+
+  return spawnSeatedHead(input, {
+    // The watch is named before the acquire that builds the runtime over it; a later one sees no writes.
+    seat: async (_input, writes) => {
+      const unwatch = seams.watchWrites(reference, writes);
+      const seat = await runActorSeat(seams, reference);
+
+      return {
+        ...seat,
+        queue: (body) => seams.host.run(reference, body),
+        release: async () => {
+          unwatch();
+          await retire();
+        },
+      };
+    },
+    model: (head, seat) => settle(explorationModelSpec(seams, seat.actor, 'head', head.model).pipe(
+      Effect.tap((spec) => Effect.promise(() => seams.priceAs(seat.actor, spec))),
+      Effect.map((spec) => ({ model: seams.resolveModel(spec), spec })),
+    )),
+    codemodeTool: (seat) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
+      Effect.map((runtime) => seams.codemodeTool(runtime, seams.webSearch())),
+    )),
+    webSearch: seams.webSearch(),
+    split: (seat, head) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
+      Effect.map((runtime) => seams.split(seat.actor, runtime, head)),
+    )),
+    mission: (head, spec) => {
+      const mission = seams.mission(head);
+
+      return mission === null || spec === null ? mission
+        : { ...mission, port: { ...mission.port, debit: (tokens, opts) => mission.port.debit(tokens, { ...opts, spec }) } };
+    },
+    reportStep: (headId, seq, step) => seams.recordStep(headId, seq, step),
+    reportDelta: seams.publishDelta,
+  });
+}
+
+/** One run actor's turn seams, over its acquired actor. */
+async function runActorSeat(seams: HostedActorSeams, reference: ActorReference): Promise<HostedNodeSeat> {
+  const actor = await seams.host.acquire(reference);
 
   return {
-    id: input.id,
-    run: async (): Promise<HeadReport> => {
-      // Created before `host.run` because acquiring builds the runtime over the watched
-      // file view; a later capture would report no file changes.
-      const capture = new HeadCapture();
-      const unwatch = seams.watchWrites(reference, capture.files);
-
-      const runHead = async (actor: HostedActor, runtime: CFRuntime, spec: string): Promise<HeadReport> => {
-        const webSearch = seams.webSearch();
-        await seams.priceAs(actor, spec);
-
-        const deps: HeadInferenceDeps = {
-          actor,
-          runId: crypto.randomUUID(),
-          clock: REAL_CLOCK,
-          model: seams.resolveModel(spec),
-          tools: buildHeadToolSet({
-            input, capture, rt: runtime, history: actor.stores.history,
-            codemodeTool: seams.codemodeTool(runtime, webSearch),
-            webSearch,
-            split: seams.split(actor, runtime, input),
-          }),
-          capture,
-          workspaceLayout: 'shared-workspace',
-          isAborted: () => stopped !== null,
-          abortReason: () => stopped,
-          profile: (request) => seams.profile({ actor, ...request }),
-          dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
-          reportStep: (seq, step) => seams.recordStep(input.id, seq, step),
-          reportDelta: seams.publishDelta,
-        };
-
-        const mission = seams.mission(input);
-
-        if (mission !== null) {
-          deps.mission = { ...mission, port: { ...mission.port, debit: (tokens, opts) => mission.port.debit(tokens, { ...opts, spec }) } };
-        }
-
-        return await runHeadInference(input, deps);
-      };
-
-      try {
-        return await seams.host.run(reference, (actor) => settle(Effect.gen(function* () {
-          const runtime = yield* cfRuntimeOf(actor, 'a hosted head');
-          const spec = yield* explorationModelSpec(seams, actor, 'head', input.model);
-
-          return yield* Effect.promise(() => runHead(actor, runtime, spec));
-        })));
-      } finally {
-        unwatch();
-        await retire();
-      }
-    },
-    /** Explicit stop: records the reason and interrupts the live turn. Not reachable from a transport close. */
-    abort: async (reason: string): Promise<void> => {
-      stopped = reason;
-      seams.host.hosted(reference)?.session.interrupt();
-    },
+    actor,
+    runId: crypto.randomUUID(),
+    profile: (request) => seams.profile({ actor, ...request }),
+    dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
   };
 }
 
@@ -728,15 +713,7 @@ export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promi
 export async function hostNodeSeat(
   seams: HostedActorSeams, node: NodeIdentity,
 ): Promise<HostedNodeSeat> {
-  const { reference } = await hostRunActor(seams, { creationId: node.nodeId, toolProfile: 'full' });
-  const actor = await seams.host.acquire(reference);
-
-  return {
-    actor,
-    runId: crypto.randomUUID(),
-    profile: (request) => seams.profile({ actor, ...request }),
-    dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
-  };
+  return await runActorSeat(seams, (await hostRunActor(seams, { creationId: node.nodeId, toolProfile: 'full' })).reference);
 }
 
 /** A swarm node's `eval`, over the hosted actor the node runs as. */

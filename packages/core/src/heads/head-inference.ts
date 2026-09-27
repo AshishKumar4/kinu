@@ -399,7 +399,7 @@ export interface HeadInferenceDeps {
   /** The prompt must name the same file plane the tools reach. */
   workspaceLayout: HeadWorkspaceLayout;
   capture: HeadCapture;
-  /** Polled at step boundaries; needed alongside {@link signal} because an RPC boundary carries a flag, not an AbortSignal. */
+  /** Polled at step boundaries: an RPC boundary carries a flag, not an AbortSignal. */
   isAborted: () => boolean;
   /** Given to the SDK so an abort cuts the step in flight; a polled flag never sees a hang. */
   signal?: AbortSignal;
@@ -411,7 +411,7 @@ export interface HeadInferenceDeps {
    * Omitted: the loop never asks, and an undeclared run must not touch the ledger.
    */
   mission?: MissionScope;
-  /** The head's durable per-step trace sink; omitted only for a hosted recursive sub-head, whose spawner's journal is unaddressable. */
+  /** The durable per-step trace; omitted only for a hosted recursive sub-head. */
   reportStep?: (seq: number, step: HeadStep) => Promise<void> | void;
   /** Live output while a step is produced: one call per provider delta, in order, never buffered. A cross-isolate transport must not await it. */
   reportDelta?: ReportHeadDelta;

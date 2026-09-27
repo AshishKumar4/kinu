@@ -55,7 +55,7 @@ import { TierIdSchema,
   readMemoryTail,
   agentsActionsFor,
   facetHomeProvisioner, facetHomeReleaser, headAgentName, explorationActorKey,
-  type HostedNodeSeat, type NodeIdentity, type ModelPricing,
+  type HeadSeat, type HostedNodeSeat, type NodeIdentity, type ModelPricing,
   type ShadowTrialTurn, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialDrain,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
@@ -162,7 +162,7 @@ import { localActorDirectory, registerLocalActor, retireLocalActor, registerLoca
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
-import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps, type HostedHeadSeat } from './head-runtime';
+import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
 import { detectOrphanedFibers, type OrphanedFiber } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
@@ -2857,7 +2857,7 @@ export class LocalAgentSession {
    * Seat one head as a logical actor: its own directory row, runtime objects, claimed loop and, on
    * release, retirement. Public so callers without a session (bench panel, eval arm) can seat heads.
    */
-  async hostHead(input: HeadInput, writes: WriteObserver): Promise<HostedHeadSeat> {
+  async hostHead(input: HeadInput, writes: WriteObserver): Promise<HeadSeat> {
     // Both named before acquire: the host seeds the loop and builds the runtime while building the actor.
     const { binding, seat } = await this.seatRunActor(input.id, (actorId) => {
       this.loopOrigins.set(actorId, input.loop);
