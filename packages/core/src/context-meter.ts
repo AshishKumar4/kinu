@@ -42,7 +42,6 @@ function systemText(system: SystemText): string {
 }
 
 /** Structured content is measured as the JSON the provider tokenizes; unguarded so it never reads as zero. */
-/** Frozen messages and a turn's schemas are measured once. */
 const MEASURED = new WeakMap<object, number>();
 
 function messageChars(message: ModelMessage): number {

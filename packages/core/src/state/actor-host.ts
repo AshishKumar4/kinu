@@ -17,6 +17,7 @@ import { createAgentStores, type AgentStores } from './agent-stores';
 import type { WorkspaceActor, WorkspaceActorDirectory } from '../identity/workspace-actors';
 import type { ActorContextStores, ChildContextResolver } from '../vfs/context-plane';
 import type { ContextEventRecorder } from '../types/context-plane';
+import type { TemporaryAgentPort } from '../types/subordinates';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { recordRecoverySettled, sameBuildOf } from '../orchestrator/turn-recovery-events';
@@ -94,6 +95,7 @@ export interface ActorHost {
   release(reference: ActorReference): void;
   releaseAll(): void;
   retire(parent: ActorReference, retirement: ActorRetirement): Promise<void>;
+  temporary(reference: ActorReference, build: (bound: BoundActor) => TemporaryAgentPort): TemporaryAgentPort;
   resumable(limit?: number): readonly ResumableActorTurn[];
   readonly installedBuild: string | null;
   readonly workspace?: string;
@@ -149,6 +151,7 @@ function actorScopedTables(sql: SqlExecutor): readonly string[] {
 export function createActorHost(deps: ActorHostDeps): ActorHost {
   const slots = new Map<string, HostSlot>();
   const opening = new Map<string, Promise<HostedActor>>();
+  const ports = new Map<string, TemporaryAgentPort>();
 
   const slotFor = (reference: ActorReference): HostSlot | null => {
     const slot = slots.get(reference.actorId);
@@ -199,8 +202,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     let built = false;
 
     try {
-      // Children need handle identity so release revokes every statement; the root's runtime is its
-      // opener's and never released alone, so the same actor id suffices.
+      // Children need handle identity for release.
       const rootBinding = reference.parentActorId === null;
 
       if (runtime.actor !== bound.handle
@@ -244,6 +246,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
       return { actor: { ...bound, runtime, session }, fence };
     } finally {
+      // A failed build frees its runtime.
       if (!built) runtime.release?.();
     }
   };
@@ -294,13 +297,18 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
     const slot = slotFor(reference);
 
-    if (!slot || slot.fence.released) return;
+    if (!slot || slot.fence.released) {
+      ports.delete(reference.actorId);
+
+      return;
+    }
 
     if (slot.actor.session.inFlight) {
       throw new KinuError('denied', 'An actor holding a turn in flight cannot be released; cancel or settle the turn first.');
     }
 
     drop(slot);
+    ports.delete(reference.actorId);
   };
 
   return {
@@ -324,8 +332,18 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       return await result;
     },
     release,
+    temporary: (reference, portFor) => {
+      const known = ports.get(reference.actorId);
+
+      if (known !== undefined) return known;
+      const port = portFor(bind(reference).bound);
+      ports.set(reference.actorId, port);
+
+      return port;
+    },
     releaseAll: () => {
       for (const slot of slots.values()) drop(slot);
+      ports.clear();
     },
     retire: async (parent, retirement) => {
       const record = deps.directory.retained(retirement.reference.actorId);
@@ -369,6 +387,8 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
         drop(slot);
       }
+
+      ports.delete(retirement.reference.actorId);
 
       const parentPath = deps.directory.storagePath(parent);
       deps.directory.apply(parent, parentPath, {
