@@ -6,6 +6,8 @@ import {
   DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH,
   DEVICE_PTY_INPUT, DEVICE_PTY_OPEN_METHOD,
   DEVICE_TOOLCHAIN_TTL_MS, TOOLCHAIN_PROBE_BINARIES,
+  DEVICE_RELAY,
+  DEVICE_UNKNOWN_METHOD, TUNNEL_DISCONNECTED,
   type JsonValue,
 } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -49,6 +51,15 @@ function fakeCtx(): DeviceSocketCtx & { accepted: Array<{ ws: FakeSocket; tags: 
       return accepted.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws);
     },
   };
+}
+
+function connected() {
+  const ctx = fakeCtx();
+  const hub = new DeviceSocketHub(ctx);
+  const ws = fakeSocket();
+  hub.accept('dev-a', ws);
+
+  return { ctx, hub, ws };
 }
 
 describe('DeviceSocketHub', () => {
@@ -177,15 +188,6 @@ describe('DeviceSocketHub toolchain probe', () => {
     return frame;
   }
 
-  function connected() {
-    const ctx = fakeCtx();
-    const hub = new DeviceSocketHub(ctx);
-    const ws = fakeSocket();
-    hub.accept('dev-a', ws);
-
-    return { ctx, hub, ws };
-  }
-
   test('asks the machine the shared question and turns its answer into evidence', async () => {
     const { hub, ws } = connected();
 
@@ -268,6 +270,125 @@ describe('DeviceSocketHub toolchain probe', () => {
     const hub = new DeviceSocketHub(ctx);
     expect(await hub.probeToolchain('dev-a', NOW)).toBeNull();
     expect(hub.toolchain('dev-a', NOW)).toBeNull();
+  });
+});
+
+describe('DeviceSocketHub Codex relay', () => {
+  const RelayCallSchema = v.object({
+    id: v.string(), method: v.literal(DEVICE_RELAY.method),
+    params: v.tuple([v.object({ method: v.string(), url: v.string(), headers: v.array(v.tuple([v.string(), v.string()])), body: v.nullable(v.string()) })]),
+  });
+
+  const REQUEST = {
+    method: 'POST', url: 'https://chatgpt.com/backend-api/codex/responses',
+    headers: [['authorization', 'Bearer access-1']] satisfies [string, string][], body: '{"input":[]}',
+  };
+
+  function relayCall(ws: FakeSocket) {
+    return v.parse(RelayCallSchema, JSON.parse(ws.sent[ws.sent.length - 1] ?? 'null'));
+  }
+
+  const encode = (text: string) => Buffer.from(text).toString('base64');
+
+  test('the answer streams chunk by chunk while the machine is still fetching', async () => {
+    const { hub, ws } = connected();
+    const relaying = hub.relay('dev-a', 'relay-1', REQUEST);
+    const call = relayCall(ws);
+
+    expect(call.id).toBe('relay-1');
+    expect(call.params[0]).toEqual(REQUEST);
+
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.head, relay: 'relay-1', status: 200, headers: [['content-type', 'text/event-stream']] }));
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.body, relay: 'relay-1', data: encode('data: one\n\n') }));
+    const response = await relaying;
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+
+    if (response.body === null) throw new Error('a streamed answer arrived with no body');
+
+    const reader = response.body.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: one\n\n');
+
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.body, relay: 'relay-1', data: encode('data: two\n\n') }));
+    hub.handleMessage('dev-a', JSON.stringify({ id: 'relay-1', result: { bytes: 22 } }));
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: two\n\n');
+    expect((await reader.read()).done).toBe(true);
+  });
+
+  test('a Stop tells the machine to drop the upstream call and fails the body', async () => {
+    const { hub, ws } = connected();
+    const relaying = hub.relay('dev-a', 'relay-2', REQUEST);
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.head, relay: 'relay-2', status: 200, headers: [] }));
+    const response = await relaying;
+
+    hub.cancelRelay('relay-2');
+    expect(JSON.parse(ws.sent[ws.sent.length - 1] ?? 'null')).toEqual({ type: DEVICE_RELAY.cancel, relay: 'relay-2' });
+    await expect(response.text()).rejects.toThrow('the caller stopped the request');
+  });
+
+  test('a machine that drops mid-answer fails the body, never ends it as if complete', async () => {
+    const { hub, ws } = connected();
+    const relaying = hub.relay('dev-a', 'relay-3', REQUEST);
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.head, relay: 'relay-3', status: 200, headers: [] }));
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.body, relay: 'relay-3', data: encode('data: half') }));
+    const response = await relaying;
+
+    ws.readyState = 3;
+    hub.handleClose('dev-a', ws);
+    await expect(response.text()).rejects.toThrow(TUNNEL_DISCONNECTED);
+  });
+
+  test('an error before any answer rejects the call with the machine\'s words', async () => {
+    const { hub } = connected();
+    const relaying = hub.relay('dev-a', 'relay-4', REQUEST);
+    hub.handleMessage('dev-a', JSON.stringify({ id: 'relay-4', error: 'chatgpt.com unreachable from this machine' }));
+
+    await expect(relaying).rejects.toThrow('chatgpt.com unreachable from this machine');
+  });
+
+  test('a daemon too old to relay is not picked again until it reconnects', async () => {
+    const { hub, ws } = connected();
+    expect(hub.relayDevice()).toBe('dev-a');
+
+    const relaying = hub.relay('dev-a', 'relay-5', REQUEST);
+    hub.handleMessage('dev-a', JSON.stringify({ id: relayCall(ws).id, error: `unknown method: ${DEVICE_RELAY.method}` }));
+    await expect(relaying).rejects.toThrow(DEVICE_UNKNOWN_METHOD);
+    expect(hub.relayDevice()).toBeNull();
+
+    hub.accept('dev-a', fakeSocket());
+    expect(hub.relayDevice()).toBe('dev-a');
+  });
+
+  test('a reader that stops reading tells the machine to drop the upstream call', async () => {
+    const { hub, ws } = connected();
+    const relaying = hub.relay('dev-a', 'relay-6', REQUEST);
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.head, relay: 'relay-6', status: 200, headers: [] }));
+    const response = await relaying;
+
+    await response.body?.cancel(new DOMException('the reader left', 'AbortError'));
+    expect(ws.sent.map((frame) => JSON.parse(frame))).toContainEqual({ type: DEVICE_RELAY.cancel, relay: 'relay-6' });
+    // What the machine sent before it heard is dropped, not written into a cancelled body.
+    hub.handleMessage('dev-a', JSON.stringify({ type: DEVICE_RELAY.body, relay: 'relay-6', data: 'bGF0ZQ==' }));
+    hub.handleMessage('dev-a', JSON.stringify({ id: 'relay-6', result: { bytes: 4 } }));
+    expect(ws.sent.filter((frame) => frame.includes(DEVICE_RELAY.cancel))).toHaveLength(1);
+  });
+
+  test('an open terminal pane does not make a daemon too old to relay look able again', async () => {
+    const { ctx, hub, ws } = connected();
+    const relaying = hub.relay('dev-a', 'relay-7', REQUEST);
+    hub.handleMessage('dev-a', JSON.stringify({ id: relayCall(ws).id, error: `unknown method: ${DEVICE_RELAY.method}` }));
+    await expect(relaying).rejects.toThrow(DEVICE_UNKNOWN_METHOD);
+
+    const pane = fakeSocket();
+    ctx.acceptWebSocket(pane, ['terminal:pty-1']);
+    pane.serializeAttachment({ terminal: 'pty-1', device: 'dev-a', workspace: 'workspace-a' });
+
+    expect(hub.relayDevice()).toBeNull();
+  });
+
+  test('no machine online picks none', () => {
+    expect(new DeviceSocketHub(fakeCtx()).relayDevice()).toBeNull();
   });
 });
 

@@ -964,6 +964,12 @@
     "status TEXT NOT NULL DEFAULT 'pending'",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "refinement_lane_holds@packages/core/src/evolution/refinement.ts": [
+    "actor_id TEXT PRIMARY KEY",
+    "answered INTEGER NOT NULL",
+    "detail TEXT NOT NULL",
+    "held_at INTEGER NOT NULL"
+  ],
   "refinement_requests@packages/core/src/evolution/refinement.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -1628,7 +1634,7 @@
     "parent_actor_id TEXT REFERENCES workspace_actors(actor_id)",
     "name TEXT NOT NULL",
     "storage_key TEXT NOT NULL",
-    "kind TEXT NOT NULL CHECK (kind IN ('main','subordinate','head','node','branch'))",
+    "kind TEXT NOT NULL CHECK (kind IN ('main','subordinate','head','branch'))",
     "lifetime TEXT NOT NULL CHECK (lifetime IN ('durable','task'))",
     "created_at INTEGER NOT NULL",
     "creation_id TEXT NOT NULL",

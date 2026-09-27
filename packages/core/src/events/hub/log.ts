@@ -492,6 +492,21 @@ export class EventLog {
     );
   }
 
+  /** An assignment whose answer was delivered closes as its completed turn would; a re-pend reads the close. */
+  markAnswered(eventId: EventId): void {
+    this.releaseLease(eventId, 'consumed_at = NULL');
+  }
+
+  isAnswered(eventId: EventId): boolean {
+    this.actor.assertCurrent();
+
+    return this.sql.exec(
+      `SELECT 1 FROM agent_log WHERE actor_id = ? AND id = ? AND kind = 'event'
+         AND turn_id IS NOT NULL AND consumed_at IS NULL`,
+      this.actorId, eventId,
+    ).toArray().length > 0;
+  }
+
   markTurnCompleted(turnId: TurnId): void {
     this.actor.assertCurrent();
     this.sql.exec(
@@ -503,12 +518,12 @@ export class EventLog {
 
   /** Used by abort_replan to re-pend events. */
   unbind(eventId: EventId): void {
+    this.releaseLease(eventId, 'turn_id = NULL, step_idx = NULL, consumed_at = NULL');
+  }
+
+  private releaseLease(eventId: EventId, assignments: 'consumed_at = NULL' | 'turn_id = NULL, step_idx = NULL, consumed_at = NULL'): void {
     this.actor.assertCurrent();
-    this.sql.exec(
-      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
-       WHERE actor_id = ? AND id = ? AND kind = 'event'`,
-      this.actorId, eventId,
-    );
+    this.sql.exec(`UPDATE agent_log SET ${assignments} WHERE actor_id = ? AND id = ? AND kind = 'event'`, this.actorId, eventId);
   }
 
   /** Reports open leases; only the caller can tell re-pend from finish-the-reply. */

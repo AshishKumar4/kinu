@@ -52,7 +52,7 @@ import {
 } from "./user/mcp";
 
 import {
-  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, createDbCodemodeProvider,
+  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference, createDbCodemodeProvider,
   type EvolutionConfig, type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
@@ -121,7 +121,7 @@ import {
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   readDeviceRequestChannel, type DeviceRequestChannel,
   cancelCurrentWork, getStoredModelSpec, setModel, getChatHistoryPage,
-  type CancelWorkOutcome, type ChatHistoryEntry, type Page, type PageRequest,
+  type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId, type MCTSProgressEvent,
   EventLog,
   resolveTurnSkills, filterToolNamesBySkills,
@@ -226,6 +226,7 @@ import {
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
 import { Hono, type Context } from 'hono';
+import { WakeArms } from '@kinu.run/core';
 import { rawPath, rethrow } from './api/context';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
@@ -885,19 +886,23 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._subordinateRuntime;
   }
 
-  private _temporaryAgentPort: TemporaryAgentPort | null = null;
+  /** The host's one port for this actor: a waiter is found only through the port that parked it. */
+  /** A turn waiting on a delegate it hired; the workspace root frees the waiting turn's slot. */
+  protected whileWaitingOnDelegate<T>(_actorId: string, waited: Promise<T>): Promise<T> {
+    return waited;
+  }
 
-  /** Built once per actor: `shell` parks a waiter that the report ingress later resolves on this
-   * isolate; a per-call port would leave every ask hanging. */
-  protected temporaryAgentPort(): TemporaryAgentPort {
-    this._temporaryAgentPort ??= createTemporaryAgentPort({
-      roster: this.subordinateRoster,
-      runtime: this.subordinateRuntime(),
-      now: () => Date.now(),
-      createName: mintSubordinateName,
+  protected temporaryAgentPort(reference: ActorReference = actorReferenceOf(this.actorHandle())): TemporaryAgentPort {
+    return this.actorHost().temporary(reference, (bound) => {
+      const seams = this.subordinateSeams();
+      const roster = seams.roster(bound);
+      roster.ensureSchema();
+
+      return createTemporaryAgentPort({
+        roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
+        whileWaiting: (waited) => this.whileWaitingOnDelegate(bound.record.actorId, waited),
+      });
     });
-
-    return this._temporaryAgentPort;
   }
 
   protected getTeamToolDeps(): TeamToolDeps {
@@ -995,6 +1000,7 @@ export abstract class ActorAgent extends Agent<Env> {
         this.broadcastSubordinateEvent({ ...report, kind: 'report' });
       },
       onAdmitted: () => { this.orch.scheduleDrain(); },
+      onEvolutionAnswer: () => { this.durableWakeOwner()?.(); },
       // A temporary child's answer belongs to the waiting `agents.ask` call, so the register gets
       // first refusal on the name through the port that parked the waiter.
       temporary: this.temporaryAgentPort(),
@@ -1020,6 +1026,7 @@ export abstract class ActorAgent extends Agent<Env> {
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider],
     reportModelCall: (report) => { this.reportModelCall(report); },
+    currentTurn: (reference) => this.currentTurnOf(reference),
   });
 
   // The bare prototype must read as sound.
@@ -1320,6 +1327,7 @@ export abstract class ActorAgent extends Agent<Env> {
       // has its own terminal claim; see {@link turnMayStillRun}.
       turnIsLive: (turnId) => this.turnMayStillRun(turnId),
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
+      settled: () => this.restWhenIdle(),
     });
 
     return this._terminalTransitions;
@@ -1339,11 +1347,20 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private readonly runningWakeRows = new Set<string>();
 
+  private readonly wakeArms = new WakeArms();
+
+  /** Set by the last maintenance pass. */
+  protected maintenanceUnfinished = false;
+
   /**
    * Soonest-wins arm of one wake row per `callback`. A due row counts (it fires now) unless its tick is
    * running, since the SDK deletes that one. Re-reads after its write so racers converge.
    */
   protected async armWakeRow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
+    return await this.wakeArms.arm(() => this.armWakeRowNow(callback, atMs, pace));
+  }
+
+  private async armWakeRowNow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
     const nowSec = Math.floor(Date.now() / 1000);
     // Round up: the SDK stores whole seconds, and waking early would re-arm and busy-spin the alarm.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
@@ -1392,7 +1409,19 @@ export abstract class ActorAgent extends Agent<Env> {
     }
   }
 
-  /** One soonest-wins row per actor; returns the surviving row's id so a caller can release it. */
+  /** Nothing owed: a turn's arms go. */
+  private async restWhenIdle(): Promise<void> {
+    await this.wakeArms.release({
+      rows: async () => (await this.listSchedules())
+        .filter((row) => row.callback === TERMINAL_RETRY_CALLBACK && !this.runningWakeRows.has(row.id))
+        .map((row) => row.id),
+      idle: () => this._chatLoop?.pumping !== true && !this.owedWorkExists(),
+      cancel: async (id) => { await this.cancelSchedule(id); },
+      rearm: async () => { await this.scheduleTerminalRetry(Date.now()); },
+    });
+  }
+
+  /** One soonest-wins row per actor; returns its id. */
   protected scheduleTerminalRetry(atMs: number, pace?: WakePace): Promise<string> {
     return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs, pace);
   }
@@ -1425,6 +1454,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // so a pass that keeps answering unfinished settles at the ceiling, not a one-second loop.
     const sweepsUnfinished = this.maintenanceSweeps();
     const recoveryUnfinished = await this.maintenanceWork();
+    this.maintenanceUnfinished = sweepsUnfinished || recoveryUnfinished;
     await this.owedDeliveryWork();
     // Re-entered here because `maintenanceWork` is activation-scoped: later ticks in a warm
     // isolate never reach the job sweep, and a deferred job's wake would find nothing to recover.
@@ -1462,7 +1492,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected owedWorkExists(): boolean {
-    return this.owedUntimedWork() || this.nextOwedAt() !== null;
+    return this.maintenanceUnfinished || this.owedUntimedWork() || this.nextOwedAt() !== null;
   }
 
   /** While true, the tick keeps its lap-paced row. Base owns no rosters; subclasses override. */
@@ -1482,6 +1512,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Test-only deterministic cut point in the terminal sequence. Null in production. */
   protected terminalEffectFault: TerminalEffectFault | null = null;
+
+  protected currentTurnOf(reference: ActorReference): string | null {
+    return sameActorReference(reference, actorReferenceOf(this.actorHandle()))
+      ? this.actorSession.currentTurnId
+      : this.actorHost().hosted(reference)?.session.currentTurnId ?? null;
+  }
 
   /** Read at the start of a terminal sequence and carried through: the loop's live turn becomes
    *  the next one as soon as it opens, so a detached re-read could close the wrong claim. */
@@ -1851,7 +1887,10 @@ export abstract class ActorAgent extends Agent<Env> {
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
-          quiet: () => { this.overviewChanged(); },
+          quiet: () => {
+            this.overviewChanged();
+            this.detachOwned(() => this.restWhenIdle());
+          },
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
             config: this.config,
@@ -2993,6 +3032,7 @@ export abstract class ActorAgent extends Agent<Env> {
         reportModelCall: (report) => this.reportModelCall(report),
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         resolveProfile: () => this.routingProfile(),
+        currentTurn: (reference) => this.currentTurnOf(reference),
         contextPlane: {
           actorId: this.actorHandle().actorId,
           claims: () => this.claims,
@@ -3493,7 +3533,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * The root's pane names none and reads this actor's conversation.
    */
   @callable()
-  async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<Page<ChatHistoryEntry>> {
+  async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<ChatHistoryPage> {
     const { actor, ...page } = request ?? {};
 
     return getChatHistoryPage(actor === undefined ? this.chatTranscript : this.subordinateChat(actor), page);

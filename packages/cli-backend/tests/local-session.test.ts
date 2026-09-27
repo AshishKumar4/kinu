@@ -2370,43 +2370,22 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job'));
   });
 
-  test('recoverBackgroundJobs re-drives an orphaned agents job whose row names the fork action', async () => {
-    const { db, rt, session } = setup('resumed fork answer');
+  test('recoverBackgroundJobs fails an orphaned agents job whose row names an action the tool no longer has', async () => {
+    const { db, rt, session } = setup();
 
-    // A legacy `'fork'` row is history, so it is translated onto the ephemeral-node action rather than refused.
-    const input = JSON.stringify({
-      action: 'fork', task: 'finish the interrupted exploration',
-      forks: [
-        { task: 'read it', rationale: 'ground it' },
-        { task: 'test it', rationale: 'check it' },
-      ],
-    });
-
-    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-a', 'agents', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f4', 'bg:agents', '{"phase":"running","jobId":"bgjob-a","kind":"agents"}', 1)`);
-
-    const stderrLines: string[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => { stderrLines.push(args.map(String).join(' ')); };
-
-    try {
-      await session.recoverBackgroundJobs();
-      await waitFor(() => jobStatus(db, 'bgjob-a') === 'completed');
-    } finally {
-      console.error = originalError;
+    for (const [id, fiber, action] of [['bgjob-fork', 'f4', 'fork'], ['bgjob-probe', 'f5', 'probe']] as const) {
+      const input = JSON.stringify({ action, task: 'finish the interrupted exploration' });
+      db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', '${id}', 'agents', 'build', 'running', '${input}', 1)`);
+      db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', '${fiber}', 'bg:agents', '{"phase":"running","jobId":"${id}","kind":"agents"}', 1)`);
     }
 
-    const settled = v.parse(
-      v.object({ preset: v.literal('ideate'), report: v.object({ expansions: v.number() }) }),
-      JSON.parse(jobResult(db, 'bgjob-a')),
-    );
+    await session.recoverBackgroundJobs();
+    // Recovered in row order, so the fork row is settled by the time the probe row is.
+    await waitFor(() => jobStatus(db, 'bgjob-probe') === 'failed');
 
-    expect(settled.report.expansions).toBeGreaterThan(0);
-    expect(jobResult(db, 'bgjob-a')).toContain('resumed fork answer');
-
-    const dropped = stderrLines.filter((line) => line.includes('agents.resume.fields_dropped'));
-    expect(dropped).toHaveLength(1);
-    expect(dropped[0]).toContain('forks');
+    // `fork` is refused exactly as an action the tool never had.
+    expect({ status: jobStatus(db, 'bgjob-fork'), error: jobError(db, 'bgjob-fork') })
+      .toEqual({ status: 'failed', error: jobError(db, 'bgjob-probe') });
   });
 
   test('end() waits for a detached job to settle instead of closing the database under it', async () => {

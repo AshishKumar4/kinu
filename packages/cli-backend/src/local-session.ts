@@ -104,7 +104,8 @@ import { TierIdSchema,
   type GepaOptimizationResult, type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
   type ShadowStatus,
-  decideRefinementRoute, listRefinements, refinementPass, requestOwnerRefinement, showRefinementRoute,
+  decideRefinementRoute, evolutionAnswerWake, listRefinements, refinementPass, requestOwnerRefinement,
+  showRefinementRoute, type RefinementLaneStep,
   type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
@@ -2035,6 +2036,12 @@ export class LocalAgentSession {
         // deleted the live claim.
         turnIsLive: (turnId) => this.chat.pumping && this.chat.currentTurnId === turnId,
       scheduleRetry: (atMs) => this.scheduleTerminalRetry(atMs),
+      // The timer also wakes a deferred job; it goes only when neither ledger owes it.
+      settled: () => {
+        if (this.jobRunner.nextResumeAt() === null) this.clearTerminalRetry();
+
+        return Promise.resolve();
+      },
     });
 
     return this.terminalTransitions;
@@ -2295,8 +2302,19 @@ export class LocalAgentSession {
   }
 
   async runRefinementLane(): Promise<void> {
-    const step = await refinementPass(this.refinementDeps);
+    this.announceRefinement(await refinementPass(this.refinementDeps));
+  }
 
+  /** A stored refiner answer's pass, on core's one rule; every daemon pass also runs the lane. */
+  async runEvolutionAnswer(now: number): Promise<void> {
+    const step = await evolutionAnswerWake(this.refinementDeps, now, (failure) => {
+      diagnostics.failure('refinement.answer_wake_failed', failure);
+    });
+
+    if (step) this.announceRefinement(step);
+  }
+
+  private announceRefinement(step: RefinementLaneStep): void {
     if (step.step === 'idle') return;
     // A refinement can move the live prompt and facts block.
     this.invalidateModelState();

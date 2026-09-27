@@ -119,6 +119,7 @@ export type RunEvent =
       modelId?: string;
       context?: ContextComposition;
       account?: CallAccount | undefined;
+      egress?: string | undefined;
     })
   /** Superseded by the step's `step_finish`; the newest row of an unfinished step is where a
    *  continuation resumes. */

@@ -162,7 +162,7 @@ export interface NimbusSandboxHandle {
     url?(port: number): string | undefined;
   };
   /** See `WorkspaceBundle.mountTable`; absent on a remote box. */
-  mountTable?(plane: MountedVfs, cred?: VfsCred): void;
+  mountTable?(plane: MountedVfs, cred?: VfsCred): () => void;
 }
 
 export interface NimbusSessionOpts {

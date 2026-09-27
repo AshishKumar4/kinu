@@ -77,7 +77,7 @@ export const RunEventSchema = v.variant('type', [
     reason: v.optional(v.string()), messages: v.optional(v.array(JsonValueSchema)),
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
     modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema),
-    account: v.optional(CallAccountSchema) }),
+    account: v.optional(CallAccountSchema), egress: v.optional(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('step_partial'), stepIndex: v.number(), text: v.string(),
     toolCalls: v.array(v.object({ toolCallId: v.string(), toolName: v.string(), args: JsonValueSchema,
       result: v.optional(v.string()), error: v.optional(v.string()) })) }),
