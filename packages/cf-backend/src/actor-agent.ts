@@ -226,6 +226,7 @@ import {
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
 import { Hono, type Context } from 'hono';
+import { WakeArms } from '@kinu.run/core';
 import { rawPath, rethrow } from './api/context';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
@@ -1340,7 +1341,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private readonly runningWakeRows = new Set<string>();
 
-  private wakeArms = 0;
+  private readonly wakeArms = new WakeArms();
 
   /** Set by the last maintenance pass. */
   protected maintenanceUnfinished = false;
@@ -1350,7 +1351,10 @@ export abstract class ActorAgent extends Agent<Env> {
    * running, since the SDK deletes that one. Re-reads after its write so racers converge.
    */
   protected async armWakeRow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
-    this.wakeArms += 1;
+    return await this.wakeArms.arm(() => this.armWakeRowNow(callback, atMs, pace));
+  }
+
+  private async armWakeRowNow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
     const nowSec = Math.floor(Date.now() / 1000);
     // Round up: the SDK stores whole seconds, and waking early would re-arm and busy-spin the alarm.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
@@ -1401,21 +1405,14 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Nothing owed: a turn's arms go. */
   private async restWhenIdle(): Promise<void> {
-    const arms = this.wakeArms;
-    let cancelled = false;
-
-    try {
-      for (const row of await this.listSchedules()) {
-        if (row.callback !== TERMINAL_RETRY_CALLBACK || this.runningWakeRows.has(row.id)) continue;
-
-        if (this._chatLoop?.pumping === true || this.owedWorkExists() || this.wakeArms !== arms) return;
-        cancelled = true;
-        await this.cancelSchedule(row.id);
-      }
-    } finally {
-      // A concurrent arm may keep a cancelled row.
-      if (cancelled && this.wakeArms !== arms) await this.scheduleTerminalRetry(Date.now());
-    }
+    await this.wakeArms.release({
+      rows: async () => (await this.listSchedules())
+        .filter((row) => row.callback === TERMINAL_RETRY_CALLBACK && !this.runningWakeRows.has(row.id))
+        .map((row) => row.id),
+      idle: () => this._chatLoop?.pumping !== true && !this.owedWorkExists(),
+      cancel: async (id) => { await this.cancelSchedule(id); },
+      rearm: async () => { await this.scheduleTerminalRetry(Date.now()); },
+    });
   }
 
   /** One soonest-wins row per actor; returns its id. */
