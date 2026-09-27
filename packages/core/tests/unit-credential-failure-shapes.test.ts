@@ -1,6 +1,5 @@
 /**
- * The migration keeps what a caller sees: these failures were plain Errors (a synchronous throw for the
- * checkpoint reads), and they stay exactly that, class, message and cause.
+ * The migration keeps what a caller sees: classified failures retain their cause and synchronous or asynchronous delivery.
  */
 import { describe, expect, test } from 'bun:test';
 import { createCredentialCipher } from '../src/credentials/envelope';
@@ -19,11 +18,10 @@ interface Failed {
 
 const failedWith = (error: Error): Failed => ({ thrown: error });
 
-/** The plain Error a failure was before the migration, never a classified one. */
-function expectPlain(failed: Failed, message: string): void {
+function expectClassified(failed: Failed, code: 'bad_input' | 'unavailable' | 'unsupported'): void {
   expect(failed.thrown).toBeInstanceOf(Error);
-  expect(failed.thrown).not.toBeInstanceOf(KinuError);
-  expect(failed.thrown).toMatchObject({ message });
+  expect(failed.thrown).toBeInstanceOf(KinuError);
+  expect(failed.thrown).toMatchObject({ code });
 }
 
 async function rejection(run: () => Promise<object | string>): Promise<Failed> {
@@ -47,24 +45,24 @@ function thrownBy(run: () => void): Failed {
 }
 
 describe('credential failures keep their shape', () => {
-  test('no key and a short key are plain Errors naming the key', async () => {
+  test('no key and a short key are unavailable configuration', async () => {
     const none = await rejection(() => createCredentialCipher({}));
     const short = await rejection(() => createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: 'short' }));
 
-    expect(none.thrown).not.toBeInstanceOf(KinuError);
+    expectClassified(none, 'unavailable');
     expect(none.thrown?.message).toContain('no encryption key is configured');
-    expect(short.thrown).not.toBeInstanceOf(KinuError);
+    expectClassified(short, 'unavailable');
     expect(short.thrown?.message).toContain('too short to be a key (5 chars)');
   });
 
-  test('a record sealed with a key this deployment no longer has, or tampered, is a plain Error; the tampered one keeps its cause', async () => {
+  test('a record sealed with a key this deployment no longer has, or tampered, is bad input; the tampered one keeps its cause', async () => {
     const retired = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: RETIRED });
     const sealed = await retired.seal('slot', 'secret');
     const current = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: KEY });
 
     const retiredKey = await rejection(() => current.open('slot', sealed));
 
-    expect(retiredKey.thrown).not.toBeInstanceOf(KinuError);
+    expectClassified(retiredKey, 'bad_input');
     expect(retiredKey.thrown?.message).toMatch(
       /^Record "slot" was sealed with encryption key \S+, which this deployment no longer has\. Restore it in CREDENTIAL_ENCRYPTION_KEY_PREVIOUS, or reconnect the provider\.$/,
     );
@@ -73,16 +71,16 @@ describe('credential failures keep their shape', () => {
     const tampered = `${mine.slice(0, -4)}AAAA`;
     const failed = await rejection(() => current.open('slot', tampered));
 
-    expectPlain(failed, 'Record "slot" failed to decrypt — the stored envelope does not match its key, or belongs to another store.');
+    expectClassified(failed, 'bad_input');
     expect(failed.thrown?.cause).toBeDefined();
-    expectPlain(await rejection(() => current.open('slot', 'pce1.onlyone')), 'Record "slot" is stored in an envelope this build cannot parse.');
+    expectClassified(await rejection(() => current.open('slot', 'pce1.onlyone')), 'bad_input');
   });
 
-  test('a credential whose kind its key cannot spend is a plain Error', () => {
-    expectPlain(thrownBy(() => { credentialToHeaders('codex.oauth', { kind: 'bearer', token: 'sk' }); }), 'codex.oauth credential must be oauth kind');
+  test('a credential whose kind its key cannot spend is bad input', () => {
+    expectClassified(thrownBy(() => { credentialToHeaders('codex.oauth', { kind: 'bearer', token: 'sk' }); }), 'bad_input');
   });
 
-  test('unconfigured checkpoint reads throw synchronously, a plain Error, not a rejected promise', () => {
+  test('unconfigured checkpoint reads throw synchronously, unsupported, not a rejected promise', () => {
     // A synchronous throw never reaches the returned promise; a promise returned here would be the regression.
     let returned: Promise<object> | null = null;
     const failed = thrownBy(() => { returned = fileRestorePlan(null, '/work', 'cp-1'); });
@@ -90,6 +88,6 @@ describe('credential failures keep their shape', () => {
     expect(returned).toBeNull();
 
     expect(failed.thrown).toBeInstanceOf(Error);
-    expect(failed.thrown).not.toBeInstanceOf(KinuError);
+    expectClassified(failed, 'unsupported');
   });
 });

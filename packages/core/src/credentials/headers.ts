@@ -1,6 +1,6 @@
 // Header mapping lives beside the store so secret material never leaves it.
 import { Effect } from 'effect';
-import { settleSync } from '../obs/index';
+import { KinuError, settleSync } from '../obs/index';
 import { codexCredentialToHeaders } from '../providers/codex-oauth';
 import { baseCredentialKey } from './accounts';
 import type { Credential } from './store';
@@ -14,17 +14,17 @@ export function credentialToHeaders(key: string, cred: Credential): CredentialHe
   return settleSync(headersOf(key, cred));
 }
 
-function headersOf(key: string, cred: Credential): Effect.Effect<CredentialHeaders> {
+function headersOf(key: string, cred: Credential): Effect.Effect<CredentialHeaders, KinuError> {
   const base = baseCredentialKey(key);
 
   if (base === 'codex.oauth') {
-    if (cred.kind !== 'oauth') return Effect.die(new Error('codex.oauth credential must be oauth kind'));
+    if (cred.kind !== 'oauth') return Effect.fail(new KinuError('bad_input', 'codex.oauth credential must be oauth kind'));
 
     return Effect.succeed(codexCredentialToHeaders(cred));
   }
 
   if (base === 'anthropic.bearer') {
-    if (cred.kind !== 'bearer') return Effect.die(new Error('anthropic.bearer credential must be bearer kind'));
+    if (cred.kind !== 'bearer') return Effect.fail(new KinuError('bad_input', 'anthropic.bearer credential must be bearer kind'));
 
     return Effect.succeed({
       'x-api-key': cred.token,
@@ -45,5 +45,5 @@ function headersOf(key: string, cred: Credential): Effect.Effect<CredentialHeade
     return Effect.succeed({ Authorization: `Bearer ${cred.accessToken}` });
   }
 
-  return Effect.die(new Error(`unhandled credential kind for key=${key}`));
+  return Effect.fail(new KinuError('bad_input', `unhandled credential kind for key=${key}`));
 }

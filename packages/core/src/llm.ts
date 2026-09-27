@@ -5,7 +5,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModel } from 'ai';
 import { Effect } from 'effect';
 import { synthesizeToolFallback } from './utils/evidence-window';
-import { settleSync } from './obs/index';
+import { KinuError, settleSync } from './obs/index';
 import type { LLM } from './types/primitives';
 import type { ModelCallSpend } from './events/model-call';
 import { generateReported, streamTextReported } from './providers/model-invocation';
@@ -61,7 +61,7 @@ export function createCompletionLLM(opts: {
 
   return {
     stream() {
-      return settleSync(Effect.die(new Error(`createCompletionLLM(${opts.spec}) has no streaming path`)));
+      return settleSync(Effect.fail(new KinuError('unsupported', `createCompletionLLM(${opts.spec}) has no streaming path`)));
     },
     // `spec` is what the catalog prices; the row keeps the `modelId` the provider says served it beside it.
     complete: async (prompt) => (await generateReported(

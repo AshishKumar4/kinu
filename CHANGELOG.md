@@ -20,6 +20,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- Credential key configuration failures are `unavailable`; unusable credential records, mismatched credential kinds and unretainable slate entries are `bad_input`. Unconfigured checkpoint reads and completion-only model streaming are `unsupported`. Synchronous refusals remain synchronous, and decryption failures retain their cause.
+
 - JSON projection and direct Workers AI binding failures now run through Effect at their public boundaries. JSON fallback values and cancellation errors are unchanged.
 
 - **A plan waiting for review no longer locks the conversation.** The composer no longer switches to Plan when a plan arrives, and Auto stays available: a message sent in Auto runs as a build turn, and the plan waits for its own decision. Background turns (event drains, jobs) keep their own mode. A plan can now be dismissed beside Approve and Request changes on the web, or with `/plan dismiss` in the CLI, at any point before it is carried out: a dismissed plan starts no turn, and a revision already running is stopped and files no new plan. In the TUI, where a message names no mode, a pending plan still holds messages in Plan until it is decided or dismissed.

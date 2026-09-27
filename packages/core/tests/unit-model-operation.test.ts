@@ -170,7 +170,7 @@ describe('the production seams open the frame before the request', () => {
     expect(rows[1].usage).toEqual({ input: 41, output: 7 });
   });
 
-  test('createCompletionLLM has no stream: asking for one throws the plain Error it always has, and writes no operation row', () => {
+  test('createCompletionLLM has no stream: asking for one throws unsupported, and writes no operation row', () => {
     const { recorder } = setup();
     const sink = recordModelOperations(recorder, () => WORKSPACE_RUN_ID);
 
@@ -190,7 +190,8 @@ describe('the production seams open the frame before the request', () => {
     }
 
     expect(thrown).toBeInstanceOf(Error);
-    expect(thrown).not.toBeInstanceOf(KinuError);
+    expect(thrown).toBeInstanceOf(KinuError);
+    expect(thrown).toMatchObject({ code: 'unsupported' });
     expect(thrown).toMatchObject({ message: 'createCompletionLLM(workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813) has no streaming path' });
     expect(operationsOf(recorder, WORKSPACE_RUN_ID)).toEqual([]);
   });

@@ -262,7 +262,8 @@ test('an entry no slate source can retain fails the capture with a plain Error n
     }
 
     expect(thrown).toBeInstanceOf(Error);
-    expect(thrown).not.toBeInstanceOf(KinuError);
+    expect(thrown).toBeInstanceOf(KinuError);
+    expect(thrown).toMatchObject({ code: 'bad_input' });
     expect(thrown).toMatchObject({ message: 'Slate source cannot retain socket: src/daemon.sock' });
     expect(files.transaction(() => files.capture(id))).toBeDefined();
   } finally {
