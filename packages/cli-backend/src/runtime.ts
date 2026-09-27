@@ -24,7 +24,7 @@ import {
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite,
   DefaultExecutionRouter, createInlineExecutor,
-  withMountTable, standardMounts, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
+  withMountTable, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
   withApprovalGatedShell, createShellSession, shellCwd, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
@@ -439,7 +439,6 @@ export function createCLIRuntime(
   let childContext: ChildContextResolver | null = null;
 
   const agentVfs = withMountTable(fileVfs, [
-    ...standardMounts((name) => executionRouter.getProvider(name)),
     sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
     // `/context`: this actor's own working history, keyed on its own id.
@@ -708,7 +707,6 @@ async function buildCLIHeadRuntime(
 
   // `/context` is this head's own history, not the parent's.
   const agentVfs = withMountTable(vfs, [
-    ...standardMounts((name) => executionRouter.getProvider(name)),
     sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
     contextMount({

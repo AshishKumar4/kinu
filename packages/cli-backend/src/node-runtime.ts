@@ -1,4 +1,4 @@
-import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, createShellSession, shellCwd, observeWrites, skillsMount, withApprovalGatedShell, withMountTable, standardMounts, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
+import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, createShellSession, shellCwd, observeWrites, skillsMount, withApprovalGatedShell, withMountTable, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, VFS, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
@@ -55,7 +55,6 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       const files = observer ? observeWrites(plane.vfs, observer) : plane.vfs;
 
       const mounted = withMountTable(files, [
-        ...standardMounts((name) => ownRouter.getProvider(name)),
         sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
         skillsMount((): VFS => vfs),
         ownContext,
