@@ -31,7 +31,7 @@ import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, 
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
-import { TRANSCRIPT_WINDOW, type ChatWire } from './chat-transport';
+import type { ChatWire } from './chat-transport';
 import { DELEGATION_LANE_FIBER } from './fiber-recovery';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
@@ -107,7 +107,7 @@ import {
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type BackgroundJob, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
-  type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
+  type AlarmScheduler,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
   listReplayEvals, type ReplayEvalSummary,
   alignmentConvergence, type AlignmentConvergence,
@@ -964,7 +964,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       recordSplit: async (rootId, rationale, spawnedAt) => { await this.headJournalRecordSplit(rootId, rationale, spawnedAt); },
       insertSpawn: async (childInput) => { await this.headJournalInsertSpawn(childInput); },
       recordReport: async (report) => { await this.headJournalRecordReport(report); },
-      cacheMerge: async (rootId, result, strategy) => { await this.headJournalCacheMerge(rootId, result, strategy); },
+      cacheMerge: async (rootId, narrative) => { await this.headJournalCacheMerge(rootId, narrative); },
     };
 
     const runtimeForSplit = this.getCFHeadRuntime();
@@ -1404,32 +1404,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
   protected get replyChannels(): ReplyChannelStore {
     if (!this._replyChannels) {
-      const wsDispatcher: ReplyDispatcher = {
-        dispatch: async (_channel: ReplyChannelRow, payload: JsonValue) => {
-          try {
-            const parsedText = v.safeParse(v.string(), payload);
-            const parsedContent = v.safeParse(v.looseObject({ content: v.optional(JsonValueSchema) }), payload);
-            const content = parsedContent.success ? parsedContent.output.content ?? payload : payload;
-            const text = parsedText.success ? parsedText.output : JSON.stringify(content);
-
-            const message = {
-              id: nanoid(),
-              role: 'assistant',
-              parts: [{ type: 'text', text }],
-            } as const;
-
-            this.broadcast(JSON.stringify({
-              type: 'cf_agent_chat_messages',
-              messages: [...await this.chatTranscript.history(undefined, TRANSCRIPT_WINDOW), message],
-            }));
-
-            return { delivered: true };
-          } catch (err) {
-            return { delivered: false, detail: renderThrownChain({ cause: err }) };
-          }
-        },
-      };
-
       // Context resolves per dispatch so binding/display-name changes never go stale.
       const emailDispatcher = createEmailThreadDispatcher(() => ({
         email: this.env.EMAIL,
@@ -1438,7 +1412,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }));
 
       this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, this.actorHandle(), {
-        ws_session: wsDispatcher,
         // Lazily bound: PeerHub needs this store to construct.
         peer_back: {
           dispatch: (channel, payload) => this.peerHub.dispatchPeerBack(channel, payload),
@@ -3375,7 +3348,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         latestAt: unseen[0]?.at ?? Date.now(),
       },
       curriculum: listProposedTasks(this.rt, 'pending'),
-      pendingPlans: listPendingPlanReviews(this.boundSql, this.rt.actor.workspaceId),
+      pendingPlans: listPendingPlanReviews(this.boundSql),
     });
   }
 
