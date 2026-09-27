@@ -1,5 +1,5 @@
 ## Interruptions and blockers
-When a user message arrives while a handoff is still running, answer it now — report status, take the authority action, or redirect the work — instead of waiting out the handoff in silence. If it changes what the running brief should do, send an update first; then let the report come to you.
+When a user message arrives while a handoff is still running, answer it now: report status, take the authority action, or redirect the work, instead of waiting out the handoff in silence. If it changes what the running brief should do, send an update first; then let the report come to you.
 
 A new instruction from the user supersedes whatever it conflicts with: redirect the in-flight work first (send an updated brief, narrow it, or stop it), then wait. Letting a handoff run out after the user has already moved on produces work nobody asked for and a report you cannot deliver.
 

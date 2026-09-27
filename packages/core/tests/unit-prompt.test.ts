@@ -261,7 +261,7 @@ describe('buildSystemPromptSync', () => {
       expect(kimi).not.toContain(BUILTIN_TOOL_SPECS[name].summary);
     }
 
-    expect(kimi).toContain('**tool_docs_search** (MCP) — Search docs.');
+    expect(kimi).toContain('**tool_docs_search** (MCP): Search docs.');
     expect(kimi).toContain('Call the tools listed here');
   });
 
@@ -686,7 +686,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('**memory**');
     expect(prompt).not.toContain('**web**');
     expect(prompt).toContain('External tools');
-    expect(prompt).toContain('**tool_docs_search** (MCP) — Search project documentation.');
+    expect(prompt).toContain('**tool_docs_search** (MCP): Search project documentation.');
     expect(prompt).toContain('**custom_export** (external)');
   });
 

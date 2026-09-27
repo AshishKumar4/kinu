@@ -14,7 +14,7 @@ import {
   ChangeSetCache, DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory,
   agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables,
   initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceBaselineTable, initWorkspaceSchema,
-  nimbusSessionFiles, resetWorkspaceBaseline, standardMounts, withMountTable,
+  classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, standardMounts, withMountTable,
   type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor,
   type SqlValue, type StepContextPlane, type StepPipeline, type VFS,
 } from '@kinu.run/core';
@@ -265,6 +265,33 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     const woken = this.stores(actor);
 
     return await this.meter.measure(async () => await this.turn(actor, woken, dynamic, { turn: 20, deltas: 500 }));
+  }
+
+  /** Subject: an activation's question "is a turn open, and which", after `runs` finished turns and one open one. */
+  async openTurnLookup(runs: number): Promise<OperationCost> {
+    initWorkspaceSchema({ execRaw: this.execRaw, sql: this.executor, exec: this.sql, transactionSync: (write) => this.ctx.storage.transactionSync(write) });
+    const actor = this.main();
+    const { eventRecorder } = this.stores(actor);
+
+    const open = (index: number): void => {
+      openTurnRun(eventRecorder, `run-${String(index)}`, {
+        agentId: actor.actorId, causedBy: 'chat', userMessage: `question ${String(index)}`, turnIndex: index,
+        turn: { turnId: `turn-${String(index)}`, messageId: `answer-${String(index)}`, kind: 'user', text: `question ${String(index)}` },
+      });
+    };
+
+    for (let index = 0; index < runs; index += 1) {
+      open(index);
+      closeTurnRun(eventRecorder, `run-${String(index)}`, { turnIndex: index, ...classifyRunEnd({ completed: true, interrupted: false }) });
+    }
+
+    open(runs);
+
+    return await this.meter.measure(async () => {
+      if (eventRecorder.openTurn()?.runId !== `run-${String(runs)}`) throw new Error('the open turn was not found');
+
+      return null;
+    });
   }
 
   /** Subject: one Diffs read of a workspace of `files` files with one edited since its baseline. */

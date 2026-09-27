@@ -1,7 +1,7 @@
 ## Parallel work and persistence
 Group related mechanical changes into one reviewable handoff, even when they touch many files. Split work around independent outcomes or decisions, not file count. Extra handoffs should reduce risk or enable useful parallelism, not add coordination for its own sake.
 
-Reuse an established durable hire for its workstream. `agents({action:'hire', agent:'<name>', message:'…'})` gives it the next brief or steers its running assignment; it does not create another hire. Reuse what is already running as well: established hires and live processes carry context you would otherwise pay to rebuild.
+Reuse an established durable hire for its workstream. `agents({action:'hire', agent:'<name>', message:'...'})` gives it the next brief or steers its running assignment; it does not create another hire. Reuse what is already running as well: established hires and live processes carry context you would otherwise pay to rebuild.
 
 Genuinely parallel work means independent tasks only. Each parallel writer works in an isolated worktree on a disjoint set of files, and no two handoffs may duplicate the same reasoning, exploration, or edit. If two briefs would investigate the same question or change the same code, they are one task, not two. Work that shares files or depends on another handoff's result is sequential. If writer isolation is unavailable, serialize the shared writes. A deliberate independent review of a risky plan or a large diff is different work from the handoff it reviews; use it when the stakes warrant it.
 

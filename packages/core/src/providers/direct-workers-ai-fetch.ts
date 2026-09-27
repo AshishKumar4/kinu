@@ -1,6 +1,6 @@
 // OpenAI-compatible fetch over the direct Workers AI binding. `Ai.run` stores its options on the shared binding and
 // rereads them after awaiting upstream, so a concurrent call can pick this call's return shape: accept every shape.
-import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import { JsonObjectSchema, jsonObjectElements, readJsonObjectText, type JsonObject } from '../utils/json';
 import { asFetchFunction } from './fetch-shim';
 import { toolCallIdFor } from './tool-call-id';
 import { withRateLimitRetry, type RateLimitRetryOptions } from './rate-limit-retry';
@@ -11,14 +11,20 @@ import { createCachedUsageRepair } from './stream-usage-repair';
 import { watchSseTerminal } from './sse-terminal';
 import { REAL_CLOCK } from '../types/clock';
 
-/** Only the fields this adapter reads; everything else travels through untouched. */
-const ChatCompletionRequestSchema = v.looseObject({
+/** The routed fields; a validating parse of the rest copied the transcript. */
+const ChatCompletionRouteSchema = v.object({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
   stream: v.optional(v.boolean(), false),
-  messages: v.optional(v.array(JsonObjectSchema)),
 });
 
-type ChatCompletionRequest = v.InferOutput<typeof ChatCompletionRequestSchema>;
+type ChatCompletionRoute = v.InferOutput<typeof ChatCompletionRouteSchema>;
+
+/** SDK record, or proxy `Headers`. */
+function sessionAffinity(headers: RequestInit['headers']): string | undefined {
+  if (v.is(v.instance(Headers), headers)) return headers.get('x-session-affinity') ?? undefined;
+
+  return v.parse(v.optional(v.record(v.string(), v.string())), headers)?.['x-session-affinity'];
+}
 
 /** `response` and `tool_calls` are nullable because a usage-only streamed delta sets neither. */
 const NativeOutputSchema = v.looseObject({
@@ -75,17 +81,20 @@ export function createDirectWorkersAIFetch(
 
 function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis.fetch {
   return asFetchFunction(async (input, init) => {
-    // Narrowed to a string URL: workers-types `Request` rejects a `string | URL` union.
-    const request = input instanceof Request ? input : new Request(input instanceof URL ? input.href : input, init);
-    const body = v.parse(JsonObjectSchema, JSON.parse(await request.text()));
-    const route = v.parse(ChatCompletionRequestSchema, body);
+    const request = input instanceof Request ? input : null;
+    const text = request === null ? init?.body : await request.text();
+    const body = v.is(v.string(), text) ? readJsonObjectText(text) : null;
+
+    if (body === null) return errorResponse(400, 'the request body is not JSON object text');
+    const route = v.parse(ChatCompletionRouteSchema, { model: body.model, stream: body.stream });
+    const signal = request?.signal ?? init?.signal;
 
     const options: DirectWorkersAIRunOptions = {
-      signal: request.signal,
+      ...(signal !== null && signal !== undefined && { signal }),
       returnRawResponse: true,
     };
 
-    const affinity = request.headers.get('x-session-affinity');
+    const affinity = sessionAffinity(request?.headers ?? init?.headers);
 
     if (affinity) options.extraHeaders = { 'x-session-affinity': affinity };
 
@@ -116,11 +125,12 @@ function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis
 
 /** Tool-call ids are forwarded as-is: the upstream pairs on equality and re-keying would split pairs.
  *  Null `content` becomes `''` because the binding's message schema rejects null (AiError on tool-only turns). */
-function bindingInputs(body: JsonObject, route: ChatCompletionRequest): JsonObject {
+function bindingInputs(body: JsonObject, route: ChatCompletionRoute): JsonObject {
   const inputs: JsonObject = { ...body, stream: route.stream };
   delete inputs.model;
+  const messages = jsonObjectElements(body.messages);
 
-  if (route.messages) inputs.messages = route.messages.map(withoutNullContent);
+  if (messages !== null) inputs.messages = messages.map(withoutNullContent);
 
   // The SDK only requests stream usage via `includeUsage`, which workers-ai.ts does not set; without this no tokens are reported.
   if (route.stream && inputs.stream_options === undefined) {

@@ -469,9 +469,14 @@ export function childContextResolver(deps: {
 }
 
 /** The claim's consumed request, or why its own rows cannot be read: a failure no later sweep reads differently. */
-async function consumedEvidence(stores: AgentStores, claim: StoredActorClaim): Promise<{ readonly context: ContextRevision | null } | { readonly failure: KinuError }> {
+async function consumedEvidence(stores: AgentStores, claim: StoredActorClaim): Promise<{ readonly context: ContextRevision } | { readonly failure: KinuError }> {
   try {
-    return { context: await stores.claims.consumedContext(claim.turnId) };
+    const context = await stores.claims.consumedContext(claim.turnId);
+
+    // Absent is as unrecoverable as corrupt.
+    if (context === null) return { failure: new KinuError('missing', 'claimed request evidence is missing') };
+
+    return { context };
   } catch (cause) {
     return { failure: toKinuError({ doing: 'reading the request record of an interrupted turn', cause, otherwise: 'io' }) };
   }

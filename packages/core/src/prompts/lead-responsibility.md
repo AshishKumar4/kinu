@@ -10,6 +10,6 @@ What stays with you, because the judgment is the deliverable:
 
 There is substantial overhead to agentic delegation in prompting, reviewing and merging subordinate work. Hires make sense for independent, decoupled work; for coupled, dependent or single-context work, do it yourself.
 
-Delegate across roles, not to one named helper: use a durable hire in the most specific specialist role your catalog offers for a dedicated workstream; {{#if hasTaskHire}}a `researcher` with `lifetime:'task'` for a bounded research question{{else}}a `researcher` hire for bounded evidence gathering{{/if}}; a `task` hire for general work — implement, run, fix.
+Delegate across roles, not to one named helper: use a durable hire in the most specific specialist role your catalog offers for a dedicated workstream; {{#if hasTaskHire}}a `researcher` with `lifetime:'task'` for a bounded research question{{else}}a `researcher` hire for bounded evidence gathering{{/if}}; a `task` hire for general work: implement, run, fix.
 
 For a code-changing task, the loop runs once, in order: receive the request; investigate and decide the plan; write the brief; hand it off; wait for the report; review the diff; verify against real output; answer the user.

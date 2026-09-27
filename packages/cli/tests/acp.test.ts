@@ -127,6 +127,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     listModels: async () => ({ models: [], failures: [] }),
     testModel: async () => ({ ok: true, firstTokenMs: 0, totalMs: 0 }),
     inspectSubordinate: async (request) => missingSubordinateHistory(request.path),
+    workspaceWork: async () => ({ plans: [], tasks: [] }),
   };
 
   return {

@@ -309,7 +309,7 @@ const SESSION_TYPES = `
   function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<string | Refusal>;
   function killProcess(pid: number | { pid: number }): Promise<string | Refusal>;
   function logs(pid: number | { pid: number; lines?: number; bytes?: number }): Promise<string | Refusal>;
-  function exposePort(port: number | { port: number }): Promise<string | Refusal>; // the URL, then 'verified: …' or 'not reached: …'
+  function exposePort(port: number | { port: number }): Promise<string | Refusal>; // the URL, then 'verified: ...' or 'not reached: ...'
   function unexposePort(port: number | { port: number }): Promise<string | Refusal>;
   function listPorts(): Promise<string | Refusal>;
   function installRuntime(spec: string): Promise<string | Refusal>;
