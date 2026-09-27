@@ -111,15 +111,20 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     walk(parsed.root, (node) => {
       const { raw } = node;
 
-      // `return settle(…)`, or an arrow whose whole body is the call: the same edge, spelled short.
-      const returned = raw.type === 'ReturnStatement' ? raw.argument : arrowBody(raw);
-
-      if (returned === null) return;
-      const call = returned.type === 'AwaitExpression' ? returned.argument : returned;
-
-      if (call.type !== 'CallExpression' || call.callee.type !== 'Identifier' || !runners.has(call.callee.name)) return;
+      if (raw.type !== 'CallExpression' || raw.callee.type !== 'Identifier' || !runners.has(raw.callee.name)) return;
       const site = `${file}:${String(parsed.lineAt(node.start))}`;
-      const owner = bridgeOwner(raw.type === 'ReturnStatement' ? node : { ...node, parent: node });
+      // `return settle(…)`, `return await settle(…)`, or an arrow whose whole body is the call: the edge, spelled short.
+      const awaited = node.parent?.raw.type === 'AwaitExpression' ? node.parent : node;
+      const holder = awaited.parent;
+      const returned = holder !== undefined && (holder.raw.type === 'ReturnStatement' || arrowBody(holder.raw) === awaited.raw);
+
+      if (!returned) {
+        findings.push(`${site}: a runner called mid-body; the effect is run once, at the edge, as its return`);
+
+        return;
+      }
+
+      const owner = bridgeOwner(holder.raw.type === 'ReturnStatement' ? holder : { parent: holder });
 
       if (owner === null) findings.push(`${site}: a runner returned outside an exported function or public member`);
       else bridges.push(site);

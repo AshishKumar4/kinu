@@ -75,11 +75,11 @@ function configuredKey(env: CredentialEncryptionEnv): Effect.Effect<ConfiguredKe
     const current = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
 
     if (!current) {
-      return yield* new KinuError('unavailable', `Credentials cannot be stored or read: no encryption key is configured. ${CREDENTIAL_ENCRYPTION_KEY_HINT}`);
+      return yield* Effect.die(new Error(`Credentials cannot be stored or read: no encryption key is configured. ${CREDENTIAL_ENCRYPTION_KEY_HINT}`));
     }
 
     if (current.length < MIN_SECRET_LENGTH) {
-      return yield* new KinuError('unavailable', `CREDENTIAL_ENCRYPTION_KEY is too short to be a key (${current.length} chars). ${CREDENTIAL_ENCRYPTION_KEY_HINT}`);
+      return yield* Effect.die(new Error(`CREDENTIAL_ENCRYPTION_KEY is too short to be a key (${current.length} chars). ${CREDENTIAL_ENCRYPTION_KEY_HINT}`));
     }
 
     const retired = (env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS ?? '')
@@ -98,7 +98,7 @@ function opened(aad: string, stored: string, current: string, retired: readonly 
     const [sealedWith, ivPart, ctPart] = stored.slice(ENVELOPE_PREFIX.length).split('.');
 
     if (!sealedWith || !ivPart || !ctPart) {
-      return yield* new KinuError('bad_input', `Record "${aad}" is stored in an envelope this build cannot parse.`);
+      return yield* Effect.die(new Error(`Record "${aad}" is stored in an envelope this build cannot parse.`));
     }
 
     for (const secret of [current, ...retired]) {
@@ -112,17 +112,19 @@ function opened(aad: string, stored: string, current: string, retired: readonly 
           candidate.key,
           unbase64url(ctPart),
         ),
-        catch: (cause) => new KinuError('bad_input',
-          `Record "${aad}" failed to decrypt — the stored envelope does not match its key, or belongs to another store.`,
-          { cause }),
-      });
+        catch: (cause) => ({ cause }),
+      }).pipe(Effect.catch((failed) => Effect.die(new Error(
+        `Record "${aad}" failed to decrypt — the stored envelope does not match its key, or belongs to another store.`,
+        { cause: failed.cause },
+      ))));
 
       return new TextDecoder().decode(plaintext);
     }
 
-    return yield* new KinuError('bad_input',
+    return yield* Effect.die(new Error(
       `Record "${aad}" was sealed with encryption key ${sealedWith}, which this deployment no longer has. `
-      + 'Restore it in CREDENTIAL_ENCRYPTION_KEY_PREVIOUS, or reconnect the provider.');
+      + 'Restore it in CREDENTIAL_ENCRYPTION_KEY_PREVIOUS, or reconnect the provider.',
+    ));
   });
 }
 

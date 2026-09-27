@@ -109,6 +109,7 @@ function hidden(): { open(): number } { return { open() { return run(openEffect(
 export function mapped(): Promise<{ open(): number }> { return settle(Effect.map(keyEffect(), () => ({ open() { return run(openEffect()); } }))); }
 export class Seams { readonly seam = { deploy: (r: number) => settle(deployEffect(r)) }; }
 const hiddenSeam = { deploy: (r: number) => settle(deployEffect(r)) };
+export function midway(): number { const n = run(countEffect()); return n + 1; }
 export function inner(): Effect.Effect<number, KinuError> { return Effect.succeed(1); }
 `;
 
@@ -124,6 +125,7 @@ export function done(): number { return settle(1); }
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:12: a runner returned outside an exported function or public member`,
       `${FILE}:15: a runner returned outside an exported function or public member`,
+      `${FILE}:16: a runner called mid-body; the effect is run once, at the edge, as its return`,
       `${FILE}:8: a runner returned outside an exported function or public member`,
     ],
   });

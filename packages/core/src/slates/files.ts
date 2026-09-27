@@ -151,7 +151,7 @@ export class SlateFiles {
 
     const refused = walk(root, '');
 
-    if (refused !== null) return Effect.fail(new KinuError('bad_input', refused));
+    if (refused !== null) return Effect.die(new Error(refused));
 
     for (const path of known.keys()) manifest.forget(path);
 
