@@ -30,7 +30,7 @@ import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareView
 import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
-import { agentArtifactDirectory, agentHome, MAIN_AGENT, subordinateReportDedupeKey } from '@kinu.run/core';
+import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
 import { TRANSCRIPT_WINDOW, type ChatWire } from './chat-transport';
 import { DELEGATION_LANE_FIBER } from './fiber-recovery';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
@@ -796,16 +796,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const report: ReportToolDeps = {
       report: async (input) => {
+        // A run-settling report is the answer.
+        const settles = reportSettlesRun(input.status, 'report_tool');
+
         const relayed = await relayHostedReport(this.subordinateSeams(), turn.actor, {
           status: input.status, content: input.content, origin: 'report_tool',
           mode: 'build', sequenceId: `live:${turn.actor.record.name}:${nanoid()}`,
           handoff: input.handoff,
+          ...(settles && { answers: turn.turnId }),
         });
 
         turn.reports.spoke = true;
-        // Only a run-settling report counts as the answer, the same predicate the ingress
-        // settles a waiter on.
-        turn.reports.settled ||= reportSettlesRun(input.status, 'report_tool');
+        turn.reports.settled ||= settles;
 
         return { id: relayed.id, disposition: relayed.disposition };
       },
@@ -1146,22 +1148,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ).toArray().length > 0;
   }
 
-  /** A dead activation's lease re-runs unless its report reached the parent. */
+  /** A lease from before this activation lost its runner; effects dedupe on rerun. */
   private rependDeadActivationLeases(): void {
-    const exec = this.boundExec();
-
-    const leased = `kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
-      AND consumed_at IS NOT NULL AND consumed_at < ?`;
-
-    exec.exec(
-      `UPDATE agent_log SET consumed_at = NULL WHERE ${leased} AND EXISTS (SELECT 1 FROM agent_log report
-         WHERE report.actor_id = (SELECT parent_actor_id FROM workspace_actors WHERE actor_id = agent_log.actor_id)
-           AND report.dedupe_key = ? || agent_log.id)`,
-      this.activationStartedAt, subordinateReportDedupeKey(''),
-    );
-
-    const rows = exec.exec(
-      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL WHERE ${leased} RETURNING id`,
+    const rows = this.boundExec().exec(
+      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
+       WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
+         AND consumed_at IS NOT NULL AND consumed_at < ?
+       RETURNING id`,
       this.activationStartedAt,
     ).toArray();
 
@@ -1298,7 +1291,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           parentActorId: turn.record.parentActorId,
         });
 
-        new EventLog(exec, bound.handle).unbind(turn.claim.turnId);
+        const log = new EventLog(exec, bound.handle);
+
+        if (log.isAnswered(turn.claim.turnId)) {
+          bound.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'completed');
+          continue;
+        }
+
+        log.unbind(turn.claim.turnId);
         diagnostics.event('subordinate.assignment_repended', {
           workspace: this.name, actor: turn.record.name, assignment: turn.claim.turnId,
         });
