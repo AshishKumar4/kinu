@@ -3,7 +3,8 @@
  * The transport writes no row: the loop does, when it opens the turn or lands the splice.
  */
 import { describe, expect, test } from 'bun:test';
-import type { UIMessage, UIMessageChunk } from 'ai';
+import { Chat } from '@ai-sdk/react';
+import { DefaultChatTransport, type UIMessage, type UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { AwaitedList, createTestSql } from '@kinu.run/test-utils';
 import { INTERRUPTED_TURN, type SendLanding, type SessionEvent } from '@kinu.run/core';
@@ -492,6 +493,16 @@ describe('ChatWireTransport', () => {
       { type: 'text', text: 'first half', state: 'done' },
       { type: 'text', text: ' and the rest', state: 'done' },
     ]);
+
+    // 2026-09-27: `sdk-minted-2` reached the tab, whose SDK chat drew the answer twice.
+    const sse = h.responses().flatMap((frame) => frame.body === undefined || frame.body === '' ? [] : [`data: ${frame.body}\n\n`]).join('');
+
+    const tab = new Chat<UIMessage>({ transport: new DefaultChatTransport({
+      fetch: Object.assign(async () => new Response(sse, { headers: { 'content-type': 'text/event-stream', 'x-vercel-ai-ui-message-stream': 'v1' } }), { preconnect: fetch.preconnect }),
+    }) });
+
+    await tab.sendMessage({ text: 'hello' });
+    expect(tab.messages.filter((message) => message.role === 'assistant').map((message) => message.id)).toEqual(['msg-1']);
   });
 
   test('a reconnecting client is told what is resuming and gets the stored chunks replayed', async () => {

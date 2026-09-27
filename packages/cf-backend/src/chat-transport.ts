@@ -73,7 +73,7 @@ interface LiveStream {
   failure: string | null;
 }
 
-/** A chunk's meaning to the loop's `partialFlushCadence`, so reconnects and continuations read the same amount. */
+/** A chunk's meaning to `partialFlushCadence`: reconnects and continuations read the same amount. */
 function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
   if (chunk.type === 'tool-output-available' || chunk.type === 'tool-output-error' || chunk.type === 'tool-output-denied') return 'settled';
 
@@ -419,7 +419,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         // The provider's own words: the sender's chat would keep them as its error, and the turn's classified
         // failure follows as the frame that ends it.
         if (chunk.type === 'error') continue;
-        const { action } = live.accumulator.applyChunk(chunk);
+        live.accumulator.applyChunk(chunk);
 
         if (!live.open.admits(chunk)) {
           this.degradeRelay(live, toKinuError({
@@ -431,8 +431,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           return;
         }
 
-        // Stamp the persisted row id: a provider emitting no `start.messageId` leaves the tab two copies.
-        if (chunk.type === 'start' && action?.type === 'start' && action.messageId === undefined) chunk.messageId = live.accumulator.messageId;
+        // The row id on every `start`: a missing or SDK-minted one draws the answer twice.
+        if (chunk.type === 'start') chunk.messageId = live.accumulator.messageId;
 
         const body = JSON.stringify(chunk);
         const resume = this.resume;
@@ -443,7 +443,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           if (live.cadence.flushes(flushSignal(chunk))) resume.resumable.flushBuffer();
         }
 
-        // Stored above, so a tab still joining reads it in its replay, in order; sent to it now it would run ahead of the parts the replay opens.
+        // A joining tab reads it in its replay; sent now, it would run ahead of the parts the replay opens.
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
       }
     } catch (cause) {
@@ -466,7 +466,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.pendingResume.clear();
   }
 
-  /** The relay broke; the turn did not. The tab gets our classification; the SDK's words go to diagnostics. */
+  /** The relay broke, not the turn: the tab gets our classification, diagnostics the SDK's words. */
   private degradeRelay(live: LiveStream, error: KinuError): void {
     diagnostics.failure('chat.stream_observe_failed', error);
     live.broken = true;
