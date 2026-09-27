@@ -917,33 +917,6 @@ describe('agents tool — resuming a stored delegation row', () => {
     })).toEqual({ action: 'swarm', preset: 'optimise', task: 'search', depth: 3, budget_usd: 5 });
   });
 
-  test('a stored fork row is re-driven as the action that spawns nodes today', () => {
-    // A stored fork maps onto `preset:'ideate'` (no `objective` to invent); caps carry over.
-    const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
-      action: 'fork', task: 'search', forks: twoForks, merge_strategy: 'consensus', budget_usd: 5,
-    }));
-
-    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search', budget_usd: 5 });
-    const dropped = lines.filter((line) => line.includes('agents.resume.fields_dropped'));
-    expect(dropped).toHaveLength(1);
-    expect(dropped[0]).toContain('forks');
-    expect(dropped[0]).toContain('merge_strategy');
-    expect(dropped[0]).toContain('settlement');
-    expect(dropped[0]).not.toContain('budget_usd');
-  });
-
-  test('a stored settle row takes the same translation, from one era further back', () => {
-    const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
-      action: 'fork', task: 'search', settle: 'mcts', budget_tokens: 900,
-    }));
-
-    expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search', budget_tokens: 900 });
-    const dropped = lines.filter((line) => line.includes('agents.resume.fields_dropped'));
-    expect(dropped).toHaveLength(1);
-    expect(dropped[0]).toContain('settle');
-    expect(dropped[0]).toContain('settlement');
-  });
-
   test('a stored inherit-context row resumes under the renamed value', () => {
     // `context:'fork'` is rewritten before the parse, which refuses the old spelling.
     const { result: resumed } = captureEvents(() => resumableAgentsInput('agents', {
@@ -983,6 +956,9 @@ describe('agents tool — resuming a stored delegation row', () => {
   });
 
   test('a stored row for a converse action is not resumable, and neither is another tool', () => {
+    // `fork` is an action the tool no longer has: refused like any action it never had.
+    expect(resumableAgentsInput('agents', { action: 'fork', task: 'search', forks: twoForks })).toBeNull();
+    expect(resumableAgentsInput('agents', { action: 'probe', task: 'search' })).toBeNull();
     expect(resumableAgentsInput('agents', { action: 'hire', role: 'r', mission: 'm' })).toBeNull();
     expect(resumableAgentsInput('agents', { action: 'ask', agent: 'a', message: 'm' })).toBeNull();
     expect(resumableAgentsInput('shell', { command: 'ls' })).toBeNull();

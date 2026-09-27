@@ -793,14 +793,10 @@ export function parseAgentsToolInput(call: { input: unknown }): AgentsToolInput 
 
 type StoredAgentsRow = v.InferOutput<typeof StoredAgentsInputSchema>;
 
-/** Fields a translated row must not carry: `preset` is fixed to `ideate`, and there is no `objective`. */
-const TRANSLATION_DECIDES = { preset: true, objective: true } satisfies Record<string, true>;
-
-function swarmFieldsOf(row: StoredAgentsRow, skip: Record<string, true>): Partial<AgentsToolInput> {
+function swarmFieldsOf(row: StoredAgentsRow): Partial<AgentsToolInput> {
   const carried: Partial<AgentsToolInput> = {};
 
   for (const field of AGENTS_ACTION_FIELDS.swarm) {
-    if (Object.hasOwn(skip, field)) continue;
     const value = row[field];
 
     if (value !== undefined) Object.assign(carried, { [field]: value });
@@ -809,30 +805,19 @@ function swarmFieldsOf(row: StoredAgentsRow, skip: Record<string, true>): Partia
   return carried;
 }
 
-/** What the re-drive lost, named per field; `extra` covers the row's settlement, which a swarm cannot carry. */
-function recordDroppedFields(
-  kind: string,
-  input: JsonValue,
-  resumed: AgentsToolInput,
-  extra: readonly string[],
-): void {
+/** What the re-drive lost, named per field. */
+function recordDroppedFields(kind: string, input: JsonValue, resumed: AgentsToolInput): void {
   const carried = new Set(Object.keys(resumed));
   const dropped = fieldNames(input).filter((field) => !carried.has(field));
 
-  if (dropped.length === 0 && extra.length === 0) return;
+  if (dropped.length === 0) return;
   diagnostics.event('agents.resume.fields_dropped', {
     kind,
-    fields: [...dropped, ...extra].join(','),
-    count: dropped.length + extra.length,
+    fields: dropped.join(','),
+    count: dropped.length,
   });
 }
 
-/**
- * Background-job resume filter and detach gate (orchestrator/background-tools.ts): a call that cannot be
- * re-driven must never be detached. Returns the input to re-execute, or null.
- * Stored rows are translated, not validated: `action:'fork'` re-drives as `preset:'ideate'`, `settle` is
- * reported as unsupported, and `config.context:'fork'` becomes `inherit`; each loss is logged.
- */
 /** Rewrite a stored row's retired `config.context` value; runs before the replay parse. */
 const StoredSwarmContextSchema = v.looseObject({
   config: v.optional(v.looseObject({ context: v.optional(v.string()) })),
@@ -846,6 +831,11 @@ function translateStoredSwarmContext(row: StoredSwarmContext): StoredSwarmContex
   return { ...row, config: { ...row.config, context: 'inherit' } };
 }
 
+/**
+ * Background-job resume filter and detach gate (orchestrator/background-tools.ts): a call that cannot be
+ * re-driven must never be detached. Returns the input to re-execute, or null.
+ * Only a swarm row resumes; `config.context:'fork'` becomes `inherit`, and each dropped field is logged.
+ */
 export function resumableAgentsInput(kind: string, input: JsonValue): AgentsToolInput | null {
   if (kind !== 'agents') return null;
   const rewritten = v.safeParse(StoredSwarmContextSchema, input);
@@ -854,17 +844,9 @@ export function resumableAgentsInput(kind: string, input: JsonValue): AgentsTool
   if (!parsed.success) return null;
   const row = parsed.output;
 
-  if (row.action === 'fork') {
-    if (row.task === undefined) return null;
-    const resumed: AgentsToolInput = { ...swarmFieldsOf(row, TRANSLATION_DECIDES), action: 'swarm', preset: 'ideate', task: row.task };
-    recordDroppedFields(kind, input, resumed, ['settlement']);
-
-    return resumed;
-  }
-
   if (row.action !== 'swarm') return null;
-  const resumed: AgentsToolInput = { action: 'swarm', ...swarmFieldsOf(row, {}) };
-  recordDroppedFields(kind, input, resumed, []);
+  const resumed: AgentsToolInput = { action: 'swarm', ...swarmFieldsOf(row) };
+  recordDroppedFields(kind, input, resumed);
 
   return resumed;
 }

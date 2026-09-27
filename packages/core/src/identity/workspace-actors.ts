@@ -12,16 +12,11 @@ export interface WorkspaceActorAuthority {
 
 const StoredActorSchema = v.object({
   actorId: v.string(), workspaceId: v.string(), parentActorId: v.nullable(v.string()),
-  name: v.string(), storageKey: v.string(), kind: v.picklist(['main', 'subordinate', 'head', 'node', 'branch']),
+  name: v.string(), storageKey: v.string(), kind: v.picklist(['main', 'subordinate', 'head', 'branch']),
   creationId: v.string(), lifetime: v.picklist(['durable', 'task']), createdAt: v.number(), retiringAt: v.nullable(v.number()), deletedAt: v.nullable(v.number()),
 });
 
-type StoredWorkspaceActor = v.InferOutput<typeof StoredActorSchema>;
-
-/** Stored `node` rows still exist; the DDL accepts them and {@link row} reads them as `head`. Nothing writes `node`. */
-export type WorkspaceActor = Omit<StoredWorkspaceActor, 'kind'> & {
-  readonly kind: Exclude<StoredWorkspaceActor['kind'], 'node'>;
-};
+export type WorkspaceActor = v.InferOutput<typeof StoredActorSchema>;
 
 export interface CreateWorkspaceActor {
   readonly parent: ActorHandle;
@@ -62,7 +57,7 @@ export function initWorkspaceActorTable(execRaw: RawSqlExec): void {
     parent_actor_id TEXT REFERENCES workspace_actors(actor_id),
     name TEXT NOT NULL,
     storage_key TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('main','subordinate','head','node','branch')),
+    kind TEXT NOT NULL CHECK (kind IN ('main','subordinate','head','branch')),
     lifetime TEXT NOT NULL CHECK (lifetime IN ('durable','task')),
     created_at INTEGER NOT NULL,
     creation_id TEXT NOT NULL,
@@ -116,17 +111,15 @@ export class WorkspaceActorDirectory {
   }
 
   private row(actorId: string): WorkspaceActor | null {
-    const rows = this.sql<StoredWorkspaceActor>`SELECT actor_id AS actorId, workspace_id AS workspaceId,
+    const rows = this.sql<WorkspaceActor>`SELECT actor_id AS actorId, workspace_id AS workspaceId,
       parent_actor_id AS parentActorId, name, storage_key AS storageKey, kind, lifetime, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
       FROM workspace_actors WHERE workspace_id = ${this.authority.workspaceId} AND actor_id = ${actorId}`;
 
     const stored = rows[0];
 
     if (!stored) return null;
-    const parsed = v.parse(StoredActorSchema, stored);
-    const { kind, ...rest } = parsed;
 
-    return { ...rest, kind: kind === 'node' ? 'head' : kind };
+    return v.parse(StoredActorSchema, stored);
   }
 
   private issue(row: WorkspaceActor): ActorHandle {
