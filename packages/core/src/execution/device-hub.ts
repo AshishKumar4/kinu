@@ -198,10 +198,12 @@ export class DeviceSocketHub {
   }
 
   relayDevice(): string | null {
-    for (const ws of this.ctx.getWebSockets()) {
-      const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
+    // A pane names its device too.
+    for (const id of this.connectedDeviceIds()) {
+      const ws = this.liveSocket(id);
+      const attachment = v.safeParse(DeviceAttachmentSchema, ws?.deserializeAttachment());
 
-      if (ws.readyState === WS_OPEN && attachment.success && attachment.output.relay === undefined) return attachment.output.device;
+      if (attachment.success && attachment.output.relay === undefined) return id;
     }
 
     return null;

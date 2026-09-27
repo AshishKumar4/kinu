@@ -374,6 +374,19 @@ describe('DeviceSocketHub Codex relay', () => {
     expect(ws.sent.filter((frame) => frame.includes(DEVICE_RELAY.cancel))).toHaveLength(1);
   });
 
+  test('an open terminal pane does not make a daemon too old to relay look able again', async () => {
+    const { ctx, hub, ws } = connected();
+    const relaying = hub.relay('dev-a', 'relay-7', REQUEST);
+    hub.handleMessage('dev-a', JSON.stringify({ id: relayCall(ws).id, error: `unknown method: ${DEVICE_RELAY.method}` }));
+    await expect(relaying).rejects.toThrow(DEVICE_UNKNOWN_METHOD);
+
+    const pane = fakeSocket();
+    ctx.acceptWebSocket(pane, ['terminal:pty-1']);
+    pane.serializeAttachment({ terminal: 'pty-1', device: 'dev-a', workspace: 'workspace-a' });
+
+    expect(hub.relayDevice()).toBeNull();
+  });
+
   test('no machine online picks none', () => {
     expect(new DeviceSocketHub(fakeCtx()).relayDevice()).toBeNull();
   });
