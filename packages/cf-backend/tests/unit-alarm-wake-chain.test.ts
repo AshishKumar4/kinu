@@ -87,6 +87,7 @@ function breakScheduleWrites(agent: HarnessOrchestratorAgent): void {
 
 describe('a refiner answer stored with no waiter', () => {
   test('arms the Kinu wake at once, and the tick routes it so the workspace owes nothing after', async () => {
+    // After an eviction the answer used to wait for the owner's next message.
     const workspace = orchestratorHarness();
     const now = Date.now();
     const { requests } = await workspace.agent.listRefinements(1);
