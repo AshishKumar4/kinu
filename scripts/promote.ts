@@ -30,7 +30,7 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { deployment, environmentArgs, why, wrangler } from './infra-cloudflare';
 import { type InfraEnvironment, deriveInfrastructure } from './infra-manifest';
-import { type Reset, ResetSchema } from './reset';
+import { LATEST_RESET_KEY, type Reset, ResetSchema } from './reset';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -254,6 +254,17 @@ export function planRollback(
   return { target, history: history.map((entry, index) => index === position ? { ...entry, withdrawnAt: at } : entry) };
 }
 
+/**
+ * The reset a rollback to `target` would cross: one a later promotion carries, or the environment's latest reset if it
+ * came after `target` was promoted (a promotion red after its reset is in no history). A build older than a reset
+ * would serve storage its migrations never made, so a rollback across one is refused.
+ */
+export function resetCrossed(history: readonly Promotion[], target: Promotion, latest: Reset | undefined): Reset | undefined {
+  const later = history.slice(history.indexOf(target) + 1).find((entry) => entry.reset !== undefined)?.reset;
+
+  return later ?? (latest !== undefined && latest.at > target.at ? latest : undefined);
+}
+
 const HealthSchema = v.looseObject({ build: v.looseObject({ sha: v.string() }) });
 
 /** A health answer's body, which is the SPA shell rather than JSON while a route serves nothing yet. */
@@ -383,6 +394,17 @@ function promotions(bucket: string): Promotion[] {
   if (`${run.stderr}\n${run.stdout}`.includes('The specified key does not exist.')) return [];
 
   throw new Error(`wrangler r2 object get ${bucket}/${HISTORY_KEY} failed: ${why(run)}`);
+}
+
+/** The latest reset `scripts/reset.ts wipe` recorded in `bucket`, or none. */
+function latestReset(bucket: string): Reset | undefined {
+  const run = wrangler(['r2', 'object', 'get', `${bucket}/${LATEST_RESET_KEY}`, '--pipe', '--remote'], 600_000);
+
+  if (run.ok) return v.parse(ResetSchema, JSON.parse(run.stdout));
+
+  if (`${run.stderr}\n${run.stdout}`.includes('The specified key does not exist.')) return undefined;
+
+  throw new Error(`wrangler r2 object get ${bucket}/${LATEST_RESET_KEY} failed: ${why(run)}`);
 }
 
 /** Refused unless `origin` serves `sha` with this very signed stamp: a record or a history entry names what a
@@ -530,6 +552,13 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
 
     if (plan === undefined) throw new Error(`production's history holds no build older than version ${serving} to return to`);
     const { target } = plan;
+    const crossed = resetCrossed(plan.history, target, latestReset(buckets.production));
+
+    if (crossed !== undefined) {
+      throw new Error(`${crossed.tag} (${crossed.at}) reset production after ${target.sha} was promoted; that build never ran on `
+        + 'this storage, so no rollback crosses the reset. Deploy forward instead.');
+    }
+
     const run = wrangler(['rollback', target.version, '--message', `Rollback to ${target.sha}`, '--yes', ...environmentArgs('production')], 600_000);
 
     if (!run.ok) throw new Error(`wrangler rollback ${target.version} failed: ${why(run)}`);
