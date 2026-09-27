@@ -25,7 +25,14 @@ type CodexRoute = { readonly kind: 'device'; readonly id: string; readonly label
 
 const CONTAINER: CodexRoute = { kind: 'container' };
 
-const PINNED = new Map<string, { readonly turn: string; readonly route: Promise<CodexRoute> }>();
+interface ActorPin {
+  turn: string;
+  route: Promise<CodexRoute> | null;
+  /** Late calls pick unwritten. */
+  readonly replaced: Set<string>;
+}
+
+const PINNED = new Map<string, ActorPin>();
 
 interface TurnKey {
   readonly actor: string;
@@ -120,7 +127,13 @@ export function codexRouteFetch(input: {
     if (turn === null) return pick();
     const held = PINNED.get(turn.actor);
 
-    if (held?.turn === turn.turn) return held.route;
+    if (held?.turn === turn.turn && held.route !== null) return held.route;
+
+    if (held?.replaced.has(turn.turn) === true) return pick();
+    const pin = held ?? { turn: turn.turn, route: null, replaced: new Set<string>() };
+
+    if (pin.turn !== turn.turn) pin.replaced.add(pin.turn);
+    pin.turn = turn.turn;
 
     const picking = (async () => {
       try {
@@ -129,12 +142,13 @@ export function codexRouteFetch(input: {
 
         return route;
       } catch (cause) {
-        PINNED.delete(turn.actor);
+        if (pin.turn === turn.turn) pin.route = null;
         throw new KinuError('unavailable', 'could not ask the account which machine carries Codex', { cause });
       }
     })();
 
-    PINNED.set(turn.actor, { turn: turn.turn, route: picking });
+    pin.route = picking;
+    PINNED.set(turn.actor, pin);
 
     return picking;
   };
@@ -174,7 +188,9 @@ export function codexRouteFetch(input: {
     } catch (cause) {
       // Nothing left: re-pinned, not switched.
       if (isDeviceUnknownMethodError({ cause })) {
-        if (turn !== null) PINNED.set(turn.actor, { turn: turn.turn, route: Promise.resolve(CONTAINER) });
+        const pin = turn === null ? undefined : PINNED.get(turn.actor);
+
+        if (pin !== undefined && pin.turn === turn?.turn) pin.route = Promise.resolve(CONTAINER);
         diagnostics.event('codex.route_pinned', { route: 'container', device: '', reason: 'daemon_without_relay' });
 
         return viaContainer(request, init);

@@ -323,4 +323,20 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     await harness.joinFibers();
     harness.close();
   });
+
+  test('a background call from an earlier turn never moves the live turn off its route', async () => {
+    const { harness, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'ok'));
+    const earlier = newTurn();
+    const live = newTurn();
+
+    expect(finished(await step(model, earlier)).egress).toBe('relay');
+    expect(finished(await step(model, live)).egress).toBe('relay');
+    const machine = await attachMachine('relay');
+
+    // The earlier turn's job is no longer inside a turn, so it may pick afresh.
+    expect(finished(await step(model, earlier)).egress).toBe(`device ${machine.deviceId}`);
+    expect(finished(await step(model, live)).egress).toBe('relay');
+    await harness.joinFibers();
+    harness.close();
+  });
 });
