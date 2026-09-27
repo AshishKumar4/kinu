@@ -284,7 +284,8 @@ export async function runHostedTask(
   },
   chat?: HostedChatSink,
 ): Promise<HostedTaskResult> {
-  return await seams.host.run(reference, async (actor) => {
+  // The relay runs after the child's queue is free: a hirer may be waiting on that queue while the relay waits on its.
+  const ran = await seams.host.run(reference, async (actor) => {
     // `ActorHostDeps.runtimeFor` is `createCFRuntime` here, but core types it `AgentRuntime`; narrow locally.
     const runtime = actor.runtime;
 
@@ -395,16 +396,18 @@ export async function runHostedTask(
         : null
     );
 
-    if (relayed === null) return { text: report.summary, relayed: null };
-
-    return {
-      text: report.summary,
-      relayed: await relayHostedReport(seams, actor, {
-        status: relayed.status, content: relayed.content, origin: 'turn_end',
-        mode: task.mode, sequenceId: task.sequenceId,
-      }),
-    };
+    return { actor, text: report.summary, relayed };
   });
+
+  if (ran.relayed === null) return { text: ran.text, relayed: null };
+
+  return {
+    text: ran.text,
+    relayed: await relayHostedReport(seams, ran.actor, {
+      status: ran.relayed.status, content: ran.relayed.content, origin: 'turn_end',
+      mode: task.mode, sequenceId: task.sequenceId,
+    }),
+  };
 }
 
 /** One actor's child substrate: every verb is a call on the workspace's one host. */
@@ -429,6 +432,9 @@ export function hostedSubordinateRuntime(
 
     return entry.reference;
   };
+
+  // A child's queue can be held by a turn that waits on a delegate: the hirer frees its own slot meanwhile.
+  const outsideSlot = <T>(waited: Promise<T>): Promise<T> => seams.whileWaiting(parent().record.actorId, waited);
 
   const resolve = (name: string): ActorReference => {
     const owner = parent();
@@ -461,11 +467,11 @@ export function hostedSubordinateRuntime(
     assign: async (name, input) => {
       const task = { kind: 'task' as const, ...input };
 
-      return await admitHostedTask(seams, resolve(name), task);
+      return await outsideSlot(admitHostedTask(seams, resolve(name), task));
     },
-    status: async (name) => await seams.host.run(resolve(name), async (actor) =>
-      readSubordinateLiveStatus(seams.exec, actor.handle)),
-    message: (name, content, mode) => admitHostedTask(seams, resolve(name), { kind: 'message', body: content, mode }),
+    status: async (name) => await outsideSlot(seams.host.run(resolve(name), async (actor) =>
+      readSubordinateLiveStatus(seams.exec, actor.handle))),
+    message: (name, content, mode) => outsideSlot(admitHostedTask(seams, resolve(name), { kind: 'message', body: content, mode })),
     rename: async (name, displayName, nameOrigin) => {
       await seams.host.run(resolve(name), async (actor) => {
         actor.stores.config.setDisplayNameOrigin(displayName, nameOrigin);
@@ -479,7 +485,7 @@ export function hostedSubordinateRuntime(
       const request: ActorRetirementRequest = { reference, name, keepHistory, interrupt };
 
       if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
-      await seams.host.retire(parent().reference, actorRetirementFor(request));
+      await outsideSlot(seams.host.retire(parent().reference, actorRetirementFor(request)));
     },
   };
 }
