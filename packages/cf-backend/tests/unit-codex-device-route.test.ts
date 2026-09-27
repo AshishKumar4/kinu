@@ -249,4 +249,18 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     await harness.joinFibers();
     harness.close();
   });
+
+  test('every model call of one turn keeps its route, whichever scope (tool, profile lane) issues it', async () => {
+    const { harness, relayed, model, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'ok'));
+    const turn = newTurn();
+
+    expect(finished(await step(model, turn)).egress).toBe('relay');
+    await attachMachine('relay');
+    const sameTurn = captureOperationProfile({ actor: turn.actor, profile: turn.profile, inputs: null, runId: turn.runId, turnId: turn.turnId });
+
+    expect(finished(await step(model, sameTurn)).egress).toBe('relay');
+    expect(relayed).toHaveLength(0);
+    await harness.joinFibers();
+    harness.close();
+  });
 });

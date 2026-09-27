@@ -1,6 +1,6 @@
 import { APICallError } from 'ai';
 import {
-  activeOperationProfile, asFetchFunction, abortCause, EGRESS_REFUSAL_HEADER, EGRESS_ROUTE_HEADER, refusalError,
+  activeOperationProfile, asFetchFunction, WORKSPACE_RUN_ID, abortCause, EGRESS_REFUSAL_HEADER, EGRESS_ROUTE_HEADER, refusalError,
   isDeviceNotConnectedError, isDeviceUnknownMethodError, DEVICE_UNRESPONSIVE,
   type OperationProfile, type UserCaller,
 } from '@kinu.run/core';
@@ -25,7 +25,20 @@ type CodexRoute = { readonly kind: 'device'; readonly id: string; readonly label
 
 const CONTAINER: CodexRoute = { kind: 'container' };
 
-const PINNED = new WeakMap<OperationProfile, Promise<CodexRoute>>();
+/** Per actor: latest turn and route. */
+const PINNED = new Map<string, { readonly turn: string; readonly route: Promise<CodexRoute> }>();
+
+interface TurnKey {
+  readonly actor: string;
+  readonly turn: string;
+}
+
+function turnOf(operation: OperationProfile | undefined): TurnKey | null {
+  if (operation === undefined || operation.turnId === WORKSPACE_RUN_ID) return null;
+  const { actor } = operation;
+
+  return { actor: JSON.stringify([actor.workspaceId, actor.actorId, actor.parentActorId]), turn: JSON.stringify([operation.runId, operation.turnId]) };
+}
 
 function stoppedBy(signal: AbortSignal | undefined, cancel: () => Promise<void>, route: 'container' | 'device'): Promise<never> {
   const stopped = Promise.withResolvers<never>();
@@ -104,11 +117,11 @@ export function codexRouteFetch(input: {
     return device === null ? CONTAINER : { kind: 'device', id: device.id, label: device.label };
   };
 
-  const routeOf = (turn: OperationProfile | undefined): Promise<CodexRoute> => {
-    if (turn === undefined) return pick();
-    const held = PINNED.get(turn);
+  const routeOf = (turn: TurnKey | null): Promise<CodexRoute> => {
+    if (turn === null) return pick();
+    const held = PINNED.get(turn.actor);
 
-    if (held !== undefined) return held;
+    if (held?.turn === turn.turn) return held.route;
 
     const picking = (async () => {
       try {
@@ -117,12 +130,12 @@ export function codexRouteFetch(input: {
 
         return route;
       } catch (cause) {
-        PINNED.delete(turn);
+        PINNED.delete(turn.actor);
         throw new KinuError('unavailable', 'could not ask the account which machine carries Codex', { cause });
       }
     })();
 
-    PINNED.set(turn, picking);
+    PINNED.set(turn.actor, { turn: turn.turn, route: picking });
 
     return picking;
   };
@@ -130,7 +143,7 @@ export function codexRouteFetch(input: {
   const viaContainer = async (request: RequestInfo | URL, init: RequestInit | undefined): Promise<Response> => stamped(await container(request, init), 'relay');
 
   return asFetchFunction(async (request, init) => {
-    const turn = activeOperationProfile();
+    const turn = turnOf(activeOperationProfile());
     const route = await routeOf(turn);
 
     if (route.kind === 'container') return viaContainer(request, init);
@@ -160,9 +173,9 @@ export function codexRouteFetch(input: {
     try {
       response = await Promise.race([hub.relayCodex(who, route.id, callId, new Request(request, { ...init, signal: null })), stopped]);
     } catch (cause) {
-      // Refused before any byte left: re-pinned, not switched.
+      // Nothing left: re-pinned, not switched.
       if (isDeviceUnknownMethodError({ cause })) {
-        if (turn !== undefined) PINNED.set(turn, Promise.resolve(CONTAINER));
+        if (turn !== null) PINNED.set(turn.actor, { turn: turn.turn, route: Promise.resolve(CONTAINER) });
         diagnostics.event('codex.route_pinned', { route: 'container', device: '', reason: 'daemon_without_relay' });
 
         return viaContainer(request, init);
