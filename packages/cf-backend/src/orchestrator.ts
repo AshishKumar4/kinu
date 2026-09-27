@@ -1201,7 +1201,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // A hirer's delivery opens the chat as an event naming the hirer; a chat send wrote its own row.
         if (task.messageId === undefined) await this.recordDelegatedTask(reference, record, task);
 
-        await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
+        // Every delivery has its opening row now, so open panes are sent the transcript holding it.
+        await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: true, carried: [] });
 
         try {
           await runHostedTask(seams, reference, task, {
