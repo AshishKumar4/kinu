@@ -103,7 +103,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     else await chatSessionTurns(this).settle({ messageId: 'a live turn', text: 'done' });
   }
   get harnessChatLoop(): ChatSession { return this.chatLoop; }
-  harnessBear(ownerUserId: string): void { this.bearWorkspace(this.name, ownerUserId); }
   /** The `reads_changed` flushes this object owes; a test runs them where production's macrotask would end. */
   readonly harnessOwedLiveReads: (() => void)[] = [];
   protected override deferLiveReads(flush: () => void): void { this.harnessOwedLiveReads.push(flush); }
@@ -121,6 +120,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return queries;
   }
+  harnessBear(ownerUserId: string): void { this.bearWorkspace(this.name, ownerUserId); }
   /** The conversation a stated turn is admitted over. Applies only while the actor
    *  holds no working history of its own. */
   async harnessSeedHistory(messages: readonly ModelMessage[]): Promise<void> {

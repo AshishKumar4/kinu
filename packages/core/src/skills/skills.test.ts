@@ -609,7 +609,7 @@ describe('renderSkillsIndexSection', () => {
       stepContextLimit({ contextWindow: 2_000, modelOutputLimit: 1_000 }));
 
     const out = renderSkillsIndexSection(index);
-    expect(out).toMatch(/… and \d+ more skills? this turn's skills allocation did not reach/);
+    expect(out).toMatch(/\.\.\.and \d+ more skills? this turn's skills allocation did not reach/);
     expect(out).toContain('`/skills`');
     // At least one entry survives, and the omitted count is honest.
     const shown = (out.match(/^- \*\*/gm) ?? []).length;

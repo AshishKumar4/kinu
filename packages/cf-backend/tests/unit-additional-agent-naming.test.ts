@@ -77,18 +77,24 @@ async function shownNames(parent: ActorHarness<HarnessOrchestratorAgent>, name: 
   return [own, listed];
 }
 
+async function listedOrigin(parent: ActorHarness<HarnessOrchestratorAgent>, name: string) {
+  return (await parent.agent.listSubordinates()).find((entry) => entry.name === name)?.nameOrigin;
+}
+
 describe('an agent the owner added without naming it', () => {
-  test('is born with its codename, on both sides', async () => {
+  test('is born with its codename, on both sides, listed as a name the system chose', async () => {
     const { parent, name } = await addedAgent();
 
     expect(await shownNames(parent, name)).toEqual([codenameFor(name), codenameFor(name)]);
+    expect(await listedOrigin(parent, name)).toBe('auto');
   });
 
-  test('a rename wins on both sides, and a second rename wins again', async () => {
+  test('a rename wins on both sides, and a second rename wins again, listed as the owner\'s', async () => {
     const { parent, name } = await addedAgent();
 
     await parent.agent.renameSubordinateAgent(name, 'Jarvis');
     expect(await shownNames(parent, name)).toEqual(['Jarvis', 'Jarvis']);
+    expect(await listedOrigin(parent, name)).toBe('user');
 
     await parent.agent.renameSubordinateAgent(name, 'Just Jarvis');
     expect(await shownNames(parent, name)).toEqual(['Just Jarvis', 'Just Jarvis']);

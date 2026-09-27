@@ -30,6 +30,7 @@
     "schema-drift.ts",
     "fixtures/payload-transport/worker.ts",
     "fixtures/payload-transport/isolate-relay.ts",
-    "fixtures/kinu-durability/worker.ts"
+    "fixtures/kinu-durability/worker.ts",
+    "worker-heap/driver.ts"
   ]
 }

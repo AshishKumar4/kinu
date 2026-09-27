@@ -18,6 +18,8 @@ import {
   type ActorHandle,
   type SqlExecutor,
   type WorkspaceActor,
+  readWorkspaceWork,
+  type WorkspaceWork,
   createFactsStore,
   initEventsHubTables,
   initAgentConfigTable,
@@ -944,6 +946,16 @@ export function listLocalActors(name: string, opts: { readonly retired?: boolean
       createdAt: row.createdAt,
       retired: row.retiringAt !== null || row.deletedAt !== null,
     }));
+  });
+}
+
+export function readLocalWorkspaceWork(name: string): WorkspaceWork {
+  return withLocalDb(name, (db) => {
+    const directory = actorDirectory(db);
+
+    return directory === null
+      ? { plans: [], tasks: [] }
+      : readWorkspaceWork(makeSql(db), directory.main(), directory.list({ retired: true }));
   });
 }
 

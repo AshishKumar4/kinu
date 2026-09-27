@@ -101,7 +101,8 @@ export interface SubordinateRosterEntry {
   actorReference: ActorReference | null;
   birth: SubordinateBirth | null;
   deleteRequested: boolean;
-  createdBy: 'orchestrator' | 'user';
+  /** `evolution`: an evolution lane's helper. */
+  createdBy: 'orchestrator' | 'user' | 'evolution';
   status: SubordinateStatus;
   currentTask: string | null;
   createdAt: number;

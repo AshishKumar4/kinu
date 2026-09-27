@@ -2,7 +2,7 @@
 import { tierIdsOf, TIER_IDS, type TierId } from '@kinu.run/core';
 import type { KeyEvent, ScrollBoxRenderable } from '@opentui/core';
 import type { TuiActionId } from './actions';
-import type { TuiAgentHubEntry, TuiHubData, TuiHubView } from './hubs';
+import type { TuiHubData, TuiHubRow, TuiHubView } from './hubs';
 import type { ActiveSurface } from './chat-app';
 
 function historyScroll(
@@ -53,10 +53,10 @@ export interface SurfaceKeyDeps {
   createNewAgent?: () => Promise<void>;
   /** The model overlay re-reads on close, so it asks for another open. */
   bumpModelRequest(): void;
-  hubAgents: readonly TuiAgentHubEntry[];
+  hubAgents: readonly TuiHubRow[];
   hubSelectedId(): string | null;
   setHubSelectedId(id: string | null): void;
-  openSubagent(entry: TuiAgentHubEntry): void;
+  openSubagent(entry: TuiHubRow): void;
   subagentHistory(): ScrollBoxRenderable | null;
 }
 

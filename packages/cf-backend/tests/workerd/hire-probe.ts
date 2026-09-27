@@ -189,7 +189,8 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   /** The owner's Stop in an actor pane: the `cancel` frame reaches the hosted room's wire as this call. */
   async stopHosted(name: string): Promise<void> {
-    const wire = this.hostedChatWire(name);
+    const resolved = await this.resolveHostedActorRoute(name);
+    const wire = 'reason' in resolved ? null : this.hostedChatWire(resolved.actorId);
 
     if (wire === null) throw new Error(`no hosted chat wire for ${name}`);
     wire.interrupt();

@@ -13,7 +13,7 @@ import type {
   InstructionSourceRow, InstructionSourceView, Page, PageRequest,
   DeferredApproval, DeferredApprovalAnswer,
   PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
-  SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend,
+  SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
   ModelTestResult,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
@@ -340,6 +340,7 @@ export interface AgentClient {
   listModels(): Promise<AgentModelMenu>;
   testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult>;
   inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult>;
+  workspaceWork(): Promise<WorkspaceWork>;
 }
 
 interface AgentUiMessage {

@@ -12,6 +12,7 @@ export const APP_ROUTES = {
   userMcp: '/user/settings/mcp',
   workspace: '/workspace/:agentId',
   workspaceAgent: '/workspace/:agentId/agents/:subName',
+  workspaceAgentPath: '/workspace/:agentId/agents/:subName/*',
   explore: '/mcts/:agentId',
   control: '/control',
   agentSettings: '/settings/:agentId',
@@ -59,7 +60,7 @@ export function routeTemplateOf(pathname: string): ReportedRoute {
 
     if (wanted.at(-1) !== '*' || segments.length <= wanted.length - 1) continue;
 
-    if (wanted.slice(0, -1).every((part, at) => part === segments[at])) return template;
+    if (wanted.slice(0, -1).every((part, at) => part.startsWith(':') || part === segments[at])) return template;
   }
 
   return UNMATCHED_ROUTE;

@@ -29,6 +29,13 @@ export function isParsedJsonObject(value: JsonValue): value is JsonObject {
     && !v.is(StringSchema, value) && !v.is(NumberSchema, value) && !v.is(BooleanSchema, value);
 }
 
+/** No walk, no copy: JSON by construction. */
+export function readJsonObjectText(text: string): JsonObject | null {
+  const value: JsonValue = JSON.parse(text);
+
+  return isParsedJsonObject(value) ? value : null;
+}
+
 /** The elements of a parsed JSON array of objects; null when it is not one. */
 export function jsonObjectElements(value: JsonValue | undefined): JsonObject[] | null {
   if (value === undefined || !Array.isArray(value)) return null;

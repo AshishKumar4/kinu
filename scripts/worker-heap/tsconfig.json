@@ -1,0 +1,11 @@
+{
+  "//": "The driver runs on workerd beside the built product, so it compiles with @cloudflare/workers-types rather than the scripts project's [bun, node].",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2024"],
+    "types": ["@cloudflare/workers-types"],
+    "moduleDetection": "force"
+  },
+  "include": ["driver.ts"]
+}

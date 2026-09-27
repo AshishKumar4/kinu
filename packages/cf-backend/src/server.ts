@@ -10,7 +10,7 @@ import { diagnostics, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
-  isForeignAgentNamespacePath, hostedActorRoute,
+  isForeignAgentNamespacePath, hostedActorRoute, HOSTED_ACTOR_ID_HEADER,
 } from "@kinu.run/core";
 import { serveReleaseArtifact } from "@kinu.run/core";
 import { DEPLOY_PAGE_PATH, RELEASE_ARTIFACT_NAME } from "@kinu.run/core/deploy";
@@ -382,9 +382,8 @@ worker.all('/agents/*', async (c, next) => {
   observeWorkspaceUse(c.env, identity, agentName, { retain: c.executionCtx });
 
   const routed = c.get('request');
-  const reqWithId = new Request(routed, { headers: appendIdentityHeaders(routed.headers, identity) });
+  const headers = appendIdentityHeaders(routed.headers, identity);
 
-  // Routed unchanged; only refuse names this workspace does not host.
   const hosted = hostedActorRoute(c.req.path);
 
   if (hosted) {
@@ -394,9 +393,11 @@ worker.all('/agents/*', async (c, next) => {
     if ('reason' in target) {
       return Response.json(target, { status: HOSTED_ACTOR_ROUTE_STATUS[target.reason] ?? 500 });
     }
+
+    headers.set(HOSTED_ACTOR_ID_HEADER, target.actorId);
   }
 
-  return (await routeAgentRequest(reqWithId, c.env)) ?? next();
+  return (await routeAgentRequest(new Request(routed, { headers }), c.env)) ?? next();
 });
 
 worker.notFound(appShell);
