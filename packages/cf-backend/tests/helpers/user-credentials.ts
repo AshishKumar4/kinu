@@ -2,6 +2,7 @@
 // owner-session by default, a workspace capability token for attenuation tests.
 import type { UserCredentialSource } from '../../src/providers/agent-registry';
 import type { CredentialSummary } from '../../src/user/user-do';
+import type { CodexRelayHub } from '../../src/egress/codex-egress-route';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import { TEST_USER_ENV } from './user-do';
 
@@ -14,10 +15,17 @@ export interface CredentialStoreDouble {
   getCredentialBaseURL(key: string): Promise<string | null>;
 }
 
+export const NO_RELAY_MACHINE: CodexRelayHub = {
+  codexRelayDevice: async () => null,
+  relayCodex: async () => { throw new Error('no machine is online to relay through'); },
+  cancelCodexRelay: async () => {},
+};
+
 export function userCredentialSource(store: CredentialStoreDouble): UserCredentialSource {
   return {
     caller: () => ownerCaller(TEST_USER_ENV),
     stub: {
+      ...NO_RELAY_MACHINE,
       getAuthHeaders: (_caller: UserCaller, key: string, opts?: { forceRefresh?: boolean }) =>
         store.getAuthHeaders(key, opts),
       listCredentials: (_caller: UserCaller) => store.listCredentials(),

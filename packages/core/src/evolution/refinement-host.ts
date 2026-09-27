@@ -42,6 +42,7 @@ export async function refinementPass(deps: RefinementDeps): Promise<RefinementLa
   }))));
 }
 
+/** Both hosts' stored-answer wake; failures go to `failed`. */
 export function evolutionAnswerWake(
   deps: RefinementDeps, now: number, failed: (failure: KinuError) => void,
 ): Promise<RefinementLaneStep | null> {

@@ -658,6 +658,8 @@ export {
   type TemporaryRunRequest,
 } from './subordinates/temporary';
 
+export { DELEGATED_TURN_SLOTS, DelegatedTurnRunners, type DelegatedTurnRunnerDeps } from './subordinates/delegated-turns';
+
 // The depth cap is derived per child, never stated by one.
 export {
   DELEGATION_MAX_DEPTH,
@@ -1075,7 +1077,7 @@ export {
   type DeviceSandboxCapability, type DeviceSandboxReason,
   TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_PROBED_CAPABILITIES,
   TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
-  DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
+  DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError, DEVICE_UNRESPONSIVE,
   WORKSPACE_HAS_NO_OWNER, isWorkspaceUnattachedError,
   SEVERAL_DEVICES_CONNECTED, isDeviceAmbiguityError,
   SANDBOX_UNAVAILABLE, isSandboxUnavailableError,
@@ -1087,6 +1089,7 @@ export {
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult,
   DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
+  DEVICE_RELAY, EGRESS_ROUTE_HEADER, type DeviceRelayRequest,
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   type DeviceSocket, type DeviceSocketCtx,
   DeviceRequestLedger, initDeviceInflightTable,

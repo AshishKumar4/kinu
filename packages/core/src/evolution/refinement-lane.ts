@@ -211,7 +211,7 @@ function laneHeld(deps: RefinementDeps, store: RefinementStore, request: Refinem
   return { step: 'idle' };
 }
 
-/** Re-routing an applied fact is a no-op, so it counts as decided. */
+/** `applied` or `rejected`. Fact `applied` is included: re-routing a fact is a no-op. */
 function ownerHasDecided(route: RefinementRoute): boolean {
   return route.disposition === 'applied' || route.disposition === 'rejected';
 }
@@ -305,7 +305,7 @@ function plan(
       if (!claim.held()) return null;
       routes.push(yield* routeEdit(deps, { edit, request, reviewed }));
 
-      // Per route, so a crash keeps each owner write recorded.
+      // Persist after each route; a crash keeps them recorded.
       if (!claim.record({ routes })) return null;
     }
 
@@ -322,7 +322,7 @@ type RefinerAnswer =
   | { readonly ok: true; readonly proposal: RefinementProposal }
   | { readonly ok: false; readonly error: string };
 
-/** A shared error code, as owner-visible refusals use. */
+/** One of the nine error codes, so owner-visible refusals use the shared vocabulary. */
 const OFF_SCHEMA_ANSWER: ErrorCode = 'bad_input';
 
 /** Instruction files the refiner may read itself, offered only when present:

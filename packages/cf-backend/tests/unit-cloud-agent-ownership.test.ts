@@ -21,6 +21,7 @@ import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import type { AuthIdentity } from '../src/auth/session';
 import type { IndexFeedSink } from '../src/control-plane/index-feed';
 import { bootstrappedProfile, userAccount, workspaceObject, workerContext } from './helpers/bindings';
+import { NO_RELAY_MACHINE } from './helpers/user-credentials';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -87,6 +88,7 @@ function indexFeed(): IndexFeed {
 /** A neutral registry; each rollback test overrides only the method whose failure it is about. */
 function registryStub(): CloudWorkspaceRegistry {
   return {
+    ...NO_RELAY_MACHINE,
     async getProfileCatalog(_caller: UserCaller) { return DEFAULT_ENVELOPE; },
     async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
     async getCredentialBaseURL(_caller: UserCaller) {

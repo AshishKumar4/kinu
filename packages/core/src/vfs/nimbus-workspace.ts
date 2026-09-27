@@ -229,7 +229,7 @@ export interface WorkspaceBundle {
   session(): Promise<WorkspaceSession>;
   onFilesChanged(listener: (paths: readonly string[]) => void): () => void;
   /** Shells running as `cred` (default: session user) serve `plane`'s mounts. */
-  mountTable(plane: MountedVfs, cred?: Readonly<VfsCred>): void;
+  mountTable(plane: MountedVfs, cred?: Readonly<VfsCred>): () => void;
   /** Drops only the workspace tables; the host's own rows stay. */
   destroy(): Promise<void>;
 }
@@ -340,7 +340,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
       return () => { fileListeners.delete(listener); };
     },
     mountTable(plane, cred) {
-      mountTables.set((cred ?? CRED_SESSION_USER).uid, plane);
+      const { uid } = cred ?? CRED_SESSION_USER;
+      mountTables.set(uid, plane);
+
+      return () => { if (mountTables.get(uid) === plane) mountTables.delete(uid); };
     },
     async stats() { return (await open()).stats(); },
     async privileged() {

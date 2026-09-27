@@ -17,6 +17,7 @@ import { createAgentStores, type AgentStores } from './agent-stores';
 import type { WorkspaceActor, WorkspaceActorDirectory } from '../identity/workspace-actors';
 import type { ActorContextStores, ChildContextResolver } from '../vfs/context-plane';
 import type { ContextEventRecorder } from '../types/context-plane';
+import type { TemporaryAgentPort } from '../types/subordinates';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { recordRecoverySettled, sameBuildOf } from '../orchestrator/turn-recovery-events';
@@ -94,6 +95,7 @@ export interface ActorHost {
   release(reference: ActorReference): void;
   releaseAll(): void;
   retire(parent: ActorReference, retirement: ActorRetirement): Promise<void>;
+  temporary(reference: ActorReference, build: (bound: BoundActor) => TemporaryAgentPort): TemporaryAgentPort;
   resumable(limit?: number): readonly ResumableActorTurn[];
   readonly installedBuild: string | null;
   readonly workspace?: string;
@@ -149,6 +151,7 @@ function actorScopedTables(sql: SqlExecutor): readonly string[] {
 export function createActorHost(deps: ActorHostDeps): ActorHost {
   const slots = new Map<string, HostSlot>();
   const opening = new Map<string, Promise<HostedActor>>();
+  const ports = new Map<string, TemporaryAgentPort>();
 
   const slotFor = (reference: ActorReference): HostSlot | null => {
     const slot = slots.get(reference.actorId);
@@ -196,48 +199,56 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
   const build = async (reference: ActorReference): Promise<{ actor: HostedActor; fence: ReleaseFence }> => {
     const { bound, fence } = bind(reference);
     const runtime = await deps.runtimeFor(bound);
-    // Children need handle identity so release revokes every statement; the root's runtime is its
-    // opener's and never released alone, so the same actor id suffices.
-    const rootBinding = reference.parentActorId === null;
+    let built = false;
 
-    if (runtime.actor !== bound.handle
-      && !(rootBinding && runtime.actor.actorId === bound.handle.actorId)) {
-      throw new KinuError('denied', 'A hosted runtime must be built over the handle the host bound.');
+    try {
+      // Children need handle identity for release.
+      const rootBinding = reference.parentActorId === null;
+
+      if (runtime.actor !== bound.handle
+        && !(rootBinding && runtime.actor.actorId === bound.handle.actorId)) {
+        throw new KinuError('denied', 'A hosted runtime must be built over the handle the host bound.');
+      }
+
+      // Seeded before the session so no turn is admitted without a program pointer.
+      const seed = await deps.loopFor({ ...bound, runtime });
+      await seedActorLoop(runtime, seed.parent, seed.origin);
+      const orchestration = await deps.orchestrationFor({ ...bound, runtime });
+
+      const tracing = deps.tracing;
+      const actor = { id: bound.record.actorId, kind: bound.record.kind };
+
+      const session = new ActorSession({
+        runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
+        ...(deps.workspace !== undefined && { workspace: deps.workspace }),
+        turns: tracing && (() => tracing().turns(actor)),
+        history: bound.stores.history,
+        events: deps.contextEvents(bound),
+        advisor: reference.parentActorId === null ? undefined : {
+          config: deps.directory.main().config,
+          workspace: async () => {
+            const root = await acquire(actorReferenceOf(deps.directory.main()));
+
+            return root.runtime.agentStateVfs ?? root.runtime.storage.vfs;
+          },
+          parent: async (signal) => {
+            const parentId = reference.parentActorId;
+
+            if (parentId === null) throw new KinuError('missing', 'A non-root advisor has no parent actor.');
+            const parent = await acquire(actorReferenceOf(deps.directory.open(parentId)));
+
+            return parent.session.orchestrator.inbox.send(signal);
+          },
+        },
+      });
+
+      built = true;
+
+      return { actor: { ...bound, runtime, session }, fence };
+    } finally {
+      // A failed build frees its runtime.
+      if (!built) runtime.release?.();
     }
-
-    // Seeded before the session so no turn is admitted without a program pointer.
-    const seed = await deps.loopFor({ ...bound, runtime });
-    await seedActorLoop(runtime, seed.parent, seed.origin);
-    const orchestration = await deps.orchestrationFor({ ...bound, runtime });
-
-    const tracing = deps.tracing;
-    const actor = { id: bound.record.actorId, kind: bound.record.kind };
-
-    const session = new ActorSession({
-      runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
-      ...(deps.workspace !== undefined && { workspace: deps.workspace }),
-      turns: tracing && (() => tracing().turns(actor)),
-      history: bound.stores.history,
-      events: deps.contextEvents(bound),
-      advisor: reference.parentActorId === null ? undefined : {
-        config: deps.directory.main().config,
-        workspace: async () => {
-          const root = await acquire(actorReferenceOf(deps.directory.main()));
-
-          return root.runtime.agentStateVfs ?? root.runtime.storage.vfs;
-        },
-        parent: async (signal) => {
-          const parentId = reference.parentActorId;
-
-          if (parentId === null) throw new KinuError('missing', 'A non-root advisor has no parent actor.');
-          const parent = await acquire(actorReferenceOf(deps.directory.open(parentId)));
-
-          return parent.session.orchestrator.inbox.send(signal);
-        },
-      },
-    });
-
-    return { actor: { ...bound, runtime, session }, fence };
   };
 
   const acquire = async (reference: ActorReference): Promise<HostedActor> => {
@@ -263,6 +274,12 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     }
   };
 
+  const drop = (slot: HostSlot): void => {
+    slot.fence.released = true;
+    slots.delete(slot.actor.reference.actorId);
+    slot.actor.runtime.release?.();
+  };
+
   const requireSlot = (reference: ActorReference): HostSlot => {
     const slot = slotFor(reference);
 
@@ -280,14 +297,18 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
     const slot = slotFor(reference);
 
-    if (!slot || slot.fence.released) return;
+    if (!slot || slot.fence.released) {
+      ports.delete(reference.actorId);
+
+      return;
+    }
 
     if (slot.actor.session.inFlight) {
       throw new KinuError('denied', 'An actor holding a turn in flight cannot be released; cancel or settle the turn first.');
     }
 
-    slot.fence.released = true;
-    slots.delete(reference.actorId);
+    drop(slot);
+    ports.delete(reference.actorId);
   };
 
   return {
@@ -311,14 +332,18 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       return await result;
     },
     release,
-    releaseAll: () => {
-      for (const reference of [...slots.values()].map((slot) => slot.actor.reference)) {
-        const slot = slotFor(reference);
+    temporary: (reference, portFor) => {
+      const known = ports.get(reference.actorId);
 
-        if (!slot) continue;
-        slot.fence.released = true;
-        slots.delete(reference.actorId);
-      }
+      if (known !== undefined) return known;
+      const port = portFor(bind(reference).bound);
+      ports.set(reference.actorId, port);
+
+      return port;
+    },
+    releaseAll: () => {
+      for (const slot of slots.values()) drop(slot);
+      ports.clear();
     },
     retire: async (parent, retirement) => {
       const record = deps.directory.retained(retirement.reference.actorId);
@@ -360,9 +385,10 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
           }
         }
 
-        slot.fence.released = true;
-        slots.delete(retirement.reference.actorId);
+        drop(slot);
       }
+
+      ports.delete(retirement.reference.actorId);
 
       const parentPath = deps.directory.storagePath(parent);
       deps.directory.apply(parent, parentPath, {

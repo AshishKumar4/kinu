@@ -192,7 +192,7 @@ Each adapter owns its backend-specific work. Local owns session resume and
 transcript hydration. Cloud owns Durable Object history hydration and socket
 reconnect. A slash command declares the capability it needs in its `requires`
 field, and the command list shows it only when the client has that capability
-(`slash-commands.ts`). `/undo` needs `checkpoints`. `/approval`, `/always`,
+(`slash-commands.ts`). `/undo` needs `checkpoints`. `/approval`, `/parked`, `/always`,
 `/instructions` and `/models` need `localControls`. `/connect` needs
 `consents`, `/plan` needs `plans`, and `/rename` needs `rename`.
 

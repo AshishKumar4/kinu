@@ -171,6 +171,40 @@ const PTY_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, PTY_CLOSE_FRAME])
  */
 const PTY_BACKLOG_MAX_BYTES = 256 * 1024;
 
+/**
+ * The Codex relay. chatgpt.com refuses Kinu's cloud network, so while this
+ * machine is online the hub asks it to make each Codex call instead. One call
+ * is one correlated RPC that answers when the body ends; the head and each
+ * body chunk go back as uncorrelated frames naming the call, so an answer
+ * streams as chatgpt.com sends it. The names and the allow-list mirror core's
+ * DEVICE_RELAY (execution/device-relay.ts) and codexEgressAllowed
+ * (providers/codex.ts); cf-backend's pc-agent test holds them equal.
+ *
+ * The call carries the owner's access token in its headers. It lives in this
+ * request's memory only: nothing here logs a header or a body, and nothing is
+ * written to disk.
+ */
+const RELAY_METHOD = 'codexRelay';
+
+const RELAY_HEAD_FRAME = 'RELAY_HEAD';
+
+const RELAY_BODY_FRAME = 'RELAY_BODY';
+
+const RELAY_CANCEL_FRAME = 'RELAY_CANCEL';
+
+const RELAY_HOST = 'chatgpt.com';
+
+const RELAY_ROUTES = Object.freeze(['GET /backend-api/codex/models', 'POST /backend-api/codex/responses', 'GET /backend-api/wham/usage']);
+
+/** Hop-by-hop headers, plus the ones a relay must not carry from the cloud side. */
+const RELAY_DROPPED_HEADERS = new Set([
+  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding',
+  'upgrade', 'host', 'content-length', 'x-forwarded-for',
+]);
+
+/** In-flight relays by call id, so a RELAY_CANCEL can stop one. */
+const relays = new Map();
+
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
 
@@ -2229,19 +2263,106 @@ function execCommand(msg, ws, ctx) {
   })().catch(reportExecReplyFailure);
 }
 
+/** Why `method url` is not relayed, or null when it is. */
+function relayRefusal(method, url) {
+  const target = URL.parse(String(url ?? ''));
+
+  if (target === null || target.protocol !== 'https:' || target.hostname !== RELAY_HOST || target.port !== '' || target.username !== '' || target.password !== '') {
+    return `the Codex relay does not reach ${String(url)}`;
+  }
+
+  return RELAY_ROUTES.includes(`${method} ${target.pathname}`) ? null : `the Codex relay does not carry ${method} ${target.pathname}`;
+}
+
+function relayHeaders(pairs) {
+  const headers = new Headers();
+
+  for (const [name, value] of pairs) {
+    const lower = String(name).toLowerCase();
+
+    if (RELAY_DROPPED_HEADERS.has(lower) || lower.startsWith('cf-') || lower.startsWith('x-kinu-')) continue;
+    headers.set(lower, String(value));
+  }
+
+  return headers;
+}
+
+/** Fetch one allow-listed call and stream its answer back as frames; resolves with the byte count. */
+async function relayCall(ws, id, request) {
+  const refused = relayRefusal(request?.method, request?.url);
+
+  if (refused !== null) throw new Error(refused);
+
+  if (relays.has(id)) throw new Error(`relay ${id} is already in flight`);
+  const abort = new AbortController();
+  relays.set(id, abort);
+
+  try {
+    const upstream = await fetch(request.url, {
+      method: request.method,
+      headers: relayHeaders(Array.isArray(request.headers) ? request.headers : []),
+      body: request.method === 'POST' ? request.body : undefined,
+      redirect: 'manual',
+      signal: abort.signal,
+    });
+
+    // The runtime already decoded the body, so its encoding no longer describes the bytes sent on.
+    const headers = [...upstream.headers].filter(([name]) => !RELAY_DROPPED_HEADERS.has(name) && name !== 'content-encoding');
+    ws.send(JSON.stringify({ type: RELAY_HEAD_FRAME, relay: id, status: upstream.status, headers }));
+    let bytes = 0;
+
+    if (upstream.body !== null) {
+      for await (const chunk of upstream.body) {
+        if (socketClosed(ws)) throw new Error(`the socket that asked for relay ${id} closed`);
+        bytes += chunk.byteLength;
+        ws.send(JSON.stringify({ type: RELAY_BODY_FRAME, relay: id, data: Buffer.from(chunk).toString('base64') }));
+      }
+    }
+
+    return { bytes };
+  } catch (err) {
+    if (abort.signal.aborted) throw new Error(`relay ${id} was stopped by the caller`, { cause: err });
+    throw new Error(`chatgpt.com could not be reached from this machine: ${errorDetail(err)}`, { cause: err });
+  } finally {
+    relays.delete(id);
+  }
+}
+
+/** Frames that name a session or a relay rather than a request id: nothing to answer, so no reply. */
+const UNCORRELATED_FRAMES = new Set([...PTY_FRAMES, RELAY_CANCEL_FRAME]);
+
+function handleUncorrelatedFrame(msg, ctx) {
+  if (msg.type === RELAY_CANCEL_FRAME) {
+    relays.get(String(msg.relay))?.abort();
+
+    return;
+  }
+
+  handlePtyFrame(msg, ctx);
+}
+
+/** Methods past the file and command set: the Codex relay, else the answer an older hub's newer frame gets. */
+function answerLaterMethod(msg, ws) {
+  const { id, method, params } = msg;
+
+  if (method === RELAY_METHOD) rpcWhenSettled(ws, id, relayCall(ws, id, params[0]));
+  else rpc(ws, id, null, 'unknown method: ' + method);
+}
+
 function handle(msg, ws, ctx) {
   const { id, method, params } = msg;
   const checkpoints = ctx && ctx.checkpoints;
 
   // A session frame first: it carries a terminal's name rather than a request
   // id, so the method dispatch below has nothing to match it on.
-  if (PTY_FRAMES.has(msg.type)) return handlePtyFrame(msg, ctx);
+  if (UNCORRELATED_FRAMES.has(msg.type)) return handleUncorrelatedFrame(msg, ctx);
 
   try {
     if (method === PTY_OPEN_METHOD) {
       rpcWhenSettled(ws, id, openTerminalSession(msg, ws, ctx));
     } else if (method === 'exec') {
       execCommand(msg, ws, ctx);
+
     } else if (method === CANCEL_METHOD || method === EXEC_ACK_METHOD) {
       const requested = params[0];
       const target = String(requested);
@@ -2327,7 +2448,7 @@ function handle(msg, ws, ctx) {
     } else if (method === 'checkpointRestore') {
       rpcWhenSettled(ws, id, checkpoints.restore(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
     } else {
-      rpc(ws, id, null, 'unknown method: ' + method);
+      answerLaterMethod(msg, ws);
     }
   } catch (err) {
     rpc(ws, id, null, err instanceof Error ? err.message : String(err));
@@ -3119,6 +3240,13 @@ module.exports = {
   PTY_CLOSE_FRAME,
   PTY_OUTPUT_FRAME,
   PTY_EXIT_FRAME,
+  RELAY_METHOD,
+  RELAY_HEAD_FRAME,
+  RELAY_BODY_FRAME,
+  RELAY_CANCEL_FRAME,
+  RELAY_HOST,
+  RELAY_ROUTES,
+  relayRefusal,
   SESSION_COMMAND,
   createInFlight,
   INFLIGHT_ROOT,

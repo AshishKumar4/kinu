@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { asFetchFunction } from '@kinu.run/core';
-import { userCredentialSource } from './helpers/user-credentials';
+import { NO_RELAY_MACHINE, userCredentialSource } from './helpers/user-credentials';
 import { createMockFetch } from '@kinu.run/test-utils';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { listProviderCatalog, type AvailableModelsEnv } from '../src/user/available-models';
@@ -96,6 +96,7 @@ describe('listProviderCatalog', () => {
       UserDO: {
         idFromName: (name) => name,
         get: () => ({
+          ...NO_RELAY_MACHINE,
           listCredentials: async () => list,
           getAuthHeaders: async () => null,
           getCredentialBaseURL: async () => null,
