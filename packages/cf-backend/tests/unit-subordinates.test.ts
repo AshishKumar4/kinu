@@ -7,19 +7,22 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import * as v from 'valibot';
 import {
-  actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS, hostedActorSocketPath,
-  observedActionEnum, ORCHESTRATOR_AGENT_SLUG, REPORT_TOOL, TASK_TURN_ENDINGS, terminalTaskReport,
+  actorConnectionTag, BUILTIN_TOOLS, DEPS_GATED_TOOLS,
+  observedActionEnum, REPORT_TOOL, SubordinateInspectionRequestSchema, type JsonValue, type Rpc, TASK_TURN_ENDINGS, terminalTaskReport,
 } from '@kinu.run/core';
 import type { SubordinateRosterEntry } from '@kinu.run/core/protocol';
 import { present } from '@kinu.run/test-utils';
 import { SubordinateTabs } from '../src/components/SubordinateTabs';
 import { KeptTranscript } from '../src/components/KeptTranscript';
+import { HelperChatBase, MessageView } from '../src/components/MessageView';
+import { nestedAgent } from '../src/pages/nested-agent';
+import type { UIMessage } from 'ai';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
   chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, workspaceFiles,
 } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
-import { answeringGateway, offeredTools } from './helpers/platform-gateway';
+import { answeringGateway, chatCompletion, offeredTools, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 mockAgentsSdk();
 
@@ -140,15 +143,21 @@ describe('a dismissed agent keeps its conversation reachable', () => {
     expect(listed.find((entry) => entry.name === name)?.status).toBe('dismissed');
   });
 
+  const rosterRow = (name: string, fields: Partial<SubordinateRosterEntry>): SubordinateRosterEntry => ({
+    name, actorId: `actor-${name}`, displayName: name, role: 'task', nameOrigin: 'user', createdBy: 'user', lifetime: 'durable',
+    status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, ...fields,
+  });
+
   const ROSTER: SubordinateRosterEntry[] = [
-    {
-      name: 'busy-mill-01', actorId: 'actor-busy-mill', displayName: 'Busy Mill', role: 'task', createdBy: 'user',
-      status: 'working', currentTask: 'Build the chess app', createdAt: 1, dismissedAt: null,
-    },
-    {
-      name: 'quiet-harbor-1a4e20', actorId: 'actor-quiet-harbor', displayName: 'Quiet Harbor', role: 'task', createdBy: 'user',
-      status: 'dismissed', currentTask: null, createdAt: 2, dismissedAt: 200,
-    },
+    rosterRow('busy-mill-01', { displayName: 'Busy Mill', nameOrigin: 'auto', status: 'working', currentTask: 'Build the chess app' }),
+    rosterRow('hello', { displayName: 'hello', createdAt: 2 }),
+    rosterRow('quiet-harbor-1a4e20', { displayName: 'Quiet Harbor', status: 'dismissed', createdAt: 3, dismissedAt: 200 }),
+    // Internal helpers: an evolution lane's refiner, and one-question helpers running and finished.
+    rosterRow('ask-refiner-fb0gr9', { displayName: 'Quiet Ash', nameOrigin: 'auto', createdBy: 'evolution', lifetime: 'task', status: 'working', createdAt: 4 }),
+    rosterRow('ask-reviewer-a1', { displayName: 'reviewing', nameOrigin: 'auto', createdBy: 'orchestrator', lifetime: 'task', status: 'working', createdAt: 5 }),
+    ...['ask-reviewer-b2', 'ask-reviewer-c3', 'ask-reviewer-d4'].map((name, index) => rosterRow(name, {
+      displayName: 'reviewing', nameOrigin: 'auto', createdBy: 'orchestrator', lifetime: 'task', status: 'dismissed', createdAt: 6 + index, dismissedAt: 300,
+    })),
   ];
 
   const strip = (activeName?: string) => renderToStaticMarkup(createElement(MemoryRouter, null,
@@ -173,6 +182,14 @@ describe('a dismissed agent keeps its conversation reachable', () => {
     expect(markup).toContain('aria-expanded="true"');
   });
 
+  test('internal helpers, running or finished, get no tab and no dismissed entry', () => {
+    const markup = strip('quiet-harbor-1a4e20');
+
+    for (const name of ['ask-refiner-fb0gr9', 'ask-reviewer-a1', 'ask-reviewer-b2', 'ask-reviewer-c3', 'ask-reviewer-d4']) {
+      expect(markup).not.toContain(`data-agent-tab="${name}"`);
+    }
+  });
+
   test('the kept pane draws an entry it could not read in its place, named, between the ones it could', () => {
     const row = (id: string, role: 'user' | 'assistant', text: string) =>
       ({ message: { id, role, parts: [{ type: 'text' as const, text }] }, steers: [] });
@@ -187,6 +204,89 @@ describe('a dismissed agent keeps its conversation reachable', () => {
     expect(markup.indexOf('asked before')).toBeLessThan(note);
     expect(note).toBeLessThan(markup.indexOf('asked after'));
     expect(markup.slice(note, markup.indexOf('</p>', note))).toContain('unavailable');
+  });
+});
+
+/** A task-lifetime helper makes no report card and has no tab; the `agents` call that asked it survives a reload. */
+describe('the call that asked a one-question helper opens its chat', () => {
+  const asked = (output: JsonValue): UIMessage => ({
+    id: 'a1', role: 'assistant',
+    parts: [{ type: 'tool-agents', toolCallId: 'agents_0', state: 'output-available', input: { action: 'hire', lifetime: 'task' }, output }],
+  });
+
+  const markup = (base: string | null, output: JsonValue, parent: string | null = null) => renderToStaticMarkup(createElement(MemoryRouter, null,
+    createElement(HelperChatBase.Provider, { value: base === null ? null : { base, parent } }, createElement(MessageView, { message: asked(output) }))));
+
+  test('a task helper\'s name links to its chat below the chat that asked it', () => {
+    const answered = { status: 'completed', agent: 'ask-reviewer-a1', lifetime: 'task', role: 'reviewer', answer: 'Fine.', transcript: 'kept' };
+
+    expect(markup('/workspace/ws/agents/', answered)).toContain('href="/workspace/ws/agents/ask-reviewer-a1"');
+    // The asking chat's id rides along: a released parent has no path to walk, but its id still finds the helper.
+    expect(markup('/workspace/ws/agents/auditor/', JSON.stringify(answered), 'actor-auditor')).toContain('href="/workspace/ws/agents/auditor/ask-reviewer-a1?parent=actor-auditor"');
+  });
+
+  test('a durable hire, or a chat with no place to open one, links nothing', () => {
+    expect(markup('/workspace/ws/agents/', { ok: true, agent: 'auditor', lifetime: 'durable' })).not.toContain('conversation"');
+    expect(markup(null, { agent: 'ask-reviewer-a1', lifetime: 'task' })).not.toContain('conversation"');
+  });
+});
+
+/** A helper below a direct child has no tab; the Work tab opens its chat by the path the TUI walks. */
+describe('a subordinate below a direct child is reached by its path', () => {
+  /** The helper's own model hires when its task says so, as a delegated turn does. */
+  const hiringGateway = () => stubAiBinding((run) => {
+    const asked = requestOf(run).messages.some((message) => message.role === 'user' && JSON.stringify(message.content).includes('Hire ask-checker-a1'));
+    const answered = requestOf(run).messages.some((message) => message.role === 'tool');
+
+    return asked && !answered
+      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', agent: 'ask-checker-a1', role: 'task', mission: 'Check the ledger.' } }, 'agents_0')
+      : chatCompletion(run, 'Done.');
+  });
+
+  async function grandchild() {
+    const parent = gatewayWorkspace(hiringGateway());
+    await parent.agent.setSoul('# Purpose\n\nAudit the ledger.');
+    const { name, subordinate } = await parent.agent.createSubordinateAgent();
+
+    await runDelegatedTask(parent, present(subordinate.actorId, 'the helper id'), 'Hire ask-checker-a1 to check the ledger.');
+    const children = await parent.agent.inspectSubordinate({ path: [name], view: 'children', page: {} });
+    const nested = children.view === 'children' ? children.page.items.find((entry) => entry.name === 'ask-checker-a1') : undefined;
+
+    return { agent: parent.agent, name, parentId: present(subordinate.actorId, 'the helper id'), path: `${name}/ask-checker-a1`, id: nested?.actorReference?.actorId };
+  }
+
+  /** The page's own resolver over this object's RPCs, as its socket answers them. */
+  const pageRpc = (agent: Awaited<ReturnType<typeof grandchild>>['agent']): Rpc => async <T>(method: string, args: unknown[] = []): Promise<T> => {
+    if (method !== 'inspectSubordinate') throw new Error(`the page asked ${method}`);
+
+    return v.parse(v.custom<T>(() => true), await agent.inspectSubordinate(v.parse(SubordinateInspectionRequestSchema, args[0])));
+  };
+
+  test('with its parent dismissed, a grandchild still opens kept, found from the id of the chat that asked it or its own', async () => {
+    const { agent, name, parentId, path, id } = await grandchild();
+    await agent.dismissSubordinate(name);
+
+    const byParent = await nestedAgent(pageRpc(agent), path, { actor: null, parent: parentId });
+    const byOwnId = await nestedAgent(pageRpc(agent), path, { actor: present(id, 'the grandchild id'), parent: null });
+
+    expect(byParent).toMatchObject({ live: false, actorId: id });
+    expect(byOwnId).toMatchObject({ live: false, actorId: id });
+    expect((await agent.getChatHistoryPage({ actor: present(id, 'the grandchild id') })).status).toBe('end');
+  });
+
+  test('the edge resolves the path to the grandchild\'s id, and its chat and window reads follow', async () => {
+    const { agent, path, id } = await grandchild();
+    const resolved = await agent.resolveHostedActorRoute(path);
+
+    expect(resolved).toEqual({ ok: true, actorId: present(id, 'the grandchild id') });
+    expect((await agent.getChatHistoryPage({ actor: present(id, 'the grandchild id') })).status).toBe('end');
+    expect((await agent.getActorSnapshot(path)).name).toBe('ask-checker-a1');
+  });
+
+  test('a name the root does not employ resolves to nothing, even when a grandchild has it', async () => {
+    const { agent } = await grandchild();
+
+    expect(await agent.resolveHostedActorRoute('ask-checker-a1')).toMatchObject({ reason: 'missing' });
   });
 });
 
@@ -217,7 +317,10 @@ describe('an agent\'s window hears only what it may act on', () => {
       // An added agent inherits the workspace's purpose, so the workspace needs one first.
       await agent.setSoul('# Purpose\n\nAudit the ledger.');
       const { name } = await agent.createSubordinateAgent();
-      const tag = present(actorConnectionTag(`/agents/${ORCHESTRATOR_AGENT_SLUG}/ledger/${hostedActorSocketPath(name)}`), 'the window tag');
+      const resolved = await agent.resolveHostedActorRoute(name);
+
+      if ('reason' in resolved) throw new Error(resolved.error);
+      const tag = actorConnectionTag(resolved.actorId);
 
       windows.push(socketConnection({ id: 'agent', tags: [tag] }));
       await agent.renameSubordinateAgent(name, 'Ledger auditor');

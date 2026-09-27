@@ -21,7 +21,7 @@ export {
   type TemporaryRunRefusal, type TemporaryRunRequest,
 } from '../types/subordinates';
 
-/** How long a roster row lives; a column because task and durable rows are indistinguishable by state. */
+/** How long a roster row lives; state cannot tell the two apart. */
 export const SUBORDINATE_LIFETIMES = ['durable', 'task'] as const;
 
 export type SubordinateLifetime = (typeof SUBORDINATE_LIFETIMES)[number];
@@ -140,14 +140,13 @@ function renderTemporaryTaskBrief(input: {
   return parts.join('\n\n');
 }
 
-/** Task-lifetime policy over the shared roster: it adds only the in-memory waiter and never stores the answer. */
+/** Task-lifetime policy over the shared roster. */
 export function createTemporaryAgentPort(deps: {
   roster: SubordinateRosterStore;
   runtime: SubordinateRuntime;
   createName(role: string): string;
   now(): number;
 }): TemporaryAgentPort {
-  // A task-lifetime agent receives one assignment. Its name exists before the assignment RPC can report.
   const waiters = new Map<string, (answer: TemporarySettlement) => void>();
 
   const registerWaiter = (name: string, signal?: AbortSignal) => {
@@ -240,6 +239,8 @@ export function createTemporaryAgentPort(deps: {
       if (inherited) assignment.inheritedContext = inherited;
 
       if (deps.roster.get(name)) return failure('denied', 'The generated actor name is already in use.', 'none');
+
+      if (request.lane) deps.roster.helpers.record(name, request.lane, startedAt);
       deps.roster.create({
         name, actorReference: null, deleteRequested: false,
         birth: { creationId, assignment, seed: { name, displayName: codenameFor(name), nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME } },
@@ -277,6 +278,8 @@ export function createTemporaryAgentPort(deps: {
         elapsed_ms: deps.now() - startedAt,
       };
     },
+
+    reclaim: (request) => deps.roster.helpers.answerFor(request),
   };
 }
 

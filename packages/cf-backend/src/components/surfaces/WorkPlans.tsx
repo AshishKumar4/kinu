@@ -87,7 +87,7 @@ function PlanCard({ item, onOpen }: { item: OwnedPlan; onOpen: () => void }) {
       {tasks.length > 0 && (
         <div className="space-y-2 px-3 pb-2.5">
           <PlanProgress tasks={tasks} />
-          {tasks.map((task) => <TaskTree key={task.id} task={task} grouped owner={owner.name} />)}
+          {tasks.map((task) => <TaskTree key={task.id} task={task} grouped owner={owner} />)}
         </div>
       )}
     </div>

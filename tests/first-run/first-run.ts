@@ -99,6 +99,7 @@ export const FIRST_RUN_CASES = [
   'agent-tab',
   'agent-chats-persist',
   'agent-dismissed-chat',
+  'agent-nested-chat',
   'agent-confined',
   'web-search',
   'account-settings',
@@ -497,6 +498,17 @@ export const FIRST_RUN_DEFECTS = {
     redDirection: 'Planted on a loopback `vite dev` build of this tree: a review diff that reports no files '
       + 'leaves `diff-shows-the-write` missed.',
   },
+  'agent-nested-chat': {
+    id: 'agent-nested-chat',
+    found: 'A helper hired by a hired agent had no chat tab, and its owner in the Work tab was plain text, '
+      + 'so nothing opened its conversation: every chat address resolved one name in the root\'s roster.',
+    missedBecause: 'agent-tab opens a direct child only; delegation-tree builds a nested tree but reads the '
+      + 'ledger, never the grandchild\'s own socket or its reads.',
+    provedRedAt: null,
+    redDirection: 'Written with the fix and not yet run: the tier needs a deployment. On a build before the '
+      + 'fix the nested socket path answers 404 (the edge looks the joined path up as one root name) and '
+      + '`nested-socket-opens` is missed.',
+  },
   'delegation-tree': {
     id: 'delegation-tree',
     found: 'Hosted subordinates that delegate in turn, settling a tree whose branches end at '
@@ -698,6 +710,7 @@ const SHORT_SUBJECT = {
   'agent-tab': 'tab',
   'agent-chats-persist': 'chats',
   'agent-dismissed-chat': 'kept',
+  'agent-nested-chat': 'nested',
   'agent-confined': 'confined',
   'web-search': 'search',
   'account-settings': 'account',

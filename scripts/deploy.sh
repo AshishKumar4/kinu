@@ -970,6 +970,17 @@ for artifact in "${KINU_CLI_ARTIFACTS[@]}"; do
 done
 rm -f "$CLI_ARTIFACT_TMP" "$CLI_ARTIFACT_LIST"
 
+# Every name the deployment serves, over a certificate that verifies, before anything drives it. The upload returns
+# before the edge holds a certificate for each new name: staging's first deploy started its tiers while the one for
+# *.staging.kinu.run was still being issued, and a share case failed on the handshake (scripts/edge-settled.ts).
+# A checked condition with a bound, never a length of time.
+if bun scripts/edge-settled.ts "$KINU_ENV"; then
+  echo -e "${GREEN}✅ Every name $KINU_WORKER serves answers over verified TLS${NC}"
+else
+  echo -e "${RED}❌ A name $KINU_WORKER serves never answered over verified TLS; the lines above name it${NC}"
+  SMOKE_FAIL=1
+fi
+
 if [ "$SMOKE_FAIL" -ne 0 ]; then
   echo ""
   echo -e "${RED}Smoke test failed.${NC}"

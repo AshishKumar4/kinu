@@ -40,7 +40,7 @@ import {
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import type { AgentModelMenu, AgentRpcMethod } from '@kinu.run/core';
-import { hostedWindowCalls, pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
+import { hostedWindowCalls, pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
@@ -705,6 +705,10 @@ export class CloudAgentClient implements AgentClient {
     const input = v.parse(SubordinateInspectionRequestSchema, request);
 
     return this.callParentHttp('inspectSubordinate', SubordinateInspectionResultSchema, [decodeJsonValue({ value: input })]);
+  }
+
+  async workspaceWork(): Promise<WorkspaceWork> {
+    return this.callParentHttp('listWorkspaceWork', WorkspaceWorkSchema);
   }
 
   async latestTakes(): Promise<AlternateTakeSet | null> {
