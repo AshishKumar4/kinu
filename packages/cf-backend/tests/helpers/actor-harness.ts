@@ -48,7 +48,7 @@ import {
   type SleepTimeUpdate,
   type EgressSecretBinding,
 } from '@kinu.run/core';
-import { HARNESS_AGENT, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
+import { HARNESS_AGENT, harnessFibersRunning, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
 import { GATEWAY_MODEL, platformGatewayEnv, type StubbedAiBinding } from './platform-gateway';
@@ -77,6 +77,20 @@ const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
 };
 
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
+  /** Work the object still owes: maintenance, untimed owed arms (turn claims, queued deliveries), a due timed ledger, a
+   *  detached task, or a hosted actor's reaction waiting to be drained (the object's wake folds only the root's). */
+  harnessWorkRemains(now = Date.now()): boolean {
+    const due = this.nextOwedAt();
+
+    const host = this.actorHost();
+
+    const reactionOwed = host.list().some((reference) =>
+      (new EventLog(this.boundExec(), host.bindStores(reference).handle).nextPendingDrainAt(now) ?? Infinity) <= now);
+
+    return this.maintenanceUnfinished || this.owedUntimedWork() || (due !== null && due <= now) || this._backgroundTasks.size > 0
+      || reactionOwed;
+  }
+
   modelFactory?: () => LanguageModel;
   override getModel(): LanguageModel {
     return this.modelFactory?.() ?? super.getModel();
@@ -540,6 +554,21 @@ export function workspaceFiles(agent: HarnessOrchestratorAgent): VFS {
 /** One event-loop turn, with no duration: queued I/O callbacks and detached continuations run first. */
 export function nextTurn(): Promise<void> {
   return new Promise((resolve) => { setImmediate(resolve); });
+}
+
+/**
+ * Runs the object's wake until `holds()`, and throws `failure` once the object has nothing left to run: no owed work
+ * and no fiber in flight. No lap count: a missing condition fails as soon as the object goes idle.
+ */
+export async function driveUntil(
+  workspace: ActorHarness<HarnessOrchestratorAgent>, failure: string, holds: () => boolean,
+): Promise<void> {
+  while (!holds()) {
+    await workspace.agent.terminalRetryPass();
+    await nextTurn();
+
+    if (!holds() && !workspace.agent.harnessWorkRemains() && !harnessFibersRunning()) throw new Error(failure);
+  }
 }
 
 /**
