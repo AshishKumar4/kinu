@@ -39,6 +39,11 @@ export const HEAP_AFTER_SETUP_BOUND_BYTES = 56_000_000;
  *  keeps the request JSON one byte per character. */
 export const STEP_LIVE_BOUND_BYTES = 5_500_000;
 
+/** Measured 2026-09-27 at {@link HEADS}: 7.7 MB on main 20cacf3423, every released head's runtime held by the
+ *  workspace's mount table; 1.1 MB once release unmounts it: Nimbus's inode cache of the homes still on disk and
+ *  code compiled for the heads, neither of them per released actor. */
+export const HEADS_RETAINED_BOUND_BYTES = 1_500_000;
+
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request. */
 export const IDLE_RETAINED_BOUND_BYTES = 14_500_000;
 
@@ -55,15 +60,17 @@ const TargetsSchema = v.array(v.object({ id: v.string(), webSocketDebuggerUrl: v
 
 const ManifestSchema = v.record(v.string(), v.object({ file: v.string(), assets: v.optional(v.array(v.string())) }));
 
-/** Every module the build emitted, as Vite's manifest lists them: the chunks and the assets they import. */
-function productModules(): { type: 'ESModule' | 'CompiledWasm'; path: string; contents: string | Uint8Array }[] {
+/** Every module the build emitted, as Vite's manifest lists them, behind `worker-heap/product.ts` as the entry. */
+async function productModules(): Promise<{ type: 'ESModule' | 'CompiledWasm'; path: string; contents: string | Uint8Array }[]> {
   const manifest = v.parse(ManifestSchema, JSON.parse(readFileSync(join(DIST, '.vite/manifest.json'), 'utf8')));
-  // The entry first: Miniflare runs the first module as the Worker's main.
   const emitted = new Set(['index.js', ...Object.values(manifest).flatMap((entry) => [entry.file, ...(entry.assets ?? [])])]);
 
-  return [...emitted].filter((file) => file.endsWith('.js') || file.endsWith('.wasm')).map((file) => file.endsWith('.js')
+  const built = [...emitted].filter((file) => file.endsWith('.js') || file.endsWith('.wasm')).map((file) => file.endsWith('.js')
     ? { type: 'ESModule' as const, path: join(DIST, file), contents: readFileSync(join(DIST, file), 'utf8') }
     : { type: 'CompiledWasm' as const, path: join(DIST, file), contents: readFileSync(join(DIST, file)) });
+
+  // The entry first: Miniflare runs the first module as the Worker's main.
+  return [{ type: 'ESModule', path: join(DIST, 'worker-heap-product.js'), contents: await bundled('product.ts') }, ...built];
 }
 
 /** The specifiers `source` imports statically: the modules an isolate instantiates with it at load. */
@@ -100,17 +107,22 @@ export function staticGraph(dist: string): readonly string[] {
   return [...reached];
 }
 
-async function driverModule(): Promise<string> {
-  const bundled = await build({
-    entryPoints: [join(import.meta.dir, 'worker-heap/driver.ts')], bundle: true, write: false, format: 'esm',
+/** One of `worker-heap/`'s modules for workerd; `kinu:product` is the built bundle's `index.js` beside it. */
+async function bundled(file: 'driver.ts' | 'product.ts'): Promise<string> {
+  const result = await build({
+    entryPoints: [join(import.meta.dir, 'worker-heap', file)], bundle: true, write: false, format: 'esm',
     platform: 'neutral', mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
     alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, `node:${name}`])),
     external: ['cloudflare:*', 'node:*'], logLevel: 'silent',
+    plugins: [{
+      name: 'kinu-product',
+      setup: (plugin) => { plugin.onResolve({ filter: /^kinu:product$/ }, () => ({ path: './index.js', external: true })); },
+    }],
   });
 
-  const [output] = bundled.outputFiles;
+  const [output] = result.outputFiles;
 
-  if (output === undefined) throw new Error('worker-heap: esbuild produced no driver module');
+  if (output === undefined) throw new Error(`worker-heap: esbuild produced no module for ${file}`);
 
   return output.text;
 }
@@ -205,6 +217,9 @@ async function inspect(port: number): Promise<{
   };
 }
 
+/** The swarm the release bound is about: WARM heads host every lazy module first, then COUNT come and go. */
+export const HEADS = { warm: 5, count: 200 } as const;
+
 /** The step the heap bounds are about: TURNS turns of ANSWER_BYTES each, then one more parked on the model. */
 export const STEP = { turns: 12, answerBytes: 200_000 } as const;
 
@@ -215,6 +230,8 @@ export interface HeapMeasurement {
   readonly stepLive: number;
   /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup. */
   readonly idleRetained: number;
+  /** What a workspace holds live after {@link HEADS} heads were hosted and released, beyond before them. */
+  readonly headsRetained: number;
   /** Each character above U+00FF in the requests, with the text before it; the scripted turns write none. */
   readonly wide: readonly string[];
 }
@@ -228,7 +245,7 @@ export async function measure(): Promise<HeapMeasurement> {
   const mf = new Miniflare(convertV4MiniflareOptions({
     inspectorPort: port,
     workers: [{
-      name: 'kinu', ...compat, modulesRoot: DIST, modules: productModules(), workerLoaders: { LOADER: {} },
+      name: 'kinu', ...compat, modulesRoot: DIST, modules: await productModules(), workerLoaders: { LOADER: {} },
       bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key },
       serviceBindings: { AI: { name: 'driver', entrypoint: 'ScriptedAI' } },
       r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),
@@ -238,7 +255,7 @@ export async function measure(): Promise<HeapMeasurement> {
       outboundService: (request) => { throw new Error(`worker-heap: the product reached the network at ${request.url}`); },
     }, {
       name: 'driver', ...compat,
-      modules: [{ type: 'ESModule', path: join(DIST, 'worker-heap-driver.js'), contents: await driverModule() }],
+      modules: [{ type: 'ESModule', path: join(DIST, 'worker-heap-driver.js'), contents: await bundled('driver.ts') }],
       bindings: { OWNER_TOKEN: v.parse(OwnerCallerSchema, await ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: key })).ownerToken },
       durableObjects: {
         HEAP_DRIVER: { className: 'HeapDriver', useSQLite: true },
@@ -284,7 +301,13 @@ export async function measure(): Promise<HeapMeasurement> {
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
       await parked;
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, wide };
+      await ask('/?workspace=heads');
+      await ask(`/heads?workspace=heads&tag=warm&count=${String(HEADS.warm)}`);
+      const beforeHeads = await inspector.liveHeap();
+      await ask(`/heads?workspace=heads&tag=swarm&count=${String(HEADS.count)}`);
+      const headsRetained = await inspector.liveHeap() - beforeHeads;
+
+      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, wide };
     } finally {
       inspector.close();
     }
@@ -340,6 +363,10 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`the idle workspace holds ${mb(measured.idleRetained)} after ${transcript()}, over ${mb(IDLE_RETAINED_BOUND_BYTES)}`);
   }
 
+  if (measured.headsRetained > HEADS_RETAINED_BOUND_BYTES) {
+    findings.push(`${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)} live, over ${mb(HEADS_RETAINED_BOUND_BYTES)}`);
+  }
+
   if (findings.length > 0) {
     console.error(`${GATE}: ${String(findings.length)} finding(s)\n`);
 
@@ -349,7 +376,8 @@ async function main(args: readonly string[]): Promise<number> {
   }
 
   console.log(`${GATE}: ok — ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
-    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them; no wasm on the static graph, every module ASCII, every request Latin-1`);
+    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
+    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}; no wasm on the static graph, every module ASCII, every request Latin-1`);
   console.log('  blind: copies made and dropped within a step (garbage between collections), transcripts shaped unlike this one, and memory outside V8 (compiled wasm, SQLite pages)');
 
   return 0;

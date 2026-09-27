@@ -263,6 +263,12 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     }
   };
 
+  const drop = (slot: HostSlot): void => {
+    slot.fence.released = true;
+    slots.delete(slot.actor.reference.actorId);
+    slot.actor.runtime.release?.();
+  };
+
   const requireSlot = (reference: ActorReference): HostSlot => {
     const slot = slotFor(reference);
 
@@ -286,8 +292,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       throw new KinuError('denied', 'An actor holding a turn in flight cannot be released; cancel or settle the turn first.');
     }
 
-    slot.fence.released = true;
-    slots.delete(reference.actorId);
+    drop(slot);
   };
 
   return {
@@ -312,13 +317,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     },
     release,
     releaseAll: () => {
-      for (const reference of [...slots.values()].map((slot) => slot.actor.reference)) {
-        const slot = slotFor(reference);
-
-        if (!slot) continue;
-        slot.fence.released = true;
-        slots.delete(reference.actorId);
-      }
+      for (const slot of slots.values()) drop(slot);
     },
     retire: async (parent, retirement) => {
       const record = deps.directory.retained(retirement.reference.actorId);
@@ -360,8 +359,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
           }
         }
 
-        slot.fence.released = true;
-        slots.delete(retirement.reference.actorId);
+        drop(slot);
       }
 
       const parentPath = deps.directory.storagePath(parent);

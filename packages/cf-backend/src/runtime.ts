@@ -366,8 +366,9 @@ export function createCFRuntime(
   }
 
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
-  // The shell this actor runs as serves its file tool's mount points.
-  workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred);
+  // The actor's shell serves its file tool's mounts. A branch has no uid, so no shell: it would take the root's table.
+  const ownsShell = actor.rootActor || hooks.workspaceExecution !== undefined;
+  const unmount = ownsShell ? workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred) : undefined;
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     shellSession,
@@ -533,6 +534,8 @@ export function createCFRuntime(
     vectorStore,
     sandboxHandle,
   };
+
+  if (unmount !== undefined) runtime.release = unmount;
 
   return runtime;
 }

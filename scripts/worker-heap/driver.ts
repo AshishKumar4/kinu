@@ -10,6 +10,8 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   setSoul(markdown: string): Promise<void>;
   setModel(model: string): Promise<void>;
   runTaskFromMcp(text: string): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  hostHeads(tag: string, count: number): Promise<void>;
 }
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
@@ -43,6 +45,10 @@ export class HeapDriver extends DurableObject<DriverEnv> {
   /** One root turn through the product's MCP entry, as a caller outside the page runs one. */
   async turn(workspace: string, text: string): Promise<void> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).runTaskFromMcp(text);
+  }
+
+  async heads(workspace: string, tag: string, count: number): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).hostHeads(tag, count);
   }
 }
 
@@ -89,6 +95,7 @@ export default {
     }
 
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
+    else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
     else await driver.setUp(workspace);
 
     return new Response(null, { status: 204 });

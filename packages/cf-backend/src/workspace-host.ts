@@ -125,7 +125,7 @@ function servesOp(envelope: WireSupervisorEnvelope): envelope is SupervisorOpEnv
 
 export interface HostedWorkspace {
   readonly bundle: WorkspaceBundle;
-  /** Cached by `shellId`: a named shell holds its own cwd and exported variables. */
+  /** A stateless view: the named shell's cwd and exported variables live in the runtime, keyed by `shellId`. */
   box(shellId: string): NimbusSandboxHandle;
   /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a
      *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. */
@@ -344,7 +344,6 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
   };
 
   const files = workspaceBoxFiles(async () => (await bundle.session()).vfs);
-  const boxes = new Map<string, NimbusSandboxHandle>();
 
   return {
     bundle,
@@ -355,20 +354,10 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
       return (await runtime()).supervisorOp(envelope);
     },
-    box(shellId) {
-      const held = boxes.get(shellId);
-
-      if (held) return held;
-
-      const built = workspaceBox({
-        runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
-        mountTable: (plane, cred) => { bundle.mountTable(plane, cred); },
-      });
-
-      boxes.set(shellId, built);
-
-      return built;
-    },
+    box: (shellId) => workspaceBox({
+      runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
+      mountTable: (plane, cred) => bundle.mountTable(plane, cred),
+    }),
     facetManager: async () => (await compose()).facets,
     ports: async () => (await compose()).ports,
     terminal: async () => {
