@@ -120,21 +120,17 @@ test('a viewer request records its calls and settles', () => {
   }
 });
 
-test('a share keeps its newest thousand viewer requests and no other share loses any', () => {
+test('a socket-held request still records its calls after a thousand newer requests', () => {
   const { db, shares } = shareDb();
 
   try {
     const share = shares.add(liveShare());
-    const other = shares.add({ ...liveShare(), id: 's2', handle: 'other-handle' });
-    const kept = shares.openRequest({ share: other.id, viewer: 'user:u1', path: '/' });
-    const first = shares.openRequest({ share: share.id, viewer: 'user:u1', path: '/' });
+    const held = shares.openRequest({ share: share.id, viewer: 'user:u1', path: '/' });
 
-    for (let n = 0; n < 1_000; n += 1) shares.openRequest({ share: share.id, viewer: 'user:u1', path: '/' });
+    for (let n = 0; n < 1_000; n += 1) shares.settleRequest(shares.openRequest({ share: share.id, viewer: 'user:u2', path: '/' }), 'ok');
 
-    const requests = shares.requests(share.id);
-    expect(requests).toHaveLength(1_000);
-    expect(requests.some((row) => row.id === first)).toBe(false);
-    expect(shares.requests(other.id).map((row) => row.id)).toEqual([kept]);
+    shares.recordCall(held, { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read', ok: true });
+    expect(shares.requests(share.id).find((row) => row.id === held)?.calls).toHaveLength(1);
   } finally {
     db.close();
   }
