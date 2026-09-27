@@ -1052,6 +1052,7 @@ export class LocalAgentHost {
         ));
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
+      onEvolutionAnswer: () => this.wake(parent, 'refiner answer'),
       // A temporary child's answer goes to the waiting `agents.ask` port, never as an event waking this parent.
       temporary: parent.temporary,
     }, {
@@ -1466,9 +1467,11 @@ export class LocalAgentHost {
       if (this.closed) return;
 
       try {
+        // A pass another process holds is reported by `drive`; its own pass drains and routes the same work.
         await this.drive(entry, async () => {
           await entry.session.flushPendingDrains();
           await this.drainAssignedWork(entry);
+          await entry.session.runEvolutionAnswer(Date.now());
         });
       } catch (cause) {
         diagnostics.failure(

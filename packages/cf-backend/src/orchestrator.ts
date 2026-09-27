@@ -16,7 +16,7 @@ import {
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
-  mintSubordinateName, withHeadCaptureRecording,
+  mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners, DELEGATED_TURN_SLOTS,
   type ActorHost, type ActorToolsetDeps, type AgentsSwarmDeps, type AgentsToolDeps, type ResumableActorTurn,
   type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
@@ -92,7 +92,7 @@ import {
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
   previewScaffoldLive, runScaffoldCaptureText, runScaffoldGepaOptimization,
   advancePromptSectionLane,
-  decideRefinementRoute, listRefinements, refinementPass, requestOwnerRefinement, showRefinementRoute,
+  decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementRequestView, type RefinementScope,
@@ -634,6 +634,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       env: this.env,
       ctx: this.ctx,
       agent: this,
+      currentTurn: (reference) => this.currentTurnOf(reference),
       exec: this.boundExec(),
       sql: this.boundSql,
       directory: this.workspaceActors(),
@@ -712,7 +713,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       announce: () => { this.broadcastSubordinatesChanged(); },
       scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
       armWake: () => { this.armDelegationWake(); },
-      temporary: () => this.temporaryAgentPort(),
+      temporary: (actor) => this.temporaryAgentPort(actor.reference),
+      whileWaiting: (actorId, waited) => this.delegatedTurns.whileWaiting(actorId, waited),
+      rederiveWake: () => { this.armDurableWake(); },
       register: async ({ creationId, toolProfile, loop }) => {
         const entry = await this.actorDirectory({
           action: 'register', creationId, name: explorationActorKey(creationId), kind: 'run', toolProfile, lifetime: 'task',
@@ -906,10 +909,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return deps;
   }
 
-  /**
-   * Built from this actor's own roster (the root's would land a hire of a hire beside its parent).
-   * No `temporary` port: it holds live `shell` promises that must outlive the turn. Null at the cap.
-   */
+  /** Built from this actor's own roster. Null at the cap. */
   private hostedTeamToolDeps(actor: HostedActor): TeamToolDeps | null {
     const seams = this.hostedSeams();
     const delegation = hostedDelegationBudget(seams, actor);
@@ -922,6 +922,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       delegation,
       roster,
       runtime: hostedSubordinateRuntime(seams, () => actor),
+      temporary: seams.temporary(actor),
       now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(actor.handle),
       originContext: async () => actor.session.history,
@@ -1149,113 +1150,83 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  /** One drain per isolate: a second would open two turns on one actor's chat room. */
-  private _delegationDrain: Promise<void> | null = null;
-
-  private _delegationDrainAgain = false;
+  private readonly delegatedTurns = new DelegatedTurnRunners({
+    slots: DELEGATED_TURN_SLOTS,
+    pass: (record) => this.drainActorAssignments(record),
+    holdLane: async (body) => {
+      await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
+        ctx.stash({ lane: DELEGATION_LANE_FIBER });
+        await body();
+      });
+    },
+    failed: (record, error) => {
+      diagnostics.failure('subordinate.delegation_drain_failed', error, { workspace: this.name, ...(record !== null && { actor: record.name }) });
+    },
+  });
 
   /**
    * Admitted delegated turns run on a fiber, off the wake: inside it a turn held the alarm to its
    * 15-minute wall, whose reset closed every socket (warm-forge-4d6acc02, 2026-09-25).
    */
-  private startDelegationDrain(): void {
-    if (this._delegationDrain !== null) {
-      this._delegationDrainAgain = true;
-
-      return;
-    }
-
-    const drain = (async () => {
-      try {
-        await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
-          ctx.stash({ lane: DELEGATION_LANE_FIBER });
-          let again = true;
-
-          while (again) {
-            this._delegationDrainAgain = false;
-            again = await this.drainAdmittedDelegations() || this._delegationDrainAgain;
-          }
-        });
-      } catch (cause) {
-        diagnostics.failure('subordinate.delegation_drain_failed', toKinuError({
-          doing: 'draining the delegated turns this workspace admitted', cause, otherwise: 'io',
-        }), { workspace: this.name });
-      } finally {
-        this._delegationDrain = null;
-      }
-    })();
-
-    this._delegationDrain = drain;
+  protected override whileWaitingOnDelegate<T>(actorId: string, waited: Promise<T>): Promise<T> {
+    return this.delegatedTurns.whileWaiting(actorId, waited);
   }
 
-  private async drainAdmittedDelegations(): Promise<boolean> {
-    const seams = this.hostedSeams();
-    const exec = this.boundExec();
-    const now = Date.now();
-    let budget = HOSTED_DELEGATION_DRAIN_BUDGET;
-    let truncated = false;
+  private startDelegationDrain(): void {
     const hires = this.workspaceActors().list().filter((record) => record.kind === 'subordinate');
 
-    for (const orphan of dismissOrphanedAssignments(exec, new Set(hires.map((record) => record.actorId)))) {
+    for (const orphan of dismissOrphanedAssignments(this.boundExec(), new Set(hires.map((record) => record.actorId)))) {
       diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id });
     }
 
-    for (const record of hires) {
-      if (budget <= 0) { truncated = true; break; }
+    this.delegatedTurns.start(hires);
+  }
 
-      const reference: ActorReference = {
-        actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId,
-      };
+  private async drainActorAssignments(record: WorkspaceActor): Promise<boolean> {
+    const seams = this.hostedSeams();
 
-      try {
-        // `bindStores`, not `acquire`: only the child's handle is needed, and it still refuses a retired
-        // or re-parented actor, so reading a child's queue does not bypass membership.
-        const log = new EventLog(exec, this.actorHost().bindStores(reference).handle);
+    const reference: ActorReference = {
+      actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId,
+    };
 
-        const swept = await drainAssignments(log, {
-          now, budget, staleMs: STALE_EVENT_DELIVERY_MS,
-          run: async (task) => {
-            const room = this.chatRooms.hostedRoom(record.actorId);
-            const answerId = crypto.randomUUID();
+    // `bindStores` still refuses a retired or re-parented actor.
+    const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
 
-            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
+    const swept = await drainAssignments(log, {
+      now: Date.now(), budget: HOSTED_DELEGATION_DRAIN_BUDGET, staleMs: STALE_EVENT_DELIVERY_MS,
+      run: (task) => this.delegatedTurns.turn(record.actorId, async () => {
+        const room = this.chatRooms.hostedRoom(record.actorId);
+        const answerId = crypto.randomUUID();
 
-            try {
-              await runHostedTask(seams, reference, task, {
-                ...(room !== null && { observeStream: (chunks, call) => room.observe(chunks, call) }),
-                answered: async ({ completion, error }) => {
-                  await this.recordHostedChatAnswer(reference, answerId, completion);
+        await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
 
-                  if (error !== null) await room?.deliver({ type: 'error', message: error });
-                  await room?.closeTurn();
-                },
-              });
-            } catch (cause) {
-              await room?.deliver({ type: 'error', message: renderThrownChain({ cause }) });
-              throw cause;
-            } finally {
+        try {
+          await runHostedTask(seams, reference, task, {
+            ...(room !== null && { observeStream: (chunks, call) => room.observe(chunks, call) }),
+            answered: async ({ completion, error }) => {
+              await this.recordHostedChatAnswer(reference, answerId, completion);
+
+              if (error !== null) await room?.deliver({ type: 'error', message: error });
               await room?.closeTurn();
-            }
-          },
-          onFailure: ({ cause }) => {
-            diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
-              doing: 'running a delegated turn this workspace admitted', cause, otherwise: 'io',
-            }), { workspace: this.name, actor: record.name });
-          },
-        });
-
-        budget -= swept.consumed;
-
-        if (swept.truncated) truncated = true;
-      } catch (cause) {
-        // One unreadable child must not end the sweep; same per-actor isolation as core recovery.
-        diagnostics.failure('subordinate.delegation_drain_failed', toKinuError({
-          doing: 'reading a hired actor\'s admitted delegations', cause, otherwise: 'io',
+            },
+          });
+        } catch (cause) {
+          await room?.deliver({ type: 'error', message: renderThrownChain({ cause }) });
+          throw cause;
+        } finally {
+          await room?.closeTurn();
+          // Mid-turn reports drain here, a reset's re-run too.
+          (await this.actorHost().acquire(reference)).session.orchestrator.scheduleDrain();
+        }
+      }),
+      onFailure: ({ cause }) => {
+        diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
+          doing: 'running a delegated turn this workspace admitted', cause, otherwise: 'io',
         }), { workspace: this.name, actor: record.name });
-      }
-    }
+      },
+    });
 
-    return truncated;
+    return swept.truncated;
   }
 
   /**
@@ -1576,6 +1547,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.peerHub.nextRetryAt(),
       this.emailOutbox.nextRetryAt(),
       this.eventLog.nextPendingDrainAt(now),
+      nextEvolutionAnswerAt(this.boundSql, this.actorHandle().actorId),
       // Prompt-cache warm; its tick phase is `alarm.cache_warm`.
       this.cacheWarming.nextWarmAt(),
       // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
@@ -3185,6 +3157,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }
       });
 
+      await tick.span('alarm.evolution_answer', async (span) => {
+        let failed = false;
+
+        const step = await evolutionAnswerWake(this.refinementDeps, now, (failure) => {
+          failed = true;
+          span.fail(failure);
+          diagnostics.failure('refinement.answer_wake_failed', failure);
+        });
+
+        if (!failed) span.setAttribute('kinu.evolution_answer_due', step !== null);
+      });
+
       // Durable re-drive of pending outbound peer messages (eviction recovery and backoff retries).
       await tick.span('alarm.peer_dispatch', async (span) => {
         try {
@@ -3936,7 +3920,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * `publishHeadStreamFrame` is reached in-process via `reportNodeDelta` and
-   * `ExplorationHostSeams.publishDelta`; the RPC allowlist exposes only required remote capabilities.
+   * `HostedActorSeams.publishDelta`; the RPC allowlist exposes only required remote capabilities.
    */
 
   /**

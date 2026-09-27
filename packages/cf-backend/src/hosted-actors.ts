@@ -113,10 +113,13 @@ export interface HostedActorSeams {
   announce(actor: BoundActor): void;
   /** Drain on a reaction (a child's report). Never for an assignment: `wakesADrain` excludes it. */
   scheduleDrain(actor: HostedActor): void;
-  /** Arm the wake chain that reaches `drainAdmittedDelegations`; the admitting request must not run it. */
+  /** Arm the wake chain that reaches the delegation runners; the admitting request must not run it. */
   armWake(): void;
+  rederiveWake(): void;
   /** Lives on the parent: `ask` parks a waiter and the report ingress resolves it. */
   temporary(actor: BoundActor): TemporaryAgentPort;
+  /** An actor's turn slot is free while it waits on another actor's queue. */
+  whileWaiting<T>(actorId: string, waited: Promise<T>): Promise<T>;
 }
 
 export function hostedDelegationBudget(
@@ -205,7 +208,7 @@ export async function admitHostedTask(
     }
 
     // Arm the wake, not the reactor: an assignment is not a `wakesADrain` row, and its runner
-    // `drainAdmittedDelegations` must not run in this request.
+    // The delegation runners must not start in this request.
     if (result.admitted) seams.armWake();
 
     return {
@@ -254,34 +257,35 @@ export async function relayHostedReport(
     if (answers !== undefined) new EventLog(seams.exec, child.handle).markAnswered(answers);
   };
 
-  return await seams.host.run(parent, async (hirer) => {
-    const temporary = seams.temporary(hirer);
+  // Not the hirer's queue: it may wait on this child's.
+  const hirer = await seams.host.acquire(parent);
+  const temporary = seams.temporary(hirer);
 
-    return await receiveSubordinateEvent({
-      log: new EventLog(seams.exec, hirer.handle),
-      roster: seams.roster(hirer),
-      vfs: seams.vfs(),
-      transaction: (body) => seams.transaction(() => {
-        const written = body();
-        answered();
+  return await receiveSubordinateEvent({
+    log: new EventLog(seams.exec, hirer.handle),
+    roster: seams.roster(hirer),
+    vfs: seams.vfs(),
+    transaction: (body) => seams.transaction(() => {
+      const written = body();
+      answered();
 
-        return written;
-      }),
-      announce: () => { seams.announce(hirer); },
-      onAdmitted: () => { seams.scheduleDrain(hirer); },
-      // A task child's answer goes first to its waiter, and closes before the waiter retires the child.
-      temporary: {
-        ...temporary,
-        settle: (input) => {
-          const settled = temporary.settle(input);
+      return written;
+    }),
+    announce: () => { seams.announce(hirer); },
+    onAdmitted: () => { if (hirer.record.parentActorId === null || !hirer.session.inFlight) seams.scheduleDrain(hirer); },
+    onEvolutionAnswer: () => { seams.rederiveWake(); },
+    // A task child's answer goes first to its waiter, and closes before the waiter retires the child.
+    temporary: {
+      ...temporary,
+      settle: (input) => {
+        const settled = temporary.settle(input);
 
-          if (settled) answered();
+        if (settled) answered();
 
-          return settled;
-        },
+        return settled;
       },
-    }, { fromSubordinate: name, ...event }, Date.now());
-  });
+    },
+  }, { fromSubordinate: name, ...event }, Date.now());
 }
 
 export async function retireStalledTask(
@@ -430,10 +434,10 @@ export async function runHostedTask(
     },
   }));
 
-  const relayEnding = async (
+  const owedReport = async (
     actor: HostedActor,
     { report, ending, reports }: Awaited<ReturnType<typeof runTurn>>,
-  ): Promise<HostedTaskResult> => {
+  ): Promise<{ readonly status: SubordinateReportStatus; readonly content: string } | null> => {
     const owed = reports.settled ? null : await terminalTaskReport({
       lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary,
       narration: () => actor.stores.history.transcript(CHAT_SESSION_ID).narration(report.canonicalCompletion?.outputPartReferences ?? []),
@@ -447,29 +451,30 @@ export async function runHostedTask(
         : null
     );
 
-    if (relayed === null) {
-      new EventLog(seams.exec, actor.handle).markAnswered(task.sequenceId);
+    if (relayed === null) new EventLog(seams.exec, actor.handle).markAnswered(task.sequenceId);
 
-      return { text: report.summary, relayed: null };
-    }
-
-    return {
-      text: report.summary,
-      relayed: await relayHostedReport(seams, actor, {
-        status: relayed.status, content: relayed.content, origin: 'turn_end',
-        mode: task.mode, sequenceId: task.sequenceId, answers: task.sequenceId,
-      }),
-    };
+    return relayed;
   };
 
-  return await seams.host.run(reference, (actor) => settle(Effect.gen(function* () {
+  // The relay runs after the child's queue is free: a hirer may be waiting on that queue while the relay waits on its.
+  const ran = await seams.host.run(reference, (actor) => settle(Effect.gen(function* () {
     const runtime = yield* cfRuntimeOf(actor, 'a hosted subordinate');
-    const ran = yield* Effect.promise(() => runTurn(actor, runtime));
+    const turn = yield* Effect.promise(() => runTurn(actor, runtime));
 
     yield* titled(actor);
 
-    return yield* Effect.promise(() => relayEnding(actor, ran));
+    return { actor, text: turn.report.summary, relayed: yield* Effect.promise(() => owedReport(actor, turn)) };
   })));
+
+  if (ran.relayed === null) return { text: ran.text, relayed: null };
+
+  return {
+    text: ran.text,
+    relayed: await relayHostedReport(seams, ran.actor, {
+      status: ran.relayed.status, content: ran.relayed.content, origin: 'turn_end',
+      mode: task.mode, sequenceId: task.sequenceId, answers: task.sequenceId,
+    }),
+  };
 }
 
 /** One actor's child substrate: every verb is a call on the workspace's one host. */
@@ -501,6 +506,9 @@ export function hostedSubordinateRuntime(
       .pipe(Effect.as(entry.reference));
   });
 
+  // A child's queue can be held by a turn that waits on a delegate: the hirer frees its own slot meanwhile.
+  const outsideSlot = <T>(waited: Promise<T>): Promise<T> => seams.whileWaiting(parent().record.actorId, waited);
+
   /** Runs `body` as the named hire. */
   const asHire = <Result>(name: string, body: (reference: ActorReference) => Promise<Result>): Effect.Effect<Result, KinuError> =>
     resolve(name).pipe(Effect.flatMap((reference) => Effect.promise(() => body(reference))));
@@ -517,10 +525,10 @@ export function hostedSubordinateRuntime(
         return Promise.resolve();
       }))))),
     cancelBirth: (input) => settle(registerChild(input, 'cancelCreation')),
-    assign: (name, input) => settle(asHire(name, (reference) => admitHostedTask(seams, reference, { kind: 'task' as const, ...input }))),
-    status: (name) => settle(asHire(name, (reference) => seams.host.run(reference, async (actor) =>
-      readSubordinateLiveStatus(seams.exec, actor.handle)))),
-    message: (name, content, mode) => settle(asHire(name, (reference) => admitHostedTask(seams, reference, { kind: 'message', body: content, mode }))),
+    assign: (name, input) => settle(asHire(name, (reference) => outsideSlot(admitHostedTask(seams, reference, { kind: 'task' as const, ...input })))),
+    status: (name) => settle(asHire(name, (reference) => outsideSlot(seams.host.run(reference, async (actor) =>
+      readSubordinateLiveStatus(seams.exec, actor.handle))))),
+    message: (name, content, mode) => settle(asHire(name, (reference) => outsideSlot(admitHostedTask(seams, reference, { kind: 'message', body: content, mode })))),
     rename: (name, displayName, nameOrigin) => settle(asHire(name, (reference) => seams.host.run(reference, async (actor) => {
       actor.stores.config.setDisplayNameOrigin(displayName, nameOrigin);
     }))),
@@ -532,7 +540,7 @@ export function hostedSubordinateRuntime(
       const request: ActorRetirementRequest = { reference, name, keepHistory, interrupt };
 
       if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
-      await seams.host.retire(parent().reference, actorRetirementFor(request));
+      await outsideSlot(seams.host.retire(parent().reference, actorRetirementFor(request)));
     },
   };
 }

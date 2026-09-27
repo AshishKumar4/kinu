@@ -1,5 +1,12 @@
 import { execFileSync } from 'node:child_process';
 
+/** A hook's repository, index and object-store variables override a spawned git's cwd. */
+export function stripGitContext(env: NodeJS.ProcessEnv): void {
+  for (const name of Object.keys(env)) {
+    if (name.startsWith('GIT_')) delete env[name];
+  }
+}
+
 /**
  * `git` against a throwaway repository. Hooks export `GIT_DIR`/`GIT_WORK_TREE`, which override `cwd`,
  * so the env is built from an allowlist (dropping every `GIT_*`) and global/system config point at /dev/null.

@@ -10,7 +10,7 @@ export interface WorkspaceActorAuthority {
   readonly ownerUserId: string | null;
 }
 
-/** A `run` actor (head, swarm node, branch) lives one run; a toolless one has no tools, plane or home. */
+/** A run actor lives one run; a toolless one has no tools or home. */
 const TOOL_PROFILES = ['full', 'toolless'] as const;
 
 const StoredActorSchema = v.object({
@@ -32,7 +32,6 @@ export interface CreateWorkspaceActor {
 
 const CreationFields = { creationId: v.pipe(v.string(), v.nonEmpty()), name: v.pipe(v.string(), v.nonEmpty()), lifetime: v.picklist(['durable', 'task']) };
 
-/** Only a run actor names a tool profile. */
 const CreatedKinds = [
   { kind: v.literal('subordinate'), toolProfile: v.optional(v.literal('full')) },
   { kind: v.literal('run'), toolProfile: v.optional(v.picklist(TOOL_PROFILES)) },

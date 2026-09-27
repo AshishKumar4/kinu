@@ -71,8 +71,7 @@ export class MyAgent extends ActorAgent {
   protected actorHandle(): ActorHandle { /* this actor's handle */ }
   actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult> { /* child directory operations */ }
   protected actorDirectoryStore(): WorkspaceActorDirectory { /* who belongs to this workspace */ }
-  protected explorationSeams(): ExplorationHostSeams { /* what an exploration runner needs */ }
-  protected subordinateSeams(): SubordinateHostSeams { /* what the subordinate rung needs */ }
+  protected hostedSeams(): HostedActorSeams { /* what every hosted actor's runner needs */ }
   protected hostedChatWire(name: string): ChatWire | null { /* a hosted actor's chat wire */ }
   protected owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] { /* what a settled turn owes */ }
   protected transcriptFor(actor: ActorHandle): SessionTranscript { /* an actor's own transcript */ }

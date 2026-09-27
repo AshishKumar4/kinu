@@ -116,7 +116,7 @@ function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaim
         digest: argumentDigest({ tool: name, args: projectJsonValue({ value: input }) }),
       };
 
-      // Only a model's call streams a part; a program's carries no step messages.
+      // A program's own call streams no part.
       if (options.messages.length > 0) await deps.durable(options.toolCallId, options.abortSignal);
       const claim = claimToolEffect(deps.sql, deps.actor, key);
 
@@ -134,7 +134,6 @@ function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaim
   };
 }
 
-/** A replay could repeat an effect, so the harness declines. */
 function indeterminateEffectMessage(name: string, callId: string): string {
   return `${name} was already started once in this turn and its outcome was never recorded, `
     + `so it may or may not have taken effect. It is not being run again. Check the state `

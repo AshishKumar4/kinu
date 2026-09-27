@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
+import { createHostedWorkspace, mountActorFiles, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { fakeMossaic, sqlOver } from '@kinu.run/test-utils';
 import {
@@ -346,6 +346,50 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(await box.exec('cat /shared/notes.md')).toMatchObject({ stdout: 'from the Drive\n', exitCode: 0 });
   });
 
+  test('a table serves until its disposer runs, and an older disposer leaves a newer table standing', async () => {
+    const actor = actorObject();
+
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx,
+      env: workspaceBindings(),
+      previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
+    });
+
+    const drive = mossaicVfs(fakeMossaic().tenant('owner'));
+    await drive.writeFile('/notes.md', 'from the Drive\n');
+    const mounted = () => withMountTable(workspace.bundle.vfs, [sharedDriveMount(() => drive, () => 'no Drive in this test')]);
+    const box = workspace.box('agent:main');
+    const first = box.mountTable?.(mounted());
+    box.mountTable?.(mounted());
+
+    first?.();
+    expect(await box.exec('cat /shared/notes.md')).toMatchObject({ stdout: 'from the Drive\n', exitCode: 0 });
+
+    // A released actor's table holds its whole runtime; a table kept past release is how 200 heads kept 7.7 MB.
+    const last = box.mountTable?.(mounted());
+    last?.();
+    expect((await box.exec('ls /')).stdout.split(/\s+/)).not.toContain('shared');
+  });
+
+  test('a view with no uid of its own never takes the root shell\'s table, so releasing it leaves the root\'s mounts', async () => {
+    const actor = actorObject();
+
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx,
+      env: workspaceBindings(),
+      previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
+    });
+
+    const drive = mossaicVfs(fakeMossaic().tenant('owner'));
+    const root = workspace.box('agent:main');
+    mountActorFiles(root, withMountTable(workspace.bundle.vfs, [sharedDriveMount(() => drive, () => 'no Drive in this test')]), { rootActor: true, cred: undefined });
+
+    const branch = mountActorFiles(workspace.box('branch:b1'), withMountTable(workspace.bundle.vfs, []), { rootActor: false, cred: undefined });
+    branch?.();
+
+    expect((await root.exec('ls /')).stdout.split(/\s+/)).toContain('shared');
+  });
+
   test('a named durable shell keeps its own cwd, and siblings do not see it', async () => {
     const actor = actorObject();
     const shellState = new Map<string, JsonValue>();
@@ -369,6 +413,8 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(await alpha.exec('cd /home/main/alpha')).toMatchObject({ exitCode: 0 });
     expect(await alpha.exec('pwd')).toMatchObject({ stdout: '/home/main/alpha\n' });
     expect(await beta.exec('pwd')).toMatchObject({ stdout: '/home/main\n' });
+    // The box is a view: one got again by name finds the same shell.
+    expect(await workspace.box('subordinate:alpha').exec('pwd')).toMatchObject({ stdout: '/home/main/alpha\n' });
   });
 
   test('the workspace never reads a session binding out of env', async () => {

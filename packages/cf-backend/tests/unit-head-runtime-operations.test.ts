@@ -53,6 +53,7 @@ const neverHost: HostedActorSeams = {
     releaseAll() { throw new Error('mergeLLM released every hosted actor'); },
     retire() { throw new Error('mergeLLM retired a hosted actor'); },
     resumable() { throw new Error('mergeLLM read the resumable claims'); },
+    temporary() { throw new Error("mergeLLM reached a task-hire port"); },
     get installedBuild(): never { throw new Error("mergeLLM read the host's build"); },
   },
   register() { throw new Error('mergeLLM reached actor registration'); },
@@ -80,6 +81,8 @@ const neverHost: HostedActorSeams = {
   scheduleDrain() { throw new Error('mergeLLM scheduled a drain'); },
   armWake() { throw new Error('mergeLLM armed a wake'); },
   temporary() { throw new Error('mergeLLM reached the task-hire port'); },
+  rederiveWake() { throw new Error('mergeLLM re-derived the wake'); },
+  whileWaiting() { throw new Error('mergeLLM freed a turn slot'); },
 };
 
 function runtimeWith(text: string) {

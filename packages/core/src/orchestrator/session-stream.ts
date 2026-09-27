@@ -162,7 +162,7 @@ export class SessionStream {
     return this.witnessCall(part.type === 'tool-call' ? part.toolCallId : null, this.exclusive(() => this.writePart(part)));
   }
 
-  /** Resolves once the call's part is durable; rejects if that write fails or `signal` aborts. */
+  /** Resolves once the call's part is durable. */
   durable(callId: string, signal?: AbortSignal): Promise<void> {
     const call = this.durableCall(callId);
 

@@ -37,7 +37,7 @@ import {
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
-  type AgentRuntime, type DynamicContext,
+  type AgentRuntime, type DynamicContext, type LLM,
   type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type RoleCatalog, type ResolvedTurnProfile, type SqlValue,
   type TierAssignments,
@@ -636,6 +636,11 @@ export function jobsOver(db: Database): BackgroundJobStore {
 export async function catalogTurn(agent: HarnessOrchestratorAgent, text: string): Promise<void> {
   await agent.harnessChatLoop.send(text, { id: crypto.randomUUID() });
   await agent.harnessChatLoop.pumpPromise;
+}
+
+/** The main actor's profile-routed side lane (reflection), the path its judge and advisor calls take too. */
+export function sideLane(agent: HarnessOrchestratorAgent): LLM {
+  return agent.observeRuntime().llm;
 }
 
 /** The main actor's event log over the object's stored rows: `publish` is the one writer ingress admits events through. */
