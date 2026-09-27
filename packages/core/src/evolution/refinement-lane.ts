@@ -11,6 +11,7 @@
 // skills wait for owner approval, subagent specs are refused, and facts must be
 // backed by the user's own sentence in the reviewed turns.
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
 
 import { controlTranscript, proposeMeasuredPromptSection } from './control';
@@ -34,7 +35,7 @@ import { routeSkill, settleSkillApproval } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { renderIssues } from '../utils/json';
-import { renderThrownChain, tolerate, type ErrorCode } from '../obs/index';
+import { attempt, renderThrownChain, settle, tolerate, type ErrorCode, type KinuError } from '../obs/index';
 import type { TemporaryRunRequest } from '../subordinates/temporary';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -146,54 +147,61 @@ export type RefinementLaneStep =
  * callers safe; the loser reports `idle`. Stale-planning recovery runs on every
  * pass and skips tokens this process is still running.
  */
-export async function advanceRefinementLane(
+export function advanceRefinementLane(
   deps: RefinementDeps,
 ): Promise<RefinementLaneStep> {
-  const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
-  store.resetStalePlanning();
+  return settle(Effect.gen(function* () {
+    const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
+    store.resetStalePlanning();
 
-  // `gated` too: a host killed between routing and settle leaves the row there.
-  for (const waiting of store.settleable()) {
-    let settled: RefinementRequestView | null;
+    // `gated` too: a host killed between routing and settle leaves the row there.
+    for (const waiting of store.settleable()) {
+      const step = yield* attempt({ doing: `settling refinement ${waiting.id}`, otherwise: 'unavailable' },
+        () => settleRoutes(deps, waiting)).pipe(
+        Effect.map((settled): RefinementLaneStep | null => settled && { step: 'settled', request: settled }),
+        Effect.catch((failure) => Effect.sync(() => laneHeld(deps, store, waiting, renderThrownChain({ cause: failure })))),
+      );
 
-    try {
-      settled = await settleRoutes(deps, waiting);
-    } catch (err) {
-      return laneHeld(deps, store, waiting, renderThrownChain({ cause: err }));
+      if (step) return step;
     }
 
-    if (settled) return { step: 'settled', request: settled };
-  }
+    const owed = store.nextRequested();
 
-  const owed = store.nextRequested();
+    if (!owed || !deps.refiner) return IDLE;
+    const claimed = store.claim(owed.id);
 
-  if (!owed || !deps.refiner) return { step: 'idle' };
-  const claimed = store.claim(owed.id);
+    if (!claimed) return IDLE;
 
-  if (!claimed) return { step: 'idle' };
+    return yield* plan(deps, claimed).pipe(
+      // Null: the claim was lost to recovery and this pass wrote nothing.
+      Effect.map((planned): RefinementLaneStep => planned === null ? IDLE : { step: 'planned', request: planned }),
+      Effect.catch((failure) => planFailed(deps, { store, claimed, owed }, failure)),
+      // A claim left registered would make recovery skip a row nothing drives.
+      Effect.ensuring(Effect.sync(() => { claimed.release(); })),
+    );
+  }));
+}
 
-  try {
-    const planned = await plan(deps, claimed);
+const IDLE: RefinementLaneStep = { step: 'idle' };
 
-    // Null: the claim was lost to recovery and this pass wrote nothing.
-    return planned === null ? { step: 'idle' } : { step: 'planned', request: planned };
-  } catch (err) {
-    const current = store.get(owed.id) ?? owed;
+function planFailed(
+  deps: RefinementDeps,
+  { store, claimed, owed }: { readonly store: RefinementStore; readonly claimed: RefinementClaim; readonly owed: RefinementRequest },
+  failure: KinuError,
+): Effect.Effect<RefinementLaneStep, KinuError> {
+  const current = store.get(owed.id) ?? owed;
+  const detail = renderThrownChain({ cause: failure });
 
-    // A stored answer keeps a wake due.
-    if (current.stage === 'planning') {
-      if (!refinementAnswerStored(deps.control.sql, deps.control.rt.actor.actorId, owed.id)) throw err;
+  // A stored answer keeps a wake due.
+  if (current.stage === 'planning') {
+    if (!refinementAnswerStored(deps.control.sql, deps.control.rt.actor.actorId, owed.id)) return Effect.fail(failure);
 
-      if (claimed.held() && claimed.advance('refused', { detail: renderThrownChain({ cause: err }) })) {
-        return { step: 'planned', request: refinementRequestView(store.get(owed.id) ?? owed) };
-      }
+    if (claimed.held() && claimed.advance('refused', { detail })) {
+      return Effect.succeed({ step: 'planned', request: refinementRequestView(store.get(owed.id) ?? owed) });
     }
-
-    return laneHeld(deps, store, current, renderThrownChain({ cause: err }));
-  } finally {
-    // A claim left registered would make recovery skip a row nothing drives.
-    claimed.release();
   }
+
+  return Effect.succeed(laneHeld(deps, store, current, detail));
 }
 
 function laneHeld(deps: RefinementDeps, store: RefinementStore, request: RefinementRequest, detail: string): RefinementLaneStep {
@@ -231,78 +239,83 @@ function reviewedTrajectory(
  * stores the row cannot guard. `settleRoutes` runs right after `gated`, so fact-only proposals reach `applied` in the
  * same pass.
  */
-async function plan(
+function plan(
   deps: RefinementDeps,
   claim: RefinementClaim,
-): Promise<RefinementRequestView | null> {
-  const { request } = claim;
-  const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
+): Effect.Effect<RefinementRequestView | null, KinuError> {
+  return Effect.gen(function* () {
+    const { request } = claim;
+    const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
 
-  const view = (): RefinementRequestView =>
-    refinementRequestView(store.get(request.id) ?? request);
+    const view = (): RefinementRequestView =>
+      refinementRequestView(store.get(request.id) ?? request);
 
-  const refuse = (detail: string, rejected?: RefinementProposal): RefinementRequestView | null => {
-    let patch: SettleRefinementPatch = { detail };
+    const refuse = (detail: string, rejected?: RefinementProposal): RefinementRequestView | null => {
+      let patch: SettleRefinementPatch = { detail };
 
-    if (rejected !== undefined) patch = { ...patch, proposal: rejected, routes: [] };
+      if (rejected !== undefined) patch = { ...patch, proposal: rejected, routes: [] };
 
-    if (!claim.advance('refused', patch)) return null;
+      if (!claim.advance('refused', patch)) return null;
 
-    return view();
-  };
+      return view();
+    };
 
-  // A resumed claim reuses its plan; the on-disk writes belong to it.
-  let proposal = request.proposal;
+    // A resumed claim reuses its plan; the on-disk writes belong to it.
+    let proposal = request.proposal;
 
-  if (proposal === null) {
-    const answered = await askRefiner(deps, request);
+    if (proposal === null) {
+      const answered = yield* attempt({ doing: 'asking the refiner', otherwise: 'unavailable' }, () => askRefiner(deps, request));
 
-    // An evicted pass's refiner is still working; a later pass takes its answer.
-    if (answered === 'running') return null;
+      // An evicted pass's refiner is still working; a later pass takes its answer.
+      if (answered === 'running') return null;
 
-    if (!answered.ok) return refuse(answered.error);
-    proposal = answered.proposal;
-  }
-
-  if (proposal.scope !== request.scope) {
-    return refuse(
-      `the refiner proposed at ${proposal.scope} scope and this request is ${request.scope} scope — `
-      + (proposal.scope === 'account' ? ACCOUNT_SCOPE_REFUSAL : 'the scopes must match'),
-      proposal,
-    );
-  }
-
-  if (proposal.edits.length === 0) {
-    return refuse(`the refiner proposed no edits — ${proposal.summary}`, proposal);
-  }
-
-  // Persist the plan before any owner write; also the first claim fence.
-  if (request.proposal === null
-    && !claim.record({ proposal, detail: proposal.summary })) return null;
-
-  const reviewed = reviewedTrajectory(deps.control.sql, deps.control.rt.actor, request);
-  const routes: RefinementRoute[] = [];
-
-  for (const [index, edit] of proposal.edits.entries()) {
-    // Never re-route an owner-decided route: that would re-ask the owner and
-    // could un-apply a real promotion.
-    const decided = request.routes[index];
-
-    if (decided !== undefined && ownerHasDecided(decided)) {
-      routes.push(decided);
-      continue;
+      if (!answered.ok) return refuse(answered.error);
+      proposal = answered.proposal;
     }
 
-    if (!claim.held()) return null;
-    routes.push(await routeEdit(deps, { edit, request, reviewed }));
+    if (proposal.scope !== request.scope) {
+      return refuse(
+        `the refiner proposed at ${proposal.scope} scope and this request is ${request.scope} scope — `
+        + (proposal.scope === 'account' ? ACCOUNT_SCOPE_REFUSAL : 'the scopes must match'),
+        proposal,
+      );
+    }
 
-    // Persist after each route so a crash between owner writes keeps them recorded.
-    if (!claim.record({ routes })) return null;
-  }
+    if (proposal.edits.length === 0) {
+      return refuse(`the refiner proposed no edits — ${proposal.summary}`, proposal);
+    }
 
-  if (!claim.advance('gated', { routes, detail: proposal.summary })) return null;
+    // Persist the plan before any owner write; also the first claim fence.
+    if (request.proposal === null
+      && !claim.record({ proposal, detail: proposal.summary })) return null;
 
-  return await settleRoutes(deps, store.get(request.id) ?? request) ?? view();
+    const reviewed = reviewedTrajectory(deps.control.sql, deps.control.rt.actor, request);
+    const routes: RefinementRoute[] = [];
+
+    for (const [index, edit] of proposal.edits.entries()) {
+      // Never re-route an owner-decided route: that would re-ask the owner and
+      // could un-apply a real promotion.
+      const decided = request.routes[index];
+
+      if (decided !== undefined && ownerHasDecided(decided)) {
+        routes.push(decided);
+        continue;
+      }
+
+      if (!claim.held()) return null;
+      routes.push(yield* routeEdit(deps, { edit, request, reviewed }));
+
+      // Persist after each route so a crash between owner writes keeps them recorded.
+      if (!claim.record({ routes })) return null;
+    }
+
+    if (!claim.advance('gated', { routes, detail: proposal.summary })) return null;
+
+    const settled = yield* attempt({ doing: `settling refinement ${request.id}`, otherwise: 'unavailable' },
+      () => settleRoutes(deps, store.get(request.id) ?? request));
+
+    return settled ?? view();
+  });
 }
 
 type RefinerAnswer =
@@ -515,23 +528,23 @@ function renderReviewedTurn(row: TurnOutcomeRow, index: number): string {
 
 /** Hand one typed edit to its owning authority; the route stores only a pointer
  *  to the identity there, so the two rows cannot disagree. */
-async function routeEdit(
+function routeEdit(
   deps: RefinementDeps,
   input: {
     edit: RefinementEdit;
     request: RefinementRequest;
     reviewed: readonly TurnOutcomeRow[];
   },
-): Promise<RefinementRoute> {
+): Effect.Effect<RefinementRoute> {
   const { edit } = input;
 
-  try {
-    return await routeEditOnce(deps, input);
-  } catch (err) {
-    const [owner, target] = editOwnerAndTarget(edit);
+  return attempt({ doing: `routing the ${edit.kind} edit`, otherwise: 'io' }, () => routeEditOnce(deps, input)).pipe(
+    Effect.catch((failure) => Effect.sync((): RefinementRoute => {
+      const [owner, target] = editOwnerAndTarget(edit);
 
-    return { kind: edit.kind, owner, target, disposition: 'refused', reason: renderThrownChain({ cause: err }) };
-  }
+      return { kind: edit.kind, owner, target, disposition: 'refused', reason: renderThrownChain({ cause: failure }) };
+    })),
+  );
 }
 
 function editOwnerAndTarget(edit: RefinementEdit): readonly [string, string] {

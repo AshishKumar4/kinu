@@ -56,6 +56,7 @@ import {
 } from '../src/evolution/refinement-skill';
 import { refinementPass } from '../src/evolution/refinement-host';
 import { createMemoryVfs, createTestSql, present, unobservedSpend } from '@kinu.run/test-utils';
+import { renderThrownChain } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
 import { Database } from 'bun:sqlite';
 import {
@@ -404,6 +405,19 @@ async function gatheredSkillPaths(rt: AgentRuntime): Promise<string[]> {
   });
 
   return sources.filter((source) => source.kind === 'skill').map((source) => source.path);
+}
+
+/** A lane step rejects, and `cause` is somewhere in the chain it carries (the lane names its step around it). */
+async function failsFrom(pending: Promise<unknown>, cause: string): Promise<void> {
+  let chain = '';
+
+  try {
+    await pending;
+  } catch (thrown) {
+    chain = renderThrownChain({ cause: thrown });
+  }
+
+  expect(chain).toContain(cause);
 }
 
 describe('refinement request — durable, and behaviourally inert', () => {
@@ -1353,7 +1367,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
-    await expect(advanceRefinementLane(deps)).rejects.toThrow('the refiner host went away');
+    await failsFrom(advanceRefinementLane(deps), 'the refiner host went away');
     // Left claimed by a dead pass; no owner touched.
     expect(store.get(opened.id)?.stage).toBe('planning');
     expect(fx.facts.all()).toEqual([]);
@@ -2300,7 +2314,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     const dying = evictedAfterAssign(rail, evicted);
 
     const opened = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await expect(advanceRefinementLane(fx.deps(dying))).rejects.toThrow('the activation was evicted');
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
     expect(rail.roster.get(rail.helper)?.createdBy).toBe('evolution');
 
     let asks = 0;
@@ -2343,7 +2357,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     const dying = evictedAfterAssign(rail, evicted);
 
     await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await expect(advanceRefinementLane(fx.deps(dying))).rejects.toThrow('the activation was evicted');
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
     expect(owed()).toBeNull();
 
     const resumed = rail.port();
@@ -2366,7 +2380,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     const dying = evictedAfterAssign(rail, evicted);
 
     await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await expect(advanceRefinementLane(fx.deps(dying))).rejects.toThrow('the activation was evicted');
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
     await rail.deliver(rail.port(), proposalText(FACT_PROPOSAL));
     createRefinementStore(fx.rt.storage.sql, fx.rt.actor).open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 });
 
@@ -2380,7 +2394,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
     const dying = evictedAfterAssign(rail, rail.port());
     await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await expect(advanceRefinementLane(fx.deps(dying))).rejects.toThrow('the activation was evicted');
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
     const resumed = rail.port();
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
     expect(owed()).not.toBeNull();
@@ -2388,7 +2402,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     // Taking the request throws, outside every catch the routing has.
     fx.db.run(`CREATE TRIGGER refuse_claim BEFORE UPDATE ON refinement_requests
       BEGIN SELECT RAISE(ABORT, 'the request table refused the write'); END`);
-    await expect(refinementPass(fx.deps(resumed))).rejects.toThrow('the request table refused the write');
+    await failsFrom(refinementPass(fx.deps(resumed)), 'the request table refused the write');
     expect(owed()).toBeNull();
 
     // A pass that completes lifts the hold and routes the answer.
@@ -2406,7 +2420,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     const dying = evictedAfterAssign(rail, rail.port());
 
     const answered = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await expect(advanceRefinementLane(fx.deps(dying))).rejects.toThrow('the activation was evicted');
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
     const resumed = rail.port();
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
     const stuck = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 }).request;

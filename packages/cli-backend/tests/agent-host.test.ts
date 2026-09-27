@@ -1451,9 +1451,11 @@ describe('LocalAgentHost', () => {
     host.subscribe((agent, event) => {
       if (agent !== 'root' && event.type === 'turn-end') answered.resolve();
     });
+    // No daemon pass runs here: only the answer's own wake can route it.
     await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
     await answered.promise;
-    // No daemon pass runs here, and close() joins the pass the answer started.
+
+    for (let lap = 0; lap < 1000 && stage() === 'requested'; lap++) await new Promise((resolve) => { setImmediate(resolve); });
     await host.close();
 
     expect(stage()).not.toBe('requested');

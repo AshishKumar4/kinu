@@ -104,7 +104,7 @@ import { TierIdSchema,
   type GepaOptimizationResult, type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
   type ShadowStatus,
-  decideRefinementRoute, evolutionAnswerPass, listRefinements, refinementPass, requestOwnerRefinement,
+  decideRefinementRoute, evolutionAnswerWake, listRefinements, refinementPass, requestOwnerRefinement,
   showRefinementRoute, type RefinementLaneStep,
   type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
@@ -2301,7 +2301,9 @@ export class LocalAgentSession {
 
   /** A stored refiner answer's pass, on core's one rule; every daemon pass also runs the lane. */
   async runEvolutionAnswer(now: number): Promise<void> {
-    const step = await evolutionAnswerPass(this.refinementDeps, now);
+    const step = await evolutionAnswerWake(this.refinementDeps, now, (failure) => {
+      diagnostics.failure('refinement.answer_wake_failed', failure);
+    });
 
     if (step) this.announceRefinement(step);
   }

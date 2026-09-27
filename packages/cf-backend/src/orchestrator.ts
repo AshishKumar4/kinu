@@ -96,7 +96,7 @@ import {
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
   previewScaffoldLive, runScaffoldCaptureText, runScaffoldGepaOptimization,
   advancePromptSectionLane,
-  decideRefinementRoute, evolutionAnswerPass, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
+  decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementRequestView, type RefinementScope,
@@ -3194,14 +3194,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       });
 
       await tick.span('alarm.evolution_answer', async (span) => {
-        try {
-          span.setAttribute('kinu.evolution_answer_due', (await evolutionAnswerPass(this.refinementDeps, now)) !== null);
-        } catch (err) {
-          const failure = toKinuError({ doing: 'routing a refiner answer this wake was armed for', cause: err, otherwise: 'unavailable' });
+        let failed = false;
 
+        const step = await evolutionAnswerWake(this.refinementDeps, now, (failure) => {
+          failed = true;
           span.fail(failure);
           diagnostics.failure('refinement.answer_wake_failed', failure);
-        }
+        });
+
+        if (!failed) span.setAttribute('kinu.evolution_answer_due', step !== null);
       });
 
       // Durable re-drive of pending outbound peer messages (eviction recovery and backoff retries).
