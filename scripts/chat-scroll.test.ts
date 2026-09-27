@@ -102,36 +102,39 @@ async function probe(page: Page): Promise<Probe> {
   return v.parse(ProbeSchema, JSON.parse(await page.$eval(PROBE, (el) => el.textContent ?? 'null')));
 }
 
+/** Animation frames in a row with nothing in flight and nothing changing before a wait counts as stalled. */
+const IDLE_FRAMES = 60;
+
 /**
- * A predicate over the probe, run in the browser.
+ * Waits for a predicate over the probe, run in the browser each frame, or for the frame to go still: no request in
+ * flight and the probe unchanged for {@link IDLE_FRAMES} frames. A still frame fails the step named `step`, so a hook
+ * that stops asking ends its scenario with a reason instead of hanging the suite to the ladder's deadline.
  *
- * The condition is a string of JS rather than a closure because it executes in
- * the page, where the schema does not exist; `probe()` above is what pins the
- * shape, and every field these conditions name is one it parses.
+ * The condition is a string of JS rather than a closure because it executes in the page, where the schema does not
+ * exist; `probe()` above is what pins the shape, and every field these conditions name is one it parses.
  */
-async function untilProbe(page: Page, condition: string): Promise<void> {
-  await page.waitForFunction(
-    `(() => { const el = document.querySelector('${PROBE}');
-       if (!el || !el.textContent) return false;
-       const state = JSON.parse(el.textContent);
-       return Boolean(${condition}); })()`,
-    { polling: 50 },
-  );
-}
+async function untilProbe(page: Page, condition: string, step: string): Promise<void> {
+  const met = `(() => { const el = document.querySelector('${PROBE}');
+    if (!el || !el.textContent) return false;
+    const state = JSON.parse(el.textContent);
+    return Boolean(${condition}); })()`;
 
-/** Probe reads in a row with nothing in flight before a walk that has not met its condition counts as stalled. */
-const IDLE_READS = 10;
-
-/** {@link untilProbe}, ended too by a walk that stalls, so a hook that stops asking fails its step instead of
- *  hanging the suite; the caller checks which of the two ended it. */
-async function untilProbeOrIdle(page: Page, condition: string): Promise<void> {
-  await page.evaluate(() => { delete document.documentElement.dataset.probeIdle; });
-  await untilProbe(page, `(${condition}) || (() => {
+  await page.evaluate(() => { delete document.documentElement.dataset.probeIdle; delete document.documentElement.dataset.probeLast; });
+  await page.waitForFunction(`(() => {
+    if (${met}) return true;
+    const text = document.querySelector('${PROBE}')?.textContent ?? '';
     const tally = document.documentElement.dataset;
-    const idle = state.loading ? 0 : Number(tally.probeIdle ?? 0) + 1;
+    const loading = text !== '' && JSON.parse(text).loading === true;
+    const idle = loading || tally.probeLast !== text ? 0 : Number(tally.probeIdle ?? 0) + 1;
+    tally.probeLast = text;
     tally.probeIdle = String(idle);
-    return idle >= ${IDLE_READS};
-  })()`);
+    return idle >= ${IDLE_FRAMES};
+  })()`, { polling: 'raf' });
+
+  if (await page.evaluate(met) === true) return;
+  const state = await probe(page);
+
+  throw new Error(`${step}: the frame went still (loading=${state.loading}, exhausted=${state.exhausted}, calls=${state.calls.length}, rows=${state.ids.length})`);
 }
 
 /** A gallery frame, loaded twice: a first load can trip vite's dependency
@@ -154,8 +157,8 @@ async function openFrame(newPage: Gallery['newPage'], origin: string, query: str
 }
 
 /** Wait until the frame is settled: nothing in flight, and the first page in. */
-async function settled(page: Page): Promise<void> {
-  await untilProbe(page, 'state.loading === false && state.calls.length > 0');
+async function settled(page: Page, step: string): Promise<void> {
+  await untilProbe(page, 'state.loading === false && state.calls.length > 0', step);
 }
 
 /** The scroller and one anchor row, before a page lands. `id` and `top` are
@@ -231,9 +234,7 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
   // it, and waiting for a second one waits for a page a correct hook never
   // asks for.
 
-  await untilProbeOrIdle(page, `state.ids.length > ${before.rows} && state.loading === false`);
-
-  if ((await probe(page)).ids.length <= before.rows) throw new Error('no older page landed: the walk stopped asking');
+  await untilProbe(page, `state.ids.length > ${before.rows} && state.loading === false`, 'no older page landed');
   // The page has landed in state; the correction is a layout effect, so let the
   // browser commit a frame before measuring where anything is.
   await page.evaluate(() => {
@@ -404,9 +405,9 @@ async function measureWalk(newPage: Gallery['newPage'], origin: string): Promise
     // Asserted rather than assumed: the live rows alone, with the first page
     // still in flight. A measurement taken after it landed would report zero
     // drift for the trivial reason that nothing moved while we watched.
-    await untilProbe(page, 'state.loading === true && state.ids.length === 3');
+    await untilProbe(page, 'state.loading === true && state.ids.length === 3', 'the edge gesture asked for no first page');
     const firstPage = await prependStep(page, false);
-    await settled(page);
+    await settled(page, 'the first page never settled');
     const firstRows = await page.$$eval('[data-msg]', (rows) => rows.length);
     const prepends: Prepend[] = [];
 
@@ -436,13 +437,13 @@ async function measureRace(newPage: Gallery['newPage'], origin: string): Promise
     // the frame's live rows overflow past the prefetch band, so nothing asks
     // on its own.
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
-    await settled(page);
+    await settled(page, 'the first page never settled');
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
-    await untilProbe(page, 'state.loading === true');
+    await untilProbe(page, 'state.loading === true', 'the edge gesture asked for no second page');
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent('gallery:arrive', { detail: 'race-1' }));
     });
-    await settled(page);
+    await settled(page, 'the page in flight never settled beside the live arrival');
     const ids = (await probe(page)).ids;
     const seen = new Set<string>();
 
@@ -461,7 +462,7 @@ async function measureBroken(newPage: Gallery['newPage'], origin: string): Promi
     // The edge gesture asks for the page — and this stub fails the FIRST
     // request, so the drive is what produces the error the scenario measures.
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
-    await untilProbeOrIdle(page, 'state.error !== null');
+    await untilProbe(page, 'state.error !== null', 'the failing page never surfaced its error');
     const failed = await probe(page);
     const boundary = await page.$eval(SCROLL, (el) => el.firstElementChild?.textContent ?? '');
     // The harness clears its own failure after one throw, so the retry the
@@ -470,8 +471,8 @@ async function measureBroken(newPage: Gallery['newPage'], origin: string): Promi
       const button = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Retry');
       button?.click();
     });
-    await untilProbeOrIdle(
-      page, 'state.error === null && state.loading === false && state.ids.length > 3');
+    await untilProbe(
+      page, 'state.error === null && state.loading === false && state.ids.length > 3', 'Retry never recovered the walk');
 
     return { refused: null, failed, boundary, retried: await probe(page) };
   } catch (err) {
@@ -487,7 +488,7 @@ async function measureWalked(newPage: Gallery['newPage'], origin: string): Promi
   try {
     // depth=1 still needs the edge gesture to start the walk at all.
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
-    await untilProbeOrIdle(page, 'state.exhausted === true');
+    await untilProbe(page, 'state.exhausted === true', 'the walk never reached the start');
 
     return {
       refused: null,
@@ -512,6 +513,8 @@ const LONG = '.p-thread-column.overflow-y-auto';
 async function paintedFrames(page: Page, drive: () => Promise<void>): Promise<LongFrame[]> {
   const recording = page.evaluate((selector) => new Promise<unknown[]>((resolve, reject) => {
     const scroller = document.querySelector<HTMLElement>(selector);
+
+    document.documentElement.dataset.probeRecording = '';
 
     if (scroller === null) {
       reject(new Error(`no ${selector} to record`));
@@ -565,10 +568,10 @@ async function paintedFrames(page: Page, drive: () => Promise<void>): Promise<Lo
       rows.disconnect();
       resolve(frames);
     }, { once: true });
-    document.documentElement.dataset.probeRecording = '';
   }), LONG);
 
-  await page.waitForFunction(() => document.documentElement.dataset.probeRecording !== undefined);
+  // The flag is set before any refusal, so a recorder that cannot start ends this wait and rejects here.
+  await Promise.race([recording.then(() => undefined), page.waitForFunction(() => document.documentElement.dataset.probeRecording !== undefined)]);
 
   try {
     await drive();
@@ -582,30 +585,39 @@ async function paintedFrames(page: Page, drive: () => Promise<void>): Promise<Lo
   return v.parse(v.array(LongFrameSchema), await recording);
 }
 
-/** Painted frames with no "Loading earlier messages" line in a row before a walk counts as stalled. */
-const IDLE_FRAMES = 10;
+type LongGoal = { readonly kind: 'rowsAbove'; readonly rows: number } | { readonly kind: 'start' | 'quiet' };
 
 /**
- * Resolves once older history has landed (rows beyond `rowsBefore`, or the conversation's start when it is null), or
- * once the chat has shown no loading line for {@link IDLE_FRAMES} frames running: a walk that stalls ends the wait,
- * and the caller reports it, rather than the suite hanging to its deadline.
+ * Waits for the long chat to reach `goal` (rows beyond a count, the conversation's start, or no loading line), or to
+ * go still: rows, heights, scroll position and loading line unchanged for {@link IDLE_FRAMES} frames. A held page
+ * that never lands is still, whatever its line says. A still chat fails the step named `step`.
  */
-async function untilLandedOrIdle(page: Page, rowsBefore: number | null): Promise<void> {
-  await page.evaluate(() => { delete document.documentElement.dataset.probeIdle; });
-  await page.waitForFunction((selector, before, idleFrames) => {
-    const scroller = document.querySelector<HTMLElement>(selector);
-    const tally = document.documentElement.dataset;
+async function untilLong(page: Page, goal: LongGoal, step: string): Promise<void> {
+  const done = goal.kind === 'rowsAbove' ? `scroller.children.length > ${goal.rows}`
+    : { start: "text.includes('Beginning of the conversation')", quiet: "!text.includes('Loading earlier messages')" }[goal.kind];
 
-    if (scroller === null) return true;
+  const reached = `(() => { const scroller = document.querySelector('${LONG}');
+    if (scroller === null) return false;
     const text = scroller.textContent ?? '';
+    return ${done}; })()`;
 
-    if (before === null ? text.includes('Beginning of the conversation') : scroller.children.length > before) return true;
-    const idle = text.includes('Loading earlier messages') ? 0 : Number(tally.probeIdle ?? 0) + 1;
-
+  await page.evaluate(() => { delete document.documentElement.dataset.probeIdle; delete document.documentElement.dataset.probeLast; });
+  await page.waitForFunction(`(() => {
+    if (${reached}) return true;
+    const scroller = document.querySelector('${LONG}');
+    const tally = document.documentElement.dataset;
+    const signature = scroller === null ? '' : [scroller.children.length, scroller.scrollHeight, scroller.scrollTop,
+      (scroller.textContent ?? '').includes('Loading earlier messages')].join();
+    const idle = tally.probeLast === signature ? Number(tally.probeIdle ?? 0) + 1 : 0;
+    tally.probeLast = signature;
     tally.probeIdle = String(idle);
+    return idle >= ${IDLE_FRAMES};
+  })()`, { polling: 'raf' });
 
-    return idle >= idleFrames;
-  }, { polling: 'raf' }, LONG, rowsBefore, IDLE_FRAMES);
+  if (await page.evaluate(reached) === true) return;
+  const at = await page.$eval(LONG, (el) => `rows=${el.children.length}, scrollTop=${Math.round(el.scrollTop)}, loading=${(el.textContent ?? '').includes('Loading earlier messages')}`);
+
+  throw new Error(`${step}: the chat went still (${at})`);
 }
 
 /** Resolves on the page's next two animation frames: whatever was committed has been painted. */
@@ -636,7 +648,7 @@ async function stillReaderLandings(newPage: Gallery['newPage'], origin: string, 
   const held = await openLong(newPage, origin, `${query}&historyHold=1`);
 
   await held.evaluate(() => { window.dispatchEvent(new Event('gallery:release-page')); });
-  await held.waitForFunction((selector) => !(document.querySelector(selector)?.textContent ?? '').includes('Loading earlier messages'), {}, LONG);
+  await untilLong(held, { kind: 'quiet' }, `the first held page never settled (${query})`);
 
   for (let landing = 0; landing < 2; landing++) {
     // The reader stands on a real row just below the reserve, which asks for the next page; it is held.
@@ -659,12 +671,10 @@ async function stillReaderLandings(newPage: Gallery['newPage'], origin: string, 
     into.push(await paintedFrames(held, async () => {
       await nextPaint(held);
       await held.evaluate(() => { window.dispatchEvent(new Event('gallery:release-page')); });
-      await untilLandedOrIdle(held, before);
+      await untilLong(held, { kind: 'rowsAbove', rows: before }, `older page ${landing + 1} never landed under a still reader (${query})`);
       await nextPaint(held);
       await nextPaint(held);
     }));
-
-    if (await held.$eval(LONG, (el) => el.children.length) <= before) throw new Error(`older page ${landing + 1} never landed under a still reader (${query})`);
   }
 
   await held.close();
@@ -706,7 +716,7 @@ async function measureLong(newPage: Gallery['newPage'], origin: string): Promise
     reservedBeforeDrag = await dragged.$eval(LONG, (el) => el.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0);
     drag = await paintedFrames(dragged, async () => {
       await dragged.$eval(LONG, (el) => { el.scrollTop = 0; });
-      await untilLandedOrIdle(dragged, null);
+      await untilLong(dragged, { kind: 'start' }, 'the drag to the top never reached the first row');
       await nextPaint(dragged);
     });
     await dragged.close();
