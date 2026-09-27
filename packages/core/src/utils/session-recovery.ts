@@ -5,7 +5,8 @@
  */
 
 import * as v from "valibot";
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, renderThrownChain, settle, toKinuError } from '../obs/index';
 
 /** The agents SDK's verbatim timeout rejection. A fast rejection is proof of life. */
 const RPC_TIMEOUT_PATTERN = /^RPC call to .+ timed out after \d+ms$/;
@@ -132,18 +133,19 @@ function isTolerableHealthFailure(input: { cause: unknown }): boolean {
 
 /** The deployed build sha from the health endpoint, or null when none is stamped or the read failed tolerably. */
 export async function fetchDeployedBuildSha(): Promise<string | null> {
-  try {
-    const res = await fetch("/api/health", { signal: AbortSignal.timeout(HEALTH_READ_TIMEOUT_MS) });
+  return settle(Effect.tryPromise({ try: readHealthBuildSha, catch: (cause) => ({ cause }) }).pipe(
+    Effect.catchIf(isTolerableHealthFailure, () => Effect.succeed(null)),
+    Effect.catch((failed) => Effect.die(failed.cause)),
+  ));
+}
 
-    if (!res.ok) return null;
-    const parsed = v.safeParse(HealthBodySchema, await res.json());
+async function readHealthBuildSha(): Promise<string | null> {
+  const res = await fetch("/api/health", { signal: AbortSignal.timeout(HEALTH_READ_TIMEOUT_MS) });
 
-    return parsed.success ? parsed.output.build?.sha ?? null : null;
-  } catch (cause) {
-    if (!isTolerableHealthFailure({ cause })) throw cause;
+  if (!res.ok) return null;
+  const parsed = v.safeParse(HealthBodySchema, await res.json());
 
-    return null;
-  }
+  return parsed.success ? parsed.output.build?.sha ?? null : null;
 }
 
 let pageBuild: Promise<string | null> | null = null;

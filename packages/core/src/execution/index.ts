@@ -105,7 +105,7 @@ export {
 } from './nimbus';
 
 export {
-  createParentExecutor, createParentWorkspaceVfs,
+  answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentExecResult,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './parent';
