@@ -1,8 +1,8 @@
 /** Staged derivation: a streamed token re-folds only the live window. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as v from "valibot";
 import {
-  EMPTY_TRANSCRIPT_FOLD, ChatHistoryEntrySchema, extendTranscript, pageSchema,
+  EMPTY_TRANSCRIPT_FOLD, ChatHistoryEntrySchema, extendTranscript, pageSchema, unreadRows,
   restoredRows, sealTranscript,
   type ChatHistoryEntry, type InlineSteer, type Transcript,
 } from "@kinu.run/core";
@@ -14,12 +14,13 @@ import type { Rpc } from "@kinu.run/core";
 const CHAT_PAGE_SIZE = 40;
 
 /** `metadata` must be declared: `v.object` drops undeclared keys, and panes read the author stamp from it. */
-const ChatHistoryPageSchema = pageSchema(ChatHistoryEntrySchema);
+const ChatHistoryPageSchema = v.intersect([pageSchema(ChatHistoryEntrySchema), v.object({ walked: v.number() })]);
 
 export interface ChatThread {
   readonly history: PagedScroll<ChatHistoryEntry>;
   readonly transcript: readonly UIMessage[];
   readonly thread: Transcript;
+  readonly unread: number;
 }
 
 const NO_IDS: ReadonlySet<string> = new Set();
@@ -35,6 +36,7 @@ export interface ChatThreadInput {
   readonly steerRuns?: readonly InlineSteer[];
   /** Omitted: workspace pane. String: actor pane. Null: actor not known yet, so the walk waits. */
   readonly actor?: string | null;
+  readonly total?: number | undefined;
 }
 
 const NO_MESSAGES: readonly UIMessage[] = [];
@@ -57,7 +59,7 @@ function slideWindow(prev: Slide, next: readonly UIMessage[]): Slide {
 }
 
 export function useChatThread({
-  rpc, live: frame, seeded, steerRuns = NO_STEER_RUNS, actor,
+  rpc, live: frame, seeded, steerRuns = NO_STEER_RUNS, actor, total,
 }: ChatThreadInput): ChatThread {
   const [slide, setSlide] = useState<Slide>(() => ({ live: frame, slid: NO_MESSAGES, gaps: 0 }));
   const current = slideWindow(slide, frame);
@@ -74,13 +76,12 @@ export function useChatThread({
   const history = usePagedScroll<ChatHistoryEntry>({
     grows: "up",
     fetchPage: useCallback(
-      (cursor) => rpc<unknown>("getChatHistoryPage", [
-        actor === undefined || actor === null
-          ? { cursor, limit: CHAT_PAGE_SIZE }
-          : { cursor, limit: CHAT_PAGE_SIZE, actor },
+      (cursor, limit) => rpc<unknown>("getChatHistoryPage", [
+        actor === undefined || actor === null ? { cursor, limit } : { cursor, limit, actor },
       ]).then((page) => v.parse(ChatHistoryPageSchema, page)),
       [rpc, actor],
     ),
+    pageSize: CHAT_PAGE_SIZE,
     startFrom: useCallback(
       () => actor === null ? null : walkStart(oldest, seeded),
       [actor, oldest, seeded]),
@@ -92,8 +93,26 @@ export function useChatThread({
     if (current.gaps > 0) reset();
   }, [current.gaps, reset]);
 
-  // Row identities are minted once per page, so memo(MessageView) holds across ticks.
-  const restored = useMemo(() => restoredRows(history.fetched), [history.fetched]);
+
+  // Minted once per entry, so a prepended page renders its own rows, not every row below.
+  const minted = useRef(new WeakMap<ChatHistoryEntry, UIMessage>());
+
+  const restored = useMemo(() => {
+    const seen = new Set<string>();
+    const rows: UIMessage[] = [];
+
+    for (const entry of history.fetched) {
+      if (seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      const row = minted.current.get(entry) ?? restoredRows([entry])[0];
+
+      if (row === undefined) continue;
+      minted.current.set(entry, row);
+      rows.push(row);
+    }
+
+    return rows;
+  }, [history.fetched]);
 
   const liveIdsKey = useMemo(() => live.map((message) => message.id).join("\n"), [live]);
 
@@ -116,5 +135,7 @@ export function useChatThread({
     () => sealTranscript(extendTranscript(olderFold, live), steerRuns),
     [olderFold, live, steerRuns]);
 
-  return { history, transcript, thread };
+  const unread = unreadRows({ total, walked: history.walked, shown: history.fetched.length, live: live.length, exhausted: history.exhausted });
+
+  return { history, transcript, thread, unread };
 }

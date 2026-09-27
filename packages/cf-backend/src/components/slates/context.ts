@@ -4,6 +4,7 @@ import type { Rpc } from "@kinu.run/core";
 /** The chat's inline previews, so each sees a later one of its slate. */
 export class SlatePreviews {
   private readonly cards = new Map<string, Set<Element>>();
+  private readonly latest = new Map<string, Element>();
   private readonly listeners = new Set<() => void>();
 
   /** Lists a preview; the returned function takes it off. */
@@ -12,11 +13,11 @@ export class SlatePreviews {
 
     cards.add(card);
     this.cards.set(slate, cards);
-    this.changed();
+    this.settle(slate);
 
     return () => {
       cards.delete(card);
-      this.changed();
+      this.settle(slate);
     };
   }
 
@@ -28,16 +29,23 @@ export class SlatePreviews {
 
   /** Whether a preview later in the document shows the same slate. */
   superseded(slate: string, card: Element | null): boolean {
-    if (card === null) return false;
+    const latest = this.latest.get(slate);
 
-    for (const other of this.cards.get(slate) ?? []) {
-      if (other !== card && (card.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return true;
-    }
-
-    return false;
+    return card !== null && latest !== undefined && latest !== card;
   }
 
-  private changed(): void {
+  private settle(slate: string): void {
+    let latest: Element | undefined;
+
+    for (const card of this.cards.get(slate) ?? []) {
+      if (latest === undefined || (latest.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) latest = card;
+    }
+
+    if (latest === this.latest.get(slate)) return;
+
+    if (latest === undefined) this.latest.delete(slate);
+    else this.latest.set(slate, latest);
+
     for (const listener of this.listeners) listener();
   }
 }

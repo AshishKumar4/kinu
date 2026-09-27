@@ -12,8 +12,10 @@ export interface PagedScroll<Item> {
   error: string | null;
   /** A page said it was the last one. Never set by a failure. */
   exhausted: boolean;
-  /** Idempotent while a fetch is in flight; safe to call on every scroll tick. */
-  loadMore: () => void;
+  /** Stored entries the published pages span. */
+  walked: number;
+  /** Idempotent while a fetch is in flight. */
+  loadMore: (urgent?: boolean) => void;
   /** Bumps the generation so an in-flight page from the old walk is discarded. */
   reset: () => void;
 }
@@ -21,7 +23,8 @@ export interface PagedScroll<Item> {
 export interface PagedScrollOptions<Item> {
   /** Matches `useGrowingScroll`'s `grows`. */
   grows: "up" | "down";
-  fetchPage: (cursor: SeekCursor | undefined) => Promise<Page<Item>>;
+  fetchPage: (cursor: SeekCursor | undefined, limit: number) => Promise<Page<Item> & { readonly walked?: number }>;
+  pageSize?: number;
   /**
    * A thunk: the chat's first anchor is unknown until the socket delivers the live list.
    * `"newest"` means no anchor; `null` means not ready, ask again.
@@ -42,17 +45,22 @@ interface PageLoadOperation {
   promise: Promise<void> | null;
 }
 
+const MAX_PAGE = 200;
+
+const CHAINED_MS = 100;
+
 export function usePagedScroll<Item>({
-  grows, fetchPage, startFrom,
+  grows, fetchPage, startFrom, pageSize = 40,
 }: PagedScrollOptions<Item>): PagedScroll<Item> {
   const [fetched, setFetched] = useState<readonly Item[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
+  const [walked, setWalked] = useState(0);
 
   // A ref, not state: several scroll handlers in one frame would all read the uncommitted `false`.
   const inFlight = useRef(false);
-  // Abandoned generations stay owned until settled; StrictMode retires the first walk while its request is pending.
+  // Abandoned walks stay owned until settled: StrictMode retires the first mid-request.
   const nextTaskId = useRef(0);
   const loadTasks = useRef(new Map<number, PageLoadOperation>());
   const cursor = useRef<SeekCursor | null>(null);
@@ -60,6 +68,7 @@ export function usePagedScroll<Item>({
   const walk = useRef(0);
   const latest = useRef({ fetchPage, startFrom });
   latest.current = { fetchPage, startFrom };
+  const size = useRef({ limit: pageSize, landedAt: -Infinity });
 
   // Unmount retires the generation so a late page cannot publish.
   useEffect(() => () => {
@@ -69,12 +78,19 @@ export function usePagedScroll<Item>({
 
   const ready = cursor.current !== null || startFrom() !== null;
 
-  const loadMore = useCallback(() => {
+  const loadMore = useCallback((urgent = false) => {
     if (inFlight.current || exhausted) return;
     const from = cursor.current ?? latest.current.startFrom();
 
     if (from === null) return;
     const generation = walk.current;
+    const chained = performance.now() - size.current.landedAt < CHAINED_MS;
+    let limit = pageSize;
+
+    if (urgent) limit = MAX_PAGE;
+    else if (chained) limit = Math.min(MAX_PAGE, size.current.limit * 2);
+
+    size.current.limit = limit;
     inFlight.current = true;
     setLoading(true);
     const taskId = ++nextTaskId.current;
@@ -85,10 +101,11 @@ export function usePagedScroll<Item>({
       let thrown: { cause: unknown } | null = null;
 
       try {
-        const page = await latest.current.fetchPage(from === "newest" ? undefined : from);
+        const page = await latest.current.fetchPage(from === "newest" ? undefined : from, limit);
 
         if (generation !== walk.current) return;
         setFetched((prev) => grows === "up" ? [...page.items, ...prev] : [...prev, ...page.items]);
+        setWalked((prev) => prev + (page.walked ?? page.items.length));
         setError(null);
 
         if (page.status === "end") setExhausted(true);
@@ -100,6 +117,7 @@ export function usePagedScroll<Item>({
 
         if (generation === walk.current) {
           inFlight.current = false;
+          size.current.landedAt = performance.now();
           setLoading(false);
         }
       }
@@ -107,7 +125,7 @@ export function usePagedScroll<Item>({
       if (thrown !== null && generation === walk.current) setError(describeError(thrown));
     })();
     // A new identity once startable, so the scroller re-asks.
-  }, [grows, exhausted, ready]);
+  }, [grows, exhausted, ready, pageSize]);
 
   const reset = useCallback(() => {
     walk.current += 1;
@@ -115,10 +133,11 @@ export function usePagedScroll<Item>({
     inFlight.current = false;
     cursor.current = null;
     setFetched([]);
+    setWalked(0);
     setLoading(false);
     setError(null);
     setExhausted(false);
   }, []);
 
-  return { fetched, loading, error, exhausted, loadMore, reset };
+  return { fetched, loading, error, exhausted, walked, loadMore, reset };
 }
