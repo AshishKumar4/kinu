@@ -15,7 +15,8 @@ import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/cor
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SUPERVISOR_OPS, type SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import type { ObjectNamespace } from '@kinu.run/core';
+import type { MountedVfs, ObjectNamespace } from '@kinu.run/core';
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
 import { clearPortCapability, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
@@ -125,7 +126,7 @@ function servesOp(envelope: WireSupervisorEnvelope): envelope is SupervisorOpEnv
 
 export interface HostedWorkspace {
   readonly bundle: WorkspaceBundle;
-  /** Cached by `shellId`: a named shell holds its own cwd and exported variables. */
+  /** A stateless view: the named shell's cwd and exported variables live in the runtime, keyed by `shellId`. */
   box(shellId: string): NimbusSandboxHandle;
   /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a
      *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. */
@@ -344,7 +345,6 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
   };
 
   const files = workspaceBoxFiles(async () => (await bundle.session()).vfs);
-  const boxes = new Map<string, NimbusSandboxHandle>();
 
   return {
     bundle,
@@ -355,20 +355,10 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
       return (await runtime()).supervisorOp(envelope);
     },
-    box(shellId) {
-      const held = boxes.get(shellId);
-
-      if (held) return held;
-
-      const built = workspaceBox({
-        runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
-        mountTable: (plane, cred) => { bundle.mountTable(plane, cred); },
-      });
-
-      boxes.set(shellId, built);
-
-      return built;
-    },
+    box: (shellId) => workspaceBox({
+      runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
+      mountTable: (plane, cred) => bundle.mountTable(plane, cred),
+    }),
     facetManager: async () => (await compose()).facets,
     ports: async () => (await compose()).ports,
     terminal: async () => {
@@ -545,4 +535,13 @@ function workspaceBox(deps: {
     },
     mountTable: deps.mountTable,
   };
+}
+
+/** An actor with no uid of its own (a branch) has no shell, so it must not take the session user's table. */
+export function mountActorFiles(
+  box: Pick<NimbusSandboxHandle, 'mountTable'>, files: MountedVfs, owner: { readonly rootActor: boolean; readonly cred: VfsCred | undefined },
+): (() => void) | undefined {
+  if (!owner.rootActor && owner.cred === undefined) return undefined;
+
+  return box.mountTable?.(files, owner.cred);
 }

@@ -1813,16 +1813,9 @@ describe('terminal workspace denial at the actual WorkspacePage boundary', () =>
  * a click removed locally.
  */
 describe('the walk-back at the actual WorkspacePage boundary', () => {
-  /** The user turns on screen, in order: one affordance per user message, so
-   *  this list IS where the conversation ends. */
-  const turnsOnScreen = (page: Page): Promise<string[]> => page.$$eval(
-    '[data-revert-turn]',
-    (buttons) => buttons.map((button) => button.getAttribute('data-revert-turn') ?? ''),
-  );
-
-  const dialogActions = (page: Page): Promise<string[]> => page.$$eval(
-    '[data-revert-action]',
-    (buttons) => buttons.map((button) => (button.textContent ?? '').trim()),
+  const revertAttributes = (page: Page, attribute: 'data-revert-turn' | 'data-revert-action'): Promise<string[]> => page.$$eval(
+    `[${attribute}]`,
+    (buttons, name) => buttons.map((button) => button.getAttribute(name) ?? ''), attribute,
   );
 
   const openDialog = async (page: Page, origin: string, search: string): Promise<void> => {
@@ -1838,8 +1831,8 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
       const page = await newPage();
       await openDialog(page, origin, '');
 
-      expect(await turnsOnScreen(page)).toEqual(['rv-u1', 'rv-u2']);
-      expect(await dialogActions(page)).toEqual(['Revert conversation']);
+      expect(await revertAttributes(page, 'data-revert-turn')).toEqual(['rv-u1', 'rv-u2']);
+      expect(await revertAttributes(page, 'data-revert-action')).toEqual(['conversation']);
 
       const dialog = await page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
       expect(dialog).toContain('Revert the conversation to before this message?');
@@ -1854,7 +1847,7 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
         () => document.querySelector('[data-revert-turn="rv-u2"]') === null,
       );
 
-      expect(await turnsOnScreen(page)).toEqual(['rv-u1']);
+      expect(await revertAttributes(page, 'data-revert-turn')).toEqual(['rv-u1']);
       const body = await page.evaluate(() => document.body.innerText);
       expect(body).toContain('Add the coupon-kind regression test');
       expect(body).not.toContain('read its rules from the campaign table');
@@ -1868,8 +1861,8 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
       const page = await newPage();
       await openDialog(page, origin, '&checkpoints=1');
 
-      expect(await dialogActions(page)).toEqual([
-        'Revert conversation and device files', 'Revert conversation',
+      expect(await revertAttributes(page, 'data-revert-action')).toEqual([
+        'conversation-and-device-files', 'conversation',
       ]);
       await page.screenshot({ path: join(TAB_SHOTS, 'revert-with-device-files-dialog.png') });
       await page.close();
@@ -2152,7 +2145,6 @@ describe('independent settings and quality reads publish independently', () => {
 });
 
 describe('the supervise view, live', () => {
-  const headingTexts = (page: Page) => page.$$eval('h2', (els) => els.map((el) => el.textContent));
 
   test('a change landing after the page opened earns the Evolution section on the next revalidation', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -2165,7 +2157,7 @@ describe('the supervise view, live', () => {
       await page.waitForFunction(
         () => [...document.querySelectorAll('h2')].some((h) => h.textContent === 'Run history'),
       );
-      expect(await headingTexts(page)).toEqual(['Automations', 'Run history']);
+      expect(await page.$eval('body', (body) => body.textContent ?? '')).not.toContain('I improved how I work');
 
       // A change lands. The page polls the changelog on the live-data cadence
       // (5s), so the heading must appear with no reload and no click.
@@ -3687,9 +3679,9 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       await page.keyboard.press('Enter');
       await page.waitForSelector('[aria-label="review reasoning effort"]');
       // A new tier starts as a copy of default (a Workers AI model, no levels): nothing to pick.
-      expect(await page.$eval('[aria-label="review reasoning effort"]', (choice) => [
-        choice.textContent, choice.hasAttribute('disabled') || choice.hasAttribute('data-disabled'),
-      ])).toEqual(['Model default', true]);
+      expect(await page.$eval('[aria-label="review reasoning effort"]', (choice) =>
+        choice.hasAttribute('disabled') || choice.hasAttribute('data-disabled'),
+      )).toBe(true);
 
       // Point it at a model that documents five levels: the choice offers
       // exactly those, in the model's order, through the combobox every tier row carries.

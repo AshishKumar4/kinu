@@ -1,79 +1,14 @@
 #!/usr/bin/env bun
 /**
- * The TEST CENSUS — a read-only measurement of every test file in the corpus,
- * classified along the axes a test review judges by.
+ * Structural test census. `--ratchet` rejects banned shapes and new or growing locked suspects;
+ * `--lock` only lowers existing debt. Every green report includes the detector's blind spots.
  *
- * WHY A CENSUS AND NOT AN OPINION. The review standard, made operational: a test
- * is valid only if a plausible DEFECT turns it red; a test that asserts on the
- * implementation's TEXT is coupled to the implementation and goes red on a
- * refactor instead; a mock of an internal module is coupling; a silent skip is
- * not coverage. Those are measurable properties of a file's syntax, not
- * judgements a reader forms by reading 826 files — and a review needs the
- * numbers before any rewrite list, because "the worst 30" over an unmeasured
- * corpus is "the 30 someone happened to open".
+ * `sources.ts` owns the corpus; `isCensusFile` narrows tests and excludes vendored anti-slop suites.
+ * Import paths resolve against that enumeration. AST bindings distinguish source-derived values
+ * from ordinary response strings, helper assertions from empty tests, and private fields from keys.
  *
- * WHAT IT IS NOW: a gate. `--ratchet` refuses any instance of a banned axis and
- * a NEW instance of a ratcheted one, and it runs in the ladder's commit tier.
- * `--lock` only shrinks the lock: it refuses to record a key the lock lacks.
- * Every run still prints what it CANNOT see, because a blind spot visible only
- * in red output is invisible exactly when the tree is green.
- *
- * THE ONE RULE THIS TOOL AND `wired.ts` SHARE, stated in both headers in the
- * same words. A constant a test needs is EITHER a public contract — exported
- * from the module that owns it AND read by production, which is exactly what
- * `wired.ts` accepts as reachable — OR it is unnecessary, because the test can
- * observe the behaviour instead. There is no third option, and the two shapes
- * that pretend to be one are a TEST-ONLY EXPORT and a TEST-SIDE MIRROR: the
- * first makes the module's surface bigger for no production reader, which
- * `wired.ts` reports as reached-by-tests-only; the second restates the value
- * beside the module, which this census reports as a mirror. They are the same
- * defect seen from two sides, and neither is the fix for the other. The fix is
- * to assert what the code DOES: a value the module hands out, a path it names
- * in a command, a count it puts in its own message.
- * A public constant can configure a probe; it is not an independent oracle for its own rendered
- * wording or displayed limit. That browser-text rule does not govern protocol/state contracts.
- *
- * CORPUS. Read through `sources.ts` like every gate, narrowed by `isTestFile`
- * and `isParseable`, minus `tools/oxlint/anti-slop` — vendored upstream code,
- * out of review scope. One exported predicate, `isCensusFile`, so the set
- * measured and the set reported are one expression. Product text comes from
- * `readSources()`, and a path literal is RESOLVED against the enumeration
- * rather than matched against a pattern of this program's own — `gate:set-equality`
- * governs this file now that the ladder runs it, and it found four own-selector
- * sites here before that.
- *
- * THE DENOMINATOR, RECONCILED against a hand tally, because the first review of
- * this tool counted by hand and got a different number. At `0da431407` the
- * review tallied 62 test files under `scripts/`; this census reads 63 there,
- * and the one file between the two readings is `scripts/test-census.test.ts` —
- * this tool's own suite, which did not exist at that revision. Nothing else
- * under `scripts/` was added, renamed or deleted between them (measured
- * 2026-09-01 by diffing `git ls-tree -r --name-only` at both revisions). The
- * report states its own arithmetic on every run: how many corpus files a runner
- * claims, how many none does, and both halves of that second number by name.
- *
- * PARSING. `syntax.ts` (oxc), the substrate the other static gates use. Every
- * signal is an AST fact about a resolved import, a declared accessibility or a
- * matcher chain. A regex only ever seeds a candidate the tree then confirms.
- *
- * PRECISION IS THE PRODUCT, and each of these was MEASURED on this tree rather
- * than reasoned about. Six false-positive classes were found and closed, and
- * every one of them would have inflated a headline the review then argues from:
- *   - assertion-free: 167 rows before file-local helper resolution. `expectRefused`
- *     holds six `expect`s and the test calling it holds none. Real count: 15.
- *   - mirror: 1,176 rows when a shared literal `2` counted. A mirror is now a
- *     NAMED constant whose distinctive value a module also names. Real count: 53.
- *   - source text: 102 rows from "a string that also occurs in src", which
- *     flagged `expect(cookie).toContain('SameSite=Lax')` — a behavioural
- *     assertion whose string naturally appears in the code that sets it. The
- *     surviving rule needs the ASSERTED VALUE to be source text, resolved
- *     through the file's own reader functions.
- *   - `spyOn(console,'error')` read as an internal mock of `spyOn`, because the
- *     target was taken from `children[0]`, which is the callee.
- *   - `test.each(TABLE)` counted as a test of its own: the factory call carries
- *     no body, so 40 table-driven suites read as assertion-free.
- *   - `x['authorization']` counted as a private reach. A bracket reach is now
- *     confirmed against members production DECLARES `private`/`protected`.
+ * `wired.ts` rejects test-only exports; importing a public contract can configure a probe but cannot
+ * supply an independent oracle for its own rendered wording. Protocol/state contracts are separate.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -83,6 +18,7 @@ import type { Node } from 'oxc-parser';
 import * as v from 'valibot';
 
 import { MIN_NODES, unitsOf, type Unit } from './ast-duplication';
+import { judgeRequirements, TEST_REQUIREMENTS } from './test-requirements';
 import { parseLock, type Plant } from './census-plants';
 import { claims, deployGates, LADDER, packageScripts } from './ladder';
 import {
@@ -115,6 +51,7 @@ export type Kind = 'unit' | 'integration' | 'e2e' | 'eval' | 'gate' | 'ui' | 'su
  *  GOOD directions, counted separately and never here. */
 export const CATEGORIES = [
   'source_text', 'mirror', 'tautology_suspect', 'private_reach', 'internal_mock',
+  'copy_pin',
   'assertion_free', 'silent_skip', 'golden_regenerated',
 ] as const;
 
@@ -125,7 +62,7 @@ export type Category = (typeof CATEGORIES)[number];
  *  source, restates product code, reaches a private member or mocks the tree's own
  *  module is rewritten at a public boundary or deleted; there is no deliberate
  *  exception to record. */
-export const BANNED: readonly Category[] = ['source_text', 'mirror', 'private_reach', 'internal_mock'];
+export const BANNED: readonly Category[] = ['source_text', 'mirror', 'private_reach', 'internal_mock', 'copy_pin'];
 
 /** The axis the lock pins, which only shrinks: a NEW instance fails by name. The
  *  three left out of both lists are debt a reviewer reads rather than debt a
@@ -155,6 +92,7 @@ export interface FileRow {
   readonly tautology_suspect: number;
   readonly private_reach: number;
   readonly internal_mock: number;
+  readonly copy_pin: number;
   readonly external_seam_mock: number;
   readonly assertion_free: number;
   readonly silent_skip: number;
@@ -188,9 +126,7 @@ interface ParsedFile {
 
 const parseCache = new Map<string, ParsedFile>();
 
-/** One parse per file for the whole run. Parsing IS the cost here: the census
- *  asks eight questions of every test file and three of every module one
- *  imports. */
+/** Parsing is shared by every classifier in one census run. */
 function parseFile(file: string, text: string): ParsedFile {
   const cached = parseCache.get(file);
 
@@ -1148,7 +1084,7 @@ function tautologies(
   parsed: ParsedFile,
   spans: readonly TestSpan[],
   localNames: ReadonlySet<string>,
-  inputs: OracleInputs,
+  oracles: OracleContext,
 ): Finding[] {
   const found: Finding[] = [];
   const all = expectations(parsed);
@@ -1189,7 +1125,7 @@ function tautologies(
     });
   }
 
-  found.push(...copiedConstantExpectations(parsed, spans, all, inputs));
+  found.push(...copiedConstantExpectations(parsed, spans, all, oracles));
 
   return found;
 }
@@ -1289,11 +1225,39 @@ function exportedConstant(
 
 type OracleInputs = Pick<CensusInputs, 'sources' | 'tracked' | 'scope' | 'readModule'>;
 
+interface OracleContext {
+  readonly inputs: OracleInputs;
+  readonly rendered: (node: SyntaxNode) => boolean;
+}
+
 interface TextContext {
   readonly parsed: ParsedFile;
   readonly bindings: Bindings;
   readonly assigned: ReadonlyMap<SyntaxNode, SyntaxNode>;
+  readonly members: ReadonlyMap<SyntaxNode, ReadonlyMap<string, readonly SyntaxNode[]>>;
   readonly imports: ReadonlyMap<string, { readonly file: string; readonly name: string }>;
+}
+
+function assignedMembers(parsed: ParsedFile, bindings: Bindings): TextContext['members'] {
+  const members = new Map<SyntaxNode, Map<string, SyntaxNode[]>>();
+  walk(parsed.tree, (node) => {
+    const { raw } = node;
+
+    if (raw.type !== 'AssignmentExpression' || raw.left.type !== 'MemberExpression' || raw.left.computed
+      || raw.left.object.type !== 'Identifier' || raw.left.property.type !== 'Identifier') return;
+    const object = nodeAt(node, raw.left.object.start, raw.left.object.end);
+    const bound = object === undefined ? undefined : bindings.resolve(object);
+    const value = nodeAt(node, raw.right.start, raw.right.end);
+
+    if (bound === undefined || value === undefined) return;
+    const fields = members.get(bound) ?? new Map<string, SyntaxNode[]>();
+    const values = fields.get(raw.left.property.name) ?? [];
+    values.push(value);
+    fields.set(raw.left.property.name, values);
+    members.set(bound, fields);
+  });
+
+  return members;
 }
 
 /** Operand positions that contribute to an expression's value, excluding a condition's test and object keys. */
@@ -1312,10 +1276,8 @@ function valueDependsOn(raw: Node, read: (node: Node | null | undefined) => bool
   return raw.type === 'TemplateLiteral' && raw.expressions.some(read);
 }
 
-/** DOM text observations, including scalar transformations and named fields returned by observer helpers.
- *  Product implementations are not observer helpers; following those would classify protocol/state assertions
- *  as rendered-text checks. Field identity is by name inside the imported helper graph, not a TypeScript type. */
-function renderedTextReader(parsed: ParsedFile, inputs: OracleInputs): (node: SyntaxNode) => boolean {
+/** Observer fields are tied to their returning function; product implementations are not observers. */
+function renderedReader(parsed: ParsedFile, inputs: OracleInputs): (node: SyntaxNode) => boolean {
   const contexts = new Map<string, TextContext>();
   const pending = [parsed];
 
@@ -1323,7 +1285,7 @@ function renderedTextReader(parsed: ParsedFile, inputs: OracleInputs): (node: Sy
     if (contexts.has(module.file)) continue;
     const bindings = bindingsOf(module);
     const imports = new Map<string, { readonly file: string; readonly name: string }>();
-    contexts.set(module.file, { parsed: module, bindings, assigned: firstAssignments(module, bindings), imports });
+    contexts.set(module.file, { parsed: module, bindings, assigned: firstAssignments(module, bindings), members: assignedMembers(module, bindings), imports });
 
     for (const statement of module.tree.children) {
       if (statement.raw.type !== 'ImportDeclaration' || statement.raw.importKind === 'type') continue;
@@ -1338,39 +1300,44 @@ function renderedTextReader(parsed: ParsedFile, inputs: OracleInputs): (node: Sy
     }
   }
 
-  const fields = new Set<string>();
-  const functions = new Set<string>();
+  const fields = new Map<SyntaxNode, Set<string>>();
   const localFunctions = new Set<SyntaxNode>();
+  const namedFunctions = new Map<string, SyntaxNode>();
 
-  const callsText = (node: SyntaxNode, context: TextContext): boolean => {
-    const { raw } = node;
+  for (const context of contexts.values()) walk(context.parsed.tree, (node) => {
+    if (!isFunctionLike(node)) return;
 
-    if (raw.type !== 'CallExpression' || raw.callee.type !== 'Identifier') return false;
-    const callee = node.children.find((child) => child.raw === raw.callee);
-    const bound = callee === undefined ? undefined : context.bindings.resolve(callee);
+    for (let scope = node.parent; scope !== undefined; scope = scope.parent) if (isFunctionLike(scope)) return;
+    const name = functionName(node);
 
-    if (bound === undefined) return false;
+    if (name !== undefined) namedFunctions.set(`${context.parsed.file}#${name}`, node);
+  });
 
-    if (bound.raw.type === 'ImportDeclaration') {
-      const imported = context.imports.get(raw.callee.name);
+  const functionOf = (node: SyntaxNode, context: TextContext): SyntaxNode | undefined => {
+    if (isFunctionLike(node)) return node;
 
-      return imported !== undefined && functions.has(`${imported.file}#${imported.name}`);
+    if (node.raw.type !== 'Identifier') return undefined;
+    const bound = context.bindings.resolve(node);
+
+    if (bound?.raw.type === 'ImportDeclaration') {
+      const imported = context.imports.get(node.raw.name);
+
+      return imported === undefined ? undefined : namedFunctions.get(`${imported.file}#${imported.name}`);
     }
 
-    const fn = bound.raw.type === 'VariableDeclarator' ? bound.children.find(isFunctionLike) : bound;
-
-    return fn !== undefined && localFunctions.has(fn);
+    return bound?.raw.type === 'VariableDeclarator' ? bound.children.find(isFunctionLike) : bound;
   };
 
-  const textOf = (node: SyntaxNode, context: TextContext, seen = new Set<SyntaxNode>()): boolean => {
+  const fieldFrom = (node: SyntaxNode, name: string, context: TextContext, seen = new Set<SyntaxNode>()): boolean => {
     if (seen.has(node)) return false;
     seen.add(node);
+
     const { raw } = node;
 
     const child = (value: Node | null | undefined): boolean => {
-      const at = value === null || value === undefined ? undefined : nodeAt(node, value.start, value.end);
+      const at = value === undefined || value === null ? undefined : nodeAt(node, value.start, value.end);
 
-      return at !== undefined && textOf(at, context, seen);
+      return at !== undefined && fieldFrom(at, name, context, seen);
     };
 
     if (raw.type === 'Identifier') {
@@ -1379,24 +1346,94 @@ function renderedTextReader(parsed: ParsedFile, inputs: OracleInputs): (node: Sy
       if (bound?.raw.type !== 'VariableDeclarator') return false;
       const value = bound.raw.init === null ? context.assigned.get(bound) : nodeAt(bound, bound.raw.init.start, bound.raw.init.end);
 
-      return value !== undefined && textOf(value, context, seen);
+      return value !== undefined && fieldFrom(value, name, context, seen);
+    }
+
+    if (raw.type === 'MemberExpression') {
+      if (!raw.computed && raw.property.type === 'Identifier' && raw.object.type === 'Identifier') {
+        const object = nodeAt(node, raw.object.start, raw.object.end);
+        const bound = object === undefined ? undefined : context.bindings.resolve(object);
+        const values = bound === undefined ? [] : context.members.get(bound)?.get(raw.property.name) ?? [];
+
+        if (values.some((value) => fieldFrom(value, name, context, seen))) return true;
+      }
+
+      return child(raw.object);
+    }
+
+    if (raw.type === 'CallExpression') {
+      const callee = nodeAt(node, raw.callee.start, raw.callee.end);
+      const candidates = [...callee === undefined ? [] : [callee], ...argumentNodes(node)];
+
+      for (const candidate of candidates) {
+        const fn = functionOf(candidate, context);
+
+        if (fn !== undefined && fields.get(fn)?.has(name)) return true;
+      }
+
+      if (argumentNodes(node).some((argument) => fieldFrom(argument, name, context, seen))) return true;
+
+      return raw.callee.type === 'MemberExpression' && child(raw.callee.object);
+    }
+
+    if (isFunctionLike(node)) return returnsOf(node).some((returned) => fieldFrom(returned, name, context, seen));
+
+    return valueDependsOn(raw, child);
+  };
+
+  const callsObserved = (node: SyntaxNode, context: TextContext): boolean => {
+    const { raw } = node;
+
+    if (raw.type !== 'CallExpression' || raw.callee.type !== 'Identifier') return false;
+    const callee = node.children.find((child) => child.raw === raw.callee);
+    const fn = callee === undefined ? undefined : functionOf(callee, context);
+
+    return fn !== undefined && localFunctions.has(fn);
+  };
+
+  const observes = (node: SyntaxNode, context: TextContext, seen = new Set<SyntaxNode>()): boolean => {
+    if (seen.has(node)) return false;
+    seen.add(node);
+    const { raw } = node;
+
+    const child = (value: Node | null | undefined): boolean => {
+      const at = value === null || value === undefined ? undefined : nodeAt(node, value.start, value.end);
+
+      return at !== undefined && observes(at, context, seen);
+    };
+
+    if (raw.type === 'Identifier') {
+      const bound = context.bindings.resolve(node);
+
+      if (bound?.raw.type !== 'VariableDeclarator') return false;
+      const value = bound.raw.init === null ? context.assigned.get(bound) : nodeAt(bound, bound.raw.init.start, bound.raw.init.end);
+
+      return value !== undefined && observes(value, context, seen);
     }
 
     if (raw.type === 'MemberExpression') {
       const name = raw.computed ? undefined : chainText(raw.property);
 
-      return name === 'textContent' || name === 'innerText' || (name !== undefined && fields.has(name)) || child(raw.object);
+      const direct = name === 'textContent' || name === 'innerText';
+
+      const object = nodeAt(node, raw.object.start, raw.object.end);
+
+      return direct || (name !== undefined && object !== undefined && fieldFrom(object, name, context)) || child(raw.object);
     }
 
     if (raw.type === 'CallExpression') {
+      const called = calleeName(node);
+
+      if (called === 'getAttribute' && stringArguments(node).some((name) => ['title', 'aria-label', 'placeholder'].includes(name))) return true;
+
       if (raw.callee.type === 'MemberExpression' && child(raw.callee.object)) return true;
 
-      if (callsText(node, context)) return true;
+      if (callsObserved(node, context)) return true;
 
-      return argumentNodes(node).some((argument) => textOf(argument, context, seen));
+      return argumentNodes(node).some((argument) => observes(argument, context, seen));
     }
 
-    if (isFunctionLike(node)) return returnsOf(node).some((returned) => textOf(returned, context, seen));
+    if (isFunctionLike(node)) return returnsOf(node).some((returned) => observes(returned, context, seen));
 
     return valueDependsOn(raw, child);
   };
@@ -1412,33 +1449,35 @@ function renderedTextReader(parsed: ParsedFile, inputs: OracleInputs): (node: Sy
           const name = declaredName(node);
           const value = node.children.find((child) => child.raw === raw.value);
 
-          if (name !== undefined && !fields.has(name) && value !== undefined && textOf(value, context)) {
-            fields.add(name);
-            changed = true;
+          if (name !== undefined && value !== undefined && observes(value, context)) {
+            for (let owner = node.parent; owner !== undefined; owner = owner.parent) {
+              if (!isFunctionLike(owner)) continue;
+              const named = fields.get(owner) ?? new Set<string>();
+
+              if (named.has(name)) continue;
+              named.add(name);
+              fields.set(owner, named);
+              changed = true;
+            }
           }
         }
 
-        if (!isFunctionLike(node) || localFunctions.has(node) || !textOf(node, context)) return;
+        if (!isFunctionLike(node) || localFunctions.has(node) || !observes(node, context)) return;
         localFunctions.add(node);
         changed = true;
-
-        for (let scope = node.parent; scope !== undefined; scope = scope.parent) if (isFunctionLike(scope)) return;
-        const name = functionName(node);
-
-        if (name !== undefined) functions.add(`${context.parsed.file}#${name}`);
       });
     }
   }
 
   const own = contexts.get(parsed.file);
 
-  return (node) => own !== undefined && textOf(node, own);
+  return (node) => own !== undefined && observes(node, own);
 }
 
 /** A rendered-text oracle copied from the implementation is not an independent wording or limit contract. */
 function copiedConstantExpectations(
   parsed: ParsedFile, spans: readonly TestSpan[], all: readonly Expectation[],
-  inputs: OracleInputs,
+  { inputs, rendered }: OracleContext,
 ): Finding[] {
   const constants = new Map<string, ProductConstant & { readonly declaration: SyntaxNode }>();
 
@@ -1458,7 +1497,6 @@ function copiedConstantExpectations(
   if (constants.size === 0) return [];
   const bindings = bindingsOf(parsed);
   const found: Finding[] = [];
-  let rendered: ((node: SyntaxNode) => boolean) | undefined;
 
   for (const expectation of all) {
     const copied = new Map<string, ProductConstant>();
@@ -1480,7 +1518,6 @@ function copiedConstantExpectations(
     const [actual] = expectation.subject === undefined ? [] : argumentNodes(expectation.subject);
 
     if (actual === undefined) continue;
-    rendered ??= renderedTextReader(parsed, inputs);
 
     if (!rendered(actual)) continue;
     const line = parsed.lineAt(expectation.call.start);
@@ -1491,6 +1528,169 @@ function copiedConstantExpectations(
   }
 
   return found;
+}
+
+const copyByCorpus = new WeakMap<ReadonlyMap<string, string>, ReadonlySet<string>>();
+
+/** JSX-authored wording, not names or content supplied by a fixture. Composed copy is not inferred. */
+function authoredCopy(sources: ReadonlyMap<string, string>): ReadonlySet<string> {
+  const cached = copyByCorpus.get(sources);
+
+  if (cached !== undefined) return cached;
+
+  const copy = new Set<string>();
+
+  const add = (value: string): void => {
+    const text = value.replace(/\s+/gu, ' ').trim();
+
+    if (/\S+\s+\S+/u.test(text)) copy.add(text);
+  };
+
+  for (const [file, source] of sources) {
+    if (!isShippedSource(file) || !file.endsWith('tsx')) continue;
+    walk(parseFile(file, source).tree, (node) => {
+      if (node.raw.type === 'JSXText') {
+        add(node.raw.value);
+
+        return;
+      }
+
+      const literal = literalText(node);
+
+      if (literal === undefined) return;
+
+      for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
+        if (parent.raw.type === 'JSXExpressionContainer') {
+          if (parent.parent?.raw.type !== 'JSXAttribute') {
+            add(literal);
+
+            return;
+          }
+
+          continue;
+        }
+
+        if (parent.raw.type === 'JSXAttribute') {
+          if (parent.raw.name.type === 'JSXIdentifier' && ['title', 'aria-label', 'placeholder', 'alt'].includes(parent.raw.name.name)) add(literal);
+
+          return;
+        }
+      }
+    });
+  }
+
+  copyByCorpus.set(sources, copy);
+
+  return copy;
+}
+
+const OracleLiteral = v.union([v.string(), v.number()]);
+
+interface ExpectedValues {
+  readonly literals: readonly v.InferOutput<typeof OracleLiteral>[];
+  readonly requirements: readonly string[];
+}
+
+/** Exact product wording requires an independently named contract. */
+function renderedPins(
+  parsed: ParsedFile, spans: readonly TestSpan[], inputs: OracleInputs,
+  rendered: (node: SyntaxNode) => boolean,
+) {
+  const copy: Finding[] = [];
+  const requirements = new Set<string>();
+  const bindings = bindingsOf(parsed);
+  const assigned = firstAssignments(parsed, bindings);
+  const registries = new Map<string, SyntaxNode>();
+
+  for (const statement of parsed.tree.children) {
+    if (statement.raw.type !== 'ImportDeclaration') continue;
+    const target = resolveSpecifier(statement.raw.source.value, dirname(parsed.file), inputs.tracked, inputs.scope);
+
+    if (target !== 'scripts/test-requirements.ts') continue;
+
+    for (const binding of importBindings(statement)) {
+      if (binding.imported === 'TEST_REQUIREMENTS') registries.set(binding.local, statement);
+    }
+  }
+
+  const expectedValues = (node: SyntaxNode, seen = new Set<SyntaxNode>()): ExpectedValues => {
+    if (seen.has(node)) return { literals: [], requirements: [] };
+    seen.add(node);
+    const { raw } = node;
+
+    if (raw.type === 'Literal') {
+      const literal = v.safeParse(OracleLiteral, raw.value);
+
+      return { literals: literal.success ? [literal.output] : [], requirements: [] };
+    }
+
+    if (raw.type === 'Identifier') {
+      const bound = bindings.resolve(node);
+
+      if (bound?.raw.type !== 'VariableDeclarator') return { literals: [], requirements: [] };
+      const value = bound.raw.init === null ? assigned.get(bound) : nodeAt(bound, bound.raw.init.start, bound.raw.init.end);
+
+      return value === undefined ? { literals: [], requirements: [] } : expectedValues(value, seen);
+    }
+
+    if (raw.type === 'MemberExpression') {
+      if (raw.object.type === 'Identifier' && raw.property.type === 'Identifier' && !raw.computed) {
+        const base = nodeAt(node, raw.object.start, raw.object.end);
+
+        if (base !== undefined && registries.has(raw.object.name) && bindings.resolve(base) === registries.get(raw.object.name)) {
+          return { literals: [], requirements: [raw.property.name] };
+        }
+      }
+
+      const object = nodeAt(node, raw.object.start, raw.object.end);
+
+      return object === undefined ? { literals: [], requirements: [] } : expectedValues(object, seen);
+    }
+
+    if (raw.type === 'CallExpression') {
+      const called = calleeName(node);
+
+      if (called === undefined || !['String', 'Number', 'parseFloat', 'parseInt'].includes(called)) return { literals: [], requirements: [] };
+    } else if (!['ArrayExpression', 'ObjectExpression', 'Property', 'ConditionalExpression', 'UnaryExpression',
+      'TSAsExpression', 'TSNonNullExpression', 'TSSatisfiesExpression', 'ParenthesizedExpression', 'ChainExpression'].includes(raw.type)) {
+      const text = literalText(node);
+
+      return { literals: text === undefined ? [] : [text], requirements: [] };
+    }
+
+    let values = node.children;
+
+    if (raw.type === 'Property') values = node.children.filter((child) => child.raw === raw.value);
+    else if (raw.type === 'ConditionalExpression') values = node.children.filter((child) => child.raw === raw.consequent || child.raw === raw.alternate);
+    else if (raw.type === 'CallExpression') values = argumentNodes(node);
+
+    const parts = values.map((child) => expectedValues(child, seen));
+
+    return { literals: parts.flatMap((part) => part.literals), requirements: parts.flatMap((part) => part.requirements) };
+  };
+
+  const exact = new Set(['toBe', 'toEqual', 'toStrictEqual', 'toMatchObject']);
+
+  for (const expectation of expectations(parsed)) {
+    const [actual] = expectation.subject === undefined ? [] : argumentNodes(expectation.subject);
+    const [expected] = argumentNodes(expectation.call);
+
+    if (actual === undefined || expected === undefined) continue;
+    const values = expectedValues(expected);
+
+    for (const name of values.requirements) requirements.add(name);
+
+    if (!exact.has(expectation.matcher)) continue;
+
+    if (!values.literals.some((value) => authoredCopy(inputs.sources).has(String(value)))) continue;
+
+    if (!rendered(actual)) continue;
+
+    const at = finderIn(parsed, spans);
+    copy.push(at(expectation.call, 'rendered copy has no named requirement', values.literals.map(String).join(', ')));
+  }
+
+  return { copy, requirements };
 }
 
 /** Names of functions imported from a LOCAL module that this node calls. */
@@ -2679,6 +2879,7 @@ export interface Findings {
   tautology_suspect: Finding[];
   private_reach: Finding[];
   internal_mock: Finding[];
+  copy_pin: Finding[];
   assertion_free: Finding[];
   silent_skip: Finding[];
   golden_regenerated: Finding[];
@@ -2703,6 +2904,7 @@ export interface PackageCounts {
   tautology_suspect: number;
   private_reach: number;
   internal_mock: number;
+  copy_pin: number;
   assertion_free: number;
   silent_skip: number;
   golden_regenerated: number;
@@ -2712,6 +2914,7 @@ export interface PackageCounts {
 }
 
 export interface Census {
+  readonly requirements: ReturnType<typeof judgeRequirements>;
   readonly generatedAt: string;
   readonly tree: {
     readonly sha: string;
@@ -2838,6 +3041,7 @@ export interface CensusInputs {
 }
 
 export interface Measured {
+  readonly requirements: ReadonlySet<string>;
   readonly row: FileRow;
   readonly findings: Findings;
   readonly publicSurface: readonly Finding[];
@@ -2858,16 +3062,21 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
   const spans = testSpans(parsed);
   const facts = localFacts(parsed, inputs.tracked);
   const { internal, external } = mocks(parsed, spans, inputs.scope);
+  let textReader: ((node: SyntaxNode) => boolean) | undefined;
+  const rendered = (node: SyntaxNode): boolean => (textReader ??= renderedReader(parsed, inputs))(node);
+
+  const pins = renderedPins(parsed, spans, inputs, rendered);
 
   const findings: Findings = {
     source_text: inputs.gateTests.has(file) ? [] : sourceText(parsed, spans, facts, inputs.tracked),
     mirror: mirrors(parsed, spans, local, inputs),
-    tautology_suspect: tautologies(parsed, spans, localNames, inputs),
+    tautology_suspect: tautologies(parsed, spans, localNames, { inputs, rendered }),
     private_reach: [
       ...privateReaches(parsed, spans, inputs.nonPublic),
       ...bridgeReaches(parsed, spans, inputs.bridges),
     ],
     internal_mock: internal,
+    copy_pin: pins.copy,
     assertion_free: assertionFree(parsed, spans, facts.asserting),
     silent_skip: silentSkips(parsed, spans),
     golden_regenerated: goldenReads(parsed, spans, inputs.generators),
@@ -2877,6 +3086,7 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
   const runner = runnerOf(file);
 
   return {
+    requirements: pins.requirements,
     findings,
     publicSurface,
     externalSeam: external,
@@ -2891,6 +3101,7 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
       tautology_suspect: findings.tautology_suspect.length,
       private_reach: findings.private_reach.length,
       internal_mock: internal.length,
+      copy_pin: findings.copy_pin.length,
       external_seam_mock: external.length,
       assertion_free: findings.assertion_free.length,
       silent_skip: findings.silent_skip.length,
@@ -2947,6 +3158,7 @@ export function censusInputs(tracked: readonly string[], runners: readonly Runne
 export function noFindings(): Findings {
   return {
     source_text: [], mirror: [], tautology_suspect: [], private_reach: [], internal_mock: [],
+    copy_pin: [],
     assertion_free: [], silent_skip: [], golden_regenerated: [],
   };
 }
@@ -2962,6 +3174,7 @@ export function runCensus(): Census {
   const externalSeam: Finding[] = [];
   const rows: FileRow[] = [];
   let totalTests = 0;
+  const requirements = new Set<string>();
 
   for (const file of corpus) {
     const measured = measureFile(file, readRepositoryFile(root, file), inputs);
@@ -2971,6 +3184,8 @@ export function runCensus(): Census {
     externalSeam.push(...measured.externalSeam);
     totalTests += measured.row.tests;
     rows.push(measured.row);
+
+    for (const name of measured.requirements) requirements.add(name);
   }
 
   const claimedBy = new Map<string, string[]>();
@@ -3019,6 +3234,7 @@ export function runCensus(): Census {
 
   return {
     generatedAt: new Date().toISOString(),
+    requirements: judgeRequirements({ registry: TEST_REQUIREMENTS, reads: requirements }),
     tree: {
       sha,
       files: joined.length,
@@ -3048,6 +3264,7 @@ function blankCounts(): PackageCounts {
   return {
     files: 0, suites: 0, tests: 0, unit: 0, integration: 0, e2e: 0, eval: 0, gate: 0, ui: 0,
     support: 0, source_text: 0, mirror: 0, tautology_suspect: 0, private_reach: 0,
+    copy_pin: 0,
     internal_mock: 0, assertion_free: 0, silent_skip: 0, golden_regenerated: 0,
     external_seam_mock: 0, public_surface_entry: 0, never_run: 0,
   };
@@ -3079,8 +3296,12 @@ export const BLIND_SPOTS: readonly string[] = [
   'expected product constants are followed through named imports and barrel re-exports; namespace members, '
   + 'CommonJS loads, default-value expressions and constants hidden behind casts, aliases or function calls are not traced',
   'the copied rendered-text oracle rule starts at DOM textContent/innerText reads and scalar transformations; '
-  + 'terminal output, server-only rendering and whole-object comparisons are not traced. Returned observer fields '
-  + 'are matched by name within the imported non-product helper graph, so unrelated objects sharing a field name can be reported',
+  + 'terminal output, server-only rendering and whole-object comparisons are not traced. Returned fields are tied '
+  + 'to their observer function, but nested field paths and dynamic property names are not resolved',
+  'copy pins require an exact multi-word JSX-authored phrase and a DOM-text observation; fixture data, composed '
+  + 'copy, substring matchers and terminal wording are outside that rule',
+  'named requirements carry a cited spec or dated owner ruling and must be used by an assertion; citation truth '
+  + 'is reviewed, not inferred from a test needing a value',
   'private reach through destructuring, `Object.entries` over a private map, a public getter '
   + 'over private state, or a cast TypeScript erases',
   'a SHAPE GATE written as a product suite: a `scripts/` suite a ladder row runs is exempt from '
@@ -3107,11 +3328,8 @@ export const BLIND_SPOTS: readonly string[] = [
   + 'Deliberate — a refactor of this repository cannot turn them red, which is what the axis '
   + 'measures — and stated because the private path pattern this resolution replaced did count '
   + 'them, so the number moved',
-  'REJECTED HEURISTIC, recorded because its absence is a blind spot: "an asserted string that '
-  + 'also occurs verbatim in an imported module" produced 102 findings on this tree and most were '
-  + 'behavioural (`expect(cookie).toContain(\'SameSite=Lax\')`), so source_text now requires the '
-  + 'asserted VALUE to come from a file read. A test that hard-codes a source string without '
-  + 'reading the file is therefore invisible here',
+  'source_text requires file-read provenance: matching an imported literal alone reported 102 sites, '
+  + 'mostly protocol behavior. copy_pin separately requires JSX-authored wording and a rendered observation',
 ];
 
 /* ── Output ──────────────────────────────────────────────────────────── */
@@ -3429,15 +3647,23 @@ function assertMeasured(census: Census): string {
 function main(argv: readonly string[]): number {
   const census = runCensus();
   const measured = assertMeasured(census);
+  const registry = census.requirements;
+
+  for (const problem of registry.invalid) console.error(`test-census: REQUIREMENT ${problem}`);
+
+  for (const name of registry.unread) console.error(`test-census: REQUIREMENT ${name} has no assertion`);
+
+  for (const name of registry.unknown) console.error(`test-census: REQUIREMENT ${name} is not registered`);
+
+  const badRequirements = registry.invalid.length + registry.unread.length + registry.unknown.length > 0;
 
   const banned = bannedKeys(census.findings);
 
   for (const key of banned) console.error(`test-census: BANNED   ${key}`);
 
   if (banned.length > 0) {
-    console.error('\ntest-census: a test that reads product source, restates product code, reaches a '
-      + 'private member or mocks an internal module has no allowance. Rewrite it at a public boundary, '
-      + 'or delete it and state the failure it could not catch; no lock records one.');
+    console.error('\ntest-census: banned coupling has no lock allowance. Assert the public behavior; '
+      + 'exact product wording needs a cited requirement, not a copied literal.');
   }
 
   if (argv.includes('--lock') || argv.includes('--ratchet')) {
@@ -3454,7 +3680,7 @@ function main(argv: readonly string[]): number {
         + 'failure it could not catch; the lock only shrinks.');
     }
 
-    if (banned.length > 0 || verdict.added.length > 0 || verdict.grown.length > 0) return 1;
+    if (badRequirements || banned.length > 0 || verdict.added.length > 0 || verdict.grown.length > 0) return 1;
 
     if (argv.includes('--lock')) {
       const plants = new Map(parseLock(lock).entries.map((entry) => [entry.key, entry.plants ?? []]));

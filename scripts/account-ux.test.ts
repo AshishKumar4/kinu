@@ -125,8 +125,6 @@ async function checkWorkspacesView(
     expect(body).toContain(name);
   }
 
-  expect(await page.$eval('[aria-pressed="true"]', (button) => button.getAttribute('aria-label')))
-    .toBe(view === 'tiled' ? 'Tiled view' : 'List view');
   expect(await page.$eval('[data-workspaces-view]', (section) => section.getAttribute('data-workspaces-view'))).toBe(view);
 
   // One state per card, no more: the chip count equals the row count, and the

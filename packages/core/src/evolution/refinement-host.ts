@@ -5,9 +5,11 @@ import {
   type RefinementLaneStep, type RequestRefinementInput,
 } from './refinement-lane';
 import {
-  createRefinementStore, refinementRequestView,
+  createRefinementStore, holdRefinementLane, nextEvolutionAnswerAt, refinementRequestView, releaseRefinementLane,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
 } from './refinement';
+import { Effect } from 'effect';
+import { attempt, renderThrownChain, settle, type KinuError } from '../obs/index';
 
 /** Explicit request; defaults to the unresolved outcomes at workspace scope. */
 export function requestOwnerRefinement(
@@ -27,9 +29,30 @@ export function listRefinements(deps: RefinementDeps, limit = 20) {
   };
 }
 
-/** Open owed debt first so a newly crossed threshold is handled this pass. */
 export async function refinementPass(deps: RefinementDeps): Promise<RefinementLaneStep> {
-  await refinementDebtRequest(deps);
+  const { sql, rt } = deps.control;
+  releaseRefinementLane(sql, rt.actor.actorId);
 
-  return advanceRefinementLane(deps);
+  return settle(attempt({ doing: 'running the refinement lane', otherwise: 'unavailable' }, async () => {
+    await refinementDebtRequest(deps);
+
+    return advanceRefinementLane(deps);
+  }).pipe(Effect.tapError((failure) => Effect.sync(() => {
+    holdRefinementLane(sql, rt.actor.actorId, renderThrownChain({ cause: failure }));
+  }))));
+}
+
+/** Both hosts' stored-answer wake; failures go to `failed`. */
+export function evolutionAnswerWake(
+  deps: RefinementDeps, now: number, failed: (failure: KinuError) => void,
+): Promise<RefinementLaneStep | null> {
+  const dueAt = nextEvolutionAnswerAt(deps.control.sql, deps.control.rt.actor.actorId);
+
+  return settle(dueAt === null || dueAt > now ? Effect.succeed(null) : attempt(
+    { doing: 'routing a refiner answer the lane was waiting on', otherwise: 'unavailable' }, () => refinementPass(deps),
+  ).pipe(Effect.catch((failure) => Effect.sync(() => {
+    failed(failure);
+
+    return null;
+  }))));
 }

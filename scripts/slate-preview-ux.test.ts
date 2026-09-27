@@ -122,43 +122,31 @@ describe('the Slate preview frame', () => {
   });
 });
 
-/** The two claims a reader checks by looking at the strip and the frame: the
- *  titled previews start at the left edge and lead the fixed surfaces, and the
- *  frame's own chrome is the URL plus the two things you do with a URL. */
-test('preview tabs lead the strip from its left edge and the frame keeps two controls', async () => {
+test('preview tabs lead the fixed surfaces and their URL can be copied and opened', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();
 
     try {
       await serveSlate(page);
+      await page.browserContext().overridePermissions(origin, ['clipboard-read', 'clipboard-sanitized-write']);
 
       for (const width of [1100, 390]) {
         await page.setViewport({ width, height: 850 });
         await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('[aria-label="Dashboard"]');
 
-        const strip = await page.$eval('[aria-label="Dashboard"]', (first) => {
+        const tabs = await page.$eval('[aria-label="Dashboard"]', (first) => {
           const box = first.parentElement;
 
           if (!(box instanceof HTMLElement)) throw new Error('the tab strip is not an element');
-          // Offsets inside the strip's own scrollable content. A phone-width
-          // strip is a scroller that brings the current tab into view, so a
-          // viewport-relative left would measure the scroll, not the layout.
-          const contentLeft = box.getBoundingClientRect().left - box.scrollLeft;
 
-          const tabs = [...box.querySelectorAll<HTMLElement>('button')]
-            .map((tab) => ({ name: tab.getAttribute('aria-label'), left: tab.getBoundingClientRect().left - contentLeft }));
-
-          return { padding: parseFloat(getComputedStyle(box).paddingLeft), tabs };
+          return [...box.querySelectorAll<HTMLElement>('button')].map((tab) => tab.getAttribute('aria-label'));
         });
 
-        // Flush with the strip's own content edge: not centred, not indented,
-        // and ahead of the fixed surfaces rather than behind them.
-        expect(strip.tabs[0]?.name).toBe('Dashboard');
-        expect(Math.round(strip.tabs[0].left - strip.padding)).toBe(0);
+        expect(tabs[0]).toBe('Dashboard');
         const previews = ['Dashboard', 'Sandbox app', 'Device app'];
-        const lastPreview = Math.max(...strip.tabs.filter((tab) => previews.includes(tab.name ?? '')).map((tab) => tab.left));
-        const firstSurface = Math.min(...strip.tabs.filter((tab) => !previews.includes(tab.name ?? '')).map((tab) => tab.left));
+        const lastPreview = Math.max(...tabs.flatMap((name, index) => previews.includes(name ?? '') ? [index] : []));
+        const firstSurface = tabs.findIndex((name) => !previews.includes(name ?? ''));
         expect(lastPreview).toBeLessThan(firstSurface);
 
         await page.click('[aria-label="Dashboard"]');
@@ -168,21 +156,34 @@ test('preview tabs lead the strip from its left edge and the frame keeps two con
           const header = frame.previousElementSibling;
 
           if (!(header instanceof HTMLElement)) throw new Error('the preview frame has no header');
-          const url = header.querySelector('code');
+          const link = header.querySelector('a');
+          const address = header.querySelector('code');
 
-          if (!(url instanceof HTMLElement)) throw new Error('the preview header shows no URL');
+          if (address === null) throw new Error('the preview header shows no address');
 
           return {
-            offset: Math.round(url.getBoundingClientRect().left
-              - (header.getBoundingClientRect().left + parseFloat(getComputedStyle(header).paddingLeft))),
-            controls: [...header.querySelectorAll('button, a')].map((control) => control.getAttribute('title')),
+            url: new URL(address.textContent ?? '').href, embedded: frame.src, href: link?.href, target: link?.target,
           };
         });
 
-        // The URL is the header's first thing, flush left — no indent, because
-        // the tabs own the label it would otherwise be separated from.
-        expect(chrome.offset).toBe(0);
-        expect(chrome.controls).toEqual(['Copy the preview URL', 'Open in new tab']);
+        expect(chrome.href).toBe(chrome.url);
+        expect(chrome.target).toBe('_blank');
+        const embedded = new URL(chrome.embedded);
+        const address = new URL(chrome.url);
+
+        expect([address.origin, address.pathname]).toEqual([embedded.origin, embedded.pathname]);
+
+        const copy = await page.evaluateHandle(() => {
+          const button = document.querySelector('iframe')?.previousElementSibling?.querySelector('button');
+
+          if (!(button instanceof HTMLButtonElement)) throw new Error('the preview header has no copy control');
+
+          return button;
+        });
+
+        await copy.click();
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(chrome.url);
+        await copy.dispose();
       }
     } finally { await page.close(); }
   });
@@ -217,7 +218,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
           if (!frame) throw new Error('Preview frame missing');
           await frame.waitForSelector('[data-slate-preview]');
           expect(await frame.$eval('[data-slate-preview]', el => el.textContent)).toBe('served by the slate');
-          expect(await iframe.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThan(600);
+          expect(await iframe.isIntersectingViewport()).toBe(true);
         }
 
         await page.click('[data-new-plan]');

@@ -822,7 +822,8 @@ export const LADDER: readonly Gate[] = [
     catches: 'a coupled test, by the axes a test review judges on. BANNED, whatever the lock holds: '
       + "an assertion over the implementation's TEXT, a test function or constant restating the "
       + "product's own, a reach into a member production declares non-public, and a mock of an "
-      + 'internal module. RATCHETED, the lock only shrinking: a matcher that cannot fail on the '
+      + 'internal module, or exact rendered product wording without a cited requirement. Unused '
+      + 'and uncited requirements fail too. RATCHETED, the lock only shrinking: a matcher that cannot fail on the '
       + 'defect its title names, keyed by category, file, TEST TITLE and finding shape, each locked '
       + 'key naming the plants that turn it red. It also refuses a STALE key, so a repaired '
       + 'coupling is recorded as repaired rather than left in the lock as budget for the next one.',

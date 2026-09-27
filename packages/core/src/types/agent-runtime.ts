@@ -106,4 +106,6 @@ export interface AgentRuntime {
   /** Read lazily by the router, so native `file` and codemode `workspace.*` share one
    *  read-before-write history. */
   setTurnFileLedgerProvider?: (provider: (() => TurnFileLedger | undefined) | null) => void;
+  /** Called once as the actor leaves the host. */
+  release?(): void;
 }

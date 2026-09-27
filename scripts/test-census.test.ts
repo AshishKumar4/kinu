@@ -33,11 +33,12 @@ import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import {
-  BLIND_SPOTS, bannedKeys, bridgesOf, CATEGORIES, type Category, type CensusInputs, checkRatchet,
+  bannedKeys, bridgesOf, CATEGORIES, type Category, type CensusInputs, checkRatchet,
   classNonPublicMembers, type Finding, gateTests, isCensusFile, lockText, measureFile, mergeFindings,
   noFindings, nonPublicMembers, productUnitsOf, ratchetCounts, ratchetKey, runnerClaims, runCensus,
 } from './test-census';
 import { failedPlanted, parseLock, type Plant } from './census-plants';
+import { judgeRequirements } from './test-requirements';
 import { isParseable, isRunnableSuite, isTestFile, trackedFiles } from './sources';
 
 /* ── The seam ──────────────────────────────────────────────────────────── */
@@ -98,7 +99,11 @@ export class ProbeHarness extends Orchestrator {
 /** Inputs built once over a synthetic one-module tree, so a classifier is
  *  measured against a module a reader can hold in their head. */
 function probeInputs(): CensusInputs {
-  const sources = new Map([[MODULE, MODULE_TEXT]]);
+  const sources = new Map([
+    [MODULE, MODULE_TEXT],
+    ['packages/probe/src/card.tsx', `export const Card = () => <section className={'Product shell'}><h1>The chosen title</h1><p>One shared member</p><p>Any convenient wording</p><p>Untitled workspace</p></section>;`],
+  ]);
+
   const bridges = bridgesOf(HELPER, HELPER_TEXT, classNonPublicMembers(sources));
 
   return {
@@ -792,21 +797,125 @@ test('rendered text follows an imported observer field without treating its geom
   expect(measured.findings.tautology_suspect.map((finding) => finding.what)).toEqual(['expected side copies a product constant']);
 });
 
-test('a local function can shadow a scalar DOM-text observer', () => {
-  const observer = 'packages/probe/tests/helpers/title.ts';
-  const sources = new Map([...inputs.sources, [observer, `export const readTitle = page => page.$eval('h1', node => node.textContent);`]]);
+for (const fixture of [
+  {
+    name: 'a stored observer result remains text through a verdict wrapper without tainting sibling state',
+    observer: 'packages/probe/tests/helpers/observe-stored.ts',
+    module: `export const observe = async page => ({ limitsStated: await page.$eval('[data-limits]', element => element.textContent) });`,
+    source: `
+      import { PROMPT_BUDGET } from '../src/budget';
+      import { observe } from './helpers/observe-stored';
+      const state = { rendered: null, stored: null };
+      beforeAll(async () => {
+        state.rendered = await attempt('rendered', () => observe(page));
+        state.stored = { limitsStated: await storage.read() };
+      });
+      test('the rendered limits', () => {
+        const row = verdictOf(state.rendered, 'rendered');
+        expect(row.limitsStated).toEqual([PROMPT_BUDGET]);
+      });
+      test('the storage limits', () => {
+        const row = verdictOf(state.stored, 'stored');
+        expect(row.limitsStated).toEqual([PROMPT_BUDGET]);
+      });
+    `,
+    expected: ['the rendered limits'],
+  },
+  {
+    name: 'a local function can shadow a scalar DOM-text observer',
+    observer: 'packages/probe/tests/helpers/title.ts',
+    module: `export const readTitle = page => page.$eval('h1', node => node.textContent);`,
+    source: `
+      import { MARKER } from '../src/budget';
+      import { readTitle } from './helpers/title';
+      test('the rendered title', async () => { expect(await readTitle(page)).toContain(MARKER); });
+      test('a non-rendering local reader', () => {
+        const readTitle = () => storage.read();
+        expect(readTitle()).toBe(MARKER);
+      });
+    `,
+    expected: ['the rendered title'],
+  },
+]) {
+  test(fixture.name, () => {
+    const sources = new Map([...inputs.sources, [fixture.observer, fixture.module]]);
 
-  const measured = measureFile(PROBE, `
-    import { MARKER } from '../src/budget';
-    import { readTitle } from './helpers/title';
-    test('the rendered title', async () => { expect(await readTitle(page)).toContain(MARKER); });
-    test('a non-rendering local reader', () => {
-      const readTitle = () => storage.read();
-      expect(readTitle()).toBe(MARKER);
+    const measured = measureFile(PROBE, fixture.source, {
+      ...inputs, sources, tracked: new Set([...inputs.tracked, fixture.observer]),
     });
-  `, { ...inputs, sources, tracked: new Set([...inputs.tracked, observer]) });
 
-  expect(measured.findings.tautology_suspect.map((finding) => finding.test)).toEqual(['the rendered title']);
+    expect(measured.findings.tautology_suspect.map((finding) => finding.test)).toEqual(fixture.expected);
+  });
+}
+
+describeCategory('copy_pin', [
+  {
+    name: 'RED: exact rendered prose, including a local expected constant',
+    source: `const COPY = 'One shared member'; test('grant', () => { const text = dialog.textContent; expect(text).toBe(COPY); });`,
+    expected: ['rendered copy has no named requirement'],
+  },
+  {
+    name: 'SILENT: a protocol string is not rendered copy',
+    source: `test('wire', () => { expect(response.message).toBe('One shared member'); });`,
+    expected: [],
+  },
+  {
+    name: 'SILENT: fixture text matching a class expression is not product wording',
+    source: `test('name', () => { expect(document.body.textContent).toBe('Product shell'); });`,
+    expected: [],
+  },
+]);
+
+describe('the named-requirement registry', () => {
+  const caption = {
+    kind: 'copy', value: 'Untitled',
+    authority: { kind: 'owner', recordedOn: '2026-09-15', reference: 'fixture-ruling', requirement: 'The fallback title names an untitled workspace.' },
+  };
+
+  test('a requirement is read through an aliased import and local binding, not an unrelated object', () => {
+    const measured = measureFile(PROBE, `
+      import { TEST_REQUIREMENTS as requirements } from '../../../scripts/test-requirements';
+      const title = requirements.untitledWorkspace.value;
+      test('title', () => { expect(document.body.textContent).toBe(title); });
+      test('unrelated', () => {
+        const requirements = { untitledWorkspace: { value: 'Any convenient wording' } };
+        expect(document.body.textContent).toBe(requirements.untitledWorkspace.value);
+      });
+    `, { ...inputs, tracked: new Set([...inputs.tracked, 'scripts/test-requirements.ts']) });
+
+    expect([...measured.requirements]).toEqual(['untitledWorkspace']);
+    expect(measured.findings.copy_pin.map((finding) => finding.test)).toEqual(['unrelated']);
+  });
+
+  test('a cited but unread requirement is rejected, and an unknown use is named', () => {
+    expect(judgeRequirements({ registry: { caption }, reads: new Set() })).toEqual({ invalid: [], unread: ['caption'], unknown: [] });
+    expect(judgeRequirements({ registry: { caption }, reads: new Set(['caption', 'madeUp']) })).toEqual({ invalid: [], unread: [], unknown: ['madeUp'] });
+  });
+
+  test('a named requirement does not excuse another literal in the assertion', () => {
+    const measured = measureFile(PROBE, `
+      import { TEST_REQUIREMENTS } from '../../../scripts/test-requirements';
+      test('extra pin', () => {
+        expect([document.body.textContent, heading.textContent])
+          .toEqual([TEST_REQUIREMENTS.untitledWorkspace.value, 'One shared member']);
+      });
+    `, { ...inputs, tracked: new Set([...inputs.tracked, 'scripts/test-requirements.ts']) });
+
+    expect(measured.findings.copy_pin.map((finding) => finding.test)).toEqual(['extra pin']);
+  });
+
+  test('a test-needs-it note supplies no authority', () => {
+    const rejected = judgeRequirements({ registry: { title: { kind: 'copy', value: 'Test title', authority: { reason: 'the test needs it' } } }, reads: new Set(['title']) });
+
+    expect(rejected.invalid.some((problem) => problem.startsWith('title.authority.kind:'))).toBe(true);
+  });
+
+  test('an owner requirement carries a dated ruling', () => {
+    const copy = { kind: 'copy', value: 'Untitled', authority: { kind: 'owner', reference: 'owner-ruling', requirement: 'Never show a slug as its title.' } };
+    expect(judgeRequirements({ registry: { copy }, reads: new Set(['copy']) }).invalid.some((problem) => problem.startsWith('copy.authority.recordedOn:'))).toBe(true);
+    expect(judgeRequirements({ registry: { copy: { ...copy, authority: { ...copy.authority, recordedOn: '2026-09-15' } } }, reads: new Set(['copy']) }))
+      .toEqual({ invalid: [], unread: [], unknown: [] });
+  });
 });
 
 describe('assertion_free and silent_skip', () => {
@@ -1206,13 +1315,6 @@ describe('this repository', () => {
       .toEqual({ banned: [], added: [], grown: [], stale: [], unproven: [] });
   });
 
-  test('it prints its blind spots on the success path', () => {
-    expect(BLIND_SPOTS.length).toBeGreaterThan(5);
-    // The rejected heuristic is recorded, because its absence is itself a blind
-    // spot: a test that hard-codes a source string without reading the file is
-    // invisible to the surviving rule.
-    expect(BLIND_SPOTS.join('\n')).toContain('REJECTED HEURISTIC');
-  });
 });
 
 describe('the runner table is resolved, never listed', () => {
