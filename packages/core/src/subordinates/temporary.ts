@@ -243,7 +243,7 @@ export function createTemporaryAgentPort(deps: {
       deps.roster.create({
         name, actorReference: null, deleteRequested: false,
         birth: { creationId, assignment, seed: { name, displayName: codenameFor(name), nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME } },
-        createdBy: 'orchestrator', status: 'working', currentTask: task, createdAt: startedAt,
+        createdBy: request.lane ? 'evolution' : 'orchestrator', status: 'working', currentTask: task, createdAt: startedAt,
         dismissedAt: null, lifetime: TEMPORARY_LIFETIME, taskEventId: null,
       });
       // A child can report before its assignment acknowledgement returns.

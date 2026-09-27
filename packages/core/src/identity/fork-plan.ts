@@ -215,10 +215,10 @@ export function forkSessionMessageRow(
   sql: SqlExecutor, actorId: string, messageId: string, artifactDirectory: string,
 ): ForkSessionMessageRow {
   const row = sql<{
-    message_id: string; role: string; native_content_kind: string; origin: string; recorded_at: number;
+    message_id: string; role: string; native_content_kind: string; origin: string;
     envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null;
   }>`
-    SELECT message_id, role, native_content_kind, origin, recorded_at, envelope_json, sealed_at, content_json, content_path, content_digest
+    SELECT message_id, role, native_content_kind, origin, envelope_json, sealed_at, content_json, content_path, content_digest
     FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
   `[0];
 

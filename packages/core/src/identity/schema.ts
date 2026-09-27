@@ -99,7 +99,6 @@ const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     staged_conversation_entries     INTEGER NOT NULL DEFAULT 0,
     staged_conversation_entry_parts INTEGER NOT NULL DEFAULT 0,
     staged_context_members          INTEGER NOT NULL DEFAULT 0,
-    staged_files                    INTEGER NOT NULL DEFAULT 0,
     transfer_id                     TEXT,
     expected_seq                    INTEGER NOT NULL DEFAULT 0,
     section_cursor                  INTEGER NOT NULL DEFAULT 0,

@@ -23,11 +23,8 @@ import type { NameOrigin } from '../identity/naming';
 const ROSTER_COLUMNS =
   'actor_id, name, created_by, status, current_task, created_at, dismissed_at, lifetime, task_event_id, actor_reference, birth_request, delete_requested';
 
-/** The stored CHECK predates `evolution`, so it is read from the helper table. */
 const ROSTER_PROJECTION =
-  'name, CASE WHEN EXISTS (SELECT 1 FROM evolution_helpers h WHERE h.actor_id = actor_subordinates.actor_id '
-  + "AND h.name = actor_subordinates.name) THEN 'evolution' ELSE created_by END AS createdBy, "
-  + 'status, current_task AS currentTask, '
+  'name, created_by AS createdBy, status, current_task AS currentTask, '
   + 'created_at AS createdAt, dismissed_at AS dismissedAt, '
   + 'lifetime, task_event_id AS taskEventId, actor_reference AS actorReference, birth_request AS birth, delete_requested AS deleteRequested';
 
@@ -106,7 +103,7 @@ export function initSubordinateRosterTable(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS actor_subordinates (
     actor_id      TEXT NOT NULL,
     name          TEXT NOT NULL,
-    created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user')),
+    created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user','evolution')),
     status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
     current_task  TEXT,
     created_at    INTEGER NOT NULL,
@@ -146,7 +143,7 @@ export class SubordinateRosterStore {
       `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${onConflict}`,
       this.actorId,
       entry.name,
-      entry.createdBy === 'evolution' ? 'orchestrator' : entry.createdBy,
+      entry.createdBy,
       entry.status,
       entry.currentTask,
       entry.createdAt,

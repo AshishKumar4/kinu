@@ -152,8 +152,8 @@ describe('one workspace actor directory', () => {
     const main = directory.createMain({ name: 'main' });
     const actorId = crypto.randomUUID();
 
-    expect(() => sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
-      VALUES (${actorId}, 'workspace', ${main.actorId}, ${`exp:${kind}`}, ${actorId}, ${kind}, 'full', 'task', ${Date.now()}, 'c-old')`).toThrow('CHECK constraint failed');
+    expect(() => sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
+      VALUES (${actorId}, ${main.actorId}, ${`exp:${kind}`}, ${actorId}, ${kind}, 'full', 'task', ${Date.now()}, 'c-old')`).toThrow('CHECK constraint failed');
     expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-new', name: `exp:${kind}-new`, kind, lifetime: 'task' }))))
       .toThrow(expect.objectContaining({ code: 'bad_input' }));
   });

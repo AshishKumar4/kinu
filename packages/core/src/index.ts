@@ -622,7 +622,6 @@ export { agentSelfHost } from './orchestrator/agent-self-host';
 export { SubordinateRosterStore, initSubordinateRosterTable, subordinateTitle } from './subordinates/roster';
 
 export {
-  SubordinateIdentityStore,
   admitSubordinateReport,
   admitSubordinateTask,
   createTeamToolDeps,
@@ -634,7 +633,6 @@ export {
   subordinateRelaysTurnEnd,
   type SubordinateDescriptor,
   type SubordinateDescriptorSource,
-  type SubordinateIdentity,
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
   type SubordinateRuntime,
@@ -664,7 +662,7 @@ export { DELEGATED_TURN_SLOTS, DelegatedTurnRunners, type DelegatedTurnRunnerDep
 export {
   DELEGATION_MAX_DEPTH,
   ROOT_DELEGATION_BUDGET,
-  delegationBudgetAtDepth, delegationBudgetOf,
+  delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,
   deriveChildDelegationBudget,
