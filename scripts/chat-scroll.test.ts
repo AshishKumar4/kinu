@@ -102,21 +102,39 @@ async function probe(page: Page): Promise<Probe> {
   return v.parse(ProbeSchema, JSON.parse(await page.$eval(PROBE, (el) => el.textContent ?? 'null')));
 }
 
+/** Animation frames in a row with nothing in flight and nothing changing before a wait counts as stalled. */
+const IDLE_FRAMES = 60;
+
 /**
- * A predicate over the probe, run in the browser.
+ * Waits for a predicate over the probe, run in the browser each frame, or for the frame to go still: no request in
+ * flight and the probe unchanged for {@link IDLE_FRAMES} frames. A still frame fails the step named `step`, so a hook
+ * that stops asking ends its scenario with a reason instead of hanging the suite to the ladder's deadline.
  *
- * The condition is a string of JS rather than a closure because it executes in
- * the page, where the schema does not exist; `probe()` above is what pins the
- * shape, and every field these conditions name is one it parses.
+ * The condition is a string of JS rather than a closure because it executes in the page, where the schema does not
+ * exist; `probe()` above is what pins the shape, and every field these conditions name is one it parses.
  */
-async function untilProbe(page: Page, condition: string): Promise<void> {
-  await page.waitForFunction(
-    `(() => { const el = document.querySelector('${PROBE}');
-       if (!el || !el.textContent) return false;
-       const state = JSON.parse(el.textContent);
-       return Boolean(${condition}); })()`,
-    { polling: 50 },
-  );
+async function untilProbe(page: Page, condition: string, step: string): Promise<void> {
+  const met = `(() => { const el = document.querySelector('${PROBE}');
+    if (!el || !el.textContent) return false;
+    const state = JSON.parse(el.textContent);
+    return Boolean(${condition}); })()`;
+
+  await page.evaluate(() => { delete document.documentElement.dataset.probeIdle; delete document.documentElement.dataset.probeLast; });
+  await page.waitForFunction(`(() => {
+    if (${met}) return true;
+    const text = document.querySelector('${PROBE}')?.textContent ?? '';
+    const tally = document.documentElement.dataset;
+    const loading = text !== '' && JSON.parse(text).loading === true;
+    const idle = loading || tally.probeLast !== text ? 0 : Number(tally.probeIdle ?? 0) + 1;
+    tally.probeLast = text;
+    tally.probeIdle = String(idle);
+    return idle >= ${IDLE_FRAMES};
+  })()`, { polling: 'raf' });
+
+  if (await page.evaluate(met) === true) return;
+  const state = await probe(page);
+
+  throw new Error(`${step}: the frame went still (loading=${state.loading}, exhausted=${state.exhausted}, calls=${state.calls.length}, rows=${state.ids.length})`);
 }
 
 /** A gallery frame, loaded twice: a first load can trip vite's dependency
@@ -139,8 +157,8 @@ async function openFrame(newPage: Gallery['newPage'], origin: string, query: str
 }
 
 /** Wait until the frame is settled: nothing in flight, and the first page in. */
-async function settled(page: Page): Promise<void> {
-  await untilProbe(page, 'state.loading === false && state.calls.length > 0');
+async function settled(page: Page, step: string): Promise<void> {
+  await untilProbe(page, 'state.loading === false && state.calls.length > 0', step);
 }
 
 /** The scroller and one anchor row, before a page lands. `id` and `top` are
@@ -216,7 +234,7 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
   // it, and waiting for a second one waits for a page a correct hook never
   // asks for.
 
-  await untilProbe(page, `state.ids.length > ${before.rows} && state.loading === false`);
+  await untilProbe(page, `state.ids.length > ${before.rows} && state.loading === false`, 'no older page landed');
   // The page has landed in state; the correction is a layout effect, so let the
   // browser commit a frame before measuring where anything is.
   await page.evaluate(() => {
@@ -332,11 +350,34 @@ interface Walked {
   readonly boundary: string;
 }
 
+/**
+ * The workspace chat over a long history (owner, 2026-09-26: "the user shouldn't feel pagination"). What a reader
+ * saw is read per rendering step after the scroller's corrections, which run in a resize observer after
+ * `requestAnimationFrame` and before paint: a bare rAF sample reports a move that was never drawn.
+ */
+const LongFrameSchema = v.object({
+  realInView: v.boolean(), atStart: v.boolean(), scrollTop: v.number(), thumbPx: v.number(), anchorTop: v.nullable(v.number()),
+});
+
+type LongFrame = v.InferOutput<typeof LongFrameSchema>;
+
+interface LongChat {
+  readonly refused: string | null;
+  /** Per older page landing under a reader holding still: the painted frames from before it to after it. */
+  readonly stillReader: readonly (readonly LongFrame[])[];
+  /** The same, over a history whose pages alternate short and long rows. */
+  readonly uneven: readonly (readonly LongFrame[])[];
+  readonly fling: readonly LongFrame[];
+  readonly reservedBeforeDrag: number;
+  readonly drag: readonly LongFrame[];
+}
+
 interface Observed {
   readonly walk: Walk;
   readonly race: Race;
   readonly broken: Broken;
   readonly walked: Walked;
+  readonly long: LongChat;
 }
 
 async function measureWalk(newPage: Gallery['newPage'], origin: string): Promise<Walk> {
@@ -364,9 +405,9 @@ async function measureWalk(newPage: Gallery['newPage'], origin: string): Promise
     // Asserted rather than assumed: the live rows alone, with the first page
     // still in flight. A measurement taken after it landed would report zero
     // drift for the trivial reason that nothing moved while we watched.
-    await untilProbe(page, 'state.loading === true && state.ids.length === 3');
+    await untilProbe(page, 'state.loading === true && state.ids.length === 3', 'the edge gesture asked for no first page');
     const firstPage = await prependStep(page, false);
-    await settled(page);
+    await settled(page, 'the first page never settled');
     const firstRows = await page.$$eval('[data-msg]', (rows) => rows.length);
     const prepends: Prepend[] = [];
 
@@ -396,13 +437,13 @@ async function measureRace(newPage: Gallery['newPage'], origin: string): Promise
     // the frame's live rows overflow past the prefetch band, so nothing asks
     // on its own.
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
-    await settled(page);
+    await settled(page, 'the first page never settled');
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
-    await untilProbe(page, 'state.loading === true');
+    await untilProbe(page, 'state.loading === true', 'the edge gesture asked for no second page');
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent('gallery:arrive', { detail: 'race-1' }));
     });
-    await settled(page);
+    await settled(page, 'the page in flight never settled beside the live arrival');
     const ids = (await probe(page)).ids;
     const seen = new Set<string>();
 
@@ -421,7 +462,7 @@ async function measureBroken(newPage: Gallery['newPage'], origin: string): Promi
     // The edge gesture asks for the page — and this stub fails the FIRST
     // request, so the drive is what produces the error the scenario measures.
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
-    await untilProbe(page, 'state.error !== null');
+    await untilProbe(page, 'state.error !== null', 'the failing page never surfaced its error');
     const failed = await probe(page);
     const boundary = await page.$eval(SCROLL, (el) => el.firstElementChild?.textContent ?? '');
     // The harness clears its own failure after one throw, so the retry the
@@ -431,7 +472,7 @@ async function measureBroken(newPage: Gallery['newPage'], origin: string): Promi
       button?.click();
     });
     await untilProbe(
-      page, 'state.error === null && state.loading === false && state.ids.length > 3');
+      page, 'state.error === null && state.loading === false && state.ids.length > 3', 'Retry never recovered the walk');
 
     return { refused: null, failed, boundary, retried: await probe(page) };
   } catch (err) {
@@ -447,7 +488,7 @@ async function measureWalked(newPage: Gallery['newPage'], origin: string): Promi
   try {
     // depth=1 still needs the edge gesture to start the walk at all.
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
-    await untilProbe(page, 'state.exhausted === true');
+    await untilProbe(page, 'state.exhausted === true', 'the walk never reached the start');
 
     return {
       refused: null,
@@ -461,12 +502,238 @@ async function measureWalked(newPage: Gallery['newPage'], origin: string): Promi
   }
 }
 
+const LONG = '.p-thread-column.overflow-y-auto';
+
+/**
+ * Every frame the page renders while `drive` runs, read in the page as it is presented: each rendering step is read
+ * in its `requestAnimationFrame` callback and read again from a resize observer created after the scroller's own, so
+ * the last reading of a step is taken after the scroller's corrections and before the paint. A step's reading is kept
+ * when the next step opens, so a one-frame move is recorded rather than sampled around.
+ */
+async function paintedFrames(page: Page, drive: () => Promise<void>): Promise<LongFrame[]> {
+  const recording = page.evaluate((selector) => new Promise<unknown[]>((resolve, reject) => {
+    const scroller = document.querySelector<HTMLElement>(selector);
+
+    document.documentElement.dataset.probeRecording = '';
+
+    if (scroller === null) {
+      reject(new Error(`no ${selector} to record`));
+
+      return;
+    }
+
+    const read = () => {
+      const box = scroller.getBoundingClientRect();
+
+      const realInView = [...scroller.children].some((row) => {
+        if (row.hasAttribute('data-scroll-edge')) return false;
+        const rect = row.getBoundingClientRect();
+
+        return rect.bottom > box.top && rect.top < box.bottom;
+      });
+
+      const anchor = scroller.querySelector('[data-probe-anchor]');
+
+      return {
+        realInView,
+        atStart: (scroller.textContent ?? '').includes('Beginning of the conversation'),
+        scrollTop: scroller.scrollTop,
+        thumbPx: (scroller.scrollTop / scroller.scrollHeight) * scroller.clientHeight,
+        anchorTop: anchor === null ? null : anchor.getBoundingClientRect().top - box.top,
+      };
+    };
+
+    const frames: ReturnType<typeof read>[] = [];
+    let step: ReturnType<typeof read> | null = null;
+
+    const resize = new ResizeObserver(() => { step = read(); });
+
+    const rows = new MutationObserver((changes) => {
+      for (const change of changes) for (const added of change.addedNodes) if (added instanceof Element) resize.observe(added);
+    });
+
+    const tick = () => {
+      if (step !== null) frames.push(step);
+      step = read();
+      raf = requestAnimationFrame(tick);
+    };
+
+    let raf = requestAnimationFrame(tick);
+
+    for (const row of scroller.children) resize.observe(row);
+    rows.observe(scroller, { childList: true });
+    window.addEventListener('probe:stop', () => {
+      cancelAnimationFrame(raf);
+      resize.disconnect();
+      rows.disconnect();
+      resolve(frames);
+    }, { once: true });
+  }), LONG);
+
+  // The flag is set before any refusal, so a recorder that cannot start ends this wait and rejects here.
+  await Promise.race([recording.then(() => undefined), page.waitForFunction(() => document.documentElement.dataset.probeRecording !== undefined)]);
+
+  try {
+    await drive();
+  } finally {
+    await page.evaluate(() => {
+      delete document.documentElement.dataset.probeRecording;
+      window.dispatchEvent(new Event('probe:stop'));
+    });
+  }
+
+  return v.parse(v.array(LongFrameSchema), await recording);
+}
+
+type LongGoal = { readonly kind: 'rowsAbove'; readonly rows: number } | { readonly kind: 'start' | 'quiet' };
+
+/**
+ * Waits for the long chat to reach `goal` (rows beyond a count, the conversation's start, or no loading line), or to
+ * go still: rows, heights, scroll position and loading line unchanged for {@link IDLE_FRAMES} frames. A held page
+ * that never lands is still, whatever its line says. A still chat fails the step named `step`.
+ */
+async function untilLong(page: Page, goal: LongGoal, step: string): Promise<void> {
+  const done = goal.kind === 'rowsAbove' ? `scroller.children.length > ${goal.rows}`
+    : { start: "text.includes('Beginning of the conversation')", quiet: "!text.includes('Loading earlier messages')" }[goal.kind];
+
+  const reached = `(() => { const scroller = document.querySelector('${LONG}');
+    if (scroller === null) return false;
+    const text = scroller.textContent ?? '';
+    return ${done}; })()`;
+
+  await page.evaluate(() => { delete document.documentElement.dataset.probeIdle; delete document.documentElement.dataset.probeLast; });
+  await page.waitForFunction(`(() => {
+    if (${reached}) return true;
+    const scroller = document.querySelector('${LONG}');
+    const tally = document.documentElement.dataset;
+    const signature = scroller === null ? '' : [scroller.children.length, scroller.scrollHeight, scroller.scrollTop,
+      (scroller.textContent ?? '').includes('Loading earlier messages')].join();
+    const idle = tally.probeLast === signature ? Number(tally.probeIdle ?? 0) + 1 : 0;
+    tally.probeLast = signature;
+    tally.probeIdle = String(idle);
+    return idle >= ${IDLE_FRAMES};
+  })()`, { polling: 'raf' });
+
+  if (await page.evaluate(reached) === true) return;
+  const at = await page.$eval(LONG, (el) => `rows=${el.children.length}, scrollTop=${Math.round(el.scrollTop)}, loading=${(el.textContent ?? '').includes('Loading earlier messages')}`);
+
+  throw new Error(`${step}: the chat went still (${at})`);
+}
+
+/** Resolves on the page's next two animation frames: whatever was committed has been painted. */
+function nextPaint(page: Page): Promise<void> {
+  return page.evaluate(() => {
+    const painted = Promise.withResolvers<void>();
+
+    requestAnimationFrame(() => requestAnimationFrame(() => { painted.resolve(); }));
+
+    return painted.promise;
+  });
+}
+
+async function openLong(newPage: Gallery['newPage'], origin: string, query: string): Promise<Page> {
+  const page = await newPage();
+
+  await page.setViewport({ width: 1280, height: 860 });
+  await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=slates&slates=2&${query}`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector(LONG);
+  await page.evaluate(() => document.fonts.ready);
+  await nextPaint(page);
+
+  return page;
+}
+
+/** Opens a held long chat and records `landings` older pages landing under a reader holding still. */
+async function stillReaderLandings(newPage: Gallery['newPage'], origin: string, query: string, into: LongFrame[][]): Promise<void> {
+  const held = await openLong(newPage, origin, `${query}&historyHold=1`);
+
+  await held.evaluate(() => { window.dispatchEvent(new Event('gallery:release-page')); });
+  await untilLong(held, { kind: 'quiet' }, `the first held page never settled (${query})`);
+
+  for (let landing = 0; landing < 2; landing++) {
+    // The reader stands on a real row just below the reserve, which asks for the next page; it is held.
+    await held.evaluate((selector) => {
+      const scroller = document.querySelector<HTMLElement>(selector);
+
+      if (scroller === null) return;
+      const reserved = scroller.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0;
+
+      scroller.scrollTop = reserved + 200;
+      scroller.querySelector('[data-probe-anchor]')?.removeAttribute('data-probe-anchor');
+      const box = scroller.getBoundingClientRect();
+      const anchor = [...scroller.children].find((row) => !row.hasAttribute('data-scroll-edge') && row.getBoundingClientRect().top >= box.top + 20);
+
+      anchor?.setAttribute('data-probe-anchor', '');
+    }, LONG);
+    await nextPaint(held);
+    const before = await held.$eval(LONG, (el) => el.children.length);
+
+    into.push(await paintedFrames(held, async () => {
+      await nextPaint(held);
+      await held.evaluate(() => { window.dispatchEvent(new Event('gallery:release-page')); });
+      await untilLong(held, { kind: 'rowsAbove', rows: before }, `older page ${landing + 1} never landed under a still reader (${query})`);
+      await nextPaint(held);
+      await nextPaint(held);
+    }));
+  }
+
+  await held.close();
+}
+
+async function measureLong(newPage: Gallery['newPage'], origin: string): Promise<LongChat> {
+  const stillReader: LongFrame[][] = [];
+  const uneven: LongFrame[][] = [];
+  let fling: LongFrame[] = [];
+  let drag: LongFrame[] = [];
+  let reservedBeforeDrag = 0;
+
+  try {
+    // Held pages: each older page lands when released, and nothing lands between a painted frame and its reading.
+    await stillReaderLandings(newPage, origin, 'history=2000', stillReader);
+    await stillReaderLandings(newPage, origin, 'history=2000&historyUneven=1', uneven);
+
+    // A fling up a long chat: every painted frame shows transcript, never the reserve, while history remains.
+    const flung = await openLong(newPage, origin, 'history=2000&historyLatency=250');
+
+    const box = await flung.$eval(LONG, (el) => {
+      const r = el.getBoundingClientRect();
+
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+
+    await flung.mouse.move(box.x, box.y);
+    fling = await paintedFrames(flung, async () => {
+      for (let tick = 0; tick < 90; tick++) {
+        await flung.mouse.wheel({ deltaY: -600 });
+        await nextPaint(flung);
+      }
+    });
+    await flung.close();
+
+    // The scrollbar dragged to the top: the reader stays at the top while history fills, and lands on the first row.
+    const dragged = await openLong(newPage, origin, 'history=2000&historyLatency=50');
+
+    reservedBeforeDrag = await dragged.$eval(LONG, (el) => el.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0);
+    drag = await paintedFrames(dragged, async () => {
+      await dragged.$eval(LONG, (el) => { el.scrollTop = 0; });
+      await untilLong(dragged, { kind: 'start' }, 'the drag to the top never reached the first row');
+      await nextPaint(dragged);
+    });
+    await dragged.close();
+
+    return { refused: null, stillReader, uneven, fling, reservedBeforeDrag, drag };
+  } catch (err) {
+    return { refused: firstLine({ cause: err }), stillReader, uneven, fling, reservedBeforeDrag, drag };
+  }
+}
+
 async function run(): Promise<Observed> {
   return withGallery(async ({ newPage, origin }) => ({
     walk: await measureWalk(newPage, origin),
     race: await measureRace(newPage, origin),
     broken: await measureBroken(newPage, origin),
     walked: await measureWalked(newPage, origin),
+    long: await measureLong(newPage, origin),
   }));
 }
 
@@ -588,5 +855,48 @@ describe('the beginning of the conversation, said by the store', () => {
     expect(observed.walked.state?.exhausted).toBe(true);
     expect(observed.walked.state?.error).toBeNull();
     expect(observed.walked.boundary).toContain('Beginning of the conversation');
+  });
+});
+
+describe('a long workspace chat, as the reader sees it', () => {
+  test('the scenarios were measured', () => {
+    expect(observed.long.refused).toBeNull();
+    expect(observed.long.stillReader).toHaveLength(2);
+    expect(observed.long.uneven).toHaveLength(2);
+  });
+
+  // 2026-09-26: a page landing moved the row being read by 344px for one painted frame.
+  test('a reader holding still sees the row they read stay put on every painted frame as older pages land', () => {
+    for (const frames of [...observed.long.stillReader, ...observed.long.uneven]) {
+      const tops = frames.flatMap((frame) => frame.anchorTop === null ? [] : [frame.anchorTop]);
+
+      expect(tops.length).toBeGreaterThan(1);
+      expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(1);
+    }
+  });
+
+  test('the scrollbar thumb moves at most a few pixels as a page replaces its estimate, pages even or not', () => {
+    for (const frames of [...observed.long.stillReader, ...observed.long.uneven]) {
+      const thumbs = frames.map((frame) => frame.thumbPx);
+
+      expect(Math.max(...thumbs) - Math.min(...thumbs)).toBeLessThanOrEqual(4);
+    }
+  });
+
+  test('a fling up the history never paints a frame without transcript in it', () => {
+    expect(observed.long.fling.length).toBeGreaterThan(20);
+    expect(observed.long.fling.filter((frame) => !frame.realInView && !frame.atStart)).toEqual([]);
+  });
+
+  test('the scrollbar stands for the whole conversation: the unread history is reserved above the loaded rows', () => {
+    expect(observed.long.reservedBeforeDrag).toBeGreaterThan(100_000);
+  });
+
+  test('the thumb dragged to the top stays at the top while history fills, and the reader lands on the first row', () => {
+    const drag = observed.long.drag;
+
+    expect(drag.length).toBeGreaterThan(0);
+    expect(drag.filter((frame) => frame.scrollTop !== 0)).toEqual([]);
+    expect(drag.at(-1)).toMatchObject({ atStart: true, realInView: true });
   });
 });

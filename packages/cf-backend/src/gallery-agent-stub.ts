@@ -54,6 +54,10 @@ export function seedGalleryChat(messages: readonly UIMessage[]): void {
 	seededChat = messages;
 }
 
+export function seededGalleryChatRows(): number {
+	return seededChat.length;
+}
+
 /** Only ids are read: a walk-back redraw names rows the client already holds and adds none. */
 const TranscriptFrameSchema = v.object({
 	type: v.literal("cf_agent_chat_messages"),
