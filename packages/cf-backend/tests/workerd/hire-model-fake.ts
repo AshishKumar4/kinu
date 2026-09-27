@@ -6,7 +6,9 @@
  */
 
 import * as v from 'valibot';
-import { CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL } from './hire-shapes';
+import {
+  CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, NEST_MISSION, NEST_RELAY, type ChildScript,
+} from './hire-shapes';
 
 export interface HireCall {
   readonly model: string;
@@ -33,7 +35,7 @@ let childAskedTwice = Promise.withResolvers<void>();
 
 let childCalls = 0;
 
-let childScript: 'answer' | 'throw' | 'park' = 'answer';
+let childScript: ChildScript = 'answer';
 
 let childPark = Promise.withResolvers<void>();
 
@@ -116,6 +118,12 @@ interface AgentsToolArgs {
   readonly message?: string;
 }
 
+/** The `nest-progress` grandchild's mid-work note. */
+interface ReportToolArgs {
+  readonly status: 'progress';
+  readonly content: string;
+}
+
 interface SseChunk {
   readonly id: string;
   readonly object: 'chat.completion.chunk';
@@ -159,7 +167,7 @@ function textBody(model: string, text: string): Response {
   ]);
 }
 
-function toolCallBody(model: string, callId: string, name: string, args: AgentsToolArgs): Response {
+function toolCallBody(model: string, callId: string, name: string, args: AgentsToolArgs | ReportToolArgs): Response {
   return streamResponse([
     sse({
       id: callId, object: 'chat.completion.chunk', model,
@@ -206,9 +214,10 @@ function rootLane(body: OutboundBody, results: readonly string[]): Response {
 
   return toolCallBody(model, 'call_hire_1', 'agents', {
     action: 'hire',
-    lifetime: 'task',
+    // `nest-park`'s middle helper is durable: the owner dismisses it while it waits on its own task hire.
+    lifetime: childScript === 'nest-park' ? 'durable' : 'task',
     role: 'auditor',
-    mission: HIRE_MISSION,
+    mission: childScript === 'answer' || childScript === 'throw' || childScript === 'park' ? HIRE_MISSION : NEST_MISSION,
   });
 }
 
@@ -222,7 +231,7 @@ async function durableLane(body: OutboundBody, results: readonly string[]): Prom
       action: 'hire',
       lifetime: 'durable',
       role: 'auditor',
-      mission: HIRE_MISSION,
+      mission: childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,
     });
   }
 
@@ -246,8 +255,22 @@ async function durableLane(body: OutboundBody, results: readonly string[]): Prom
   return textBody(model, `ROOT-SAW-DURABLE ${name}`);
 }
 
-/** The child's closing prose is the report a task-lifetime child relays. */
-async function childLane(body: OutboundBody): Promise<Response> {
+/** The child's closing prose is the report a task-lifetime child relays; under `nest` it first hires its own. */
+async function childLane(body: OutboundBody, results: readonly string[]): Promise<Response> {
+  const model = body.model ?? HIRE_CHILD_MODEL;
+
+  // `chain`: every helper hires one of its own, to the depth cap; the others nest one level.
+  if (childScript !== 'answer' && childScript !== 'throw' && childScript !== 'park' && lastUser(body).includes(NEST_MISSION)) {
+    if (results.length !== 0) return textBody(model, `${NEST_RELAY} ${results.join(' ')}`.slice(0, 600));
+
+    return toolCallBody(model, 'call_nested_hire_1', 'agents', {
+      action: 'hire',
+      lifetime: 'task',
+      role: 'auditor',
+      mission: childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,
+    });
+  }
+
   childCalls += 1;
   childSpoke.resolve();
 
@@ -255,17 +278,22 @@ async function childLane(body: OutboundBody): Promise<Response> {
 
   // 'park' is consumed by the call that parks; the recovery re-run must be answered,
   // or the hang is the fake's own doing.
-  if (childScript === 'park') {
-    childScript = 'answer';
+  if (childScript === 'park' || childScript === 'nest-park') {
+    childScript = childScript === 'park' ? 'answer' : 'nest';
 
     await childPark.promise;
+  }
+
+  // A progress note first: it reaches a hirer that is waiting on this very child.
+  if (childScript === 'nest-progress' && results.length === 0) {
+    return toolCallBody(model, 'call_progress_1', 'report', { status: 'progress', content: 'halfway' });
   }
 
   if (childScript === 'throw') {
     return new Response(JSON.stringify({ error: { message: 'hire-child model refuses this turn' } }), { status: 500 });
   }
 
-  return textBody(body.model ?? HIRE_CHILD_MODEL, CHILD_ANSWER);
+  return textBody(model, CHILD_ANSWER);
 }
 
 /** Auto-title and sleep-time judge want non-streamed JSON; keyed by role: title leads with a system
@@ -296,7 +324,7 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
     const raw = await request.text();
 
     const spec = v.parse(
-      v.looseObject({ script: v.optional(v.picklist(['answer', 'throw', 'park'])) }),
+      v.looseObject({ script: v.optional(v.picklist(['answer', 'throw', 'park', 'nest', 'nest-park', 'nest-progress', 'chain'])) }),
       raw === '' ? {} : JSON.parse(raw),
     );
 
@@ -376,7 +404,7 @@ export async function hireOutbound(request: Request): Promise<Response> {
   if (body.stream !== true) return auxLane(body);
 
   // The child's lane: `report` is deps-gated (core's `DEPS_GATED_TOOLS`), so only a hired actor carries it.
-  if (toolNames(body).includes('report')) return await childLane(body);
+  if (toolNames(body).includes('report')) return await childLane(body, results);
 
   if (body.model === HIRE_DURABLE_MODEL) return await durableLane(body, results);
 

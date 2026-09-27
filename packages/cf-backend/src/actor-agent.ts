@@ -886,19 +886,23 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._subordinateRuntime;
   }
 
-  private _temporaryAgentPort: TemporaryAgentPort | null = null;
+  /** The host's one port for this actor: a waiter is found only through the port that parked it. */
+  /** A turn waiting on a delegate it hired; the workspace root frees the waiting turn's slot. */
+  protected whileWaitingOnDelegate<T>(_actorId: string, waited: Promise<T>): Promise<T> {
+    return waited;
+  }
 
-  /** Built once per actor: `shell` parks a waiter that the report ingress later resolves on this
-   * isolate; a per-call port would leave every ask hanging. */
-  protected temporaryAgentPort(): TemporaryAgentPort {
-    this._temporaryAgentPort ??= createTemporaryAgentPort({
-      roster: this.subordinateRoster,
-      runtime: this.subordinateRuntime(),
-      now: () => Date.now(),
-      createName: mintSubordinateName,
+  protected temporaryAgentPort(reference: ActorReference = actorReferenceOf(this.actorHandle())): TemporaryAgentPort {
+    return this.actorHost().temporary(reference, (bound) => {
+      const seams = this.subordinateSeams();
+      const roster = seams.roster(bound);
+      roster.ensureSchema();
+
+      return createTemporaryAgentPort({
+        roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
+        whileWaiting: (waited) => this.whileWaitingOnDelegate(bound.record.actorId, waited),
+      });
     });
-
-    return this._temporaryAgentPort;
   }
 
   protected getTeamToolDeps(): TeamToolDeps {

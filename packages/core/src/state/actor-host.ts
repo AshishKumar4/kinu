@@ -17,6 +17,7 @@ import { createAgentStores, type AgentStores } from './agent-stores';
 import type { WorkspaceActor, WorkspaceActorDirectory } from '../identity/workspace-actors';
 import type { ActorContextStores, ChildContextResolver } from '../vfs/context-plane';
 import type { ContextEventRecorder } from '../types/context-plane';
+import type { TemporaryAgentPort } from '../types/subordinates';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { recordRecoverySettled, sameBuildOf } from '../orchestrator/turn-recovery-events';
@@ -94,6 +95,7 @@ export interface ActorHost {
   release(reference: ActorReference): void;
   releaseAll(): void;
   retire(parent: ActorReference, retirement: ActorRetirement): Promise<void>;
+  temporary(reference: ActorReference, build: (bound: BoundActor) => TemporaryAgentPort): TemporaryAgentPort;
   resumable(limit?: number): readonly ResumableActorTurn[];
   readonly installedBuild: string | null;
   readonly workspace?: string;
@@ -149,6 +151,7 @@ function actorScopedTables(sql: SqlExecutor): readonly string[] {
 export function createActorHost(deps: ActorHostDeps): ActorHost {
   const slots = new Map<string, HostSlot>();
   const opening = new Map<string, Promise<HostedActor>>();
+  const ports = new Map<string, TemporaryAgentPort>();
 
   const slotFor = (reference: ActorReference): HostSlot | null => {
     const slot = slots.get(reference.actorId);
@@ -280,7 +283,11 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
     const slot = slotFor(reference);
 
-    if (!slot || slot.fence.released) return;
+    if (!slot || slot.fence.released) {
+      ports.delete(reference.actorId);
+
+      return;
+    }
 
     if (slot.actor.session.inFlight) {
       throw new KinuError('denied', 'An actor holding a turn in flight cannot be released; cancel or settle the turn first.');
@@ -288,6 +295,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
     slot.fence.released = true;
     slots.delete(reference.actorId);
+    ports.delete(reference.actorId);
   };
 
   return {
@@ -311,6 +319,15 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       return await result;
     },
     release,
+    temporary: (reference, portFor) => {
+      const known = ports.get(reference.actorId);
+
+      if (known !== undefined) return known;
+      const port = portFor(bind(reference).bound);
+      ports.set(reference.actorId, port);
+
+      return port;
+    },
     releaseAll: () => {
       for (const reference of [...slots.values()].map((slot) => slot.actor.reference)) {
         const slot = slotFor(reference);
@@ -319,6 +336,8 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         slot.fence.released = true;
         slots.delete(reference.actorId);
       }
+
+      ports.clear();
     },
     retire: async (parent, retirement) => {
       const record = deps.directory.retained(retirement.reference.actorId);
@@ -363,6 +382,8 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         slot.fence.released = true;
         slots.delete(retirement.reference.actorId);
       }
+
+      ports.delete(retirement.reference.actorId);
 
       const parentPath = deps.directory.storagePath(parent);
       deps.directory.apply(parent, parentPath, {
