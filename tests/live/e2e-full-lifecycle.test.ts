@@ -18,12 +18,14 @@ import {
   BUILTIN_TOOLS,
   collectStepText,
   createFactsStore,
+  extractJsonObject,
   openWorkspaceMainActor,
   readSoul,
   type JsonObject,
   type LLMProviderConfig,
   type CompletedTurn,
 } from '../../packages/core/src/index';
+import { tolerate } from '../../packages/core/src/obs';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   makeSql, type CLIRuntime,
@@ -282,7 +284,8 @@ describe('E2E Full Lifecycle', () => {
     const execution = turn.toolCalls.find((call) => call.name === 'eval');
     expect(execution, 'the model did not use eval').toBeDefined();
     const output = v.parse(v.object({ logs: v.array(v.string()) }), execution?.result);
-    expect(output.logs).toContain('{"7":true,"10":false,"13":true}');
+    expect(output.logs.map((line) => tolerate(() => extractJsonObject(line), 'malformed-input')))
+      .toContainEqual({ 7: true, 10: false, 13: true });
     expect(finalIntegerAnswer(turn.assistantResponse)).toBe(2);
   }, 300_000);
 
