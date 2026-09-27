@@ -15,7 +15,7 @@ import { publishBlueprint, revokeShare, type Published } from "@/lib/shared-api"
 import { EmailsField, emailsOf, Failure, Lead, StopButton } from "./ShareParts";
 import { showRejection } from "@/hooks/use-async-resource";
 
-const HistorySchema = v.object({ versions: v.array(v.object({ id: v.string() })) });
+const HistorySchema = v.object({ versions: v.array(v.object({ id: v.string() })), next: v.nullable(v.string()) });
 
 export function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(`${result.reason}: ${result.error}`);
@@ -62,9 +62,21 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
   useEffect(() => {
     if (fixture !== undefined) return;
     let live = true;
-    Promise.all([rpc<SlateAnswer<unknown>>("slate", [{ op: "history", id: slate }]), rpc<SlateAnswer<unknown>>("slate", [{ op: "shares" }])]).then(([history, rows]) => {
+
+    const versionIds = async (): Promise<string[]> => {
+      let page = answered(await rpc<SlateAnswer<unknown>>("slate", [{ op: "history", id: slate }]), HistorySchema);
+      const ids = page.versions.map((entry) => entry.id);
+
+      for (let after = page.next; after !== null; after = page.next) {
+        page = answered(await rpc<SlateAnswer<unknown>>("slate", [{ op: "history", id: slate, after }]), HistorySchema);
+        ids.push(...page.versions.map((entry) => entry.id));
+      }
+
+      return ids;
+    };
+
+    Promise.all([versionIds(), rpc<SlateAnswer<unknown>>("slate", [{ op: "shares" }])]).then(([ids, rows]) => {
       if (!live) return;
-      const ids = answered(history, HistorySchema).versions.map((entry) => entry.id);
       setVersions(ids);
       setVersion(ids.at(-1) ?? null);
       setShares(answered(rows, v.array(SlateShareRecordSchema)).filter((share) => share.slate === slate && share.revokedAt === null));
