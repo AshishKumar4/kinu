@@ -80,24 +80,13 @@ export function createDirectWorkersAIFetch(
   return withRateLimitRetry(asFetchFunction(async (input, init) => {
     const request = input instanceof Request ? input : null;
     const text = request === null ? init?.body : await request.text();
-    const body = v.is(v.string(), text) ? readJsonObjectText(text) : null;
+    const started = v.is(v.string(), text) ? startRun(binding, text, request, init) : null;
 
-    if (body === null) return errorResponse(400, 'the request body is not JSON object text');
-    const route = v.parse(ChatCompletionRouteSchema, { model: body.model, stream: body.stream });
-    const signal = request?.signal ?? init?.signal;
-
-    const options: DirectWorkersAIRunOptions = {
-      ...(signal !== null && signal !== undefined && { signal }),
-      returnRawResponse: true,
-    };
-
-    const affinity = sessionAffinity(request?.headers ?? init?.headers);
-
-    if (affinity) options.extraHeaders = { 'x-session-affinity': affinity };
-
+    if (started === null) return errorResponse(400, 'the request body is not JSON object text');
+    const { route, running } = started;
     const startedAt = Date.now();
 
-    return settle(Effect.tryPromise({ try: () => binding.run(route.model, bindingInputs(body, route), options), catch: (cause) => ({ cause }) }).pipe(
+    return settle(Effect.tryPromise({ try: () => running, catch: (cause) => ({ cause }) }).pipe(
       Effect.matchEffect({
         onSuccess: (answer) => Effect.promise(() => (route.stream
           ? streamedResponse(answer, route.model, startedAt)
@@ -114,6 +103,30 @@ export function createDirectWorkersAIFetch(
       }),
     ));
   }), retry);
+}
+
+/** The parsed request stays in here: a caller's frame would hold it until the model answers. */
+function startRun(
+  binding: DirectWorkersAIRunner, text: string, request: Request | null, init: RequestInit | undefined,
+): { readonly route: ChatCompletionRoute; readonly running: Promise<Response | ReadableStream<Uint8Array> | JsonObject> } | null {
+  const body = readJsonObjectText(text);
+
+  if (body === null) return null;
+  const route = v.parse(ChatCompletionRouteSchema, { model: body.model, stream: body.stream });
+  const signal = request?.signal ?? init?.signal;
+
+  const options: DirectWorkersAIRunOptions = {
+    ...(signal !== null && signal !== undefined && { signal }),
+    returnRawResponse: true,
+  };
+
+  const affinity = sessionAffinity(request?.headers ?? init?.headers);
+
+  if (affinity) options.extraHeaders = { 'x-session-affinity': affinity };
+
+  const inputs = bindingInputs(body, route);
+
+  return { route, running: Promise.resolve().then(() => binding.run(route.model, inputs, options)) };
 }
 
 /** Tool-call ids are forwarded as-is: the upstream pairs on equality and re-keying would split pairs.
@@ -137,7 +150,6 @@ function withoutNullContent(message: JsonObject): JsonObject {
   return message.content === null ? { ...message, content: '' } : message;
 }
 
-/** A request that asked for a whole completion. */
 async function completedResponse(
   answer: Response | ReadableStream<Uint8Array> | JsonObject,
   model: string,
@@ -154,7 +166,6 @@ async function completedResponse(
   return openAICompletion(v.parse(JsonObjectSchema, JSON.parse(text)), model);
 }
 
-/** A request that asked to stream. */
 async function streamedResponse(
   answer: Response | ReadableStream<Uint8Array> | JsonObject,
   model: string,

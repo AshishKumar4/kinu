@@ -53,7 +53,7 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0 };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false };
 
 /** The text of every user message a request carries. */
 function userTexts(messages: readonly object[]): string[] {
@@ -94,6 +94,14 @@ export class ScriptedAI extends WorkerEntrypoint {
 
       if (!root) {
         const steps = messages.filter((message) => 'role' in message && message.role === 'tool').length;
+
+        // Held at its last working step, a helper turn carries its whole transcript into a model call.
+        if (model.holdHelper && steps === HELPER_STEPS - 1) {
+          model.helperParked = true;
+
+          while (model.holdHelper) await scheduler.wait(20);
+          model.helperParked = false;
+        }
 
         // A helper works a page per step, with a cheap tool call, then answers in one word.
         if (steps < HELPER_STEPS) {
@@ -154,13 +162,15 @@ export default {
 
       if (url.searchParams.has('released')) model.released = Number(url.searchParams.get('released'));
 
+      if (url.searchParams.has('holdHelper')) model.holdHelper = url.searchParams.get('holdHelper') === '1';
+
       if (url.searchParams.has('hires')) {
         model.hires = Number(url.searchParams.get('hires'));
         model.helpersAnswered = 0;
         model.stepping = false;
       }
 
-      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered });
+      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked });
     }
 
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
