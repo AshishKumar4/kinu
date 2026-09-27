@@ -1428,7 +1428,6 @@ describe('LocalAgentHost', () => {
     const team = await host.team('root');
     await team.spawn({ name: 'ask-refiner-x1', role: 'researcher', mission: 'Propose refinements.', mode: 'build' });
 
-    // The request and helper rows the lane writes when it hires its refiner; its waiter is gone.
     const seed = new Database(dbPath);
     const actorId = present(seed.query<{ actor_id: string }, []>('SELECT actor_id FROM actor_subordinates LIMIT 1').get(), 'the root').actor_id;
     const now = Date.now();
@@ -1451,7 +1450,6 @@ describe('LocalAgentHost', () => {
     host.subscribe((agent, event) => {
       if (agent !== 'root' && event.type === 'turn-end') answered.resolve();
     });
-    // No daemon pass runs here: only the answer's own wake can route it.
     await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
     await answered.promise;
 

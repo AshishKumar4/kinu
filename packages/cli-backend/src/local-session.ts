@@ -2305,7 +2305,6 @@ export class LocalAgentSession {
     this.announceRefinement(await refinementPass(this.refinementDeps));
   }
 
-  /** A stored refiner answer's pass, on core's one rule; every daemon pass also runs the lane. */
   async runEvolutionAnswer(now: number): Promise<void> {
     const step = await evolutionAnswerWake(this.refinementDeps, now, (failure) => {
       diagnostics.failure('refinement.answer_wake_failed', failure);

@@ -407,7 +407,6 @@ async function gatheredSkillPaths(rt: AgentRuntime): Promise<string[]> {
   return sources.filter((source) => source.kind === 'skill').map((source) => source.path);
 }
 
-/** A lane step rejects, and `cause` is somewhere in the chain it carries (the lane names its step around it). */
 async function failsFrom(pending: Promise<unknown>, cause: string): Promise<void> {
   let chain = '';
 
@@ -2243,7 +2242,6 @@ describe('promotion never half-lands — the read-back is what allows the unlink
 });
 
 /** One workspace database for the roster and the root's rail, as both hosts keep them. */
-/** `over`: the lane's own database, so the helper's parent is the actor whose lane asked it, as in a workspace. */
 function refinerRail(over?: { readonly db: Database; readonly workspaceId: string }) {
   const db = over?.db ?? new Database(':memory:');
   const workspaceId = over?.workspaceId ?? 'refiner-workspace';
@@ -2254,7 +2252,6 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
   const root = directory.main();
   const roster = new SubordinateRosterStore(exec, root);
   roster.ensureSchema();
-  // Resolved when the helper's task event is recorded on its row: the moment its answer can be keyed.
   const assigned = Promise.withResolvers<void>();
   const recordAssignment = roster.recordAssignmentEvent.bind(roster);
 
@@ -2297,7 +2294,7 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
   };
 }
 
-/** A port whose activation dies once its refiner is assigned: the run it started, and its waiter, outlive it. */
+/** An activation evicted once its refiner is assigned. */
 function evictedAfterAssign(rail: ReturnType<typeof refinerRail>, evicted: TemporaryAgentPort): TemporaryAgentPort {
   const lost: Promise<unknown>[] = [];
 
@@ -2306,7 +2303,6 @@ function evictedAfterAssign(rail: ReturnType<typeof refinerRail>, evicted: Tempo
     run: async (request) => {
       const run = evicted.run(request);
       lost.push(run);
-      // A run that settles before it is assigned ends the wait too: a broken hire fails with its own error.
       await Promise.race([rail.assigned, run]);
       throw new Error('the activation was evicted');
     },
@@ -2359,7 +2355,6 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
   });
 
   test('a stored answer owes the lane a pass at once, and the pass that routes it clears that', async () => {
-    // Without it, an answer stored after an eviction waits for the owner's next turn.
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
@@ -2383,7 +2378,6 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
   });
 
   test('it owes nothing while an older request is ahead in the lane, which the next pass would take instead', async () => {
-    // A due source the pass will not route would re-arm the wake at once, lap after lap.
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
@@ -2410,19 +2404,16 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
     expect(owed()).not.toBeNull();
 
-    // Taking the request throws, outside every catch the routing has.
     fx.db.run(`CREATE TRIGGER refuse_claim BEFORE UPDATE ON refinement_requests
       BEGIN SELECT RAISE(ABORT, 'the request table refused the write'); END`);
     await failsFrom(refinementPass(fx.deps(resumed)), 'the request table refused the write');
     expect(owed()).toBeNull();
 
-    // A pass that completes lifts the hold and routes the answer.
     fx.db.run('DROP TRIGGER refuse_claim');
     expect((await refinementPass(fx.deps(resumed))).step).toBe('planned');
   });
 
   test('a pass that fails for no one request holds the lane with its cause, owing no wake until new input', async () => {
-    // Still due, every wake would re-run the same failing settle.
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
