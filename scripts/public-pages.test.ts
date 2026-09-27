@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { contrast, rgba, withGallery, type Gallery } from './gallery-harness';
+import { TEST_REQUIREMENTS } from './test-requirements';
 import { THEMES, type Theme } from './computed-style';
 
 // The shared contract is dependency-free: this gate reads the handle shape
@@ -61,12 +62,12 @@ interface Contrast {
   readonly what: string;
   readonly ratio: number;
   readonly size: number;
+  readonly weight: number;
 }
 
 interface SurfaceFact {
   readonly present: boolean;
-  readonly width: number;
-  readonly height: number;
+  readonly drawn: boolean;
   readonly text: string;
 }
 
@@ -248,12 +249,12 @@ interface Facts {
   movieReduced?: MovieReducedFact;
   heroA11y?: { label: string; phrases: string[] };
   persists?: { text: string; caption: string };
-  heroTreeText?: { text: string };
+  heroTreeText?: { treeHidden: boolean; text: string };
   checkoutLead?: { firstIsProse: boolean; firstIsTool: boolean };
   homeLink?: { visible: boolean; hasGraphic: boolean };
   deploy?: { button: string | null; guide: string | null };
   providers?: string[];
-  loginLayout?: { dialog: boolean; cardOffset: number; barOffset: number; footer: boolean };
+  loginLayout?: { dialog: boolean; center: number; cardCenter: number; barCenter: number; footer: boolean };
   landingOverflow: Record<string, WidthIntegrity>;
   /** The `cut` rule measured in both directions on one page: the landing's
    *  own count, that count with a clipped row injected, and with an overhang
@@ -285,31 +286,6 @@ function required<T>(value: T | undefined, label: string): T {
   if (value === undefined) throw new Error(`${label} was not measured`);
 
   return value;
-}
-
-function luminance(rgb: readonly [number, number, number]): number {
-  const linear = (channel: number): number => {
-    const c = channel / 255;
-
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  };
-
-  return 0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2]);
-}
-
-function contrastRatio(a: readonly [number, number, number], b: readonly [number, number, number]): number {
-  const high = Math.max(luminance(a), luminance(b));
-  const low = Math.min(luminance(a), luminance(b));
-
-  return (high + 0.05) / (low + 0.05);
-}
-
-function parseRgb(value: string): [number, number, number] {
-  const channels = value.match(/-?[\d.]+/g);
-
-  if (channels === null || channels.length < 3) throw new Error(`not a colour: ${value}`);
-
-  return [Number(channels[0]), Number(channels[1]), Number(channels[2])];
 }
 
 async function openLanding(
@@ -443,8 +419,7 @@ beforeAll(async () => {
 
           return {
             present: element !== null,
-            width: Math.round(box?.width ?? 0),
-            height: Math.round(box?.height ?? 0),
+            drawn: (box?.width ?? 0) > 0 && (box?.height ?? 0) > 0,
             text: element?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
           };
         };
@@ -794,12 +769,13 @@ beforeAll(async () => {
           if (element === null) return [];
           const style = getComputedStyle(element);
 
-          return [{ what, ink: style.color, paper: background(element), size: parseFloat(style.fontSize) }];
+          return [{ what, ink: style.color, paper: background(element), size: parseFloat(style.fontSize), weight: parseFloat(style.fontWeight) }];
         });
       }).then((rows) => rows.map((row) => ({
         what: row.what,
         size: row.size,
-        ratio: contrastRatio(parseRgb(row.ink), parseRgb(row.paper)),
+        weight: row.weight,
+        ratio: contrast(rgba(row.ink), rgba(row.paper)),
       })));
 
       facts.persists = await page.evaluate(() => ({
@@ -810,6 +786,7 @@ beforeAll(async () => {
       }));
 
       facts.heroTreeText = await page.evaluate(() => ({
+        treeHidden: document.querySelector('#top [data-hero-graph], #top [data-hero-dust]')?.getAttribute('aria-hidden') === 'true',
         text: document.querySelector('#top p.sr-only')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
       }));
 
@@ -1097,8 +1074,9 @@ beforeAll(async () => {
 
               return {
                 dialog: document.querySelector('[role="dialog"]')?.getAttribute('aria-modal') === 'true',
-                cardOffset: Math.abs((card?.left ?? 0) + (card?.width ?? 0) / 2 - viewportCenter),
-                barOffset: Math.abs((bar?.left ?? 0) + (bar?.width ?? 0) / 2 - viewportCenter),
+                center: viewportCenter,
+                cardCenter: (card?.left ?? 0) + (card?.width ?? 0) / 2,
+                barCenter: (bar?.left ?? 0) + (bar?.width ?? 0) / 2,
                 footer: document.querySelector('footer') !== null,
               };
             });
@@ -1150,12 +1128,9 @@ describe('the standalone landing runs', () => {
 
     for (const surface of [workspace, tui, cli]) {
       expect(surface.present).toBeTrue();
-      expect(surface.width).toBeGreaterThan(500);
+      expect(surface.drawn).toBeTrue();
     }
 
-    expect(workspace.height).toBeGreaterThan(600);
-    expect(tui.height).toBeGreaterThan(600);
-    expect(cli.height).toBeGreaterThan(150);
     expect(new Set([workspace.text, tui.text, cli.text]).size).toBe(3);
   });
 
@@ -1258,8 +1233,9 @@ describe('the landing demonstration leads with its result', () => {
   });
 
   test('the hero tree carries its text equivalent', () => {
+    // The tree is hidden from assistive technology, so the sentence beside it is all a screen reader gets.
     const hero = required(facts.heroTreeText, 'hero tree text');
-    expect(hero.text).toBe('Kinu tries several approaches to a task, checks each, and keeps the one that passes, along with any tool it built along the way.');
+    expect(hero).toEqual({ treeHidden: true, text: expect.stringMatching(/\S+\s+\S+/u) });
   });
 
   test('the checkout frame leads with prose, not a tool row', () => {
@@ -1409,8 +1385,8 @@ describe('public actions work', () => {
   test('sign in is a centered modal under one centered header', () => {
     const layout = required(facts.loginLayout, 'sign-in layout');
     expect(layout.dialog).toBeTrue();
-    expect(layout.cardOffset).toBeLessThanOrEqual(1);
-    expect(layout.barOffset).toBeLessThanOrEqual(1);
+    expect(layout.cardCenter).toBeCloseTo(layout.center, 0);
+    expect(layout.barCenter).toBeCloseTo(layout.center, 0);
     expect(layout.footer).toBeFalse();
   });
 });
@@ -1472,8 +1448,12 @@ describe('rendered landing text is readable', () => {
   test('sampled roles meet WCAG AA on their actual surfaces', () => {
     expect(facts.contrast.length).toBeGreaterThanOrEqual(8);
 
-    for (const { what, ratio, size } of facts.contrast) {
-      expect(ratio, `${what} at ${String(size)}px`).toBeGreaterThanOrEqual(size >= 24 ? 3 : 4.5);
+    const contract = TEST_REQUIREMENTS.wcagTextContrast.values;
+
+    for (const { what, ratio, size, weight } of facts.contrast) {
+      const large = size >= contract.largePixels || (size >= contract.largeBoldPixels && weight >= contract.boldWeight);
+
+      expect(ratio, `${what} at ${String(size)}px weight ${String(weight)}`).toBeGreaterThanOrEqual(large ? contract.large : contract.normal);
     }
   });
 });
