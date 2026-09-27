@@ -4135,20 +4135,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.eventRecorder.spendByAccount();
   }
 
-  /**
-   * `steps` bounds only the telemetry sample; `spend` is summed in SQL over the whole log, never windowed.
-   * `telemetry` is this agent's own turns; `spend` covers every producer in the workspace.
-   */
   /** The machine's name is read from the account, so it is current. */
   private async codexRoute(egress: string | undefined, deviceId: string | null): Promise<NonNullable<ActivitySnapshot['latest']>['route']> {
     if (egress === 'relay') return { kind: 'container' };
 
     if (deviceId === null) return null;
     const { stub, caller } = await this.userHub();
-    const status = await stub.deviceRuntimeStatus(caller);
 
-    return { kind: 'device', id: deviceId, name: status.devices?.find((device) => device.id === deviceId)?.name ?? null };
+    return { kind: 'device', id: deviceId, name: await stub.deviceName(caller, deviceId) };
   }
+
+  /**
+   * `steps` bounds only the telemetry sample; `spend` is summed in SQL over the whole log, never windowed.
+   * `telemetry` is this agent's own turns; `spend` covers every producer in the workspace.
+   */
 
   @callable()
   async getActivitySnapshot(opts?: { steps?: number; logs?: number }): Promise<ActivitySnapshot> {

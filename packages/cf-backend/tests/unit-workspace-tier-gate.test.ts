@@ -102,6 +102,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'mcp.manage', name: 'userMcp_warmConnections', run: (u, c) => u.userMcp_warmConnections(c) },
   { capability: 'mcp.manage', name: 'userMcp_handleOAuthCallback', run: (u, c) => u.userMcp_handleOAuthCallback(c, 'https://app/api/user/mcp/callback') },
 
+  { capability: 'device.rpc', name: 'deviceName', run: (u, c) => u.deviceName(c, 'dev-none') },
   { capability: 'device.rpc', name: 'deviceRpc', run: (u, c) => u.deviceRpc(c, 'exec', ['ls'], { agentName: WORKSPACE }) },
   { capability: 'device.rpc', name: 'acknowledgeDeviceRequest', run: (u, c) => u.acknowledgeDeviceRequest(c, 'rpc-1') },
   { capability: 'device.rpc', name: 'cancelDeviceRequestsForTurn', run: (u, c) => u.cancelDeviceRequestsForTurn(c, 'turn-1') },

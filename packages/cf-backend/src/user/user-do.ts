@@ -532,7 +532,6 @@ export interface CredentialSummary {
 /** What one OAuth refresh established; see `UserDO.refreshOAuthCredential`. */
 type OAuthRefresh = OAuthCredential | 'revoked' | { readonly failed: KinuError };
 
-/** A login and the revision it was read at. */
 interface HeldLogin {
   readonly cred: OAuthCredential;
   readonly revision: number;
@@ -3039,6 +3038,13 @@ export class UserDO extends Agent<Env> {
    * Toolchain is probed on status read, not in the HELLO handler: the reply arrives on that socket,
    * so awaiting it there would deadlock. Kept separate from `listDevices` to avoid a device round-trip.
    */
+  /** Null once removed; asks no machine anything. */
+  async deviceName(caller: UserCaller, deviceId: string): Promise<string | null> {
+    await this.requireTier(caller, 'device.rpc');
+
+    return this.sqlx<{ label: string }>(`SELECT label FROM user_devices WHERE id = ?`, deviceId)[0]?.label ?? null;
+  }
+
   async deviceRuntimeStatus(caller: UserCaller): Promise<DeviceStatus> {
     const resolved = await this.requireTier(caller, 'device.rpc');
     const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;
@@ -3709,7 +3715,6 @@ export class UserDO extends Agent<Env> {
     return null;
   }
 
-  /** Headers ready to inject into a fetch. */
   async getAuthHeaders(caller: UserCaller, key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null> {
     await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
