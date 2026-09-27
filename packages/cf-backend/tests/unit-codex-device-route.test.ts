@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { LanguageModel } from 'ai';
 import {
-  CODEX_CRED_KEY, DEVICE_RELAY, EgressCalls,
+  CODEX_CRED_KEY, DEVICE_CANCEL_METHOD, DEVICE_RELAY, EgressCalls, NO_DEVICE_CONNECTED,
   asFetchFunction, captureOperationProfile, operationProfileStream, requestUrl, runChat,
   type ChatEvent, type JsonValue, type OperationProfile,
 } from '@kinu.run/core';
@@ -49,6 +49,9 @@ interface Rig {
   readonly forwarded: Request[];
   readonly relayed: v.InferOutput<typeof RelayRequestSchema>[];
   readonly model: LanguageModel;
+  /** Settles when a revocation sweep asks the machine to cancel a command; the answer waits for `answerCancel`. */
+  readonly cancelAsked: Promise<void>;
+  readonly answerCancel: () => void;
   /** Attach the owner's machine; `answers` says what its daemon does with a relay call. */
   readonly attachMachine: (answers: 'relay' | 'too-old', label?: string) => Promise<{ readonly deviceId: string; readonly close: () => Promise<void> }>;
 }
@@ -58,9 +61,18 @@ async function rig(upstream: Upstream): Promise<Rig> {
   const relayed: Rig['relayed'] = [];
   const machines = new Map<string, 'relay' | 'too-old'>();
   const owner = await testOwner();
+  const cancelAsked = Promise.withResolvers<void>();
+  const cancelAnswered = Promise.withResolvers<void>();
 
   const harness: TestUserDO = createTestUserDO({
     deviceResponder: async (frame: DeviceFrame): Promise<JsonValue> => {
+      if (frame.method === DEVICE_CANCEL_METHOD) {
+        cancelAsked.resolve();
+        await cancelAnswered.promise;
+
+        return { requestId: v.parse(v.string(), frame.params[0]), cancelled: 'terminated' };
+      }
+
       if (frame.method !== DEVICE_RELAY.method || frame.device === undefined) return { present: [] };
 
       if (machines.get(frame.device) === 'too-old') throw new Error(`unknown method: ${DEVICE_RELAY.method}`);
@@ -99,6 +111,7 @@ async function rig(upstream: Upstream): Promise<Rig> {
 
   return {
     harness, forwarded, relayed, model: registry.resolveModel('codex/gpt-5.5'),
+    cancelAsked: cancelAsked.promise, answerCancel: () => { cancelAnswered.resolve(); },
     attachMachine: async (answers, label = 'studio') => {
       const { deviceId } = await harness.userDO.registerDevice(owner, label);
       machines.set(deviceId, answers);
@@ -274,6 +287,39 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     expect(done.text).toBe('from the machine');
     // The record names the machine by id; its label is read where it is shown, so a rename never rewrites history.
     expect(done.egress).toBe(`device ${machine.deviceId}`);
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('a machine revoked while the request body is still being read is not handed the token', async () => {
+    const { harness, relayed, cancelAsked, answerCancel, attachMachine } = await rig(recordedUpstream(ACCESS_1, 'ok'));
+    const owner = await testOwner();
+    const machine = await attachMachine('relay');
+    // A command still running on the machine, so the revocation sweep waits on its cancellation with the socket open.
+    harness.db.prepare('INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id) VALUES (?, ?, ?, ?)')
+      .run('rpc-held-1', machine.deviceId, 'workspace-a', 'turn-1');
+    const body = Promise.withResolvers<void>();
+
+    const held = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await body.promise;
+        controller.enqueue(new TextEncoder().encode('{}'));
+        controller.close();
+      },
+    });
+
+    const relaying = harness.userDO.relayCodex(owner, machine.deviceId, 'call-revoked', new Request('https://chatgpt.com/backend-api/codex/responses', {
+      method: 'POST', body: held, headers: { authorization: `Bearer ${ACCESS_1}` },
+    }));
+
+    const revocation = harness.userDO.revokeDevice(owner, machine.deviceId);
+    await cancelAsked;
+    body.resolve();
+
+    await expect(relaying).rejects.toThrow(NO_DEVICE_CONNECTED);
+    expect(relayed).toHaveLength(0);
+    answerCancel();
+    await revocation;
     await harness.joinFibers();
     harness.close();
   });

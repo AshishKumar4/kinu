@@ -2572,7 +2572,6 @@ export class UserDO extends Agent<Env> {
     return result === undefined ? undefined : JSON.stringify(result);
   }
 
-  /** docs/DEPLOYMENT.md § Codex egress. */
   async codexRelayDevice(caller: UserCaller): Promise<{ readonly id: string; readonly label: string } | null> {
     await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
     const deviceId = this._devices.relayDevice();
@@ -2587,11 +2586,12 @@ export class UserDO extends Agent<Env> {
       throw new KinuError('denied', `the Codex relay does not carry ${request.method} ${new URL(request.url).pathname}`);
     }
 
+    const body = request.body === null ? null : await request.text();
+
+    // No await from here to the send.
     if (!this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
 
-    return this._devices.relay(deviceId, callId, {
-      method: request.method, url: request.url, headers: [...request.headers], body: request.body === null ? null : await request.text(),
-    });
+    return this._devices.relay(deviceId, callId, { method: request.method, url: request.url, headers: [...request.headers], body });
   }
 
   async cancelCodexRelay(caller: UserCaller, callId: string): Promise<void> {
