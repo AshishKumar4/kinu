@@ -108,6 +108,7 @@ const USER_DO_METHODS = [
   'deleteAccount',
   'deleteCredential',
   'dismissUnrevokedGrant',
+  'deviceName',
   'deviceRpc',
   'deviceRuntimeStatus',
   'disconnectCodex',

@@ -145,9 +145,12 @@ test('the Activity tab names the route of the newest Codex step: the machine by 
   await catalogTurn(actor.agent, 'again');
   expect((await actor.agent.getActivitySnapshot()).latest).toMatchObject({ modelId: 'gpt-5.5', route: { kind: 'device', id: deviceId, name: 'studio' } });
 
-  // Resolved when read, so a rename shows at once.
+  // Read at snapshot time, and asking no machine: a slow one cannot hold the tab up.
   await user.userDO.renameDevice(await testOwner(), deviceId, 'desk');
+  await connectMachine('laptop');
+  const asked = user.deviceFrames.length;
   expect((await actor.agent.getActivitySnapshot()).latest?.route).toEqual({ kind: 'device', id: deviceId, name: 'desk' });
+  expect(user.deviceFrames.slice(asked).map((frame) => frame.method)).toEqual([]);
   await user.joinFibers();
   user.close();
 });
