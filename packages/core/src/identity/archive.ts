@@ -9,6 +9,8 @@ import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import type { AgentDatabase } from './inline-primitives';
 import type { SqlExec } from '../types/primitives';
 import type { JsonPrimitive } from '../utils/json';
+import { SCHEMA_GENESIS } from './schema-genesis';
+import { requireSchemaGenesis } from './schema-stamp';
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
 
@@ -142,6 +144,8 @@ interface ArchiveHeader {
   workspace: string;
   source: 'cloud' | 'local';
   exported_at: number;
+  /** The schema genesis of the Kinu that wrote it; an archive under another is refused by name. */
+  schema_genesis?: string;
 }
 
 type SchemaKind = 'table' | 'index' | 'trigger' | 'view';
@@ -199,6 +203,7 @@ const ArchiveRecordSchema: v.GenericSchema<ArchiveRecord> = v.variant('t', [
     workspace: v.string(),
     source: v.picklist(['cloud', 'local']),
     exported_at: v.number(),
+    schema_genesis: v.optional(v.string()),
   }),
   v.object({
     t: v.literal('schema'),
@@ -414,6 +419,7 @@ export async function readWorkspaceArchivePage(
       workspace: opts.workspace,
       source: opts.source,
       exported_at: opts.now ?? Date.now(),
+      schema_genesis: SCHEMA_GENESIS,
     };
 
     emit(header);
@@ -566,6 +572,17 @@ export interface ArchiveRestoreOptions {
 }
 
 /** Streams into an empty database; dependent objects (indexes, FTS, triggers, views) apply after the rows. */
+/** The first record, refused unless it is this format's header under this Kinu's schema genesis. */
+function archiveHeader(record: ArchiveRecord): ArchiveHeader {
+  if (record.t !== 'header' || record.kinu_workspace_archive !== WORKSPACE_ARCHIVE_VERSION) {
+    throw new Error(`This file is not a Kinu workspace archive v${WORKSPACE_ARCHIVE_VERSION}.`);
+  }
+
+  requireSchemaGenesis(`This archive of "${record.workspace}"`, record.schema_genesis?.slice(0, 7) ?? null);
+
+  return record;
+}
+
 export async function restoreWorkspaceArchive(
   sql: SqlExec,
   lines: Iterable<string>,
@@ -606,13 +623,7 @@ export async function restoreWorkspaceArchive(
     }
 
     if (!header) {
-      if (record.t !== 'header' || record.kinu_workspace_archive !== WORKSPACE_ARCHIVE_VERSION) {
-        throw new Error(
-          `This file is not a Kinu workspace archive v${WORKSPACE_ARCHIVE_VERSION}.`,
-        );
-      }
-
-      header = record;
+      header = archiveHeader(record);
       continue;
     }
 

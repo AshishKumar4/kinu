@@ -65,7 +65,7 @@ async function postCreate(
       if (register !== undefined) return await register(caller, name, displayName, options);
 
       return {
-        entry: { name, displayName: displayName ?? name, createdAt: 7, lastVisited: 7, archivedAt: null },
+        entry: { name, displayName: displayName ?? name, createdAt: 7, lastVisited: 7 },
         status: 'created' as const,
       };
     },

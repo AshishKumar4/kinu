@@ -123,7 +123,7 @@ export async function readSubordinateInspection(
 
       if (request.view === 'plan') return { view: 'plan', path, plan };
 
-      if (!tableExists(sql, 'plan_task_links')) return missingSubordinateHistory(path);
+      if (!tableExists(sql, 'agent_tasks')) return missingSubordinateHistory(path);
 
       return { view: 'planTasks', path, tasks: readPlanTasks(sql, actor, plan) };
     }

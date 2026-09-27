@@ -51,8 +51,8 @@ async function createLocalAgent(home: string, name: string): Promise<void> {
     // `search_nodes` and `agent_log` are actor-private: seed under the main actor `createWorkspace` issued;
     // rows under any other id are silently invisible to `kinu mcts` and `kinu events`.
     const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
-    db.run("INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      ["c1", "memory/MEMORY.md", 0, 2, "h", "# Memory\n\nhello local memory\n", 2]);
+    db.run("INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text) VALUES (?, ?, ?, ?, ?, ?)",
+      ["c1", "memory/MEMORY.md", 0, 2, "h", "# Memory\n\nhello local memory\n"]);
     db.run("INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
       actorId,
       "root",
@@ -66,7 +66,7 @@ async function createLocalAgent(home: string, name: string): Promise<void> {
       "terminal",
       3,
     ]);
-    db.run("INSERT INTO agent_log (actor_id, id, kind, trace_id, ingress, variant, trust, priority, payload_visibility, payload, received_at, schema_version) VALUES (?, ?, 'event', ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+    db.run("INSERT INTO agent_log (actor_id, id, kind, trace_id, ingress, variant, trust, priority, payload_visibility, payload, received_at) VALUES (?, ?, 'event', ?, ?, ?, ?, ?, ?, ?, ?)", [
       actorId,
       "event-1",
       "trace-1",
@@ -77,7 +77,6 @@ async function createLocalAgent(home: string, name: string): Promise<void> {
       "full",
       JSON.stringify({ text: "hello" }),
       4,
-      1,
     ]);
   } finally {
     db.close();

@@ -740,15 +740,26 @@
       "loadAtStart": 3.26,
       "exit": 0
     },
-    "bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts scripts/*-ux.test.ts scripts/computed-style.test.ts": {
-      "wallSeconds": 270.88,
-      "cpuSeconds": 62.42,
-      "peakRssMb": 2533.15,
-      "peakRunnable": 23,
-      "peakCpuThreads": 8.26,
-      "meanThreads": 0.23,
-      "samples": 1043,
-      "loadAtStart": 1.95,
+    "bun test --timeout=0 scripts/account-ux.test.ts scripts/drive-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts": {
+      "wallSeconds": 144.69,
+      "cpuSeconds": 51.17,
+      "peakRssMb": 2524.28,
+      "peakRunnable": 26,
+      "peakCpuThreads": 8.17,
+      "meanThreads": 0.35,
+      "samples": 579,
+      "loadAtStart": 1.98,
+      "exit": 0
+    },
+    "bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts --path-ignore-patterns=scripts/account-ux.test.ts --path-ignore-patterns=scripts/drive-ux.test.ts --path-ignore-patterns=scripts/slate-preview-ux.test.ts --path-ignore-patterns=scripts/slate-sharing-ux.test.ts scripts/*-ux.test.ts scripts/computed-style.test.ts": {
+      "wallSeconds": 131.47,
+      "cpuSeconds": 47.64,
+      "peakRssMb": 2835.54,
+      "peakRunnable": 28,
+      "peakCpuThreads": 7.49,
+      "meanThreads": 0.36,
+      "samples": 529,
+      "loadAtStart": 1.88,
       "exit": 0
     },
     "bun test --timeout=0 scripts/chat-and-files-ux.test.ts": {

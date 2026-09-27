@@ -16,7 +16,6 @@ export type ExperiencePayload =
       kind: 'craft';
       name: string;
       description: string;
-      params: Record<string, string> | null;
       code: string;
       score: number;
     }
@@ -84,7 +83,6 @@ const ExperiencePayloadSchema: v.GenericSchema<ExperiencePayload> = v.variant('k
     kind: v.literal('craft'),
     name: v.string(),
     description: v.string(),
-    params: v.nullable(v.record(v.string(), v.string())),
     code: v.string(),
     score: v.number(),
   }),

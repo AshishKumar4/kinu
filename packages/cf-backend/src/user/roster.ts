@@ -46,7 +46,7 @@ export interface RosterFrame {
   counts: RosterCounts;
 }
 
-const ACTIVE = 'w.archived_at IS NULL AND w.delete_pending = 0 AND w.create_pending = 0';
+const ACTIVE = 'w.delete_pending = 0 AND w.create_pending = 0';
 
 const FROM = `FROM user_workspaces w
   LEFT JOIN workspace_overviews o ON o.name = w.name`;
@@ -57,14 +57,13 @@ const BUCKET = `CASE WHEN ${DECISIONS} > 0 THEN 'needs' WHEN o.activity IS NULL 
   WHEN o.activity = 'working' THEN 'working' ELSE 'idle' END`;
 
 const ENTRY = `SELECT w.name, w.display_name AS displayName, w.created_at AS createdAt, w.last_visited AS lastVisited,
-  w.archived_at AS archivedAt, o.overview, COALESCE(o.decisions, 0) AS decisions`;
+  o.overview, COALESCE(o.decisions, 0) AS decisions`;
 
 const RosterRowSchema = v.object({
   name: v.string(),
   displayName: v.string(),
   createdAt: v.number(),
   lastVisited: v.number(),
-  archivedAt: v.nullable(v.number()),
   overview: v.nullable(v.string()),
   decisions: v.number(),
 });
@@ -113,7 +112,7 @@ function rosterEntry(row: RosterRow): RosterEntry {
   const stored = row.overview === null ? null : v.safeParse(WorkspaceOverviewSchema, JSON.parse(row.overview));
 
   return {
-    name: row.name, displayName: row.displayName, createdAt: row.createdAt, lastVisited: row.lastVisited, archivedAt: row.archivedAt,
+    name: row.name, displayName: row.displayName, createdAt: row.createdAt, lastVisited: row.lastVisited,
     overview: stored?.success === true ? { ...stored.output, decisionsWaiting: row.decisions } : null,
     decisions: row.decisions,
   };

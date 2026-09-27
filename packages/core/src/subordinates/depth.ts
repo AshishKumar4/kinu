@@ -1,7 +1,7 @@
 /**
- * Subordinate-tree depth cap. The parent derives a child's depth and the seeding authority
- * writes it into the child's immutable identity row; a child never states its own depth.
- * The runtime refusal stays because a cached toolset can be built before the identity is seeded.
+ * Subordinate-tree depth cap. A child's depth is walked off the actor directory; a child never
+ * states its own depth. The runtime refusal stays because a cached toolset can be built before
+ * the child is seated.
  */
 
 import type { ErrorCode } from '../obs/error';
@@ -25,13 +25,6 @@ export const ROOT_DELEGATION_BUDGET: DelegationBudget = {
   maxDepth: DELEGATION_MAX_DEPTH,
 };
 
-/** Budget from a stored depth, clamped at 0 so an old or negative row only narrows. */
-export function delegationBudgetAtDepth(depth: number): DelegationBudget {
-  const safeDepth = Math.max(0, depth);
-
-  return { depth: safeDepth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - safeDepth) };
-}
-
 /**
  * Budget from the actor's directory record, walked up to the root. A parent the directory
  * no longer describes ends the walk; the depth counted so far is a floor.
@@ -48,7 +41,7 @@ export function delegationBudgetOf(
     current = describe(current.parentActorId);
   }
 
-  return delegationBudgetAtDepth(depth);
+  return { depth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - depth) };
 }
 
 /** The budget a hired subordinate inherits: depth up one, room down one. */

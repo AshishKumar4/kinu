@@ -72,6 +72,7 @@ import type { FileCheckpoints } from '@kinu.run/core';
 import { diagnostics, KinuError, renderCauseChain, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 import * as v from 'valibot';
+import { stampSchemaGenesis } from './schema-genesis';
 
 const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV];
 
@@ -246,6 +247,7 @@ export function createCLIRuntime(
       agentId = crypto.randomUUID();
       agentName = config.agentName ?? 'agent';
       void sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
+      stampSchemaGenesis(db);
       initWorkspaceActorTable(execRaw);
       new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
     }

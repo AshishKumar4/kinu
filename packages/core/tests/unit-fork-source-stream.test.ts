@@ -49,7 +49,7 @@ function rowPayloadBytes(frame: ForkFrame): number {
       return frame.rows.reduce((total, row) => total + bytes(row.key) + bytes(row.value), 0);
     case 'craftedTools':
       return frame.rows.reduce((total, row) => total + bytes(row.name) + bytes(row.description)
-        + bytes(row.params) + bytes(row.code) + bytes(row.scope), 0);
+        + bytes(row.code), 0);
     case 'memoryChunks':
       return frame.rows.reduce((total, row) => total + bytes(row.id) + bytes(row.path)
         + bytes(row.hash) + bytes(row.text), 0);

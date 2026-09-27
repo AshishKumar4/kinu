@@ -21,7 +21,6 @@ import {
   FEEDBACK_MAX_REQUEST_BYTES,
   FEEDBACK_MAX_ROUTE_CHARS,
   FEEDBACK_MAX_SCREENSHOT_BYTES,
-  FEEDBACK_MAX_USER_AGENT_CHARS,
   FEEDBACK_SCREENSHOT_TYPE,
   type FeedbackAccepted,
   type FeedbackRecord,
@@ -317,9 +316,7 @@ async function handleFeedbackSubmission(
     // The authority's answer, never the submitted string.
     workspace: attribution?.workspace ?? null,
     objectKey: screenshot?.key ?? null,
-    contentType: screenshot === null ? null : FEEDBACK_SCREENSHOT_TYPE,
     bytes: screenshot?.bytes.length ?? null,
-    userAgent: (request.headers.get('user-agent') ?? '').slice(0, FEEDBACK_MAX_USER_AGENT_CHARS) || null,
   };
 
   const written = await deps.record(row);

@@ -17,7 +17,7 @@ import {
   createAgentsCodemodeProvider,
   createTeamToolDeps,
   createTemporaryAgentPort,
-  delegationBudgetAtDepth, delegationDepthRefusal,
+  deriveChildDelegationBudget, delegationDepthRefusal,
   receiveSubordinateEvent,
   type SubordinateEventResult,
   type SubordinateReportHandoff,
@@ -66,6 +66,10 @@ function testProfile(): AgentsProfileContext {
     availableTools: [],
   };
 }
+
+/** A hire chain `depth` levels below the root. */
+const budgetAt = (depth: number) =>
+  Array.from({ length: depth }, () => 0).reduce((budget) => deriveChildDelegationBudget(budget), ROOT_DELEGATION_BUDGET);
 
 const NOW = 1_700_000_000_000;
 
@@ -185,7 +189,7 @@ function makeScene(options: {
 
   const teamInput: Parameters<typeof createTeamToolDeps>[0] = {
     delegation: options.delegation
-      ? delegationBudgetAtDepth(options.delegation.depth)
+      ? budgetAt(options.delegation.depth)
       : ROOT_DELEGATION_BUDGET,
     roster,
     runtime,

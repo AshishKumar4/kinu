@@ -18,6 +18,8 @@ export interface RecordedGatewayRun extends GatewayRunRequest {
 export interface StubbedAiBinding {
   binding: WorkersAIBinding;
   runs: RecordedGatewayRun[];
+  /** Runs the script has not answered yet. */
+  readonly unanswered: ReadonlySet<RecordedGatewayRun>;
 }
 
 /** Only `gateway().run()` exists, so a suite reaching for another binding method fails loudly. */
@@ -25,17 +27,20 @@ export function stubAiBinding(
   respond: (run: RecordedGatewayRun) => Response | Promise<Response> = () => Response.json({ ok: true }),
 ): StubbedAiBinding {
   const runs: RecordedGatewayRun[] = [];
+  const unanswered = new Set<RecordedGatewayRun>();
 
   return {
     runs,
+    unanswered,
     binding: {
       gateway(gateway: string) {
         return {
           run(data: GatewayRunRequest, options?: { signal?: AbortSignal }): Promise<Response> {
             const recorded: RecordedGatewayRun = { gateway, ...data, signal: options?.signal };
             runs.push(recorded);
+            unanswered.add(recorded);
 
-            return Promise.resolve(respond(recorded));
+            return Promise.resolve(respond(recorded)).finally(() => { unanswered.delete(recorded); });
           },
         };
       },

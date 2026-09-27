@@ -96,8 +96,6 @@ export interface McpServerSummary {
   authUrl: string | null;
   allowedTools: string[] | null;
   presetId: McpPresetId | null;
-  createdAt: number;
-  updatedAt: number;
 }
 
 /** Not exposed across RPC; the orchestrator asks for tool descriptors directly. */
@@ -109,8 +107,6 @@ export interface McpServerConfig {
   headers: Record<string, string> | null;
   allowedTools: string[] | null;
   presetId: McpPresetId | null;
-  createdAt: number;
-  updatedAt: number;
 }
 
 const McpTransportSchema = v.picklist(['auto', 'sse', 'streamable-http']);

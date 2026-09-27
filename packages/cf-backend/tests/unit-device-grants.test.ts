@@ -1368,7 +1368,7 @@ describe('a copied device.json goes stale', () => {
 
     const rotated = await connectDaemon(harness, token);
     expect((await harness.userDO.listDevices(await testOwner()))[0]).toMatchObject({
-      id: deviceId, lastIp: '203.0.113.7', lastAgent: 'kinu-daemon/1', replacedAt: null,
+      id: deviceId, replacedAt: null,
     });
     const incumbent = harness.acceptedSockets.at(-1);
 

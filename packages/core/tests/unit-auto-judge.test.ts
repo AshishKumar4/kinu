@@ -127,9 +127,9 @@ describe('runAutoShadowEval', () => {
     const rt = await setup();
 
     for (let i = 0; i < 5; i++) {
-      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
+      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, pending_version, task,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
-        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
+        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 1, 't', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
     }
 
     const result = await runAutoShadowEval({
@@ -159,9 +159,9 @@ describe('runAutoShadowEval', () => {
     // A 5-2 record would promote on win-rate alone; the second regression must still roll back.
     for (let i = 0; i < 6; i++) {
       const winner = i < 5 ? 'pending' : 'current';
-      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
+      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, pending_version, task,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
-        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, ${winner}, 'seed', ${Date.now()})`;
+        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 1, 't', 0.4, 0.8, ${winner}, 'seed', ${Date.now()})`;
     }
 
     const result = await runAutoShadowEval({
@@ -185,8 +185,7 @@ describe('runAutoShadowEval', () => {
     expect(map.get(1)).toBe('rolled_back');
   });
 
-  test('records the STATUS-derived current version after rollback cycles', async () => {
-    // After a rollback the numbering is non-contiguous, so currentVersion is not pending - 1.
+  test('scores the pending version after rollback cycles', async () => {
     const rt = await setup();
     void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back'
       WHERE actor_id = ${rt.actor.actorId} AND version = 1`;
@@ -209,12 +208,11 @@ describe('runAutoShadowEval', () => {
 
     expect(result.skipped).toBe(false);
 
-    const row = rt.storage.sql<{ current_version: number; pending_version: number }>`
-      SELECT current_version, pending_version FROM scaffold_evaluations
+    const row = rt.storage.sql<{ pending_version: number }>`
+      SELECT pending_version FROM scaffold_evaluations
       WHERE actor_id = ${rt.actor.actorId}`[0];
 
     expect(row.pending_version).toBe(3);
-    expect(row.current_version).toBe(0);
   });
 
   test('skips gracefully when pending file unreadable', async () => {

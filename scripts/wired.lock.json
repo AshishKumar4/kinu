@@ -140,7 +140,6 @@
   "packages/core/src/evolution/pathology.ts#isPathologyId (unreached-export)",
   "packages/core/src/evolution/pathology.ts#pathologyId (unreached-export)",
   "packages/core/src/evolution/recovery.ts#MAX_RECOVERY_FINDINGS (unreached-export)",
-  "packages/core/src/evolution/refinement-lane.ts#RequestRefinementInput.sessionId (unsupplied-field)",
   "packages/core/src/evolution/refinement.ts#SettleRefinementPatch.now (unsupplied-field)",
   "packages/core/src/evolution/refinement.ts#SettleRefinementPatch.proposal (unsupplied-field)",
   "packages/core/src/evolution/refinement.ts#SettleRefinementPatch.routes (unsupplied-field)",

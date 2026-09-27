@@ -250,7 +250,6 @@ function seedGradedTurns(rt: AgentRuntime, negatives: number, accepted = 2) {
     const turnId = `neg-${String((seeded += 1))}`;
     recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId,
-      sessionId: 'session-1',
       outcome: 'corrected',
       confidence: 0.9,
       source: 'classifier',
@@ -267,7 +266,6 @@ function seedGradedTurns(rt: AgentRuntime, negatives: number, accepted = 2) {
     const turnId = `ok-${String((seeded += 1))}`;
     recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId,
-      sessionId: 'session-1',
       outcome: 'accepted',
       confidence: 0.9,
       source: 'classifier',
@@ -428,7 +426,7 @@ describe('refinement request — durable, and behaviourally inert', () => {
     const before = activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(fx.deps(port), {
-      trigger: 'explicit', scope: 'workspace', sessionId: 'session-1',
+      trigger: 'explicit', scope: 'workspace',
     });
 
     expect(opened.stage).toBe('requested');
@@ -448,7 +446,7 @@ describe('refinement request — durable, and behaviourally inert', () => {
     const { port } = scriptedRefiner('{}');
 
     const opened = await requestRefinement(fx.deps(port), {
-      trigger: 'explicit', scope: 'workspace', sessionId: 'session-1',
+      trigger: 'explicit', scope: 'workspace',
     });
 
     for (const id of negatives) expect(opened.turnIds).toContain(id);
@@ -1001,7 +999,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(bare.sql<{ name: string }>`
       SELECT name FROM pragma_table_info('refinement_requests')`.map((row) => row.name))
       .toEqual([
-        'actor_id', 'id', 'trigger', 'scope', 'stage', 'claim', 'session_id', 'turn_ids',
+        'actor_id', 'id', 'trigger', 'scope', 'stage', 'claim', 'turn_ids',
         'debt_key', 'proposal', 'routes', 'detail', 'created_at', 'updated_at',
       ]);
     bare.close();

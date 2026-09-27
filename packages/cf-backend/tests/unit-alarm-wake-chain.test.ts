@@ -95,11 +95,11 @@ describe('a refiner answer stored with no waiter', () => {
 
     const actorId = harnessActorId(workspace.db);
     workspace.db.prepare(`INSERT INTO refinement_requests
-      (actor_id, id, trigger, scope, stage, claim, session_id, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
-      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
+      (actor_id, id, trigger, scope, stage, claim, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
+      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
     workspace.db.prepare(`INSERT INTO evolution_helpers
-      (actor_id, name, lane, lane_request_id, task_event_id, answer_status, answer, created_at)
-      VALUES (?, 'ask-refiner-x1', 'refinement', 'refine-1', 'evt-1', 'completed', ?, ?)`)
+      (actor_id, name, lane_request_id, answer_status, answer, created_at)
+      VALUES (?, 'ask-refiner-x1', 'refine-1', 'completed', ?, ?)`)
       .run(actorId, 'Nothing to change.\n\n{"scope":"workspace","summary":"nothing","edits":[]}', now);
 
     await workspace.agent.activateActor();
@@ -118,8 +118,8 @@ describe('a refiner answer stored with no waiter', () => {
     const actorId = harnessActorId(workspace.db);
     const now = Date.now();
     workspace.db.prepare(`INSERT INTO refinement_requests
-      (actor_id, id, trigger, scope, stage, claim, session_id, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
-      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
+      (actor_id, id, trigger, scope, stage, claim, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
+      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
 
     const refiner = await hostedSubordinateHarness(workspace, {
       name: 'ask-refiner-x1', displayName: 'Refiner', nameOrigin: 'auto', mission: 'propose refinements',
@@ -127,9 +127,9 @@ describe('a refiner answer stored with no waiter', () => {
 
     workspace.db.prepare(`INSERT INTO actor_subordinates (actor_id, name, created_by, status, current_task, created_at, dismissed_at,
       lifetime, task_event_id, actor_reference, birth_request, delete_requested)
-      VALUES (?, 'ask-refiner-x1', 'orchestrator', 'working', 'review', ?, NULL, 'task', 'evt-1', NULL, NULL, 0)`).run(actorId, now);
-    workspace.db.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane, lane_request_id, task_event_id, answer_status, answer, created_at)
-      VALUES (?, 'ask-refiner-x1', 'refinement', 'refine-1', NULL, NULL, NULL, ?)`).run(actorId, now);
+      VALUES (?, 'ask-refiner-x1', 'evolution', 'working', 'review', ?, NULL, 'task', 'evt-1', NULL, NULL, 0)`).run(actorId, now);
+    workspace.db.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
+      VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
     const wakes = `SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '${KINU_TIMER_CALLBACK}'`;
     expect(held(workspace.db, wakes)).toBe(0);
 

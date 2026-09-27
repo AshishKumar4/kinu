@@ -41,9 +41,7 @@ const ControlFeedbackRowSchema = v.object({
   route: v.string(),
   workspace: v.nullable(v.string()),
   objectKey: v.nullable(v.string()),
-  contentType: v.nullable(v.string()),
   bytes: v.nullable(v.number()),
-  userAgent: v.nullable(v.string()),
 });
 
 export type ControlFeedbackRow = v.InferOutput<typeof ControlFeedbackRowSchema>;

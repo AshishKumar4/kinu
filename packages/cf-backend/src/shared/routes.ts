@@ -192,7 +192,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity, owner
 
   if (!published.ok) return err(slateRefusalStatus(published.reason), published.error);
 
-  const { share, inspection } = v.parse(PublishedBlueprintSchema, published.value);
+  const { share } = v.parse(PublishedBlueprintSchema, published.value);
 
   const id = await mintBlueprintId(env, body.workspace, share.id);
 
@@ -208,7 +208,7 @@ async function publish(request: Request, env: Env, identity: AuthIdentity, owner
     users = v.parse(v.object({ users: v.array(v.string()) }), recorded.value).users;
 
     const receipt: SharedBlueprintReceipt = {
-      ownerUserId: identity.userId, ownerEmail: identity.email, workspace: body.workspace, shareId: share.id, title: inspection.title,
+      ownerUserId: identity.userId, ownerEmail: identity.email, workspace: body.workspace, shareId: share.id,
     };
 
     for (const user of named) {
@@ -288,11 +288,8 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity, own
 
     if (!recorded.ok) return err(409, recorded.error);
 
-    const reading = await owned.readLiveShare(share.id);
-
     const receipt: SharedBlueprintReceipt = {
       ownerUserId: identity.userId, ownerEmail: identity.email, workspace: body.workspace, shareId: share.id,
-      title: reading.ok ? reading.value.title : share.slate,
     };
 
     for (const user of named) {

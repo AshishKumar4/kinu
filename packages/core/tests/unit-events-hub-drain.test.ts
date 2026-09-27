@@ -6,7 +6,7 @@ import { present } from '@kinu.run/test-utils';
 
 const EVENT_BASE = {
   trace_id: 'tid', caused_by: null, trust: 'authenticated', priority: 'normal',
-  received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
+  received_at: 0, reply_channel: null, dedupe_key: null,
 } satisfies Omit<BaseEvent, 'id' | 'ingress' | 'variant' | 'payload_visibility'>;
 
 function webhook(id: string): KinuEvent {

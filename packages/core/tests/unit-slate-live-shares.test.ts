@@ -92,8 +92,8 @@ test('a viewer request records its calls and settles', () => {
 
   try {
     const share = shares.add(liveShare());
-    const request = shares.openRequest({ share: share.id, viewer: 'user:u1', slate: 'issues', path: '/' });
-    const other = shares.openRequest({ share: share.id, viewer: 'source:deadbeef', slate: 'issues', path: '/' });
+    const request = shares.openRequest({ share: share.id, viewer: 'user:u1', path: '/' });
+    const other = shares.openRequest({ share: share.id, viewer: 'source:deadbeef', path: '/' });
 
     expect(request).not.toBe(other);
     shares.recordCall(request, { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read', ok: true });
@@ -115,6 +115,22 @@ test('a viewer request records its calls and settles', () => {
 
     expect(() => shares.recordCall(99_999, { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read', ok: true }))
       .toThrow('No viewer request 99999');
+  } finally {
+    db.close();
+  }
+});
+
+test('a socket-held request still records its calls after a thousand newer requests', () => {
+  const { db, shares } = shareDb();
+
+  try {
+    const share = shares.add(liveShare());
+    const held = shares.openRequest({ share: share.id, viewer: 'user:u1', path: '/' });
+
+    for (let n = 0; n < 1_000; n += 1) shares.settleRequest(shares.openRequest({ share: share.id, viewer: 'user:u2', path: '/' }), 'ok');
+
+    shares.recordCall(held, { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read', ok: true });
+    expect(shares.requests(share.id).find((row) => row.id === held)?.calls).toHaveLength(1);
   } finally {
     db.close();
   }

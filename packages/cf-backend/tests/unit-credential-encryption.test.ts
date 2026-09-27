@@ -68,8 +68,8 @@ describe('the credential store is sealed at rest', () => {
     await harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-openai' });
     const sealed = present(storedValue(harness, 'openai.bearer'), 'the sealed openai.bearer row');
     sqlExec(harness.db).exec(
-      `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-      'openrouter.bearer', 'bearer', sealed, Date.now(), Date.now(),
+      `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
+      'openrouter.bearer', 'bearer', sealed,
     );
     await expect(harness.userDO.getAuthHeaders(await testOwner(), 'openrouter.bearer'))
       .rejects.toThrow('opening the stored credential openrouter.bearer');
@@ -86,8 +86,8 @@ describe('the credential store is sealed at rest', () => {
       ['anthropic.bearer', 'sk-not-json-secret'],
     ]) {
       sqlExec(harness.db).exec(
-        `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-        key, 'bearer', await cipher.seal(`test-user-do:${key}`, plaintext), 0, 0,
+        `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
+        key, 'bearer', await cipher.seal(`test-user-do:${key}`, plaintext),
       );
     }
 
@@ -110,8 +110,8 @@ describe('the credential store is sealed at rest', () => {
     await harness.userDO.setCredential(await testOwner(), 'anthropic.bearer', { kind: 'bearer', token: 'sk-ok' });
     const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: 'a-retired-credential-encryption-key-5555' });
     sqlExec(harness.db).exec(
-      `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-      'openai.bearer', 'bearer', await cipher.seal('test-user-do:openai.bearer', JSON.stringify({ kind: 'bearer', token: 'sk-lost' })), 0, 0,
+      `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
+      'openai.bearer', 'bearer', await cipher.seal('test-user-do:openai.bearer', JSON.stringify({ kind: 'bearer', token: 'sk-lost' })),
     );
 
     // The owner's CLI session; the listing's own reads go to the real store.
@@ -153,8 +153,8 @@ describe('migration and rotation', () => {
         key TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
     sqlExec(harness.db).exec(
-      `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-      'openai.bearer', 'bearer', JSON.stringify({ kind: 'bearer', token: 'sk-legacy' }), 0, 0,
+      `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
+      'openai.bearer', 'bearer', JSON.stringify({ kind: 'bearer', token: 'sk-legacy' }),
     );
 
     expect(await harness.userDO.getAuthHeaders(await testOwner(), 'openai.bearer'))
@@ -179,13 +179,13 @@ describe('migration and rotation', () => {
     await first.userDO.setCredential(await testOwner(), 'anthropic.bearer', { kind: 'bearer', token: 'sk-ok' });
     await first.userDO.userMcp_list(await testOwner());
     sqlExec(first.db).exec(
-      `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-      'openai.bearer', 'bearer', plaintext, 0, 0,
+      `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
+      'openai.bearer', 'bearer', plaintext,
     );
     sqlExec(first.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
-      'planted', 'planted', 'https://mcp.example/sse', 'auto', plainHeaders, 0, 0,
+      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
+       VALUES (?, ?, ?, ?, ?, NULL)`,
+      'planted', 'planted', 'https://mcp.example/sse', 'auto', plainHeaders,
     );
 
     await expect(first.userDO.getAuthHeaders(await testOwner(), 'openai.bearer'))
@@ -221,8 +221,8 @@ describe('migration and rotation', () => {
         key TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
     sqlExec(rotated.db).exec(
-      `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-      'openai.bearer', 'bearer', sealedUnderOldKey, 0, 0,
+      `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
+      'openai.bearer', 'bearer', sealedUnderOldKey,
     );
 
     expect(await rotated.userDO.getAuthHeaders(await rotatedOwner(), 'openai.bearer'))
@@ -242,9 +242,9 @@ describe('migration and rotation', () => {
         key TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
     sqlExec(orphaned.db).exec(
-      `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
       'openai.bearer', 'bearer',
-      await cipher.seal('test-user-do:openai.bearer', JSON.stringify({ kind: 'bearer', token: 'sk-lost' })), 0, 0,
+      await cipher.seal('test-user-do:openai.bearer', JSON.stringify({ kind: 'bearer', token: 'sk-lost' })),
     );
     await orphaned.userDO.setCredential(await rotatedOwner(), 'anthropic.bearer', { kind: 'bearer', token: 'sk-ok' });
 
@@ -276,9 +276,9 @@ describe('MCP server headers are sealed too', () => {
   async function seedServer(harness: ReturnType<typeof createTestUserDO>, id: string): Promise<void> {
     await harness.userDO.userMcp_list(await testOwner());
     sqlExec(harness.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-       VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)`,
-      id, id, 'https://mcp.example/sse', 'auto', 0, 0,
+      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
+       VALUES (?, ?, ?, ?, NULL, NULL)`,
+      id, id, 'https://mcp.example/sse', 'auto',
     );
   }
 
@@ -341,8 +341,8 @@ describe('a sealed value is bound to the store it was written in', () => {
         key TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
     sqlExec(theirs.db).exec(
-      `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-      'openai.bearer', 'bearer', sealed, 0, 0,
+      `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)`,
+      'openai.bearer', 'bearer', sealed,
     );
 
     await expect(theirs.userDO.getAuthHeaders(await testOwner(), 'openai.bearer'))

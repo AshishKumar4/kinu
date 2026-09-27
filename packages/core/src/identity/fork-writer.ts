@@ -122,7 +122,6 @@ export class ForkTargetWriter {
     void this.target`DELETE FROM conversation_entries WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM context_memberships WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM actor_context_selection WHERE actor_id = ${actorId}`;
-    void this.target`UPDATE actor_contexts SET fork_context_id = ${null}, fork_revision = ${null} WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM context_revisions WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM actor_contexts WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM stream_parts WHERE actor_id = ${actorId}`;
@@ -140,8 +139,8 @@ export class ForkTargetWriter {
     for (const t of rows) {
       void this.target`
         INSERT OR REPLACE INTO crafted_tools
-        (name, description, params, code, scope, created_at, updated_at)
-        VALUES (${t.name}, ${t.description}, ${t.params}, ${t.code}, ${t.scope}, ${t.created_at}, ${t.updated_at})
+        (name, description, code, created_at, updated_at)
+        VALUES (${t.name}, ${t.description}, ${t.code}, ${t.created_at}, ${t.updated_at})
       `;
     }
 
@@ -152,8 +151,8 @@ export class ForkTargetWriter {
   stageMemoryChunks(rows: readonly ForkMemoryChunkRow[]): void {
     for (const c of rows) {
       void this.target`
-        INSERT OR REPLACE INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
-        VALUES (${c.id}, ${c.path}, ${c.start_line}, ${c.end_line}, ${c.hash}, ${c.text}, ${c.updated_at})
+        INSERT OR REPLACE INTO memory_chunks (id, path, start_line, end_line, hash, text)
+        VALUES (${c.id}, ${c.path}, ${c.start_line}, ${c.end_line}, ${c.hash}, ${c.text})
       `;
     }
 
@@ -167,10 +166,10 @@ export class ForkTargetWriter {
     for (const row of rows) {
       void this.target`
         INSERT INTO session_messages
-        (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id, recorded_at,
+        (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id,
          envelope_json, sealed_at, content_json, content_path, content_digest)
         VALUES (${actorId}, ${row.message_id}, ${row.role}, ${row.native_content_kind}, ${row.origin},
-                ${null}, ${null}, ${null}, ${row.recorded_at},
+                ${null}, ${null}, ${null},
                 ${row.envelope_json}, ${row.sealed_at}, ${row.content_json},
                 ${row.content_path === null ? null : this.artifactPath(row.content_path)}, ${row.content_digest})
       `;
@@ -238,13 +237,11 @@ export class ForkTargetWriter {
     }
 
     this.staging.addFile(path);
-    this.staging.count({ files: 1 });
   }
 
   /** Record the whole tree entries a sink placed; SOUL never arrives this way (its sink refuses it). */
   stageCommittedEntries(paths: readonly string[]): void {
     for (const path of paths) this.staging.addFile(path);
-    this.staging.count({ files: paths.length });
   }
 
   /** How much has landed, read from the target, for the wire's completeness check. */
@@ -366,9 +363,9 @@ export class ForkTargetWriter {
     const content = JSON.stringify([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text } }]);
     void this.target`
       INSERT INTO session_messages
-      (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id, recorded_at,
+      (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id,
        envelope_json, sealed_at, content_json, content_path, content_digest)
-      VALUES (${actorId}, ${markerId}, ${'system'}, ${'string'}, ${'edit'}, ${null}, ${null}, ${null}, ${recordedAt},
+      VALUES (${actorId}, ${markerId}, ${'system'}, ${'string'}, ${'edit'}, ${null}, ${null}, ${null},
               ${'{}'}, ${recordedAt}, ${content}, ${null}, ${null})
     `;
 
@@ -398,8 +395,8 @@ export class ForkTargetWriter {
 
     if (selected === undefined) {
       void this.target`
-        INSERT INTO actor_contexts (actor_id, context_id, fork_context_id, fork_revision)
-        VALUES (${actorId}, ${contextId}, ${null}, ${null})
+        INSERT INTO actor_contexts (actor_id, context_id)
+        VALUES (${actorId}, ${contextId})
       `;
     }
 

@@ -302,15 +302,14 @@ export class ForkSourceProbeDO extends ForkProbeDO {
     const actor = new WorkspaceActorDirectory(this.sql, { workspaceId: 'source-workspace', ownerUserId: '' }).createMain({ name: PROBE_SOURCE_NAME });
     actor.config.setModel('probe/model-1');
     actor.config.set('reasoning_effort', 'high — long enough that this row needs a frame of its own');
-    void this.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
-      VALUES (${'probe_tool'}, ${'Counts what a fork carried.'}, ${null},
-              ${'export default () => 1;'}, ${'workspace'}, ${1_760_000_000_001}, ${1_760_000_000_002})`;
+    void this.sql`INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
+      VALUES (${'probe_tool'}, ${'Counts what a fork carried.'},
+              ${'export default () => 1;'}, ${1_760_000_000_001}, ${1_760_000_000_002})`;
 
     for (const n of [1, 2]) {
-      void this.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
+      void this.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text)
         VALUES (${`chunk-${n}`}, ${'memory/notes.md'}, ${n}, ${n + 1}, ${`hash-${n}`},
-                ${`Chunk ${n} of the parent's memory index, wide enough to need its own frame.`},
-                ${1_760_000_000_003})`;
+                ${`Chunk ${n} of the parent's memory index, wide enough to need its own frame.`})`;
     }
 
     const history = new SessionHistory({

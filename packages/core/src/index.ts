@@ -123,6 +123,10 @@ export {
   type ArchiveRestoreOptions, type ArchiveRestoreResult,
 } from './identity/archive';
 
+export { SCHEMA_GENESIS } from './identity/schema-genesis';
+
+export { requireSchemaGenesis, SCHEMA_GENESIS_STAMP } from './identity/schema-stamp';
+
 export {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
@@ -622,7 +626,6 @@ export { agentSelfHost } from './orchestrator/agent-self-host';
 export { SubordinateRosterStore, initSubordinateRosterTable, subordinateTitle } from './subordinates/roster';
 
 export {
-  SubordinateIdentityStore,
   admitSubordinateReport,
   admitSubordinateTask,
   createTeamToolDeps,
@@ -634,7 +637,6 @@ export {
   subordinateRelaysTurnEnd,
   type SubordinateDescriptor,
   type SubordinateDescriptorSource,
-  type SubordinateIdentity,
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
   type SubordinateRuntime,
@@ -664,7 +666,7 @@ export { DELEGATED_TURN_SLOTS, DelegatedTurnRunners, type DelegatedTurnRunnerDep
 export {
   DELEGATION_MAX_DEPTH,
   ROOT_DELEGATION_BUDGET,
-  delegationBudgetAtDepth, delegationBudgetOf,
+  delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,
   deriveChildDelegationBudget,
@@ -2364,7 +2366,6 @@ export {
   FEEDBACK_MAX_REQUEST_BYTES,
   FEEDBACK_MAX_NOTE_CHARS,
   FEEDBACK_MAX_ROUTE_CHARS,
-  FEEDBACK_MAX_USER_AGENT_CHARS,
   FEEDBACK_SCREENSHOT_TYPE,
   FEEDBACK_REDACT_ATTR,
   FEEDBACK_OMIT_ATTR,

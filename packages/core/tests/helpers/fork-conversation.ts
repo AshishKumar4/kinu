@@ -165,8 +165,8 @@ export async function seedForkSource(workspace: TestWorkspace, opts: {
   actor.config.setModel('@cf/moonshotai/kimi-k2.6');
 
   for (const tool of opts.craftedTools ?? []) {
-    void workspace.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
-      VALUES (${tool.name}, ${tool.description}, ${null}, ${tool.code}, ${'local'}, ${500}, ${500})`;
+    void workspace.sql`INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
+      VALUES (${tool.name}, ${tool.description}, ${tool.code}, ${500}, ${500})`;
   }
 
   const memory = opts.memory ?? [{ path: 'memory/MEMORY.md', text: 'key insight' }];
@@ -175,8 +175,8 @@ export async function seedForkSource(workspace: TestWorkspace, opts: {
 
   for (const [index, file] of memory.entries()) {
     await workspace.vfs.writeFile(file.path, file.text);
-    void workspace.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
-      VALUES (${`chunk-${index}`}, ${file.path}, ${1}, ${2}, ${`hash-${index}`}, ${file.text}, ${700})`;
+    void workspace.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text)
+      VALUES (${`chunk-${index}`}, ${file.path}, ${1}, ${2}, ${`hash-${index}`}, ${file.text})`;
   }
 
   return new ForkConversation(workspace, opts.artifactDirectory ?? SOURCE_ARTIFACTS);

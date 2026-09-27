@@ -109,8 +109,10 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     turn_id  TEXT,
     mode     TEXT NOT NULL CHECK (mode IN ('plan','build')),
     text     TEXT NOT NULL,
+    metadata_json TEXT,
     UNIQUE (actor_id, id)
   )`);
+  // A row per file: one attachment fills most of `do.sqlite.row_bytes`, so a send's files cannot share a row.
   execRaw(`CREATE TABLE IF NOT EXISTS pending_steer_files (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id   TEXT NOT NULL,
@@ -118,12 +120,6 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     filename   TEXT NOT NULL,
     media_type TEXT NOT NULL,
     url        TEXT NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS pending_steer_metadata (
-    actor_id      TEXT NOT NULL,
-    steer_id      TEXT NOT NULL,
-    metadata_json TEXT NOT NULL,
-    PRIMARY KEY (actor_id, steer_id)
   )`);
 }
 
@@ -139,17 +135,14 @@ export class PendingSendStore {
 
   /** Reserve before the client hears the send was taken. `turnId` is null only on the CLI's idle lane. */
   reserve(steer: AcceptedSteer & { readonly turnId: string | null; readonly metadata?: JsonObject }): void {
-    void this.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
-      VALUES (${this.actorId}, ${steer.id}, ${steer.turnId}, ${steer.mode}, ${steer.text})`;
+    const metadata = steer.metadata === undefined ? null : JSON.stringify(steer.metadata);
+
+    void this.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text, metadata_json)
+      VALUES (${this.actorId}, ${steer.id}, ${steer.turnId}, ${steer.mode}, ${steer.text}, ${metadata})`;
 
     for (const file of steer.files ?? []) {
       void this.sql`INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
         VALUES (${this.actorId}, ${steer.id}, ${file.filename}, ${file.mediaType}, ${file.url})`;
-    }
-
-    if (steer.metadata !== undefined) {
-      void this.sql`INSERT INTO pending_steer_metadata (actor_id, steer_id, metadata_json)
-        VALUES (${this.actorId}, ${steer.id}, ${JSON.stringify(steer.metadata)})`;
     }
   }
 
@@ -172,8 +165,6 @@ export class PendingSendStore {
     for (const id of ids) {
       void this.sql`DELETE FROM pending_steer_files
         WHERE actor_id = ${this.actorId} AND steer_id = ${id}`;
-      void this.sql`DELETE FROM pending_steer_metadata
-        WHERE actor_id = ${this.actorId} AND steer_id = ${id}`;
       void this.sql`DELETE FROM pending_steers
         WHERE actor_id = ${this.actorId} AND id = ${id}`;
     }
@@ -195,10 +186,10 @@ export class PendingSendStore {
   }
 
   metadata(steerId: string): JsonObject | undefined {
-    const row = this.sql<{ metadata_json: string }>`
-      SELECT metadata_json FROM pending_steer_metadata WHERE actor_id = ${this.actorId} AND steer_id = ${steerId}`[0];
+    const json = this.sql<{ metadata_json: string | null }>`
+      SELECT metadata_json FROM pending_steers WHERE actor_id = ${this.actorId} AND id = ${steerId}`[0]?.metadata_json;
 
-    return row === undefined ? undefined : parseJsonObject(row.metadata_json);
+    return json === undefined || json === null ? undefined : parseJsonObject(json);
   }
 
   /** Every owed send in acceptance order; attachments via {@link files}. */

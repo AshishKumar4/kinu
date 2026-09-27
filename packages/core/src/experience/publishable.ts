@@ -80,7 +80,6 @@ function craftCandidate(
       kind: 'craft',
       name: tool.name,
       description: tool.description,
-      params: tool.params,
       code: tool.code,
       score: effective,
     },

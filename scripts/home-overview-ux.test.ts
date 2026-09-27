@@ -226,20 +226,26 @@ describe('the home workspace cards', () => {
 
         // The line's rule at 390px: the title and task keep to one line
         // each, and the visible chip does not push past the line's box.
-        const boxes = await page.evaluate(() => {
+        const boxes = await page.evaluate((texts) => {
           const line = [...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
             .find((node) => (node.textContent ?? '').includes('Email triage automation'));
 
           const chip = line?.querySelector('[data-overview-chip]');
 
+          const oneLine = (text: string | null): boolean => {
+            const leaf = [...line?.querySelectorAll('span') ?? []].find((span) => span.children.length === 0 && span.textContent === text);
+
+            return leaf !== undefined && leaf.getBoundingClientRect().height <= parseFloat(getComputedStyle(leaf).lineHeight) + 0.5;
+          };
+
           return {
-            line: line?.getBoundingClientRect().height ?? -1,
+            oneLine: texts.map(oneLine),
             chipRight: chip?.getBoundingClientRect().right ?? -1,
             lineRight: line?.getBoundingClientRect().right ?? -1,
           };
-        });
+        }, ['Email triage automation', card.task]);
 
-        expect(boxes.line).toBeLessThanOrEqual(56);
+        expect(boxes.oneLine).toEqual([true, true]);
         expect(boxes.chipRight).toBeLessThanOrEqual(boxes.lineRight);
 
         const overflow = await page.evaluate(() => ({

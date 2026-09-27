@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { initTurnOutcomeTables, recordTurnOutcome, seededRandom } from '@kinu.run/core';
-import { makeSql } from '@kinu.run/cli-backend';
+import { makeSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
 import { scratchDir, createTestActorsOver, runToExit } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
@@ -49,6 +49,7 @@ function seedWorkspace(name: string, size = 600): World {
   // `openLocalRootActor` reads the registered main row, so the seed registers a real workspace identity;
   // rows under any other id leave the command drawing from an empty ledger.
   const actor = createTestActorsOver(db, { name }).main;
+  stampSchemaGenesis(db);
 
   const random = seededRandom(4242);
   const truthByTurn = new Map<string, 'accepted' | 'corrected'>();

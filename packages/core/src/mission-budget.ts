@@ -109,7 +109,6 @@ const DDL = `CREATE TABLE IF NOT EXISTS mission_budget (
   blended_tokens INTEGER NOT NULL DEFAULT 0,
   calls INTEGER NOT NULL DEFAULT 0,
   spawns INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL,
   exhausted_at INTEGER,
   PRIMARY KEY (actor_id, label)
 )`;
@@ -128,15 +127,15 @@ export class MissionBudgetLedger {
   }
 
   /** Idempotent: a repeat cron fire continues the cumulative row rather than resetting it. */
-  declare(label: string, limits: MissionBudgetLimits, parent: string | null, now: number): MissionRow {
+  declare(label: string, limits: MissionBudgetLimits, parent: string | null): MissionRow {
     this.actor.assertCurrent();
     const existing = this.get(label);
 
     if (existing) return existing;
     const effectiveParent = parent !== null && parent !== label && this.get(parent) !== null ? parent : null;
     void this.sql`INSERT INTO mission_budget
-        (actor_id, label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens, calls, spawns, created_at, exhausted_at)
-      VALUES (${this.actorId}, ${label}, ${effectiveParent}, ${limits.usd ?? null}, ${limits.tokens ?? null}, 0, 0, 0, 0, 0, ${now}, NULL)`;
+        (actor_id, label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens, calls, spawns, exhausted_at)
+      VALUES (${this.actorId}, ${label}, ${effectiveParent}, ${limits.usd ?? null}, ${limits.tokens ?? null}, 0, 0, 0, 0, 0, NULL)`;
 
     const declared = this.get(label);
 
@@ -317,7 +316,7 @@ export class MissionGovernor {
   declare(label: string, limits: MissionBudgetLimits, opts?: { parent?: string }): MissionBudgetSnapshot {
     const parent = opts?.parent ?? this.active[0] ?? null;
 
-    return toSnapshot(this.ledger.declare(label, limits, parent, this.now()));
+    return toSnapshot(this.ledger.declare(label, limits, parent));
   }
 
   /** The first exhausted label in any chain; no labels never reads storage. */
