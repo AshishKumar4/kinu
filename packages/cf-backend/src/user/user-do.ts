@@ -3,6 +3,7 @@
  * Every privileged method takes a `UserCaller` first and gates on `requireTier` before anything else.
  */
 import { Agent, type AgentContext } from "agents";
+import { Effect } from "effect";
 import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from "../rpc-surface";
 import { ActivationGate, startBeforeRpc } from "../activation-gate";
 import { parseCliTokenUserId } from "../cli/auth-store";
@@ -34,6 +35,7 @@ import {
   DEVICE_PTY_EXIT,
   DEVICE_PTY_MAX_AXIS,
   NO_DEVICE_CONNECTED, SEVERAL_DEVICES_CONNECTED,
+  codexEgressAllowed,
   isDeviceUnknownMethodError,
   isWorkspaceName,
   ORCHESTRATOR_AGENT_SLUG,
@@ -76,6 +78,7 @@ import {
   diagnostics,
   KinuError,
   renderThrownChain,
+  settle,
   tolerate,
   toKinuError,
 } from '@kinu.run/core/obs';
@@ -2569,6 +2572,31 @@ export class UserDO extends Agent<Env> {
     if (stopping) this.recordToolPathCancellation(params, result);
 
     return result === undefined ? undefined : JSON.stringify(result);
+  }
+
+  async codexRelayDevice(caller: UserCaller): Promise<{ readonly id: string; readonly label: string } | null> {
+    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
+    const deviceId = this._devices.relayDevice();
+
+    return deviceId === null || !this.isActiveDevice(deviceId) ? null : { id: deviceId, label: this.deviceLabel(deviceId) };
+  }
+
+  async relayCodex(caller: UserCaller, deviceId: string, callId: string, request: Request): Promise<Response> {
+    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
+    const allowed = codexEgressAllowed({ method: request.method, url: request.url });
+    const body = allowed && request.body !== null ? await request.text() : null;
+
+    // No await from here to the send.
+    if (!allowed) return settle(Effect.fail(new KinuError('denied', `the Codex relay does not carry ${request.method} ${new URL(request.url).pathname}`)));
+
+    if (!this.isActiveDevice(deviceId)) return settle(Effect.fail(new KinuError('unavailable', NO_DEVICE_CONNECTED)));
+
+    return settle(Effect.promise(() => this._devices.relay(deviceId, callId, { method: request.method, url: request.url, headers: [...request.headers], body })));
+  }
+
+  async cancelCodexRelay(caller: UserCaller, callId: string): Promise<void> {
+    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
+    this._devices.cancelRelay(callId);
   }
 
   /** `agentHome` is empty only under the raw tier. */

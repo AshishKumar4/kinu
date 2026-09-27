@@ -39,7 +39,7 @@ import type {
 } from '../src/subordinates/temporary';
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, RefinementProposalSchema,
-  createRefinementStore, evolutionDebt, initRefinementTables, refinementStagingPath,
+  createRefinementStore, evolutionDebt, initRefinementTables, nextEvolutionAnswerAt, refinementStagingPath,
   type RefinementDeps, type RefinementEdit, type RefinementProposal, type RefinementRoute,
 } from '../src/evolution/refinement';
 import { extractJsonObject } from '../src/providers/structured';
@@ -54,7 +54,9 @@ import {
 import {
   decideRefinementRoute, showRefinementRoute,
 } from '../src/evolution/refinement-skill';
+import { refinementPass } from '../src/evolution/refinement-host';
 import { createMemoryVfs, createTestSql, present, unobservedSpend } from '@kinu.run/test-utils';
+import { renderThrownChain } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
 import { Database } from 'bun:sqlite';
 import {
@@ -196,6 +198,7 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
 
 interface Fixture {
   rt: AgentRuntime;
+  db: Database;
   stores: AgentStores;
   facts: FactsStore;
   approvals: InstructionApprovalStore;
@@ -203,7 +206,7 @@ interface Fixture {
 }
 
 function fixture(): Fixture {
-  const { rt, stores } = createTestRuntime();
+  const { rt, db, stores } = createTestRuntime();
   initAllTables(rt.storage.execRaw, rt.storage.sql);
   initTurnOutcomeTables(rt.storage.execRaw);
   initGepaTables(rt.storage.execRaw);
@@ -218,6 +221,7 @@ function fixture(): Fixture {
 
   return {
     rt,
+    db,
     stores,
     facts,
     approvals,
@@ -401,6 +405,19 @@ async function gatheredSkillPaths(rt: AgentRuntime): Promise<string[]> {
   });
 
   return sources.filter((source) => source.kind === 'skill').map((source) => source.path);
+}
+
+/** A lane step rejects, and `cause` is somewhere in the chain it carries (the lane names its step around it). */
+async function failsFrom(pending: Promise<unknown>, cause: string): Promise<void> {
+  let chain = '';
+
+  try {
+    await pending;
+  } catch (thrown) {
+    chain = renderThrownChain({ cause: thrown });
+  }
+
+  expect(chain).toContain(cause);
 }
 
 describe('refinement request — durable, and behaviourally inert', () => {
@@ -758,6 +775,27 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(row.stage).toBe('refused');
   });
 
+  test('a route that throws is refused on its own with its cause, and an edit routed before it stands', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const proposal: RefinementProposal = { scope: 'workspace', summary: 'a fact and a skill', edits: [FACT_EDIT, skillProposal(BREVITY_SKILL).edits[0]] };
+    const { port } = scriptedRefiner(proposalText(proposal));
+    const deps = fx.deps(port);
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    const root = refinementStagingPath(opened.id, 'brevity').split('/').slice(0, -2).join('/');
+    await fx.rt.storage.vfs.mkdir(root.split('/').slice(0, -1).join('/'), { recursive: true });
+    await fx.rt.storage.vfs.writeFile(root, 'a regular file where the staging folder goes');
+
+    await advanceRefinementLane(deps);
+
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
+    expect(row.routes.map((route) => [route.kind, route.disposition])).toEqual([['fact', 'applied'], ['skill', 'refused']]);
+    expect(routeFor(row.routes, 'skill').reason).toMatch(/mkdir '[^']*refinement/u);
+    expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
+    expect(row.stage).not.toBe('refused');
+    expect(nextEvolutionAnswerAt(fx.rt.storage.sql, fx.rt.actor.actorId)).toBeNull();
+  });
+
   test('a skill edit stages OUTSIDE discovery — zero prompt influence before approval', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
@@ -942,7 +980,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(route.owner).toBe('');
   });
 
-  test('one request table, owning no artifact, in exactly the shape it ships', () => {
+  test('the request table and the lane hold, owning no artifact, in exactly the shape they ship', () => {
     // A bare database, so what this init creates is exactly what is measured.
     const bare = createTestSql();
 
@@ -953,7 +991,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     initRefinementTables(bare.execRaw);
     const added = tables().filter((name) => !before.has(name));
 
-    expect(added).toEqual(['refinement_requests']);
+    expect(added).toEqual(['refinement_lane_holds', 'refinement_requests']);
 
     // Names that would betray a second authority for an artifact.
     for (const forbidden of ['skill', 'prompt_section', 'fact', 'subordinate', 'actor_config']) {
@@ -1329,7 +1367,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
-    await expect(advanceRefinementLane(deps)).rejects.toThrow('the refiner host went away');
+    await failsFrom(advanceRefinementLane(deps), 'the refiner host went away');
     // Left claimed by a dead pass; no owner touched.
     expect(store.get(opened.id)?.stage).toBe('planning');
     expect(fx.facts.all()).toEqual([]);
@@ -2205,12 +2243,14 @@ describe('promotion never half-lands — the read-back is what allows the unlink
 });
 
 /** One workspace database for the roster and the root's rail, as both hosts keep them. */
-function refinerRail() {
-  const db = new Database(':memory:');
+/** `over`: the lane's own database, so the helper's parent is the actor whose lane asked it, as in a workspace. */
+function refinerRail(over?: { readonly db: Database; readonly workspaceId: string }) {
+  const db = over?.db ?? new Database(':memory:');
+  const workspaceId = over?.workspaceId ?? 'refiner-workspace';
   const exec = makeSqlExec(db);
   initEventsHubTables(exec);
-  createTestActor(makeSql(db), makeExecRaw(db), 'refiner-workspace', 'main');
-  const directory = new WorkspaceActorDirectory(makeSql(db), { workspaceId: 'refiner-workspace', ownerUserId: '' });
+  createTestActor(makeSql(db), makeExecRaw(db), workspaceId, 'main');
+  const directory = new WorkspaceActorDirectory(makeSql(db), { workspaceId, ownerUserId: '' });
   const root = directory.main();
   const roster = new SubordinateRosterStore(exec, root);
   roster.ensureSchema();
@@ -2231,6 +2271,7 @@ function refinerRail() {
   const port = () => createTemporaryAgentPort({ roster, runtime, createName: (role) => `${role}-a1b2c3`, now: () => SEED_EPOCH });
 
   return {
+    root,
     roster,
     log,
     port,
@@ -2238,11 +2279,26 @@ function refinerRail() {
     reports: () => log.pending().filter((event) => event.variant === 'subordinate_report'),
     deliver: (temporary: TemporaryAgentPort, content: string) => receiveSubordinateEvent({
       log, roster, vfs: createMemoryVfs().vfs, transaction: (body) => body(),
-      announce: () => undefined, onAdmitted: () => undefined, temporary,
+      announce: () => undefined, onAdmitted: () => undefined, onEvolutionAnswer: () => undefined, temporary,
     }, {
       fromSubordinate: 'ask-refiner-a1b2c3', status: 'completed', content, origin: 'turn_end',
       sequenceId: 'refiner:turn-1', mode: 'plan',
     }, SEED_EPOCH),
+  };
+}
+
+/** A port whose activation dies once its refiner is assigned: the run it started, and its waiter, outlive it. */
+function evictedAfterAssign(rail: ReturnType<typeof refinerRail>, evicted: TemporaryAgentPort): TemporaryAgentPort {
+  const lost: Promise<unknown>[] = [];
+
+  return {
+    ...evicted,
+    run: async (request) => {
+      lost.push(evicted.run(request));
+
+      for (let attempt = 0; attempt < 50 && !rail.roster.get(rail.helper)?.taskEventId; attempt++) await Promise.resolve();
+      throw new Error('the activation was evicted');
+    },
   };
 }
 
@@ -2255,20 +2311,10 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
 
     // The activation dies once the refiner is assigned: its pass unwinds, and the run it started
     // (with its waiter) is held by nothing that survives.
-    const lost: Promise<unknown>[] = [];
-
-    const dying: TemporaryAgentPort = {
-      ...evicted,
-      run: async (request) => {
-        lost.push(evicted.run(request));
-
-        for (let attempt = 0; attempt < 50 && !rail.roster.get(rail.helper)?.taskEventId; attempt++) await Promise.resolve();
-        throw new Error('the activation was evicted');
-      },
-    };
+    const dying = evictedAfterAssign(rail, evicted);
 
     const opened = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await expect(advanceRefinementLane(fx.deps(dying))).rejects.toThrow('the activation was evicted');
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
     expect(rail.roster.get(rail.helper)?.createdBy).toBe('evolution');
 
     let asks = 0;
@@ -2299,5 +2345,98 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     expect(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)?.stage).toBe('applied');
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(rail.reports()).toEqual([]);
+  });
+
+  test('a stored answer owes the lane a pass at once, and the pass that routes it clears that', async () => {
+    // Without it, an answer stored after an eviction waits for the owner's next turn.
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
+    const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
+    const evicted = rail.port();
+    const dying = evictedAfterAssign(rail, evicted);
+
+    await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    expect(owed()).toBeNull();
+
+    const resumed = rail.port();
+    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
+    const due = owed();
+
+    expect(due).not.toBeNull();
+    expect(due ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(Date.now());
+
+    expect((await advanceRefinementLane(fx.deps(resumed))).step).toBe('planned');
+    expect(owed()).toBeNull();
+  });
+
+  test('it owes nothing while an older request is ahead in the lane, which the next pass would take instead', async () => {
+    // A due source the pass will not route would re-arm the wake at once, lap after lap.
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
+    const evicted = rail.port();
+    const dying = evictedAfterAssign(rail, evicted);
+
+    await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    await rail.deliver(rail.port(), proposalText(FACT_PROPOSAL));
+    createRefinementStore(fx.rt.storage.sql, fx.rt.actor).open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 });
+
+    expect(nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId)).toBeNull();
+  });
+
+  test('any throw in a pass holds the lane: its stored answer stops reading as due', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
+    const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
+    const dying = evictedAfterAssign(rail, rail.port());
+    await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    const resumed = rail.port();
+    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
+    expect(owed()).not.toBeNull();
+
+    // Taking the request throws, outside every catch the routing has.
+    fx.db.run(`CREATE TRIGGER refuse_claim BEFORE UPDATE ON refinement_requests
+      BEGIN SELECT RAISE(ABORT, 'the request table refused the write'); END`);
+    await failsFrom(refinementPass(fx.deps(resumed)), 'the request table refused the write');
+    expect(owed()).toBeNull();
+
+    // A pass that completes lifts the hold and routes the answer.
+    fx.db.run('DROP TRIGGER refuse_claim');
+    expect((await refinementPass(fx.deps(resumed))).step).toBe('planned');
+  });
+
+  test('a pass that fails for no one request holds the lane with its cause, owing no wake until new input', async () => {
+    // Still due, every wake would re-run the same failing settle.
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
+    const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
+    const dying = evictedAfterAssign(rail, rail.port());
+
+    const answered = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    const resumed = rail.port();
+    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
+    const stuck = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 }).request;
+    void fx.rt.storage.sql`UPDATE refinement_requests SET stage = 'gated' WHERE id = ${stuck.id}`;
+    void fx.rt.storage.sql`ALTER TABLE prompt_section_versions RENAME TO prompt_section_versions_away`;
+    expect(owed()).not.toBeNull();
+
+    expect((await refinementPass(fx.deps(resumed))).step).toBe('idle');
+    expect(store.get(stuck.id)?.detail).toContain('prompt_section_versions');
+    expect(owed()).toBeNull();
+    expect(store.get(answered.id)?.stage).not.toBe('applied');
+
+    void fx.rt.storage.sql`ALTER TABLE prompt_section_versions_away RENAME TO prompt_section_versions`;
+    await refinementPass(fx.deps(resumed));
+    await refinementPass(fx.deps(resumed));
+    expect(store.get(answered.id)?.stage).toBe('applied');
+    expect(owed()).toBeNull();
   });
 });

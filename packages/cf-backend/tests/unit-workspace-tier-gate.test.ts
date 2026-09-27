@@ -56,6 +56,9 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'credentials.model', name: 'getCredentialBaseURL(openai-compat.box)', run: (u, c) => u.getCredentialBaseURL(c, 'openai-compat.box') },
   { capability: 'credentials.model', name: 'listCredentials', run: (u, c) => u.listCredentials(c) },
   { capability: 'credentials.model', name: 'listConnectedProviders', run: (u, c) => u.listConnectedProviders(c) },
+  { capability: 'credentials.model', name: 'codexRelayDevice', run: (u, c) => u.codexRelayDevice(c) },
+  { capability: 'credentials.model', name: 'relayCodex', run: (u, c) => u.relayCodex(c, 'dev-none', 'call-1', new Request('https://chatgpt.com/backend-api/codex/models')) },
+  { capability: 'credentials.model', name: 'cancelCodexRelay', run: (u, c) => u.cancelCodexRelay(c, 'call-1') },
 
   { capability: 'credentials.other', name: 'getAuthHeaders(github)', run: (u, c) => u.getAuthHeaders(c, 'github') },
   { capability: 'credentials.other', name: 'getCredentialBaseURL(github)', run: (u, c) => u.getCredentialBaseURL(c, 'github') },

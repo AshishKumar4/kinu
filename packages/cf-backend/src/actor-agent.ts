@@ -52,7 +52,7 @@ import {
 } from "./user/mcp";
 
 import {
-  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, createDbCodemodeProvider,
+  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference, createDbCodemodeProvider,
   type EvolutionConfig, type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
@@ -886,19 +886,23 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._subordinateRuntime;
   }
 
-  private _temporaryAgentPort: TemporaryAgentPort | null = null;
+  /** The host's one port for this actor: a waiter is found only through the port that parked it. */
+  /** A turn waiting on a delegate it hired; the workspace root frees the waiting turn's slot. */
+  protected whileWaitingOnDelegate<T>(_actorId: string, waited: Promise<T>): Promise<T> {
+    return waited;
+  }
 
-  /** Built once per actor: `shell` parks a waiter that the report ingress later resolves on this
-   * isolate; a per-call port would leave every ask hanging. */
-  protected temporaryAgentPort(): TemporaryAgentPort {
-    this._temporaryAgentPort ??= createTemporaryAgentPort({
-      roster: this.subordinateRoster,
-      runtime: this.subordinateRuntime(),
-      now: () => Date.now(),
-      createName: mintSubordinateName,
+  protected temporaryAgentPort(reference: ActorReference = actorReferenceOf(this.actorHandle())): TemporaryAgentPort {
+    return this.actorHost().temporary(reference, (bound) => {
+      const seams = this.subordinateSeams();
+      const roster = seams.roster(bound);
+      roster.ensureSchema();
+
+      return createTemporaryAgentPort({
+        roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
+        whileWaiting: (waited) => this.whileWaitingOnDelegate(bound.record.actorId, waited),
+      });
     });
-
-    return this._temporaryAgentPort;
   }
 
   protected getTeamToolDeps(): TeamToolDeps {
@@ -996,6 +1000,7 @@ export abstract class ActorAgent extends Agent<Env> {
         this.broadcastSubordinateEvent({ ...report, kind: 'report' });
       },
       onAdmitted: () => { this.orch.scheduleDrain(); },
+      onEvolutionAnswer: () => { this.durableWakeOwner()?.(); },
       // A temporary child's answer belongs to the waiting `agents.ask` call, so the register gets
       // first refusal on the name through the port that parked the waiter.
       temporary: this.temporaryAgentPort(),
@@ -1021,6 +1026,7 @@ export abstract class ActorAgent extends Agent<Env> {
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider],
     reportModelCall: (report) => { this.reportModelCall(report); },
+    currentTurn: (reference) => this.currentTurnOf(reference),
   });
 
   // The bare prototype must read as sound.
@@ -1506,6 +1512,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Test-only deterministic cut point in the terminal sequence. Null in production. */
   protected terminalEffectFault: TerminalEffectFault | null = null;
+
+  protected currentTurnOf(reference: ActorReference): string | null {
+    return sameActorReference(reference, actorReferenceOf(this.actorHandle()))
+      ? this.actorSession.currentTurnId
+      : this.actorHost().hosted(reference)?.session.currentTurnId ?? null;
+  }
 
   /** Read at the start of a terminal sequence and carried through: the loop's live turn becomes
    *  the next one as soon as it opens, so a detached re-read could close the wrong claim. */
@@ -3020,6 +3032,7 @@ export abstract class ActorAgent extends Agent<Env> {
         reportModelCall: (report) => this.reportModelCall(report),
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         resolveProfile: () => this.routingProfile(),
+        currentTurn: (reference) => this.currentTurnOf(reference),
         contextPlane: {
           actorId: this.actorHandle().actorId,
           claims: () => this.claims,

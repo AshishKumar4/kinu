@@ -59,7 +59,6 @@ const TASK_ENDING_REPORT = {
     + 'produced; its transcript holds what it had done.',
 } as const satisfies Record<TaskTurnEnding, string | null>;
 
-/** The report a child's settled turn owes its caller. */
 export interface OwedReport {
   readonly status: SubordinateReportStatus;
   readonly content: string;
@@ -146,6 +145,7 @@ export function createTemporaryAgentPort(deps: {
   runtime: SubordinateRuntime;
   createName(role: string): string;
   now(): number;
+  whileWaiting?<T>(waited: Promise<T>): Promise<T>;
 }): TemporaryAgentPort {
   const waiters = new Map<string, (answer: TemporarySettlement) => void>();
 
@@ -219,13 +219,12 @@ export function createTemporaryAgentPort(deps: {
         reason,
       });
 
-      /** Archive the row and retire the actor; history is always kept. */
-      const release = async (): Promise<void> => {
+      const release = async (interrupt: boolean): Promise<void> => {
         const actor = deps.roster.requireExisting(name).actorReference;
 
         if (!actor) throw new KinuError('missing', 'The temporary actor has no confirmed identity.');
         deps.roster.dismiss(name, deps.now());
-        await deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor);
+        await deps.runtime.dismiss(name, { keepHistory: true, interrupt }, actor);
       };
 
       const creationId = crypto.randomUUID();
@@ -259,8 +258,14 @@ export function createTemporaryAgentPort(deps: {
         return failure(error.code, renderCauseChain(error));
       }
 
-      const settlement = await waiter.promise;
-      await release();
+      // Released inside the wait, before the caller takes its slot back.
+      const answered = waiter.promise.then(async (settled) => {
+        await release(settled === 'cancelled');
+
+        return settled;
+      });
+
+      const settlement = await (deps.whileWaiting?.(answered) ?? answered);
 
       if (settlement === 'cancelled') {
         return failure('cancelled', 'the caller cancelled this hire before the agent answered.');

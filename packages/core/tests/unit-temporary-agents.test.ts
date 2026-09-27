@@ -230,6 +230,7 @@ function makeScene(options: {
       transaction: (body) => body(),
       announce: () => { /* the rail row is the record; see `published()` */ },
       onAdmitted: () => { wakes.push(1); },
+      onEvolutionAnswer: () => undefined,
       temporary,
     }, {
       fromSubordinate: input.from ?? TEMP_NAME,

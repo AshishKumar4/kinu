@@ -1,4 +1,4 @@
-/** The swarm explorer's view model. Only the web client reads it, so it has its own subpath and the Worker loads none of it. */
+/** The swarm explorer's view model: only the web client reads it, so the Worker loads none of it. */
 export {
   swarmResolutionOf, swarmAxisRows, fanInArity, fanInVertices, nodeRationales,
   runRefusal, runLiveness, formatEvidenceValue,

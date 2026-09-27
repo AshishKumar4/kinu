@@ -153,7 +153,6 @@
   "packages/core/src/execution/device-tunnel.ts#DEVICE_CANCEL_VERSION_REFUSAL (unreached-export)",
   "packages/core/src/execution/device-tunnel.ts#DEVICE_DUPLICATE_REQUEST (unreached-export)",
   "packages/core/src/execution/device-tunnel.ts#DEVICE_UNKNOWN_METHOD (unreached-export)",
-  "packages/core/src/execution/device-tunnel.ts#DEVICE_UNRESPONSIVE (unreached-export)",
   "packages/core/src/execution/device-tunnel.ts#DeviceCancelResultSchema (unreached-export)",
   "packages/core/src/execution/device-tunnel.ts#DeviceRpcOptions.extra (unsupplied-field)",
   "packages/core/src/execution/device-tunnel.ts#DeviceRpcOptions.onTerminal (unsupplied-field)",
