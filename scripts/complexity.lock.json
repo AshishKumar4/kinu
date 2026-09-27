@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-27",
-  "files": 2804,
-  "functions": 69382,
+  "files": 2833,
+  "functions": 70052,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -94,10 +94,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive",
-      "complexity": 37
-    },
-    {
       "key": "packages/core/src/strategy/swarm.ts#swarmValidity",
       "complexity": 37
     },
@@ -123,6 +119,10 @@
     },
     {
       "key": "packages/cli/src/cc-transcript.ts#mineSession",
+      "complexity": 35
+    },
+    {
+      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive",
       "complexity": 35
     },
     {

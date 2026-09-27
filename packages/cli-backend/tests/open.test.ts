@@ -25,4 +25,17 @@ describe('openWorkspaceCLI', () => {
     expect(info.purpose).toBe('Run the household and the lab.');
     db.close();
   });
+
+  test('a database an older Kinu made is refused by name before any schema runs over it', async () => {
+    const dir = scratchDir('open-older');
+    const dbPath = join(dir, 'agent.db');
+    const db = new Database(dbPath);
+    await createWorkspace(db, { name: 'jarvis', purpose: 'Run the lab.', llm: DUMMY_LLM });
+    db.exec('PRAGMA user_version = 0');
+    const tables = db.query('SELECT name, sql FROM sqlite_master ORDER BY name').all();
+
+    await expect(openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM })).rejects.toThrow(/made by an older Kinu.*kinu create/s);
+    expect(db.query('SELECT name, sql FROM sqlite_master ORDER BY name').all()).toEqual(tables);
+    db.close();
+  });
 });

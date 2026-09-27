@@ -123,6 +123,10 @@ export {
   type ArchiveRestoreOptions, type ArchiveRestoreResult,
 } from './identity/archive';
 
+export { SCHEMA_GENESIS } from './identity/schema-genesis';
+
+export { requireSchemaGenesis, SCHEMA_GENESIS_STAMP } from './identity/schema-stamp';
+
 export {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
