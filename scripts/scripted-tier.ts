@@ -16,7 +16,7 @@ import * as v from 'valibot';
 import { EVAL_ACCOUNTS, PROVIDER_PROXY_PATH, PROXY_CRED_HEADER, PROXY_TARGET_HEADER } from '@kinu.run/core';
 import { resolvePublicSessionPlan, resolveWebIdentity, webHeaders } from '../evals/src/session';
 import {
-  SCRIPTED_MODEL_ID, SCRIPTED_MODEL_ORIGIN, SCRIPTED_MODEL_SPEC,
+  SCRIPTED_MODEL_ID, SCRIPTED_MODEL_KEY_ENV, SCRIPTED_MODEL_ORIGIN, SCRIPTED_MODEL_SPEC,
 } from '../packages/test-utils/src/scripted-model-spec';
 import { SCRIPTED_CREDENTIAL, defaultToScriptedModel, registerScriptedModel } from './scripted-model';
 import { FALLBACK_ANSWER } from './scripted-protocol';
@@ -24,6 +24,14 @@ import { FALLBACK_ANSWER } from './scripted-protocol';
 const [origin, named, ...rest] = process.argv.slice(2);
 
 const token = process.env.KINU_TOKEN?.trim() ?? '';
+
+/** The scripted model Worker's `SCRIPTED_MODEL_KEY`, stored as the account's API key; it answers nothing else. */
+const modelKey = process.env[SCRIPTED_MODEL_KEY_ENV]?.trim() ?? '';
+
+if (modelKey === '') {
+  console.error(`scripted-tier: ${SCRIPTED_MODEL_KEY_ENV} is not set, so the scripted model Worker would refuse every call.`);
+  process.exit(2);
+}
 
 if (origin === undefined || named === undefined || rest.length > 0 || token === '') {
   console.error('usage: KINU_TOKEN=<the account\'s CLI bearer> bun scripts/scripted-tier.ts <origin> <eval account>');
@@ -40,7 +48,7 @@ if (identity.kind === 'absent') throw new Error(identity.remedy);
 
 const headers = webHeaders(identity.identity);
 
-await registerScriptedModel(origin, SCRIPTED_MODEL_ORIGIN, headers);
+await registerScriptedModel(origin, SCRIPTED_MODEL_ORIGIN, headers, modelKey);
 
 await defaultToScriptedModel(origin, headers);
 

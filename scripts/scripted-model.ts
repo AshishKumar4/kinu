@@ -132,11 +132,13 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
 
 /** Point the `openai-compat` credential of the account `headers` name at the scripted model at `baseURL`: a local
  *  server's, or the deployed tiers' Worker. */
-export async function registerScriptedModel(origin: string, baseURL: string, headers: Record<string, string> = {}): Promise<void> {
+export async function registerScriptedModel(
+  origin: string, baseURL: string, headers: Record<string, string> = {}, apiKey = 'fake-key',
+): Promise<void> {
   await apiJson(origin, `/api/user/credentials/${SCRIPTED_CREDENTIAL}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ kind: 'openai-compat', baseURL, apiKey: 'fake-key' }),
+    body: JSON.stringify({ kind: 'openai-compat', baseURL, apiKey }),
   });
 }
 
