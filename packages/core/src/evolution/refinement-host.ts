@@ -5,9 +5,10 @@ import {
   type RefinementLaneStep, type RequestRefinementInput,
 } from './refinement-lane';
 import {
-  createRefinementStore, refinementRequestView,
+  createRefinementStore, holdRefinementLane, refinementRequestView, releaseRefinementLane,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
 } from './refinement';
+import { renderThrownChain } from '../obs/index';
 
 /** Explicit request; defaults to the unresolved outcomes at workspace scope. */
 export function requestOwnerRefinement(
@@ -27,9 +28,17 @@ export function listRefinements(deps: RefinementDeps, limit = 20) {
   };
 }
 
-/** Open owed debt first so a newly crossed threshold is handled this pass. */
 export async function refinementPass(deps: RefinementDeps): Promise<RefinementLaneStep> {
-  await refinementDebtRequest(deps);
+  const { sql, rt } = deps.control;
+  releaseRefinementLane(sql, rt.actor.actorId);
+
+  try {
+    await refinementDebtRequest(deps);
+  } catch (err) {
+    holdRefinementLane(sql, rt.actor.actorId, renderThrownChain({ cause: err }));
+
+    return { step: 'idle' };
+  }
 
   return advanceRefinementLane(deps);
 }

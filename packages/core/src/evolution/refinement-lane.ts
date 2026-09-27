@@ -20,9 +20,9 @@ import {
 } from './outcomes';
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, REFINEMENT_PROPOSAL_EXAMPLE,
-  RefinementProposalSchema, createRefinementStore, evolutionDebt,
+  RefinementProposalSchema, createRefinementStore, evolutionDebt, holdRefinementLane, refinementAnswerStored,
   refinementRequestView,
-  type RefinementClaim, type RefinementDeps,
+  type RefinementClaim, type RefinementDeps, type RefinementStore,
   type EvolutionDebt, type RefinementEdit, type RefinementProposal, type RefinementRequest,
   type RefinementRequestView, type RefinementRoute, type RefinementScope, type RefinementStage,
   type RefinementTrigger, type SettleRefinementPatch,
@@ -34,7 +34,7 @@ import { routeSkill, settleSkillApproval } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { renderIssues } from '../utils/json';
-import { renderThrownChain, toKinuError, tolerate, type ErrorCode } from '../obs/index';
+import { renderThrownChain, tolerate, type ErrorCode } from '../obs/index';
 import type { TemporaryRunRequest } from '../subordinates/temporary';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -154,7 +154,13 @@ export async function advanceRefinementLane(
 
   // `gated` too: a host killed between routing and settle leaves the row there.
   for (const waiting of store.settleable()) {
-    const settled = await settleRoutes(deps, waiting);
+    let settled: RefinementRequestView | null;
+
+    try {
+      settled = await settleRoutes(deps, waiting);
+    } catch (err) {
+      return laneHeld(deps, store, waiting, renderThrownChain({ cause: err }));
+    }
 
     if (settled) return { step: 'settled', request: settled };
   }
@@ -171,10 +177,30 @@ export async function advanceRefinementLane(
 
     // Null: the claim was lost to recovery and this pass wrote nothing.
     return planned === null ? { step: 'idle' } : { step: 'planned', request: planned };
+  } catch (err) {
+    const current = store.get(owed.id) ?? owed;
+
+    // A stored answer keeps a wake due.
+    if (current.stage === 'planning') {
+      if (!refinementAnswerStored(deps.control.sql, deps.control.rt.actor.actorId, owed.id)) throw err;
+
+      if (claimed.held() && claimed.advance('refused', { detail: renderThrownChain({ cause: err }) })) {
+        return { step: 'planned', request: refinementRequestView(store.get(owed.id) ?? owed) };
+      }
+    }
+
+    return laneHeld(deps, store, current, renderThrownChain({ cause: err }));
   } finally {
     // A claim left registered would make recovery skip a row nothing drives.
     claimed.release();
   }
+}
+
+function laneHeld(deps: RefinementDeps, store: RefinementStore, request: RefinementRequest, detail: string): RefinementLaneStep {
+  store.record(request.id, request.stage, { detail });
+  holdRefinementLane(deps.control.sql, deps.control.rt.actor.actorId, detail);
+
+  return { step: 'idle' };
 }
 
 /** `applied` or `rejected`. Fact `applied` is included: re-routing a fact is a no-op. */
@@ -268,17 +294,7 @@ async function plan(
     }
 
     if (!claim.held()) return null;
-    let routed: RefinementRoute;
-
-    try {
-      routed = await routeEdit(deps, { edit, request, reviewed });
-    } catch (cause) {
-      const failure = toKinuError({ doing: `routing the ${edit.kind} edit`, cause, otherwise: 'io' });
-
-      return refuse(`${failure.code}: ${failure.message}`);
-    }
-
-    routes.push(routed);
+    routes.push(await routeEdit(deps, { edit, request, reviewed }));
 
     // Persist after each route so a crash between owner writes keeps them recorded.
     if (!claim.record({ routes })) return null;
@@ -506,6 +522,28 @@ async function routeEdit(
     request: RefinementRequest;
     reviewed: readonly TurnOutcomeRow[];
   },
+): Promise<RefinementRoute> {
+  const { edit } = input;
+
+  try {
+    return await routeEditOnce(deps, input);
+  } catch (err) {
+    return { kind: edit.kind, owner: '', target: editTarget(edit), disposition: 'refused', reason: renderThrownChain({ cause: err }) };
+  }
+}
+
+function editTarget(edit: RefinementEdit): string {
+  switch (edit.kind) {
+    case 'fact': return edit.key;
+    case 'prompt_section': return edit.sectionId;
+    case 'skill': return edit.path;
+    case 'subagent_spec': return edit.role;
+  }
+}
+
+async function routeEditOnce(
+  deps: RefinementDeps,
+  input: Parameters<typeof routeEdit>[1],
 ): Promise<RefinementRoute> {
   const { edit } = input;
 

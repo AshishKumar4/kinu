@@ -54,6 +54,7 @@ import {
 import {
   decideRefinementRoute, showRefinementRoute,
 } from '../src/evolution/refinement-skill';
+import { refinementPass } from '../src/evolution/refinement-host';
 import { createMemoryVfs, createTestSql, present, unobservedSpend } from '@kinu.run/test-utils';
 import { RunEventRecorder } from '../src/events/recorder';
 import { Database } from 'bun:sqlite';
@@ -760,11 +761,11 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(row.stage).toBe('refused');
   });
 
-  test('a staging write that fails refuses the request with its reason, and owes no wake', async () => {
-    // A throw left the request planning with its answer stored, so the wake fold read it as due forever.
+  test('a route that throws is refused on its own with its cause, and an edit routed before it stands', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
-    const { port } = scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL)));
+    const proposal: RefinementProposal = { scope: 'workspace', summary: 'a fact and a skill', edits: [FACT_EDIT, skillProposal(BREVITY_SKILL).edits[0]] };
+    const { port } = scriptedRefiner(proposalText(proposal));
     const deps = fx.deps(port);
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     const root = refinementStagingPath(opened.id, 'brevity').split('/').slice(0, -2).join('/');
@@ -774,8 +775,10 @@ describe('routing — every typed edit lands in the store that already owns it',
     await advanceRefinementLane(deps);
 
     const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
-    expect(row.stage).toBe('refused');
-    expect(row.detail).toContain('skill');
+    expect(row.routes.map((route) => [route.kind, route.disposition])).toEqual([['fact', 'applied'], ['skill', 'refused']]);
+    expect(routeFor(row.routes, 'skill').reason).toMatch(/mkdir '[^']*refinement/u);
+    expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
+    expect(row.stage).not.toBe('refused');
     expect(nextEvolutionAnswerAt(fx.rt.storage.sql, fx.rt.actor.actorId)).toBeNull();
   });
 
@@ -963,7 +966,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(route.owner).toBe('');
   });
 
-  test('one request table, owning no artifact, in exactly the shape it ships', () => {
+  test('the request table and the lane hold, owning no artifact, in exactly the shape they ship', () => {
     // A bare database, so what this init creates is exactly what is measured.
     const bare = createTestSql();
 
@@ -974,7 +977,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     initRefinementTables(bare.execRaw);
     const added = tables().filter((name) => !before.has(name));
 
-    expect(added).toEqual(['refinement_requests']);
+    expect(added).toEqual(['refinement_lane_holds', 'refinement_requests']);
 
     // Names that would betray a second authority for an artifact.
     for (const forbidden of ['skill', 'prompt_section', 'fact', 'subordinate', 'actor_config']) {
@@ -2368,5 +2371,35 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     createRefinementStore(fx.rt.storage.sql, fx.rt.actor).open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 });
 
     expect(nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId)).toBeNull();
+  });
+
+  test('a pass that fails for no one request holds the lane with its cause, owing no wake until new input', async () => {
+    // Still due, every wake would re-run the same failing settle.
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
+    const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
+    const dying = evictedAfterAssign(rail, rail.port());
+
+    const answered = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
+    await expect(advanceRefinementLane(fx.deps(dying))).rejects.toThrow('the activation was evicted');
+    const resumed = rail.port();
+    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
+    const stuck = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 }).request;
+    void fx.rt.storage.sql`UPDATE refinement_requests SET stage = 'gated' WHERE id = ${stuck.id}`;
+    void fx.rt.storage.sql`ALTER TABLE prompt_section_versions RENAME TO prompt_section_versions_away`;
+    expect(owed()).not.toBeNull();
+
+    expect((await refinementPass(fx.deps(resumed))).step).toBe('idle');
+    expect(store.get(stuck.id)?.detail).toContain('prompt_section_versions');
+    expect(owed()).toBeNull();
+    expect(store.get(answered.id)?.stage).not.toBe('applied');
+
+    void fx.rt.storage.sql`ALTER TABLE prompt_section_versions_away RENAME TO prompt_section_versions`;
+    await refinementPass(fx.deps(resumed));
+    await refinementPass(fx.deps(resumed));
+    expect(store.get(answered.id)?.stage).toBe('applied');
+    expect(owed()).toBeNull();
   });
 });
