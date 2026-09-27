@@ -7,9 +7,10 @@
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { evalSessionPath } from '@kinu.run/test-utils';
 import { containerApplications, deployment, why, wrangler } from './infra-cloudflare';
 import { type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig } from './infra-manifest';
 
@@ -145,6 +146,8 @@ async function wipe(environment: InfraEnvironment, recordFile: string, scratch: 
 
   writeFileSync(recordFile, JSON.stringify(reset));
   run(['r2', 'object', 'put', `${bucket}/resets/${tag}.json`, '--file', recordFile, '--content-type', 'application/json', '--remote']);
+  // Every eval bearer this machine keeps for the origin named a session the reset deleted; the tiers mint new ones.
+  rmSync(dirname(evalSessionPath(origin(config), undefined)), { recursive: true, force: true });
   let answered = false;
 
   for (let attempt = 1; attempt <= HEALTH_ATTEMPTS && !answered; attempt += 1) {
