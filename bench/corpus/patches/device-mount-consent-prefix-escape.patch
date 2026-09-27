@@ -10,4 +10,4 @@ index db9ffd67a..90799438c 100644
 +    if (!(path === root || path.startsWith(root))) {
        throw makeVfsError(
          'EACCES',
-         `'${path}' is outside the consented device directory '${root}' — the agent sees the folder the owner `
+         `'${path}' is outside the consented device directory '${root}': the agent sees the folder the owner `

@@ -249,7 +249,7 @@ describe('renderForLLM', () => {
       expect(r.brief).toContain(
         `[... ${longReport.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
       );
-      expect(r.brief.endsWith(` — full report: ${content_path}`)).toBe(true);
+      expect(r.brief.endsWith(`: full report: ${content_path}`)).toBe(true);
       expect(await vfs.readFile(content_path)).toBe(longReport);
     });
 
@@ -287,7 +287,7 @@ describe('renderForLLM', () => {
       expect(r.brief).toContain(
         `[... ${serialized.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
       );
-      expect(r.brief).toContain(`"} — full message: ${body_path}`);
+      expect(r.brief).toContain(`"}: full message: ${body_path}`);
       expect(await vfs.readFile(body_path)).toBe(serialized);
     });
 
@@ -326,7 +326,7 @@ describe('renderForLLM', () => {
         `[... ${serialized.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
       );
       expect(r.brief).toContain('rollback');
-      expect(r.brief.endsWith(` — full body: ${body_path}`)).toBe(true);
+      expect(r.brief.endsWith(`: full body: ${body_path}`)).toBe(true);
       expect(await vfs.readFile(body_path)).toBe(serialized);
     });
 
@@ -350,7 +350,7 @@ describe('renderForLLM', () => {
         `[... ${body_text.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
       );
       expect(r.brief).toContain('Ship it by Friday.');
-      expect(r.brief.endsWith(` — full body: ${body_path}`)).toBe(true);
+      expect(r.brief.endsWith(`: full body: ${body_path}`)).toBe(true);
     });
 
     test('the budget boundary is exact, and identical content re-addresses one path', async () => {
@@ -391,7 +391,7 @@ describe('renderForLLM', () => {
       const brief = renderForLLM(present(event, 'the delivered peer event')).brief;
 
       expect(brief).toContain(`[... ${JSON.stringify(body).length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`);
-      expect(brief).toContain(' — full message could not be saved: ');
+      expect(brief).toContain(': full message could not be saved: ');
       expect(brief).toContain('the disk is full');
     });
 
@@ -421,8 +421,8 @@ describe('renderForLLM', () => {
       const [event] = log.pending({ variant: 'process_done' });
       const brief = renderForLLM(present(event, 'the process event')).brief;
 
-      expect(brief).toContain(` — full stdout: ${eventContentPath(stdout)}`);
-      expect(brief).toContain(' — full stderr could not be saved: ');
+      expect(brief).toContain(`: full stdout: ${eventContentPath(stdout)}`);
+      expect(brief).toContain(': full stderr could not be saved: ');
       expect(brief).toContain('the disk is full');
     });
   });

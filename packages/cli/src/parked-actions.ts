@@ -1,4 +1,5 @@
-import { literalText, type DeferredApproval, type DeferredApprovalAnswer } from '@kinu.run/core';
+import { type DeferredApproval, type DeferredApprovalAnswer } from '@kinu.run/core';
+import { literalText } from '@kinu.run/core/tui';
 import { attempt, settle, toWire, type KinuError, type Wire } from '@kinu.run/core/obs';
 import type { LocalSessionControls } from './agent-client';
 

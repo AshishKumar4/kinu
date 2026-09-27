@@ -256,7 +256,7 @@ describe('readInstructionSource — one row, opened', () => {
 
     expect(row.digest).toBe(instructionDigest(long));
     expect(row.bytes).toBe(long.length);
-    expect(row.preview).toHaveLength(51);
+    expect(row.preview).toHaveLength(53);
   });
 });
 
@@ -282,7 +282,7 @@ describe('previewInstruction — the owner sees what they are approving', () => 
 
   test('a long file is bounded and marked as clipped', () => {
     const preview = previewInstruction('x'.repeat(5_000), 100);
-    expect(preview).toHaveLength(101);
-    expect(preview.endsWith('…')).toBe(true);
+    expect(preview).toHaveLength(103);
+    expect(preview.endsWith('...')).toBe(true);
   });
 });

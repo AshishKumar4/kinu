@@ -59,7 +59,7 @@ export const OUTPUT_CONTINUATION_EVENT = 'output_continuation';
 /** Continuation text: resume where cut, no restart, no re-running tool calls. */
 export const OUTPUT_CONTINUATION_TEXT =
   'The previous answer stopped at the model output limit before it was finished. '
-  + 'Continue it from exactly where it stopped — do not restart it, repeat what it already '
+  + 'Continue it from exactly where it stopped: do not restart it, repeat what it already '
   + 'said, or re-run tool calls whose results are already above.';
 
 /** What a settled turn knows about whether it was cut at the output limit. */
@@ -126,7 +126,7 @@ export function classifyRunEnd(facts: RunEndFacts): RunEndClassification {
       cause: new Error(
         'the turn\'s last step still had tool calls pending, so something stopped the loop '
         + 'mid-work while reporting that it finished. The turn is sealed incomplete; what '
-        + 'stopped the loop is the defect — a step ceiling, a stop condition, a relay it waited on.',
+        + 'stopped the loop is the defect: a step ceiling, a stop condition, a relay it waited on.',
       ),
       otherwise: 'unavailable',
     }));

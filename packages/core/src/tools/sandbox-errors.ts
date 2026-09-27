@@ -21,5 +21,5 @@ export function explainNativeToolReferenceError(error: string): string {
     ? ` or through the \`${namespace}\` namespace declared in this sandbox's type block`
     : '';
 
-  return `${error} — "${name}" is a native Kinu tool. In a program call it as \`${CRAFTED_TOOL_NAMESPACE}.${name}(input)\` with the same input object the native call takes${projection}.`;
+  return `${error}: "${name}" is a native Kinu tool. In a program call it as \`${CRAFTED_TOOL_NAMESPACE}.${name}(input)\` with the same input object the native call takes${projection}.`;
 }

@@ -6,10 +6,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import type { HeadRunView } from '@kinu.run/core';
-import {
-  fanInArity, fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows,
-  swarmResolutionOf,
-} from '@kinu.run/core';
+import { fanInArity, fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf } from '@kinu.run/core/swarm-view';
 
 type JournalNode = HeadRunView['heads'][number];
 

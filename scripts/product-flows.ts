@@ -32,7 +32,6 @@ import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import { FLOW_SLATE, SLATE_ASK, WRITE_FILE_ASK } from './flows-script';
 
-/** Where a row runs and who it runs as. */
 export interface FlowTarget {
   readonly browser: Browser;
   readonly origin: string;
@@ -517,12 +516,10 @@ export async function recordRenderTasks(page: Page): Promise<void> {
 
 /** Wait for already-queued work and its paint, never for the value the assertion expects. */
 export async function rendered(page: Page): Promise<void> {
-  do {
-    await waitOn(page, 'the page\'s queued render callbacks', page.evaluate(`(async () => {
-      while (window.__pageTasks.size > 0) await Promise.all([...window.__pageTasks.values()].map(task => task.done));
-    })()`));
-    await painted(page);
-  } while (await page.evaluate('window.__pageTasks.size > 0'));
+  await waitOn(page, 'the page\'s queued render callbacks', page.evaluate(`
+    Promise.all([...window.__pageTasks.values()].map(task => task.done))
+  `));
+  await painted(page);
 }
 
 /** The composer of `agent`'s own pane, live: the pane that sends to that agent's chat. */
@@ -694,13 +691,11 @@ export async function reachesHome(target: FlowTarget): Promise<WelcomeVerdict> {
   }
 }
 
-/** The answers the chat column has drawn: every rendered reply block's text. */
 const ANSWERS = `[...document.querySelectorAll('#chat .prose-chat')]
   .filter((block) => block.getClientRects().length > 0)
   .map((block) => (block.textContent ?? '').trim())
   .filter((text) => text.length > 0)`;
 
-/** The text of the warnings the page shows. */
 const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning')]
   .map((notice) => (notice.textContent ?? '').trim()).filter((text) => text !== '').join(' | ')`;
 
@@ -1064,7 +1059,6 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
   }
 }
 
-/** The entry names the Drive list shows. */
 const DRIVE_LISTED = `[...document.querySelectorAll('[data-drive-entry]')].map((row) => row.getAttribute('data-drive-entry') ?? '')`;
 
 /** Counts, on `window`, every listing of the Drive's root the page's own fetch

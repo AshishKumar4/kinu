@@ -153,7 +153,8 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
       ],
     }),
     agents,
-    effectClaims: { sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID },
+    // No session stream persists this harness's calls, so none is waited for.
+    effectClaims: { sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID, durable: () => Promise.resolve() },
     facts,
     webSearch,
   });

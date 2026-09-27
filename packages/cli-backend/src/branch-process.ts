@@ -58,7 +58,7 @@ export function createBranchSpawner(
       );
     }
 
-    const binding = registerLocalActor(config.parent, { name: explorationActorKey(branchId), creationId: branchId, kind: 'branch', lifetime: 'task' });
+    const binding = registerLocalActor(config.parent, { name: explorationActorKey(branchId), creationId: branchId, kind: 'run', toolProfile: 'toolless', lifetime: 'task' });
 
     const workerPath = join(dirname(fileURLToPath(import.meta.url)), 'branch-worker.ts');
 

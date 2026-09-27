@@ -106,7 +106,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
         }
 
         if (`${offered.slots.join('|')}//${offered.flags.join('|')}` !== wantedKey) {
-          return `slot contract changed — expected {slots: ${wanted.slots.join(', ') || '(none)'}; `
+          return `slot contract changed: expected {slots: ${wanted.slots.join(', ') || '(none)'}; `
             + `flags: ${wanted.flags.join(', ') || '(none)'}}`;
         }
 
@@ -131,7 +131,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
   }
 
   const rationale =
-    `GEPA-optimised ${section.id} — ${formatScoreInterval(winnerScore, 3)} over `
+    `GEPA-optimised ${section.id}: ${formatScoreInterval(winnerScore, 3)} over `
     + `${String(gepa.history.length - 1)} mutations (incumbent: ${formatScoreInterval(incumbentScore, 3)}), `
     + `${String(Buffer.byteLength(winner.source, 'utf8'))} bytes against `
     + `${String(Buffer.byteLength(seed, 'utf8'))}.`;

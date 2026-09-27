@@ -116,7 +116,7 @@ async function loadSolve(spec) {
 const emit = (o) => { console.log('RESULT ' + JSON.stringify(o)); };
 
 /** Structural equality over what a decoder returns: a primitive, or an array of
- *  primitives. Deliberately not general — an answer shape no task can compare is
+ *  primitives. Deliberately not general: an answer shape no task can compare is
  *  a task whose ground truth was never written down. */
 function same(a, b) {
   if (Array.isArray(a) || Array.isArray(b)) {
@@ -139,8 +139,8 @@ function same(a, b) {
  * A reference that fails or answers wrongly THROWS. That is the instrument being
  * broken and it must take the harness down rather than be scored, because a
  * verifier that grades against a wrong expected answer publishes a number nobody
- * can trust. Everything the CANDIDATE can do wrong — absent, unparseable,
- * throwing, over budget, wrong shape, wrong answer — comes back as a failure
+ * can trust. Everything the CANDIDATE can do wrong (absent, unparseable,
+ * throwing, over budget, wrong shape, wrong answer) comes back as a failure
  * string, which is a legitimate zero.
  */
 function trial(input, oracle, decode, expected) {
@@ -173,7 +173,7 @@ function trial(input, oracle, decode, expected) {
  *
  *  A task built from several instances is scored on their TOTAL cost and their
  *  CONJUNCTION, so a solution that answers one instance cheaply and the other
- *  wrongly cannot pass — which is the whole reason a task carries more than one.
+ *  wrongly cannot pass, which is the whole reason a task carries more than one.
  */
 function emitTrials(parts) {
   let refOps = 0; let candOps = 0; let refMs = 0; let candMs = 0;

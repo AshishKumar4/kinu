@@ -64,7 +64,7 @@ export function toolCallEffect(toolName: string, input: JsonValue | undefined): 
 export function clip(value: string, max: number = MAX): string {
   const flat = value.replace(/\s+/g, " ").trim();
 
-  return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}…`;
+  return flat.length <= max ? flat : `${flat.slice(0, max - 3).trimEnd()}...`;
 }
 
 function quoted(value: string, max: number = MAX): string {
@@ -82,7 +82,7 @@ function actionOn(action: string, target?: string, body?: string): string {
   const head = words(action, target ? clip(target, 40) : undefined);
   const tail = body ? quoted(body, 48) : "";
 
-  return tail ? `${head} — ${tail}` : head;
+  return tail ? `${head}: ${tail}` : head;
 }
 
 /** The first line of an eval program that isn't blank or a comment. */

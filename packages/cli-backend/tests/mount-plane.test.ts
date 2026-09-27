@@ -74,7 +74,7 @@ describe('the local backend file plane', () => {
 
     if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
     expect(error.code).toBe('ENXIO');
-    expect(error.message).toContain('/sandbox — no Sandbox container bound');
+    expect(error.message).toContain('/sandbox: no Sandbox container bound');
     expect(await mounted.exists('/sandbox/workspace')).toBe(false);
     expect(await mounted.stat('/sandbox')).toBeNull();
   });

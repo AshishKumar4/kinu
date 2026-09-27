@@ -62,7 +62,7 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     // Public repo: internal citations are blocked like credentials.
     id: 'cf-internal-reference',
     regex: CF_INTERNAL_REFERENCE,
-    message: 'Cloudflare-internal source reference (public repo — cite the measurement instead)',
+    message: 'Cloudflare-internal source reference (public repo: cite the measurement instead)',
   },
   {
     // Fragments (8+ hex after a prefix) count. An ellipsis is benign only
@@ -70,7 +70,7 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     id: 'kinu-token',
     regex: /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/g,
     benign: /<your-|\bp(?:ta|tc|dt)_(?:\.\.\.|…)/,
-    message: 'Kinu access/CLI/device token (rotate it — a printed-once value that reached a file is compromised)',
+    message: 'Kinu access/CLI/device token (rotate it: a printed-once value that reached a file is compromised)',
   },
   {
     // Mirrors GitHub push protection prefixes so a local pass predicts the push.
@@ -78,7 +78,7 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     id: 'provider-secret',
     regex: /\b(?:[sr]k_live_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|sk-ant-[A-Za-z0-9-]{20,}|sk-proj-[A-Za-z0-9_-]{20,})/g,
     benign: /<your-|example|placeholder/,
-    message: "third-party provider credential — if this is a deliberate test fixture, ASSEMBLE it at runtime rather than declaring it in .secretscanignore: a declaration satisfies THIS scan, but GitHub push protection reads the source text and will block the push anyway",
+    message: "third-party provider credential, if this is a deliberate test fixture, ASSEMBLE it at runtime rather than declaring it in .secretscanignore: a declaration satisfies THIS scan, but GitHub push protection reads the source text and will block the push anyway",
   },
   {
     id: 'credentialed-url',

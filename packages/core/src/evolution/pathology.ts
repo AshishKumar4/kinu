@@ -163,7 +163,7 @@ const EXAMPLE_CHARS = 160;
 function clampExample(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
 
-  return flat.length > EXAMPLE_CHARS ? `${flat.slice(0, EXAMPLE_CHARS - 1)}…` : flat;
+  return flat.length > EXAMPLE_CHARS ? `${flat.slice(0, EXAMPLE_CHARS - 3)}...` : flat;
 }
 
 /** Largest first, ties by id. `rows` should already be the negative outcomes. */
@@ -277,10 +277,10 @@ export function renderPathologyBlock(clusters: ReadonlyArray<PathologyCluster>):
       : '';
 
     const evidence = c.examples
-      .map((e) => `      asked "${e.request}" → then "${e.followup}"`)
+      .map((e) => `      asked "${e.request}" -> then "${e.followup}"`)
       .join('\n');
 
-    return `  ${c.id} — ${c.title} (${c.size} turn${c.size === 1 ? '' : 's'}${severity})${versions}` +
+    return `  ${c.id}: ${c.title} (${c.size} turn${c.size === 1 ? '' : 's'}${severity})${versions}` +
       (evidence ? `\n${evidence}` : '');
   });
 

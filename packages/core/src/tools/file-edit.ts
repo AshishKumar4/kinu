@@ -26,7 +26,7 @@ export type FileEditOutcome =
   | { ok: true; content: string; applied: AppliedEdit[] }
   | { ok: false; reason: FileEditFailure; message: string };
 
-export const BOM = '﻿';
+export const BOM = '\uFEFF';
 
 function detectLineEnding(content: string): '\r\n' | '\n' {
   const crlf = content.indexOf('\r\n');
@@ -252,8 +252,8 @@ export function formatFileSlice(
     const tail = `${reason} stopped it; continue with action=read offset=${last + 1}]`;
 
     return affordable(
-      `\n\n[showing lines ${first}-${last} of ${total} in ${opts.path} — ${tail}`,
-      `\n\n[showing lines ${first}-${last} of ${total} — ${tail}`);
+      `\n\n[showing lines ${first}-${last} of ${total} in ${opts.path}: ${tail}`,
+      `\n\n[showing lines ${first}-${last} of ${total}: ${tail}`);
   };
 
   const capReason = `the ${opts.maxChars}-char cap`;

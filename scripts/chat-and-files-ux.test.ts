@@ -2325,11 +2325,8 @@ describe('linking a machine happens on the surface that asked for it', () => {
       // and the URL never moved.
       expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
       expect(new URL(page.url()).pathname).toBe('/gallery.html');
-      // The disclosure is on screen BEFORE anything is installed.
-      expect(await page.$eval('[role="dialog"]', (d) => d.textContent ?? ''))
-        // a8459f7f3 cut the disclosure to three lines, ending on "The daemon
-        // only dials out. Revoke it any time under Account settings → Devices."
-        .toContain('The daemon only dials out. Revoke it any time under Account settings → Devices.');
+      // The disclosure is on screen before anything is installed: no command yet.
+      expect(await page.$('[data-connect-command]')).toBeNull();
 
       await page.click('[role="dialog"] [data-connect-start]');
       await page.waitForSelector('[data-connect-command]');

@@ -114,8 +114,8 @@ function stripExports(program: acorn.Program, source: string): string {
 function refused(reason: string): CraftedSourceAdmission {
   return {
     ok: false,
-    error: `${reason}. Write the tool as \`async (args) => { … }\`, \`async function name(args) { … }\`, `
-      + 'or `const name = async (args) => { … }`',
+    error: `${reason}. Write the tool as \`async (args) => { ... }\`, \`async function name(args) { ... }\`, `
+      + 'or `const name = async (args) => { ... }`',
   };
 }
 

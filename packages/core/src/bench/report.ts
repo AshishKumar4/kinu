@@ -86,16 +86,16 @@ export interface BenchDecision {
 /** Rejection by default: kept only when the held-out number improves under an
  *  exact paired test. Power does not gate acceptance; it only caveats magnitude. */
 export function decideBenchOutcome(sealed: SealedScorecard | null): BenchDecision {
-  if (!sealed) return { accept: false, reason: 'no held-out measurement — dev-split results alone never justify keeping a variant' };
+  if (!sealed) return { accept: false, reason: 'no held-out measurement: dev-split results alone never justify keeping a variant' };
   const s = sealed.stats;
 
   if (s.pairs === 0) return { accept: false, reason: 'held-out split was empty' };
 
   // Checked first: with no differing pair the floor rule would blame the task count.
-  if (s.discordant === 0) return { accept: false, reason: `variants never disagreed on ${s.pairs} held-out tasks — no evidence either way` };
+  if (s.discordant === 0) return { accept: false, reason: `variants never disagreed on ${s.pairs} held-out tasks: no evidence either way` };
 
   if (!s.canReachSignificance) {
-    return { accept: false, reason: `only ${s.discordant} of ${s.pairs} held-out tasks differed between the variants — the smallest p that many differing pairs can produce is ${s.floorPValue.toFixed(4)} > ${s.alpha}, so no outcome here could have accepted anything` };
+    return { accept: false, reason: `only ${s.discordant} of ${s.pairs} held-out tasks differed between the variants: the smallest p that many differing pairs can produce is ${s.floorPValue.toFixed(4)} > ${s.alpha}, so no outcome here could have accepted anything` };
   }
 
   if (s.effect <= 0) return { accept: false, reason: `held-out effect ${fmtPp(s.effect)} is not an improvement` };
@@ -107,7 +107,7 @@ export function decideBenchOutcome(sealed: SealedScorecard | null): BenchDecisio
     reason: `held-out effect ${fmtPp(s.effect)} is significant (exact McNemar p=${s.pValue.toFixed(4)})`,
     caveat: s.resolvable
       ? undefined
-      : `the design has 80% power only for effects ≥ ${fmtPp(s.mde)}, so ${fmtPp(s.effect)} is very likely an overestimate — ${s.pairsNeededForObserved} pairs would pin the magnitude down`,
+      : `the design has 80% power only for effects >= ${fmtPp(s.mde)}, so ${fmtPp(s.effect)} is very likely an overestimate: ${s.pairsNeededForObserved} pairs would pin the magnitude down`,
   };
 }
 
@@ -162,7 +162,7 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
     else throw new Error(`attempt for unknown variant "${attempt.variantId}" on task ${attempt.taskId}`);
 
     if (!Number.isInteger(attempt.repeat) || attempt.repeat < 0 || attempt.repeat >= config.repeats) {
-      throw new Error(`out-of-range repeat ${attempt.repeat} for ${attempt.taskId} (variant ${attempt.variantId}) — expected 0..${config.repeats - 1}`);
+      throw new Error(`out-of-range repeat ${attempt.repeat} for ${attempt.taskId} (variant ${attempt.variantId}): expected 0..${config.repeats - 1}`);
     }
 
     const key = `${attempt.variantId}:${attempt.taskId}:${attempt.repeat}`;
@@ -179,7 +179,7 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
 
   for (const [taskId, { a, b }] of byTask) {
     if (a.length !== config.repeats || b.length !== config.repeats) {
-      throw new Error(`unpaired task ${taskId}: expected ${config.repeats} attempt(s) per variant, got ${a.length} and ${b.length} — a paired design cannot drop half a pair`);
+      throw new Error(`unpaired task ${taskId}: expected ${config.repeats} attempt(s) per variant, got ${a.length} and ${b.length}: a paired design cannot drop half a pair`);
     }
 
     // Sorted so the report is byte-identical regardless of runner order.
@@ -222,7 +222,7 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
     decision,
     headline: sealedStats
       ? `held-out ${fmtPp(sealedStats.effect)} (${sealedStats.verdict})`
-      : `dev-only ${fmtPp(stats.effect)} — no held-out measurement`,
+      : `dev-only ${fmtPp(stats.effect)}: no held-out measurement`,
   };
 }
 
@@ -236,7 +236,7 @@ export function renderBenchSummary(report: BenchReport): string {
     (report.budgetBreaches > 0 ? `  (${report.budgetBreaches} attempt(s) hit the budget)` : ''));
   lines.push(`Repeats: ${k} attempt(s) per task per variant`);
   lines.push('');
-  lines.push(`DEV split (${dev.tasks} paired tasks) — adaptation may see this`);
+  lines.push(`DEV split (${dev.tasks} paired tasks): adaptation may see this`);
   lines.push(renderPairedStats(dev.stats));
   lines.push(renderCost(dev.cases));
 
@@ -250,19 +250,19 @@ export function renderBenchSummary(report: BenchReport): string {
     for (const c of unstable) lines.push(`  ${renderCase(c)}`);
     lines.push('');
   } else if (k > 1) {
-    lines.push(`UNSTABLE on dev: none — every task agreed across all ${k} repeats`);
+    lines.push(`UNSTABLE on dev: none; every task agreed across all ${k} repeats`);
     lines.push('');
   }
 
   if (report.sealed) {
-    lines.push(`SEALED split (${report.sealed.tasks} paired tasks) — aggregates only, opened ${report.sealAccessOrdinal ?? '?'} time(s)`);
+    lines.push(`SEALED split (${report.sealed.tasks} paired tasks): aggregates only, opened ${report.sealAccessOrdinal ?? '?'} time(s)`);
     lines.push(renderPairedStats(report.sealed.stats));
   } else {
     lines.push('SEALED split: not opened');
   }
 
   lines.push('');
-  lines.push(`DECISION: ${report.decision.accept ? 'KEEP' : 'REJECT'} — ${report.decision.reason}`);
+  lines.push(`DECISION: ${report.decision.accept ? 'KEEP' : 'REJECT'}: ${report.decision.reason}`);
 
   if (report.decision.caveat) lines.push(`  caveat: ${report.decision.caveat}`);
 
@@ -323,12 +323,12 @@ function renderPairedStats(s: PairedBinaryStats): string {
     `  pass@1 A=${pct(s.passAtOneA)}  B=${pct(s.passAtOneB)}  effect=${fmtPp(s.effect)}` +
       `  95% CI [${fmtPp(s.ci.lo)}, ${fmtPp(s.ci.hi)}]`,
     `  pass^${s.repeats} A=${pct(s.passAllA)}  B=${pct(s.passAllB)}  effect=${fmtPp(s.effectAll)}` +
-      (s.repeats === 1 ? '  (identical to pass@1 at 1 repeat)' : `  — solved in all ${s.repeats} attempts`),
+      (s.repeats === 1 ? '  (identical to pass@1 at 1 repeat)' : `  (solved in all ${s.repeats} attempts)`),
     // Exact McNemar at one attempt per task; the exact sign test above it.
     `  ${s.repeats === 1 ? 'McNemar exact' : 'exact sign test over tasks'} p=${s.pValue.toFixed(4)}` +
       `  (b=${s.onlyA} favour A, c=${s.onlyB} favour B, ${s.discordant}/${s.pairs} discordant tasks)`,
     `  detectable at this n: ${fmtPp(s.mde)}  resolution=${s.resolutionRatio.toFixed(2)}x` +
-      `  → ${s.verdict}`,
+      `  -> ${s.verdict}`,
   ];
 
   if (s.repeats > 1) {

@@ -77,7 +77,7 @@ export async function runScaffoldGepa<I = unknown, E = unknown>(
 
   // Carries the intervals so the promotion reader sees how thin the evidence was.
   const rationale = opts.rationale ??
-    `GEPA-optimised scaffold — aggregate ${formatScoreInterval(winnerScore, 3)} ` +
+    `GEPA-optimised scaffold: aggregate ${formatScoreInterval(winnerScore, 3)} ` +
     `over ${gepa.history.length - 1} mutations (seed: ${formatScoreInterval(seedScore, 3)}).`;
 
   const modResult = await modifyScaffold(opts.rt, rationale, winner.source);

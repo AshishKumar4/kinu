@@ -99,7 +99,7 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
     return { ok: false, error: replacement ? `job already retried as ${replacement}` : 'job retry could not be reserved' };
   }
 
-  deps.logActivity('bg_job_retry', `${jobId} → ${newId}`);
+  deps.logActivity('bg_job_retry', `${jobId} -> ${newId}`);
 
   const promise = Promise.resolve(tool.execute(input, {
       abortSignal: controller.signal, toolCallId: newId, messages: [],

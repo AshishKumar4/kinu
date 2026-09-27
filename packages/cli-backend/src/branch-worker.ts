@@ -86,7 +86,7 @@ const directory = new WorkspaceActorDirectory(sql, { workspaceId: owner.id, owne
 const validateActor = () => {
   const entry = directory.apply(bootstrap.parent, bootstrap.parentStoragePath, { action: 'validate', name: bootstrap.name, reference: bootstrap.reference });
 
-  if (entry.storageKey !== bootstrap.storageKey || entry.kind !== 'branch') throw new KinuError('denied', 'The branch physical identity does not match its directory record.');
+  if (entry.storageKey !== bootstrap.storageKey || entry.toolProfile !== 'toolless') throw new KinuError('denied', 'The branch physical identity does not match its directory record.');
 };
 
 validateActor();

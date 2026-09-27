@@ -1,6 +1,3 @@
-/**
- * A long chat's older pages, the plan review flow end to end, plans' one owner in the inspector, and an inspector that never moves its selection on its own. Its rows run in `live-app-rows.ts` against its own dev server and scripted model.
- */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

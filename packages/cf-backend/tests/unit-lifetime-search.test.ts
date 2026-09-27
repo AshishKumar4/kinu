@@ -84,7 +84,7 @@ test('a branch call the provider fails is not billed', async () => {
 
 test('a rollout branch is given no home to act in', async () => {
   const { agent, db } = await lifetimeSearch(stubAiBinding((run) => chatCompletion(run, 'Cache the token table between passes.')));
-  const branches = db.query<{ storage_key: string }, []>("SELECT storage_key FROM workspace_actors WHERE kind = 'branch'").all();
+  const branches = db.query<{ storage_key: string }, []>("SELECT storage_key FROM workspace_actors WHERE kind = 'run' AND tool_profile = 'toolless'").all();
 
   expect(branches.length).toBeGreaterThan(0);
   // The plane answers for a directory that exists, so an absent home is not a blind read.

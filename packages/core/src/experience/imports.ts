@@ -135,7 +135,7 @@ export function stageImport(
   if (!staged || staged.kind !== entry.kind) {
     return {
       ok: false,
-      reason: `payload for ${entry.kind} "${entry.key}" does not parse as ${entry.kind} experience — refusing a row lists would skip`,
+      reason: `payload for ${entry.kind} "${entry.key}" does not parse as ${entry.kind} experience: refusing a row lists would skip`,
     };
   }
 
@@ -164,7 +164,7 @@ export function stageImport(
     return {
       ok: false,
       reason: existing.status === 'corroborated'
-        ? `already imported and corroborated here — it is part of this workspace already`
+        ? `already imported and corroborated here: it is part of this workspace already`
         : `already imported this turn and waiting on the outcome that would corroborate it`,
     };
   }

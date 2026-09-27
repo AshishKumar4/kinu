@@ -66,7 +66,7 @@ export function buildDrainBatch(events: KinuEvent[], internal?: InternalEventTes
       && e.variant === 'peer_agent'
       && e.payload.reply_expected
     )
-      ? ` [the sender awaits your answer — answer it with agents({action:'msg', event_id:'${e.id}', message:...})]`
+      ? ` [the sender awaits your answer: answer it with agents({action:'msg', event_id:'${e.id}', message:...})]`
       : '';
 
     return `- [${r.variant}] from ${oneLine(r.triggered_by)}: ${oneLine(r.brief)}${replyHint}`;
