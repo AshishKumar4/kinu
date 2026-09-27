@@ -468,7 +468,7 @@ describe('proposal prompt cites the archive', () => {
 
     expect(prompt).toContain('Scaffold archive');
     expect(prompt).toContain('v3 [current, parent v2, 4-0-1 W-L-T]');
-    expect(prompt).toContain('v1 [rolled_back, parent v0, 0-2-0 W-L-T] — tried branching heads');
+    expect(prompt).toContain('v1 [rolled_back, parent v0, 0-2-0 W-L-T]: tried branching heads');
     expect(prompt).toContain('branching from ARCHIVED v1');
     expect(prompt).toContain('cite its version');
   });

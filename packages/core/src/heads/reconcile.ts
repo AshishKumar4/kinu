@@ -111,7 +111,7 @@ function forkInterruptedWake(runs: readonly AbandonedHeadRun[]): string {
     `${heads} head(s) across ${runs.length} fork run(s) were still marked running from an ` +
     `activation that has ended, so nothing is executing them and no report will arrive. ` +
     `They are now recorded as aborted: ${roster.join('; ')}. ` +
-    `Earlier steps may have shown these as in flight — that is no longer true. ` +
+    `Earlier steps may have shown these as in flight: that is no longer true. ` +
     `Re-fork the work you still need, or continue without it and say what is missing.`
   );
 }

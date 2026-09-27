@@ -16,7 +16,7 @@ import { unobservedSpend } from '@kinu.run/test-utils';
 
 /** A head's runtime over its parent's database; a head has no store of its own. */
 export async function createHeadRuntime(parent: CLIRuntime, id: string, observer?: WriteObserver) {
-  const binding = registerLocalActor(parent.actor, { name: explorationActorKey(id), creationId: id, kind: 'head', lifetime: 'task' });
+  const binding = registerLocalActor(parent.actor, { name: explorationActorKey(id), creationId: id, kind: 'run', lifetime: 'task' });
   // The per-kind runtime's release fence binds to the handle its binder issued, so bind once and pass it through.
   const handle = bindLocalActor(parent.storage.sql, binding);
 
@@ -78,7 +78,7 @@ export function headSeatFactory(
 ): (input: HeadInput, observer: WriteObserver) => Promise<HostedHeadSeat> {
   return async (input, observer) => {
     const binding = registerLocalActor(parent.actor, {
-      name: explorationActorKey(input.id), creationId: input.id, kind: 'head', lifetime: 'task',
+      name: explorationActorKey(input.id), creationId: input.id, kind: 'run', lifetime: 'task',
     });
 
     const agentName = headAgentName(binding.storageKey);

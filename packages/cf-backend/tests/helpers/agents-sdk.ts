@@ -75,6 +75,11 @@ function fiberRows<Row extends object>(
   return sql.exec(query, ...bindings).toArray().map((row) => v.parse(schema, row));
 }
 
+/** Whether a `runFiber` body started so far is still running. */
+export function harnessFibersRunning(): boolean {
+  return harnessFiberBodies.size > 0;
+}
+
 /** Resolves when every `runFiber` body started so far has settled. */
 export async function joinHarnessFibers(): Promise<void> {
   while (harnessFiberBodies.size > 0) await Promise.all(harnessFiberBodies);

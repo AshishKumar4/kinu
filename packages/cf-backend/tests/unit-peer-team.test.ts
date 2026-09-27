@@ -520,7 +520,7 @@ describe('oversize peer bodies stay reachable', () => {
 
     if (!path) throw new Error('expected spilled peer body path');
     expect(bob.files.get(path)).toBe(JSON.stringify(message));
-    expect(renderForLLM(events[0]).brief).toEndWith(` — full message: ${path}`);
+    expect(renderForLLM(events[0]).brief).toEndWith(`: full message: ${path}`);
     const batch = buildDrainBatch(events);
 
     if (!batch) throw new Error('expected peer drain batch');

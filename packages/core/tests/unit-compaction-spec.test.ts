@@ -51,7 +51,7 @@ describe('buildCompactionSummaryPrompt', () => {
     expect(prompt).toContain('PREVIOUS SUMMARY:');
     expect(prompt).toContain('Old task body');
     expect(prompt).toContain('NEW TURNS TO INCORPORATE:');
-    expect(prompt).toContain('In Progress → Completed');
+    expect(prompt).toContain('In Progress to Completed');
     expect(prompt).toContain('PRESERVE still-relevant information');
 
     for (const section of SECTIONS) expect(prompt).toContain(section);

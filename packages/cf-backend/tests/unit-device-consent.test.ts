@@ -49,7 +49,7 @@ describe('device consent prompt data', () => {
     expect(DEVICE_CONNECT_DISCLOSURE).toEqual([
       'Kinu installs a small daemon here and links this machine to your account.',
       'A workspace you approve runs in a sandbox: its own home plus folders you pick. Everything else stays invisible to it.',
-      'The daemon only dials out. Revoke it any time under Account settings → Devices.',
+      'The daemon only dials out. Revoke it any time under Account settings > Devices.',
     ]);
   });
 });

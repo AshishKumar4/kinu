@@ -182,7 +182,7 @@ export async function acceptSandboxLifecycleFailure(
     && before.outcome !== 'undelivered') {
     // `ok`: the agent has been told; a repeat is the container's conservative retry.
     recordSettlement('ok', '');
-    deps.logActivity?.('sandbox_incident_duplicate', `${incident.stage} — ${incident.incidentId}`);
+    deps.logActivity?.('sandbox_incident_duplicate', `${incident.stage}: ${incident.incidentId}`);
 
     return { status: 'queued', incidentId: incident.incidentId, duplicate: true };
   }
@@ -234,7 +234,7 @@ export async function acceptSandboxLifecycleFailure(
   recordSettlement(landed ? 'ok' : 'failed', '');
   deps.logActivity?.(
     landed ? 'sandbox_incident_announced' : 'sandbox_incident_undelivered',
-    `${incident.stage} — ${incident.incidentId}`,
+    `${incident.stage}: ${incident.incidentId}`,
   );
 
   return {

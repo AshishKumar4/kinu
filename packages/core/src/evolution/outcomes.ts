@@ -79,7 +79,7 @@ export function outcomeQuality(outcome: TurnOutcome, source: TurnOutcomeSource =
 
 const TRIVIAL_MESSAGE = new RegExp(
   '^\\s*(hi|hiya|hey|hello|yo|sup|thanks?|thank you|thx|ty|ok(ay)?|k|kk|cool|nice|great|awesome|perfect|' +
-  'good (morning|afternoon|evening|night)|gm|gn|bye|goodbye|see ya|cya|lol|haha)[\\s!.…]*$',
+  'good (morning|afternoon|evening|night)|gm|gn|bye|goodbye|see ya|cya|lol|haha)[\\s!.\\u2026]*$',
   'i',
 );
 
@@ -175,21 +175,21 @@ export function buildOutcomeClassifierPrompt(input: {
     `User's follow-up message:\n"${evidenceWindow(input.followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n\n` +
     `Outcomes:\n` +
     `- "accepted": the user moved on, built on the answer, or asked something new that presumes it ` +
-    `worked. ("great, now add the retry" — the next step only makes sense if the last one landed.)\n` +
+    `worked. ("great, now add the retry": the next step only makes sense if the last one landed.)\n` +
     `- "corrected": the user re-asked the same thing, fixed a mistake, contradicted the answer, or had to ` +
-    `re-state what they already asked for. ("no, I said STAGING" — the same ask, restated because the ` +
+    `re-state what they already asked for. ("no, I said STAGING": the same ask, restated because the ` +
     `answer missed it.)\n` +
     `- "frustrated": the user expressed explicit dissatisfaction or negative emotion about the response. ` +
-    `("why do you keep breaking the build" — a complaint about the response, not about the build.)\n\n` +
+    `("why do you keep breaking the build": a complaint about the response, not about the build.)\n\n` +
     `A terse follow-up is the one this gets wrong. Read what it is ABOUT, not how sharp it sounds:\n` +
-    `- "no" / "wrong file" / "not that one" → corrected. A flat contradiction carries no complaint.\n` +
-    `- "no, seriously?" / "again?!" → frustrated. The complaint is about the response itself.\n` +
-    `- "ok" / "thanks" → accepted. A short acknowledgement is still an acknowledgement.\n` +
-    `- "hm" / "what about the other one?" → nothing is settled. Answer with the outcome the disputed ` +
+    `- "no" / "wrong file" / "not that one" -> corrected. A flat contradiction carries no complaint.\n` +
+    `- "no, seriously?" / "again?!" -> frustrated. The complaint is about the response itself.\n` +
+    `- "ok" / "thanks" -> accepted. A short acknowledgement is still an acknowledgement.\n` +
+    `- "hm" / "what about the other one?" -> nothing is settled. Answer with the outcome the disputed ` +
     `request supports, at a LOW confidence.\n\n` +
     `Not evidence the answer worked: a follow-up that changes the subject while the ask still stands, ` +
     `or one where the user does the work themselves. Moving on and being satisfied are different things.\n` +
-    `An unsettled follow-up belongs in confidence rather than in a firmer verdict — an honest 0.4 is ` +
+    `An unsettled follow-up belongs in confidence rather than in a firmer verdict: an honest 0.4 is ` +
     `worth more than a 0.9 that is wrong, because this field is what the calibration profile measures.\n\n` +
     `JSON shape: {"outcome":"accepted"|"corrected"|"frustrated","confidence":<0..1>,"evidence":"<short reason>"}\n` +
     jsonObjectOnlyInstruction()
@@ -657,7 +657,7 @@ export function renderOutcomeCriterion(
 
   const critic = CRITIC_PROSE[expected?.critic ?? 'user'];
 
-  return `The agent's response below FAILED — ${critic.verdict}. ${rule.failed}\n\n`
+  return `The agent's response below FAILED: ${critic.verdict}. ${rule.failed}\n\n`
     + `Failed response:\n${evidenceWindow(expected?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n`
     + `${critic.complaint}:\n${evidenceWindow(expected?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
 }
@@ -672,11 +672,11 @@ export type OutcomeSplitDegeneracy =
 export function describeSplitDegeneracy(degeneracy: OutcomeSplitDegeneracy): string {
   switch (degeneracy) {
     case 'no_labeled_turns':
-      return 'no outcome-labeled turns yet — chat with the agent first';
+      return 'no outcome-labeled turns yet: chat with the agent first';
     case 'no_negatives':
-      return 'no corrected/frustrated turns yet — there is no failure to optimize toward';
+      return 'no corrected/frustrated turns yet: there is no failure to optimize toward';
     case 'no_held_out_negatives':
-      return 'only one labeled failure exists, and the optimizer must train on it — ' +
+      return 'only one labeled failure exists, and the optimizer must train on it: ' +
         'the winner is selected without any unseen failure, so an improvement here is not evidence of one';
   }
 }

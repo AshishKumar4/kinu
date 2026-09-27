@@ -46,7 +46,7 @@ describe('buildScaffoldProposalPrompt — documents the real sandbox contract', 
       'be terser',
     );
 
-    expect(withBridge).toContain('run (generator, line 1) → host.llmStream()');
+    expect(withBridge).toContain('run (generator, line 1) -> host.llmStream()');
   });
 });
 

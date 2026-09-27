@@ -91,7 +91,7 @@ function compileTemplate(id: string, source: string): TemplateNode[] {
       const unclosed = open.at(-1);
 
       if (unclosed) {
-        fail(id, `unclosed {{${IF_PREFIX}${unclosed.flag}}} — every conditional needs its {{/if}}`);
+        fail(id, `unclosed {{${IF_PREFIX}${unclosed.flag}}}: every conditional needs its {{/if}}`);
       }
 
       return root;
@@ -108,7 +108,7 @@ function compileTemplate(id: string, source: string): TemplateNode[] {
       const flag = name.slice(IF_PREFIX.length);
 
       if (!SLOT_PATTERN.test(flag)) {
-        fail(id, `malformed flag "{{${name}}}" at index ${start} — a flag is `
+        fail(id, `malformed flag "{{${name}}}" at index ${start}: a flag is `
           + `{{${IF_PREFIX}name}} with one space and no expression, matching ${SLOT_PATTERN.source}`);
       }
 
@@ -141,12 +141,12 @@ function compileTemplate(id: string, source: string): TemplateNode[] {
 
     if (name.startsWith('#') || name.startsWith('/')) {
       // Named rather than "malformed slot": `{{#each}}` is a design decision, not a typo.
-      fail(id, `unknown block tag "{{${name}}}" at index ${start} — `
+      fail(id, `unknown block tag "{{${name}}}" at index ${start}: `
         + `{{${IF_PREFIX}flag}} / {{else}} / {{/if}} are the only blocks; iteration stays in TypeScript`);
     }
 
     if (!SLOT_PATTERN.test(name)) {
-      fail(id, `malformed slot "{{${name}}}" at index ${start} — `
+      fail(id, `malformed slot "{{${name}}}" at index ${start}: `
         + `a slot is {{name}} with no spaces, matching ${SLOT_PATTERN.source}`);
     }
 
@@ -182,7 +182,7 @@ function renderNodes(
         }
 
         if (!v.is(TEXT_VALUE, value)) {
-          fail(id, `slot {{${node.name}}} is a text slot but was given a boolean — `
+          fail(id, `slot {{${node.name}}} is a text slot but was given a boolean: `
             + `write {{${IF_PREFIX}${node.name}}} to branch on it`);
         }
 
@@ -198,7 +198,7 @@ function renderNodes(
         }
 
         if (!v.is(FLAG_VALUE, value)) {
-          fail(id, `flag {{${IF_PREFIX}${node.flag}}} is a boolean slot but was given a string — `
+          fail(id, `flag {{${IF_PREFIX}${node.flag}}} is a boolean slot but was given a string: `
             + `write {{${node.flag}}} to substitute it`);
         }
 

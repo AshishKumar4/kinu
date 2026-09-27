@@ -129,7 +129,7 @@ export function resolveLiveModel(env: EnvSource = ambientByName(Object.values(LI
   return {
     kind: 'absent',
     reason: `no live-model target. Set ${LIVE_MODEL_ENV.origin} + ${LIVE_MODEL_ENV.token} `
-      + `for the deployed worker proxy (cheapest — native Workers AI), or `
+      + `for the deployed worker proxy (cheapest: native Workers AI), or `
       + `${LIVE_MODEL_ENV.gatewayURL[0]} + ${LIVE_MODEL_ENV.gatewayAuth[0]} for an AI Gateway.`,
   };
 }
@@ -163,7 +163,7 @@ export function workerSession(llm: LLMProviderConfig): LiveModelSession {
 export function liveModelTarget(suite: string): LiveModelTarget | null {
   // Ambient credentials are not consent to spend: a live run needs `KINU_EVAL_LIVE`, set only by the tier scripts.
   if (process.env['KINU_EVAL_LIVE'] !== '1') {
-    console.warn(`[skip] ${suite} — live suites are opt-in: run 'bun run test:live' (KINU_EVAL_LIVE=1)`);
+    console.warn(`[skip] ${suite}: live suites are opt-in: run 'bun run test:live' (KINU_EVAL_LIVE=1)`);
 
     return null;
   }
@@ -171,16 +171,16 @@ export function liveModelTarget(suite: string): LiveModelTarget | null {
   const resolved = resolveLiveModel();
 
   if (resolved.kind === 'misconfigured') {
-    throw new Error(`${suite}: live-model environment refuses this run — ${resolved.reason}`);
+    throw new Error(`${suite}: live-model environment refuses this run; ${resolved.reason}`);
   }
 
   if (resolved.kind === 'absent') {
-    console.warn(`[skip] ${suite} — ${resolved.reason}`);
+    console.warn(`[skip] ${suite}: ${resolved.reason}`);
 
     return null;
   }
 
-  console.warn(`[live] ${suite} — ${resolved.target.describe}`);
+  console.warn(`[live] ${suite}: ${resolved.target.describe}`);
 
   return resolved.target;
 }
@@ -235,7 +235,7 @@ export async function infraBoundary<T>(boundary: string, op: () => Promise<T>): 
     if (err instanceof DeploymentAnswer && !platformAnswer(err)) throw err;
 
     throw new Error(
-      `${INFRA_FAILURE_MARKER} — ${boundary} did not answer: ${String(err)}. `
+      `${INFRA_FAILURE_MARKER}: ${boundary} did not answer: ${String(err)}. `
       + "The environment failed here, so nothing about the agent's behaviour was measured; "
       + 'check the deployment before reading this as a regression.',
       { cause: err },
@@ -373,11 +373,11 @@ export function resetLiveModelSpend(): void {
 export function reportLiveModelSpend(suite: string): LiveModelSpend {
   const total = liveModelSpend();
   console.warn(
-    `[spend] ${suite} — ${total.calls} model call(s), `
+    `[spend] ${suite}: ${total.calls} model call(s), `
     + `${total.usage.input ?? 'unreported'} in / ${total.usage.output ?? 'unreported'} out tokens`
     + (total.callsWithoutUsage > 0 ? `, ${total.callsWithoutUsage} without reported usage` : '')
     + (total.episodesUnmeasured > 0
-      ? `, ${total.episodesUnmeasured} episode(s) UNMEASURED — this suite drove work whose `
+      ? `, ${total.episodesUnmeasured} episode(s) UNMEASURED: this suite drove work whose `
         + 'spend it could not account for, so the totals above are not this suite\'s cost'
       : '')
     + (total.episodesWithoutModel > 0

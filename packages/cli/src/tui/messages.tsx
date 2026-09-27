@@ -2,10 +2,10 @@ import { BoxRenderable, CodeRenderable, MarkdownRenderable, TextRenderable, type
 import * as v from 'valibot';
 import { useCallback, useRef } from 'react';
 
-import { TUI_MARKS } from '@kinu.run/core';
+import { TUI_MARKS } from '@kinu.run/core/tui';
 
 import type { AgentClientStatus } from '../agent-client';
-import { clipText, terminalText } from '@kinu.run/core';
+import { clipText, terminalText } from '@kinu.run/core/tui';
 import { EXPANDED_RESULT_LINES, FileDiffCard, fileEditDiffView } from './diff-card';
 import { StatusView } from './help-view';
 import { useTuiTheme, type TuiThemeColors } from './theme';

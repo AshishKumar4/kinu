@@ -9,12 +9,12 @@ describe('the workspace work read', () => {
     const workspace = createTestWorkspace();
     const { directory, main } = createTestActorsOver(workspace.db, { name: 'workspace' });
 
-    const child = (parent: ActorHandle, name: string, kind: 'subordinate' | 'head', lifetime: 'durable' | 'task') =>
+    const child = (parent: ActorHandle, name: string, kind: 'subordinate' | 'run', lifetime: 'durable' | 'task') =>
       directory.create({ parent, name, creationId: `${parent.name}/${name}`, kind, lifetime });
 
     const refiner = child(main, 'ask-refiner-fb0gr9', 'subordinate', 'task');
     const nested = child(refiner, 'ask-checker-a1', 'subordinate', 'task');
-    const head = child(main, explorationActorKey('head-1'), 'head', 'task');
+    const head = child(main, explorationActorKey('head-1'), 'run', 'task');
     const underHead = child(head, 'ask-reader-b2', 'subordinate', 'task');
 
     for (const actor of [main, refiner, nested, head, underHead]) {

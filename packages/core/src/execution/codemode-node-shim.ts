@@ -74,7 +74,7 @@ function shellQuote(value) {
 /** An argument as a suggestion can repeat it: short JSON, else an ellipsis. */
 function shownArg(value) {
   const json = typeof value === 'function' ? undefined : JSON.stringify(value);
-  return json !== undefined && json.length <= 80 ? json : '…';
+  return json !== undefined && json.length <= 80 ? json : '...';
 }
 
 /**

@@ -58,28 +58,28 @@ function deviceFailure(input: { doing: string; cause: unknown }): KinuError {
 
 /** Abort before the frame went out: nothing was sent, so nothing is running. */
 const EXEC_NOT_STARTED =
-  'device exec stopped before the command was sent — nothing ran on the device';
+  'device exec stopped before the command was sent: nothing ran on the device';
 
 /** The daemon's owned process group is gone; a `setsid`-escaped process is outside its authority. */
 const EXEC_TERMINATED =
-  'device exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run';
+  'device exec stopped: the device confirmed its owned command process group terminated; separately sessioned processes may still run';
 
 /** No active command entry on the daemon; backgrounded or escaped work may remain. */
 const EXEC_NOTHING_RUNNING =
-  'device exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run';
+  'device exec stopped: no active command control entry remained on the device; backgrounded or separately sessioned processes may still run';
 
 /** The daemon has no cancellation method; the user must update it. */
 const EXEC_CANCEL_UNSUPPORTED =
-  'device exec aborted — this machine runs an older Kinu daemon that cannot stop a command, '
+  'device exec aborted: this machine runs an older Kinu daemon that cannot stop a command, '
   + 'so the command may still be running. Ask the user to update the daemon on that machine.';
 
 /** The device left mid-cancellation, so nothing confirmed the kill. */
 const EXEC_CANCEL_UNCONFIRMED =
-  'device exec aborted — the device disconnected before it confirmed the command stopped';
+  'device exec aborted: the device disconnected before it confirmed the command stopped';
 
 /** Kill refused, no answer within the deadline, or an answer about another command. */
 const execCancelFailed = (reason: string): string =>
-  `device exec aborted — the device could not stop the command, which may still be running: ${reason}`;
+  `device exec aborted: the device could not stop the command, which may still be running: ${reason}`;
 
 /** Stops a running command and reports what that achieved; answers instead of throwing (abort path).
  *  Only an answer naming this request confirms anything. */
@@ -226,7 +226,7 @@ export function createDeviceTunnelExecutor(
     if (s.registered) {
       return {
         configured: true, available: false, active: false, status: 'disconnected',
-        reason: 'Device registered but offline — the user can reconnect it with `kinu connect`.',
+        reason: 'Device registered but offline: the user can reconnect it with `kinu connect`.',
         ...identity,
       };
     }
@@ -506,7 +506,7 @@ function resolveForCall(
 
   if (fleet === undefined) {
     return refuse(new KinuError('unavailable',
-      `the device list is not known here yet, so "${named}" cannot be matched — retry, or call without a device`));
+      `the device list is not known here yet, so "${named}" cannot be matched: retry, or call without a device`));
   }
 
   const entry = deviceByName(fleet, named);
@@ -514,7 +514,7 @@ function resolveForCall(
   if (entry) return { kind: 'target', deviceId: entry.id };
 
   return refuse(new KinuError('unavailable',
-    `no connected machine is named "${named}" — connected: ${live.map((d) => d.name).join(', ') || 'none'}`));
+    `no connected machine is named "${named}": connected: ${live.map((d) => d.name).join(', ') || 'none'}`));
 }
 
 /** Per-machine file view for one call, or the refusal naming why there is none. */
@@ -567,7 +567,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     if (explicit) return trimmed(explicit);
     throw makeVfsError(
       'EACCES',
-      'this device reported no consented directory, so the base tier reaches nothing on it — '
+      'this device reported no consented directory, so the base tier reaches nothing on it: '
       + 'run `kinu connect` on the machine, in the directory this workspace should see',
       '/',
     );
@@ -596,7 +596,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     if (!(path === root || path.startsWith(`${root}/`))) {
       throw makeVfsError(
         'EACCES',
-        `'${path}' is outside the consented device directory '${root}' — the agent sees the folder the owner `
+        `'${path}' is outside the consented device directory '${root}': the agent sees the folder the owner `
         + `consented${scope === 'sandboxed' ? ' and its own /tmp' : ''}, and nothing else. `
         + `Ask the owner to consent that directory, ${op} '${path}'`,
         path,
@@ -756,8 +756,8 @@ function noSuchDevice(fleet: readonly DeviceFleetEntry[] | undefined, first: str
   const segments = connectedDevices(fleet).map((d) => deviceMountSegment(d, fleet)).join(', ');
 
   const reason = first === ''
-    ? `several machines are connected — each is mounted at /pc/<name>: ${segments}`
-    : `no connected machine is named "${first}" — connected: ${segments}`;
+    ? `several machines are connected: each is mounted at /pc/<name>: ${segments}`
+    : `no connected machine is named "${first}": connected: ${segments}`;
 
   return makeVfsError('ENXIO', reason, `/pc${first === '' ? '' : `/${first}`}`);
 }

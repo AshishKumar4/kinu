@@ -103,7 +103,7 @@ const TYPES = `declare namespace parent {
   function readdir(path: string): Promise<string[] | Refusal>;
   function exists(path: string): Promise<boolean | Refusal>;
   /**
-   * Run a command in the parent workspace's REAL shell — the same ~95
+   * Run a command in the parent workspace's REAL shell: the same ~95
    * coreutils, pipes, redirects and loops its own agent has. This is the fast
    * way to search it: \`grep -rn TODO .\`, \`find . -name '*.ts'\`.
    */
@@ -190,7 +190,7 @@ export function createParentExecutor(deps: {
 
       exec: {
         description:
-          "Run one command in the parent workspace's real shell — the full coreutils set, pipes, "
+          "Run one command in the parent workspace's real shell: the full coreutils set, pipes, "
           + 'redirects and loops. The fast way to search it (grep -rn, find).',
         execute: async (...args: unknown[]) => {
           // DO RPC exposes no kill: the parent's command runs on, but the caller stops waiting.
@@ -206,7 +206,7 @@ export function createParentExecutor(deps: {
           return commandResult(value(await raceAbort(
             () => deps.handle.exec(command),
             signal,
-            'parent exec aborted — the command may still finish in the parent workspace',
+            'parent exec aborted: the command may still finish in the parent workspace',
           )));
         },
       },

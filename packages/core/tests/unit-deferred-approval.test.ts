@@ -139,7 +139,7 @@ describe('a gated action nobody is there to approve', () => {
     const { shellTool, executed, queue } = setup();
 
     const out = shellTool.execute({ command: GATED });
-    await expect(out).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN — queued for owner approval (defer-1): git-force-push on workspace. A decision will wake you.') });
+    await expect(out).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN: queued for owner approval (defer-1): git-force-push on workspace. A decision will wake you.') });
     expect(executed).toEqual([]);
     expect(queue.list().map((a) => a.command)).toEqual([GATED]);
   });
@@ -155,7 +155,7 @@ describe('a gated action nobody is there to approve', () => {
     expect(queued.exitCode).not.toBe(ran.exitCode);
     expect(queued.stdout).toBe('');
     expect(queued.stderr).toBe(
-      'NOT RUN — queued for owner approval (defer-1): git-force-push on workspace. A decision will wake you.',
+      'NOT RUN: queued for owner approval (defer-1): git-force-push on workspace. A decision will wake you.',
     );
   });
 
@@ -251,7 +251,7 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
     await queue.decide(['defer-1'], 'denied');
 
     expect(delivered).toHaveLength(1);
-    expect(delivered[0].text).toContain('DENIED — do not re-issue');
+    expect(delivered[0].text).toContain('DENIED: do not re-issue');
   });
 
   test('a night of parked actions is ONE decision and ONE wake', async () => {
@@ -349,7 +349,7 @@ describe('what an approval actually buys', () => {
 
     const out = shellTool.execute({ command: GATED })
 
-    await expect(out).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN — the owner refused this (defer-1). Not a timeout; find another way.') });
+    await expect(out).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN: the owner refused this (defer-1). Not a timeout; find another way.') });
     expect(executed).toEqual([]);
     expect(queue.list()).toEqual([]);
   });
@@ -364,7 +364,7 @@ describe('what an approval actually buys', () => {
     advance(DENIAL_STANDING_MS + 1);
     const out = shellTool.execute({ command: GATED })
 
-    await expect(out).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN — queued for owner approval (defer-2)') });
+    await expect(out).rejects.toMatchObject({ message: expect.stringContaining('NOT RUN: queued for owner approval (defer-2)') });
     expect(executed).toEqual([]);
     expect(queue.list().map((a) => a.id)).toEqual(['defer-2']);
     expect(store.get('defer-1')).toBeNull();
@@ -811,7 +811,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
 
     if (!spend) throw new Error('the approved grant must be spendable');
     // Consumer B parks its own row.
-    expect(await exec(GATED)).toMatchObject({ error: expect.stringContaining('NOT RUN — queued for owner approval (defer-2)') });
+    expect(await exec(GATED)).toMatchObject({ error: expect.stringContaining('NOT RUN: queued for owner approval (defer-2)') });
     // A never reached the machine, so the grant comes back beside defer-2.
     queue.channel.settle(spend.spend, 'did-not-run');
 

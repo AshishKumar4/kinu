@@ -84,7 +84,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
         : 'Search memory notes (hybrid FTS5 + Vectorize when wired).',
       execute: dispatch('search'),
     },
-    conversations: { planAllowed: true, description: 'Read this agent’s past conversation: search, scroll, or browse.', execute: dispatch('conversations') },
+    conversations: { planAllowed: true, description: 'Read this agent\'s past conversation: search, scroll, or browse.', execute: dispatch('conversations') },
   };
 
   if (hasFacts) {

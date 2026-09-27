@@ -505,7 +505,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     const row = catalogRow(logical);
 
     if (row === undefined) {
-      throw new KinuError('missing', `no table \`${logical}\` — declare it with db.createTable, or read db.listTables() to see what this workspace has`);
+      throw new KinuError('missing', `no table \`${logical}\`: declare it with db.createTable, or read db.listTables() to see what this workspace has`);
     }
 
     const record = recordOf(row);

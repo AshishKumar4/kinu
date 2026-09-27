@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 
-import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER } from '@kinu.run/core';
+import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER } from '@kinu.run/core/tui';
 
 import { defaultDeviceName } from '../src/device-connect';
 import { runTuiInPty } from './helpers/pty-screen';

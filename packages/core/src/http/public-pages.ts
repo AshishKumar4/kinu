@@ -24,7 +24,7 @@ export function loginDocument(providers: readonly LoginProvider[]): string {
 
 export function authDocument(title: string, body: string): string {
   return publicPage({
-    title: title.includes('Kinu') ? title : `${title} — Kinu.run`,
+    title: title.includes('Kinu') ? title : `${title} - Kinu.run`,
     styles: CARD_CSS,
     nav: `<a class="quiet" href="/install">Install CLI</a><a class="icon" href="${REPO_URL}" target="_blank" rel="noopener noreferrer" aria-label="Kinu on GitHub">${GITHUB_ICON}</a>`,
     body: `<main class="gate"><section class="card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
@@ -38,7 +38,7 @@ export function authDocument(title: string, body: string): string {
 /** Device-approval pages: deliberately no header or footer (opened from a terminal, read once). */
 export function approvalDocument(title: string, body: string): string {
   return publicPage({
-    title: `${title} — Kinu.run`,
+    title: `${title} - Kinu.run`,
     styles: CARD_CSS,
     body: `<main class="gate"><div class="card">
   <span class="lockup">${mark(18)} Kinu.run</span>
@@ -72,7 +72,7 @@ min-height:48px;padding:0 17px;border:1px solid var(--c-input-border);border-rad
 background:var(--c-fill);color:var(--c-text);font-size:14.5px;font-weight:600;
 transition:background 150ms var(--ease),border-color 150ms var(--ease)}
 .provider:hover{border-color:var(--c-accent);background:var(--c-accent-subtle)}
-.provider::after{content:"→";color:var(--c-text-3)}
+.provider::after{content:"\\2192";color:var(--c-text-3)}
 .provider:hover::after{color:var(--c-accent-fg)}
 dl{display:grid;margin:22px 0 0;border-top:var(--rule)}
 dl>div{display:flex;justify-content:space-between;gap:18px;padding:9px 0;

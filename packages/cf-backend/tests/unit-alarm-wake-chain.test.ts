@@ -87,7 +87,6 @@ function breakScheduleWrites(agent: HarnessOrchestratorAgent): void {
 
 describe('a refiner answer stored with no waiter', () => {
   test('arms the Kinu wake at once, and the tick routes it so the workspace owes nothing after', async () => {
-    // After an eviction the answer used to wait for the owner's next message.
     const workspace = orchestratorHarness();
     const now = Date.now();
     const { requests } = await workspace.agent.listRefinements(1);
@@ -113,7 +112,6 @@ describe('a refiner answer stored with no waiter', () => {
   });
 
   test('an answer relayed after activation pulls the Kinu wake to now, and the tick routes it', async () => {
-    // The helper's own turn reports through the relay; nothing is seeded as already answered.
     const workspace = gatewayWorkspace(answeringGateway('Nothing to change.\n\n{"scope":"workspace","summary":"nothing","edits":[]}'));
     await workspace.agent.activateActor();
     const actorId = harnessActorId(workspace.db);
@@ -126,7 +124,6 @@ describe('a refiner answer stored with no waiter', () => {
       name: 'ask-refiner-x1', displayName: 'Refiner', nameOrigin: 'auto', mission: 'propose refinements',
     });
 
-    // The row the `agents` tool writes when the lane hires its refiner.
     workspace.db.prepare(`INSERT INTO actor_subordinates (actor_id, name, created_by, status, current_task, created_at, dismissed_at,
       lifetime, task_event_id, actor_reference, birth_request, delete_requested)
       VALUES (?, 'ask-refiner-x1', 'orchestrator', 'working', 'review', ?, NULL, 'task', 'evt-1', NULL, NULL, 0)`).run(actorId, now);

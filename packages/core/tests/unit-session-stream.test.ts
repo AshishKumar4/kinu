@@ -199,3 +199,41 @@ test('a final message that reorders what streamed seals in the final order, with
     ] });
   } finally { s.testSql.close(); }
 });
+
+test('a call is durable only once its part is in the record, and a slow write holds only the waiter', async () => {
+  // DESIGN red 9: `execute` may start before the stream reaches the call; the claim waits, the stream does not.
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    const calls = () => s.testSql.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM stream_parts WHERE kind = 'tool-call'").get()?.n ?? 0;
+    const seen: number[] = [];
+    const waited = stream.durable('call-1').then(() => { seen.push(calls()); });
+
+    // The earlier text part and the call arrive after the waiter; neither waits on it.
+    await stream.nativePart({ type: 'text-start', id: '0' });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'sending' });
+    await stream.nativePart({ type: 'text-end', id: '0' });
+    expect(seen).toEqual([]);
+
+    await stream.nativePart({ type: 'tool-call', toolCallId: 'call-1', toolName: 'shell', input: { command: 'deploy' } });
+    await waited;
+    expect(seen).toEqual([1]);
+
+    // A call asked for after its part landed is durable at once.
+    await stream.durable('call-1');
+  } finally { s.testSql.close(); }
+});
+
+test('a waiter for a call whose turn is aborted is released with the abort', async () => {
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    const abort = new AbortController();
+    const waited = stream.durable('call-never', abort.signal);
+
+    abort.abort(new Error('stopped'));
+    await expect(waited).rejects.toThrow('stopped');
+  } finally { s.testSql.close(); }
+});

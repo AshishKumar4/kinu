@@ -187,5 +187,5 @@ function readHeadSpend(sql: SqlExecutor): HeadSpendRow[] {
              WHERE e.actor_id = a.actor_id AND e.type = 'step_finish'
                AND e.ts >= strftime('%Y-%m-%dT%H:%M:%fZ', h.spawned_at / 1000.0, 'unixepoch')) AS hasSteps
     FROM head_journal h LEFT JOIN workspace_actors a
-      ON a.parent_actor_id = h.actor_id AND a.creation_id = h.id AND a.kind IN ('head', 'branch')`;
+      ON a.parent_actor_id = h.actor_id AND a.creation_id = h.id AND a.kind = 'run'`;
 }

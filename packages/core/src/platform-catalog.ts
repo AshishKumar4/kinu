@@ -199,7 +199,7 @@ export const PLATFORM_CATALOG = {
       + '"aspirational" at HEAD. One probe DID land on 128 MiB and it is narrower than the docs '
       + 'claim: do.isolate.transient_alloc_reset reset a DO at exactly 128 MiB of '
       + 'allocate-and-free, in the DO context and not in a facet. So the best current reading is '
-      + '~128 MiB for the supervisor DO isolate — possibly less, if it is shared — while facets '
+      + '~128 MiB for the supervisor DO isolate (possibly less, if it is shared) while facets '
       + 'get substantially more. And the whole family is confounded by '
       + 'worker.memory_kill_is_burst_sensitive: the kill is rate-sensitive, so none of these '
       + 'numbers is a static capacity.',
@@ -263,7 +263,7 @@ export const PLATFORM_CATALOG = {
       + 'SILENT IS NOT UNDETECTABLE, and this is the most useful thing in the entry: see '
       + 'do.isolate.generation_counter. Nothing is thrown, but the reset IS observable '
       + 'POSITIVELY on the very next call, with no timeout, and it can be told apart from a slow '
-      + 'response — which waiting for a missing completion cannot do, because that confuses a '
+      + 'response, which waiting for a missing completion cannot do, because that confuses a '
       + 'reset with still-running and only fires after our own deadline.',
     conflictsWith: ['worker.isolate.memory', 'do.isolate.oom_catchable'],
   },
@@ -290,9 +290,9 @@ export const PLATFORM_CATALOG = {
       { scenario: 'consecutive resets observed as generation steps on one object', value: 4, unit: 'count' },
     ],
     notes:
-      'THE ANSWER TO THE HARDEST PROBLEM IN THIS FILE. Four entries — do.isolate.reset_silent, '
+      'THE ANSWER TO THE HARDEST PROBLEM IN THIS FILE. Four entries: do.isolate.reset_silent, '
       + 'do.evict.no_signal, do.isolate.cotenancy, and the platform-side half of '
-      + 'worker.subrequests — have firstPartySignal false and throw nothing, so no error '
+      + 'worker.subrequests: have firstPartySignal false and throw nothing, so no error '
       + 'taxonomy will ever construct a code for any of them. A generation discontinuity turns '
       + 'all four from an inference into a MEASUREMENT: positive, timeout-free, and able to tell '
       + 'a reset from a slow call. Nimbus multiplies the generation into the id space and observed '
@@ -319,7 +319,7 @@ export const PLATFORM_CATALOG = {
     date: '2026-07-24',
     trigger: 'an isolate memory reset that does produce a message',
     onBreach:
-      'the failure RECURS on retry — unlike do.reset.transient — so it must surface rather '
+      'the failure RECURS on retry: unlike do.reset.transient, so it must surface rather '
       + 'than be re-driven',
     observable: [
       {
@@ -363,11 +363,11 @@ export const PLATFORM_CATALOG = {
       'THIS ENTRY IS THE REASON THIS FILE EXISTS, and its history is the argument for the '
       + 'file\'s shape. Nimbus halves its supervisor budget to 64 MiB citing "§6 invariant I1" '
       + 'in a document that was never committed and is gone. The blanket claim in that citation '
-      + '— 128 MiB shared across co-tenanting peers — is NOT what the probe found: eight peers '
+      + '(128 MiB shared across co-tenanting peers) is NOT what the probe found: eight peers '
       + 'sat on eight distinct isolates with one constructor call each, and four peers held '
       + '100 MB apiece without incident. What is real is the failure at 120 MB apiece, where '
       + 'one of four silently lost its allocation. So the useful claim is conditional pressure, '
-      + 'not shared address space — a more actionable fact than the one that was lost, arrived '
+      + 'not shared address space: a more actionable fact than the one that was lost, arrived '
       + 'at by measuring instead of citing.',
   },
 
@@ -381,7 +381,7 @@ export const PLATFORM_CATALOG = {
     date: '2026-07-24',
     trigger: 'any call to process.memoryUsage() outside a dynamic-worker isolate under nodejs_compat',
     onBreach:
-      'heap telemetry reports zero forever — every field of the returned struct is 0 — so any '
+      'heap telemetry reports zero forever (every field of the returned struct is 0) so any '
       + 'memory-containment check built on it is vacuous, and headroom must be ESTIMATED from '
       + 'accounted allocations instead',
     observable: [],
@@ -396,7 +396,7 @@ export const PLATFORM_CATALOG = {
     notes:
       'Nimbus replaced two helpers that called it anyway and reported zero forever. Because '
       + 'the estimate is a deterministic function of accounted allocations, it doubles as a '
-      + 'simulated heap — which is what makes a deterministic DO lifecycle lane possible.',
+      + 'simulated heap, which is what makes a deterministic DO lifecycle lane possible.',
   },
 
   'do.block_concurrency.cancel_ms': {
@@ -410,7 +410,7 @@ export const PLATFORM_CATALOG = {
     trigger: 'a blockConcurrencyWhile callback still pending ~30 s after the gate opened',
     onBreach:
       'the block is cancelled, the Durable Object is RESET, and the request 500s; every '
-      + 'event queued behind the gate — pure @callable reads included — dies with it',
+      + 'event queued behind the gate (pure @callable reads included) dies with it',
     observable: [
       {
         context: 'thrown into every caller waiting on the object',
@@ -420,7 +420,7 @@ export const PLATFORM_CATALOG = {
       },
       {
         context: 'what the owner saw in the product',
-        message: "Couldn't load the plan — RPC call to listAgentTasks timed out after 30000ms",
+        message: "Couldn't load the plan: RPC call to listAgentTasks timed out after 30000ms",
       },
     ],
     firstPartySignal: true,
@@ -473,7 +473,7 @@ export const PLATFORM_CATALOG = {
     date: '2026-08-16',
     trigger: 'a pure read issued against an object already inside a long await',
     onBreach:
-      'nothing — this is the hypothesis that was DISPROVED. An object parked inside a turn '
+      'nothing: this is the hypothesis that was DISPROVED. An object parked inside a turn '
       + 'awaiting the model answers a pure @callable read in 1 ms',
     observable: [],
     firstPartySignal: false,
@@ -500,7 +500,7 @@ export const PLATFORM_CATALOG = {
     firstPartySignal: true,
     notes:
       'CPU only: waiting on the model, storage or any I/O does not count. Each incoming '
-      + 'request or WebSocket message RESETS the remaining budget to the limit — but burning '
+      + 'request or WebSocket message RESETS the remaining budget to the limit, but burning '
       + 'more than the limit BETWEEN incoming network requests raises the chance the object '
       + 'is evicted and reset. That is the shape of a long agent turn with no inbound traffic, '
       + 'and it is the documented mechanism behind do.evict.no_signal. '
@@ -588,7 +588,7 @@ export const PLATFORM_CATALOG = {
     notes:
       'It exists only for API compatibility with ExecutionContext, and that compatibility IS the '
       + 'hazard: the call reads as a durability decision and is not one. workerd shows the '
-      + 'mechanism — DurableObjectState::waitUntil forwards to IoContext::addWaitUntil, and '
+      + 'mechanism: DurableObjectState::waitUntil forwards to IoContext::addWaitUntil, and '
       + 'IoContext::addTask says "In Actors, we treat all tasks as wait-until tasks", so '
       + 'ctx.waitUntil(p) and a bare floating p are the same code path in an actor. '
       + 'worker.wait_until.grace_ms is the NON-ACTOR branch of IncomingRequest::drain and does not '
@@ -635,7 +635,7 @@ export const PLATFORM_CATALOG = {
       + 'itself cannot be forced or observed. The consequence for design: the only retention a '
       + 'Durable Object has is an await inside the invocation, where the output gate holds the '
       + 'response until the storage write commits. Everything else is best-effort and must be '
-      + 'written as such — including the agents-SDK keepAlive heartbeat, which is alarm-backed and '
+      + 'written as such, including the agents-SDK keepAlive heartbeat, which is alarm-backed and '
       + 'therefore itself depends on the wake-up row landing.',
   },
 
@@ -655,7 +655,7 @@ export const PLATFORM_CATALOG = {
     firstPartySignal: false,
     notes:
       'A timing side-channel mitigation, not a bug. It means wall-clock durations reported '
-      + 'from inside a turn only advance across awaits — CPU-bound work is invisible to them. '
+      + 'from inside a turn only advance across awaits: CPU-bound work is invisible to them. '
       + 'Anything that renders elapsed time to the model is measuring awaits, not work.',
   },
 
@@ -747,12 +747,12 @@ export const PLATFORM_CATALOG = {
         context: 'a WorkerLoader binding passed into a child env',
         message: 'Could not serialize object of type "WorkerLoader". This type does not support serialization.',
       },
-      { context: 'Nimbus supervisor ↔ facet', message: 'Cannot deserialize cloned data' },
+      { context: 'Nimbus supervisor <-> facet', message: 'Cannot deserialize cloned data' },
     ],
     firstPartySignal: true,
     notes:
       'Stronger than the claim it was probed against: a Module cannot cross ANY boundary, '
-      + 'including a same-isolate structuredClone. Kinu paid for this independently — the '
+      + 'including a same-isolate structuredClone. Kinu paid for this independently: the '
       + 'device-tunnel upgrade path passed a WebSocket as a DO-RPC argument and 500\'d every '
       + 'daemon connect in production (packages/cf-backend/tests/unit-device-hub.test.ts:1-2).',
   },
@@ -780,8 +780,8 @@ export const PLATFORM_CATALOG = {
     firstPartySignal: true,
     notes:
       'Verified against workerd 1.20260601.1 via miniflare with one Durable Object calling '
-      + 'another. Only `#private` is hidden from RPC. This is why UserDO internals — raw '
-      + 'credential rows included — are reachable today, and it is the platform fact behind '
+      + 'another. Only `#private` is hidden from RPC. This is why UserDO internals: raw '
+      + 'credential rows included: are reachable today, and it is the platform fact behind '
       + 'the open `#private` hardening item.',
   },
 
@@ -795,7 +795,7 @@ export const PLATFORM_CATALOG = {
     provenance: `${NIMBUS_JIT_PROBE}:52-61`,
     date: '2026-07-24',
     trigger: "ctx.storage.put(key, <compiled WebAssembly.Module>) followed by get(key)",
-    onBreach: 'the write succeeds and the read fails permanently — a durably unreadable value',
+    onBreach: 'the write succeeds and the read fails permanently: a durably unreadable value',
     observable: [
       { context: 'the put', message: 'stored' },
       { context: 'the subsequent get', message: 'internal error; reference = 1uv5ip2lecbfa2e91tu7onr7' },
@@ -851,7 +851,7 @@ export const PLATFORM_CATALOG = {
     date: '2026-07-24',
     trigger: 'a second env.LOADER.get with the same name and different module bytes',
     onBreach:
-      'the callback does not run and the FIRST bytes keep serving — new source silently has '
+      'the callback does not run and the FIRST bytes keep serving: new source silently has '
       + 'no effect',
     observable: [],
     firstPartySignal: false,
@@ -859,9 +859,9 @@ export const PLATFORM_CATALOG = {
       'Refuted the claim it was probed against ("the module-init window is one-shot, only at '
       + 'load time"): three loads under fresh names returned 38 / 39 / 40, each reflecting the '
       + 'bytes supplied at that instant, so compilation-on-demand IS available at request '
-      + 'time. The confined half is real — a compiled Module cannot leave the child that '
+      + 'time. The confined half is real: a compiled Module cannot leave the child that '
       + 'compiled it (rpc.clone_refused). The caching half is a live hazard for this repo: '
-      + 'crafted tools are versioned source dispatched via env.LOADER.get(toolName, …), so an '
+      + 'crafted tools are versioned source dispatched via env.LOADER.get(toolName, ...), so an '
       + 'edited tool re-dispatched under the same name within one isolate lifetime may run '
       + 'the old body with NO signal. Not yet probed against our dispatcher.',
   },
@@ -882,7 +882,7 @@ export const PLATFORM_CATALOG = {
     firstPartySignal: true,
     notes:
       'SetAllowAtomicsWait(false) appears exactly once in the whole workerd tree, in the '
-      + 'IsolateBase constructor, unconditional — no compat flag, no config knob, applied '
+      + 'IsolateBase constructor, unconditional: no compat flag, no config knob, applied '
       + 'before any worker code runs. NO CONFIGURATION PERMITS IT. A spin-wait substitute is '
       + 'pointless rather than merely slow: one isolate on one thread with no concurrent '
       + 'mutator, and date_now.frozen_between_io means the loop cannot even observe time.',
@@ -906,13 +906,13 @@ export const PLATFORM_CATALOG = {
       + '"Per a second internal research note, §9" and tightens itself to 256 KiB against '
       + 'it; that document was compiled from Cloudflare internal source, is gone, and cannot be '
       + 'restored. The number is right, it is now sourced from the page Cloudflare publishes, '
-      + 'AND it has an independent probe behind it — do.storage.sync_kv measured the value cap '
+      + 'AND it has an independent probe behind it: do.storage.sync_kv measured the value cap '
       + 'at roughly 2,200,000 bytes against workerd util/sqlite.c++:1362-1380. So the one lost '
       + 'claim that mattered is the one claim that is now over-evidenced, and nothing in Kinu '
       + 'needs the dossier. '
       + 'The whole chat transcript, plan documents and MCTS search nodes persist as rows here. '
       + 'The agents SDK truncates a chat message to its own ROW_MAX_BYTES guard beneath this, '
-      + 'but can only shrink TEXT parts — file parts ride through verbatim as base64, at 4/3 '
+      + 'but can only shrink TEXT parts: file parts ride through verbatim as base64, at 4/3 '
       + 'of raw, which is what CLOUD_MAX_INLINE_ATTACHMENT_BYTES is derived from.',
   },
 
@@ -932,7 +932,7 @@ export const PLATFORM_CATALOG = {
       'Documented as "100 KB"; taken as binary KiB here because the value is a SQLite '
       + 'compile-time parameter (SQLITE_MAX_SQL_LENGTH) rather than a billing quantity. '
       + 'The reading is unverified. Reached by generated statements, not by hand-written '
-      + 'ones — a batched multi-VALUES insert is the realistic breach.',
+      + 'ones: a batched multi-VALUES insert is the realistic breach.',
   },
 
   'do.sqlite.bound_params': {
@@ -980,7 +980,7 @@ export const PLATFORM_CATALOG = {
     date: DOCS_READ,
     trigger: 'total object storage reaching 10 GB on Workers Paid (5 GB per account on Free)',
     onBreach:
-      'ordinary writes fail catchably — INSERT, UPDATE, put(), sql.exec() — while SELECT, '
+      'ordinary writes fail catchably: INSERT, UPDATE, put(), sql.exec(), while SELECT, '
       + 'get(), list() and DELETE keep working so space can be freed. A FACET CLONE that '
       + 'crosses the quota does NOT fail catchably: the object is reset and the destination is '
       + 'left EMPTY',
@@ -998,28 +998,28 @@ export const PLATFORM_CATALOG = {
       { scenario: 'logical total observed to FAIL on a deployed probe', value: 11_600_000_000, unit: 'bytes' },
     ],
     notes:
-      'The quota is shared by the root object, EVERY facet beneath it, and every clone — and '
+      'The quota is shared by the root object, EVERY facet beneath it, and every clone, and '
       + 'a copy-on-write clone consumes its FULL logical bytes against it with no CoW credit, '
       + 'so an O(1) clone is free in time and not in quota. Causality was established by '
       + 'freeing 5 GiB and retrying successfully '
       + '(~/Nimbus/scratchpad/do-sqlite-fork-feasibility.md §4). Every Kinu fork and '
-      + 'subordinate is a facet, so this is one shared 10 GB across a whole exploration tree — '
+      + 'subordinate is a facet, so this is one shared 10 GB across a whole exploration tree: '
       + 'and see do.storage.size_is_per_object, because NOTHING on the platform reports the '
       + 'shared total. Accounting is LOGICAL rather than physical: a 1.058 GB facet cloned nine '
       + 'times is roughly 10.58 GB logical across ten databases, and all of them succeeded before '
       + 'the tenth failed, so the quota is not a simple sum of what any one reader can see. '
       + 'The published 10 GB is CONSERVATIVE and kept as the number to act on: a deployed probe '
-      + 'bisected the real wall between 10.58 GB (fit) and 11.6 GB (failed) — and note 10 GiB, '
+      + 'bisected the real wall between 10.58 GB (fit) and 11.6 GB (failed), and note 10 GiB, '
       + '10,737,418,240 bytes, falls INSIDE that window, so 10 GiB describes where the wall sits '
       + 'and is not a number to design to; it is 7.37% above the published figure. Budget against '
       + 'the published 10^10 anyway, because the breach mode makes this an ADMISSION-CONTROL input '
-      + 'and not a health metric — you cannot alert at 99% on a limit whose breach destroys the '
+      + 'and not a health metric: you cannot alert at 99% on a limit whose breach destroys the '
       + 'destination, so decide BEFORE the clone, with reserve, on the arithmetic '
       + 'X·(N+1) <= quota. A generic internal-storage reset must therefore NOT be filed as '
       + 'unavailable-storage and left there: quota exhaustion is decidable in advance. '
       + 'BUT NONE OF THAT DESCRIBES KINU TODAY, and reading it as though it did is the error '
-      + 'this paragraph exists to head off. There is NO clone path here — zero `ctx.facets.clone(` '
-      + 'call sites outside this file — so a Kinu fork copies nothing: it shares the parent\'s '
+      + 'this paragraph exists to head off. There is NO clone path here: zero `ctx.facets.clone(` '
+      + 'call sites outside this file, so a Kinu fork copies nothing: it shares the parent\'s '
       + 'Nimbus file plane and gets an EMPTY private SQLite of 4096 bytes. The clone arithmetic is '
       + 'preventive only. And for the facet leak below, bytes are NOT the binding constraint: see '
       + 'do.facet.count, which is reached roughly an order of magnitude sooner.'
@@ -1049,7 +1049,7 @@ export const PLATFORM_CATALOG = {
     notes:
       'Nimbus pins these signatures because they were reaching recordFailure() and being '
       + 'misread as isolate OOM. Which specific operations trigger it, and at what working-set '
-      + 'size, is unmeasured — the cap itself is not published.',
+      + 'size, is unmeasured: the cap itself is not published.',
   },
 
   'do.kv.value_bytes': {
@@ -1095,8 +1095,8 @@ export const PLATFORM_CATALOG = {
       'THE ONLY PLACE 128 MiB WAS EVER MEASURED, and it is narrower than the documented claim: '
       + 'the DO context, not a facet, and a transient burst rather than a retained set. 32, 64 '
       + 'and 96 MiB were all fine on the same worker. The detail that matters operationally is '
-      + 'that the request SUCCEEDED — a 200 went back to the client and the object died '
-      + 'afterwards — so a success response is not evidence the object survived the work, and '
+      + 'that the request SUCCEEDED: a 200 went back to the client and the object died '
+      + 'afterwards, so a success response is not evidence the object survived the work, and '
       + 'anything that caches in memory after replying has already lost it.',
   },
 
@@ -1124,8 +1124,8 @@ export const PLATFORM_CATALOG = {
       'READ THIS BEFORE TRUSTING ANY OTHER MEMORY NUMBER HERE, INCLUDING THE MEASURED ONES. '
       + 'The probe\'s own words: the kill is burst/pressure-triggered, not static capacity, and '
       + '"a 25-40 MB static diet cannot close a gap that static capacity does not explain". That '
-      + 'reconciles the whole family — 248 MiB burst, 200 MiB across RPCs, 128 MiB transient in a '
-      + 'DO, 130-150 MB under real work — as answers to four different questions rather than four '
+      + 'reconciles the whole family: 248 MiB burst, 200 MiB across RPCs, 128 MiB transient in a '
+      + 'DO, 130-150 MB under real work: as answers to four different questions rather than four '
       + 'contradictions. The practical consequence: a memory budget derived from a ladder '
       + 'OVERSTATES what real work gets, so an allocation-rate reduction buys more than a '
       + 'headroom calculation predicts.',
@@ -1155,7 +1155,7 @@ export const PLATFORM_CATALOG = {
     observable: [],
     firstPartySignal: false,
     notes:
-      'A NUMBER THAT READS FINE AND IS FALSE — the shape the `bounds` axis exists to catch, and '
+      'A NUMBER THAT READS FINE AND IS FALSE: the shape the `bounds` axis exists to catch, and '
       + 'it was within one review of shipping as a dashboard metric. The quota in '
       + 'do.storage.bytes is shared by the root, every facet and every clone, and no platform API '
       + 'returns that total, so headroom is a SUM the application must aggregate itself: emit '
@@ -1165,8 +1165,8 @@ export const PLATFORM_CATALOG = {
 
   'do.storage.sync_kv': {
     subject:
-      'ctx.storage.kv on a SQLite-backed Durable Object is genuinely synchronous — structured '
-      + 'clone, zero awaits — with a per-value cap of about 2.2 MB',
+      'ctx.storage.kv on a SQLite-backed Durable Object is genuinely synchronous: structured '
+      + 'clone, zero awaits, with a per-value cap of about 2.2 MB',
     limit: { value: 2_200_000, unit: 'bytes' },
     origin: 'platform',
     bounds: 'row',
@@ -1177,19 +1177,19 @@ export const PLATFORM_CATALOG = {
       + '~/Nimbus/scratchpad/workerd-capability-survey.md §1.2 (route /synckv)',
     date: '2026-07-24',
     trigger: 'a ctx.storage.kv put whose structured-cloned value exceeds roughly 2,200,000 bytes',
-    onBreach: 'the value is rejected; the wording was not captured — see the declared gap',
+    onBreach: 'the value is rejected; the wording was not captured: see the declared gap',
     observable: [],
     firstPartySignal: true,
     notes:
       'DIRECTLY RELEVANT TO THE ACTIVATION GATE. A sync KV read takes no await at all, so it '
-      + 'cannot be what stalls an onStart — which sharpens do.init_gate.awaited_by from "avoid '
+      + 'cannot be what stalls an onStart, which sharpens do.init_gate.awaited_by from "avoid '
       + 'I/O" to "avoid the AWAIT": local storage reads are free, and it is the cross-object hop '
       + 'that kills. Registered outside every compatibility flag check '
       + '(api/actor-state.h:307-309), so it is not gated. The mechanism is why this can be sync '
       + 'while nothing network-shaped can: a SQLite read is a blocking pread on a local file '
       + '(sqlite.c++:2100-2103) and writes are made to LOOK synchronous by the output gate '
       + '(io-gate.h:12-21). The ~2.2 MB figure also independently CORROBORATES the 2 MB per-row '
-      + 'cap that the second lost dossier asserted — the one lost claim that now has a probe '
+      + 'cap that the second lost dossier asserted, the one lost claim that now has a probe '
       + 'behind it.',
   },
 
@@ -1211,7 +1211,7 @@ export const PLATFORM_CATALOG = {
   },
 
   'worker.subrequests': {
-    subject: 'Subrequests per invocation — every fetch() plus every call to KV, R2, D1 or a binding',
+    subject: 'Subrequests per invocation: every fetch() plus every call to KV, R2, D1 or a binding',
     limit: { value: 10_000, unit: 'count' },
     origin: 'platform',
     bounds: 'count',
@@ -1225,7 +1225,7 @@ export const PLATFORM_CATALOG = {
     notes:
       'Each hop of a redirect chain counts, so the total exceeds the number of fetch() calls '
       + 'in the source. Nimbus lists the subrequest cap among the terminations it has "no '
-      + 'first-party signal for", which conflicts with the documented error string — the two '
+      + 'first-party signal for", which conflicts with the documented error string: the two '
       + 'are probably different situations (a refused subrequest you can catch, versus a '
       + 'platform-side termination you cannot). Unresolved.',
     conflictsWith: ['do.evict.no_signal'],
@@ -1240,7 +1240,7 @@ export const PLATFORM_CATALOG = {
     provenance: `${CF_WORKER_LIMITS}#simultaneous-open-connections`,
     date: DOCS_READ,
     trigger: 'a seventh fetch/KV/R2/Queues/TCP/outbound-WebSocket call opened while six await headers',
-    onBreach: 'the seventh call is QUEUED until one of the six receives its headers — not rejected',
+    onBreach: 'the seventh call is QUEUED until one of the six receives its headers, not rejected',
     observable: [],
     firstPartySignal: false,
     notes:
@@ -1274,9 +1274,9 @@ export const PLATFORM_CATALOG = {
     notes:
       'MUST be simulated as SILENT DISAPPEARANCE rather than a throw, or the simulation is '
       + 'easier than production. Five labelled workerd reasons are known but none is delivered '
-      + 'to the object. This repo already handles it the only way available — a job row still '
+      + 'to the object. This repo already handles it the only way available: a job row still '
       + 'marked `running` when nothing in the isolate owns it IS an orphan, whatever became of '
-      + 'its fiber — and stamps its own message ("interrupted by Durable Object eviction '
+      + 'its fiber, and stamps its own message ("interrupted by Durable Object eviction '
       + 'before completion") because the platform supplies none.',
     conflictsWith: ['worker.subrequests'],
   },
@@ -1311,7 +1311,7 @@ export const PLATFORM_CATALOG = {
       'These three strings are the difference between a retry that succeeds and a retry loop: '
       + 'do.isolate.oom also says "was reset" and RECURS, so a discriminator that matched on '
       + '"reset" alone would loop forever on a real OOM. Recorded as observed rather than '
-      + 'probed — they came out of production, not a designed experiment.',
+      + 'probed: they came out of production, not a designed experiment.',
   },
 
   'websocket.message_bytes': {
@@ -1329,7 +1329,7 @@ export const PLATFORM_CATALOG = {
     notes:
       'Documented for RECEIVED messages only; nothing is published about the outbound '
       + 'direction. This is the only published 32 MiB figure, and rpc.arg_bytes asserts the '
-      + 'same number for a different mechanism with no source — they may or may not be the '
+      + 'same number for a different mechanism with no source: they may or may not be the '
       + 'same cap.',
     conflictsWith: ['rpc.arg_bytes'],
   },
@@ -1372,7 +1372,7 @@ export const PLATFORM_CATALOG = {
       'Load-bearing for authorization: the CLI RPC scope restriction is persisted as a '
       + 'connection TAG precisely because a tag rides the attachment through hibernation, '
       + 'while a per-connection allowlist in memory would silently widen to full access on '
-      + 'wake. The dynamic-context ledger relies on the same fact from the other side — a '
+      + 'wake. The dynamic-context ledger relies on the same fact from the other side: a '
       + 'cold start legitimately starts with one fresh block.',
   },
 
@@ -1389,12 +1389,12 @@ export const PLATFORM_CATALOG = {
     provenance: '~/Nimbus/scratchpad/do-facets-migration.md §1.6, §1.7, §1.8',
     date: '2026-07-24',
     trigger: 'a facet allocating while its parent already holds a large working set',
-    onBreach: 'nothing — the ceilings do not interact',
+    onBreach: 'nothing: the ceilings do not interact',
     observable: [],
     firstPartySignal: false,
     measurements: [
       { scenario: 'facet ceiling with parent holding 0 bytes', value: 208 * MiB, unit: 'bytes' },
-      { scenario: 'facet ceiling with parent holding 128 MiB — bit-identical', value: 208 * MiB, unit: 'bytes' },
+      { scenario: 'facet ceiling with parent holding 128 MiB: bit-identical', value: 208 * MiB, unit: 'bytes' },
       { scenario: 'eight facets at 192 MiB plus a 128 MiB parent, live at once', value: 1664 * MiB, unit: 'bytes' },
       { scenario: 'facets confirmed to be distinct isolates', value: 40, unit: 'count' },
     ],
@@ -1415,8 +1415,8 @@ export const PLATFORM_CATALOG = {
     provenance: '~/Nimbus/scratchpad/do-facets-migration.md §1.12',
     date: '2026-07-24',
     trigger:
-      'synchronous or CPU-bound work inside any facet — a non-indexed SQL scan, a large '
-      + 'JSON.parse/stringify, heavy string building — while a sibling or the parent is called',
+      'synchronous or CPU-bound work inside any facet: a non-indexed SQL scan, a large '
+      + 'JSON.parse/stringify, heavy string building, while a sibling or the parent is called',
     onBreach:
       'sibling RPCs that normally return in 0-1 ms block for the length of the neighbour\'s '
       + 'burn, measured to 33,833 ms at the CPU cap',
@@ -1439,14 +1439,14 @@ export const PLATFORM_CATALOG = {
       + '5 s?" is answered in minutes instead of being rediscovered. The real exposure is '
       + 'SYNCHRONOUS work: Nimbus blew the 30 s CPU limit on a `WHERE seq = ?` full scan over '
       + '16,000 rows of 64 KiB. Two PEER Durable Objects measured 4 ms under the same load, so '
-      + 'peer objects — not more facets — are the shape that actually parallelises. Note also '
+      + 'peer objects (not more facets) are the shape that actually parallelises. Note also '
       + 'that a facet call can exceed facet.rpc_timeout_ms purely because a sibling was busy, '
       + 'in which case the timeout is measuring the neighbour rather than the work.',
   },
 
   'do.facet.abort_reuses_isolate': {
     subject:
-      'ctx.facets.abort(name) rejects pending work but REUSES the same isolate — only rotating the '
+      'ctx.facets.abort(name) rejects pending work but REUSES the same isolate, only rotating the '
       + 'loader id gives a fresh one',
     limit: null,
     origin: 'platform',
@@ -1463,8 +1463,8 @@ export const PLATFORM_CATALOG = {
     notes:
       'Probe verbatim: `[rekey=false] phase1 boot=g6vaa659 held=128 -> abort -> re-get '
       + 'boot=g6vaa659 held=128 (same isolate)`. This is the most common way a Kinu head dies '
-      + '— it was called on every head abort, every spawn-bootstrap failure and every MCTS '
-      + 'branch teardown (git 4ebb58082:packages/cf-backend/src/facet-spawn.ts) — and it means an '
+      + '(it was called on every head abort, every spawn-bootstrap failure and every MCTS '
+      + 'branch teardown, git 4ebb58082:packages/cf-backend/src/facet-spawn.ts), and it means an '
       + 'abort neither frees the retained memory nor '
       + 'produces any boot-level discontinuity. Two consequences: '
       + 'do.isolate.generation_counter must be persisted rather than boot-derived or it is blind '
@@ -1539,7 +1539,7 @@ export const PLATFORM_CATALOG = {
     notes:
       'Means the coordinator is structurally the only thing that can talk to a head. A live '
       + 'fork roster cannot be handed to another object, and a head cannot be addressed '
-      + 'directly from the UI worker — every observation of a running fork has to be relayed '
+      + 'directly from the UI worker: every observation of a running fork has to be relayed '
       + 'by its parent.',
   },
 
@@ -1554,7 +1554,7 @@ export const PLATFORM_CATALOG = {
     trigger: 'between two and five minutes of idleness across the parent and its facets',
     onBreach:
       'all of them evict together: facet SQLite persists, in-memory state does not. An OOM is '
-      + 'the opposite — blast radius is contained in BOTH directions',
+      + 'the opposite: blast radius is contained in BOTH directions',
     observable: [],
     firstPartySignal: false,
     measurements: [
@@ -1577,7 +1577,7 @@ export const PLATFORM_CATALOG = {
     provenance: '~/Nimbus/scratchpad/do-sqlite-fork-feasibility.md:308 (workerd FacetTreeIndex format)',
     date: '2026-07-24',
     trigger: 'the 65,537th facet name ever used beneath one root object',
-    onBreach: 'unknown — the ceiling was read in the index format, not reached',
+    onBreach: 'unknown: the ceiling was read in the index format, not reached',
     observable: [],
     firstPartySignal: false,
     notes:
@@ -1587,7 +1587,7 @@ export const PLATFORM_CATALOG = {
       + 'it would cost 65,536 facet creations. '
       + 'THIS IS THE BINDING CONSTRAINT FOR THE LEAK, NOT do.storage.bytes. A fresh facet '
       + 'database is 4096 bytes and a leaked head writes kilobytes, so at 15 permanent facets per '
-      + 'default MCTS search this cap arrives at roughly 4,400 searches — an order of magnitude '
+      + 'default MCTS search this cap arrives at roughly 4,400 searches: an order of magnitude '
       + 'before 10 GB is threatened. A byte-based dashboard therefore reads healthy for the '
       + 'ENTIRE LIFE of the defect and then the object hits a hard facet-id wall the telemetry '
       + 'never mentioned: the same "true number answering the wrong question" shape as '
@@ -1597,8 +1597,8 @@ export const PLATFORM_CATALOG = {
       + '`_forgetSubAgent` while `deleteSubAgent` does (verified in node_modules/agents/dist/'
       + 'index.js: abortSubAgent at :5765 with no forget, deleteSubAgent forgetting at :5793). So '
       + '`SELECT COUNT(*) FROM cf_agents_sub_agents` IS the leak counter, and once a terminal-only '
-      + 'delete lands it should go flat instead of monotonic. It is DISTRIBUTED like the journal — '
-      + 'the root holds depth-1 heads and each depth-1 facet holds its own depth-2 — so a '
+      + 'delete lands it should go flat instead of monotonic. It is DISTRIBUTED like the journal: '
+      + 'the root holds depth-1 heads and each depth-1 facet holds its own depth-2, so a '
       + 'root-only count under-reports a recursive split.'
       + ' '
       + 'The facet implementation recorded at git 4ebb58082:packages/cf-backend/src/facet-spawn.ts:61 '
@@ -1616,7 +1616,7 @@ export const PLATFORM_CATALOG = {
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
-    provenance: 'local://observability-contract.md — clone source-name probe',
+    provenance: 'local://observability-contract.md: clone source-name probe',
     date: '2026-08-17',
     trigger: "ctx.facets.clone with a source name of '', '.', '..', '/', 'root' or '0'",
     onBreach:
@@ -1627,7 +1627,7 @@ export const PLATFORM_CATALOG = {
     notes:
       'A TYPO DOES NOT THROW, IT DELETES. All six inputs above were accepted. If any fork path '
       + 'ever derives a facet name from a path fragment, an id substring or model output, that is '
-      + 'silent data loss with no exception anywhere — the worst combination in this catalog, '
+      + 'silent data loss with no exception anywhere: the worst combination in this catalog, '
       + 'because it is destructive AND invisible AND reachable from untrusted input. Validate the '
       + 'name at the call site; the platform will not.',
   },
@@ -1652,14 +1652,14 @@ export const PLATFORM_CATALOG = {
     ],
     notes:
       'Flat 18-54 ms across two and a half orders of magnitude, which makes forking a whole '
-      + 'workspace state essentially free in time — and it is UNDOCUMENTED, with no '
+      + 'workspace state essentially free in time, and it is UNDOCUMENTED, with no '
       + 'compatibility promise, so building on it is a bet. The quota half is the trap: an O(1) '
       + 'clone is not a cheap clone, and crossing the 10 GB quota with one is a silent reset '
       + 'that leaves the destination empty. '
       + 'KINU DOES NOT USE THIS TODAY: there are zero `ctx.facets.clone(` call sites outside '
       + 'this file, and a fork shares the parent\'s file plane rather than copying it. Catalogued '
       + 'because it is the obvious thing to reach for when someone wants cheap forking, and both '
-      + 'its traps — no compatibility promise, full logical bytes against the quota — are '
+      + 'its traps (no compatibility promise, full logical bytes against the quota) are '
       + 'invisible at the call site.',
   },
 
@@ -1676,7 +1676,7 @@ export const PLATFORM_CATALOG = {
     date: '2026-08-17',
     trigger: 'attempting to bound a child Worker\'s or facet\'s memory through its limits object',
     onBreach:
-      'there is no field to set, so the memory ceiling cannot be configured at all — and the '
+      'there is no field to set, so the memory ceiling cannot be configured at all, and the '
       + 'cpuMs field that DOES exist is accepted and then dropped by workerd OSS, so it can be '
       + 'set while enforcing nothing',
     observable: [],
@@ -1698,20 +1698,20 @@ export const PLATFORM_CATALOG = {
     bounds: null,
     evidence: 'proven-by-probe',
     provenance:
-      'local://observability-contract.md — ObservabilityLibraries two-DO probe, '
+      'local://observability-contract.md: ObservabilityLibraries two-DO probe, '
       + 'wrangler 4.97.0 / workerd 1.20260601.1, compat 2025-12-01 + nodejs_compat',
     date: '2026-08-17',
     trigger: 'calling tracing.startActiveSpan, span.end(), span.setAttributes(), or reading ctx.tracing',
     onBreach:
       'a TypeError, because the member does not exist. Span.prototype is exactly '
-      + '["isTraced","setAttribute"], and ctx.tracing is undefined — only the module import works',
+      + '["isTraced","setAttribute"], and ctx.tracing is undefined, only the module import works',
     observable: [{ context: 'the call', message: 'TypeError: tracing.startActiveSpan is not a function' }],
     firstPartySignal: true,
     notes:
       'startActiveSpan shipped 2026-07-28 and the workerd bundled with our wrangler predates it. '
       + 'The consequence is architectural, not cosmetic: a span whose lifetime is a stream, a '
       + 'hibernation cycle or an alarm CANNOT be held open, so any such trace has to be a '
-      + 'persisted link plus a fresh scoped span on resume — the same mechanism '
+      + 'persisted link plus a fresh scoped span on resume: the same mechanism '
       + 'websocket.hibernation_state already forces. `enterSpan` does survive a DO-to-DO RPC hop; '
       + 'that half was confirmed in the same run.',
   },
@@ -1723,21 +1723,21 @@ export const PLATFORM_CATALOG = {
     bounds: null,
     evidence: 'proven-by-probe',
     provenance:
-      'local://observability-contract.md — ObservabilityLibraries probe under '
+      'local://observability-contract.md: ObservabilityLibraries probe under '
       + '`wrangler dev --local` (miniflare, no trace collector)',
     date: '2026-08-17',
     trigger:
       'creating a custom span locally with observability.traces.enabled and NO tail_consumer '
       + 'attached',
     onBreach:
-      'nothing is recorded and nothing says so — the span is created, isTraced reads false, and '
+      'nothing is recorded and nothing says so: the span is created, isTraced reads false, and '
       + 'no tree is assembled',
     observable: [],
     firstPartySignal: false,
     notes:
       'BOUNDS WHAT ANYONE CAN VERIFY ON A LAPTOP, but less than first thought: attaching a '
       + 'tail_consumer flips every isTraced to TRUE locally, so a local run CAN prove a span is '
-      + 'being recorded. What it cannot prove is the tree\'s SHAPE — `tailStream`, which carries '
+      + 'being recorded. What it cannot prove is the tree\'s SHAPE: `tailStream`, which carries '
       + 'spanOpen/spanClose, is typed but not dispatched by workerd 1.20260601.1 ("Handler does '
       + 'not export a tail() function."), and the legacy tail TraceItem has no spans field. So '
       + 'nesting and propagation are deployed-only evidence. One hazard learned by hanging a dev '
@@ -1748,16 +1748,16 @@ export const PLATFORM_CATALOG = {
   'worker.v8_pointer_compression': {
     subject:
       'workerd runs V8 with pointer compression, so a live JS value costs roughly a third less '
-      + 'than on Node — asymptotically, once the fixed heap floor is amortised',
+      + 'than on Node: asymptotically, once the fixed heap floor is amortised',
     limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
-    provenance: 'local://v8-sizing-probe.md — VmHWM of the workerd child under wrangler 4.97.0, fresh isolate per size',
+    provenance: 'local://v8-sizing-probe.md: VmHWM of the workerd child under wrangler 4.97.0, fresh isolate per size',
     date: '2026-08-17',
     trigger: 'estimating resident bytes for a large JS array or per-element structure inside a Worker',
     onBreach:
-      'nothing fails here — this is a conversion factor, not a ceiling. A budget computed from '
+      'nothing fails here: this is a conversion factor, not a ceiling. A budget computed from '
       + 'Node measurements OVERSTATES workerd at the large end, and one computed from a SMALL '
       + 'sample overstates the per-element cost several-fold',
     observable: [],
@@ -1777,7 +1777,7 @@ export const PLATFORM_CATALOG = {
       + 'THIS PROBE MEASURES BYTES, NOT THE ENFORCEMENT POINT: `wrangler dev` does not enforce '
       + 'the production isolate cap, and the probe isolate reached 822 MiB unkilled. The '
       + 'enforcement points are do.isolate.reset_silent and do.isolate.oom_catchable, and what '
-      + 'this entry contributes is that ordinary byte counts cross them — an LCS table over ONE '
+      + 'this entry contributes is that ordinary byte counts cross them: an LCS table over ONE '
       + 'admitted 256 KiB file passes the ~200 MiB silent-reset wall at roughly 6,100 lines '
       + '(+226 MiB at 6,376, +330 MiB at 8,192), which means MEMORY binds long before '
       + 'do.cpu_ms_per_invocation does. Read with worker.memory_kill_is_burst_sensitive: an '
@@ -1792,12 +1792,12 @@ export const PLATFORM_CATALOG = {
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
-    provenance: 'local://observability-contract.md — facet spawn probe, workerd 1.20260601.1',
+    provenance: 'local://observability-contract.md: facet spawn probe, workerd 1.20260601.1',
     date: '2026-08-17',
     trigger: 'mapping a Durable Object id to a class, or correlating telemetry on ctx.id, for a facet',
     onBreach:
-      'every facet is labelled as its root\'s class — every head and every subordinate reads as '
-      + 'an OrchestratorAgent — and nothing contradicts the label',
+      'every facet is labelled as its root\'s class: every head and every subordinate reads as '
+      + 'an OrchestratorAgent, and nothing contradicts the label',
     observable: [],
     firstPartySignal: false,
     notes:
@@ -1814,15 +1814,15 @@ export const PLATFORM_CATALOG = {
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
-    provenance: 'local://observability-contract.md — ctx.facets.get spawn probe, isTraced true in the facet',
+    provenance: 'local://observability-contract.md: ctx.facets.get spawn probe, isTraced true in the facet',
     date: '2026-08-17',
     trigger: 'opening a span inside a facet spawned via ctx.facets.get(name, () => ({ class }))',
-    onBreach: 'nothing — this is the capability, recorded because its absence was assumed',
+    onBreach: 'nothing: this is the capability, recorded because its absence was assumed',
     observable: [],
     firstPartySignal: false,
     notes:
       'Probed with the exact spawn shape Kinu uses, so heads, subordinates and MCTS branches '
-      + 'are NOT invisible to the native tracer — which makes the owner\'s repeated '
+      + 'are NOT invisible to the native tracer, which makes the owner\'s repeated '
       + '"I cannot see what the forks are doing" a wiring problem rather than a platform one. '
       + 'One direction is still open and it is the direction that matters: whether ROOT to FACET '
       + 'emits a subrequest edge. Facet-to-root goes through getServerByName and is a genuine '
@@ -1863,7 +1863,7 @@ export const PLATFORM_CATALOG = {
     firstPartySignal: true,
     notes:
       'The practical ceiling on bundle size, and the reason module top level is the only place '
-      + 'codegen is permitted (isolate.codegen_blocked) — the startup window is short by '
+      + 'codegen is permitted (isolate.codegen_blocked): the startup window is short by '
       + 'construction. Every cold activation of every Durable Object pays it.',
   },
 
@@ -1890,17 +1890,17 @@ export const PLATFORM_CATALOG = {
       + 'Measure with TextEncoder().encode().length: String.length counts UTF-16 code units '
       + 'and undercounts non-ASCII. '
       + 'THE LOWER BOUND OF THIS MEASUREMENT NO LONGER EXISTS. constants.ts:96 reads verbatim '
-      + '"// raw → boots, 8 MiB raw → fails." — the number before the first "raw" has been '
+      + '"// raw -> boots, 8 MiB raw -> fails.": the number before the first "raw" has been '
       + 'edited away, and `git show 0a6798b` shows it was never intact in git, so a two-point '
       + 'boots/fails bracket survives as one point. An earlier draft of THIS entry guessed 4 MiB '
       + 'and that guess was wrong; it is recorded here because inventing the missing half is '
       + 'exactly the failure the catalog exists to prevent, and it nearly happened again inside '
       + 'the fix. The file also contradicts itself: 8 MiB raw is documented as failing while '
-      + 'VFS_BUNDLE_MAX_BYTES is 24 MiB raw — reconcilable only because the ENCODED 22 MiB gate '
+      + 'VFS_BUNDLE_MAX_BYTES is 24 MiB raw: reconcilable only because the ENCODED 22 MiB gate '
       + 'is what actually binds and the raw cap is a cheap pre-check. Modelled as SILENT because '
       + 'the probe recorded that the '
       + 'child fails to boot and did not record whether anything reaches the loader caller, or '
-      + 'with what wording — assuming no signal is the harder and therefore safer assumption '
+      + 'with what wording: assuming no signal is the harder and therefore safer assumption '
       + 'until somebody captures it.',
   },
 
@@ -1920,8 +1920,8 @@ export const PLATFORM_CATALOG = {
       'THE SAME FAILURE AS do.isolate.cotenancy, INSIDE THIS REPO. '
       + '`packages/cf-backend/src/hooks/use-kinu.ts` ships a live 25 s application-level '
       + 'heartbeat on every open connection and justified it with a bare "STABILITY-AUDIT §A4"; '
-      + 'that document is NOT in the working tree — only its screenshots survived the '
-      + 'public-repo purge — and its recovered text (git 947c2560:docs/STABILITY-AUDIT.md §A4) '
+      + 'that document is NOT in the working tree, only its screenshots survived the '
+      + 'public-repo purge, and its recovered text (git 947c2560:docs/STABILITY-AUDIT.md §A4) '
       + 'says "Cloudflare\'s documented 100s reap" while citing no URL. Cloudflare\'s Workers limits, Durable Objects limits and '
       + 'WebSocket best-practices pages publish no such figure (read 2026-08-17). So the chain '
       + 'is: production behaviour, citing a deleted document, citing "documented", citing '
@@ -1943,7 +1943,7 @@ export const PLATFORM_CATALOG = {
     date: DOCS_READ,
     trigger: 'an inbound WebSocket control frame (ping) on an accepted, possibly hibernated socket',
     onBreach:
-      'nothing fails — but an APPLICATION-level keepalive message is not a control frame, so it '
+      'nothing fails, but an APPLICATION-level keepalive message is not a control frame, so it '
       + 'is delivered to webSocketMessage and wakes the object every interval',
     observable: [],
     firstPartySignal: true,
@@ -1987,7 +1987,7 @@ export const PLATFORM_CATALOG = {
     observable: [{ context: 'the caller', message: 'Request failed' }],
     firstPartySignal: true,
     notes:
-      "The VENDOR SDK's shipped default, not a Cloudflare runtime bound and not ours — filed "
+      "The VENDOR SDK's shipped default, not a Cloudflare runtime bound and not ours: filed "
       + 'under platform because Kinu cannot widen it per call. It is why "no deadline" work '
       + 'rides the process lane (startProcess + waitForExit installs no timer) instead of a '
       + 'bigger exec timeout: execution/sandbox.ts routes on exactly this entry.',

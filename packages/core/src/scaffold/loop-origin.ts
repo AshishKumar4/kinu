@@ -21,5 +21,5 @@ export type LoopOrigin =
  * parent's loop; hired subordinates and temporaries start from the bootstrap.
  */
 export function defaultLoopOrigin(kind: WorkspaceActor['kind']): LoopOrigin {
-  return kind === 'head' || kind === 'branch' ? { kind: 'inherit' } : { kind: 'builtin' };
+  return kind === 'run' ? { kind: 'inherit' } : { kind: 'builtin' };
 }

@@ -93,20 +93,15 @@ export interface WorkspaceHostSeams {
   chosenWriteObserver(record: WorkspaceActor): WriteObserver | null;
 }
 
-/** An MCTS branch acquires no execution plane; a swarm node's home is in `head-`. */
-export type HostedActorHomeKind = 'head' | 'subordinate';
-
-function hostedActorAgentName(kind: HostedActorHomeKind, id: string): string {
-  switch (kind) {
-    case 'head': return headAgentName(id);
-    case 'subordinate': return subordinateAgentName(id);
-  }
+/** A toolless run actor (an MCTS branch) has no home; a swarm node's home is in `head-`. */
+function hasHome(record: WorkspaceActor): boolean {
+  return record.kind !== 'main' && record.toolProfile === 'full';
 }
 
-function hostedHomeKind(record: WorkspaceActor): HostedActorHomeKind | null {
-  if (record.kind === 'main' || record.kind === 'branch') return null;
+function hostedHomeName(record: WorkspaceActor): string {
+  const id = parseActorKey(record.storageKey).id;
 
-  return record.kind;
+  return record.kind === 'subordinate' ? subordinateAgentName(id) : headAgentName(id);
 }
 
 /** Kind-prefixed so a head's and a subordinate's shell state cannot collide on one id. */
@@ -124,12 +119,11 @@ export async function provisionHostedActorHome(
   seams: Pick<WorkspaceHostSeams, 'homeHost' | 'directory'>,
   record: WorkspaceActor,
   reference: ActorReference,
-  kind: HostedActorHomeKind,
 ): Promise<NodeWorkspace> {
   const path = seams.directory.storagePath(reference);
   const provision = facetHomeProvisioner(seams.homeHost(), () => { seams.directory.validate(reference, path); });
 
-  return await provision(hostedActorAgentName(kind, parseActorKey(record.storageKey).id));
+  return await provision(hostedHomeName(record));
 }
 
 /** Build the workspace's one actor host over the root's `Storage` (open-38). */
@@ -140,9 +134,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
   let host: ActorHost | null = null;
 
   const homeFor = (record: WorkspaceActor, reference: ActorReference): Promise<HostedNodeHome> | null => {
-    const kind = hostedHomeKind(record);
-
-    if (kind === null) return null;
+    if (!hasHome(record)) return null;
     const held = homes.get(record.actorId);
 
     if (held) return held;
@@ -153,7 +145,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
     provisioning = (async (): Promise<HostedNodeHome> => {
       try {
-        const home = await provisionHostedActorHome(seams, record, reference, kind);
+        const home = await provisionHostedActorHome(seams, record, reference);
 
         if (home.isolation !== 'private-home') throw new KinuError('denied', 'A hosted actor requires its own credential.');
 
@@ -342,11 +334,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
     /** Releases the home and state subtree on destroy only; an archived actor keeps its files. */
     discardBytes: async (record: WorkspaceActor): Promise<void> => {
-      const kind = hostedHomeKind(record);
-
-      if (kind !== null) {
-        await facetHomeReleaser(seams.homeHost())(hostedActorAgentName(kind, parseActorKey(record.storageKey).id));
-      }
+      if (hasHome(record)) await facetHomeReleaser(seams.homeHost())(hostedHomeName(record));
 
       homes.delete(record.actorId);
       const box = seams.workspaceBox(hostedActorShellId(record));
