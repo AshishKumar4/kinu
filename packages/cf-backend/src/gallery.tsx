@@ -127,12 +127,12 @@ const STOCK_ROSTER = {
   entries: [
     { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
       ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
-      : "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
-    { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
-    { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
-    { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
+      : "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
+    { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
+    { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
+    { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5 },
     // First-run row: titled by its first prompt, so it has no title yet, only its slug.
-    { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3, archivedAt: null },
+    { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3 },
   ],
   total: 5,
 };
@@ -156,7 +156,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
     {
       id: "dev_1", label: "ashish-mbp", os: "darwin", hostname: "ashish-mbp.local",
       connected: true, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 90e3,
-      expiresAt: NOW + 50 * 864e5, lastIp: "192.0.2.2", lastAgent: "kinu-device",
+      expiresAt: NOW + 50 * 864e5,
       replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     },
@@ -202,19 +202,18 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   {
     id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
     transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
-    authUrl: null, error: null, presetId: null, createdAt: NOW - 3 * 864e5, updatedAt: NOW,
+    authUrl: null, error: null, presetId: null,
   },
   {
     id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
     transport: "sse", status: "authenticating", toolsCount: 0,
     allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
-    error: null, presetId: null, createdAt: NOW - 864e5, updatedAt: NOW,
+    error: null, presetId: null,
   },
   {
     id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.example/sse",
     transport: "sse", status: "failed", toolsCount: 0, allowedTools: null,
     authUrl: null, error: "The server refused the connection.", presetId: null,
-    createdAt: NOW - 2 * 864e5, updatedAt: NOW,
   },
 ];
 
@@ -231,13 +230,13 @@ if (mcpPresetVariant === "connected") {
     {
       id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
       transport: "streamable-http", status: "ready", toolsCount: 21, allowedTools: null,
-      authUrl: null, error: null, presetId: "github", createdAt: NOW - 864e5, updatedAt: NOW,
+      authUrl: null, error: null, presetId: "github",
     },
     {
       id: "srv-preset-cloudflare", name: "Cloudflare", serverUrl: "https://mcp.cloudflare.com/mcp",
       transport: "streamable-http", status: "authenticating", toolsCount: 0, allowedTools: null,
       authUrl: "https://mcp.cloudflare.com/authorize?srv-preset-cloudflare", error: null,
-      presetId: "cloudflare", createdAt: NOW - 3600e3, updatedAt: NOW,
+      presetId: "cloudflare",
     },
     ...GALLERY_UNCLAIMED_MCP,
   ];
@@ -313,8 +312,8 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
 async function settingsSectionsFixture(path: string): Promise<Response | null> {
   if (path === "/api/user/credentials") {
     return fixtureJson([
-      { key: "anthropic.bearer", kind: "bearer", createdAt: NOW - 864e5, updatedAt: NOW },
-      { key: "anthropic.bearer@work", kind: "bearer", createdAt: NOW - 36e5, updatedAt: NOW },
+      { key: "anthropic.bearer", kind: "bearer" },
+      { key: "anthropic.bearer@work", kind: "bearer" },
     ]);
   }
 
@@ -451,7 +450,6 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
       allowedTools: addBody.output.allowedTools ?? null,
       authUrl, error: null,
       presetId: preset?.id ?? null,
-      createdAt: NOW, updatedAt: NOW,
     }];
 
     return fixtureJson({ id, authUrl }, 201);
@@ -500,7 +498,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
       {
         id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
         connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
-        lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
+        replacedAt: null,
         revokedAt: revoked ? NOW : null, unstoppedAt: incident === "revoked" ? NOW : null,
         reuseDetectedAt: incident === "reused" ? NOW : null, wholeMachine: false,
         sandbox: {
@@ -511,7 +509,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
       ...(frame === "devices" ? [{
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
-        lastIp: "192.0.2.2", lastAgent: "kinu-device", replacedAt: null,
+        replacedAt: null,
         revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
       }] : []),
@@ -595,7 +593,7 @@ function deviceConnectFixture(path: string, method: string): Response | null {
       id: "dev-arrived", label: "Owner PC", os: "darwin", hostname: "owner-mac",
       connected: connectFixtureMode !== "stall",
       createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
-      lastIp: "192.0.2.7", lastAgent: "kinu-device", replacedAt: null,
+      replacedAt: null,
       revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     }]);
@@ -640,7 +638,7 @@ const EXTRA_WORKSPACE = new URLSearchParams(location.search).get("extraWorkspace
 const galleryRoster: RosterEntry[] = [
   ...GALLERY_ROSTER.entries,
   ...(EXTRA_WORKSPACE ? [{
-    name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5, archivedAt: null,
+    name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5,
   }] : []),
 ].map((entry) => {
   const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
@@ -3423,7 +3421,6 @@ function RosterAuthorityFrame() {
     displayName: "Checkout coupon bug",
     createdAt: NOW - 7 * 864e5,
     lastVisited: NOW - 60e3,
-    archivedAt: null,
   };
 
   return (
@@ -4362,7 +4359,7 @@ function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
           mode,
           live: { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE] },
           blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
-            { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", kind: "blueprint", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
+            { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
           ] },
         }} />
     </div>
@@ -5873,7 +5870,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
   return {
     id, label, os: "linux", hostname: label, connected: true,
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
-    lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+    replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox,
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current",
   };

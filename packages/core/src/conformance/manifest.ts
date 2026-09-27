@@ -233,13 +233,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     slates: EVERYWHERE,
     slate_versions: EVERYWHERE,
     slate_publications: EVERYWHERE,
-    slate_deployments: EVERYWHERE,
-    slate_resources: EVERYWHERE,
-    slate_previews: EVERYWHERE,
-    slate_deployment_reservations: EVERYWHERE,
-    slate_resource_reservations: EVERYWHERE,
-    slate_invocations: EVERYWHERE,
-    slate_receipts: EVERYWHERE,
     // The authored slate's `this.storage` KV.
     slate_state: EVERYWHERE,
     slate_file_manifest: EVERYWHERE,

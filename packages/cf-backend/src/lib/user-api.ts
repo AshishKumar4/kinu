@@ -36,7 +36,6 @@ export interface WorkspaceEntry {
   displayName: string;
   createdAt: number;
   lastVisited: number;
-  archivedAt: number | null;
 }
 
 export type RosterEntry = v.InferOutput<typeof RosterEntrySchema>;
@@ -59,8 +58,6 @@ export interface RosterQuery {
 export interface CredentialSummary {
   key: string;
   kind: 'bearer' | 'oauth' | 'openai-compat';
-  createdAt: number;
-  updatedAt: number;
 }
 
 export interface CodexStatus {
@@ -107,7 +104,6 @@ const UserProfileSchema = v.nullable(v.object({
 
 const WorkspaceEntrySchema = v.object({
   name: v.string(), displayName: v.string(), createdAt: v.number(), lastVisited: v.number(),
-  archivedAt: v.nullable(v.number()),
 });
 
 const RosterEntrySchema = v.object({ ...WorkspaceEntrySchema.entries, overview: v.nullable(WorkspaceOverviewSchema), decisions: v.number() });
@@ -137,7 +133,6 @@ const CliSetupSchema = v.object({
 
 const CredentialSummarySchema = v.object({
   key: v.string(), kind: v.picklist(['bearer', 'oauth', 'openai-compat']),
-  createdAt: v.number(), updatedAt: v.number(),
 });
 
 const ModelMenuEntrySchema = v.object({
@@ -267,9 +262,6 @@ export interface UserDevice {
   lastSeenAt: number | null;
   /** Measured from the last rotation (every accepted connect), so a machine in use never reaches it. */
   expiresAt: number | null;
-  /** A stolen `device.json` shows up here: an unrecognised address or an uncaused replacement. */
-  lastIp: string | null;
-  lastAgent: string | null;
   replacedAt: number | null;
   revokedAt: number | null;
   unstoppedAt: number | null;
@@ -305,7 +297,7 @@ const UNREPORTED_SANDBOX: v.InferOutput<typeof DeviceSandboxSchema> =
 const UserDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()), expiresAt: v.nullable(v.number()),
-  lastIp: v.nullable(v.string()), lastAgent: v.nullable(v.string()), replacedAt: v.nullable(v.number()),
+  replacedAt: v.nullable(v.number()),
   revokedAt: v.nullable(v.number()), unstoppedAt: v.nullable(v.number()),
   reuseDetectedAt: v.optional(v.nullable(v.number()), null),
   wholeMachine: v.optional(v.boolean(), false),
@@ -530,8 +522,6 @@ export interface McpServerSummary {
   authUrl: string | null;
   allowedTools: string[] | null;
   presetId: string | null;
-  createdAt: number;
-  updatedAt: number;
 }
 
 export interface McpServerInput {

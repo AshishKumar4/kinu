@@ -429,7 +429,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Compaction | `compaction_state`, `compaction_archive` | `core/src/state/workspace-schema.ts` (the DDL lives in core because `@kinu.run/compaction` sits above it in the dependency graph) |
 | Typed config | `actor_config` | `core/src/config/store.ts` |
 | Prompt sections | `prompt_section_versions`, `prompt_section_evaluations` | `core/src/prompting/section-store.ts` |
-| Slates | `slates`, `slate_versions`, `slate_publications`, `slate_deployments` and the other `slate_*` tables | `core/src/state/workspace-schema.ts`, `core/src/slates/` |
+| Slates | `slates`, `slate_versions`, `slate_publications` and the other `slate_*` tables | `core/src/state/workspace-schema.ts`, `core/src/slates/` |
 
 These are created outside that pass, by the root that owns each:
 

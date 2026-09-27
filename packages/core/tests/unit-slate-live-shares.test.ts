@@ -92,8 +92,8 @@ test('a viewer request records its calls and settles', () => {
 
   try {
     const share = shares.add(liveShare());
-    const request = shares.openRequest({ share: share.id, viewer: 'user:u1', slate: 'issues', path: '/' });
-    const other = shares.openRequest({ share: share.id, viewer: 'source:deadbeef', slate: 'issues', path: '/' });
+    const request = shares.openRequest({ share: share.id, viewer: 'user:u1', path: '/' });
+    const other = shares.openRequest({ share: share.id, viewer: 'source:deadbeef', path: '/' });
 
     expect(request).not.toBe(other);
     shares.recordCall(request, { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read', ok: true });
@@ -115,6 +115,26 @@ test('a viewer request records its calls and settles', () => {
 
     expect(() => shares.recordCall(99_999, { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read', ok: true }))
       .toThrow('No viewer request 99999');
+  } finally {
+    db.close();
+  }
+});
+
+test('a share keeps its newest thousand viewer requests and no other share loses any', () => {
+  const { db, shares } = shareDb();
+
+  try {
+    const share = shares.add(liveShare());
+    const other = shares.add({ ...liveShare(), id: 's2', handle: 'other-handle' });
+    const kept = shares.openRequest({ share: other.id, viewer: 'user:u1', path: '/' });
+    const first = shares.openRequest({ share: share.id, viewer: 'user:u1', path: '/' });
+
+    for (let n = 0; n < 1_000; n += 1) shares.openRequest({ share: share.id, viewer: 'user:u1', path: '/' });
+
+    const requests = shares.requests(share.id);
+    expect(requests).toHaveLength(1_000);
+    expect(requests.some((row) => row.id === first)).toBe(false);
+    expect(shares.requests(other.id).map((row) => row.id)).toEqual([kept]);
   } finally {
     db.close();
   }

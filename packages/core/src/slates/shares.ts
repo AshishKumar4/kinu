@@ -4,12 +4,11 @@ import type { RawSqlExec, SqlExec } from '../types/primitives';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
-import { SHARE_KINDS, type ShareKind, type SlateShareRecord } from './sharing';
+import type { SlateShareRecord } from './sharing';
 
 export function initSlateShareTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS slate_shares (
-    id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('blueprint')),
-    publication_id TEXT NOT NULL, included_paths TEXT NOT NULL,
+    id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, publication_id TEXT NOT NULL, included_paths TEXT NOT NULL,
     created_at INTEGER NOT NULL, revoked_at INTEGER
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS slate_share_users (
@@ -19,7 +18,7 @@ export function initSlateShareTables(execRaw: RawSqlExec): void {
 }
 
 const ShareRow = v.object({
-  id: v.string(), slate_id: v.string(), kind: v.picklist(SHARE_KINDS), publication_id: v.string(),
+  id: v.string(), slate_id: v.string(), publication_id: v.string(),
   included_paths: v.string(), created_at: v.number(), revoked_at: v.nullable(v.number()),
 });
 
@@ -118,7 +117,7 @@ const BLUEPRINT_SHARES: ShareTable<v.InferOutput<typeof ShareRow>, SlateShareRec
   missing: 'No such blueprint',
   revoked: 'This blueprint is no longer shared',
   record: (row, users) => ({
-    id: row.id, slate: row.slate_id, kind: row.kind, publication: row.publication_id,
+    id: row.id, slate: row.slate_id, publication: row.publication_id,
     included: v.parse(v.array(v.string()), JSON.parse(row.included_paths)),
     createdAt: row.created_at, revokedAt: row.revoked_at, users,
   }),
@@ -132,7 +131,6 @@ export interface ShareUser {
 export interface NewSlateShare {
   readonly id: string;
   readonly slate: string;
-  readonly kind: ShareKind;
   readonly publication: string;
   readonly included: readonly string[];
 }
@@ -145,10 +143,10 @@ export class SlateShareStore extends ShareStore<v.InferOutput<typeof ShareRow>, 
   add(share: NewSlateShare): SlateShareRecord {
     const createdAt = this.now();
     this.db.exec(
-      'INSERT INTO slate_shares (id, slate_id, kind, publication_id, included_paths, created_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, NULL)',
-      share.id, share.slate, share.kind, share.publication, JSON.stringify(share.included), createdAt,
+      'INSERT INTO slate_shares (id, slate_id, publication_id, included_paths, created_at, revoked_at) VALUES (?, ?, ?, ?, ?, NULL)',
+      share.id, share.slate, share.publication, JSON.stringify(share.included), createdAt,
     );
 
-    return { id: share.id, slate: share.slate, kind: share.kind, publication: share.publication, included: [...share.included], createdAt, revokedAt: null, users: [] };
+    return { id: share.id, slate: share.slate, publication: share.publication, included: [...share.included], createdAt, revokedAt: null, users: [] };
   }
 }

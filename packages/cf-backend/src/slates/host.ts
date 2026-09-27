@@ -232,7 +232,6 @@ export class SlateHost {
       request: this.live.openRequest({
         share: share.id,
         viewer: subject,
-        slate: share.slate,
         path: input.pathname,
       }),
     };
@@ -618,7 +617,7 @@ export class SlateHost {
     return running.app;
   }
 
-  /** Ends processes, the durable application and the authored tree; committed versions stay. */
+  /** Ends processes, the durable application, the authored tree and its storage; committed versions stay. */
   async remove(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     try {
       const session = await this.deps.session();
@@ -636,6 +635,7 @@ export class SlateHost {
       session.vfs.withTransaction(() => {
         if (vfs.exists(root)) vfs.removeRecursive(root);
         forgetSlateFiles(this.deps.ctx.storage.sql, new SlateId(id));
+        this.state.forget(id);
       });
       await this.deps.forgetPicture?.(id);
 

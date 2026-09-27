@@ -32,6 +32,23 @@ test('a slate value round-trips and a missing key answers null', () => {
   }
 });
 
+test('forgetting a removed slate clears its keys and leaves every other slate', () => {
+  const ws = createTestWorkspace();
+
+  try {
+    const store = storeOn(ws.db);
+
+    store.put('notes', 'a', 1);
+    store.put('notes', 'b', 2);
+    store.put('other', 'a', 3);
+    store.forget('notes');
+    expect(store.list('notes')).toEqual([]);
+    expect(store.list('other')).toEqual([['a', 3]]);
+  } finally {
+    ws.db.close();
+  }
+});
+
 test('list orders by key and a prefix bounds the range without a LIKE', () => {
   const ws = createTestWorkspace();
 

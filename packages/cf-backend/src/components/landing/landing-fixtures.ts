@@ -50,9 +50,9 @@ const QUIET = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latest
 
 export const LANDING_ROSTER = {
   entries: [
-    { name: 'checkout-fixes', displayName: 'Checkout coupon bug', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
-    { name: 'perf-audit', displayName: 'Perf audit — landing', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
-    { name: 'email-triage', displayName: 'Email triage automation', createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
+    { name: 'checkout-fixes', displayName: 'Checkout coupon bug', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
+    { name: 'perf-audit', displayName: 'Perf audit — landing', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
+    { name: 'email-triage', displayName: 'Email triage automation', createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
   ].map((entry) => ({ ...entry, overview: { ...QUIET, slates: [], shares: [] }, decisions: 0 })),
   total: 3,
   nextCursor: null,

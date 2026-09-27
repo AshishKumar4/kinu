@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-27",
-  "files": 2804,
-  "functions": 69382,
+  "files": 2827,
+  "functions": 70060,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -62,10 +62,6 @@
       "complexity": 41
     },
     {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
-      "complexity": 40
-    },
-    {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
       "complexity": 40
     },
@@ -84,6 +80,10 @@
     {
       "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction",
       "complexity": 38
+    },
+    {
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
+      "complexity": 37
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",

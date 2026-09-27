@@ -80,10 +80,7 @@ const OWNED = {
 /** The surface a workspace root has and an actor scope does not. */
 const ROOT_ONLY_TABLES = [
   'fork_lineage', 'fork_staged_files', 'fork_transfer',
-  'slate_deployment_reservations',
-  'slate_deployments', 'slate_file_manifest', 'slate_invocations', 'slate_live_share_users', 'slate_live_shares',
-  'slate_previews', 'slate_publications',
-  'slate_receipts', 'slate_resource_reservations', 'slate_resources',
+  'slate_file_manifest', 'slate_live_share_users', 'slate_live_shares', 'slate_publications',
   'slate_share_users', 'slate_shares', 'slate_state', 'slate_versions',
   'slate_viewer_requests', 'slates', 'workspace_actors', 'workspace_identity', 'workspace_soul',
 ];

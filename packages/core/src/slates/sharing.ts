@@ -207,7 +207,6 @@ export type BlueprintInspection = v.InferOutput<typeof BlueprintInspectionSchema
 export const SlateShareRecordSchema = v.object({
   id: v.string(),
   slate: v.string(),
-  kind: v.picklist(SHARE_KINDS),
   publication: v.string(),
   included: v.array(v.string()),
   createdAt: v.number(),

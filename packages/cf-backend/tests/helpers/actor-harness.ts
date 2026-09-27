@@ -1605,8 +1605,8 @@ export async function reactivateOrchestratorHarness(
     const [key, update] = opts.sleepTimeAnswer;
     config.setSleepTimeComputeEnabled(true);
     db.prepare(
-      'INSERT INTO sleep_time_updates (effect_key, update_json, created_at) VALUES (?, ?, ?) ON CONFLICT(effect_key) DO NOTHING',
-    ).run(key, JSON.stringify(update), Date.now());
+      'INSERT INTO sleep_time_updates (effect_key, update_json) VALUES (?, ?) ON CONFLICT(effect_key) DO NOTHING',
+    ).run(key, JSON.stringify(update));
   } else {
     config.setSleepTimeComputeEnabled(false);
   }
