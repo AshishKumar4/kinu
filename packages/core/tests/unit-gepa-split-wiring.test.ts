@@ -402,8 +402,7 @@ test('an unavailable paired trial cannot supply the last win needed to promote a
   if (!proposal.ok) throw new Error(proposal.error);
 
   for (let index = 0; index < 4; index++) recordPromptSectionTrial(rt.storage.sql, rt.actor, {
-    sectionId: section.id, pendingVersion: proposal.version, instanceId: 'measured-' + index,
-    currentScore: 0.1, pendingScore: 0.9, winner: 'pending', feedback: 'measured improvement',
+    sectionId: section.id, pendingVersion: proposal.version, winner: 'pending',
   });
   const failure = new Error('pending trial judge unavailable');
 

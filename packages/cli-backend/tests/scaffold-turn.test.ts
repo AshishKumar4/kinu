@@ -94,8 +94,7 @@ for (const mode of ['promote', 'auto', 'veto'] as const) {
 
     if (mode === 'auto') {
       for (let trial = 0; trial < 5; trial++) recordShadowEvaluation(rt.storage.sql, rt.actor, {
-        currentVersion: 0, pendingVersion: 1, task: `trial-${trial}`, currentOutput: 'current', pendingOutput: 'candidate',
-        judgeResult: { winner: 'pending', rationale: 'candidate met the fixture requirement', currentScore: 0, pendingScore: 1 },
+        pendingVersion: 1, task: `trial-${trial}`, judgeResult: { winner: 'pending', rationale: 'candidate met the fixture requirement', currentScore: 0, pendingScore: 1 },
       });
     }
 

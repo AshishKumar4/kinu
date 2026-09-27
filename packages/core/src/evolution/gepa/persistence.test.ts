@@ -54,7 +54,6 @@ describe('startGepaRun + finishGepaRun', () => {
     const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
       targetRef: null,
-      budget: { maxIterations: 5, maxMetricCalls: 50, minibatchSize: 2 },
     });
 
     expect(runId).toMatch(/^gepa-/);
@@ -89,11 +88,10 @@ describe('persistGepaCandidate + loadGepaCandidates', () => {
 
     const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
-      budget: { maxIterations: 1, maxMetricCalls: 10, minibatchSize: 1 },
     });
 
     const cand = mkCandidate('c1', 'source-1', { i1: 0.7, i2: 0.3 });
-    persistGepaCandidate(sql, actor, { runId, candidate: cand, iteration: 0, accepted: true });
+    persistGepaCandidate(sql, actor, { runId, candidate: cand, iteration: 0 });
 
     const loaded = loadGepaCandidates(sql, actor, runId);
     expect(loaded.length).toBe(1);
@@ -110,15 +108,14 @@ describe('persistGepaCandidate + loadGepaCandidates', () => {
 
     const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
-      budget: { maxIterations: 5, maxMetricCalls: 50, minibatchSize: 1 },
     });
 
     const seed = mkCandidate('seed', 'src-0', { i1: 0.5 });
     const it1 = mkCandidate('it1', 'src-1', { i1: 0.6 });
     const it2 = mkCandidate('it2', 'src-2', { i1: 0.7 });
-    persistGepaCandidate(sql, actor, { runId, candidate: seed, iteration: 0, accepted: true });
-    persistGepaCandidate(sql, actor, { runId, candidate: it1, iteration: 1, accepted: true });
-    persistGepaCandidate(sql, actor, { runId, candidate: it2, iteration: 2, accepted: true });
+    persistGepaCandidate(sql, actor, { runId, candidate: seed, iteration: 0 });
+    persistGepaCandidate(sql, actor, { runId, candidate: it1, iteration: 1 });
+    persistGepaCandidate(sql, actor, { runId, candidate: it2, iteration: 2 });
     const loaded = loadGepaCandidates(sql, actor, runId);
     expect(loaded.map(c => c.id)).toEqual(['seed', 'it1', 'it2']);
   });
@@ -127,13 +124,13 @@ describe('persistGepaCandidate + loadGepaCandidates', () => {
 describe('loadGepaParetoFront — the derived front', () => {
   test('derives the per-instance front from accepted candidates alone', () => {
     const { sql, actor } = setup();
-    const runId = startGepaRun(sql, actor, { target: 'scaffold', budget: {} });
+    const runId = startGepaRun(sql, actor, { target: 'scaffold' });
     // Neither specialist dominates; the front is derived from scores_json.
     const a = mkCandidate('a', 'src-a', { i1: 0.9, i2: 0.3 });
     const b = mkCandidate('b', 'src-b', { i1: 0.3, i2: 0.9 });
 
     for (const cand of [a, b]) {
-      persistGepaCandidate(sql, actor, { runId, candidate: cand, iteration: 0, accepted: true });
+      persistGepaCandidate(sql, actor, { runId, candidate: cand, iteration: 0 });
     }
 
     expect(loadGepaParetoFront(sql, actor, runId)).toEqual([
@@ -160,7 +157,6 @@ describe('runGepa with makePersistingHooks end-to-end', () => {
 
     const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
-      budget: { maxIterations: 2, maxMetricCalls: 50, minibatchSize: 1 },
     });
 
     const hooks = makePersistingHooks({ sql, actor, runId });

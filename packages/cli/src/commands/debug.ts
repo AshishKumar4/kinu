@@ -127,7 +127,6 @@ function explorationRecordRecord(record: ExplorationRecord): BundleRecord {
     branches: record.branches,
     floorValue: record.floorValue,
     floorProof: record.floorProof,
-    costUsd: record.costUsd,
     costTokens: record.costTokens,
     firstRecordedAt: record.firstRecordedAt,
     displacements: record.displacements,
@@ -235,7 +234,7 @@ const ExplorationRecordSchema: v.GenericSchema<ExplorationRecord> = v.object({
   preset: v.string(), label: v.nullable(v.string()), rootId: v.string(),
   configDigest: v.string(), depth: v.number(), branches: v.number(),
   floorDigest: v.nullable(v.string()), floorValue: v.nullable(v.number()),
-  floorProof: v.nullable(v.string()), costUsd: v.nullable(v.number()),
+  floorProof: v.nullable(v.string()),
   costTokens: v.nullable(v.number()), firstRecordedAt: v.number(), displacements: v.number(),
 });
 

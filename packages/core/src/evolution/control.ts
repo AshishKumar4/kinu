@@ -534,7 +534,7 @@ export async function runScaffoldGepaOptimization(
 
   const reflectionLm = reflectionLmFor(control, model);
 
-  const runId = startGepaRun(control.sql, control.rt.actor, { target: 'scaffold', budget });
+  const runId = startGepaRun(control.sql, control.rt.actor, { target: 'scaffold' });
   const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
   let iterations = 0;
   let result;
@@ -662,7 +662,7 @@ async function runPromptSectionGepaOptimization(
   const reflectionLm = reflectionLmFor(control, await control.model());
 
   const runId = startGepaRun(control.sql, control.rt.actor, {
-    target: 'prompt_section', targetRef: opts.sectionId, budget,
+    target: 'prompt_section', targetRef: opts.sectionId,
   });
 
   const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
@@ -783,11 +783,7 @@ async function runPromptSectionTrials(
     recordPromptSectionTrial(control.sql, control.rt.actor, {
       sectionId,
       pendingVersion: pending.version,
-      instanceId: instance.id,
-      currentScore: current.score,
-      pendingScore: candidate.score,
       winner: trialWinner(candidate.score, current.score),
-      feedback: candidate.feedback,
     });
     trialsRun += 1;
   }

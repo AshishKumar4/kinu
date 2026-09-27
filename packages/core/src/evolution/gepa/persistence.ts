@@ -8,9 +8,8 @@ import { nowMs } from '../../utils/date';
 import {
   computeParetoFront,
 } from './pareto';
-import { DEFAULT_GEPA_BUDGET } from './types';
 import type {
-  GepaBudget, GepaCandidate, GepaResult, GepaProgressHooks,
+  GepaCandidate, GepaResult, GepaProgressHooks,
 } from './types';
 
 const GepaRunStatusSchema = v.picklist(['running', 'completed', 'aborted']);
@@ -32,7 +31,6 @@ export function initGepaTables(execRaw: RawSqlExec): void {
     winner_id     TEXT,
     metric_calls  INTEGER NOT NULL DEFAULT 0,
     iterations    INTEGER NOT NULL DEFAULT 0,
-    budget_json   TEXT NOT NULL,
     PRIMARY KEY (actor_id, run_id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_gepa_runs_status_started
@@ -51,7 +49,6 @@ export function initGepaTables(execRaw: RawSqlExec): void {
     aggregate      REAL NOT NULL,
     created_at     INTEGER NOT NULL,
     iteration      INTEGER NOT NULL,
-    accepted       INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (actor_id, id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_gepa_candidates_run_iter
@@ -61,25 +58,22 @@ export function initGepaTables(execRaw: RawSqlExec): void {
 
 }
 
-/** Persists the fully resolved budget so the snapshot matches what runGepa used. */
 export function startGepaRun(
   sql: SqlExecutor,
   actor: ActorHandle,
   opts: {
     target: 'scaffold' | 'prompt_section';
     targetRef?: string | null;
-    budget?: Partial<GepaBudget>;
   },
 ): string {
   actor.assertCurrent();
   const runId = `gepa-${nanoid()}`;
   const startedAt = nowMs();
-  const budgetJson = JSON.stringify({ ...DEFAULT_GEPA_BUDGET, ...opts.budget });
   void sql`INSERT INTO gepa_runs
         (actor_id, run_id, target, target_ref, started_at, ended_at, status, stop_reason,
-         winner_id, metric_calls, iterations, budget_json)
+         winner_id, metric_calls, iterations)
         VALUES (${actor.actorId}, ${runId}, ${opts.target}, ${opts.targetRef ?? null}, ${startedAt},
-                ${null}, ${'running'}, ${null}, ${null}, ${0}, ${0}, ${budgetJson})`;
+                ${null}, ${'running'}, ${null}, ${null}, ${0}, ${0})`;
 
   return runId;
 }
@@ -91,7 +85,6 @@ export function persistGepaCandidate(
     runId: string;
     candidate: GepaCandidate;
     iteration: number;
-    accepted: boolean;
   },
 ): void {
   actor.assertCurrent();
@@ -99,11 +92,11 @@ export function persistGepaCandidate(
   const feedbackJson = JSON.stringify(Object.fromEntries(args.candidate.feedback));
   void sql`INSERT INTO gepa_candidates
         (actor_id, id, run_id, parent_id, source, scores_json, feedback_json,
-         aggregate, created_at, iteration, accepted)
+         aggregate, created_at, iteration)
         VALUES (${actor.actorId}, ${args.candidate.id}, ${args.runId}, ${args.candidate.parentId},
                 ${args.candidate.source}, ${scoresJson}, ${feedbackJson},
                 ${args.candidate.aggregateScore}, ${args.candidate.createdAt},
-                ${args.iteration}, ${args.accepted ? 1 : 0})`;
+                ${args.iteration})`;
 }
 
 
@@ -249,7 +242,7 @@ export function makePersistingHooks(args: {
   return {
     onCandidate: ({ candidate, iteration }) => {
       persistGepaCandidate(args.sql, args.actor, {
-        runId: args.runId, candidate, iteration, accepted: true,
+        runId: args.runId, candidate, iteration,
       });
     },
     onIteration: state => {
@@ -266,7 +259,7 @@ export interface GepaParetoEntry {
   readonly score: number;
 }
 
-/** Derived from accepted candidates' stored score keys; rejected ones never entered the pool. */
+/** Derived from the stored candidates' score keys; a rejected candidate is never stored. */
 export function loadGepaParetoFront(
   sql: SqlExecutor, actor: ActorHandle, runId: string,
 ): GepaParetoEntry[] {
@@ -274,7 +267,7 @@ export function loadGepaParetoFront(
 
   const rows = sql<{ id: string; scores_json: string }>`
     SELECT id, scores_json FROM gepa_candidates
-    WHERE actor_id = ${actor.actorId} AND run_id = ${runId} AND accepted = 1`;
+    WHERE actor_id = ${actor.actorId} AND run_id = ${runId}`;
 
   if (rows.length === 0) return [];
 

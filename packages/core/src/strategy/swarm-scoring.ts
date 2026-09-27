@@ -373,7 +373,7 @@ export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusa
   if (breach !== null) {
     publication = { kind: 'sealed', breach };
 
-    if (identity !== null) sealRecords(sql, rt.actor, { identity, breach, at: Date.now() });
+    if (identity !== null) sealRecords(sql, rt.actor, { identity, breach });
     log.event('exploration.floor_breach', {
       preset: resolved.preset,
       metric: measured?.metric ?? '',
@@ -394,7 +394,6 @@ export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusa
       aggregated: expansion.aggregated,
       tokens: spentBy.get(expansion.id) ?? null,
     },
-    now: Date.now(),
   });
   insertSearchNode(sql, rt.actor, {
     nodeId: expansion.id, parentNodeId: expansion.parentId, parentMsgId: null, rootId,
