@@ -102,6 +102,8 @@ export function inheritedDescriptor(instance: RpcSurfaceSubject, name: string): 
 
 /** The RPC counterpart of the `requireTier` gate: every entry gates itself on a `UserCaller`. */
 const USER_DO_METHODS = [
+  'cancelCodexRelay',
+  'codexRelayDevice',
   'completeOnboarding',
   'deleteAccount',
   'deleteCredential',
@@ -150,6 +152,7 @@ const USER_DO_METHODS = [
   'registerBrowserSession',
   'registerDevice',
   'registerWorkspace',
+  'relayCodex',
   'releaseWorkspaceReservation',
   'removeWorkspace',
   'renameDevice',

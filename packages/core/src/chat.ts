@@ -40,6 +40,7 @@ import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } f
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES, RATE_LIMIT_HANDOVER_HEADER } from './providers/rate-limit-retry';
 import { callAccountOf, type CallAccount } from './providers/quota';
+import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
 import { classifyErrorCode, diagnostics, renderThrownChain, toKinuError, type TracedInvocation } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
@@ -69,6 +70,7 @@ export type ChatEvent =
      *  (providers/cache-warming.ts). */
     request?: { body?: unknown; sentAt?: number };
     account?: CallAccount;
+    egress?: string;
     /** The request this step sent, taken when the SDK finished it and before the next, so a lagging reader still
      *  records each step's own request. */
     context?: ContextComposition;
@@ -338,15 +340,20 @@ class ProviderCall {
     for (const part of step.content) if (part.type === 'tool-call') this.dispatchedCalls.delete(part.toolCallId);
     const usage = normalizeUsage(step.usage);
     const account = callAccountOf(step.response);
+    const egress = step.response.headers?.[EGRESS_ROUTE_HEADER];
     const { modelId } = step.response;
+    const { body } = step.request;
+    // The SDK keeps each step record.
+    Reflect.deleteProperty(step.request, 'body');
 
     this.pendingStepEvents.push({
       stepIndex, responseMessages: this.responseSoFar,
       finishReason: step.finishReason, text: step.text,
       toolCalls: step.toolCalls.map((call) => ({ toolName: call.toolName })), toolResults: step.toolResults,
-      request: { body: step.request.body, sentAt: this.stepSentAt },
+      request: { body, sentAt: this.stepSentAt },
       ...(usageReported(usage) && { usage }),
       ...(account !== undefined && { account }),
+      ...(egress !== undefined && { egress }),
       ...(context && { context }),
       ...(this.fallback !== undefined && { fallback: this.fallback }),
       ...(modelId !== '' && { modelId }),

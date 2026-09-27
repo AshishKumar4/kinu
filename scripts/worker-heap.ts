@@ -39,6 +39,21 @@ export const HEAP_AFTER_SETUP_BOUND_BYTES = 56_000_000;
  *  keeps the request JSON one byte per character. */
 export const STEP_LIVE_BOUND_BYTES = 5_500_000;
 
+/** Measured 2026-09-27 at {@link HEADS}: 7.7 MB on main 20cacf3423, every released head's runtime held by the
+ *  workspace's mount table; 1.1 MB once release unmounts it: Nimbus's inode cache of the homes still on disk and
+ *  code compiled for the heads, neither of them per released actor. */
+export const HEADS_RETAINED_BOUND_BYTES = 1_500_000;
+
+/** Measured 2026-09-27 at {@link LONG_TURN}, after the setup, step and heads above in the same isolate: 104-116 MB
+ *  used over 3 runs on main 20cacf3423, 99-117 MB over 10 once no step keeps its request body. The collector decides
+ *  when garbage goes, hence the spread; this row trips only as the peak nears the 128 MB isolate, and the growth row
+ *  below is the one that pins what a turn keeps. */
+export const LONG_TURN_PEAK_BOUND_BYTES = 124_000_000;
+
+/** Measured 2026-09-27 at {@link LONG_TURN}: 7.7 MB on main 20cacf3423, where the AI SDK's record of every step
+ *  kept its request body, a full copy of the message list; 3.6-4.0 MB over 10 runs once the body stays off the record. */
+export const LONG_TURN_GROWTH_BOUND_BYTES = 5_000_000;
+
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request. */
 export const IDLE_RETAINED_BOUND_BYTES = 14_500_000;
 
@@ -55,15 +70,17 @@ const TargetsSchema = v.array(v.object({ id: v.string(), webSocketDebuggerUrl: v
 
 const ManifestSchema = v.record(v.string(), v.object({ file: v.string(), assets: v.optional(v.array(v.string())) }));
 
-/** Every module the build emitted, as Vite's manifest lists them: the chunks and the assets they import. */
-function productModules(): { type: 'ESModule' | 'CompiledWasm'; path: string; contents: string | Uint8Array }[] {
+/** Every module the build emitted, as Vite's manifest lists them, behind `worker-heap/product.ts` as the entry. */
+async function productModules(): Promise<{ type: 'ESModule' | 'CompiledWasm'; path: string; contents: string | Uint8Array }[]> {
   const manifest = v.parse(ManifestSchema, JSON.parse(readFileSync(join(DIST, '.vite/manifest.json'), 'utf8')));
-  // The entry first: Miniflare runs the first module as the Worker's main.
   const emitted = new Set(['index.js', ...Object.values(manifest).flatMap((entry) => [entry.file, ...(entry.assets ?? [])])]);
 
-  return [...emitted].filter((file) => file.endsWith('.js') || file.endsWith('.wasm')).map((file) => file.endsWith('.js')
+  const built = [...emitted].filter((file) => file.endsWith('.js') || file.endsWith('.wasm')).map((file) => file.endsWith('.js')
     ? { type: 'ESModule' as const, path: join(DIST, file), contents: readFileSync(join(DIST, file), 'utf8') }
     : { type: 'CompiledWasm' as const, path: join(DIST, file), contents: readFileSync(join(DIST, file)) });
+
+  // The entry first: Miniflare runs the first module as the Worker's main.
+  return [{ type: 'ESModule', path: join(DIST, 'worker-heap-product.js'), contents: await bundled('product.ts') }, ...built];
 }
 
 /** The specifiers `source` imports statically: the modules an isolate instantiates with it at load. */
@@ -100,17 +117,22 @@ export function staticGraph(dist: string): readonly string[] {
   return [...reached];
 }
 
-async function driverModule(): Promise<string> {
-  const bundled = await build({
-    entryPoints: [join(import.meta.dir, 'worker-heap/driver.ts')], bundle: true, write: false, format: 'esm',
+/** One of `worker-heap/`'s modules for workerd; `kinu:product` is the built bundle's `index.js` beside it. */
+async function bundled(file: 'driver.ts' | 'product.ts'): Promise<string> {
+  const result = await build({
+    entryPoints: [join(import.meta.dir, 'worker-heap', file)], bundle: true, write: false, format: 'esm',
     platform: 'neutral', mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
     alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, `node:${name}`])),
     external: ['cloudflare:*', 'node:*'], logLevel: 'silent',
+    plugins: [{
+      name: 'kinu-product',
+      setup: (plugin) => { plugin.onResolve({ filter: /^kinu:product$/ }, () => ({ path: './index.js', external: true })); },
+    }],
   });
 
-  const [output] = bundled.outputFiles;
+  const [output] = result.outputFiles;
 
-  if (output === undefined) throw new Error('worker-heap: esbuild produced no driver module');
+  if (output === undefined) throw new Error(`worker-heap: esbuild produced no module for ${file}`);
 
   return output.text;
 }
@@ -205,6 +227,12 @@ async function inspect(port: number): Promise<{
   };
 }
 
+/** The swarm the release bound is about: WARM heads host every lazy module first, then COUNT come and go. */
+export const HEADS = { warm: 5, count: 200 } as const;
+
+/** The long turn the peak bound is about: STEPS model calls, each after a small `file stat` result. */
+export const LONG_TURN = { steps: 150 } as const;
+
 /** The step the heap bounds are about: TURNS turns of ANSWER_BYTES each, then one more parked on the model. */
 export const STEP = { turns: 12, answerBytes: 200_000 } as const;
 
@@ -215,6 +243,12 @@ export interface HeapMeasurement {
   readonly stepLive: number;
   /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup. */
   readonly idleRetained: number;
+  /** What a workspace holds live after {@link HEADS} heads were hosted and released, beyond before them. */
+  readonly headsRetained: number;
+  /** The most used heap (uncollected) read at any model call of {@link LONG_TURN}. */
+  readonly longTurnPeak: number;
+  /** What {@link LONG_TURN} holds live at its last model call beyond its first. */
+  readonly longTurnGrowth: number;
   /** Each character above U+00FF in the requests, with the text before it; the scripted turns write none. */
   readonly wide: readonly string[];
 }
@@ -228,7 +262,7 @@ export async function measure(): Promise<HeapMeasurement> {
   const mf = new Miniflare(convertV4MiniflareOptions({
     inspectorPort: port,
     workers: [{
-      name: 'kinu', ...compat, modulesRoot: DIST, modules: productModules(), workerLoaders: { LOADER: {} },
+      name: 'kinu', ...compat, modulesRoot: DIST, modules: await productModules(), workerLoaders: { LOADER: {} },
       bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key },
       serviceBindings: { AI: { name: 'driver', entrypoint: 'ScriptedAI' } },
       r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),
@@ -238,7 +272,7 @@ export async function measure(): Promise<HeapMeasurement> {
       outboundService: (request) => { throw new Error(`worker-heap: the product reached the network at ${request.url}`); },
     }, {
       name: 'driver', ...compat,
-      modules: [{ type: 'ESModule', path: join(DIST, 'worker-heap-driver.js'), contents: await driverModule() }],
+      modules: [{ type: 'ESModule', path: join(DIST, 'worker-heap-driver.js'), contents: await bundled('driver.ts') }],
       bindings: { OWNER_TOKEN: v.parse(OwnerCallerSchema, await ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: key })).ownerToken },
       durableObjects: {
         HEAP_DRIVER: { className: 'HeapDriver', useSQLite: true },
@@ -284,7 +318,33 @@ export async function measure(): Promise<HeapMeasurement> {
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
       await parked;
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, wide };
+      await ask('/?workspace=heads');
+      await ask(`/heads?workspace=heads&tag=warm&count=${String(HEADS.warm)}`);
+      const beforeHeads = await inspector.liveHeap();
+      await ask(`/heads?workspace=heads&tag=swarm&count=${String(HEADS.count)}`);
+      const headsRetained = await inspector.liveHeap() - beforeHeads;
+
+      await ask('/?workspace=long');
+      await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}`);
+      const long = ask('/turn?workspace=long&text=long');
+      let longTurnPeak = 0;
+      let firstLive = 0;
+      let lastLive = 0;
+
+      // Each model call parks until released, so the read lands at every step of the turn.
+      for (let step = 1; step <= LONG_TURN.steps; step++) {
+        while (v.parse(v.object({ arrived: v.number() }), JSON.parse(await ask('/model'))).arrived < step) await Bun.sleep(2);
+        longTurnPeak = Math.max(longTurnPeak, await inspector.usedHeap());
+
+        if (step === 1) firstLive = await inspector.liveHeap();
+
+        if (step === LONG_TURN.steps) lastLive = await inspector.liveHeap();
+        await ask(`/model?released=${String(step)}`);
+      }
+
+      await long;
+
+      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, longTurnPeak, longTurnGrowth: lastLive - firstLive, wide };
     } finally {
       inspector.close();
     }
@@ -340,6 +400,18 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`the idle workspace holds ${mb(measured.idleRetained)} after ${transcript()}, over ${mb(IDLE_RETAINED_BOUND_BYTES)}`);
   }
 
+  if (measured.headsRetained > HEADS_RETAINED_BOUND_BYTES) {
+    findings.push(`${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)} live, over ${mb(HEADS_RETAINED_BOUND_BYTES)}`);
+  }
+
+  if (measured.longTurnGrowth > LONG_TURN_GROWTH_BOUND_BYTES) {
+    findings.push(`a ${String(LONG_TURN.steps)}-step turn holds ${mb(measured.longTurnGrowth)} more live at its last step than its first, over ${mb(LONG_TURN_GROWTH_BOUND_BYTES)}`);
+  }
+
+  if (measured.longTurnPeak > LONG_TURN_PEAK_BOUND_BYTES) {
+    findings.push(`a ${String(LONG_TURN.steps)}-step turn peaks at ${mb(measured.longTurnPeak)} used, over ${mb(LONG_TURN_PEAK_BOUND_BYTES)}`);
+  }
+
   if (findings.length > 0) {
     console.error(`${GATE}: ${String(findings.length)} finding(s)\n`);
 
@@ -349,8 +421,10 @@ async function main(args: readonly string[]): Promise<number> {
   }
 
   console.log(`${GATE}: ok — ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
-    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them; no wasm on the static graph, every module ASCII, every request Latin-1`);
-  console.log('  blind: copies made and dropped within a step (garbage between collections), transcripts shaped unlike this one, and memory outside V8 (compiled wasm, SQLite pages)');
+    + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
+    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
+    + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
+  console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; and memory outside V8 (compiled wasm, SQLite pages)');
 
   return 0;
 }

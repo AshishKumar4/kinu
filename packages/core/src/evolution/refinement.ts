@@ -275,6 +275,49 @@ export function initRefinementTables(execRaw: RawSqlExec): void {
            ON refinement_requests(actor_id, debt_key) WHERE debt_key IS NOT NULL`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_refinement_stage
            ON refinement_requests(actor_id, stage, created_at)`);
+  execRaw(`CREATE TABLE IF NOT EXISTS refinement_lane_holds (
+    actor_id  TEXT PRIMARY KEY,
+    -- Answered helpers when it failed: one more is new input.
+    answered  INTEGER NOT NULL,
+    detail    TEXT NOT NULL,
+    held_at   INTEGER NOT NULL
+  )`);
+}
+
+export function holdRefinementLane(sql: SqlExecutor, actorId: string, detail: string): void {
+  void sql`INSERT INTO refinement_lane_holds (actor_id, answered, detail, held_at)
+    VALUES (${actorId}, (SELECT COUNT(*) FROM evolution_helpers WHERE actor_id = ${actorId} AND answer_status IS NOT NULL),
+      ${detail}, ${nowMs()})
+    ON CONFLICT(actor_id) DO UPDATE SET answered = excluded.answered, detail = excluded.detail, held_at = excluded.held_at`;
+}
+
+export function refinementAnswerStored(sql: SqlExecutor, actorId: string, requestId: string): boolean {
+  return sql<{ one: number }>`SELECT 1 AS one FROM evolution_helpers
+    WHERE actor_id = ${actorId} AND lane = 'refinement' AND lane_request_id = ${requestId} AND answer_status IS NOT NULL
+    LIMIT 1`.length > 0;
+}
+
+export function releaseRefinementLane(sql: SqlExecutor, actorId: string): void {
+  void sql`DELETE FROM refinement_lane_holds WHERE actor_id = ${actorId}`;
+}
+
+const EvolutionAnswerAtSchema = v.object({ at: v.nullable(v.number()) });
+
+export function nextEvolutionAnswerAt(sql: SqlExecutor, actorId: string): number | null {
+  // A live pass finishes its own planning row.
+  const live = JSON.stringify([...liveClaims]);
+
+  const [row] = sql<{ at: number | null }>`SELECT MIN(h.created_at) AS at FROM (
+      SELECT id FROM refinement_requests WHERE actor_id = ${actorId}
+        AND (stage = 'requested' OR (stage = 'planning' AND (claim IS NULL OR claim NOT IN (SELECT value FROM json_each(${live})))))
+      ORDER BY created_at ASC, id ASC LIMIT 1
+    ) r
+    JOIN evolution_helpers h ON h.actor_id = ${actorId} AND h.lane = 'refinement' AND h.lane_request_id = r.id
+    WHERE h.answer_status IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM refinement_lane_holds hd WHERE hd.actor_id = ${actorId}
+        AND hd.answered >= (SELECT COUNT(*) FROM evolution_helpers e WHERE e.actor_id = ${actorId} AND e.answer_status IS NOT NULL))`;
+
+  return v.parse(EvolutionAnswerAtSchema, row ?? { at: null }).at;
 }
 
 export interface OpenRefinementInput {

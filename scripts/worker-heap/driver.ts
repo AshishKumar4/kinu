@@ -10,6 +10,8 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   setSoul(markdown: string): Promise<void>;
   setModel(model: string): Promise<void>;
   runTaskFromMcp(text: string): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  hostHeads(tag: string, count: number): Promise<void>;
 }
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
@@ -44,10 +46,14 @@ export class HeapDriver extends DurableObject<DriverEnv> {
   async turn(workspace: string, text: string): Promise<void> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).runTaskFromMcp(text);
   }
+
+  async heads(workspace: string, tag: string, count: number): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).hostHeads(tag, count);
+  }
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>() };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepping: false, arrived: 0, released: 0 };
 
 /** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
 export class ScriptedAI extends WorkerEntrypoint {
@@ -60,10 +66,20 @@ export class ScriptedAI extends WorkerEntrypoint {
     // Each character above U+00FF, with the text before it: one of them stores the whole request two bytes each.
     for (const match of request.matchAll(/[\u{100}-\u{10ffff}]/gu)) model.wide.add(request.slice(Math.max(0, match.index - 48), match.index + 1));
     model.parked += 1;
+    // Stepping: each call waits until the gate has read the heap at it.
+    const seq = model.stepping ? ++model.arrived : 0;
 
     // A timer is I/O to the runtime; a bare pending promise would be cancelled as a hung request.
-    while (model.holding) await scheduler.wait(20);
+    while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
     model.parked -= 1;
+
+    if (model.toolSteps > 0) {
+      model.toolSteps -= 1;
+      const call = { id: `step-${String(seq)}`, name: 'file', arguments: JSON.stringify({ action: 'stat', path: '.' }) };
+
+      return new Response(`data: ${JSON.stringify({ response: '', tool_calls: [call] })}\n\ndata: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`,
+        { headers: { 'content-type': 'text/event-stream' } });
+    }
 
     const text = 'word '.repeat(Math.ceil(model.answerBytes / 5)).slice(0, model.answerBytes);
     const frames = [];
@@ -85,10 +101,20 @@ export default {
       model.answerBytes = Number(url.searchParams.get('answerBytes') ?? model.answerBytes);
       model.holding = url.searchParams.get('holding') === '1';
 
-      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide] });
+      if (url.searchParams.has('toolSteps')) {
+        model.toolSteps = Number(url.searchParams.get('toolSteps'));
+        model.stepping = model.toolSteps > 0;
+        model.arrived = 0;
+        model.released = 0;
+      }
+
+      if (url.searchParams.has('released')) model.released = Number(url.searchParams.get('released'));
+
+      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived });
     }
 
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
+    else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
     else await driver.setUp(workspace);
 
     return new Response(null, { status: 204 });

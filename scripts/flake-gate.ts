@@ -25,6 +25,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
+import { stripGitContext } from '../packages/test-utils/src/git';
 import { runUnderDeadline } from './deadline';
 import { finding } from './gate-ratchet';
 import { GATE_DEADLINE_SECONDS, LADDER, TIERS, claims, gatesFor, narrowedTo, sharedBrowserModules, type Gate } from './ladder';
@@ -221,6 +222,22 @@ function slots(size: number): <T>(work: () => Promise<T>) => Promise<T> {
   };
 }
 
+/** Bun's implicit spawn env is its startup snapshot (ADR L10), so the test must start without hook context too.
+ *  The parent keeps that context: stagedTestFiles must still read the index the committing hook names. */
+function testEnvironment() {
+  const env: Record<string, string> = {};
+
+  for (const name of Object.keys(process.env)) {
+    const value = process.env[name];
+
+    if (value !== undefined) env[name] = value;
+  }
+
+  stripGitContext(env);
+
+  return env;
+}
+
 /** One run of a planned suite, under its row's deadline, with its JUnit report read where it writes one. */
 async function runOnce(plan: Extract<Plan, { kind: 'repeat' }>, run: number, scratch: string): Promise<RunOutcome> {
   const report = join(scratch, `${plan.file.replaceAll('/', '_')}.${String(run)}.xml`);
@@ -230,7 +247,7 @@ async function runOnce(plan: Extract<Plan, { kind: 'repeat' }>, run: number, scr
 
   const outcome = await runUnderDeadline({
     argv: spawned, cwd: root, seconds: plan.row.deadline?.seconds ?? GATE_DEADLINE_SECONDS,
-    label: `${plan.file} run ${String(run)}`, stdio: 'pipe',
+    label: `${plan.file} run ${String(run)}`, stdio: 'pipe', env: testEnvironment(),
   });
 
   const xml = junit ? tolerate(() => readFileSync(report, 'utf8'), 'enoent') : undefined;
@@ -411,7 +428,7 @@ export async function sweepRun(batch: SweepBatch, seed: number, scratch: string,
 
   const outcome = await runUnderDeadline({
     argv: spawned, cwd: root, seconds: batch.row.deadline?.seconds ?? GATE_DEADLINE_SECONDS,
-    label: `${batch.row.label} under seed ${String(seed)}`, stdio: 'pipe',
+    label: `${batch.row.label} under seed ${String(seed)}`, stdio: 'pipe', env: testEnvironment(),
   });
 
   const xml = junit ? tolerate(() => readFileSync(report, 'utf8'), 'enoent') : undefined;
