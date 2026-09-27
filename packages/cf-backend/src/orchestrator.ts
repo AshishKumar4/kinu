@@ -30,7 +30,7 @@ import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareView
 import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
-import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
+import { agentArtifactDirectory, agentHome, MAIN_AGENT, subordinateReportDedupeKey } from '@kinu.run/core';
 import { TRANSCRIPT_WINDOW, type ChatWire } from './chat-transport';
 import { DELEGATION_LANE_FIBER } from './fiber-recovery';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
@@ -1148,13 +1148,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ).toArray().length > 0;
   }
 
-  /** A lease from before this activation lost its runner; effects dedupe on rerun. */
+  /** A dead activation's lease re-runs unless its report already reached the parent. */
   private rependDeadActivationLeases(): void {
-    const rows = this.boundExec().exec(
-      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
-       WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
-         AND consumed_at IS NOT NULL AND consumed_at < ?
-       RETURNING id`,
+    const exec = this.boundExec();
+
+    const leased = `kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
+      AND consumed_at IS NOT NULL AND consumed_at < ?`;
+
+    exec.exec(
+      `UPDATE agent_log SET consumed_at = NULL WHERE ${leased} AND EXISTS (SELECT 1 FROM agent_log report
+         WHERE report.actor_id = (SELECT parent_actor_id FROM workspace_actors WHERE actor_id = agent_log.actor_id)
+           AND report.dedupe_key = ? || agent_log.id)`,
+      this.activationStartedAt, subordinateReportDedupeKey(''),
+    );
+
+    const rows = exec.exec(
+      `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL WHERE ${leased} RETURNING id`,
       this.activationStartedAt,
     ).toArray();
 
