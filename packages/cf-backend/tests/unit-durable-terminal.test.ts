@@ -272,8 +272,8 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const decayOne = { upserts: [], decay: ['deploy_target'] };
     // The answer a first attempt persisted, with the lane on: the state the replay reads.
     workspaceMainActor(harness.db).config.setSleepTimeComputeEnabled(true);
-    harness.db.prepare('INSERT INTO sleep_time_updates (effect_key, update_json, created_at) VALUES (?, ?, ?)')
-      .run('a-decay', JSON.stringify(decayOne), Date.now());
+    harness.db.prepare('INSERT INTO sleep_time_updates (effect_key, update_json) VALUES (?, ?)')
+      .run('a-decay', JSON.stringify(decayOne));
     turns(harness).open('u-decay');
 
     harness.db.exec(`CREATE TRIGGER probe_block_sleep_tombstone

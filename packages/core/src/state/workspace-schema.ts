@@ -83,7 +83,6 @@ function initCompactionStateTables(execRaw: RawSqlExec): void {
       actor_id        TEXT NOT NULL,
       session_key     TEXT NOT NULL,
       range_hash      TEXT NOT NULL,
-      path            TEXT NOT NULL,
       start_turn      INTEGER NOT NULL,
       end_turn        INTEGER NOT NULL,
       user_turns      INTEGER NOT NULL,

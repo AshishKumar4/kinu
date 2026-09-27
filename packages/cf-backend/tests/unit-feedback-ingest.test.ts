@@ -18,7 +18,6 @@ import {
   FEEDBACK_MAX_REQUEST_BYTES,
   FEEDBACK_MAX_ROUTE_CHARS,
   FEEDBACK_MAX_SCREENSHOT_BYTES,
-  FEEDBACK_MAX_USER_AGENT_CHARS,
   type FeedbackRecord,
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
@@ -505,16 +504,13 @@ describe('what the endpoint stores', () => {
       route: '/workspace/checkout-fixes',
       workspace: 'checkout-fixes',
       objectKey: null,
-      contentType: null,
       bytes: null,
-      userAgent: null,
     }]);
   });
 
   test('a screenshot report writes R2 under the user’s prefix, then the row that points at it', async () => {
     const rec = recorder();
     const request = submit({ note: 'here', route: '/mcts/checkout-fixes', workspace: 'checkout-fixes', screenshot: pngPart(realPng()) });
-    request.headers.set('user-agent', 'Mozilla/5.0 (probe)');
     const response = await answerFeedback(request, ME, rec.deps);
 
     expect(response?.status).toBe(201);
@@ -522,9 +518,7 @@ describe('what the endpoint stores', () => {
     expect([...rec.objects.keys()]).toEqual([key]);
     expect(rec.rows[0]).toMatchObject({
       objectKey: key,
-      contentType: 'image/png',
       bytes: rec.objects.get(key)?.length,
-      userAgent: 'Mozilla/5.0 (probe)',
       workspace: 'checkout-fixes',
     });
   });
@@ -546,11 +540,9 @@ describe('what the endpoint stores', () => {
   test('over-long text is clamped at the edge, not rejected', async () => {
     const rec = recorder();
     const request = submit({ note: 'n'.repeat(FEEDBACK_MAX_NOTE_CHARS + 500), route: `/workspace/${'s'.repeat(900)}` });
-    request.headers.set('user-agent', 'u'.repeat(900));
     await answerFeedback(request, ME, rec.deps);
     expect(rec.rows[0]?.note.length).toBe(FEEDBACK_MAX_NOTE_CHARS);
     expect(rec.rows[0]?.route.length).toBe(FEEDBACK_MAX_ROUTE_CHARS);
-    expect(rec.rows[0]?.userAgent?.length).toBe(FEEDBACK_MAX_USER_AGENT_CHARS);
   });
 
   test('an absent workspace field is null rather than an empty string', async () => {

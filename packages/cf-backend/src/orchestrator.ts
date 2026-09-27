@@ -2209,10 +2209,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       craft_usage: terminalEffect({
         input: v.object({ messageId: v.string(), toolNames: v.array(v.string()) }),
         run: ({ messageId, toolNames }) => {
-          void this.sql`INSERT INTO turn_craft_usage (actor_id, message_id, tool_names, created_at)
-                   VALUES (${this.actorHandle().actorId}, ${messageId}, ${JSON.stringify(toolNames)}, ${Date.now()})
-                   ON CONFLICT(actor_id, message_id) DO UPDATE SET
-                     tool_names = excluded.tool_names, created_at = excluded.created_at`;
+          void this.sql`INSERT INTO turn_craft_usage (actor_id, message_id, tool_names)
+                   VALUES (${this.actorHandle().actorId}, ${messageId}, ${JSON.stringify(toolNames)})
+                   ON CONFLICT(actor_id, message_id) DO UPDATE SET tool_names = excluded.tool_names`;
 
           return { status: 'completed' };
         },
@@ -2515,8 +2514,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private persistSleepTimeUpdate(key: string, update: SleepTimeUpdate): void {
-    void this.sql`INSERT INTO sleep_time_updates (effect_key, update_json, created_at)
-      VALUES (${key}, ${JSON.stringify(update)}, ${Date.now()})
+    void this.sql`INSERT INTO sleep_time_updates (effect_key, update_json)
+      VALUES (${key}, ${JSON.stringify(update)})
       ON CONFLICT(effect_key) DO NOTHING`;
   }
 
@@ -2836,22 +2835,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       actor_id   TEXT NOT NULL,
       message_id TEXT NOT NULL,
       feedback   TEXT NOT NULL CHECK (feedback IN ('positive','negative')),
-      created_at INTEGER NOT NULL,
       PRIMARY KEY (actor_id, message_id)
     )`);
     // Persisting the paid-for answer between model call and fact mutation makes a replay
     // apply the same update instead of buying another.
     execRaw(`CREATE TABLE IF NOT EXISTS sleep_time_updates (
       effect_key  TEXT PRIMARY KEY,
-      update_json TEXT NOT NULL,
-      created_at  INTEGER NOT NULL
+      update_json TEXT NOT NULL
     )`);
     // Same per-actor key as turn_feedback: the thumbs re-score reads this table.
     execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
       actor_id   TEXT NOT NULL,
       message_id TEXT NOT NULL,
       tool_names TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
       PRIMARY KEY (actor_id, message_id)
     )`);
     // Owned by this root: the container is the workspace's; subordinates ride their parent's.
@@ -3665,11 +3661,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       throw new KinuError('bad_input', `feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
     }
 
-    void this.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
-             VALUES (${this.actorHandle().actorId}, ${messageId}, ${feedback}, ${Date.now()})
-             ON CONFLICT(actor_id, message_id) DO UPDATE SET
-               feedback   = excluded.feedback,
-               created_at = excluded.created_at`;
+    void this.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback)
+             VALUES (${this.actorHandle().actorId}, ${messageId}, ${feedback})
+             ON CONFLICT(actor_id, message_id) DO UPDATE SET feedback = excluded.feedback`;
 
     let rescored = 0;
 
