@@ -31,7 +31,7 @@ const ExecRatioSpecSchema = v.strictObject({
   reference: v.pipe(
     v.string(), v.minLength(1),
     v.includes(REFERENCE_SOLVE_DECLARATION,
-      'must declare `export function solve(input, oracle)` — the harness calls it by that name'),
+      'must declare `export function solve(input, oracle)`: the harness calls it by that name'),
   ),
   body: v.pipe(v.string(), v.minLength(1)),
   targetOps: v.pipe(v.number(), v.finite()),
@@ -80,7 +80,7 @@ const EXEC_RATIO: VerifierKindEntry = {
         if (!m.correct) {
           return {
             kind: 'unmeasurable',
-            detail: `wrong answer at ${String(m.candOps)} oracle calls — correctness gates the `
+            detail: `wrong answer at ${String(m.candOps)} oracle calls: correctness gates the `
               + 'measurement, so an incorrect answer has no cost worth comparing however cheap it was',
             measured,
           };
@@ -151,7 +151,7 @@ export function resolveVerifier(source: VerifierSpec): ResolvedVerifier | SwarmR
       error: refusalOf(new KinuError(
         'bad_input',
         `\`spec\` does not describe a "${kind}" measurement: ${bound.issues}. Every field is `
-        + 'required — one that is missing is a quantity the floor and its margin checks '
+        + 'required: one that is missing is a quantity the floor and its margin checks '
         + 'would otherwise have to invent.',
       )).error,
     };

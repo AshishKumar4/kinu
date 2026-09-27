@@ -64,7 +64,7 @@ function buildComponents(components: WorkspaceComponents) {
     // so fail loudly; running surfaces use createCLIRuntime's real spawner.
     spawnBranch: () => {
       throw new Error(
-        'createWorkspace\'s birth runtime does not implement spawnBranch — it is for creating a '
+        'createWorkspace\'s birth runtime does not implement spawnBranch: it is for creating a '
         + 'workspace, not for running one. Open the workspace with openWorkspaceCLI (which builds '
         + 'createCLIRuntime) to get a real branch spawner. Returning a stub result here would be '
         + 'indistinguishable from a real exploration to every consumer.',

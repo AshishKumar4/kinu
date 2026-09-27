@@ -200,7 +200,7 @@ export async function runSwarm(
 
   if (scheduler === null) {
     return unsupported('advance:"pareto" orders its frontier by the axes an instanced or vector '
-      + `objective declares, and this run resolved none — score:"${resolved.config.score.kind}" `
+      + `objective declares, and this run resolved none: score:"${resolved.config.score.kind}" `
       + 'measures nothing a front could be ordered by, so every selection would return no node '
       + 'and the run would settle empty. Give it an instanced or vector `objective` with '
       + 'score:"verify", or select with advance:"uct".');

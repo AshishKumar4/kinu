@@ -290,7 +290,7 @@ describe('what the model is told', () => {
     const status = await fleet.userDO.deviceRuntimeStatus(fleet.workspace);
 
     // Refusal names the roster's connected machines in roster order, taken from the snapshot.
-    const expected = `name the machine this command runs on — connected: ${
+    const expected = `name the machine this command runs on: connected: ${
       connectedDevices(status.devices).map((d) => `${d.name} (${d.os})`).join(', ')
     }. Pass it as device: "<name>".`;
 

@@ -50,7 +50,7 @@
  *     [--quiet-wait=<s>] [--shared-wait=<s>]
  */
 
-import { existsSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { tolerate } from '@kinu.run/core/obs';
@@ -351,16 +351,20 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
   const loadAtStart = Number(readFileSync('/proc/loadavg', 'utf8').split(' ')[0]);
   const started = performance.now();
 
-  const child = Bun.spawn([
-    'setsid',
-    'timeout', '--signal=TERM', `--kill-after=${String(KILL_AFTER_SECONDS)}s`, String(request.deadline),
-    '/usr/bin/time', '-v', '-o', request.rusagePath,
-    'bash', '-c', request.run,
-  ], {
-    cwd: root,
-    stdout: Bun.file(request.logPath),
-    stderr: Bun.file(request.logPath),
-  });
+  // One open file description shares its offset; opening the path twice overwrites one stream with the other.
+  const log = openSync(request.logPath, 'w');
+  let child: ReturnType<typeof Bun.spawn>;
+
+  try {
+    child = Bun.spawn([
+      'setsid',
+      'timeout', '--signal=TERM', `--kill-after=${String(KILL_AFTER_SECONDS)}s`, String(request.deadline),
+      '/usr/bin/time', '-v', '-o', request.rusagePath,
+      'bash', '-c', request.run,
+    ], { cwd: root, stdout: log, stderr: log });
+  } finally {
+    closeSync(log);
+  }
 
   let peakPssKb = 0;
   let peakRunnable = 0;
@@ -485,6 +489,7 @@ if (import.meta.main) {
   const sharedWaitSeconds = Number(process.argv.find((argument) => argument.startsWith('--shared-wait='))?.slice('--shared-wait='.length) ?? 2_700);
   const contended: string[] = [];
   const skipped: string[] = [];
+  const failed: string[] = [];
   const scripts = packageScripts();
   const tracked = trackedTestFiles();
   console.log(`measuring ${String(rows.length)} row(s) alone on ${machine}, MemAvailable ${String(memAvailableMb())} MiB`);
@@ -543,7 +548,11 @@ if (import.meta.main) {
       dumpMembers,
     });
 
-    measured[gate.run] = cost;
+    // A run that failed stopped early, so its figure is short by whatever it never ran: it is
+    // reported and not recorded, and the row keeps what it had.
+    if (cost.exit === 0) measured[gate.run] = cost;
+    else failed.push(`${gate.label} — exit ${String(cost.exit)}, log ${join(scratch, `${String(index)}.log`)}`);
+
     // Written after EVERY row, so a sweep stopped halfway keeps what it measured.
     writeCosts({ measuredAt: today, machine, method: COST_METHOD, rows: measured });
 
@@ -574,5 +583,12 @@ if (import.meta.main) {
     console.log(`  ${String(skipped.length)} row(s) NOT measured — another checkout held a resource they need:`);
 
     for (const line of skipped) console.log(`    ${line}`);
+  }
+
+  if (failed.length > 0) {
+    console.log(`  ${String(failed.length)} row(s) NOT recorded — the run failed, so its figure is not the row's cost:`);
+
+    for (const line of failed) console.log(`    ${line}`);
+    process.exitCode = 1;
   }
 }

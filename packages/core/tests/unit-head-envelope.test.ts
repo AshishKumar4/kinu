@@ -19,7 +19,7 @@ import type { HostedNodeSeat } from '../src/strategy/node-agent';
 async function hostedHead(): Promise<HostedNodeSeat> {
   const { rt, testSql } = createTestRuntime();
 
-  return hostedSeatsOver({ rt, db: testSql.db }).seat('head-envelope', 'head');
+  return hostedSeatsOver({ rt, db: testSql.db }).seat('head-envelope', 'run');
 }
 
 describe('deriveChildBudget', () => {
@@ -80,7 +80,7 @@ function loopInput(budget: Partial<HeadBudget> = {}): HeadInput {
     inheritedContext: [{ id: 'm1', role: 'user', content: 'go', createdAt: 1 }],
     budget: { maxDepth: 0, spawnedAt: Date.now(), ...budget },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('head'),
+    loop: defaultLoopOrigin('run'),
   };
 }
 

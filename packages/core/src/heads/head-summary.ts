@@ -83,7 +83,7 @@ export function synthesizeHeadSummary(opts: {
   const parts: string[] = [];
 
   if (opts.decisions.length) {
-    parts.push("Decisions: " + opts.decisions.map((d) => `${d.question} → ${d.choice}`).join("; "));
+    parts.push("Decisions: " + opts.decisions.map((d) => `${d.question}: ${d.choice}`).join("; "));
   }
 
   if (opts.evidence.length) {

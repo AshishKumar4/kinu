@@ -99,9 +99,14 @@ export interface Violation {
   readonly specifier: string;
 }
 
-/** Walk the client graph. Returns one violation per distinct forbidden edge,
- *  each carrying the entry-to-edge chain that loads it. */
-export function findViolations(sources: ReadonlyMap<string, string>, entries: readonly string[]): Violation[] {
+/** Every module a walk loaded, and each forbidden edge with its chain. */
+interface ClientWalk {
+  readonly modules: ReadonlySet<string>;
+  readonly violations: readonly Violation[];
+}
+
+/** Walk the graph from `entries` by runtime edges. */
+function walkClient(sources: ReadonlyMap<string, string>, entries: readonly string[]): ClientWalk {
   if (entries.length === 0) throw new Error(`${GATE}: no client entry — a gate that walks no entry cannot fail`);
 
   for (const entry of entries) {
@@ -132,7 +137,9 @@ export function findViolations(sources: ReadonlyMap<string, string>, entries: re
   };
 
   const violations: Violation[] = [];
+  const modules = new Set<string>();
   walkModules(entries, (file, chain) => {
+    modules.add(file);
     const paths: { path: string; line: number }[] = [];
 
     for (const edge of runtimeEdges(of(file))) {
@@ -156,7 +163,17 @@ export function findViolations(sources: ReadonlyMap<string, string>, entries: re
     return paths;
   });
 
-  return violations.sort((a, b) => a.specifier.localeCompare(b.specifier)
+  return { modules, violations };
+}
+
+/** Every module `entries` load at runtime, by the walk this gate makes. */
+export function runtimeModules(sources: ReadonlyMap<string, string>, entries: readonly string[]): ReadonlySet<string> {
+  return walkClient(sources, entries).modules;
+}
+
+/** One violation per distinct forbidden edge, each carrying the entry-to-edge chain that loads it. */
+export function findViolations(sources: ReadonlyMap<string, string>, entries: readonly string[]): Violation[] {
+  return [...walkClient(sources, entries).violations].sort((a, b) => a.specifier.localeCompare(b.specifier)
     || a.chain.join('').localeCompare(b.chain.join('')));
 }
 

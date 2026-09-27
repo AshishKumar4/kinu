@@ -216,7 +216,7 @@ export function renderFactsBlock(facts: Fact[], opts: { maxChars?: number } = {}
   }
 
   if (shown < facts.length) {
-    lines.push(`# …and ${facts.length - shown} more facts not shown — memory recall reads any key`);
+    lines.push(`# ...and ${facts.length - shown} more facts not shown: memory recall reads any key`);
   }
 
   return lines.join('\n');

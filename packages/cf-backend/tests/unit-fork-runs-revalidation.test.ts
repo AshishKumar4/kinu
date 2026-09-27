@@ -10,7 +10,7 @@ import {
   hasActiveForkWork, selectForkRun, forkParamRows, unexplainedForkRoots,
 } from '../src/components/surfaces/fork-runs';
 import { explorationForkTree } from '@kinu.run/core';
-import { isCompeted, principalVariation, maxVisits } from '@kinu.run/core';
+import { isCompeted, principalVariation, maxVisits } from '@kinu.run/core/swarm-view';
 import { present } from '@kinu.run/test-utils';
 
 function summary(over: Partial<ForkRunSummary> = {}): ForkRunSummary {

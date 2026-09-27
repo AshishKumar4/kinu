@@ -147,12 +147,12 @@ function openedNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
   const what = rows.length === 1 && single !== undefined ? `${single.probe} is failing` : `${rows.length} checks are failing`;
 
   const body = [
-    `${deps.origin} — synthetic monitoring found a problem.`,
+    `${deps.origin}: synthetic monitoring found a problem.`,
     '',
-    ...rows.map((row) => `• ${row.probe}: ${row.detail}`),
+    ...rows.map((row) => `- ${row.probe}: ${row.detail}`),
     '',
     'What this means for a user right now:',
-    ...rows.map((row) => `• ${row.probe}: ${IMPACT.get(row.probe) ?? 'this check is part of the public surface.'}`),
+    ...rows.map((row) => `- ${row.probe}: ${IMPACT.get(row.probe) ?? 'this check is part of the public surface.'}`),
     '',
     ...rows.some((row) => !row.probe.startsWith(FLEET_PROBE_PREFIX)) ? SITE_ADVICE : [],
     ...rows.some((row) => row.probe.startsWith(FLEET_PROBE_PREFIX)) ? FLEET_ADVICE : [],
@@ -175,9 +175,9 @@ function recoveredNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
     subject: `Health: ${what}`,
     key: argumentDigest({ kind: 'recovered', rows: rows.map((r) => [r.probe, r.opened_at]) }),
     text: [
-      `${deps.origin} — the checks below are passing again.`,
+      `${deps.origin}: the checks below are passing again.`,
       '',
-      ...rows.map((row) => `• ${row.probe}: was failing for ${duration(deps.now - row.opened_at)}`
+      ...rows.map((row) => `- ${row.probe}: was failing for ${duration(deps.now - row.opened_at)}`
         + ` across ${row.failures} check${row.failures === 1 ? '' : 's'}`),
     ].join('\n'),
   };

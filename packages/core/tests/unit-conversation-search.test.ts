@@ -110,7 +110,7 @@ describe('ConversationSearchStore.scroll', () => {
     const full = present(await store.scroll(id, 5, 10_000), 'the untruncated window');
 
     expect(capped.messages[0].content).toContain('x'.repeat(700));
-    expect(capped.messages[0].content).toContain('[+4300 chars — pass max_chars to read the full message]');
+    expect(capped.messages[0].content).toContain('[+4300 chars: pass max_chars to read the full message]');
     expect(full.messages[0].content).toBe('x'.repeat(5000));
   });
 });

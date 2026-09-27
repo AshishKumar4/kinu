@@ -241,7 +241,7 @@ export {
 } from './evolution/session-window';
 
 export {
-  buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog,
   executeChangelogRevert, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
   type ChangelogRevertAction,
@@ -1438,17 +1438,6 @@ export {
   type PlatformQuantity,
 } from './platform-catalog';
 
-// Terminal chrome vocabulary, shared so depictions of the TUI cannot drift.
-export {
-  CHANGE_KIND_GLYPH,
-  composerVisibleRows,
-  TUI_ADVERTISED_PRESET_BINDINGS,
-  TUI_ADVERTISED_HINTS,
-  TUI_COMPOSER_PLACEHOLDER,
-  TUI_COMPOSER_STEERING_PLACEHOLDER,
-  TUI_MARKS,
-} from './tui-presentation';
-
 // Safety
 export {
   reviewCommand,
@@ -2276,13 +2265,6 @@ export {
   createPlanAnnotationSaveQueue, type PlanAnnotationSaveQueue,
 } from './plans/plan-annotation-save';
 
-export {
-  swarmResolutionOf, swarmAxisRows, fanInArity, fanInVertices, nodeRationales,
-  runRefusal, runLiveness, formatEvidenceValue,
-  type SwarmAxis, type SwarmAxisRow, type SwarmResolution, type RunRefusal,
-  type RunLevel, type RunLiveness,
-} from './read-models/swarm-resolution';
-
 export { terminalChatError, type ChatTurnError, type TerminalFrame } from './utils/chat-turn-error';
 
 export {
@@ -2308,28 +2290,6 @@ export {
   type WorkersAIOptions,
   createWorkersAIProvider,
 } from './providers/workers-ai-provider';
-
-export {
-  scoreBand,
-  type ExplorerSelection,
-  cleanNodeLabel,
-  clipToWidth,
-  isCompeted,
-  principalVariation,
-  ancestorIds,
-  findForkNode,
-  terminalForkNode,
-  treeStats,
-  maxVisits,
-  subtreeCount,
-  losingBranchIds,
-  NODE_R_MAX,
-  NODE_R_UNSCORED,
-  nodeRadius,
-  linkWidth,
-  LABEL_MIN_SCALE,
-  viewNoteFor,
-} from './read-models/swarm-tree-model';
 
 export {
   type AnyToolPart,
@@ -2430,18 +2390,6 @@ export {
   normalizeModelMenu,
   contextWindowForSpec,
 } from './providers/model-menu';
-
-export {
-  modelDisplayName,
-  formatContextUsage,
-} from './tui/context-status';
-
-export {
-  clipText,
-  terminalText,
-  literalText,
-  agentDisplayLabel,
-} from './tui/format';
 
 export {
   ESC_ESC_BEAT_MS,

@@ -3,7 +3,8 @@
  * The transport writes no row: the loop does, when it opens the turn or lands the splice.
  */
 import { describe, expect, test } from 'bun:test';
-import type { UIMessage, UIMessageChunk } from 'ai';
+import { Chat } from '@ai-sdk/react';
+import { DefaultChatTransport, type UIMessage, type UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { AwaitedList, createTestSql } from '@kinu.run/test-utils';
 import { INTERRUPTED_TURN, type SendLanding, type SessionEvent } from '@kinu.run/core';
@@ -36,10 +37,10 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   let clears = 0;
   const connections = new Map<string, Connection>();
   const frames = new Map<string, string[]>();
-  /** Everything a socket was handed, in order: its own sends and each broadcast that did not exclude it. */
+  /** Everything a socket was handed, in order: its sends and broadcasts that included it. */
   const received = new Map<string, string[]>();
 
-  /** A socket the SDK's protocol helpers can drive; every other platform-socket member throws, so a reach past them names itself. */
+  /** Drivable by the SDK's protocol helpers; any other member throws, naming itself. */
   const connection = (id: string): Connection => {
     const socketFrames: string[] = [];
     const heard: string[] = [];
@@ -94,7 +95,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   };
 }
 
-/** A request to an idle loop, answered once its turn has run; tests drive the turn's events, then settle the landing last. */
+/** A request to an idle loop, answered once its turn has run; the landing settles last. */
 function openRequest(landing: SendLanding | HarnessRefusal = 'turn', loadHistory?: () => Promise<UIMessage[]>) {
   const settled = Promise.withResolvers<SendLanding>();
   const h = harness(settled.promise, loadHistory);
@@ -367,8 +368,6 @@ describe('ChatWireTransport', () => {
     expect(frames[8]).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
     // The SDK packs flushed chunks into segment rows, so the count is of segments.
     expect(h.chunkRows().length).toBeGreaterThan(0);
-    expect(h.transport.answer('msg-1')).toEqual({ id: 'msg-1', role: 'assistant', parts: [{ type: 'step-start' }, { type: 'text', text: 'hello', state: 'done' }] });
-    expect(h.transport.answer('msg-1')).toBeNull();
     expect(h.broadcasts.at(-1)?.frame.type).toBe('cf_agent_chat_messages');
   });
 
@@ -391,15 +390,10 @@ describe('ChatWireTransport', () => {
     await h.transport.observe(broken, { index: 0 });
 
     expect(h.responses().at(-1)).toMatchObject({ id: 'req-1', done: false, error: true, body: expect.stringContaining('the socket under the relay closed') });
-    // The transcript persists the loop's full text, so nothing offers the partial as the row.
-    expect(h.transport.streamed('msg-1')).toBeNull();
-    expect(h.transport.answer('msg-1')).toBeNull();
-
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hello', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
 
     expect(h.responses().at(-1)).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
-    expect(h.transport.answer('msg-1')).toBeNull();
     expect(h.broadcasts.at(-1)?.frame.type).toBe('cf_agent_chat_messages');
   });
 
@@ -428,7 +422,6 @@ describe('ChatWireTransport', () => {
     expect(relayed.some((body) => body.includes('tool-input-delta'))).toBe(false);
     expect(relayed.some((body) => body.includes('never relayed'))).toBe(false);
 
-    expect(h.transport.streamed('msg-1')).toBeNull();
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'reading it', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
     expect(h.responses().at(-1)).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
@@ -486,12 +479,17 @@ describe('ChatWireTransport', () => {
     await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'first half and the rest', toolCalls: [], steps: 2, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
     await h.land(answered);
 
-    const answer = h.transport.answer('msg-1');
-    expect(answer?.id).toBe('msg-1');
-    expect(answer?.parts.filter((part) => part.type === 'text')).toEqual([
-      { type: 'text', text: 'first half', state: 'done' },
-      { type: 'text', text: ' and the rest', state: 'done' },
-    ]);
+    // 2026-09-27: `sdk-minted-2` reached the tab, whose SDK chat drew the answer twice.
+    const sse = h.responses().flatMap((frame) => frame.body === undefined || frame.body === '' ? [] : [`data: ${frame.body}\n\n`]).join('');
+
+    const tab = new Chat<UIMessage>({ transport: new DefaultChatTransport({
+      fetch: Object.assign(async () => new Response(sse, { headers: { 'content-type': 'text/event-stream', 'x-vercel-ai-ui-message-stream': 'v1' } }), { preconnect: fetch.preconnect }),
+    }) });
+
+    await tab.sendMessage({ text: 'hello' });
+    const assistant = tab.messages.filter((message) => message.role === 'assistant');
+    expect(assistant.map((message) => message.id)).toEqual(['msg-1']);
+    expect(assistant[0]?.parts.flatMap((part) => part.type === 'text' ? [part.text] : [])).toEqual(['first half', ' and the rest']);
   });
 
   test('a reconnecting client is told what is resuming and gets the stored chunks replayed', async () => {

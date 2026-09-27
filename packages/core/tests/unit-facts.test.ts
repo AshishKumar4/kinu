@@ -90,7 +90,7 @@ describe('agent_facts', () => {
     const block = renderFactsBlock(facts.recentTopK(50), { maxChars: 200 });
     const [disclosure, ...factLines] = block.split('\n').reverse();
     expect(factLines.join('\n').length).toBeLessThanOrEqual(200);
-    expect(disclosure).toMatch(/…and \d+ more facts not shown/);
+    expect(disclosure).toMatch(/\.\.\.and \d+ more facts not shown/);
   });
 
   test('renderFactsBlock empty input returns empty string', () => {

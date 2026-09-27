@@ -521,7 +521,7 @@ export function createTeamToolDeps(deps: {
       throw new KinuError(
         'bad_input',
         `subordinate "${entry.name}" is a temporary agent for one question (lifetime 'task'), `
-          + 'released by the call that asked it — assign, message and dismiss apply to durable subordinates only',
+          + 'released by the call that asked it: assign, message and dismiss apply to durable subordinates only',
       );
     }
 

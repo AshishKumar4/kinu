@@ -5,11 +5,11 @@ import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 
 import { diagnostics, renderThrownChain, settleLogged, toKinuError } from '@kinu.run/core/obs';
-import { TUI_MARKS } from '@kinu.run/core';
+import { TUI_MARKS } from '@kinu.run/core/tui';
 
 import { AGENT_HOME, canonicalProjectRoot } from '../config';
 import { agentWorkspaceKey, groupAgentWorkspaces, type ListedAgent } from '../agent-list';
-import { agentDisplayLabel, clipText } from '@kinu.run/core';
+import { agentDisplayLabel, clipText } from '@kinu.run/core/tui';
 import {
   createKeybindingRegistry,
   createKeyDispatcher,

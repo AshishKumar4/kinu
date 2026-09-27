@@ -160,7 +160,7 @@ names methods because methods outlast line numbers.
 
 Heads, swarm nodes and MCTS branches are logical actors of the one workspace
 object (`core/src/state/actor-host.ts`, hosted by
-`cf-backend/src/exploration-hosting.ts`). Their work runs inside the invocation
+`cf-backend/src/hosted-actors.ts`). Their work runs inside the invocation
 that asked for it. There is no RPC boundary, so there is no `rpc` span to open,
 and the 120 s cap on an unanswered cross-object request does not apply.
 

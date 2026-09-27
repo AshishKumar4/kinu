@@ -53,7 +53,7 @@ function toolHeavyConversation(): ModelMessage[] {
     { role: 'user', content: 'now summarize both' },
     ...toolExchange('c3', 'C'.repeat(3_000)),
     { role: 'assistant', content: 'summary of both logs.' },
-    { role: 'user', content: 'thanks — keep going' },
+    { role: 'user', content: 'thanks: keep going' },
   ];
 }
 
@@ -73,7 +73,7 @@ function visible(subjects: CompactionLadderSubjects, turns: Parameters<typeof tr
 export const COMPACTION_LAYERS: readonly Layer<CompactionLadderSubjects>[] = Object.freeze([
   {
     id: 'compaction-ladder',
-    owns: 'the @better-compact ladder that actually rewrites history — the kinu codec, plan construction, ' +
+    owns: 'the @better-compact ladder that actually rewrites history: the kinu codec, plan construction, ' +
       'the staged transform, and byte-stable snapshot replay',
     subjects: ['kinuCodec', 'buildPlan', 'transformTurns', 'replayPlanSnapshot', 'matchesPlanSnapshot'],
     probes: [
@@ -157,7 +157,7 @@ export const COMPACTION_FAULTS: readonly Fault<CompactionLadderSubjects>[] = Obj
     id: 'compaction-ladder/rewrite-regresses',
     layer: 'compaction-ladder',
     patches: ['transformTurns', 'replayPlanSnapshot'],
-    models: 'the staged transform silently no-ops and cached plans always miss — compaction stops compacting',
+    models: 'the staged transform silently no-ops and cached plans always miss: compaction stops compacting',
     inject: (s) => ({
       ...s,
       transformTurns: (turns) => turns,

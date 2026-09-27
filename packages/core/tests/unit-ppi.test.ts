@@ -375,7 +375,7 @@ describe('calibration gaps — no number rather than a wrong one', () => {
     ]);
 
     expect(result.accuracy).toBeNull();
-    expect(result.gap && describeCalibrationGap(result.gap)).toBe('uncalibrated — no hand-labeled turns yet');
+    expect(result.gap && describeCalibrationGap(result.gap)).toBe('uncalibrated: no hand-labeled turns yet');
   });
 
   test('one unlabeled verdict blocks the profile and is named', () => {

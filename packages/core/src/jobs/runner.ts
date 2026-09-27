@@ -143,13 +143,13 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
 /** Wake text differs by outcome because the agent's next action does. */
 function wakeText(job: BackgroundJob): string {
   const generation = job.resumeAttempts > 0
-    ? ` (generation ${String(job.resumeAttempts + 1)} — it was interrupted and re-driven)`
+    ? ` (generation ${String(job.resumeAttempts + 1)}: it was interrupted and re-driven)`
     : '';
 
   if (job.status === 'completed') {
     return `Background ${job.kind} job ${job.id} completed${generation}. Read the full result with `
       + `agent.jobResult('${job.id}'), then synthesize it / continue the work you backgrounded. `
-      + `The result says whether it is COMPLETE or PARTIAL — say which when you report it.`;
+      + `The result says whether it is COMPLETE or PARTIAL: say which when you report it.`;
   }
 
   // Cancelled: no result will arrive, and the agent was told to wait for one.
@@ -250,13 +250,13 @@ export class BackgroundJobRunner {
     const running = this.liveDetachedCount();
 
     if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
-      this.deps.logActivity?.('bg_job_refused', `${kind} — ${running} jobs already running`);
+      this.deps.logActivity?.('bg_job_refused', `${kind}: ${running} jobs already running`);
 
       return { detached: false, reason: 'too many jobs already running' };
     }
 
     const jobId = this.create(kind, input, mode, controller);
-    this.deps.logActivity?.('bg_job_started', `${kind} → ${jobId}`);
+    this.deps.logActivity?.('bg_job_started', `${kind} -> ${jobId}`);
     await this.beginDetachedWork(jobId, kind, promise, ownership);
 
     return { detached: true, jobId };
@@ -290,7 +290,7 @@ export class BackgroundJobRunner {
     } catch (err) {
       this.deps.logActivity?.(
         'bg_job_transfer_failed',
-        `${kind} → ${jobId}; external-work transfer was not confirmed — ${renderThrownChain({ cause: err })}`,
+        `${kind} -> ${jobId}; external-work transfer was not confirmed: ${renderThrownChain({ cause: err })}`,
       );
     }
 
@@ -392,7 +392,7 @@ export class BackgroundJobRunner {
       if (outcome.kind === 'settled') this.deps.store.settle(jobId, epoch, serializeJobResult({ value: outcome.result }), Date.now());
       else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
       this.deps.logActivity?.('bg_job_settled',
-        outcome.kind === 'settled' ? `${jobId} completed` : `${jobId} failed — ${outcome.error}`);
+        outcome.kind === 'settled' ? `${jobId} completed` : `${jobId} failed: ${outcome.error}`);
       this.notifySettled(jobId);
       await this.wake(jobId);
     };
@@ -414,22 +414,22 @@ export class BackgroundJobRunner {
     const now = Date.now();
 
     if (!harvested.ok) {
-      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR} — ${why}, and reading `
+      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR}: ${why}, and reading `
         + `what it had produced failed: ${harvested.error}`, now);
-      this.deps.logActivity?.('bg_job_bounded', `${jobId} failed unreadable — ${why}`);
+      this.deps.logActivity?.('bg_job_bounded', `${jobId} failed unreadable: ${why}`);
     } else if (harvested.value === null) {
-      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR} — ${why}, and it had `
+      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR}: ${why}, and it had `
         + 'produced no partial result to hand back', now);
-      this.deps.logActivity?.('bg_job_bounded', `${jobId} failed empty — ${why}`);
+      this.deps.logActivity?.('bg_job_bounded', `${jobId} failed empty: ${why}`);
     } else {
       this.deps.store.settle(jobId, epoch, serializeJobResult({ value: {
         partial: true,
         why: `This result is PARTIAL: ${why}. It is what the work had completed, not a `
-          + 'finished answer — say so if you use it.',
+          + 'finished answer: say so if you use it.',
         generation: (job?.resumeAttempts ?? 0) + 1,
         result: harvested.value,
       } }), now);
-      this.deps.logActivity?.('bg_job_bounded', `${jobId} settled partial — ${why}`);
+      this.deps.logActivity?.('bg_job_bounded', `${jobId} settled partial: ${why}`);
     }
 
     this.notifySettled(jobId);
@@ -510,7 +510,7 @@ export class BackgroundJobRunner {
 
     return (reason) => {
       if (reason === 'preempted') {
-        this.deps.logActivity?.('bg_job_wake_skipped', `${job.id} (${job.status}) — wake preempted; result retained`);
+        this.deps.logActivity?.('bg_job_wake_skipped', `${job.id} (${job.status}): wake preempted; result retained`);
       }
 
       this.publishWakeRetry(eventLog, scheduleDrain, job, text);
@@ -702,7 +702,7 @@ export class BackgroundJobRunner {
       if (!claim) return { state: 'none' }; // lost the race — another activation reclaimed it
       // Armed before the drive: an eviction during it cannot write the wait afterwards.
       this.deps.store.deferResume(jobId, now + recoveryBackoffMs(claim.attempts - 1));
-      this.deps.logActivity?.('bg_job_resume', `${job.kind} → ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
+      this.deps.logActivity?.('bg_job_resume', `${job.kind} -> ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
       this.driveResume(job, this.deps.resume);
 
       return { state: 'redriven', job };
@@ -721,7 +721,7 @@ export class BackgroundJobRunner {
     });
     this.deps.logActivity?.(
       'bg_job_resume_deferred',
-      `${job.kind} → ${job.id} was interrupted ${String(job.resumeAttempts)} time(s); `
+      `${job.kind} -> ${job.id} was interrupted ${String(job.resumeAttempts)} time(s); `
       + `next attempt in ${String(Math.ceil(delayMs / 1000))}s`,
     );
     await this.deps.scheduleResume?.(at);

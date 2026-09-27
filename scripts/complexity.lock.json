@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-26",
-  "files": 2775,
-  "functions": 68729,
+  "measuredAt": "2026-09-27",
+  "files": 2804,
+  "functions": 69382,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -182,10 +182,6 @@
       "complexity": 32
     },
     {
-      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 32
-    },
-    {
       "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>attachChainOnce",
       "complexity": 32
     },
@@ -287,6 +283,10 @@
     },
     {
       "key": "packages/core/src/chat.ts#ProviderCall.consume",
+      "complexity": 30
+    },
+    {
+      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 30
     },
     {

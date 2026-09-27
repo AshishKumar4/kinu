@@ -166,9 +166,23 @@ function groupMessages(messages: ModelMessage[]): ModelMessage[][] {
   return groups;
 }
 
+const HASHED = new WeakMap<ModelMessage, { readonly group: readonly ModelMessage[]; readonly hash: string }>();
+
+function groupHash(group: ModelMessage[]): string {
+  const last = group.at(-1);
+  const held = last === undefined ? undefined : HASHED.get(last);
+
+  if (held !== undefined && held.group.length === group.length && held.group.every((message, at) => message === group[at])) return held.hash;
+  const hash = contentHashKey(group);
+
+  if (last !== undefined) HASHED.set(last, { group: [...group], hash });
+
+  return hash;
+}
+
 function encodeGroup(group: ModelMessage[], claimKey: (base: string) => string): Turn {
   const first = group[0];
-  const key = claimKey(contentHashKey(group));
+  const key = claimKey(groupHash(group));
   const items: Item[] = [];
   const pendingCalls = new Map<string, ToolPairHandle>();
 

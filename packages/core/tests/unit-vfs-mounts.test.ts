@@ -181,7 +181,7 @@ describe('the workspace plane mount table', () => {
 
 			if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
 			expect(error.code).toBe('ENXIO');
-			expect(error.message).toContain('/pc — no device connected');
+			expect(error.message).toContain('/pc: no device connected');
 		}
 
 		const conditional = mounted.writeFileIfRevision?.bind(mounted);
@@ -331,7 +331,7 @@ describe('the workspace plane mount table', () => {
 
 		// A device tunnel is a presence: unavailable means absent.
 		await expect(mounted.readdir('/pc')).rejects.toMatchObject({ code: 'ENXIO' });
-		await expect(mounted.readdir('/pc')).rejects.toThrow('/pc — no device connected');
+		await expect(mounted.readdir('/pc')).rejects.toThrow('/pc: no device connected');
 		// A container is a binding: it provisions on first touch.
 		expect(await mounted.readFile('/sandbox/workspace/b.txt', { encoding: 'utf8' })).toBe('y');
 		expect(EXECUTOR_MOUNTS.device).toBe('/pc');

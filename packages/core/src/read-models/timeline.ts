@@ -148,9 +148,9 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
         detail: e.rationale || e.reason, refId: e.rootId,
       };
     case 'scaffold_promotion':
-      return { ...base, kind: 'scaffold', label: `Scaffold promoted v${e.fromVersion} → v${e.toVersion}` };
+      return { ...base, kind: 'scaffold', label: `Scaffold promoted v${e.fromVersion} -> v${e.toVersion}` };
     case 'scaffold_rollback':
-      return { ...base, kind: 'scaffold', label: `Scaffold rolled back v${e.fromVersion} → v${e.toVersion}` };
+      return { ...base, kind: 'scaffold', label: `Scaffold rolled back v${e.fromVersion} -> v${e.toVersion}` };
     case 'memory_write':
       return { ...base, kind: 'craft', label: 'Memory write', detail: `${e.path} (${e.bytes}b)` };
     case 'fiber_recovered':
