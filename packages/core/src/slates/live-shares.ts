@@ -1,7 +1,9 @@
 /** Live-share rows, separate from `slate_shares` (blueprints). `slate_viewer_requests` is the audit trail of what admission did. */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import { ShareStore, type ShareTable } from './shares';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
 import {
@@ -93,12 +95,16 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
   }
 
   recordCall(request: number, call: ViewerCall): void {
-    const row = this.db.exec('SELECT calls FROM slate_viewer_requests WHERE id = ?', request).toArray()[0];
+    return settleSync(Effect.suspend(() => {
+      const row = this.db.exec('SELECT calls FROM slate_viewer_requests WHERE id = ?', request).toArray()[0];
 
-    if (row === undefined) throw new KinuError('missing', `No viewer request ${request}`);
-    const calls = v.parse(v.array(ViewerCallSchema), JSON.parse(v.parse(v.object({ calls: v.string() }), row).calls));
-    calls.push(call);
-    this.db.exec('UPDATE slate_viewer_requests SET calls = ? WHERE id = ?', JSON.stringify(calls), request);
+      if (row === undefined) return Effect.fail(new KinuError('missing', `No viewer request ${request}`));
+      const calls = v.parse(v.array(ViewerCallSchema), JSON.parse(v.parse(v.object({ calls: v.string() }), row).calls));
+      calls.push(call);
+      this.db.exec('UPDATE slate_viewer_requests SET calls = ? WHERE id = ?', JSON.stringify(calls), request);
+
+      return Effect.void;
+    }));
   }
 
   settleRequest(request: number, outcome: string): void {

@@ -1,5 +1,7 @@
 import { eslintCompatPlugin } from "@oxlint/plugins";
 
+import { effectRestrictedApiRule } from "./rules/effect-restricted-api.ts";
+import { effectRunInAdapterRule } from "./rules/effect-run-in-adapter.ts";
 import { noAmbientGitInTestsRule } from "./rules/no-ambient-git-in-tests.ts";
 import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.ts";
 import { noElapsedWorkDeadlineRule } from "./rules/no-elapsed-work-deadline.ts";
@@ -7,6 +9,7 @@ import { noConditionalEmptyObjectSpreadRule } from "./rules/no-conditional-empty
 import { noCopyRpcStubRule } from "./rules/no-copy-rpc-stub.ts";
 import { noBareErrorInDurableObjectRule } from "./rules/no-bare-error-in-durable-object.ts";
 import { noDdlInCatchRule } from "./rules/no-ddl-in-catch.ts";
+import { noEffectSwallowRule } from "./rules/no-effect-swallow.ts";
 import { noEmptyCatchRule } from "./rules/no-empty-catch.ts";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.ts";
 import { noManufacturedSqlColumnRule } from "./rules/no-manufactured-sql-column.ts";
@@ -45,12 +48,14 @@ import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety
  * Generic Oxlint rules that reject low-evidence and low-signal implementation patterns, plus the
  * Kinu-local rules (see upstream.json's `kinuRules`): the no-swallow family,
  * no-wait-until-in-durable-object, no-copy-rpc-stub, no-untyped-console,
- * require-runtime-import-extension, and the two design-smell rules
- * no-near-duplicate-functions and no-manufactured-sql-column.
+ * require-runtime-import-extension, the two design-smell rules no-near-duplicate-functions and
+ * no-manufactured-sql-column, and the three Effect boundary rules.
  */
 const antiSlopPlugin = eslintCompatPlugin({
 	meta: { name: "anti-slop" },
 	rules: {
+		"effect-restricted-api": effectRestrictedApiRule,
+		"effect-run-in-adapter": effectRunInAdapterRule,
 		"no-ambient-git-in-tests": noAmbientGitInTestsRule,
 		"no-elapsed-work-deadline": noElapsedWorkDeadlineRule,
 		"no-chained-type-assertions": noChainedTypeAssertionsRule,
@@ -58,6 +63,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-copy-rpc-stub": noCopyRpcStubRule,
 		"no-bare-error-in-durable-object": noBareErrorInDurableObjectRule,
 		"no-ddl-in-catch": noDdlInCatchRule,
+		"no-effect-swallow": noEffectSwallowRule,
 		"no-empty-catch": noEmptyCatchRule,
 		"no-known-value-widening": noKnownValueWideningRule,
 		"no-module-mocking": noModuleMockingRule,

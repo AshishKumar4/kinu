@@ -2,6 +2,8 @@
  * Synchronous chat-send latch, acquired before any async step and released by the matching send's terminal
  * settle. React state cannot own it: two presses in one tick both read the uncommitted value.
  */
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 
 /** Tokens strictly increase, so a stale settle cannot release the latch held by a later send. */
 export interface SendLatch {
@@ -23,14 +25,11 @@ export function admitTurn(latch: SendLatch, begin: () => Promise<void>): boolean
   latch.owner = token;
   const release = (): void => { if (latch.owner === token) latch.owner = null; };
 
-  try {
-    begin().then(release, release);
-  } catch (thrown) {
-    release();
-    throw thrown;
-  }
-
-  return true;
+  return settleSync(Effect.try({ try: () => { begin().then(release, release); }, catch: (cause) => ({ cause }) }).pipe(
+    Effect.tapError(() => Effect.sync(release)),
+    Effect.catch((failed) => Effect.die(failed.cause)),
+    Effect.as(true),
+  ));
 }
 
 /** The abandoned turn's settle can no longer release it: its token is no longer the owner. */

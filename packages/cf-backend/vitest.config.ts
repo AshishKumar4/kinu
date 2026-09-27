@@ -530,6 +530,7 @@ export default defineConfig({
           STREAM_LIFECYCLE: { className: 'StreamLifecycleDO', useSQLite: true },
           FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
           COMPLEXITY_PROBE: { className: 'ComplexityProbeDO', useSQLite: true },
+          EFFECT_ATOMICITY_PROBE: { className: 'EffectAtomicityProbeDO', useSQLite: true },
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },
           SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
           SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', scriptName: 'slate-share-probe', useSQLite: true },

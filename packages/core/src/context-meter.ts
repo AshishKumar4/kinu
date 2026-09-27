@@ -7,7 +7,8 @@ import { asSchema, type ModelMessage, type SystemModelMessage, type ToolSet } fr
 import * as v from 'valibot';
 import { CHARS_PER_TOKEN } from './llm';
 import { JsonObjectSchema } from './utils/json';
-import { diagnostics, renderThrownChain } from './obs/index';
+import { Effect } from 'effect';
+import { diagnostics, renderThrownChain, settleSync } from './obs/index';
 import { DYNAMIC_CONTEXT_OPEN_TAG, splitPromptSections } from './utils/prompt-sections';
 
 /** Coarse on purpose: the four things an operator can act on. */
@@ -60,20 +61,27 @@ function isEphemeral(message: ModelMessage): boolean {
 }
 
 /** Counted as the JSON Schema the provider is sent. */
-function toolChars(name: string, def: ToolDefsLike[string]): number {
-  if (!def) return 0;
-  let schema = 0;
+function toolChars(name: string, def: ToolDefsLike[string]): Effect.Effect<number, never> {
+  if (!def) return Effect.succeed(0);
 
-  try {
-    const sent = def.inputSchema === undefined ? undefined : v.safeParse(JsonObjectSchema, asSchema(def.inputSchema).jsonSchema);
+  return Effect.map(schemaChars(def), (schema) => name.length + (def.description?.length ?? 0) + schema);
+}
 
-    if (sent?.success === false) diagnostics.event('context_meter.schema_unmeasurable', { error: 'its JSON Schema is not ready synchronously' });
-    schema = sent?.success === true ? JSON.stringify(sent.output).length : 0;
-  } catch (error) {
-    diagnostics.event('context_meter.schema_unmeasurable', { error: renderThrownChain({ cause: error }) });
-  }
+function schemaChars(def: NonNullable<ToolDefsLike[string]>): Effect.Effect<number, never> {
+  return Effect.try({
+    try: () => {
+      const sent = def.inputSchema === undefined ? undefined : v.safeParse(JsonObjectSchema, asSchema(def.inputSchema).jsonSchema);
 
-  return name.length + (def.description?.length ?? 0) + schema;
+      if (sent?.success === false) diagnostics.event('context_meter.schema_unmeasurable', { error: 'its JSON Schema is not ready synchronously' });
+
+      return sent?.success === true ? JSON.stringify(sent.output).length : 0;
+    },
+    catch: (cause) => ({ cause }),
+  }).pipe(Effect.catch((thrown) => {
+    diagnostics.event('context_meter.schema_unmeasurable', { error: renderThrownChain(thrown) });
+
+    return Effect.succeed(0);
+  }));
 }
 
 /** Segments come out in wire order: system sections, tools, then message planes. */
@@ -82,17 +90,24 @@ export function measureContext(input: {
   tools?: ToolDefsLike | undefined;
   messages: readonly ModelMessage[];
 }): ContextComposition {
+  return settleSync(Effect.map(toolSegments(input.tools ?? {}), (toolRows) => composition(input, toolRows)));
+}
+
+function toolSegments(tools: ToolDefsLike): Effect.Effect<ContextSegment[], never> {
+  return Effect.map(
+    Effect.all(Object.entries(tools).map(([name, def]) => Effect.map(toolChars(name, def), (chars): ContextSegment => ({ plane: 'tools', label: name, chars, items: 1 })))),
+    (rows) => rows.filter((row) => row.chars > 0),
+  );
+}
+
+function composition(input: Parameters<typeof measureContext>[0], toolRows: readonly ContextSegment[]): ContextComposition {
   const segments: ContextSegment[] = [];
 
   for (const section of splitPromptSections(systemText(input.system))) {
     segments.push({ plane: 'system', label: section.title, chars: section.chars, items: 1 });
   }
 
-  for (const [name, def] of Object.entries(input.tools ?? {})) {
-    const chars = toolChars(name, def);
-
-    if (chars > 0) segments.push({ plane: 'tools', label: name, chars, items: 1 });
-  }
+  segments.push(...toolRows);
 
   // Fold per role: a per-message row would be unbounded.
   const roles = new Map<string, { chars: number; items: number }>();

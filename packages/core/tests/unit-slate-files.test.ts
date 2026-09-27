@@ -3,6 +3,7 @@ import { setSystemTime } from 'bun:test';
 import type { ContentRef } from '@agent-core/core';
 import { SlateId } from '@agent-core/core/slates';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { KinuError } from '../src/obs/error';
 import { SlateFiles, slateDirectory, type SlateFileTree } from '../src/slates/files';
 import { WorkspaceSlateContentStore } from '../src/slates/content';
 import { settleWorkspaceSlates } from '../src/vfs/agent-home';
@@ -232,6 +233,39 @@ test('a fork writes the tree once and its first version reads nothing; a restore
     counts.reads = 0;
     expect(files.transaction(() => files.capture(id)).value).toBe(version.value);
     expect(counts.reads).toBe(0);
+  } finally {
+    ws.db.close();
+  }
+});
+
+test('an entry no slate source can retain fails the capture with a plain Error naming the path, as it always has', async () => {
+  const { ws, vfs, kernel, files } = await slatePlane();
+
+  try {
+    const id = new SlateId('sockets');
+    const directory = slateDirectory(id);
+    seed(vfs, directory, 1);
+    vfs.writeFile(`${directory}/src/daemon.sock`, '');
+
+    // The working tree reports a kind the slate tree has no entry for.
+    const socketed = new SlateFiles({
+      ...vfs,
+      lstat: (path) => ({ ...vfs.lstat(path), type: path.endsWith('.sock') ? 'socket' : vfs.lstat(path).type }),
+    }, new WorkspaceSlateContentStore(kernel), makeSqlExec(ws.db), (body) => body());
+
+    let thrown: unknown;
+
+    try {
+      socketed.capture(id);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).toBeInstanceOf(KinuError);
+    expect(thrown).toMatchObject({ code: 'bad_input' });
+    expect(thrown).toMatchObject({ message: 'Slate source cannot retain socket: src/daemon.sock' });
+    expect(files.transaction(() => files.capture(id))).toBeDefined();
   } finally {
     ws.db.close();
   }

@@ -23,6 +23,7 @@ import type {
 import type { DeployInputs, DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { ComplexityProbeDO } from './complexity/complexity-probe';
+import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
@@ -317,6 +318,7 @@ declare global {
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       COMPLEXITY_PROBE: DurableObjectNamespace<ComplexityProbeDO>;
+      EFFECT_ATOMICITY_PROBE: DurableObjectNamespace<EffectAtomicityProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeRpc>;
       SLATE_SHARE_PROBE: DurableObjectNamespace<SlateShareProbeRpc>;

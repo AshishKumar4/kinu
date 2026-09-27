@@ -151,7 +151,7 @@ export function withRateLimitRetry(
       if (handover) throw handedOver(limit.status, retryAfterMs);
       ownedCooldownUntil.ms = untilMs;
       warn(
-        `[kinu] ${host} rate-limited — waiting ${fmtSpan(waitMs)} `
+        `[kinu] ${host} rate-limited: waiting ${fmtSpan(waitMs)} `
         + `(attempt ${String(attempt)})`,
       );
       reportWait(waitMs, attempt, retryAfterMs !== null ? 'header' : 'backoff', limit.status);

@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import type { VFS } from '../types/primitives';
 
 /** POSIX dirname: '' for a bare name, '/' for a top-level one (a naive `lastIndexOf` slice gets both wrong). */
@@ -15,12 +17,13 @@ export function vfsBasename(path: string): string {
 
 /** Idempotent mkdir: swallows "already exists" errors; others propagate. */
 export async function ensureDir(vfs: Pick<VFS, 'mkdir'>, dir: string): Promise<void> {
-  try {
-    await vfs.mkdir(dir, { recursive: true });
-  } catch (err) {
+  return settle(Effect.tryPromise({ try: async () => { await vfs.mkdir(dir, { recursive: true }); }, catch: (cause) => ({ cause }) }).pipe(
     // A remote environment may surface EEXIST even with `recursive: true`.
-    const msg = err instanceof Error ? err.message.toLowerCase() : '';
+    Effect.catchIf(({ cause }) => {
+      const msg = cause instanceof Error ? cause.message.toLowerCase() : '';
 
-    if (!msg.includes('exist') && !msg.includes('eexist')) throw err;
-  }
+      return msg.includes('exist') || msg.includes('eexist');
+    }, () => Effect.void),
+    Effect.catch((failed) => Effect.die(failed.cause)),
+  ));
 }
