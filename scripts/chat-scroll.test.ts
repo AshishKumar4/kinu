@@ -332,11 +332,32 @@ interface Walked {
   readonly boundary: string;
 }
 
+/**
+ * The workspace chat over a long history (owner, 2026-09-26: "the user shouldn't feel pagination"). What a reader
+ * saw is read off painted frames (the CDP screencast), because the scroller's corrections run in a resize observer
+ * after `requestAnimationFrame` and before paint: a rAF sample reports a move that was never drawn.
+ */
+const LongFrameSchema = v.object({
+  realInView: v.boolean(), atStart: v.boolean(), scrollTop: v.number(), thumbPx: v.number(), anchorTop: v.nullable(v.number()),
+});
+
+type LongFrame = v.InferOutput<typeof LongFrameSchema>;
+
+interface LongChat {
+  readonly refused: string | null;
+  /** Per older page landing under a reader holding still: the painted frames from before it to after it. */
+  readonly stillReader: readonly (readonly LongFrame[])[];
+  readonly fling: readonly LongFrame[];
+  readonly reservedBeforeDrag: number;
+  readonly drag: readonly LongFrame[];
+}
+
 interface Observed {
   readonly walk: Walk;
   readonly race: Race;
   readonly broken: Broken;
   readonly walked: Walked;
+  readonly long: LongChat;
 }
 
 async function measureWalk(newPage: Gallery['newPage'], origin: string): Promise<Walk> {
@@ -461,12 +482,168 @@ async function measureWalked(newPage: Gallery['newPage'], origin: string): Promi
   }
 }
 
+const LONG = '.p-thread-column.overflow-y-auto';
+
+/** One painted frame's reading: whether any transcript row is in view, the thumb's top in track pixels, and where
+ *  the row marked `data-probe-anchor` sits in the viewport. */
+function readFrame(page: Page): Promise<LongFrame> {
+  return page.evaluate((selector) => {
+    const scroller = document.querySelector<HTMLElement>(selector);
+
+    if (scroller === null) return { realInView: false, atStart: false, scrollTop: -1, thumbPx: -1, anchorTop: null };
+
+    const box = scroller.getBoundingClientRect();
+
+    const realInView = [...scroller.children].some((row) => {
+      if (row.hasAttribute('data-scroll-edge')) return false;
+
+      const rect = row.getBoundingClientRect();
+
+      return rect.bottom > box.top && rect.top < box.bottom;
+    });
+
+    const anchor = scroller.querySelector('[data-probe-anchor]');
+
+    return {
+      realInView,
+      atStart: (scroller.textContent ?? '').includes('Beginning of the conversation'),
+      scrollTop: scroller.scrollTop,
+      thumbPx: (scroller.scrollTop / scroller.scrollHeight) * scroller.clientHeight,
+      anchorTop: anchor === null ? null : anchor.getBoundingClientRect().top - box.top,
+    };
+  }, LONG).then((raw) => v.parse(LongFrameSchema, raw));
+}
+
+/** Every frame the page paints while `drive` runs, read as it is presented. */
+async function paintedFrames(page: Page, drive: () => Promise<void>): Promise<LongFrame[]> {
+  const cdp = await page.createCDPSession();
+  const frames: LongFrame[] = [];
+  const reads: Promise<void>[] = [];
+
+  cdp.on('Page.screencastFrame', (frame) => {
+    reads.push(readFrame(page).then((read) => { frames.push(read); })
+      .then(() => cdp.send('Page.screencastFrameAck', { sessionId: frame.sessionId })));
+  });
+  await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 5, everyNthFrame: 1 });
+
+  try {
+    await drive();
+  } finally {
+    await cdp.send('Page.stopScreencast');
+    await Promise.all(reads);
+    await cdp.detach();
+  }
+
+  return frames;
+}
+
+/** Resolves on the page's next two animation frames: whatever was committed has been painted. */
+function nextPaint(page: Page): Promise<void> {
+  return page.evaluate(() => {
+    const painted = Promise.withResolvers<void>();
+
+    requestAnimationFrame(() => requestAnimationFrame(() => { painted.resolve(); }));
+
+    return painted.promise;
+  });
+}
+
+async function openLong(newPage: Gallery['newPage'], origin: string, query: string): Promise<Page> {
+  const page = await newPage();
+
+  await page.setViewport({ width: 1280, height: 860 });
+  await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=slates&slates=2&${query}`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector(LONG);
+  await page.evaluate(() => document.fonts.ready);
+  await nextPaint(page);
+
+  return page;
+}
+
+async function measureLong(newPage: Gallery['newPage'], origin: string): Promise<LongChat> {
+  const stillReader: LongFrame[][] = [];
+  let fling: LongFrame[] = [];
+  let drag: LongFrame[] = [];
+  let reservedBeforeDrag = 0;
+
+  try {
+    // Held pages: each older page lands when released, and nothing lands between a painted frame and its reading.
+    const held = await openLong(newPage, origin, 'history=2000&historyHold=1');
+
+    await held.evaluate(() => { window.dispatchEvent(new Event('gallery:release-page')); });
+    await held.waitForFunction((selector) => !(document.querySelector(selector)?.textContent ?? '').includes('Loading earlier messages'), {}, LONG);
+
+    for (let landing = 0; landing < 2; landing++) {
+      // The reader stands on a real row just below the reserve, which asks for the next page; it is held.
+      await held.evaluate((selector) => {
+        const scroller = document.querySelector<HTMLElement>(selector);
+
+        if (scroller === null) return;
+        const reserved = scroller.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0;
+
+        scroller.scrollTop = reserved + 200;
+        scroller.querySelector('[data-probe-anchor]')?.removeAttribute('data-probe-anchor');
+        const box = scroller.getBoundingClientRect();
+        const anchor = [...scroller.children].find((row) => !row.hasAttribute('data-scroll-edge') && row.getBoundingClientRect().top >= box.top + 20);
+
+        anchor?.setAttribute('data-probe-anchor', '');
+      }, LONG);
+      await nextPaint(held);
+      const before = await held.$eval(LONG, (el) => el.children.length);
+
+      stillReader.push(await paintedFrames(held, async () => {
+        await nextPaint(held);
+        await held.evaluate(() => { window.dispatchEvent(new Event('gallery:release-page')); });
+        await held.waitForFunction((selector, count) => (document.querySelector(selector)?.children.length ?? 0) > count, {}, LONG, before);
+        await nextPaint(held);
+        await nextPaint(held);
+      }));
+    }
+
+    await held.close();
+
+    // A fling up a long chat: every painted frame shows transcript, never the reserve, while history remains.
+    const flung = await openLong(newPage, origin, 'history=2000&historyLatency=250');
+
+    const box = await flung.$eval(LONG, (el) => {
+      const r = el.getBoundingClientRect();
+
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+
+    await flung.mouse.move(box.x, box.y);
+    fling = await paintedFrames(flung, async () => {
+      for (let tick = 0; tick < 90; tick++) {
+        await flung.mouse.wheel({ deltaY: -600 });
+        await nextPaint(flung);
+      }
+    });
+    await flung.close();
+
+    // The scrollbar dragged to the top: the reader stays at the top while history fills, and lands on the first row.
+    const dragged = await openLong(newPage, origin, 'history=2000&historyLatency=50');
+
+    reservedBeforeDrag = await dragged.$eval(LONG, (el) => el.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0);
+    drag = await paintedFrames(dragged, async () => {
+      await dragged.$eval(LONG, (el) => { el.scrollTop = 0; });
+      await dragged.waitForFunction((selector) => (document.querySelector(selector)?.textContent ?? '').includes('Beginning of the conversation'), {}, LONG);
+      await nextPaint(dragged);
+    });
+    await dragged.close();
+
+    return { refused: null, stillReader, fling, reservedBeforeDrag, drag };
+  } catch (err) {
+    return { refused: firstLine({ cause: err }), stillReader, fling, reservedBeforeDrag, drag };
+  }
+}
+
 async function run(): Promise<Observed> {
   return withGallery(async ({ newPage, origin }) => ({
     walk: await measureWalk(newPage, origin),
     race: await measureRace(newPage, origin),
     broken: await measureBroken(newPage, origin),
     walked: await measureWalked(newPage, origin),
+    long: await measureLong(newPage, origin),
   }));
 }
 
@@ -588,5 +765,47 @@ describe('the beginning of the conversation, said by the store', () => {
     expect(observed.walked.state?.exhausted).toBe(true);
     expect(observed.walked.state?.error).toBeNull();
     expect(observed.walked.boundary).toContain('Beginning of the conversation');
+  });
+});
+
+describe('a long workspace chat, as the reader sees it', () => {
+  test('the scenarios were measured', () => {
+    expect(observed.long.refused).toBeNull();
+    expect(observed.long.stillReader).toHaveLength(2);
+  });
+
+  // 2026-09-26: a page landing moved the row being read by 344px for one painted frame.
+  test('a reader holding still sees the row they read stay put on every painted frame as older pages land', () => {
+    for (const frames of observed.long.stillReader) {
+      const tops = frames.flatMap((frame) => frame.anchorTop === null ? [] : [frame.anchorTop]);
+
+      expect(tops.length).toBeGreaterThan(1);
+      expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(1);
+    }
+  });
+
+  test('the scrollbar thumb moves at most a few pixels as a page replaces its estimate', () => {
+    for (const frames of observed.long.stillReader) {
+      const thumbs = frames.map((frame) => frame.thumbPx);
+
+      expect(Math.max(...thumbs) - Math.min(...thumbs)).toBeLessThanOrEqual(4);
+    }
+  });
+
+  test('a fling up the history never paints a frame without transcript in it', () => {
+    expect(observed.long.fling.length).toBeGreaterThan(20);
+    expect(observed.long.fling.filter((frame) => !frame.realInView && !frame.atStart)).toEqual([]);
+  });
+
+  test('the scrollbar stands for the whole conversation: the unread history is reserved above the loaded rows', () => {
+    expect(observed.long.reservedBeforeDrag).toBeGreaterThan(100_000);
+  });
+
+  test('the thumb dragged to the top stays at the top while history fills, and the reader lands on the first row', () => {
+    const drag = observed.long.drag;
+
+    expect(drag.length).toBeGreaterThan(0);
+    expect(drag.filter((frame) => frame.scrollTop !== 0)).toEqual([]);
+    expect(drag.at(-1)).toMatchObject({ atStart: true, realInView: true });
   });
 });

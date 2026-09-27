@@ -130,7 +130,8 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 
   /** The head's ancestry, newest first, one entry per row; a cursor resumes above its entry. */
-  pageIds(request: PageRequest = {}): Page<{ readonly id: string }> {
+  /** `walked`: entries spanned, tool rows included. */
+  pageIds(request: PageRequest = {}): Page<{ readonly id: string }> & { readonly walked: number } {
     this.actor.assertCurrent();
     const limit = Math.max(1, Math.min(200, Math.floor(request.limit ?? 100)));
     const after = request.cursor?.after ?? null;
@@ -145,17 +146,26 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     }
 
     const rows: { id: string }[] = [];
+    const spans: number[] = [];
+    let read = 0;
 
     while (id !== null && rows.length <= limit) {
       const entry = this.read(id);
 
       if (entry === null) throw new KinuError('missing', 'conversation ancestry entry is missing');
+      read += 1;
 
-      if (entry.role !== 'tool') rows.push({ id: entry.id });
+      if (entry.role !== 'tool') {
+        rows.push({ id: entry.id });
+        spans.push(read);
+      }
+
       id = entry.parentId;
     }
 
-    return seekPage(rows, limit, row => row.id);
+    const page = seekPage(rows, limit, row => row.id);
+
+    return { ...page, walked: page.status === 'end' ? read : spans[limit - 1] ?? read };
   }
 
   async metadata(id: string): Promise<JsonObject | undefined> {
@@ -166,7 +176,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return result;
   }
 
-  async page(request: PageRequest = {}): Promise<Page<ConversationProjection>> {
+  async page(request: PageRequest = {}): Promise<Page<ConversationProjection> & { readonly walked: number }> {
     const page = this.pageIds(request);
     const items: ConversationProjection[] = [];
 

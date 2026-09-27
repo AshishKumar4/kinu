@@ -305,7 +305,7 @@ function HistoryBoundaryNotice({ loading, error, exhausted, onRetry }: HistoryBo
       <>
         <WarningCircleIcon size={13} className="p-danger shrink-0" />
         <span className="p-text-3">Could not load earlier messages.</span>
-        <button onClick={onRetry} className="p-accent hover:underline">Retry</button>
+        <button onClick={() => { onRetry(); }} className="p-accent hover:underline">Retry</button>
       </>
     );
   }
@@ -330,7 +330,7 @@ function HistoryBoundaryNotice({ loading, error, exhausted, onRetry }: HistoryBo
 /** All four states share one height: this row sits above the prepend, so a size change shifts the transcript. */
 export function HistoryBoundary(props: HistoryBoundaryProps) {
   return (
-    <div className="flex h-7 items-center justify-center gap-2 text-xs">
+    <div data-scroll-edge="" className="flex h-7 items-center justify-center gap-2 text-xs">
       <HistoryBoundaryNotice {...props} />
     </div>
   );

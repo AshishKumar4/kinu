@@ -103,7 +103,7 @@ import type {
 import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import * as v from "valibot";
-import { galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -1520,7 +1520,12 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   getWorkspaceSnapshot: () => {
     const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get("getWorkspaceSnapshot"));
 
-    return { ...snapshot, activePlan: galleryAgentPlan, slates: gallerySlates().slates };
+    const status = v.parse(JsonObjectSchema, snapshot.status);
+
+    return {
+      ...snapshot, activePlan: galleryAgentPlan, slates: gallerySlates().slates,
+      status: HISTORY_ROWS > 0 ? { ...status, messageCount: seededGalleryChatRows() + HISTORY_ROWS } : status,
+    };
   },
   listSlates: gallerySlates,
   getActivePlanReview: () => galleryAgentPlan,
@@ -1671,7 +1676,55 @@ new MutationObserver(() => {
   galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getExposedPorts"] }));
 }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-preview-arrived", "data-sandbox-starting"] });
 
+/* `&history=N&historyLatency=ms`: N older rows, paged; `&historyHold=1` waits for `gallery:release-page`. */
+const HISTORY_ROWS = Number(new URLSearchParams(location.search).get("history") ?? 0);
+
+const HISTORY_LATENCY_MS = Number(new URLSearchParams(location.search).get("historyLatency") ?? 250);
+
+const HISTORY_HELD = new URLSearchParams(location.search).get("historyHold") === "1";
+
+const HISTORY_PICTURE = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220"><rect width="480" height="220" fill="#3a3530"/><text x="24" y="120" fill="#e8dcc4" font-size="28">chart</text></svg>')}`;
+
+function historyRow(index: number): ChatHistoryEntry {
+  const id = `hist-${String(index).padStart(5, "0")}`;
+  const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
+
+  if (index % 2 === 0) return { id, role: "user", content: `Question ${index}: what changed in the pricing guard this time?`, createdAt };
+
+  const kind = index % 10;
+  let content = `Answer ${index}. The guard now reads the campaign before it writes the cart.`;
+
+  if (kind === 1) content += "\n\n" + "A longer explanation that wraps across several lines of the column. ".repeat(6);
+  else if (kind === 3) content += "\n\n```ts\nexport function guard(cart: Cart) {\n  if (cart.coupon?.archived) throw new Error('archived');\n  return apply(cart);\n}\n```";
+  else if (kind === 5) content += `\n\n![chart ${index}](${HISTORY_PICTURE})`;
+  else if (kind === 7) content += "\n\nslate://board";
+
+  return { id, role: "assistant", content, createdAt };
+}
+
+async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
+  const request = v.parse(v.tuple([v.object({ cursor: v.optional(v.object({ after: v.string() })), limit: v.number() })]), args);
+  const { cursor, limit } = request[0];
+  const held = cursor?.after.startsWith("hist-") ? Number(cursor.after.slice(5)) : HISTORY_ROWS;
+  const from = Math.max(0, held - limit);
+  const items = Array.from({ length: held - from }, (_, offset) => historyRow(from + offset));
+  const settled = Promise.withResolvers<void>();
+
+  if (HISTORY_HELD) window.addEventListener("gallery:release-page", () => { settled.resolve(); }, { once: true });
+  else setTimeout(settled.resolve, HISTORY_LATENCY_MS);
+  await settled.promise;
+  const first = items[0];
+
+  const walked = items.length;
+
+  return from === 0 || first === undefined
+    ? { status: "end", items, walked }
+    : { status: "more", items, next: { after: first.id }, walked };
+}
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getChatHistoryPage" && HISTORY_ROWS > 0) return rpcResult(await galleryHistoryPage(args)).json<T>();
+
   const plan = galleryPlanRpc(method, args);
 
   if (plan) return rpcResult(v.parse(JsonValueSchema, plan.value)).json<T>();

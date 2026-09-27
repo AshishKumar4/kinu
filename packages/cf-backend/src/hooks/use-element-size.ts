@@ -27,11 +27,22 @@ function useObserved<T>(read: (el: HTMLDivElement) => T, initial: T, apply: (upd
 	return { attach, value };
 }
 
-const sizeOf = (el: HTMLDivElement) => ({ w: el.clientWidth, h: el.clientHeight });
+interface ElementSize { readonly w: number; readonly h: number }
 
 /** Callers must treat 0 as "not measured yet" and still render. */
 export function useElementSize() {
-	const { attach, value } = useObserved(sizeOf, { w: 0, h: 0 }, run);
+	const last = useRef<ElementSize>({ w: 0, h: 0 });
+
+	const sizeOf = useCallback((el: HTMLDivElement): ElementSize => {
+		const w = el.clientWidth;
+		const h = el.clientHeight;
+
+		if (w !== last.current.w || h !== last.current.h) last.current = { w, h };
+
+		return last.current;
+	}, []);
+
+	const { attach, value } = useObserved(sizeOf, last.current, run);
 
 	return { attach, size: value };
 }
