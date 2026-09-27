@@ -3,7 +3,12 @@ import * as v from 'valibot';
 const Named = v.pipe(v.string(), v.minLength(1));
 
 const Authority = v.variant('kind', [
-  v.object({ kind: v.literal('owner'), recordedOn: v.pipe(v.string(), v.isoDate()), reference: Named, requirement: Named }),
+  v.object({
+    kind: v.literal('owner'),
+    recordedOn: v.pipe(v.string(), v.isoDate()),
+    reference: v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/u, 'not a full commit sha')),
+    requirement: Named,
+  }),
   v.object({ kind: v.literal('spec'), standard: Named, clause: Named, reference: Named }),
 ]);
 
@@ -47,12 +52,17 @@ export const TEST_REQUIREMENTS = {
   },
 } as const satisfies Record<string, TestRequirement>;
 
+/** Whether an owner ruling's commit came before the test that cites it, so no test can cite its own commit. */
+export type Predates = (sha: string, name: string, file: string) => boolean;
+
 interface RequirementsInput {
   readonly registry: unknown;
-  readonly reads: ReadonlySet<string>;
+  /** Each requirement an assertion reads, with the files that read it. */
+  readonly reads: ReadonlyMap<string, readonly string[]>;
+  readonly predates: Predates;
 }
 
-export function judgeRequirements({ registry, reads }: RequirementsInput) {
+export function judgeRequirements({ registry, reads, predates }: RequirementsInput) {
   const parsed = v.safeParse(v.record(Named, Requirement), registry);
 
   if (!parsed.success) {
@@ -62,11 +72,13 @@ export function judgeRequirements({ registry, reads }: RequirementsInput) {
     };
   }
 
-  const names = new Set(Object.keys(parsed.output));
+  const invalid = Object.entries(parsed.output).flatMap(([name, { authority }]) => authority.kind !== 'owner' ? [] : (reads.get(name) ?? [])
+    .filter((file) => !predates(authority.reference, name, file))
+    .map((file) => `${name}.authority.reference: ${authority.reference} is no commit before ${file} read it`));
 
   return {
-    invalid: [],
-    unread: [...names].filter((name) => !reads.has(name)).sort(),
-    unknown: [...reads].filter((name) => !names.has(name)).sort(),
+    invalid,
+    unread: Object.keys(parsed.output).filter((name) => !reads.has(name)).sort(),
+    unknown: [...reads.keys()].filter((name) => !(name in parsed.output)).sort(),
   };
 }

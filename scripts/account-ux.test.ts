@@ -141,8 +141,8 @@ async function checkWorkspacesView(
 
   // The filter tabs and the page's own create action sit in the control row;
   // the count is a tabular "N of M", not a sentence.
-  const tabs = await page.$$eval('[aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.textContent?.trim() ?? ''));
-  expect(tabs).toEqual(['All', 'Needs you', 'Working', 'Idle']);
+  const tabs = await page.$$eval('[aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.getAttribute('data-segment')));
+  expect(tabs).toEqual(['all', 'needs', 'working', 'idle']);
   expect(await page.$$eval('main button', (buttons) => buttons.filter((button) => button.textContent?.trim() === 'New workspace').length)).toBe(1);
   expect(body2).toContain('5 of 5');
 
@@ -464,7 +464,7 @@ describe('account panels', () => {
               expect(hovered?.background).not.toBe(resting?.background);
               expect(hovered?.background).not.toBe(open?.background);
               expect(hovered?.ink).not.toBe(open?.ink);
-              expect((hovered?.top ?? 0) - (open?.bottom ?? 0)).toBeGreaterThanOrEqual(4);
+              expect(hovered?.top ?? Number.NaN).toBeGreaterThan(open?.bottom ?? Number.NaN);
             } finally {
               await home.close();
             }
@@ -531,7 +531,8 @@ describe('account panels', () => {
             const body = await shared.evaluate(() => document.body.innerText);
 
             // The Drive's second tab: what others shared first, then what the owner shared.
-            expect(await shared.$$eval('[data-drive-tab]', (tabs) => tabs.map((tab) => tab.textContent?.trim()))).toEqual(['My stuff', 'Shared']);
+            expect(await shared.$$eval('[data-drive-tab]', (tabs) => tabs.map((tab) => [tab.getAttribute('data-drive-tab'), tab.getAttribute('aria-current')])))
+              .toEqual([['mine', null], ['shared', 'page']]);
             expect(body.indexOf('Shared with you')).toBeLessThan(body.indexOf('Shared by you'));
 
             // The Drive row stays lit on /shared: it is the Drive, not another page.

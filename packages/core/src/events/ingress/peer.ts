@@ -334,7 +334,7 @@ export class PeerHub {
     if (!channel) {
       return {
         ok: false,
-        error: `no open peer reply channel for event ${input.eventId} — already answered, expired, or the sender did not ask for a reply`,
+        error: `no open peer reply channel for event ${input.eventId}: already answered, expired, or the sender did not ask for a reply`,
       };
     }
 

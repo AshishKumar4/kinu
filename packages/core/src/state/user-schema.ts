@@ -64,7 +64,7 @@ export function initUserTables(sql: SqlExec): void {
       -- that is still running keeps the name and one whose source DIED stops
       -- holding it: without this a mid-transfer eviction wedged a name that no
       -- roster read could see and no retry could take back. NULL once the row
-      -- is a published workspace — nothing is streaming into it any more.
+      -- is a published workspace: nothing is streaming into it any more.
       fork_lease_expires_at INTEGER
     )
   `);

@@ -136,7 +136,7 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
 
   // Only addressing mistakes get the roots hint; other errors carry their own reason.
   const hint = err.code === 'ENOENT' || err.code === 'EISDIR'
-    ? ` — ${await vfsAddressingHint(vfs, 'the `file` tool\'s path')}`
+    ? `: ${await vfsAddressingHint(vfs, 'the `file` tool\'s path')}`
     : '';
 
   return { reason, error: `${err.message}${hint}` };
@@ -207,7 +207,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
       case 'stale':
         return { reason: 'stale', refusal:
           `${path} changed since you read it. Read it again (action=read path=${path}) before you ` +
-          (action === 'edit' ? 'edit it — the text you are matching may have moved.' : 'replace it, so you know what you are discarding.') };
+          (action === 'edit' ? 'edit it: the text you are matching may have moved.' : 'replace it, so you know what you are discarding.') };
       case 'never':
         return { reason: 'unread', refusal:
           `${path} has not been read here yet, so ${action === 'edit' ? 'editing' : 'overwriting'} it would be blind. ` +

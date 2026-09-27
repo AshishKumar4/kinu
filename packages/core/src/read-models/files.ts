@@ -428,13 +428,13 @@ export async function readExecutorFile(
     const inlineType = inlineFileType(path);
 
     if (inlineType !== undefined) {
-      return { error: `${inlineType} is not text — this file is shown and downloaded as bytes` };
+      return { error: `${inlineType} is not text: this file is shown and downloaded as bytes` };
     }
 
     const window = stat === null ? RESIDENT_TEXT_MAX_BYTES : Math.min(stat.size, RESIDENT_TEXT_MAX_BYTES);
     const bytes = await readBoundedWithVfsOps(vfs, path, window, stat?.size ?? null);
 
-    if (bytes.includes(0)) return { error: 'binary file — not previewable' };
+    if (bytes.includes(0)) return { error: 'binary file, not previewable' };
 
     const result: ExecutorTextFile = {
       content: new TextDecoder().decode(bytes),

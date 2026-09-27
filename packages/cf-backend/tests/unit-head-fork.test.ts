@@ -80,7 +80,7 @@ async function hostedHead(files: Record<string, string> = {}, id = 'head-1', use
     if (!written.ok) throw new Error(`the fixture could not seed ${path}`);
   }
 
-  const head = await hostedExplorationHarness(workspace, 'head', id);
+  const head = await hostedExplorationHarness(workspace, 'full', id);
   const rt = head.actor.runtime;
 
   if (!isCFRuntime(rt)) throw new Error('the hosted head did not receive a CF runtime');

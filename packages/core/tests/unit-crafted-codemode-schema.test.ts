@@ -50,7 +50,7 @@ function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'cr
   return buildActorTools({
     rt,
     history: storesFor(rt).history,
-    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
     ...deps,
   });
 }

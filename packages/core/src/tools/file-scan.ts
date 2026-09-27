@@ -164,7 +164,7 @@ async function readUnranged(vfs: VFS, path: string, size: number | null): Promis
   const refuse = (what: string): never => {
     throw makeVfsError('EPERM',
       `this file plane has no ranged read, so ${what} cannot be read within `
-      + `${String(RESIDENT_TEXT_MAX_BYTES)} — read or slice it with workspace.readFile inside eval`,
+      + `${String(RESIDENT_TEXT_MAX_BYTES)}: read or slice it with workspace.readFile inside eval`,
       path);
   };
 

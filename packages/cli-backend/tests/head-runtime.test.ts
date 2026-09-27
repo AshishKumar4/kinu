@@ -156,7 +156,7 @@ const aHeadInput = (over?: Partial<HeadInput>): HeadInput => ({
   id: 'h1', rootId: 'r1', parentId: null, depth: 0, task: 't', rationale: 'r',
   inheritedContext: [], budget: { maxDepth: 2, spawnedAt: Date.now() },
   mergeStrategy: 'synthesize', ...over,
-  mode: over?.mode ?? 'build', loop: over?.loop ?? defaultLoopOrigin('head'),
+  mode: over?.mode ?? 'build', loop: over?.loop ?? defaultLoopOrigin('run'),
 });
 
 function fakeHeadsModel(capture?: (options: {

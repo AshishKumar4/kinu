@@ -74,7 +74,7 @@ export async function validateWithRetries(
         ok: true,
         attempts: attempt,
         passedOnAttempt: attempt,
-        detail: attempt === 1 ? detail : `FLAKY: ${detail} — but attempt 1 failed (${first})`,
+        detail: attempt === 1 ? detail : `FLAKY: ${detail}, but attempt 1 failed (${first})`,
       };
     }
 

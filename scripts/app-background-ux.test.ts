@@ -162,18 +162,12 @@ describe('the living background', () => {
           const box = canvas?.getBoundingClientRect() ?? null;
 
           return {
-            canvasBox: box === null ? null : { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
-            innerWidth: window.innerWidth,
-            innerHeight: window.innerHeight,
+            coversViewport: box !== null && box.left <= 0 && box.top <= 0 && box.right >= innerWidth && box.bottom >= innerHeight,
           };
         });
 
         if (host === null) throw new Error('no [data-app-background] host');
-        expect(host.canvasBox).not.toBeNull();
-        expect(host.canvasBox?.left ?? 1).toBeLessThanOrEqual(0);
-        expect(host.canvasBox?.top ?? 1).toBeLessThanOrEqual(0);
-        expect(host.canvasBox?.right ?? 0).toBeGreaterThanOrEqual(host.innerWidth);
-        expect(host.canvasBox?.bottom ?? 0).toBeGreaterThanOrEqual(host.innerHeight);
+        expect(host.coversViewport).toBe(true);
 
         const hits = await page.evaluate(() => {
           const hostEl = document.querySelector('[data-app-background]');

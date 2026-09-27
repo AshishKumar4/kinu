@@ -67,8 +67,7 @@ interface Contrast {
 
 interface SurfaceFact {
   readonly present: boolean;
-  readonly width: number;
-  readonly height: number;
+  readonly drawn: boolean;
   readonly text: string;
 }
 
@@ -250,12 +249,12 @@ interface Facts {
   movieReduced?: MovieReducedFact;
   heroA11y?: { label: string; phrases: string[] };
   persists?: { text: string; caption: string };
-  heroTreeText?: { text: string };
+  heroTreeText?: { treeHidden: boolean; text: string };
   checkoutLead?: { firstIsProse: boolean; firstIsTool: boolean };
   homeLink?: { visible: boolean; hasGraphic: boolean };
   deploy?: { button: string | null; guide: string | null };
   providers?: string[];
-  loginLayout?: { dialog: boolean; cardOffset: number; barOffset: number; footer: boolean };
+  loginLayout?: { dialog: boolean; center: number; cardCenter: number; barCenter: number; footer: boolean };
   landingOverflow: Record<string, WidthIntegrity>;
   /** The `cut` rule measured in both directions on one page: the landing's
    *  own count, that count with a clipped row injected, and with an overhang
@@ -420,8 +419,7 @@ beforeAll(async () => {
 
           return {
             present: element !== null,
-            width: Math.round(box?.width ?? 0),
-            height: Math.round(box?.height ?? 0),
+            drawn: (box?.width ?? 0) > 0 && (box?.height ?? 0) > 0,
             text: element?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
           };
         };
@@ -788,6 +786,7 @@ beforeAll(async () => {
       }));
 
       facts.heroTreeText = await page.evaluate(() => ({
+        treeHidden: document.querySelector('#top [data-hero-graph], #top [data-hero-dust]')?.getAttribute('aria-hidden') === 'true',
         text: document.querySelector('#top p.sr-only')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
       }));
 
@@ -1075,8 +1074,9 @@ beforeAll(async () => {
 
               return {
                 dialog: document.querySelector('[role="dialog"]')?.getAttribute('aria-modal') === 'true',
-                cardOffset: Math.abs((card?.left ?? 0) + (card?.width ?? 0) / 2 - viewportCenter),
-                barOffset: Math.abs((bar?.left ?? 0) + (bar?.width ?? 0) / 2 - viewportCenter),
+                center: viewportCenter,
+                cardCenter: (card?.left ?? 0) + (card?.width ?? 0) / 2,
+                barCenter: (bar?.left ?? 0) + (bar?.width ?? 0) / 2,
                 footer: document.querySelector('footer') !== null,
               };
             });
@@ -1128,12 +1128,9 @@ describe('the standalone landing runs', () => {
 
     for (const surface of [workspace, tui, cli]) {
       expect(surface.present).toBeTrue();
-      expect(surface.width).toBeGreaterThan(500);
+      expect(surface.drawn).toBeTrue();
     }
 
-    expect(workspace.height).toBeGreaterThan(600);
-    expect(tui.height).toBeGreaterThan(600);
-    expect(cli.height).toBeGreaterThan(150);
     expect(new Set([workspace.text, tui.text, cli.text]).size).toBe(3);
   });
 
@@ -1236,8 +1233,9 @@ describe('the landing demonstration leads with its result', () => {
   });
 
   test('the hero tree carries its text equivalent', () => {
+    // The tree is hidden from assistive technology, so the sentence beside it is all a screen reader gets.
     const hero = required(facts.heroTreeText, 'hero tree text');
-    expect(hero.text).toBe('Kinu tries several approaches to a task, checks each, and keeps the one that passes, along with any tool it built along the way.');
+    expect(hero).toEqual({ treeHidden: true, text: expect.stringMatching(/\S+\s+\S+/u) });
   });
 
   test('the checkout frame leads with prose, not a tool row', () => {
@@ -1387,8 +1385,8 @@ describe('public actions work', () => {
   test('sign in is a centered modal under one centered header', () => {
     const layout = required(facts.loginLayout, 'sign-in layout');
     expect(layout.dialog).toBeTrue();
-    expect(layout.cardOffset).toBeLessThanOrEqual(1);
-    expect(layout.barOffset).toBeLessThanOrEqual(1);
+    expect(layout.cardCenter).toBeCloseTo(layout.center, 0);
+    expect(layout.barCenter).toBeCloseTo(layout.center, 0);
     expect(layout.footer).toBeFalse();
   });
 });

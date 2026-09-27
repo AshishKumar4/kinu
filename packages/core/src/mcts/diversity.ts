@@ -59,6 +59,6 @@ export function diversityDirective(siblings: readonly string[]): string {
   return (
     `\n\nYou are ONE of several approaches explored in parallel for this task. ` +
     `Sibling approaches are pursuing these DISTINCT angles:\n${listed}\n` +
-    `Propose an approach that is genuinely DISTINCT from those siblings — do not converge on the same idea.`
+    `Propose an approach that is genuinely DISTINCT from those siblings: do not converge on the same idea.`
   );
 }

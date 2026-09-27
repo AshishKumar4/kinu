@@ -38,7 +38,7 @@ import {
   noFindings, nonPublicMembers, productUnitsOf, ratchetCounts, ratchetKey, runnerClaims, runCensus,
 } from './test-census';
 import { failedPlanted, parseLock, type Plant } from './census-plants';
-import { judgeRequirements } from './test-requirements';
+import { judgeRequirements, type Predates } from './test-requirements';
 import { isParseable, isRunnableSuite, isTestFile, trackedFiles } from './sources';
 
 /* ── The seam ──────────────────────────────────────────────────────────── */
@@ -778,7 +778,7 @@ test('rendered text follows an imported observer field without treating its geom
 
   const sources = new Map([...inputs.sources, [observer, `
     export async function observe(page) {
-      const limitsStated = await page.$eval('[data-limits]', element => element.textContent.match(/\\d+/g).map(Number));
+      const limitsStated = await page.$eval('[data-limits]', element => element?.textContent?.match(/\\d+/g).map(Number));
       const width = await page.$eval('[data-limits]', element => element.getBoundingClientRect().width);
       return { limitsStated, width };
     }
@@ -789,7 +789,7 @@ test('rendered text follows an imported observer field without treating its geom
     import { observe } from './helpers/observe';
     test('reads the dialog', async () => {
       const seen = await observe(page);
-      expect(seen.limitsStated).toEqual([PROMPT_BUDGET]);
+      expect(seen?.limitsStated).toEqual([PROMPT_BUDGET]);
       expect(seen.width).toBe(PROMPT_BUDGET);
     });
   `, { ...inputs, sources, tracked: new Set([...inputs.tracked, observer]) });
@@ -855,6 +855,11 @@ describeCategory('copy_pin', [
     expected: ['rendered copy has no named requirement'],
   },
   {
+    name: 'RED: optional-chained DOM observations still pin product copy',
+    source: `test('title', () => { expect(document.body?.textContent).toBe('One shared member'); });`,
+    expected: ['rendered copy has no named requirement'],
+  },
+  {
     name: 'SILENT: a protocol string is not rendered copy',
     source: `test('wire', () => { expect(response.message).toBe('One shared member'); });`,
     expected: [],
@@ -900,6 +905,16 @@ describe('the named-requirement registry', () => {
     authority: { kind: 'spec', standard: 'WCAG 2.2', clause: '1.4.3', reference: 'https://www.w3.org/TR/WCAG22/#contrast-minimum' },
   };
 
+  const RULING = '269ff163c7df4fa1e6ed6c3e4ebcce83ad1c8f74';
+
+  const caption = {
+    kind: 'copy', value: 'Untitled',
+    authority: { kind: 'owner', recordedOn: '2026-09-15', reference: RULING, requirement: 'The fallback title names an untitled workspace.' },
+  };
+
+  const judge = (registry: Parameters<typeof judgeRequirements>[0]['registry'], reads: Readonly<Record<string, readonly string[]>>, predates: Predates = () => true) =>
+    judgeRequirements({ registry, reads: new Map(Object.entries(reads)), predates });
+
   test('a requirement is read through an aliased import and local binding, not an unrelated object', () => {
     const measured = measureFile(PROBE, `
       import { TEST_REQUIREMENTS as requirements } from '../../../scripts/test-requirements';
@@ -916,8 +931,8 @@ describe('the named-requirement registry', () => {
   });
 
   test('a cited but unread requirement is rejected, and an unknown use is named', () => {
-    expect(judgeRequirements({ registry: { contrast }, reads: new Set() })).toEqual({ invalid: [], unread: ['contrast'], unknown: [] });
-    expect(judgeRequirements({ registry: { contrast }, reads: new Set(['contrast', 'madeUp']) })).toEqual({ invalid: [], unread: [], unknown: ['madeUp'] });
+    expect(judge({ contrast }, {})).toEqual({ invalid: [], unread: ['contrast'], unknown: [] });
+    expect(judge({ contrast }, { contrast: [PROBE], madeUp: [PROBE] })).toEqual({ invalid: [], unread: [], unknown: ['madeUp'] });
   });
 
   test('one named CSS bound does not excuse another literal in the assertion', () => {
@@ -937,6 +952,16 @@ describe('the named-requirement registry', () => {
     expect([...measured.requirements]).toEqual(['wcagTextContrast']);
   });
 
+  test('an owner ruling cites a commit before each test that reads it, never free text or the test\'s own commit', () => {
+    const reader = 'scripts/a.test.ts';
+    const late = 'scripts/b.test.ts';
+
+    expect(judge({ caption }, { caption: [reader, late] }, (sha, name, file) => sha === RULING && name === 'caption' && file === reader).invalid)
+      .toEqual([expect.stringMatching(new RegExp(`^caption\\.authority\\.reference: .*${late}`, 'u'))]);
+    expect(judge({ caption: { ...caption, authority: { ...caption.authority, reference: 'owner said so' } } }, { caption: [reader] }).invalid)
+      .toEqual([expect.stringMatching(/^caption\.authority\.reference: /u)]);
+  });
+
   test('a named requirement does not excuse another literal in the assertion', () => {
     const measured = measureFile(PROBE, `
       import { TEST_REQUIREMENTS } from '../../../scripts/test-requirements';
@@ -950,15 +975,15 @@ describe('the named-requirement registry', () => {
   });
 
   test('a test-needs-it note supplies no authority', () => {
-    const rejected = judgeRequirements({ registry: { padding: { kind: 'css', values: { minimum: 8 }, authority: { reason: 'the test needs it' } } }, reads: new Set(['padding']) });
+    const rejected = judge({ padding: { kind: 'css', values: { minimum: 8 }, authority: { reason: 'the test needs it' } } }, { padding: [PROBE] });
 
     expect(rejected.invalid.some((problem) => problem.startsWith('padding.authority.kind:'))).toBe(true);
   });
 
   test('an owner requirement carries a dated ruling', () => {
-    const copy = { kind: 'copy', value: 'Untitled', authority: { kind: 'owner', reference: 'owner-ruling', requirement: 'Never show a slug as its title.' } };
-    expect(judgeRequirements({ registry: { copy }, reads: new Set(['copy']) }).invalid.some((problem) => problem.startsWith('copy.authority.recordedOn:'))).toBe(true);
-    expect(judgeRequirements({ registry: { copy: { ...copy, authority: { ...copy.authority, recordedOn: '2026-09-15' } } }, reads: new Set(['copy']) }))
+    const copy = { kind: 'copy', value: 'Untitled', authority: { kind: 'owner', reference: RULING, requirement: 'Never show a slug as its title.' } };
+    expect(judge({ copy }, { copy: [PROBE] }).invalid.some((problem) => problem.startsWith('copy.authority.recordedOn:'))).toBe(true);
+    expect(judge({ copy: { ...copy, authority: { ...copy.authority, recordedOn: '2026-09-15' } } }, { copy: [PROBE] }))
       .toEqual({ invalid: [], unread: [], unknown: [] });
   });
 });

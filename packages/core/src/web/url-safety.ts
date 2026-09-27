@@ -21,7 +21,7 @@ export class UnsafeUrlError extends Error {
 export function assertSafeUrl(url: string): URL {
   if (SECRET_PREFIX_RE.test(url) || SECRET_PREFIX_RE.test(safeDecode(url))) {
     throw new UnsafeUrlError(
-      'URL contains what appears to be an API key or token — secrets must not be sent in URLs',
+      'URL contains what appears to be an API key or token: secrets must not be sent in URLs',
     );
   }
 

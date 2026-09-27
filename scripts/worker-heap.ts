@@ -44,6 +44,10 @@ export const STEP_LIVE_BOUND_BYTES = 5_500_000;
  *  code compiled for the heads, neither of them per released actor. */
 export const HEADS_RETAINED_BOUND_BYTES = 1_500_000;
 
+/** Measured 2026-09-27 at {@link HELPERS}: 0.8 MB on main 905d6665d4, each helper's chat room keeping its whole
+ *  streamed answer; 0.0-0.1 MB over 3 runs once no room keeps an answer. */
+export const PER_HELPER_RETAINED_BOUND_BYTES = 250_000;
+
 /** Measured 2026-09-27 at {@link LONG_TURN}, after the setup, step and heads above in the same isolate: 104-116 MB
  *  used over 3 runs on main 20cacf3423, 99-117 MB over 10 once no step keeps its request body. The collector decides
  *  when garbage goes, hence the spread; this row trips only as the peak nears the 128 MB isolate, and the growth row
@@ -54,8 +58,9 @@ export const LONG_TURN_PEAK_BOUND_BYTES = 124_000_000;
  *  kept its request body, a full copy of the message list; 3.6-4.0 MB over 10 runs once the body stays off the record. */
 export const LONG_TURN_GROWTH_BOUND_BYTES = 5_000_000;
 
-/** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request. */
-export const IDLE_RETAINED_BOUND_BYTES = 14_500_000;
+/** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
+ *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer. */
+export const IDLE_RETAINED_BOUND_BYTES = 12_000_000;
 
 const WranglerSchema = v.object({
   compatibility_date: v.string(),
@@ -230,6 +235,10 @@ async function inspect(port: number): Promise<{
 /** The swarm the release bound is about: WARM heads host every lazy module first, then COUNT come and go. */
 export const HEADS = { warm: 5, count: 200 } as const;
 
+/** The delegation the helper bound is about: the root hires COUNT task helpers, each working 4 pages of
+ *  ANSWER_BYTES (`worker-heap/driver.ts`) before a one-word answer. */
+export const HELPERS = { warm: 2, count: 12, answerBytes: 200_000 } as const;
+
 /** The long turn the peak bound is about: STEPS model calls, each after a small `file stat` result. */
 export const LONG_TURN = { steps: 150 } as const;
 
@@ -245,6 +254,8 @@ export interface HeapMeasurement {
   readonly idleRetained: number;
   /** What a workspace holds live after {@link HEADS} heads were hosted and released, beyond before them. */
   readonly headsRetained: number;
+  /** What a workspace holds live per finished task helper after {@link HELPERS} settle, beyond before them. */
+  readonly perHelperRetained: number;
   /** The most used heap (uncollected) read at any model call of {@link LONG_TURN}. */
   readonly longTurnPeak: number;
   /** What {@link LONG_TURN} holds live at its last model call beyond its first. */
@@ -344,7 +355,31 @@ export async function measure(): Promise<HeapMeasurement> {
 
       await long;
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, longTurnPeak, longTurnGrowth: lastLive - firstLive, wide };
+      const HelperStateSchema = v.object({ calls: v.number(), helpersAnswered: v.number() });
+
+      // Settled: every helper answered and no model call arrived for half a second.
+      const hire = async (count: number): Promise<void> => {
+        await ask(`/model?answerBytes=${String(HELPERS.answerBytes)}&hires=${String(count)}`);
+        await ask('/turn?workspace=helpers&text=HIRE-ROOT');
+        let last = -1;
+
+        for (;;) {
+          const state = v.parse(HelperStateSchema, JSON.parse(await ask('/model')));
+
+          if (state.helpersAnswered >= count && state.calls === last) break;
+          last = state.calls;
+          await Bun.sleep(500);
+        }
+      };
+
+      await ask('/?workspace=helpers');
+      await hire(HELPERS.warm);
+      const beforeHelpers = await inspector.liveHeap();
+      await hire(HELPERS.count);
+      const perHelperRetained = (await inspector.liveHeap() - beforeHelpers) / HELPERS.count;
+      await ask('/model?hires=0');
+
+      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, longTurnPeak, longTurnGrowth: lastLive - firstLive, wide };
     } finally {
       inspector.close();
     }
@@ -404,6 +439,10 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)} live, over ${mb(HEADS_RETAINED_BOUND_BYTES)}`);
   }
 
+  if (measured.perHelperRetained > PER_HELPER_RETAINED_BOUND_BYTES) {
+    findings.push(`each finished task helper leaves ${mb(measured.perHelperRetained)} live, over ${mb(PER_HELPER_RETAINED_BOUND_BYTES)}`);
+  }
+
   if (measured.longTurnGrowth > LONG_TURN_GROWTH_BOUND_BYTES) {
     findings.push(`a ${String(LONG_TURN.steps)}-step turn holds ${mb(measured.longTurnGrowth)} more live at its last step than its first, over ${mb(LONG_TURN_GROWTH_BOUND_BYTES)}`);
   }
@@ -422,7 +461,8 @@ async function main(args: readonly string[]): Promise<number> {
 
   console.log(`${GATE}: ok — ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
     + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
-    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
+    + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a finished helper `
+    + `${mb(measured.perHelperRetained)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
     + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
   console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; and memory outside V8 (compiled wasm, SQLite pages)');
 

@@ -1,10 +1,5 @@
 /**
- * The live-app rows: the real product in a real browser, before publish. Each row file
- * (`live-app-turns`, `live-app-sleep`, `live-app-plans`, `live-app-layout`) boots the local dev server through
- * live-app-harness (vite dev = real Worker in workerd, real Durable Objects, real client), plus a
- * local scripted model the workspaces are configured to use, and measures its own rows here; its
- * tests read the verdicts. One file per row group, so each ends well inside its deadline alone: the
- * seventeen rows in one file took 375 s in a deploy and outran its 480 s alone (2026-09-26).
+ * Real Worker, client and browser; scripted model. The combined row exceeded 480 s alone on 2026-09-26.
  *
  * SCOPE. These rows own only what a rendered document can prove: geometry,
  * node identity, and what the DOM shows after a real interaction. The
@@ -12,9 +7,6 @@
  * text rendering before the tool card it preceded — is RPC and data shape,
  * provable inside the workerd pool without a DOM, and lives there (the
  * cloudflare-os in-pool session harness); it is deliberately NOT here.
- *
- * Every assertion is geometry, identity or counts — never a copied sentence,
- * never a source-text match.
  */
 
 import type { Page } from 'puppeteer';
@@ -404,7 +396,6 @@ export const RAIL_SHUT_PX = 64;
 
 const SHUT_NAMES = 'hide|collapse|close';
 
-/** The header's task state, by the name its status carries; its text is the state's word. */
 const TASK_STATE = '[role="status"][aria-label="Task state"]';
 
 /** Every 20 ms from install: whether the chat column offers Stop, how many live states it draws, and the header's
@@ -434,7 +425,6 @@ const INSTALL_LIVE_SAMPLER = `(() => {
 
 const READ_LIVE_SAMPLES = `(() => { clearInterval(window.__liveSampler); return window.__liveSamples; })()`;
 
-/** The newest sample, the sampler left running. */
 const LAST_LIVE_SAMPLE = 'window.__liveSamples.at(-1) ?? null';
 
 const LiveSampleSchema = v.object({ t: v.number(), stop: v.boolean(), states: v.number(), task: v.nullable(v.string()) });
@@ -901,10 +891,8 @@ async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): 
   return verdict;
 }
 
-/** The label of the inspector tab marked current, or null while none is. */
 const MARKED_TAB = `(document.querySelector('#inspector .p-tabstrip [aria-current="true"]')?.getAttribute('aria-label') ?? null)`;
 
-/** Record every change of the marked inspector tab from now on. */
 const RECORD_MARKS = `(() => {
   const marks = [${MARKED_TAB}];
   window.__keptTabMarks = marks;
@@ -1109,7 +1097,6 @@ async function watchTurns(page: Page): Promise<TurnWatch> {
   };
 }
 
-/** The header and the composer disagree: one says a turn runs and the other says nothing does. */
 const disagrees = (sample: v.InferOutput<typeof LiveSampleSchema>): boolean =>
   (sample.stop && sample.task === 'idle') || (!sample.stop && sample.task === 'working');
 
@@ -1178,7 +1165,6 @@ async function measureOpenedMidTurn(
   }
 }
 
-/** Every socket the page opens, how many replays have completed on them, and what the server answered on them. */
 const RECORD_SOCKETS = `(() => {
   window.__sockets = [];
   window.__replaysComplete = 0;
@@ -1314,7 +1300,6 @@ async function measureObservedReconnect(newPage: LiveApp['newPage'], origin: str
   }
 }
 
-/** The reconnect turn has answered and closed. */
 const TURN_ANSWERED = `(${ANSWER_BLOCKS}).at(-1) === 'P:Done.' && !(${STOP_OFFERED})`;
 
 /** What a page's sockets have heard, counted before it sleeps so the answers to its waking are told apart. */
@@ -1469,7 +1454,6 @@ async function measureAnswered(
   }
 }
 
-/** The inspector strip's Work tab. */
 const WORK_TAB = `document.querySelector('#inspector .p-tabstrip [aria-label="Work"]')`;
 
 /** Row 8: the inspector never moves its selection on its own. In a new
@@ -1550,6 +1534,8 @@ const FROM_BOTTOM = `(() => { const el = ${CHAT_SCROLLER}; return el === undefin
 
 const SCROLL_METRICS = `(() => { const el = ${CHAT_SCROLLER}; return el === undefined ? '' : String(el.scrollHeight) + ':' + String(el.scrollTop); })()`;
 
+const CHAT_ROWS = `(() => { const el = ${CHAT_SCROLLER}; return el === undefined ? 0 : [...el.children].filter(row => !row.hasAttribute('data-scroll-edge')).length; })()`;
+
 /** History pages asked for between two reads, the second taken once the view has stopped growing: a
  *  runaway walk keeps it growing, so it cannot read settled early. */
 async function pagesUntilSettled(page: Page, counter: RpcCounter): Promise<number> {
@@ -1573,6 +1559,37 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
 
   const page = await openWorkspace(newPage, origin, long);
   const counter = await countRpc(page);
+  const reads = await frameLedger(page);
+
+  const fetchOlderPage = async (): Promise<boolean> => {
+    const before = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
+    const rows = v.parse(v.number(), await page.evaluate(CHAT_ROWS));
+
+    const box = v.parse(v.object({ x: v.number(), y: v.number(), height: v.number() }), await page.evaluate(`(() => {
+      const el = ${CHAT_SCROLLER};
+      if (el === undefined) return null;
+      const rect = el.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, height: el.clientHeight };
+    })()`));
+
+    reads.restart();
+    await page.mouse.move(box.x, box.y);
+
+    while ((counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) === before) {
+      const wasAtTop = await page.evaluate(`(${CHAT_SCROLLER})?.scrollTop === 0`);
+      await page.mouse.wheel({ deltaY: -box.height / 2 });
+      await painted(page);
+
+      if (wasAtTop && await page.evaluate(`(${CHAT_SCROLLER})?.scrollTop === 0`)
+        && (counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) === before) return false;
+    }
+
+    await waitOn(page, 'the history page response', settledAfter(page, reads, HISTORY_PAGE_METHOD));
+    await until(page, 'the older messages to render', `${CHAT_ROWS} > ${String(rows)}`);
+    await settled(page, SCROLL_METRICS);
+
+    return true;
+  };
 
   try {
     await until(page, 'the newest turn to render', `(document.querySelector('#chat')?.textContent ?? '').includes('Long chat turn ${String(LONG_CHAT_TURNS)}.')`);
@@ -1586,17 +1603,11 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
 
     const beforeTop = counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0;
 
-    await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = 0; })()`);
-    await until(page, 'the older page to land', `(${CHAT_SCROLLER})?.scrollTop > 0`);
-    await settled(page, SCROLL_METRICS);
+    const fetched = await fetchOlderPage();
 
     const pagesOnScrollToTop = (counter.counts().sent[HISTORY_PAGE_METHOD] ?? 0) - beforeTop;
 
-    // A second page further up, then a spot just above the live edge: an offset from the top the reopened chat,
-    // which holds only its newest window, is too short to reach.
-    await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = 0; })()`);
-    await until(page, 'the second older page to land', `(${CHAT_SCROLLER})?.scrollTop > 0`);
-    await settled(page, SCROLL_METRICS);
+    if (fetched && !(await page.evaluate(`[...document.querySelectorAll('#chat [data-scroll-edge]')].some(edge => edge.textContent?.includes('Beginning of the conversation') === true)`))) await fetchOlderPage();
     await page.evaluate(`(() => { const el = ${CHAT_SCROLLER}; if (el) el.scrollTop = el.scrollHeight - el.clientHeight - 600; })()`);
     await painted(page);
     await page.evaluate(`document.querySelector('a[href="/workspace/${other}"]')?.click()`);
@@ -1610,11 +1621,11 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
     return { pagesIdleAfterOpen, openFromBottom, pagesOnScrollToTop, pagesIdleAfterReturn, returnFromBottom };
   } finally {
     await counter.stop();
+    await reads.stop();
     await page.close();
   }
 }
 
-/** What each page of a thinking turn showed as a stream error, and what the page reported to the server for it. */
 interface MidThoughtVerdict {
   readonly reconnectedErrors: readonly string[];
   readonly joinedErrors: readonly string[];
@@ -1624,12 +1635,10 @@ interface MidThoughtVerdict {
   readonly probe: string;
 }
 
-/** The chat's stream-error card text, if the page shows one. */
 const STREAM_ERROR_TEXT = `[...document.querySelectorAll('[data-chat-error]')].map((node) => (node.textContent ?? '').trim()).filter(Boolean)`;
 
 const ReportBodySchema = v.looseObject({ event: v.string() });
 
-/** Every client error report the page posts, with the server's answer. */
 function recordReports(page: Page, into: { status: number; event: string; refusal: string }[]): void {
   page.on('response', async (response) => {
     const request = response.request();

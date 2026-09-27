@@ -4,13 +4,11 @@
  */
 import * as v from 'valibot';
 
-import {
-  diffLines, MAX_LINES_PER_FILE, parseJsonValue, TUI_MARKS,
-  type DiffLine, type FileStatus,
-} from '@kinu.run/core';
+import { diffLines, MAX_LINES_PER_FILE, parseJsonValue, type DiffLine, type FileStatus } from '@kinu.run/core';
+import { TUI_MARKS } from '@kinu.run/core/tui';
 import { tolerate } from '@kinu.run/core/obs';
 
-import { clipText, terminalText } from '@kinu.run/core';
+import { clipText, terminalText } from '@kinu.run/core/tui';
 import { useTuiTheme } from './theme';
 
 /** The expanded tool-result line budget, shared with the card. */

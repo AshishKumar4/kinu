@@ -144,8 +144,10 @@ describe('hire', () => {
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
 
+    // The interrupted `agents` call was claimed before the abort, so recovery settles it as the lost-call
+    // refusal (effect-claim.ts), which is a settled caller too.
     expect(observed.toolResults.join(' ')).toMatch(
-      /failed|blocked|unavailable|interrupt|recovered|CHILD-ANSWER/i,
+      /failed|blocked|unavailable|interrupt|recovered|taken effect|CHILD-ANSWER/i,
     );
   });
 

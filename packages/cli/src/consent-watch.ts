@@ -10,7 +10,8 @@ import type {
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { literalText, waitForAnswer } from '@kinu.run/core';
+import { waitForAnswer } from '@kinu.run/core';
+import { literalText } from '@kinu.run/core/tui';
 
 const CONSENT_POLL_MS = 750;
 

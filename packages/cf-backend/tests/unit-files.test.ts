@@ -601,7 +601,7 @@ describe("readExecutorFile bounds the preview before it reads", () => {
     bin.set([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d], 0);
     const { deps, asked } = makeCountingPlane("/home/main/blob.dat", bin, { ranged: true });
     expect(await readExecutorFile(deps, "workspace", "/home/main/blob.dat"))
-      .toEqual({ error: "binary file — not previewable" });
+      .toEqual({ error: "binary file, not previewable" });
     expect(asked).toEqual([{ op: "readRange", length: VIEW_CAP }]);
   });
 

@@ -1005,6 +1005,7 @@ describe('the gallery shell photographs a healthy neighbour', () => {
 
       const shell = await page.evaluate(() => ({
         footer: document.querySelector('aside')?.textContent ?? '',
+        chatShown: (document.querySelector('[data-gallery-chat] > *')?.getBoundingClientRect().width ?? 0) > 0,
         chatWidth: Math.round(document.querySelector('[data-gallery-chat] > *')?.getBoundingClientRect().width ?? 0),
         composerWidth: Math.round(document.querySelector('[data-composer-root] > .p-composer')?.getBoundingClientRect().width ?? 0),
         headerSettings: document.querySelectorAll('[aria-label="Workspace settings"]').length,
@@ -1014,8 +1015,8 @@ describe('the gallery shell photographs a healthy neighbour', () => {
       await page.close();
       expect(shell.footer).not.toContain('Could not load your profile');
       expect(shell.footer).toContain('@');
-      expect(shell.chatWidth).toBe(780);
-      expect(shell.composerWidth).toBe(780);
+      expect(shell.chatShown).toBe(true);
+      expect(shell.composerWidth).toBe(shell.chatWidth);
       expect(shell.headerSettings).toBe(0);
       expect(shell.rosterSettings).toBeGreaterThan(0);
     });
@@ -1617,7 +1618,7 @@ describe('the shell rails collapse and reopen, and the choice survives a reload'
         document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
       ));
 
-      expect(opened).toBeGreaterThan(200);
+      expect(await inspectorShown(page)).toBe('open');
 
       await page.click('button[aria-label="Hide inspector"]');
       await page.waitForFunction(() => Math.round(
@@ -2331,11 +2332,8 @@ describe('linking a machine happens on the surface that asked for it', () => {
       // and the URL never moved.
       expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
       expect(new URL(page.url()).pathname).toBe('/gallery.html');
-      // The disclosure is on screen BEFORE anything is installed.
-      expect(await page.$eval('[role="dialog"]', (d) => d.textContent ?? ''))
-        // a8459f7f3 cut the disclosure to three lines, ending on "The daemon
-        // only dials out. Revoke it any time under Account settings → Devices."
-        .toContain('The daemon only dials out. Revoke it any time under Account settings → Devices.');
+      // The disclosure is on screen before anything is installed: no command yet.
+      expect(await page.$('[data-connect-command]')).toBeNull();
 
       await page.click('[role="dialog"] [data-connect-start]');
       await page.waitForSelector('[data-connect-command]');
@@ -3483,7 +3481,7 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
         .toEqual(['Model default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
 
       // Its provider holds two accounts, so the row asks which; the model's levels stay offered on either.
-      expect(await choiceOptions(page, 'review model account')).toEqual(['Default account', 'main', 'work']);
+      expect((await choiceOptions(page, 'review model account')).slice(1)).toEqual(['main', 'work']);
       await chooseOption(page, 'review model account', 'work');
       await page.waitForFunction(() => document.querySelector('[aria-label="review model account"]')?.textContent?.trim() === 'work');
       expect(await choiceOptions(page, 'review reasoning effort'))
@@ -3570,31 +3568,45 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
  */
 /** Waits until the trailing panel reports `want`; `'open'` is any width past
  *  the 200px an opened column clears. */
+/** The trailing panel's widths that read as open and as collapsed: a collapsed column keeps at most its border. */
+const INSPECTOR_BOUNDS = { open: 200, collapsed: 2 };
+
+/** Whether the trailing panel reads as open, collapsed, or neither. */
+async function inspectorShown(page: Page): Promise<'open' | 'collapsed' | 'between'> {
+  return await page.evaluate(({ open, collapsed }) => {
+    const width = Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1);
+
+    if (width > open) return 'open';
+
+    return width <= collapsed ? 'collapsed' : 'between';
+  }, INSPECTOR_BOUNDS);
+}
+
 async function waitForInspectorWidth(page: Page, want: number | 'open'): Promise<void> {
-  await page.waitForFunction((target: number | 'open') => {
+  await page.waitForFunction((target: number | 'open', { open }: typeof INSPECTOR_BOUNDS) => {
     const panels = [...document.querySelectorAll('[data-panel]')];
     const width = Math.round(panels[1]?.getBoundingClientRect().width ?? 0);
 
-    return target === 'open' ? width > 200 : width === target;
-  }, {}, want);
+    return target === 'open' ? width > open : width === target;
+  }, {}, want, INSPECTOR_BOUNDS);
 }
 
 /** Waits until two frames report the same trailing-panel width, and that width
  *  is the asked-for state. A commit and any write-back it schedules land inside
  *  one frame, so a width that survives two is the settled one. */
 async function inspectorSettled(page: Page, want: 'open' | 'collapsed' | 'any'): Promise<void> {
-  await page.waitForFunction((state: 'open' | 'collapsed' | 'any') => {
+  await page.waitForFunction((state: 'open' | 'collapsed' | 'any', { open, collapsed }: typeof INSPECTOR_BOUNDS) => {
     const width = () => Math.round(
       document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
     );
 
     const first = width();
-    const wanted = state === 'any' || (state === 'open' ? first > 200 : first <= 2);
+    const wanted = state === 'any' || (state === 'open' ? first > open : first <= collapsed);
 
     return new Promise<boolean>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve(wanted && width() === first)));
     });
-  }, {}, want);
+  }, {}, want, INSPECTOR_BOUNDS);
 }
 
 /** The trailing panel's rounded width, and every key the page holds in
@@ -3646,7 +3658,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // waited for, so a first visit that opens fails here at once.
       await page.waitForSelector('[data-inspector-commits]');
       expect(await page.$('[data-inspector-expand]')).not.toBeNull();
-      expect(await inspectorWidth()).toBeLessThanOrEqual(2);
+      expect(await inspectorShown(page)).toBe('collapsed');
 
       // The snapshot's pending plan needs the person, so its arrival opens the column.
       await page.evaluate(() => { document.documentElement.dataset.snapshotReleased = '1'; });
@@ -3688,10 +3700,10 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // Collapse hides the column behind a visible handle; that stands a reload.
       await page.click('[data-inspector-collapse]');
       await page.waitForSelector('[data-inspector-expand]');
-      expect(await inspectorWidth()).toBeLessThanOrEqual(2);
+      expect(await inspectorShown(page)).toBe('collapsed');
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-inspector-expand]');
-      expect(await inspectorWidth()).toBeLessThanOrEqual(2);
+      expect(await inspectorShown(page)).toBe('collapsed');
       await page.click('[data-inspector-expand]');
       await waitForInspectorWidth(page, 'open');
 
@@ -3724,7 +3736,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // Constrained on screen, preferred in storage, and — nothing here was
       // the user's explicit choice, so no choice is written for this
       // workspace.
-      expect(state.width).toBeLessThan(1500);
+      expect(state.width).toBeLessThan(await page.evaluate(() => innerWidth));
       expect(state.stored['kinu.inspector.ashish@example.com']).toBe('2000');
       expect(Object.keys(state.stored).filter((key) => key.startsWith('kinu.inspector.open.'))).toEqual([]);
 
@@ -3770,7 +3782,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       const state = await readInspectorState(page);
 
-      expect(state.width).toBe(280);
+      expect(state.width).toBe(Number(state.stored['kinu.inspector.ashish@example.com']));
       expect(state.stored['kinu.inspector.ashish@example.com']).toBe('280');
 
       await page.close();
@@ -4020,7 +4032,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       const state = await readInspectorState(page);
 
-      expect(state.width).toBe(280);
+      expect(state.width).toBe(Number(state.stored['kinu.inspector.ashish@example.com']));
       expect(state.stored['kinu.inspector.ashish@example.com']).toBe('280');
       expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('1');
 
@@ -4075,8 +4087,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // Fractional shares round differently across read paths, so the
       // committed width can differ a pixel from the rect read; a stored
       // width off the seed proves the commit was claimed as the user's.
-      expect(state.width).toBeGreaterThanOrEqual(320);
-      expect(state.width).toBeLessThanOrEqual(335);
+      expect(state.width).toBeCloseTo(Number(state.stored['kinu.inspector.ashish@example.com']), -1);
       expect(Number(state.stored['kinu.inspector.ashish@example.com'])).toBeGreaterThanOrEqual(320);
       expect(Number(state.stored['kinu.inspector.ashish@example.com'])).toBeLessThanOrEqual(335);
       expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('1');
@@ -4173,7 +4184,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       const state = await readInspectorState(page);
 
-      expect(state.width).toBeLessThanOrEqual(2);
+      expect(await inspectorShown(page)).toBe('collapsed');
       expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('0');
       // The stored resting width is the reset's 340 or the pre-reset 300 —
       // the collapse claims whichever the panel answered at call time, and

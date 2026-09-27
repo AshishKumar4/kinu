@@ -10,11 +10,12 @@ import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@op
 import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from 'react';
 
 import { tierIdsOf,
-  DEFAULT_ROLE_ID, TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, nextReasoningEffort, offeredReasoningEfforts,
-  composerVisibleRows, effectiveRoleCatalog,
+  DEFAULT_ROLE_ID, nextReasoningEffort, offeredReasoningEfforts,
+  effectiveRoleCatalog,
   type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ReasoningEffort, type SeekCursor,
   type SubordinateChild, type TierId,
 } from '@kinu.run/core';
+import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, composerVisibleRows } from '@kinu.run/core/tui';
 import {
   findForkPivot,
   forkCandidates,
@@ -83,7 +84,7 @@ import type { ComposerKeyDeps } from './draft-keys';
 import type { SurfaceKeyDeps } from './surface-keys';
 import { useStreamingBuffer } from './streaming-buffer';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from '@kinu.run/core';
-import { agentDisplayLabel, clipText } from '@kinu.run/core';
+import { agentDisplayLabel, clipText } from '@kinu.run/core/tui';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import {
   buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace, answeredHelpers,

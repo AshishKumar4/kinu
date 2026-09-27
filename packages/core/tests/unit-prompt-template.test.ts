@@ -256,7 +256,7 @@ describe('{{#if}} — a flag with no value fails loudly, like every other slot',
     // A runtime source declares no contract, so this compiles; that is the case under test.
     const stringWhereFlagBelongs = { flag: 'true' };
     expect(() => section.render(stringWhereFlagBelongs)).toThrow(
-      /flag \{\{#if flag\}\} is a boolean slot but was given a string — write \{\{flag\}\}/,
+      /flag \{\{#if flag\}\} is a boolean slot but was given a string: write \{\{flag\}\}/,
     );
   });
 
@@ -265,7 +265,7 @@ describe('{{#if}} — a flag with no value fails loudly, like every other slot',
     const section = definePromptSection('t/slot-typed', source);
     const booleanWhereTextBelongs = { value: true };
     expect(() => section.render(booleanWhereTextBelongs)).toThrow(
-      /slot \{\{value\}\} is a text slot but was given a boolean — write \{\{#if value\}\}/,
+      /slot \{\{value\}\} is a text slot but was given a boolean: write \{\{#if value\}\}/,
     );
   });
 });
@@ -273,7 +273,7 @@ describe('{{#if}} — a flag with no value fails loudly, like every other slot',
 describe('{{#if}} — a malformed conditional fails at definition', () => {
   test('rejects a conditional that is never closed', () => {
     expect(() => definePromptSection('t/unclosed-if', 'A{{#if x}}B')).toThrow(
-      /prompt template "t\/unclosed-if": unclosed \{\{#if x\}\} — every conditional needs its \{\{\/if\}\}/,
+      /prompt template "t\/unclosed-if": unclosed \{\{#if x\}\}: every conditional needs its \{\{\/if\}\}/,
     );
   });
 
@@ -297,13 +297,13 @@ describe('{{#if}} — a malformed conditional fails at definition', () => {
 
   test('rejects an expression in the condition — a flag is one declared boolean', () => {
     expect(() => definePromptSection('t/expr', '{{#if a && b}}x{{/if}}')).toThrow(
-      /malformed flag "\{\{#if a && b\}\}" at index 0 — a flag is \{\{#if name\}\} with one space and no expression/,
+      /malformed flag "\{\{#if a && b\}\}" at index 0: a flag is \{\{#if name\}\} with one space and no expression/,
     );
   });
 
   test('rejects {{#each}} BY NAME, pointing at where iteration lives', () => {
     expect(() => definePromptSection('t/each', '{{#each items}}x{{/each}}')).toThrow(
-      /unknown block tag "\{\{#each items\}\}" at index 0 — .*iteration stays in TypeScript/,
+      /unknown block tag "\{\{#each items\}\}" at index 0: .*iteration stays in TypeScript/,
     );
   });
 });

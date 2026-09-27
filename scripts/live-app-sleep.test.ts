@@ -1,6 +1,3 @@
-/**
- * A page that loses the turn and comes back: one that only watched it through a dropped socket, one asleep through its end, and one joining a reasoning turn part-way. Its rows run in `live-app-rows.ts` against its own dev server and scripted model.
- */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

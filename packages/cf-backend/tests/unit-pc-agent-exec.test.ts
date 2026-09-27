@@ -665,7 +665,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
 
     await expect(pending).rejects.toMatchObject({
       name: 'AbortError',
-      message: 'device exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run',
+      message: 'device exec stopped: the device confirmed its owned command process group terminated; separately sessioned processes may still run',
     });
     expect(await gone(descendant)).toBe(true);
     tunnel.dispose();

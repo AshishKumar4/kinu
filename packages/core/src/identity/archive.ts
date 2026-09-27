@@ -685,7 +685,7 @@ export async function restoreWorkspaceArchive(
 
   if (!header) throw new Error('This file is not a Kinu workspace archive (no header).');
 
-  if (!end) throw new Error('This archive is incomplete — the export did not finish.');
+  if (!end) throw new Error('This archive is incomplete: the export did not finish.');
 
   if (end.rows !== rows) {
     throw new Error(`This archive is damaged: it declares ${end.rows} rows but carries ${rows}.`);

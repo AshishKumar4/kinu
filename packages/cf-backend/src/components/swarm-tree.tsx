@@ -11,12 +11,8 @@ import {
 import { useTheme } from "@/hooks/use-theme";
 import { useElementSize } from "@/hooks/use-element-size";
 import type { ForkNode } from "@kinu.run/core";
-import {
-	ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits,
-	NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, viewNoteFor,
-	type ExplorerSelection,
-} from "@kinu.run/core";
-import { scoreBand } from '@kinu.run/core';
+import { ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, viewNoteFor, type ExplorerSelection } from "@kinu.run/core/swarm-view";
+import { scoreBand } from '@kinu.run/core/swarm-view';
 
 export interface SwarmTreeRegion {
 	runId: string;

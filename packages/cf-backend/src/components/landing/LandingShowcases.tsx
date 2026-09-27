@@ -1,5 +1,5 @@
 import { Button, Tabs } from '@cloudflare/kumo';
-import { TUI_ADVERTISED_HINTS, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS } from '@kinu.run/core';
+import { TUI_ADVERTISED_HINTS, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS } from '@kinu.run/core/tui';
 import { useRef, useState, type ReactElement, type ReactNode } from 'react';
 
 import { useCopy, type CopyStatus } from '@/hooks/use-copy';

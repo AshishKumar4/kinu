@@ -13,12 +13,12 @@ declare module 'kinu:product' {
   }
 
   export class OrchestratorAgent extends DurableObject {
-    protected explorationSeams(): {
+    protected hostedSeams(): {
       readonly host: {
         acquire(reference: ActorReference): Promise<HostedActor>;
         release(reference: ActorReference): void;
       };
-      register(input: { readonly creationId: string; readonly kind: 'head' }): Promise<ActorReference>;
+      register(input: { readonly creationId: string; readonly toolProfile: 'full' }): Promise<ActorReference>;
     };
   }
 

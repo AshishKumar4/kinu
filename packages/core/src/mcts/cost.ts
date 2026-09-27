@@ -87,7 +87,7 @@ export function describeCostBasis(basis: CostBasis): string {
   const fallback = `the $${basis.usdPer1kTokens}/1k blended fallback`;
 
   return basis.model === null
-    ? `no model named, so ${fallback} — the price is unknown, not zero`
-    : `${basis.model} is unpriced in the catalog, so ${fallback} `
-      + '— the price is unknown, not zero';
+    ? `no model named, so ${fallback}: the price is unknown, not zero`
+    : `${basis.model} is unpriced in the catalog, so ${fallback}: `
+      + 'the price is unknown, not zero';
 }
