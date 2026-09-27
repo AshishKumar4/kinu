@@ -96,7 +96,7 @@ import {
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
   previewScaffoldLive, runScaffoldCaptureText, runScaffoldGepaOptimization,
   advancePromptSectionLane,
-  decideRefinementRoute, listRefinements, refinementPass, requestOwnerRefinement, showRefinementRoute,
+  decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementRequestView, type RefinementScope,
@@ -779,6 +779,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       armWake: () => { this.armDelegationWake(); },
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
       whileWaiting: (actorId, waited) => this.delegatedTurns.whileWaiting(actorId, waited),
+      rederiveWake: () => { this.armDurableWake(); },
     };
   }
 
@@ -1560,6 +1561,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.peerHub.nextRetryAt(),
       this.emailOutbox.nextRetryAt(),
       this.eventLog.nextPendingDrainAt(now),
+      nextEvolutionAnswerAt(this.boundSql, this.actorHandle().actorId),
       // Prompt-cache warm; its tick phase is `alarm.cache_warm`.
       this.cacheWarming.nextWarmAt(),
       // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
@@ -3167,6 +3169,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           span.fail(failure);
           diagnostics.failure('event.wake_drain_failed', failure);
         }
+      });
+
+      await tick.span('alarm.evolution_answer', async (span) => {
+        let failed = false;
+
+        const step = await evolutionAnswerWake(this.refinementDeps, now, (failure) => {
+          failed = true;
+          span.fail(failure);
+          diagnostics.failure('refinement.answer_wake_failed', failure);
+        });
+
+        if (!failed) span.setAttribute('kinu.evolution_answer_due', step !== null);
       });
 
       // Durable re-drive of pending outbound peer messages (eviction recovery and backoff retries).

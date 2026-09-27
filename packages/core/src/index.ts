@@ -1801,7 +1801,7 @@ export {
 export {
   REFINEMENT_DISPOSITIONS, REFINEMENT_EDIT_KINDS, REFINEMENT_SCOPES,
   REFINEMENT_STAGES, REFINEMENT_TRIGGERS, RefinementProposalSchema,
-  createRefinementStore, evolutionDebt, initRefinementTables, refinementRequestView,
+  createRefinementStore, evolutionDebt, initRefinementTables, nextEvolutionAnswerAt, refinementRequestView,
   refinementStagingPath,
   type EvolutionDebt, type OpenRefinementInput, type RefinementDeps,
   type RefinementDisposition, type RefinementEdit, type RefinementEditKind,
@@ -1813,7 +1813,7 @@ export {
 
 export { type RefinementLaneStep } from './evolution/refinement-lane';
 
-export { listRefinements, refinementPass, requestOwnerRefinement } from './evolution/refinement-host';
+export { listRefinements, evolutionAnswerWake, refinementPass, requestOwnerRefinement } from './evolution/refinement-host';
 
 export {
   REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute,

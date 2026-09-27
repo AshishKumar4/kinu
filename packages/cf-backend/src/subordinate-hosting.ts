@@ -90,6 +90,7 @@ export interface SubordinateHostSeams {
   scheduleDrain(actor: HostedActor): void;
   /** Arm the wake chain that reaches the delegation runners; the admitting request must not run it. */
   armWake(): void;
+  rederiveWake(): void;
   /** Lives on the parent: `ask` parks a waiter and the report ingress resolves it. */
   temporary(actor: BoundActor): TemporaryAgentPort;
   /** An actor's turn slot is free while it waits on another actor's queue. */
@@ -234,6 +235,7 @@ export async function relayHostedReport(
     }),
     announce: () => { seams.announce(hirer); },
     onAdmitted: () => { if (hirer.record.parentActorId === null || !hirer.session.inFlight) seams.scheduleDrain(hirer); },
+    onEvolutionAnswer: () => { seams.rederiveWake(); },
     // A task child's answer goes first to its waiter, and closes before the waiter retires the child.
     temporary: {
       ...temporary,

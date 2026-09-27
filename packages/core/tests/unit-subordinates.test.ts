@@ -1229,6 +1229,7 @@ function parentScene(): ParentScene {
         announced.push({ id: report.id, content: report.content });
       },
       onAdmitted: () => { seen.push('drain'); },
+      onEvolutionAnswer: () => { seen.push('evolution'); },
     },
   };
 }
