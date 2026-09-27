@@ -179,7 +179,6 @@ export async function acceptInboundEmail(
     event_id: 'pending',
     kind: 'email_thread',
     holder_addr: JSON.stringify(thread),
-    payload_policy: 'full',
   }, msg.now);
 
   const { id, admitted } = deps.log.publish({

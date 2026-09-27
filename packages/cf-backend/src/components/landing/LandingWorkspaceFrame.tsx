@@ -124,7 +124,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   // overrides the timeline's pending one.
   const [decided, setDecided] = useState<PlanReview | null>(() => (
     reduced && isMovie
-      ? { ...MOVIE_PLAN, status: 'approved', feedback: null, handoffAccepted: true, updatedAt: Date.now(), decidedAt: Date.now() }
+      ? { ...MOVIE_PLAN, status: 'approved', feedback: null, handoffAccepted: true, updatedAt: Date.now() }
       : null
   ));
 

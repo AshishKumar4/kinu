@@ -210,7 +210,7 @@ function railWithHelper() {
   const sql = makeSqlExec(db);
   initEventsHubTables(sql);
   const main = createTestActorsOver(db).main;
-  new EvolutionHelperStore(sql, main).record('ask-refiner-x1', { lane: 'refinement', requestId: 'refine-1' }, 1);
+  new EvolutionHelperStore(sql, main).record('ask-refiner-x1', { requestId: 'refine-1' }, 1);
 
   return new EventLog(sql, main);
 }

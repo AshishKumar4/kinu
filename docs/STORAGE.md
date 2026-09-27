@@ -141,17 +141,9 @@ erDiagram
         INTEGER version PK "Version number"
         INTEGER written_at "Epoch ms"
         TEXT rationale "Why it was changed"
-        REAL canary_score "Canary evaluation score"
-        REAL baseline_score "Baseline comparison score"
         TEXT status "current/pending/rolled_back/historical"
         INTEGER parent_version "DGM lineage, the version this branched from"
         TEXT pathology "The failure cell this version was written to fix"
-    }
-    scaffold_regression_fixtures {
-        TEXT id PK "Random hex ID"
-        TEXT task "Regression test task"
-        TEXT expected_keywords "Expected output keywords"
-        INTEGER created_at "Epoch ms"
     }
     task_history {
         TEXT id PK "Random hex ID"
@@ -405,7 +397,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 
 | Subsystem | Tables | Owner |
 |---|---|---|
-| Events hub | `agent_log`, `reply_channels`, `triggers` (+ views `events_v`, `run_event_v`, `turn_phase_log_v`) | `core/src/events/hub/schema.ts` |
+| Events hub | `agent_log`, `reply_channels`, `triggers` | `core/src/events/hub/schema.ts` |
 | Run-event log | `run_events` | `core/src/events/recorder.ts` |
 | Turn outcomes | `turn_outcomes`, `lessons`, `outcome_labels`, `outcome_ensemble_labels`, `pattern_extractions` | `core/src/evolution/outcomes.ts` |
 | Replay eval | `replay_evals` | `core/src/evolution/replay.ts` |
@@ -421,14 +413,14 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Facts | `agent_facts` | `core/src/memory/facts.ts` |
 | Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts`, created by the store on first use |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
-| Task list | `agent_tasks` (one plan per actor), `agent_task_notes`, `plan_task_links` | `core/src/tools/task-store.ts` |
+| Task list | `agent_tasks` (one plan per actor; note and plan link are columns) | `core/src/tools/task-store.ts` |
 | Approvals | `deferred_approvals`, `device_consent_requests`, `instruction_approvals` | `core/src/safety/deferred-approval.ts`, `device-consent.ts`, `instruction-trust.ts` |
 | Plan review | `plan_reviews` | `core/src/plans/review.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
 | Compaction | `compaction_state`, `compaction_archive` | `core/src/state/workspace-schema.ts` (the DDL lives in core because `@kinu.run/compaction` sits above it in the dependency graph) |
 | Typed config | `actor_config` | `core/src/config/store.ts` |
-| Prompt sections | `prompt_section_versions`, `prompt_section_evaluations` | `core/src/prompting/section-store.ts` |
+| Prompt sections | `prompt_section_versions` | `core/src/prompting/section-store.ts` |
 | Slates | `slates`, `slate_versions`, `slate_publications` and the other `slate_*` tables | `core/src/state/workspace-schema.ts`, `core/src/slates/` |
 
 These are created outside that pass, by the root that owns each:
@@ -436,7 +428,6 @@ These are created outside that pass, by the root that owns each:
 | Subsystem | Tables | Owner |
 |---|---|---|
 | Subordinate roster | `actor_subordinates` (every actor that can hire) | `core/src/subordinates/roster.ts` |
-| Local subordinate identity | `subordinate_identity` (CLI only; a hosted actor's identity is its `workspace_actors` row) | `core/src/subordinates/support.ts` |
 | Workspace-diff baseline | `vfs_baseline` | `core/src/read-models/workspace-diff.ts`, called by each root's schema pass |
 | Orchestrator-local | `turn_feedback`, `sleep_time_updates`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
 | Webhook ingress (cf only) | `webhook_rate_windows`, `webhook_replay_claims`, `webhook_secrets` | `core/src/events/ingress/webhook.ts` (`initWebhookIngressTables`), `rate-limit.ts`, `secrets.ts` |

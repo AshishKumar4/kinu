@@ -17,7 +17,6 @@ export interface ContextProposal {
   readonly cause: string; readonly turnId: string | null; readonly buildIdentity?: string;
   readonly expectedPending?: string | null;
   readonly changes: readonly ContextChange[];
-  readonly sources?: readonly { readonly outputMessageId: string; readonly outputPart: number; readonly entryId: string; readonly messageId: string; readonly part: number }[];
 }
 
 interface ProposalRow { context_id: string; base_revision: number; author: string; via: string; cause: string; turn_id: string | null; status: string }
@@ -85,14 +84,6 @@ export class SessionProposals {
         void this.sql`INSERT INTO context_proposal_entries(actor_id,proposal_id,entry_id,expected_message_id,message_id,position)
           VALUES(${actorId},${proposal.id},${change.entryId},${change.expected?.messageId ?? null},${change.replacement?.messageId ?? null},${change.replacement?.position ?? null})`;
       }
-
-      for (const source of proposal.sources ?? []) {
-        this.validateExpected(base.get(source.entryId), { messageId: source.messageId });
-
-        if (!proposal.changes.some(change => change.replacement?.messageId === source.outputMessageId)) throw new KinuError('bad_input', 'transformation source names an output outside the proposal');
-        void this.sql`INSERT INTO context_proposal_sources(actor_id,proposal_id,output_message_id,output_part_no,source_entry_id,source_message_id,source_part_no)
-          VALUES(${actorId},${proposal.id},${source.outputMessageId},${source.outputPart},${source.entryId},${source.messageId},${source.part})`;
-      }
     });
   }
 
@@ -128,13 +119,13 @@ export class SessionProposals {
       const actorId = this.actor.actorId;
 
       if (refusal !== null) {
-        void this.sql`UPDATE context_proposals SET deferred_reason=${refusal},deferred_at=${Date.now()} WHERE actor_id=${actorId} AND proposal_id=${id}`;
+        void this.sql`UPDATE context_proposals SET deferred_reason=${refusal} WHERE actor_id=${actorId} AND proposal_id=${id}`;
 
         return null;
       }
 
       const committed = this.context.commit(selected, { cause: proposal.cause, turnId, mutate: () => next, assertEpoch, proposal: { id, author: proposal.author } });
-      void this.sql`UPDATE context_proposals SET status='applied',deferred_reason=NULL,deferred_at=NULL WHERE actor_id=${actorId} AND proposal_id=${id}`;
+      void this.sql`UPDATE context_proposals SET status='applied',deferred_reason=NULL WHERE actor_id=${actorId} AND proposal_id=${id}`;
 
       return committed;
     });

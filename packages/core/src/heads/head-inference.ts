@@ -57,7 +57,7 @@ export class HeadCapture {
   recordEvidence(e: Evidence): void { this.evidence.push(e); }
   recordDecision(d: Decision): void { this.decisions.push(d); }
   recordArtifact(a: ArtifactRef): void { this.artifacts.push(a); }
-  /** `result` is the projected output: this row is the head's only audit trail (`head_journal.tool_calls_json`). */
+  /** `result` is the projected output. */
   recordToolCall(call: HeadToolCall): void {
     this.toolCalls.push(call);
   }

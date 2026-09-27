@@ -146,9 +146,7 @@ describe('v2 e2e: branching heads → merge', () => {
       expect(r.summary).not.toBeNull();
     }
 
-    const cached = present(journal.readCachedMerge('root-1'), 'the cached merge for root-1');
-
-    expect(cached.mergedNarrative).toBe(result.mergedNarrative);
+    expect(journal.readRun('root-1')?.merge?.narrative).toBe(result.mergedNarrative);
   });
 });
 
@@ -213,9 +211,8 @@ describe('v2 e2e: scaffold shadow rollout', () => {
 
     for (let i = 0; i < 5; i++) {
       recordShadowEvaluation(rt.storage.sql, rt.actor, {
-        currentVersion: 0, pendingVersion: 1,
-        task: `t${i}`, currentOutput: 'c', pendingOutput: 'p',
-        judgeResult: judge('pending'),
+        pendingVersion: 1,
+        task: `t${i}`, judgeResult: judge('pending'),
       });
     }
 

@@ -81,11 +81,10 @@ describe('shadow context parity', () => {
     expect(result.skipped).toBe(false);
     expect(result.evaluation?.winner).toBe('tie');
 
-    const row = rt.storage.sql<{ pending_output: string; winner: string }>`
-      SELECT pending_output, winner FROM scaffold_evaluations
+    const row = rt.storage.sql<{ winner: string }>`
+      SELECT winner FROM scaffold_evaluations
       WHERE actor_id = ${rt.actor.actorId}`[0];
 
-    expect(row.pending_output).toBe(CONTEXT_AWARE_ANSWER);
     expect(row.winner).toBe('tie');
   });
 

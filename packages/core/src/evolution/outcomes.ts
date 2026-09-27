@@ -225,7 +225,6 @@ const TURN_OUTCOMES_DDL = `(
     actor_id TEXT NOT NULL,
     id TEXT NOT NULL,
     turn_id TEXT,
-    session_id TEXT NOT NULL DEFAULT 'default',
     outcome TEXT NOT NULL CHECK (outcome IN (${sqlCheckList(TURN_OUTCOMES)})),
     confidence REAL NOT NULL,
     source TEXT NOT NULL CHECK (source IN (${sqlCheckList(TURN_OUTCOME_SOURCES)})),
@@ -248,7 +247,6 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec): void {
     actor_id   TEXT NOT NULL,
     effect_key TEXT NOT NULL,
     answer     TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, effect_key)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS lessons ${LESSONS_DDL}`);
@@ -397,7 +395,6 @@ export function ensembleLabels(sql: SqlExecutor, actor: ActorHandle): EnsembleLa
 
 export interface RecordTurnOutcomeInput {
   turnId?: string | null;
-  sessionId?: string;
   outcome: TurnOutcome;
   confidence: number;
   source: TurnOutcomeSource;
@@ -418,10 +415,10 @@ export function recordTurnOutcome(
   actor.assertCurrent();
   const id = `outc-${nanoid()}`;
   void sql`INSERT INTO turn_outcomes
-        (actor_id, id, turn_id, session_id, outcome, confidence, source,
+        (actor_id, id, turn_id, outcome, confidence, source,
          user_message, assistant_response, followup, scaffold_version, created_at, evidence)
       VALUES
-        (${actor.actorId}, ${id}, ${input.turnId ?? null}, ${input.sessionId ?? 'default'}, ${input.outcome},
+        (${actor.actorId}, ${id}, ${input.turnId ?? null}, ${input.outcome},
          ${input.confidence}, ${input.source}, ${evidenceWindow(input.userMessage, EVIDENCE_BUDGETS.storedUserMessage)},
          ${evidenceWindow(input.assistantResponse, EVIDENCE_BUDGETS.storedAssistantResponse)},
          ${input.followup === null || input.followup === undefined ? null : evidenceWindow(input.followup, EVIDENCE_BUDGETS.storedFollowup)},
@@ -432,7 +429,7 @@ export function recordTurnOutcome(
 }
 
 interface RawOutcomeRow {
-  id: string; turn_id: string | null; session_id: string; outcome: TurnOutcome;
+  id: string; turn_id: string | null; outcome: TurnOutcome;
   confidence: number; source: TurnOutcomeSource; user_message: string;
   assistant_response: string; followup: string | null;
   scaffold_version: number | null; created_at: number; evidence: string | null;
@@ -440,7 +437,7 @@ interface RawOutcomeRow {
 
 function toOutcomeRow(r: RawOutcomeRow): TurnOutcomeRow {
   return {
-    id: r.id, turnId: r.turn_id, sessionId: r.session_id, outcome: r.outcome,
+    id: r.id, turnId: r.turn_id, outcome: r.outcome,
     confidence: r.confidence, source: r.source, userMessage: r.user_message,
     assistantResponse: r.assistant_response, followup: r.followup,
     scaffoldVersion: r.scaffold_version, createdAt: r.created_at,

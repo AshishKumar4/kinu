@@ -155,7 +155,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
         identity: CALLS, descriptor: null, artifact: 'solve()', value: 23,
         detail: '23 calls', measured: null, preset: 'optimise', label: null,
         rootId: 'search-new', configDigest: 'cfg-1', depth: 5, branches: 3,
-        floor: null, costUsd: null, costTokens: null, at: 20_000, ...over,
+        floor: null, costTokens: null, at: 20_000, ...over,
       },
     });
   };

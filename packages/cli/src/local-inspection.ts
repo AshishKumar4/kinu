@@ -284,7 +284,7 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Arra
 
     return all<{ path: string; text: string; start_line: number; end_line: number }>(
       db,
-      `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY updated_at DESC LIMIT ?`,
+      `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY rowid DESC LIMIT ?`,
       `%${q}%`,
       window,
     ).map((row) => ({ path: row.path, text: row.text, startLine: row.start_line, endLine: row.end_line }));

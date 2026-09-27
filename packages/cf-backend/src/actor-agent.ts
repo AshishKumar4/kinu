@@ -96,8 +96,8 @@ import {
   nanoid,
   type HeadJournal, LiveHeadJournal,
   type HeadStreamFrame,
-  type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
-  type SerializedMessage, type HeadRuntime, type HeadGrounding, type MergeResult,
+  type HeadId, type HeadInput, type HeadReport,
+  type SerializedMessage, type HeadRuntime, type HeadGrounding,
   readMemoryTail,
   type RunEventRecorder,
   // Spend governor is opt-in: no label means no cap.
@@ -2124,8 +2124,8 @@ export abstract class ActorAgent extends Agent<Env> {
     this.headJournal.recordReport(report);
   }
 
-  async headJournalCacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): Promise<void> {
-    this.headJournal.cacheMerge(rootId, result, strategy);
+  async headJournalCacheMerge(rootId: HeadId, narrative: string): Promise<void> {
+    this.headJournal.cacheMerge(rootId, narrative);
   }
 
   private _evolutionSettling: AsyncTaskOwner | null = null;

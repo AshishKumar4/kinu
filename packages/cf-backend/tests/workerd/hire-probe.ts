@@ -180,7 +180,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     const inFlight = this.probeState.storage.sql.exec<{ n: number }>(
       `SELECT COUNT(*) AS n FROM actor_turn_claims c JOIN workspace_actors a ON a.actor_id = c.actor_id
-       WHERE a.kind = 'subordinate' AND c.status = 'admitted'`).one().n;
+       WHERE a.kind = 'subordinate' AND c.outcome IS NULL`).one().n;
 
     diagnostics.event('probe.wake_returned', { delegatedTurnsInFlight: inFlight });
 

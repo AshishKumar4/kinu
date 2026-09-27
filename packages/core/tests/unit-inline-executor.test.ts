@@ -62,12 +62,12 @@ describe('workspace provider (InlineExecutor)', () => {
   test('listTools returns an array (not a string)', async () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
-      name: 'alpha', description: 'first', params: null,
-      code: 'async () => "a"', scope: 'local',
+      name: 'alpha', description: 'first',
+      code: 'async () => "a"',
     });
     rt.craftStore.create({
-      name: 'beta', description: 'second', params: null,
-      code: 'async () => "b"', scope: 'local',
+      name: 'beta', description: 'second',
+      code: 'async () => "b"',
     });
 
     const exec = buildExec(rt);
@@ -89,8 +89,8 @@ describe('workspace provider (InlineExecutor)', () => {
     const { rt } = createTestRuntime();
 
     const ghost: CraftedTool = {
-      name: 'ghost', description: 'no row yet', params: null,
-      code: 'async () => 1', scope: 'local', createdAt: 0, updatedAt: 0,
+      name: 'ghost', description: 'no row yet',
+      code: 'async () => 1', createdAt: 0, updatedAt: 0,
     };
 
     const exec = createInlineExecutor({

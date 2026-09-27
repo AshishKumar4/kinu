@@ -732,7 +732,6 @@ describe('CLI TUI layout', () => {
                 depth: 1,
               }],
               createdAt: 1,
-              pickedAt: null,
             }}
             terminal={{ width: 40, height: 8 }}
             onSelect={() => {}}

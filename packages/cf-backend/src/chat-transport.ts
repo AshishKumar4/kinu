@@ -116,7 +116,7 @@ class OpenParts {
 }
 
 /** A frame's newest messages; the pane pages older rows from storage. */
-export const TRANSCRIPT_WINDOW = 60;
+const TRANSCRIPT_WINDOW = 60;
 
 function transcriptFrame(history: readonly UIMessage[]): string {
   return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history });

@@ -64,8 +64,7 @@ describe('archive lineage + branch-from-archived round-trip', () => {
     const v1Version = present(v1.version, 'the accepted v1 version');
 
     recordShadowEvaluation(rt.storage.sql, rt.actor, {
-      currentVersion: 0, pendingVersion: v1Version, task: 't1',
-      currentOutput: 'c', pendingOutput: 'p',
+      pendingVersion: v1Version, task: 't1',
       judgeResult: { winner: 'current', rationale: 'regressed', currentScore: 0.8, pendingScore: 0.3 },
     });
     await applyPromotionDecision(rt, present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending v1 proposal'), 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
@@ -93,8 +92,7 @@ describe('archive lineage + branch-from-archived round-trip', () => {
 
     // And the v2 pending can win + promote like any trunk proposal.
     recordShadowEvaluation(rt.storage.sql, rt.actor, {
-      currentVersion: 0, pendingVersion: v2Version, task: 't2',
-      currentOutput: 'c', pendingOutput: 'p',
+      pendingVersion: v2Version, task: 't2',
       judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.4, pendingScore: 0.9 },
     });
     const outcome = await applyPromotionDecision(rt, present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending v2 proposal'), 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
@@ -406,8 +404,7 @@ describe('rejected proposals are queryable evidence', () => {
 
     for (const winner of ['current', 'current', 'pending'] as const) {
       recordShadowEvaluation(rt.storage.sql, rt.actor, {
-        currentVersion: 0, pendingVersion: proposedVersion, task: 't',
-        currentOutput: 'a', pendingOutput: 'b',
+        pendingVersion: proposedVersion, task: 't',
         judgeResult: { winner, rationale: `${winner} was clearer`, currentScore: 1, pendingScore: 0 },
       });
     }

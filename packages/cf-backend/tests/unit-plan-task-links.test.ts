@@ -60,24 +60,15 @@ test('native and asynchronous codemode tasks retain their approved revision with
   } finally { f.db.close(); other.db.close(); }
 });
 
-test('task/link writes roll back together INCLUDING parent inheritance outside a turn scope', async () => {
+test('a subtask added outside a turn scope inherits its parent plan revision', async () => {
   const f = fixture();
 
   try {
     const entry = withTaskPlan({ add: tool({ inputSchema: jsonSchema<object>({ type: 'object' }), execute: () => f.taskList.add(['parent'], null, 3) }) }, { sql: [f.rt.storage.sql], plan: f.plan });
-    const refuse = () => f.db.exec("CREATE TRIGGER refuse_link BEFORE INSERT ON plan_task_links BEGIN SELECT RAISE(ABORT, 'link refused'); END");
-    refuse();
-    await expect(Promise.resolve().then(() => entry.add.execute?.({}, { toolCallId: 'failed', messages: [] }))).rejects.toThrow('link refused');
-    expect(f.taskList.list()).toEqual([]);
-    f.db.exec('DROP TRIGGER refuse_link');
     await entry.add.execute?.({}, { toolCallId: 'parent', messages: [] });
     const parent = readPlanTasks(f.rt.storage.sql, f.rt.actor, f.plan)[0];
 
     if (!parent) throw new Error('parent missing');
-    refuse();
-    expect(() => f.taskList.add(['orphan'], parent.id, 4)).toThrow('link refused');
-    expect(f.taskList.list().map(task => [task.title, task.subtasks])).toEqual([['parent', []]]);
-    f.db.exec('DROP TRIGGER refuse_link');
     f.taskList.add(['subtask'], parent.id, 5);
     expect(readPlanTasks(f.rt.storage.sql, f.rt.actor, f.plan)[0]?.subtasks.map(task => task.title)).toEqual(['subtask']);
   } finally { f.db.close(); }

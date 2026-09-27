@@ -264,8 +264,7 @@ export const ParityRowsSchema = v.object({
   })),
   terminalEffects: v.array(v.object({
     sequenceId: v.string(), effectKey: v.string(), effectName: v.string(), scope: v.string(), seq: v.number(),
-    input: v.string(), lane: v.string(), status: v.string(), outcome: v.nullable(v.string()),
-    attempts: v.number(), settled: v.boolean(),
+    input: v.string(), lane: v.string(), status: v.string(), attempts: v.number(),
   })),
   runEvents: v.array(v.object({ runId: v.string(), type: v.string(), payload: v.string() })),
 });

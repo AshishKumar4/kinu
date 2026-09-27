@@ -4,6 +4,8 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
 export const WORKSPACE_IDENTITY_DDL =
   `CREATE TABLE IF NOT EXISTS workspace_identity (
+    -- One row per database: a second identity is refused, not arbitrated by readers.
+    singleton  INTEGER NOT NULL DEFAULT 1 UNIQUE CHECK (singleton = 1),
     id         TEXT NOT NULL,
     name       TEXT NOT NULL,
     owner_user_id TEXT NOT NULL DEFAULT '',
@@ -99,7 +101,6 @@ const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     staged_conversation_entries     INTEGER NOT NULL DEFAULT 0,
     staged_conversation_entry_parts INTEGER NOT NULL DEFAULT 0,
     staged_context_members          INTEGER NOT NULL DEFAULT 0,
-    staged_files                    INTEGER NOT NULL DEFAULT 0,
     transfer_id                     TEXT,
     expected_seq                    INTEGER NOT NULL DEFAULT 0,
     section_cursor                  INTEGER NOT NULL DEFAULT 0,

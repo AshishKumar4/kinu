@@ -72,12 +72,8 @@ function seedSplit(db: Database, actorId: string, run: {
   }
 
   if (run.merged) {
-    db.query(`INSERT INTO head_merge_results
-      (actor_id, root_id, merged_narrative, selected_decisions_json, unresolved_questions_json,
-       recommendations_json, cost_head_count, cost_total_tokens, cost_total_wall_ms,
-       cost_max_depth, merged_at, merge_strategy)
-      VALUES (?, ?, 'merged', '[]', '[]', '[]', ?, 10, 10, 1, ?, ?)`)
-      .run(actorId, run.rootId, run.heads, run.at, run.strategy ?? 'synthesize');
+    db.query(`INSERT INTO head_merge_results (actor_id, root_id, merged_narrative) VALUES (?, ?, 'merged')`)
+      .run(actorId, run.rootId);
   }
 }
 
@@ -398,7 +394,6 @@ describe('Pareto canvas evidence', () => {
           aggregated: [],
           tokens: null,
         },
-        now: 1_000,
       });
     }
 

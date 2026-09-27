@@ -68,7 +68,6 @@ export interface PlanReview {
   readonly handoffAccepted: boolean;
   readonly createdAt: number;
   readonly updatedAt: number;
-  readonly decidedAt: number | null;
 }
 
 export type PlanReviewResult =

@@ -41,7 +41,7 @@ function headRun(over: Partial<HeadRunView> = {}): HeadRunView {
         spawnedAt: 0, lastStepAt: null, decisions: [],
       },
     ],
-    merge: { narrative: 'X, with Y’s guard rail', headCount: 2, totalTokens: 18 },
+    merge: { narrative: 'X, with Y’s guard rail' },
     ...over,
   };
 }

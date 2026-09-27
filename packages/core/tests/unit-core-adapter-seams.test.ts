@@ -658,7 +658,7 @@ describe('craft failure attribution — the same marker in both substrates', () 
 
     const stored: CraftedTool = {
       name: 'f', description: '', code: 'async () => 1',
-      params: null, scope: 'local', createdAt: 0, updatedAt: 0,
+      createdAt: 0, updatedAt: 0,
     };
 
     expect(toCraftedToolSource(stored)?.description).toBe('');

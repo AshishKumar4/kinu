@@ -31,7 +31,7 @@ import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, 
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
-import { TRANSCRIPT_WINDOW, type ChatWire } from './chat-transport';
+import type { ChatWire } from './chat-transport';
 import { DELEGATION_LANE_FIBER } from './fiber-recovery';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
@@ -107,7 +107,7 @@ import {
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type BackgroundJob, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
-  type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
+  type AlarmScheduler,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
   listReplayEvals, type ReplayEvalSummary,
   alignmentConvergence, type AlignmentConvergence,
@@ -346,6 +346,9 @@ const ACTIVITY_LOG_WINDOW = 200;
 /** Widest single stream one terminal row carries out of `executor_output` (~200 lines at 80 cols).
  * The clip is always declared, never silent; see {@link OrchestratorAgent.getExecutorOutput}. */
 const EXECUTOR_OUTPUT_CLIP = 16 * 1024;
+
+/** The terminal rows a reload shows per executor, and all `executor_output` keeps: an older row reaches no reader. */
+const EXECUTOR_HISTORY_ROWS = 50;
 
 /** `stdout_len`/`stderr_len` are the stored lengths, so a reader can tell a short command
  *  from a clipped one. */
@@ -964,7 +967,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       recordSplit: async (rootId, rationale, spawnedAt) => { await this.headJournalRecordSplit(rootId, rationale, spawnedAt); },
       insertSpawn: async (childInput) => { await this.headJournalInsertSpawn(childInput); },
       recordReport: async (report) => { await this.headJournalRecordReport(report); },
-      cacheMerge: async (rootId, result, strategy) => { await this.headJournalCacheMerge(rootId, result, strategy); },
+      cacheMerge: async (rootId, narrative) => { await this.headJournalCacheMerge(rootId, narrative); },
     };
 
     const runtimeForSplit = this.getCFHeadRuntime();
@@ -1404,32 +1407,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
   protected get replyChannels(): ReplyChannelStore {
     if (!this._replyChannels) {
-      const wsDispatcher: ReplyDispatcher = {
-        dispatch: async (_channel: ReplyChannelRow, payload: JsonValue) => {
-          try {
-            const parsedText = v.safeParse(v.string(), payload);
-            const parsedContent = v.safeParse(v.looseObject({ content: v.optional(JsonValueSchema) }), payload);
-            const content = parsedContent.success ? parsedContent.output.content ?? payload : payload;
-            const text = parsedText.success ? parsedText.output : JSON.stringify(content);
-
-            const message = {
-              id: nanoid(),
-              role: 'assistant',
-              parts: [{ type: 'text', text }],
-            } as const;
-
-            this.broadcast(JSON.stringify({
-              type: 'cf_agent_chat_messages',
-              messages: [...await this.chatTranscript.history(undefined, TRANSCRIPT_WINDOW), message],
-            }));
-
-            return { delivered: true };
-          } catch (err) {
-            return { delivered: false, detail: renderThrownChain({ cause: err }) };
-          }
-        },
-      };
-
       // Context resolves per dispatch so binding/display-name changes never go stale.
       const emailDispatcher = createEmailThreadDispatcher(() => ({
         email: this.env.EMAIL,
@@ -1438,7 +1415,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }));
 
       this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, this.actorHandle(), {
-        ws_session: wsDispatcher,
         // Lazily bound: PeerHub needs this store to construct.
         peer_back: {
           dispatch: (channel, payload) => this.peerHub.dispatchPeerBack(channel, payload),
@@ -3371,7 +3347,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         latestAt: unseen[0]?.at ?? Date.now(),
       },
       curriculum: listProposedTasks(this.rt, 'pending'),
-      pendingPlans: listPendingPlanReviews(this.boundSql, this.rt.actor.workspaceId),
+      pendingPlans: listPendingPlanReviews(this.boundSql),
     });
   }
 
@@ -4548,14 +4524,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Streams are clipped to {@link EXECUTOR_OUTPUT_CLIP} chars with true length beside them.
    * Must filter by actor: executor ids are shared across actors in the workspace box.
    */
-  async getExecutorOutput(executorId: string, limit = 50) {
+  async getExecutorOutput(executorId: string) {
     return this.sql<ExecutorOutputRow>`SELECT id, executor, command,
         substr(stdout, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stdout, length(stdout) AS stdout_len,
         substr(stderr, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stderr, length(stderr) AS stderr_len,
         exit_code, created_at
       FROM executor_output
       WHERE actor_id = ${this.actorHandle().actorId} AND executor = ${executorId}
-      ORDER BY created_at DESC LIMIT ${limit}`;
+      ORDER BY created_at DESC, rowid DESC LIMIT ${EXECUTOR_HISTORY_ROWS}`;
+  }
+
+  private recordExecutorOutput(
+    executorId: string, command: string, output: { stdout: string | null; stderr: string; exitCode: number },
+  ): void {
+    const actorId = this.actorHandle().actorId;
+
+    void this.sql`INSERT INTO executor_output (actor_id, executor, command, stdout, stderr, exit_code)
+      VALUES (${actorId}, ${executorId}, ${command}, ${output.stdout}, ${output.stderr}, ${output.exitCode})`;
+    void this.sql`DELETE FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
+      AND rowid NOT IN (SELECT rowid FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
+        ORDER BY created_at DESC, rowid DESC LIMIT ${EXECUTOR_HISTORY_ROWS})`;
   }
 
   /** Seals reportless branch heads with an error report; the status change is the cursor.
@@ -4616,7 +4604,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
         name: e.name,
-        outputs: await this.getExecutorOutput(e.name, 50),
+        outputs: await this.getExecutorOutput(e.name),
       })),
     );
 
@@ -4807,8 +4795,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         ? { stdout: result, stderr: '', exitCode: 0 }
         : { stdout: result.error, stderr: result.error, exitCode: 1, refusal: result };
 
-      void this.sql`INSERT INTO executor_output (actor_id, executor, command, stdout, stderr, exit_code)
-        VALUES (${this.actorHandle().actorId}, ${executorId}, ${command}, ${output.stdout}, ${output.stderr}, ${output.exitCode})`;
+      this.recordExecutorOutput(executorId, command, output);
 
       this.broadcast(JSON.stringify({
         type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now(),
@@ -4818,8 +4805,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     } catch (err) {
       const refusal = refusalOf(toKinuError({ doing: 'execute on ' + executorId, cause: err, otherwise: 'io' }));
       const errMsg = refusal.error;
-      void this.sql`INSERT INTO executor_output (actor_id, executor, command, stderr, exit_code)
-        VALUES (${this.actorHandle().actorId}, ${executorId}, ${command}, ${errMsg}, ${1})`;
+      this.recordExecutorOutput(executorId, command, { stdout: null, stderr: errMsg, exitCode: 1 });
       // Broadcast errors too: the UI terminal renders only from broadcasts. (STABILITY-AUDIT §B4.)
       this.broadcast(JSON.stringify({
         type: 'executor-output', executor: executorId, command, stdout: '',
@@ -5478,12 +5464,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listRefinements(this.refinementDeps, limit);
   }
 
-  /** Called by `webhookDeliveryRoutes` so publish + dedupe + reply channel open run atomically in this DO. */
+  /** Called by `webhookDeliveryRoutes` so publish + dedupe run atomically in this DO. */
   async acceptWebhookDelivery(opts: WebhookDelivery): Promise<WebhookDeliveryResult> {
     return acceptWebhookDelivery({
       triggers: this.triggerRegistry,
       log: this.eventLog,
-      replies: this.replyChannels,
       vfs: this.rt.storage.vfs,
       secrets: this.webhookSecrets,
       sql: this.ctx.storage.sql,

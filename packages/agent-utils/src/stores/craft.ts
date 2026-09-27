@@ -1,41 +1,20 @@
 import type { SqlExecutor, SqlRow } from "../types";
 import type { CraftedTool, CraftedToolProvider } from "../codemode/builder";
 import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from "../memory/query";
-import * as v from "valibot";
 
 type CraftedToolRow = SqlRow<{
 	name: string;
 	description: string;
-	params: string | null;
 	code: string;
-	scope: string;
 	created_at: number;
 	updated_at: number;
 }>;
 
-const StringDictionarySchema = v.record(v.string(), v.string());
-
-function parseParams(params: string): Record<string, string> {
-	const value: unknown = JSON.parse(params);
-
-	return v.parse(StringDictionarySchema, value, {
-		message: "crafted tool params must be a string dictionary",
-	});
-}
-
-function isCraftScope(scope: string): scope is CraftedTool["scope"] {
-	return scope === "local" || scope === "shared";
-}
-
 function rowToTool(row: CraftedToolRow): CraftedTool {
-	if (!isCraftScope(row.scope)) throw new Error(`invalid crafted tool scope: ${row.scope}`);
-
 	return {
 		name: row.name,
 		description: row.description,
-		params: row.params ? parseParams(row.params) : null,
 		code: row.code,
-		scope: row.scope,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 	};
@@ -47,9 +26,7 @@ export function initCraftedToolsTables(sql: SqlExecutor): void {
 		CREATE TABLE IF NOT EXISTS crafted_tools (
 			name TEXT PRIMARY KEY,
 			description TEXT NOT NULL DEFAULT '',
-			params TEXT,
 			code TEXT NOT NULL DEFAULT '',
-			scope TEXT NOT NULL DEFAULT 'local',
 			created_at INTEGER NOT NULL DEFAULT 0,
 			updated_at INTEGER NOT NULL DEFAULT 0,
 			score REAL NOT NULL DEFAULT 0.5,
@@ -92,46 +69,38 @@ export class CraftStore implements CraftedToolProvider {
 		initCraftedToolsTables(this.sql);
 	}
 
-	create(input: { name: string; description: string; params?: Record<string, string> | null; code: string; scope?: CraftedTool["scope"] }): CraftedTool {
+	create(input: { name: string; description: string; code: string }): CraftedTool {
 		const now = Date.now();
-		const paramsJson = input.params ? JSON.stringify(input.params) : null;
-		const scope = input.scope ?? "local";
 
 		void this.sql`
-			INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
-			VALUES (${input.name}, ${input.description}, ${paramsJson}, ${input.code}, ${scope}, ${now}, ${now})
+			INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
+			VALUES (${input.name}, ${input.description}, ${input.code}, ${now}, ${now})
 		`;
 
 		return {
 			name: input.name,
 			description: input.description,
-			params: input.params ?? null,
 			code: input.code,
-			scope,
 			createdAt: now,
 			updatedAt: now,
 		};
 	}
 
-	update(name: string, patch: { description?: string; params?: Record<string, string> | null; code?: string; scope?: CraftedTool["scope"] }): CraftedTool | null {
+	update(name: string, patch: { description?: string; code?: string }): CraftedTool | null {
 		const existing = this.get(name);
 
 		if (!existing) return null;
 
 		const now = Date.now();
 		const desc = patch.description ?? existing.description;
-		// `params: null` clears them, so only an absent key keeps the existing ones.
-		const params = patch.params === undefined ? existing.params : patch.params;
-		const paramsJson = params ? JSON.stringify(params) : null;
 		const code = patch.code ?? existing.code;
-		const scope = patch.scope ?? existing.scope;
 
 		void this.sql`
-			UPDATE crafted_tools SET description = ${desc}, params = ${paramsJson}, code = ${code}, scope = ${scope}, updated_at = ${now}
+			UPDATE crafted_tools SET description = ${desc}, code = ${code}, updated_at = ${now}
 			WHERE name = ${name}
 		`;
 
-		return { name, description: desc, params, code, scope, createdAt: existing.createdAt, updatedAt: now };
+		return { name, description: desc, code, createdAt: existing.createdAt, updatedAt: now };
 	}
 
 	delete(name: string): boolean {

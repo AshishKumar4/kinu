@@ -1420,7 +1420,6 @@ let galleryAgentPlan: PlanReview = {
   handoffAccepted: false,
   createdAt: NOW,
   updatedAt: NOW,
-  decidedAt: null,
 };
 
 /* The walk-back: two user turns, so there is a second message to revert to. `?transcript=revert` seeds it;
@@ -1536,7 +1535,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     }],
     tasks: document.documentElement.dataset.workMoved === "1" ? [{
       owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
-      tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", createdAt: 1, updatedAt: 1, note: null, subtasks: [] }],
+      tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
     }] : [],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
@@ -1583,7 +1582,6 @@ function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
     feedback: feedback ?? null,
     handoffAccepted: true,
     updatedAt: Date.now(),
-    decidedAt: Date.now(),
   };
 
   return { value: { ok: true, plan: galleryAgentPlan, queued: true } };
@@ -1620,7 +1618,6 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       feedback: null,
       handoffAccepted: false,
       updatedAt: NOW,
-      decidedAt: null,
     };
 
     return { value: { name, displayName: "", subordinate: entry } };
@@ -2204,7 +2201,6 @@ const MERGED_RUN: HeadRunView = {
   ],
   merge: {
     narrative: "Three real call sites left — apply-coupon.ts and both reads in pricing.ts — and the same ?? inferKind guard covers all of them. The cart serializer is already null-safe. The admin report could not be checked; that package is not in this sandbox. The API routes were still being walked when this merged, so they are unread.",
-    headCount: 5, totalTokens: 24_820,
   },
 };
 
@@ -4136,24 +4132,24 @@ function ChatSlateFrame() {
 const AGENT_TASKS = [
   {
     id: "t1", parentId: null, title: "Reproduce the SAVE20 coupon 500", status: "done",
-    createdAt: NOW - 52e5, updatedAt: NOW - 44e5, note: null, subtasks: [],
+    updatedAt: NOW - 44e5, note: null, subtasks: [],
   },
   {
     id: "t2", parentId: null, title: "Patch the gateway timeout that swallows the coupon lookup",
-    status: "active", createdAt: NOW - 52e5, updatedAt: NOW - 8e5, note: null,
+    status: "active", updatedAt: NOW - 8e5, note: null,
     subtasks: [
-      { id: "t5", parentId: "t2", title: "Raise the upstream deadline to 60s", status: "done", createdAt: NOW - 30e5, updatedAt: NOW - 21e5, note: null },
-      { id: "t6", parentId: "t2", title: "Stop retrying a request the client already abandoned", status: "active", createdAt: NOW - 30e5, updatedAt: NOW - 6e5, note: "Client already bails at 8s — retrying past that is burn, not robustness." },
-      { id: "t7", parentId: "t2", title: "Check the same path in the checkout worker", status: "open", createdAt: NOW - 30e5, updatedAt: NOW - 30e5, note: null },
+      { id: "t5", parentId: "t2", title: "Raise the upstream deadline to 60s", status: "done", updatedAt: NOW - 21e5, note: null },
+      { id: "t6", parentId: "t2", title: "Stop retrying a request the client already abandoned", status: "active", updatedAt: NOW - 6e5, note: "Client already bails at 8s — retrying past that is burn, not robustness." },
+      { id: "t7", parentId: "t2", title: "Check the same path in the checkout worker", status: "open", updatedAt: NOW - 30e5, note: null },
     ],
   },
   {
     id: "t3", parentId: null, title: "Add a regression test for the expired-coupon branch",
-    status: "open", createdAt: NOW - 52e5, updatedAt: NOW - 52e5, note: null, subtasks: [],
+    status: "open", updatedAt: NOW - 52e5, note: null, subtasks: [],
   },
   {
     id: "t4", parentId: null, title: "Rewrite the coupon docs page", status: "dropped",
-    createdAt: NOW - 52e5, updatedAt: NOW - 40e5, note: null, subtasks: [],
+    updatedAt: NOW - 40e5, note: null, subtasks: [],
   },
 ];
 
@@ -4166,7 +4162,7 @@ const WORKSPACE_WORK = {
         id: "plan-gateway", sessionId: "default", revision: 3,
         content: "# Gateway timeout repair\n\nPatch the gateway timeout, then prove the expired-coupon branch.",
         status: "pending", annotations: [], feedback: null, handoffAccepted: false,
-        createdAt: NOW - 53e5, updatedAt: NOW - 9e5, decidedAt: null,
+        createdAt: NOW - 53e5, updatedAt: NOW - 9e5,
       },
       tasks: AGENT_TASKS.filter((task) => task.id === "t2"),
     },
@@ -4176,10 +4172,10 @@ const WORKSPACE_WORK = {
         id: "plan-courier", sessionId: "default", revision: 1,
         content: "# Courier rollout\n\nStage the rollout and verify the receipt.",
         status: "approved", annotations: [], feedback: null, handoffAccepted: true,
-        createdAt: NOW - 60e5, updatedAt: NOW - 50e5, decidedAt: NOW - 50e5,
+        createdAt: NOW - 60e5, updatedAt: NOW - 50e5,
       },
       tasks: [
-        { id: "t8", parentId: null, title: "Stage the rollout", status: "done", createdAt: NOW - 60e5, updatedAt: NOW - 55e5, note: null, subtasks: [] },
+        { id: "t8", parentId: null, title: "Stage the rollout", status: "done", updatedAt: NOW - 55e5, note: null, subtasks: [] },
       ],
     },
   ],

@@ -327,7 +327,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
   async pendingSteerFileRows(): Promise<PendingSteerFile[]> {
     return this.actorState.storage.sql
-      .exec('SELECT actor_id, steer_id, filename, media_type, url FROM pending_steer_files ORDER BY actor_id, steer_id, seq')
+      .exec(`SELECT p.actor_id, p.id AS steer_id, f.value ->> 'filename' AS filename, f.value ->> 'mediaType' AS media_type,
+          f.value ->> 'url' AS url FROM pending_steers p, json_each(p.files_json) f ORDER BY p.actor_id, p.id, f.key`)
       .toArray()
       .map((row) => ({
         actorId: textColumn(row.actor_id),
@@ -380,11 +381,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
           id: textColumn(row.id), kind: textColumn(row.kind), turnId: row.turn_id === null ? null : textColumn(row.turn_id),
           variant: row.variant === null ? null : textColumn(row.variant), consumed: row.consumed_at !== null, payload: textColumn(row.payload),
         })),
-      terminalEffects: sql.exec('SELECT sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, outcome, attempts, settled_at FROM terminal_effects ORDER BY rowid').toArray()
+      terminalEffects: sql.exec('SELECT sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts FROM terminal_effects ORDER BY rowid').toArray()
         .map((row) => ({
           sequenceId: textColumn(row.sequence_id), effectKey: textColumn(row.effect_key), effectName: textColumn(row.effect_name), scope: textColumn(row.scope),
           seq: Number(row.seq), input: textColumn(row.input_json), lane: textColumn(row.lane), status: textColumn(row.status),
-          outcome: row.outcome === null ? null : textColumn(row.outcome), attempts: Number(row.attempts), settled: row.settled_at !== null,
+          attempts: Number(row.attempts),
         })),
       runEvents: sql.exec("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'step_finish', 'tool_call_end', 'run_end') ORDER BY rowid").toArray()
         .map((row) => ({ runId: textColumn(row.run_id), type: textColumn(row.type), payload: textColumn(row.payload) })),
@@ -396,9 +397,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       `INSERT INTO agent_log
          (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
           trust, priority, payload_visibility, payload, received_at,
-          schema_version, dedupe_key, consumed_at)
+          dedupe_key, consumed_at)
        VALUES (?, ?, 'event', 'evt-seeded-dead', 0, NULL, 'tr-seeded', 'webhook_bearer', 'webhook',
-               'authenticated', 'normal', 'full', ?, 1, 1, NULL, 0)`,
+               'authenticated', 'normal', 'full', ?, 1, NULL, 0)`,
       this.actorHandle().actorId,
       `ev-seeded-${marker}`,
       JSON.stringify({

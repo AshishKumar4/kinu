@@ -1,6 +1,6 @@
 /**
  * The one `HeadRuntime`. Merge model, effort and spend label are owned by core's `headMergeLLM`;
- * `reportModelCall` is the only record of a merge's cost (`head_merge_results` sums the heads).
+ * `reportModelCall` is the only record of a merge's cost (`summarizeCost` sums the heads).
  */
 
 import {
