@@ -3,7 +3,8 @@
  * and routes. The procedure and why each step is there: docs/DEPLOYMENT.md, § Wrangler bindings.
  *
  *   bun scripts/reset.ts plan <environment>           what a reset deletes, read from wrangler.jsonc
- *   bun scripts/reset.ts wipe <environment> <record>  delete it, recorded in <record> and the releases bucket
+ *   bun scripts/reset.ts wipe <environment> <record>  delete it, recorded in <record> and the releases bucket;
+ *                                                     production asks for `reset production` typed at a terminal
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -26,6 +27,12 @@ export const ResetSchema = v.object({
 });
 
 export type Reset = v.InferOutput<typeof ResetSchema>;
+
+/** The newest reset, beside `resets/<tag>.json`: what a rollback must not cross. */
+export const LATEST_RESET_KEY = 'resets/latest.json';
+
+/** The words a production reset is confirmed with. */
+export const PRODUCTION_CONFIRMATION = 'reset production';
 
 /** Every class the migrations leave standing. */
 function carriedClasses(migrations: DeployedConfig['migrations']): readonly string[] {
@@ -111,8 +118,6 @@ async function wipe(environment: InfraEnvironment, recordFile: string, scratch: 
   const doomed = applications.filter((application) => names.has(application.name)
     || (application.namespace !== undefined && namespaces.has(application.namespace)));
 
-  for (const application of doomed) run(['containers', 'delete', application.id]);
-
   const tag = `reset-${new Date().toISOString().replace(/[-:]|\.\d+/gu, '')}`;
   const placeholder = join(scratch, 'wrangler.json');
 
@@ -134,6 +139,14 @@ async function wipe(environment: InfraEnvironment, recordFile: string, scratch: 
     throw new Error(`the placeholder uploaded as '${placeholderVersion}', and ${worker} does not serve it without Durable Objects`);
   }
 
+  console.log(`reset: ${worker} serves placeholder ${placeholderVersion} under ${tag}; deleted ${[...bound].map(([name, namespace]) => `${name} (${namespace})`).join(', ')}`);
+
+  // After the placeholder, so a refused upload leaves every application in place; each one is named as it goes.
+  for (const application of doomed) {
+    run(['containers', 'delete', application.id]);
+    console.log(`reset: deleted container application ${application.name} (${application.id})`);
+  }
+
   const reset: Reset = {
     environment,
     worker,
@@ -145,7 +158,11 @@ async function wipe(environment: InfraEnvironment, recordFile: string, scratch: 
   };
 
   writeFileSync(recordFile, JSON.stringify(reset));
-  run(['r2', 'object', 'put', `${bucket}/resets/${tag}.json`, '--file', recordFile, '--content-type', 'application/json', '--remote']);
+
+  for (const key of [`resets/${tag}.json`, LATEST_RESET_KEY]) {
+    run(['r2', 'object', 'put', `${bucket}/${key}`, '--file', recordFile, '--content-type', 'application/json', '--remote']);
+  }
+
   // Every eval bearer this machine keeps for the origin named a session the reset deleted; the tiers mint new ones.
   rmSync(dirname(evalSessionPath(origin(config), undefined)), { recursive: true, force: true });
   let answered = false;
@@ -161,6 +178,16 @@ async function wipe(environment: InfraEnvironment, recordFile: string, scratch: 
   return reset;
 }
 
+/** Asks on the terminal, and only there: piped input is no person's answer. */
+async function confirmedAtTerminal(): Promise<boolean> {
+  if (process.stdin.isTTY !== true) return false;
+  process.stderr.write(`Type '${PRODUCTION_CONFIRMATION}' to delete every Durable Object of production: `);
+
+  for await (const line of console) return line.trim() === PRODUCTION_CONFIRMATION;
+
+  return false;
+}
+
 async function main(argv: readonly string[], scratch: string): Promise<number> {
   const [command, environment, recordFile] = argv;
   const known = v.is(v.picklist(INFRA_ENVIRONMENTS), environment);
@@ -174,11 +201,15 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
   }
 
   if (known && command === 'wipe' && recordFile !== undefined) {
+    if (environment === 'production' && !await confirmedAtTerminal()) {
+      console.error(`reset: not confirmed at a terminal with '${PRODUCTION_CONFIRMATION}'; nothing was deleted.`);
+
+      return 1;
+    }
+
     const reset = await wipe(environment, recordFile, scratch);
 
-    console.log(`reset: ${reset.worker} deleted ${reset.classes.map((entry) => `${entry.className} (${entry.namespace})`).join(', ')}`);
-    console.log(`reset: container applications deleted: ${reset.applications.map((entry) => `${entry.name} (${entry.id})`).join(', ') || 'none'}`);
-    console.log(`reset: placeholder version ${reset.placeholderVersion} under tag ${reset.tag} answers /api/health with no build`);
+    console.log(`reset: placeholder ${reset.placeholderVersion} answers /api/health with no build; recorded at resets/${reset.tag}.json`);
 
     return 0;
   }

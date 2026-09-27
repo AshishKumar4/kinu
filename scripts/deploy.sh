@@ -182,23 +182,20 @@ export KINU_INFRA_ENVIRONMENT="$KINU_ENV"
 KINU_WORKER=""
 KINU_URL=""
 
-# Asked before the gates, so the answer is given at the terminal and not an hour
-# into the run. Read from stdin: a run with nothing typed deletes nothing.
+# The plan is shown before the gates. A production reset is confirmed inside
+# scripts/reset.ts wipe, at a terminal, just before it deletes, so a run with no
+# terminal to ask on is refused here rather than after the build.
 if [ "$KINU_RESET" = "1" ]; then
   if [ "$KINU_GATES_ONLY" = "1" ]; then
     echo -e "${RED}--reset deletes storage at the upload, and --gates-only stops before the build.${NC}"
     exit 2
   fi
+  if [ "$KINU_ENV" = "production" ] && [ ! -t 0 ]; then
+    echo -e "${RED}A production reset is confirmed at a terminal, and this run has none. Nothing was deployed or deleted.${NC}"
+    exit 1
+  fi
   echo -e "${BOLD}RESET: this deploy deletes every Durable Object of $KINU_ENV, with all its storage:${NC}"
   bun "$KINU_ROOT/scripts/reset.ts" plan "$KINU_ENV" || exit 1
-  if [ "$KINU_ENV" = "production" ]; then
-    KINU_RESET_ANSWER=""
-    read -r -p "Type 'reset production' to go on: " KINU_RESET_ANSWER || true
-    if [ "$KINU_RESET_ANSWER" != "reset production" ]; then
-      echo -e "${RED}Not confirmed. Nothing was deployed or deleted.${NC}"
-      exit 1
-    fi
-  fi
 fi
 
 # Captured during deploy for final summary
@@ -229,8 +226,8 @@ cleanup() {
   if [ "$status" -ne 0 ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ "$KINU_PROMOTE" = "1" ]; then
     echo -e "${RED}Production serves this red promotion. Return it to the build it took before: bun run deploy --rollback${NC}"
   fi
-  if [ "$status" -ne 0 ] && [ -s "$KINU_RESET_RECORD" ] && [ "${DEPLOY_PUBLISHED:-0}" != "1" ]; then
-    echo -e "${RED}$KINU_WORKER is reset and serves the placeholder ($KINU_RESET_RECORD). Deploy again without --reset.${NC}"
+  if [ "$status" -ne 0 ] && [ -n "$KINU_RESET_RECORD" ] && [ "${DEPLOY_PUBLISHED:-0}" != "1" ]; then
+    echo -e "${RED}The reset ran and the build never uploaded: the reset lines above say what $KINU_WORKER serves and what was deleted. Deploy again without --reset.${NC}"
   fi
 }
 trap cleanup EXIT INT TERM

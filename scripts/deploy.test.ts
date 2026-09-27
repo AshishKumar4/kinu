@@ -229,8 +229,6 @@ interface DeployRun {
   /** Record when each gate started and ended, each stub holding its slot for
    *  `spanSleep` seconds: the only way to see whether two rows overlapped. */
   readonly spans?: boolean;
-  /** What the operator types at the terminal. */
-  readonly typed?: string;
 }
 
 function runDeploy({
@@ -245,7 +243,6 @@ function runDeploy({
   threads,
   rssMb,
   spans = false,
-  typed = "",
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   const log = join(fixture, "events.log");
@@ -332,7 +329,6 @@ exit 87
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       SKIP_E2E: "1",
     }),
-    stdin: Buffer.from(typed),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -427,20 +423,44 @@ describe("deploy gate", () => {
     expect([combined.status, combined.events]).toEqual([2, []]);
   });
 
-  test("a production reset runs nothing until 'reset production' is typed", () => {
-    const RESET_PLAN = "bun scripts/reset.ts plan production";
+  // A production reset is confirmed inside `reset.ts wipe`, at a terminal; a run with none stops before anything.
+  test("a production reset with no terminal to confirm at runs nothing", () => {
+    const run = runDeploy({ option: "--promote", options: ["--reset"] });
 
-    for (const typed of ["", "yes\n", "reset staging\n"]) {
-      const refused = runDeploy({ option: "--promote", options: ["--reset"], typed });
+    expect([run.status, run.events]).toEqual([1, []]);
+  });
 
-      expect([refused.status, refused.events], `typed ${JSON.stringify(typed)}`).toEqual([1, [RESET_PLAN]]);
-    }
+  // The advertised `wipe production` deletes nothing unless a person types the words at a terminal: piped input is
+  // refused before any Cloudflare call, and this child has no wrangler on its PATH to make one with.
+  test("a production wipe with its words piped in deletes nothing", () => {
+    const record = join(scratchDir("reset-refused"), "record.json");
 
-    const confirmed = runDeploy({ option: "--promote", options: ["--reset"], typed: "reset production\n" });
+    const run = Bun.spawnSync([process.execPath, join(REPO_ROOT, "scripts", "reset.ts"), "wipe", "production", record], {
+      env: childEnv({ PATH: "" }),
+      stdin: Buffer.from("reset production\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
 
-    expect(confirmed.events.slice(0, 1 + phaseGates("preflight").length)).toEqual([RESET_PLAN, ...phaseGates("preflight")]);
-    expect(confirmed.events).toContain(PROMOTION_CHECK);
-    expect(runDeploy({ option: "--reset" }).events).toContain(WITHDRAW);
+    expect([run.exitCode, run.stderr.toString()]).toEqual([1, expect.stringContaining("not confirmed at a terminal")]);
+    expect(existsSync(record)).toBe(false);
+  });
+
+  // The wipe sits after the build: a red gate or a failed build must leave the storage as it was.
+  test("a reset deletes nothing when a gate is red or the build fails", () => {
+    const wiped = (events: readonly string[]) => events.filter((event) => event.startsWith("bun scripts/reset.ts wipe"));
+
+    const failedBuild = runDeploy({ option: "--reset" });
+
+    expect(failedBuild.events).toContain("bun scripts/reset.ts plan staging");
+    expect(failedBuild.events).toContain("MUTATE bunx vite build");
+    expect(wiped(failedBuild.events)).toEqual([]);
+
+    const redGate = runDeploy({ option: "--reset", failingGate: REQUIRED_GATES[REQUIRED_GATES.length - 1] });
+
+    expect(redGate.status).not.toBe(0);
+    expect(redGate.events.some((event) => event.startsWith("MUTATE "))).toBe(false);
+    expect(wiped(redGate.events)).toEqual([]);
   });
 
   test("an ambient environment variable cannot point the account gate at the other deployment", () => {
