@@ -145,6 +145,7 @@ export function createTemporaryAgentPort(deps: {
   runtime: SubordinateRuntime;
   createName(role: string): string;
   now(): number;
+  whileWaiting?<T>(waited: Promise<T>): Promise<T>;
 }): TemporaryAgentPort {
   const waiters = new Map<string, (answer: TemporarySettlement) => void>();
 
@@ -218,7 +219,6 @@ export function createTemporaryAgentPort(deps: {
         reason,
       });
 
-      /** Archive the row and retire the actor; history is always kept. */
       const release = async (interrupt: boolean): Promise<void> => {
         const actor = deps.roster.requireExisting(name).actorReference;
 
@@ -258,8 +258,14 @@ export function createTemporaryAgentPort(deps: {
         return failure(error.code, renderCauseChain(error));
       }
 
-      const settlement = await waiter.promise;
-      await release(settlement === 'cancelled');
+      // Released inside the wait, before the caller takes its slot back.
+      const answered = waiter.promise.then(async (settled) => {
+        await release(settled === 'cancelled');
+
+        return settled;
+      });
+
+      const settlement = await (deps.whileWaiting?.(answered) ?? answered);
 
       if (settlement === 'cancelled') {
         return failure('cancelled', 'the caller cancelled this hire before the agent answered.');

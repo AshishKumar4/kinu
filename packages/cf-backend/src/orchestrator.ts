@@ -16,7 +16,7 @@ import {
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
-  mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners,
+  mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners, DELEGATED_TURN_SLOTS,
   type ActorHost, type ActorToolsetDeps, type AgentsSwarmDeps, type AgentsToolDeps, type ResumableActorTurn,
   type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
@@ -1160,6 +1160,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private readonly delegatedTurns = new DelegatedTurnRunners({
+    slots: DELEGATED_TURN_SLOTS,
     pass: (record) => this.drainActorAssignments(record),
     holdLane: async (body) => {
       await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
@@ -1176,6 +1177,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Admitted delegated turns run on a fiber, off the wake: inside it a turn held the alarm to its
    * 15-minute wall, whose reset closed every socket (warm-forge-4d6acc02, 2026-09-25).
    */
+  protected override whileWaitingOnDelegate<T>(actorId: string, waited: Promise<T>): Promise<T> {
+    return this.delegatedTurns.whileWaiting(actorId, waited);
+  }
+
   private startDelegationDrain(): void {
     const hires = this.workspaceActors().list().filter((record) => record.kind === 'subordinate');
 
@@ -1198,7 +1203,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const swept = await drainAssignments(log, {
       now: Date.now(), budget: HOSTED_DELEGATION_DRAIN_BUDGET, staleMs: STALE_EVENT_DELIVERY_MS,
-      run: async (task) => {
+      run: (task) => this.delegatedTurns.turn(record.actorId, async () => {
         const room = this.chatRooms.hostedRoom(record.actorId);
         const answerId = crypto.randomUUID();
 
@@ -1220,7 +1225,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         } finally {
           await room?.closeTurn();
         }
-      },
+      }),
       onFailure: ({ cause }) => {
         diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
           doing: 'running a delegated turn this workspace admitted', cause, otherwise: 'io',

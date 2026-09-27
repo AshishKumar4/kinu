@@ -1,10 +1,12 @@
-/** One runner per hired actor: its turns serial, actors concurrent, no count cap. */
 
 import type { WorkspaceActor } from '../identity/workspace-actors';
 import { toKinuError, type KinuError } from '../obs/error';
 
+/** Raising it is the owner's call (NESTED-HIRE-0926). */
+export const DELEGATED_TURN_SLOTS = 1;
+
 export interface DelegatedTurnRunnerDeps {
-  /** True: budget cut it short. */
+  readonly slots: number;
   pass(record: WorkspaceActor): Promise<boolean>;
   holdLane(body: () => Promise<void>): Promise<void>;
   failed(record: WorkspaceActor | null, error: KinuError): void;
@@ -17,12 +19,62 @@ export class DelegatedTurnRunners {
 
   private lane: Promise<void> | null = null;
 
-  constructor(private readonly deps: DelegatedTurnRunnerDeps) {}
+  private readonly holders = new Set<string>();
+
+  private readonly queued: (() => void)[] = [];
+
+  private free: number;
+
+  constructor(private readonly deps: DelegatedTurnRunnerDeps) {
+    this.free = deps.slots;
+  }
 
   start(records: readonly WorkspaceActor[]): void {
     for (const record of records) this.startActorRunner(record);
 
     this.holdLane();
+  }
+
+  async turn<T>(actorId: string, body: () => Promise<T>): Promise<T> {
+    await this.acquire(actorId);
+
+    try {
+      return await body();
+    } finally {
+      this.release(actorId);
+    }
+  }
+
+  /** Waiting on a delegate frees the slot. */
+  async whileWaiting<T>(actorId: string, waited: Promise<T>): Promise<T> {
+    if (!this.holders.has(actorId)) return await waited;
+    this.release(actorId);
+
+    try {
+      return await waited;
+    } finally {
+      await this.acquire(actorId);
+    }
+  }
+
+  private async acquire(actorId: string): Promise<void> {
+    if (this.free > 0) {
+      this.free -= 1;
+    } else {
+      const turn = Promise.withResolvers<void>();
+      this.queued.push(turn.resolve);
+      await turn.promise;
+    }
+
+    this.holders.add(actorId);
+  }
+
+  private release(actorId: string): void {
+    this.holders.delete(actorId);
+    const next = this.queued.shift();
+
+    if (next === undefined) this.free += 1;
+    else next();
   }
 
   private startActorRunner(record: WorkspaceActor): void {

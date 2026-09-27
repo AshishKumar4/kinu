@@ -886,6 +886,11 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** The host's one port for this actor: a waiter is found only through the port that parked it. */
+  /** A turn waiting on a delegate it hired; the workspace root frees the waiting turn's slot. */
+  protected whileWaitingOnDelegate<T>(_actorId: string, waited: Promise<T>): Promise<T> {
+    return waited;
+  }
+
   protected temporaryAgentPort(reference: ActorReference = actorReferenceOf(this.actorHandle())): TemporaryAgentPort {
     return this.actorHost().temporary(reference, (bound) => {
       const seams = this.subordinateSeams();
@@ -894,6 +899,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return createTemporaryAgentPort({
         roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
+        whileWaiting: (waited) => this.whileWaitingOnDelegate(bound.record.actorId, waited),
       });
     });
   }
