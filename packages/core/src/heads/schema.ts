@@ -1,6 +1,6 @@
 /**
  * SQLite schema for branching heads, private to the owning actor; idempotent (IF NOT EXISTS).
- * Every table carries `actor_id` in its primary key: head, step and evidence ids are not globally
+ * Every table carries `actor_id` in its primary key: head and step ids are not globally
  * unique (`journal.ts` insertSpawn derives head ids).
  */
 
@@ -48,29 +48,16 @@ const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
   summary TEXT,
   error_message TEXT,
   decisions_json TEXT,
-  artifacts_json TEXT,
-  tool_calls_json TEXT,
-  child_head_ids_json TEXT,
   file_changes_json TEXT,
   merge_strategy TEXT NOT NULL DEFAULT 'synthesize',
   PRIMARY KEY (actor_id, id)
 )`;
 
-/** Cached merges keyed by root_id. `cost_total_tokens` is NULLable: an unknown cost is not zero. */
+/** The merged narrative of a settled top-level run, keyed by root_id. */
 const HEAD_MERGE_RESULTS_DDL = `CREATE TABLE IF NOT EXISTS head_merge_results (
   actor_id TEXT NOT NULL,
   root_id TEXT NOT NULL,
   merged_narrative TEXT NOT NULL,
-  selected_decisions_json TEXT,
-  unresolved_questions_json TEXT,
-  recommendations_json TEXT,
-  cost_head_count INTEGER NOT NULL,
-  cost_total_tokens INTEGER,
-  cost_total_wall_ms INTEGER NOT NULL,
-  cost_max_depth INTEGER NOT NULL,
-  merged_at INTEGER NOT NULL,
-  merge_strategy TEXT NOT NULL,
-  blind_spots_json TEXT,
   PRIMARY KEY (actor_id, root_id)
 )`;
 
@@ -90,20 +77,6 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_parent ON head_journal(actor_id, parent_id)`);
   // `root_id` trails the status so `listLive` (DISTINCT root_id of running heads) seeks only open rows.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_status ON head_journal(actor_id, status, root_id)`);
-
-  execRaw(`CREATE TABLE IF NOT EXISTS head_evidence (
-    actor_id TEXT NOT NULL,
-    id TEXT NOT NULL,
-    head_id TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    body TEXT NOT NULL,
-    ref TEXT,
-    confidence REAL,
-    created_at INTEGER NOT NULL,
-    PRIMARY KEY (actor_id, id)
-  )`);
-
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_evidence_head ON head_evidence(actor_id, head_id)`);
 
   execRaw(`CREATE TABLE IF NOT EXISTS head_steps (
     actor_id TEXT NOT NULL,

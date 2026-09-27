@@ -75,6 +75,24 @@ function fiberRows<Row extends object>(
   return sql.exec(query, ...bindings).toArray().map((row) => v.parse(schema, row));
 }
 
+/**
+ * A wait the suite plants inside code the harness runs (a loaded worker's eval): `globalThis[Symbol.for(HOLD)](name)`
+ * never settles, and the harness can name what is held. A reset drops them with the fibers.
+ */
+const held = new Set<string>();
+
+Object.assign(globalThis, {
+  [Symbol.for('kinu.test.hold')]: (name: string) => {
+    held.add(name);
+
+    return new Promise<never>(() => {});
+  },
+});
+
+export function harnessHolds(): readonly string[] {
+  return [...held];
+}
+
 /** Whether a `runFiber` body started so far is still running. */
 export function harnessFibersRunning(): boolean {
   return harnessFiberBodies.size > 0;
@@ -92,6 +110,7 @@ export async function joinHarnessFibers(): Promise<void> {
  */
 export function abandonHarnessFibers(): void {
   harnessFiberBodies.clear();
+  held.clear();
   harnessActiveFibers.clear();
 }
 

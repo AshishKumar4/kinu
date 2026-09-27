@@ -78,21 +78,18 @@ describe('getPendingScaffold', () => {
 
     for (let i = 0; i < 3; i++) {
       recordShadowEvaluation(sql, actor, {
-        currentVersion: 3, pendingVersion: 4,
-        task: `task-${i}`, currentOutput: 'c', pendingOutput: 'p',
-        judgeResult: judge,
+        pendingVersion: 4,
+        task: `task-${i}`, judgeResult: judge,
       });
     }
 
     recordShadowEvaluation(sql, actor, {
-      currentVersion: 3, pendingVersion: 4,
-      task: 'task-4', currentOutput: 'c', pendingOutput: 'p',
-      judgeResult: { winner: 'current', rationale: '', currentScore: 0.7, pendingScore: 0.5 },
+      pendingVersion: 4,
+      task: 'task-4', judgeResult: { winner: 'current', rationale: '', currentScore: 0.7, pendingScore: 0.5 },
     });
     recordShadowEvaluation(sql, actor, {
-      currentVersion: 3, pendingVersion: 4,
-      task: 'task-5', currentOutput: 'c', pendingOutput: 'p',
-      judgeResult: { winner: 'tie', rationale: '', currentScore: 0.6, pendingScore: 0.6 },
+      pendingVersion: 4,
+      task: 'task-5', judgeResult: { winner: 'tie', rationale: '', currentScore: 0.6, pendingScore: 0.6 },
     });
 
     const p = present(getPendingScaffold(sql, actor), 'the pending scaffold');
@@ -115,12 +112,12 @@ describe('readShadowVerdict — the promote/rollback decision grid', () => {
   test('reads scaffold_evaluations, orders regressions-first, aggregates win-rate', () => {
     const { sql, actor } = setup();
     // Seed a mix: 2 pending wins, 1 current win (regression), 1 tie — all for v4.
-    recordShadowEvaluation(sql, actor, { currentVersion: 3, pendingVersion: 4, task: 'pw1', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.5, pendingScore: 0.8 } });
-    recordShadowEvaluation(sql, actor, { currentVersion: 3, pendingVersion: 4, task: 'cw1', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'current', rationale: 'regressed', currentScore: 0.9, pendingScore: 0.4 } });
-    recordShadowEvaluation(sql, actor, { currentVersion: 3, pendingVersion: 4, task: 'pw2', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.5, pendingScore: 0.7 } });
-    recordShadowEvaluation(sql, actor, { currentVersion: 3, pendingVersion: 4, task: 'tie1', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'tie', rationale: 'same', currentScore: 0.6, pendingScore: 0.6 } });
+    recordShadowEvaluation(sql, actor, { pendingVersion: 4, task: 'pw1', judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.5, pendingScore: 0.8 } });
+    recordShadowEvaluation(sql, actor, { pendingVersion: 4, task: 'cw1', judgeResult: { winner: 'current', rationale: 'regressed', currentScore: 0.9, pendingScore: 0.4 } });
+    recordShadowEvaluation(sql, actor, { pendingVersion: 4, task: 'pw2', judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.5, pendingScore: 0.7 } });
+    recordShadowEvaluation(sql, actor, { pendingVersion: 4, task: 'tie1', judgeResult: { winner: 'tie', rationale: 'same', currentScore: 0.6, pendingScore: 0.6 } });
     // A row for a DIFFERENT version must be excluded.
-    recordShadowEvaluation(sql, actor, { currentVersion: 4, pendingVersion: 5, task: 'other', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'pending', rationale: '', currentScore: 0.1, pendingScore: 0.9 } });
+    recordShadowEvaluation(sql, actor, { pendingVersion: 5, task: 'other', judgeResult: { winner: 'pending', rationale: '', currentScore: 0.1, pendingScore: 0.9 } });
 
     const verdict = readShadowVerdict(sql, actor, 4);
     expect(verdict.version).toBe(4);

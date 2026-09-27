@@ -9,7 +9,6 @@ function tree(over: Partial<AgentTaskTree> & { title: string }): AgentTaskTree {
     id: over.id ?? `t-${over.title}`,
     parentId: null,
     status: 'open',
-    createdAt: 0,
     updatedAt: 0,
     note: null,
     subtasks: [],
@@ -42,7 +41,7 @@ test('a turn that settles with open tasks owes a reminder naming them', () => {
   const decision = present(decideAt(reminders, [
     tree({ title: 'ship the feature', status: 'active' }),
     tree({ title: 'done already', status: 'done', subtasks: [
-      { id: 's1', parentId: 'x', title: 'write the test', status: 'open', createdAt: 0, updatedAt: 0, note: null },
+      { id: 's1', parentId: 'x', title: 'write the test', status: 'open', updatedAt: 0, note: null },
     ] }),
   ]), 'the reminder decision');
 

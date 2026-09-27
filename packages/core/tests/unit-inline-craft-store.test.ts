@@ -1,7 +1,6 @@
 /**
  * Defends: the inline runtime's crafted-tool store answered raw `crafted_tools` rows typed as tools
- * (snake_case timestamps, `params` as JSON text), so a reader of `tool.params` or `tool.createdAt` got a
- * string or nothing. It is now agent-utils' own CraftStore, the one both backends' stores are.
+ * (snake_case timestamps), so a reader of `tool.createdAt` got nothing. It is now agent-utils' own CraftStore, the one both backends' stores are.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -10,15 +9,14 @@ import { createInlineCraftStore } from '../src/identity/inline-primitives';
 import { makeSql } from './helpers';
 
 const WEATHER = {
-  name: 'weather', description: 'look up the forecast for a city', params: { city: 'string' },
-  code: 'return 1', scope: 'local',
+  name: 'weather', description: 'look up the forecast for a city', code: 'return 1',
 } as const;
 
 function stored() {
   const db = new Database(':memory:');
   initCraftedToolsTables(makeSql(db));
   const tools = createInlineCraftStore(db);
-  tools.create({ ...WEATHER, params: { ...WEATHER.params } });
+  tools.create({ ...WEATHER });
 
   return tools;
 }
@@ -36,8 +34,11 @@ describe('the inline crafted-tool store', () => {
   test('list and search answer tools, not rows', () => {
     const tools = stored();
 
-    expect(tools.list().map((tool) => tool.params)).toEqual([{ city: 'string' }]);
-    expect(tools.search('forecast for a city').map((tool) => [tool.name, tool.params])).toEqual([['weather', { city: 'string' }]]);
+    const answered = [...tools.list(), ...tools.search('forecast for a city')];
+
+    expect(answered.map((tool) => tool.name)).toEqual(['weather', 'weather']);
+
+    for (const tool of answered) expect(tool.createdAt).toBeNumber();
   });
 
   test('a name nobody stored reads as absent', () => {

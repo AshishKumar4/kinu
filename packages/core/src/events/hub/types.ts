@@ -71,13 +71,7 @@ export type TriggerId = string;
 
 export type ReplyChannelId = string;
 
-export type ReplyChannelKind =
-  | 'ws_session'
-  | 'http_pending'
-  | 'peer_back'
-  | 'mcp_pending'
-  | 'email_thread'
-  | 'none';
+export type ReplyChannelKind = 'peer_back' | 'email_thread';
 
 export interface ReplyChannelRef {
   id: ReplyChannelId;
@@ -90,12 +84,10 @@ export interface ReplyChannelRow {
   id: ReplyChannelId;
   event_id: EventId;
   kind: ReplyChannelKind;
-  holder_addr: string;                 // DO id / socket id / outbound URL
+  holder_addr: string;
   ttl_expires_at: number;
-  payload_policy: PayloadPolicy;
   state: ReplyChannelState;
   reply_payload: JsonValue | null;
-  attempt_count: number;
   created_at: number;
   updated_at: number;
 }
@@ -259,7 +251,6 @@ export interface BaseEvent {
   priority: Priority;
   payload_visibility: PayloadPolicy;
   received_at: number;
-  schema_version: number;
   reply_channel: ReplyChannelRef | null;
   dedupe_key: string | null;
 }
@@ -387,33 +378,6 @@ export type RevisitCondition =
   | { kind: 'after_phase'; phase: 'idle' | 'merging' }
   | { kind: 'after_event'; variant: EventVariant; source?: string }
   | { kind: 'after_seconds'; n: number };       // n capped at 3600
-
-export type AgentLogKind =
-  | 'event'
-  | 'phase'
-  | 'step'
-  | 'tool_call'
-  | 'tool_result'
-  | 'reactor_decision'
-  | 'reply_attempt';
-
-export interface AgentLogRow {
-  id: string;
-  kind: AgentLogKind;
-  turn_id: TurnId | null;
-  step_idx: number | null;
-  parent_id: string | null;
-  trace_id: TraceId;
-  ingress: IngressKind | null;
-  variant: EventVariant | null;
-  trust: TrustLevel | null;
-  priority: Priority | null;
-  payload_visibility: PayloadPolicy | null;
-  payload: unknown;
-  received_at: number;
-  schema_version: number;
-  dedupe_key: string | null;
-}
 
 export type TriggerKind =
   | 'webhook_durable'

@@ -36,7 +36,6 @@ const TRIAL_SCOPE = 'shadow_trial';
 
 export interface ShadowEvaluationRow {
   id: string;
-  current_version: number;
   pending_version: number;
   task: string;
   current_score: number | null;
@@ -95,11 +94,8 @@ export function initShadowTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS scaffold_evaluations (
     actor_id TEXT NOT NULL,
     id TEXT NOT NULL,
-    current_version INTEGER NOT NULL,
     pending_version INTEGER NOT NULL,
     task TEXT NOT NULL,
-    current_output TEXT,
-    pending_output TEXT,
     current_score REAL,
     pending_score REAL,
     winner TEXT,
@@ -419,11 +415,8 @@ export function recordShadowEvaluation(
   sql: SqlExecutor,
   actor: ActorHandle,
   args: {
-    currentVersion: number;
     pendingVersion: number;
     task: string;
-    currentOutput: string;
-    pendingOutput: string;
     judgeResult: ShadowTrialVerdict;
     /** Queue identity, so a replay writes the same row; bare evals get a fresh id. */
     trialId?: string;
@@ -434,7 +427,6 @@ export function recordShadowEvaluation(
 
   const row: ShadowEvaluationRow = {
     id,
-    current_version: args.currentVersion,
     pending_version: args.pendingVersion,
     task: args.task,
     current_score: args.judgeResult.currentScore,
@@ -445,10 +437,9 @@ export function recordShadowEvaluation(
   };
 
   void sql`INSERT INTO scaffold_evaluations
-    (actor_id, id, current_version, pending_version, task, current_output, pending_output,
+    (actor_id, id, pending_version, task,
      current_score, pending_score, winner, judge_rationale, evaluated_at)
-    VALUES (${actor.actorId}, ${row.id}, ${row.current_version}, ${row.pending_version},
-            ${row.task}, ${args.currentOutput}, ${args.pendingOutput},
+    VALUES (${actor.actorId}, ${row.id}, ${row.pending_version}, ${row.task},
             ${row.current_score}, ${row.pending_score},
             ${row.winner}, ${row.judge_rationale}, ${row.evaluated_at})
     ON CONFLICT(actor_id, id) DO NOTHING`;

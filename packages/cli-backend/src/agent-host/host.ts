@@ -11,7 +11,6 @@ import {
   EventLog,
   ReplyChannelStore,
   SubordinateRosterStore,
-  SubordinateIdentityStore,
   admitSubordinateTask,
   dismissOrphanedAssignments,
   drainAssignments,
@@ -39,6 +38,7 @@ import {
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
   facetHomeReleaser,
+  readMission,
   readSoul,
   recoverSubordinateLifecycles,
   SOUL_PATH,
@@ -82,7 +82,7 @@ import {
 } from '../runtime';
 import type { CLIOpenConfig } from '../open';
 import {
-  bindLocalActor, bindLocalActorReference, localActorDirectory, localActorMission, localActorOwner,
+  bindLocalActor, bindLocalActorReference, localActorDirectory,
   adoptLocalActorHandle, cancelLocalCreation, openLocalActor, recoverLocalActorRetirements, registerLocalActor,
   requireLocalActorWorkspace, type LocalActorBinding,
 } from '../actor-identity';
@@ -1105,7 +1105,7 @@ export class LocalAgentHost {
       now: () => Date.now(),
       inheritedContext: (): Promise<SerializedMessage[]> => inheritedContextFromTranscript(parent.actor.session.canonical.transcript(parent.sessionId)),
       originContext: async () => parent.actor.session.history,
-      ownMission: () => localActorMission(parent.ws.rt, makeSqlExec(parent.tree.db)) ?? '',
+      ownMission: () => readMission(makeSql(parent.tree.db)) ?? '',
       createName: mintSubordinateName,
       broadcast: (event) => parent.session.host.broadcast(event),
       broadcastTask: (event) => parent.session.host.broadcast(metadataBroadcastEvent(
@@ -1253,22 +1253,12 @@ export class LocalAgentHost {
     }
 
     const tree = parent.tree;
-    const exec = makeSqlExec(tree.db);
     const sql = makeSql(tree.db);
-    const owner = localActorOwner(parent.ws.rt.actor);
-    const depth = delegationBudgetOf((actorId) => tree.host.describe(actorId), parent.actor.record).depth + 1;
 
     try {
       tree.db.transaction(() => {
         // The child's own handle; stores below are scoped to it, so one database holds N descriptors.
         const actor = bindLocalActor(sql, binding);
-        const subordinateIdentity = new SubordinateIdentityStore(exec, actor);
-        subordinateIdentity.ensureSchema();
-        subordinateIdentity.seed({
-          name: input.name, mission: input.mission,
-          ownerUserId: owner.ownerUserId, parentWorkspace: owner.workspaceName,
-          depth, lifetime: input.lifetime,
-        });
         actor.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
         actor.config.setRoleSelection(input.role);
         actor.config.setAssignedTier(input.tier ?? null);
@@ -1481,6 +1471,7 @@ export class LocalAgentHost {
 
   private async drain(entry: HostEntry, source: string): Promise<void> {
     try {
+      // A pass another process holds is reported by `drive`; its own pass drains and routes the same work.
       await this.drive(entry, async () => {
         await entry.session.flushPendingDrains();
         await this.drainAssignedWork(entry);

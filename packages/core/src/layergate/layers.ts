@@ -148,7 +148,6 @@ function event(fixture: EventFixture): KinuEvent {
     priority: 'normal',
     payload_visibility: 'full',
     received_at: 0,
-    schema_version: 1,
     reply_channel: null,
     dedupe_key: null,
     ...fixture,

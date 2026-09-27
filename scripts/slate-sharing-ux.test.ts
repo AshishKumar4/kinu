@@ -18,7 +18,6 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
-import { SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from './gallery-harness';
 
@@ -119,10 +118,16 @@ describe('slate sharing surfaces', () => {
             expect(lead).toContain('It runs in your workspace, as you.');
             expect(await live.$eval('[data-share-access]', (element) => element.getAttribute('data-share-access'))).toBe('users');
             expect(await live.$eval('[data-share-fork]', (box) => box instanceof HTMLInputElement && box.checked)).toBe(true);
-            // The bounds a live share runs under, in the dialog that creates it.
+            // docs/SLATE-SHARING.md S5, independent of the constants used to render these bounds.
             const limits = await live.$eval('[data-share-limits]', (element) => element.textContent ?? '');
-            expect(limits).toContain(String(SHARE_VIEWER_REQUESTS_PER_MINUTE));
-            expect(limits).toContain(`$${String(SHARE_SPEND_CAP_USD_PER_DAY)}`);
+            const requests: number[] = [];
+            const dollars: number[] = [];
+
+            for (const [, currency, amount] of limits.matchAll(/(\$?)(\d+(?:\.\d+)?)/g)) {
+              (currency === '$' ? dollars : requests).push(Number(amount));
+            }
+
+            expect({ requests, dollars }).toEqual({ requests: [120], dollars: [2] });
             shots.push(await shoot(live, `share-dialog-live-${viewport}-${theme}`, LIVE_SHOTS));
             // Folded, the reach names what the slate reaches (a server by its title), not the slate's own keys.
             const reach = await live.$eval('[data-share-reach]', (element) => element.textContent ?? '');

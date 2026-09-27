@@ -14,7 +14,7 @@ import { useConversationUiState, usePlanApprovedMode, type ConversationUiState }
 
 const PENDING: PlanReview = {
   id: 'plan-lane', sessionId: 'default', revision: 1, content: '# Prompt edits', status: 'pending',
-  annotations: [], feedback: null, handoffAccepted: false, createdAt: 1, updatedAt: 1, decidedAt: null,
+  annotations: [], feedback: null, handoffAccepted: false, createdAt: 1, updatedAt: 1,
 };
 
 const KEYS = ['window', 'IS_REACT_ACT_ENVIRONMENT'] as const;

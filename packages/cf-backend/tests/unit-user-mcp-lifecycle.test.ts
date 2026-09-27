@@ -52,8 +52,8 @@ async function seedServer(
 ): Promise<void> {
   await h.userDO.userMcp_list(await testOwner());
   sqlExec(h.db).exec(
-    `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-     VALUES (?, ?, ?, 'auto', NULL, NULL, 0, 0)`,
+    `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
+     VALUES (?, ?, ?, 'auto', NULL, NULL)`,
     id, fields.name ?? id, fields.url ?? `https://${id}.example/sse`,
   );
 
@@ -103,8 +103,8 @@ describe('a server name is one identity, enforced by the database', () => {
     await seedServer(h, 'srv1', { name: 'GitHub' });
     // The UNIQUE index on `lower(name)` refuses the write itself.
     expect(() => sqlExec(h.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-       VALUES ('srv2', 'github', 'https://other.example/sse', 'auto', NULL, NULL, 0, 0)`,
+      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
+       VALUES ('srv2', 'github', 'https://other.example/sse', 'auto', NULL, NULL)`,
     )).toThrow(/UNIQUE/i);
     h.close();
   });
@@ -264,8 +264,8 @@ describe('the descriptor read is off the connection critical path', () => {
     const owner = await testOwner();
     await h.userDO.userMcp_list(owner);
     sqlExec(h.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-       VALUES ('srv1', 'slow', 'https://srv1.example/sse', 'auto', NULL, NULL, 0, 0)`,
+      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
+       VALUES ('srv1', 'slow', 'https://srv1.example/sse', 'auto', NULL, NULL)`,
     );
     const before = recordedMcpLifecycle();
     const establishedBefore = before.established.length;
@@ -292,8 +292,8 @@ describe('the descriptor read is off the connection critical path', () => {
     await seedServer(h, 'srv1', { name: 'fast' });
     seedMcpTools('srv1', [{ name: 'ready_tool', inputSchema: { type: 'object' } }]);
     sqlExec(h.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-       VALUES ('srv2', 'stuck', 'https://srv2.example/sse', 'auto', 'sealed', NULL, 0, 0)`,
+      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
+       VALUES ('srv2', 'stuck', 'https://srv2.example/sse', 'auto', 'sealed', NULL)`,
     );
     const gate = hangMcpEstablish();
     const warming = h.userDO.userMcp_warmConnections(owner);
@@ -316,8 +316,8 @@ describe('the descriptor read is off the connection critical path', () => {
     const owner = await testOwner();
     await h.userDO.userMcp_list(owner);
     sqlExec(h.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-       VALUES ('srv1', 'later', 'https://srv1.example/sse', 'auto', NULL, NULL, 0, 0)`,
+      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
+       VALUES ('srv1', 'later', 'https://srv1.example/sse', 'auto', NULL, NULL)`,
     );
 
     const first = await readSurface(h, owner);
@@ -341,8 +341,8 @@ describe('the descriptor read is off the connection critical path', () => {
     await seedServer(h, 'srv1', { name: 'ready' });
     seedMcpTools('srv1', [{ name: 'go', inputSchema: { type: 'object' } }]);
     sqlExec(h.db).exec(
-      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-       VALUES ('srv2', 'pending', 'https://srv2.example/sse', 'auto', NULL, NULL, 0, 0)`,
+      `INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
+       VALUES ('srv2', 'pending', 'https://srv2.example/sse', 'auto', NULL, NULL)`,
     );
 
     const surface = await readSurface(h, owner);

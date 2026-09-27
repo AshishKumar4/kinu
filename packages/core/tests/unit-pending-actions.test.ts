@@ -188,7 +188,7 @@ describe('what the inspector opens for on its own', () => {
 
   const plan = (status: PlanReview['status']): PlanReview => ({
     id: 'plan-1', sessionId: 's', revision: 1, content: '# Plan', status, annotations: [], feedback: null,
-    handoffAccepted: false, createdAt: 1, updatedAt: 1, decidedAt: null,
+    handoffAccepted: false, createdAt: 1, updatedAt: 1,
   });
 
   const action: PendingAction = { id: 'a-1', kind: 'deferred_action', title: 'Run rm -rf build', detail: null, at: 1 };

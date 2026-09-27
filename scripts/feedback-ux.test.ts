@@ -690,6 +690,7 @@ async function readScrollPanes(page: Page): Promise<Pane[]> {
 interface Observed {
   desktop: {
     shot: { width: number; height: number; redacted: number };
+    surface: { width: number; height: number };
     password: Region;
     token: Region;
     control: Region;
@@ -745,6 +746,12 @@ async function run(): Promise<Observed> {
     await serveFeedback(page);
     await page.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[data-secret-input]');
+
+    const surface = await page.evaluate(() => ({
+      width: document.documentElement.clientWidth * devicePixelRatio,
+      height: Math.max(document.documentElement.clientHeight, document.documentElement.scrollHeight) * devicePixelRatio,
+    }));
+
     await openDialog(page);
     await page.waitForSelector('[data-feedback-canvas]');
 
@@ -1139,7 +1146,7 @@ async function run(): Promise<Observed> {
     await downPage.close();
 
     return {
-      desktop: { shot, password, token, control, consent, sent, toast },
+      desktop: { shot, surface, password, token, control, consent, sent, toast },
       annotated: { before, afterDrag, afterUndo, sentAnnotated },
       noteOnly: { shotSectionPresent, sent: bareSent },
       oversized: { message, sendableWithoutShot, sent: bigSent },
@@ -1206,9 +1213,10 @@ describe('the screenshot never carries a secret', () => {
     expect(observed.desktop.shot.redacted).toBeGreaterThanOrEqual(2);
   });
 
-  test('the capture has real dimensions', () => {
-    expect(observed.desktop.shot.width).toBeGreaterThan(1000);
-    expect(observed.desktop.shot.height).toBeGreaterThan(400);
+  test('the capture covers the whole document at its pixel density', () => {
+    const { shot, surface } = observed.desktop;
+
+    expect({ width: shot.width, height: shot.height }).toEqual(surface);
   });
 });
 

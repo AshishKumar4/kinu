@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { initRunEventTables, parseJsonValue, type JsonObject, type JsonValue } from '@kinu.run/core';
-import { makeSql } from '@kinu.run/cli-backend';
+import { makeSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
 import { createTestActor } from '../../core/tests/helpers';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -20,6 +20,7 @@ async function readLocal(expression: string): Promise<JsonValue> {
   initRunEventTables(execRaw);
   // `run_events` is scoped by the store's main actor, so the seed registers a real workspace identity.
   const actor = createTestActor(makeSql(db), execRaw, 'run-events-workspace', 'jarvis');
+  stampSchemaGenesis(db);
 
   const row = (index: number, type: string, extra: JsonObject = {}) => {
     const ts = new Date(1_700_000_000_000 + index * 1000).toISOString();

@@ -233,7 +233,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
           ON CONFLICT(actor_id, id) DO NOTHING`;
 
       // Same synchronous pass, so nothing observes the row without its tombstone.
-      if (opts.id !== undefined) recordEffectDone(sql, actor, { scope: APPEND_SCOPE, key: opts.id }, now);
+      if (opts.id !== undefined) recordEffectDone(sql, actor, { scope: APPEND_SCOPE, key: opts.id });
       sweepSettled();
 
       return id;

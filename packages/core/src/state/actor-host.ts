@@ -444,10 +444,10 @@ function unsettledClaimsOf(sql: SqlExecutor, actorId: string, limit: number): re
   const rows = sql<{
     turn_id: string; run_id: string; epoch: number; work_mode: 'plan' | 'build';
     program_kind: 'builtin' | 'scaffold'; program_version: number; program_digest: string | null;
-    program_build: string | null; consumed_revision: number | null; claimed_at: number;
+    program_build: string | null; claimed_at: number;
   }>`SELECT turn_id, run_id, epoch, work_mode, program_kind, program_version, program_digest,
-            program_build, consumed_revision, claimed_at
-     FROM actor_turn_claims WHERE actor_id = ${actorId} AND status = 'admitted'
+            program_build, claimed_at
+     FROM actor_turn_claims WHERE actor_id = ${actorId} AND outcome IS NULL
      ORDER BY claimed_at DESC LIMIT ${limit}`;
 
   return rows.map((row) => Object.freeze({
@@ -457,7 +457,7 @@ function unsettledClaimsOf(sql: SqlExecutor, actorId: string, limit: number): re
       digest: row.program_digest, build: row.program_build,
     }),
     status: 'admitted' as const, outcome: null,
-    consumedRevision: row.consumed_revision, claimedAt: row.claimed_at,
+    claimedAt: row.claimed_at,
   }));
 }
 

@@ -211,9 +211,9 @@ describe('a queued trial is not evidence', () => {
     const { control } = countedControl(rt);
 
     for (let i = 0; i < 4; i++) {
-      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
+      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, pending_version, task,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
-        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
+        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 1, 't', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
     }
 
     for (let i = 0; i < 6; i++) {
@@ -258,9 +258,9 @@ describe('the offline drain is what executes trials', () => {
     const rt = await setup();
 
     for (let i = 0; i < 5; i++) {
-      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
+      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, pending_version, task,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
-        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
+        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 1, 't', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
     }
 
     const counted = countedControl(rt, { autoPromote: true });

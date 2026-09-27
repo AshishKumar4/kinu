@@ -97,15 +97,14 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
       // Asked, not caught: an unreadable file must not index as absent.
       if (!await vfs.exists(path)) return;
       const content = v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
-      const now = Date.now();
       // Replace the chunk set and keep the FTS5 shadow in step for the real MemoryStore.
       void sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE path = ${path})`;
       void sql`DELETE FROM memory_chunks WHERE path = ${path}`;
 
       for (const chunk of await chunkMarkdown(content)) {
         const id = `${path}:${chunk.startLine}-${chunk.endLine}`;
-        void sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
-          VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash}, ${chunk.text}, ${now})`;
+        void sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text)
+          VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash}, ${chunk.text})`;
         void sql`INSERT INTO memory_chunks_fts (rowid, text) SELECT rowid, text FROM memory_chunks WHERE id = ${id}`;
       }
     },

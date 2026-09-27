@@ -204,7 +204,6 @@ const TAKES_SET: AlternateTakeSet = {
     { nodeId: 'node-c', text: 'Split the test: transport retries covered separately from handler logic.', score: 0.84, visits: 9, depth: 3 },
   ],
   createdAt: 1755700000000,
-  pickedAt: null,
 };
 
 const TREE_NODES: readonly AgentSearchNode[] = [

@@ -99,10 +99,10 @@ describe('takesTerminalEffect', () => {
     const actor = createTestActors(sql, execRaw).main;
 
     const seed = (id: string) => sql`INSERT INTO alternate_takes
-      (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
+      (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at)
       VALUES (${actor.actorId}, ${id}, ${null}, ${null}, ${'pick'}, ${'mcts'}, ${'a'}, ${null},
               ${JSON.stringify([{ nodeId: 'a', text: 'A', score: 0.9, visits: 1, depth: 1 }, { nodeId: 'b', text: 'B', score: 0.8, visits: 1, depth: 1 }])},
-              ${1}, ${null})`;
+              ${1})`;
 
     const effect = takesTerminalEffect({ sql, actor, sessionId: 's' });
 

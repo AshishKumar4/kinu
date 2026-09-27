@@ -17,7 +17,7 @@ const Key = v.pipe(v.string(), v.minLength(1), v.maxLength(512));
 /** Keyed per slate so one slate cannot read another's state. Also run by the resident-slate probe on its own DO storage. */
 export function initSlateStateTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS slate_state (
-    slate_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL,
+    slate_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
     PRIMARY KEY (slate_id, key)
   )`);
 }
@@ -95,7 +95,6 @@ function stateEntry(row: SqlExecRow): [string, JsonValue] {
   return [key, parseJsonValue(value)];
 }
 
-/** `updated_at` is diagnostics only, never a guard. */
 export class SqliteSlateStateStore {
   constructor(private readonly db: SqlExec) {}
 
@@ -107,14 +106,18 @@ export class SqliteSlateStateStore {
 
   put(slateId: string, key: string, value: JsonValue): void {
     this.db.exec(
-      'INSERT INTO slate_state (slate_id, key, value, updated_at) VALUES (?, ?, ?, ?)'
-      + ' ON CONFLICT (slate_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
-      slateId, key, JSON.stringify(value), Date.now(),
+      'INSERT INTO slate_state (slate_id, key, value) VALUES (?, ?, ?) ON CONFLICT (slate_id, key) DO UPDATE SET value = excluded.value',
+      slateId, key, JSON.stringify(value),
     );
   }
 
   delete(slateId: string, key: string): boolean {
     return this.db.exec('DELETE FROM slate_state WHERE slate_id = ? AND key = ? RETURNING key', slateId, key).toArray().length !== 0;
+  }
+
+  /** A removed slate's state goes with it, so a later slate of the same id starts empty. */
+  forget(slateId: string): void {
+    this.db.exec('DELETE FROM slate_state WHERE slate_id = ?', slateId);
   }
 
   list(slateId: string, options?: SlateStorageListOptions): Array<[string, JsonValue]> {

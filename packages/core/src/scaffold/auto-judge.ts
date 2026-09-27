@@ -12,7 +12,7 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import * as v from 'valibot';
 import {
   type PendingScaffold, type ShadowConfig, type ShadowTrialVerdict, type ScaffoldDecisionEvents,
-  DEFAULT_SHADOW_CONFIG, getPendingScaffold, getCurrentScaffoldVersion,
+  DEFAULT_SHADOW_CONFIG, getPendingScaffold,
   recordShadowEvaluation, scoredShadowTrial, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow';
 import { runScaffold, scaffoldEventText, type ScaffoldRunResult } from './executor';
@@ -135,7 +135,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
 
   const pendingOutput = pendingEvents.join('') || (pendingResult.error ?? '');
 
-  // Windowed once so the recorded trial is exactly the evidence judged.
+  // Windowed once so the recorded task is exactly the one judged.
   const evidence = {
     task: evidenceWindow(opts.task, EVIDENCE_BUDGETS.shadowTask),
     currentOutput: evidenceWindow(opts.currentOutput, EVIDENCE_BUDGETS.shadowOutput),
@@ -155,13 +155,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
     return { skipped: true };
   }
 
-  const evaluation = {
-    // Live version comes from status; numbering is non-contiguous after rollbacks.
-    currentVersion: getCurrentScaffoldVersion(opts.rt.storage.sql, opts.rt.actor) ?? pending.version - 1,
-    pendingVersion: pending.version,
-    ...evidence,
-    judgeResult,
-  };
+  const evaluation = { pendingVersion: pending.version, task: evidence.task, judgeResult };
 
   recordShadowEvaluation(
     opts.rt.storage.sql,

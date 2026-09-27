@@ -62,7 +62,7 @@ test('a blueprint carries the included tree and its requirements, and admits wit
     ]);
 
     const published = await owner.blueprints.publish('issues', version.id.value, ['src']);
-    expect(published.share).toMatchObject({ slate: 'issues', kind: 'blueprint', included: ['package.json', 'src'], revokedAt: null, users: [] });
+    expect(published.share).toMatchObject({ slate: 'issues', included: ['package.json', 'src'], revokedAt: null, users: [] });
     const publication = owner.slates.publication(new SlatePublicationId(published.share.publication));
     expect(publication.materialization.value).not.toBe(version.source.value);
     expect(owner.slates.skeleton(publication.id).sourceDigest.value).toBe(publication.materialization.digest.value);

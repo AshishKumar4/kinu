@@ -66,7 +66,7 @@ function collect(o: Fixture, over: Overrides = {}, stores: AgentStores = o.store
 
 test('a workspace craft is not advertised without an installed callable reader', () => {
   const o = setup();
-  o.rt.craftStore.create({ name: 'secret_echo', description: 'Echo from the workspace', code: '(input) => input', params: null, scope: 'local' });
+  o.rt.craftStore.create({ name: 'secret_echo', description: 'Echo from the workspace', code: '(input) => input' });
 
   expect(collect(o).craftedTools ?? []).toEqual([]);
 });

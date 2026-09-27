@@ -62,8 +62,8 @@ test('native MCP protocol failures reject while namespace responses retain their
     const owner = await testOwner();
     await user.userDO.userMcp_list(owner);
     user.sql.exec(`INSERT INTO user_mcp_servers
-      (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL, 0, 0)`);
+      (id, name, server_url, transport, headers, allowed_tools)
+      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL)`);
     await user.userDO.userMcp_list(owner);
     seedMcpTools('connection-id', [{ name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }]);
     actor.agent.harnessDrivingUserMessage('Read the issue.', { kinuMode: 'build' });
@@ -106,8 +106,8 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     const owner = await testOwner();
     await user.userDO.userMcp_list(owner);
     user.sql.exec(`INSERT INTO user_mcp_servers
-      (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, '["read_issue"]', 0, 0)`);
+      (id, name, server_url, transport, headers, allowed_tools)
+      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, '["read_issue"]')`);
     await user.userDO.userMcp_list(owner);
     seedMcpTools('connection-id', [
       { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },

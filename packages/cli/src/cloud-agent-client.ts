@@ -207,7 +207,6 @@ const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({
   chosenNodeId: v.nullable(v.string()),
   candidates: v.array(AlternateTakeCandidateSchema),
   createdAt: v.number(),
-  pickedAt: v.nullable(v.number()),
 });
 
 const TakePickOutcomeSchema: v.GenericSchema<TakePickOutcome> = v.object({
