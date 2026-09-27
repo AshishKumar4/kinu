@@ -440,7 +440,7 @@ async function gate(
   if (member.verdict === null) {
     return refuse('no-verdict', 'missing',
       `node ${member.nodeId} has no verdict, so nothing has checked what it produced. A member `
-      + 'is graded before it is applied — call the report tool\'s verifier on it first.');
+      + 'is graded before it is applied: call the report tool\'s verifier on it first.');
   }
 
   // Rule 3: verdict not clean.
@@ -650,7 +650,7 @@ async function spawnMerge(
         conflict.with
       } is already applied and is what the workspace now holds; member ${member.nodeId} changed `
       + 'the same paths from the same base. Produce one version that keeps what each member '
-      + 'earned, then report it. Your result is graded like any other candidate — it is not '
+      + 'earned, then report it. Your result is graded like any other candidate: it is not '
       + 'trusted because it resolved a conflict.',
   };
 

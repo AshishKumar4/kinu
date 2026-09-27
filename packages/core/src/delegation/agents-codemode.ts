@@ -85,7 +85,7 @@ const AGENTS_CODEMODE_DESCRIPTIONS = {
   hire: 'Put one workstream in front of one agent: `role` creates a helper that starts with a blank context, and without `role` an `agent` that already exists is handed the work (a subordinate reports later as an event; a peer reply is awaited). scope:"workspace" creates a specialist workspace of its own.',
   msg: 'Say something to an agent without handing it a workstream: `agent` by name, or `event_id` to answer an incoming agent message event.',
   list: 'The unified roster: subordinates, peer workspace agents, and the task-lifetime agents running right now.',
-  dismiss: 'Retire a subordinate (archived by default — its context is kept).',
+  dismiss: 'Retire a subordinate (archived by default: its context is kept).',
 } satisfies Record<AgentsToolAction, string>;
 
 /** `hire`'s return and description at the `task` lifetime, gated like its docstring. */

@@ -7,6 +7,7 @@ import { isParseable, isRunnableSuite, readRepositoryFile, trackedFiles } from "
 import { declaredName, importBindings, literalString, parse, walk, type SyntaxNode } from "../../../scripts/syntax.ts";
 
 const expectedRules = [
+  "anti-slop/no-wide-model-text",
   "anti-slop/no-ambient-git-in-tests",
   "anti-slop/no-chained-type-assertions",
   "anti-slop/no-conditional-empty-object-spread",

@@ -22,6 +22,7 @@
     "no-sentinel-catch",
     "no-sync-spawn",
     "no-tui-colour-literal",
+    "no-wide-model-text",
     "no-unaccounted-catch",
     "no-untyped-console",
     "no-vacuous-type-predicate",
@@ -71,6 +72,7 @@
       "require-rpc-seal",
       "require-super-alarm",
       "no-tui-colour-literal",
+      "no-wide-model-text",
       "no-dynamic-model-import",
       "require-variant-utility",
       "no-cli-credential-flag",
@@ -89,7 +91,7 @@
     },
     "index.ts": {
       "upstream": "9deed4cb455b9a6251001dc3a525d5b5e2c6ef989dd1c01e804c2edf0a697415",
-      "local": "74ecac121dd9f3ef346f4219d4c77108aed01dc54906888a7e7c1ae8d294dadb",
+      "local": "d6790831d8ea175835a9a871e964695d18c5bb9cfd5940f0e422f53389091c31",
       "reason": "Registers the Kinu-local rules declared in kinuRules beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
     },
     "live-tree.gate.test.ts": {
@@ -284,6 +286,12 @@
       "kinuOnly": true
     },
     "rules/no-tui-colour-literal.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-wide-model-text.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-wide-model-text.ts": {
       "kinuOnly": true
     },
     "rules/no-unaccounted-catch.test.ts": {

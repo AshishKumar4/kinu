@@ -78,24 +78,24 @@ const CUT_GENERATOR = 'unit:"generator" was cut. It was documented as the genera
   + 'that produces candidates, against unit:"answer"\'s one candidate, but NOTHING EVER '
   + 'READ THE DIFFERENCE: the surface branches on this axis once, on '
   + 'unit:{kind:"thought"}, so every generator run was an answer run with a different '
-  + 'word in its argument digest. Use unit:{kind:"answer"} — the same agent node, now '
+  + 'word in its argument digest. Use unit:{kind:"answer"}: the same agent node, now '
   + 'under its only spelling. The `prove` preset moved with it.';
 
 const CUT_DECORRELATE = '`decorrelate` was cut entirely. It shipped with all three of its '
-  + 'values behaving identically — sibling angles were handed out under every one of '
-  + 'them including decorrelate:"blind", which names the opposite — so no call was ever '
+  + 'values behaving identically: sibling angles were handed out under every one of '
+  + 'them including decorrelate:"blind", which names the opposite, so no call was ever '
   + 'choosing anything. Diversification is now unconditional and there is nothing to '
   + 'set. NOTE WHAT THAT COSTS: angles can no longer be turned OFF. Detecting that '
   + 'siblings have converged is a separate instrument and this axis never was one.';
 
-const CUT_MUTATE = 'expand:"mutate" was cut. It asked what a child starts from — the '
-  + "parent's own answer rather than the workspace as found — and that is the `context` "
+const CUT_MUTATE = 'expand:"mutate" was cut. It asked what a child starts from: the '
+  + "parent's own answer rather than the workspace as found, and that is the `context` "
   + 'axis, which asks it once for the caller-to-root edge and every branch edge '
   + 'together. Use context:"inherit" for the parent\'s conversation, context:"fresh" for '
   + 'its results alone.';
 
 const CUT_FORK_CONTEXT = 'context:"fork" was renamed context:"inherit": the value names context '
-  + 'INHERITANCE — the child starts from the parent\'s conversation verbatim — and `fork` is the '
+  + 'INHERITANCE, the child starts from the parent\'s conversation verbatim, and `fork` is the '
   + 'removed `agents` action, a different referent sharing one spelling. Use context:"inherit" '
   + 'for the parent\'s conversation, context:"fresh" for its results alone.';
 
@@ -105,7 +105,7 @@ const CUT_AGREE = 'score:"agree" was cut: it is score:"judge" with the populatio
 
 const CUT_NOVELTY = 'score:"novelty" was cut FROM THIS AXIS and re-homed rather than '
   + 'removed: it never graded a node, it decided whether a candidate is admitted to an '
-  + "archive cell. It is now advance:{kind:\"archive\", novelty: τ}, where it cannot be "
+  + "archive cell. It is now advance:{kind:\"archive\", novelty: tau}, where it cannot be "
   + 'omitted. Move the rejection test onto the archive.';
 
 const CUT_BEAM = 'advance:"beam" was cut, and this one COSTS SOMETHING rather than having '

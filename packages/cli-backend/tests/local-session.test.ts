@@ -5215,7 +5215,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // `preset` cannot be invented, so a call without one is refused before expanding, naming the field.
     const refusal = {
       success: false, reason: 'bad_input',
-      error: 'swarm needs `preset` — the shape of the search (no role catalog is wired here to take its default from). '
+      error: 'swarm needs `preset`: the shape of the search (no role catalog is wired here to take its default from). '
         + SWARM_PRESET_DOCTRINE.join(' '),
     };
 

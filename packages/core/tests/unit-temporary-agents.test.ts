@@ -475,7 +475,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     const scene = makeScene();
     expect(await scene.call({ action: 'list' })).toEqual({
       subordinates: [],
-      note: 'No helper agents yet — create one with action:"hire".',
+      note: 'No helper agents yet: create one with action:"hire".',
     });
 
     const run = startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
