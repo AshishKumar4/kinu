@@ -78,7 +78,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     id: 'context-assembly/prefix-renderers-regress',
     layer: 'context-assembly',
     patches: ['compilePromptSurface', 'buildSystemPromptSync', 'admitAgentsMd'],
-    models: 'the surface compiler stops filtering unavailable executors, a prefix section renderer drops a line, and AGENTS.md admission stops bounding what it reads — every file is materialized whatever its size',
+    models: 'the surface compiler stops filtering unavailable executors, a prefix section renderer drops a line, and AGENTS.md admission stops bounding what it reads: every file is materialized whatever its size',
     inject: (s) => ({
       ...s,
       compilePromptSurface: (opts) => {
@@ -178,7 +178,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     id: 'event-drain/self-wake-loop',
     layer: 'event-drain',
     patches: ['buildDrainBatch', 'renderForLLM'],
-    models: 'the drain stops excluding the agent\'s own events and the rendered view stops flagging self-causation — the self-wake loop, twice over',
+    models: 'the drain stops excluding the agent\'s own events and the rendered view stops flagging self-causation: the self-wake loop, twice over',
     inject: (s) => ({
       ...s,
       buildDrainBatch: (events) =>
@@ -286,7 +286,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     id: 'craft-fitness/prose-scored-as-execution',
     layer: 'craft-fitness',
     patches: ['craftInvocationSites', 'craftInvocationError'],
-    models: 'the signal stops distinguishing code from prose and failures stop naming the tool that raised — ' +
+    models: 'the signal stops distinguishing code from prose and failures stop naming the tool that raised: ' +
       'a crafted tool merely MENTIONED in a string earns execution credit, and no failure is attributable to anything',
     inject: (s) => ({
       ...s,
@@ -353,7 +353,7 @@ export function renderFaultMatrix(impacts: readonly FaultImpact[]): string {
   const width = Math.max(...impacts.map((i) => i.fault.length));
 
   return [
-    `Fault matrix (own ≥ ${LOCALIZATION_OWN_MIN_PP}pp, every other layer < ${LOCALIZATION_OTHER_MAX_PP}pp)`,
+    `Fault matrix (own >= ${LOCALIZATION_OWN_MIN_PP}pp, every other layer < ${LOCALIZATION_OTHER_MAX_PP}pp)`,
     ...impacts.map((impact) => {
       const leaks = Object.entries(impact.dropPp)
         .filter((entry): entry is [string, number] =>

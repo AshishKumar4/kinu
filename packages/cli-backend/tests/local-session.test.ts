@@ -1455,8 +1455,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     if (!parked) throw new Error('unattended command was not queued');
 
     expect(first.exitCode).not.toBe(0);
-    expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
-    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN — queued for owner approval');
+    expect(first.stderr).toContain(`NOT RUN: queued for owner approval (${parked.id})`);
+    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN: queued for owner approval');
     expect(await session.listDeferredApprovals()).toHaveLength(2);
     const sandboxAction = (await session.listDeferredApprovals()).find((action) => action.executor === 'sandbox');
 
@@ -1502,7 +1502,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       const first = await shell.exec('rm -rf build');
       const parked = present((await session.listDeferredApprovals())[0], 'the parked delete');
 
-      expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
+      expect(first.stderr).toContain(`NOT RUN: queued for owner approval (${parked.id})`);
       expect(existsSync(join(project, 'build'))).toBe(true);
       expect(await session.decideDeferredApprovals([parked.id], 'always')).toEqual({ decided: [parked.id] });
 
@@ -5194,7 +5194,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // `preset` cannot be invented, so a call without one is refused before expanding, naming the field.
     const refusal = {
       success: false, reason: 'bad_input',
-      error: 'swarm needs `preset` — the shape of the search (no role catalog is wired here to take its default from). '
+      error: 'swarm needs `preset`: the shape of the search (no role catalog is wired here to take its default from). '
         + SWARM_PRESET_DOCTRINE.join(' '),
     };
 
@@ -5555,7 +5555,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
       id: 'h-fork', rootId: 'r1', parentId: null, depth: 0, mode: 'build',
       task: 'look at the parser', rationale: 'because', inheritedContext: [],
       budget: { maxDepth: 2, spawnedAt: Date.now() },
-      loop: defaultLoopOrigin('head'), mergeStrategy: 'synthesize', model: 'local/fork',
+      loop: defaultLoopOrigin('run'), mergeStrategy: 'synthesize', model: 'local/fork',
     });
 
     await head.run();

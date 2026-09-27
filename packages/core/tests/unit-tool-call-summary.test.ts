@@ -11,18 +11,18 @@ describe('tool call summaries — the unified agents tool', () => {
     expect(summarizeToolCall('agents', { action: 'fork', task: 'find the fix' }))
       .toBe('fork: "find the fix"');
     expect(summarizeToolCall('agents', { action: 'hire', agent: 'scout', role: 'researcher — landscape' }))
-      .toBe('hire scout — "researcher — landscape"');
+      .toBe('hire scout: "researcher — landscape"');
     expect(summarizeToolCall('agents', { action: 'hire', role: 'researcher' })).toBe('hire researcher');
     expect(summarizeToolCall('agents', { action: 'hire', scope: 'workspace', mission: 'summarize papers' }))
-      .toBe('hire workspace — "summarize papers"');
+      .toBe('hire workspace: "summarize papers"');
     expect(summarizeToolCall('agents', { action: 'hire', agent: 'scout', message: 'Audit the CLI surface' }))
-      .toBe('hire scout — "Audit the CLI surface"');
+      .toBe('hire scout: "Audit the CLI surface"');
     expect(summarizeToolCall('agents', { action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the CLI surface' }))
       .toBe('hire (task) auditor');
     expect(summarizeToolCall('agents', { action: 'msg', agent: 'scout', topic: 'fyi' }))
-      .toBe('msg scout — "fyi"');
+      .toBe('msg scout: "fyi"');
     expect(summarizeToolCall('agents', { action: 'msg', event_id: 'ev-1', message: 'here you go' }))
-      .toBe('msg — "here you go"');
+      .toBe('msg: "here you go"');
     expect(summarizeToolCall('agents', { action: 'dismiss', agent: 'arch-auditor' })).toBe('dismiss arch-auditor');
     expect(summarizeToolCall('agents', { action: 'list' })).toBe('list');
   });
@@ -39,15 +39,15 @@ describe('tool call summaries — builtins', () => {
 
   test('team spawn names the subordinate, falling back to its role', () => {
     expect(summarizeToolCall('team', { action: 'spawn', name: 'scout', role: 'researcher — landscape' }))
-      .toBe('spawn scout — "researcher — landscape"');
+      .toBe('spawn scout: "researcher — landscape"');
     expect(summarizeToolCall('team', { action: 'spawn', role: 'researcher' })).toBe('spawn researcher');
   });
 
   test('team assign and message carry the body they sent', () => {
     expect(summarizeToolCall('team', { action: 'assign', name: 'scout', task: 'Audit the CLI surface' }))
-      .toBe('assign scout — "Audit the CLI surface"');
+      .toBe('assign scout: "Audit the CLI surface"');
     expect(summarizeToolCall('team', { action: 'message', name: 'scout', content: 'skip the tests' }))
-      .toBe('message scout — "skip the tests"');
+      .toBe('message scout: "skip the tests"');
   });
 
   test('run shows the command; think shows the head count and task', () => {
@@ -63,7 +63,7 @@ describe('tool call summaries — builtins', () => {
   test('memory, skills and web name their subject', () => {
     expect(summarizeToolCall('memory', { action: 'search', query: 'deploy' })).toBe('search "deploy"');
     expect(summarizeToolCall('memory', { action: 'save', content: 'the deploy target is staging' }))
-      .toBe('save — "the deploy target is staging"');
+      .toBe('save: "the deploy target is staging"');
     expect(summarizeToolCall('memory', { action: 'conversations' })).toBe('conversations');
     expect(summarizeToolCall('memory', { action: 'remember', key: 'user.tz', value: 'UTC' }))
       .toBe('remember user.tz');
@@ -83,22 +83,22 @@ describe('tool call summaries — builtins', () => {
       .toBe('"workers ai session affinity"');
     expect(summarizeToolCall('web_fetch', { url: 'https://example.com/docs' })).toBe('https://example.com/docs');
     expect(summarizeToolCall('experience', { action: 'search', query: 'auth retry backoff' }))
-      .toBe('search — "auth retry backoff"');
+      .toBe('search: "auth retry backoff"');
     expect(summarizeToolCall('experience', { action: 'publish', kind: 'craft', key: 'slugify' }))
-      .toBe('publish craft — "slugify"');
-    expect(summarizeToolCall('experience', { action: 'import', id: 'exp-71' })).toBe('import — "exp-71"');
+      .toBe('publish craft: "slugify"');
+    expect(summarizeToolCall('experience', { action: 'import', id: 'exp-71' })).toBe('import: "exp-71"');
   });
 
   test('peers distinguishes the addressee and the reply lane', () => {
-    expect(summarizeToolCall('peers', { action: 'ask', agent: 'atlas', topic: 'schema' })).toBe('ask atlas — "schema"');
-    expect(summarizeToolCall('peers', { action: 'send', agent: 'atlas', message: 'done' })).toBe('send atlas — "done"');
-    expect(summarizeToolCall('peers', { action: 'reply', event_id: 'ev-1', message: 'yes' })).toBe('reply — "yes"');
+    expect(summarizeToolCall('peers', { action: 'ask', agent: 'atlas', topic: 'schema' })).toBe('ask atlas: "schema"');
+    expect(summarizeToolCall('peers', { action: 'send', agent: 'atlas', message: 'done' })).toBe('send atlas: "done"');
+    expect(summarizeToolCall('peers', { action: 'reply', event_id: 'ev-1', message: 'yes' })).toBe('reply: "yes"');
     expect(summarizeToolCall('peers', { action: 'list' })).toBe('list');
   });
 
   test('report leads with the status it is reporting', () => {
     expect(summarizeToolCall('report', { status: 'completed', content: 'audit finished' }))
-      .toBe('completed — "audit finished"');
+      .toBe('completed: "audit finished"');
   });
 
   test('eval separates the visible intent from the first executable line', () => {
@@ -142,7 +142,7 @@ describe('tool call summaries — truthfulness', () => {
   test('long values are clipped with a visible marker, never silently cut', () => {
     const long = 'a'.repeat(200);
     const summary = summarizeToolCall('shell', { command: long });
-    expect(summary.endsWith('…')).toBe(true);
+    expect(summary.endsWith('...')).toBe(true);
     expect(summary.length).toBeLessThanOrEqual(72);
     expect(clip('short')).toBe('short');
     expect(clip('one    two\n three')).toBe('one two three');

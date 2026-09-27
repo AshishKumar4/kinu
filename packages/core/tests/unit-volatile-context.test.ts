@@ -263,7 +263,7 @@ describe('renderDynamicContextBlock', () => {
 
     expect(text).toContain('server-7');
     expect(text).not.toContain('server-8');
-    expect(text).toContain('…and 3 more, not shown');
+    expect(text).toContain('...and 3 more, not shown');
   });
 
   test('unselectable executors are omitted; empty state renders nothing', () => {
@@ -560,7 +560,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
     expect(text).toContain('- t15 [open] step 15');
     expect(text).not.toContain('- t16 [open] step 16');
-    expect(text).toContain('- …and 5 more, not shown');
+    expect(text).toContain('- ...and 5 more, not shown');
   });
 
   test('each roster is capped, and what was dropped is counted honestly', () => {
@@ -571,7 +571,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
     expect(text).toContain('- job-0 (think_heads)');
     expect(text).toContain('- job-7 (think_heads)');
     expect(text).not.toContain('- job-8 (think_heads)');
-    expect(text).toContain('- …and 4 more, not shown');
+    expect(text).toContain('- ...and 4 more, not shown');
   });
 
   test('long free text from a store is clipped to one line', () => {
@@ -579,7 +579,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
       jobs: roster([{ id: 'job-1', kind: 'shell', label: `${'x'.repeat(400)}\nsecond line` }]),
     }), 'dynamic context block');
 
-    expect(text).toContain('…');
+    expect(text).toContain('...');
     expect(text.split('\n').every((line) => line.length < 200)).toBe(true);
   });
 

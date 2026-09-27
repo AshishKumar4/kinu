@@ -158,7 +158,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         signal,
       });
 
-      if (res.status === 429) throw new WebFetchError('Tavily rate limit (429) — retry shortly', true);
+      if (res.status === 429) throw new WebFetchError('Tavily rate limit (429): retry shortly', true);
 
       if (!res.ok) {
         const body = await res.text();
@@ -211,7 +211,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       });
 
       if (res.status === 429 || res.status === 202) {
-        throw new WebFetchError('DuckDuckGo rate-limited the request — retry shortly, or connect a Tavily key for reliable search', true);
+        throw new WebFetchError('DuckDuckGo rate-limited the request: retry shortly, or connect a Tavily key for reliable search', true);
       }
 
       if (!res.ok) throw new WebFetchError(`web search failed (${res.status})`);
@@ -270,7 +270,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
           if (!location) {
             finalUrl = target;
 
-            if (hop.status === 429) throw new WebFetchError('fetch rate-limited (429) — retry shortly', true);
+            if (hop.status === 429) throw new WebFetchError('fetch rate-limited (429): retry shortly', true);
 
             if (!hop.ok) throw new WebFetchError(`fetch failed (${hop.status}) for ${finalUrl}`);
             const contentType = hop.headers.get('content-type') ?? '';
@@ -390,7 +390,7 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
     tools: {
       search: {
         planAllowed: true,
-        description: 'web.search(query, { limit? }) → { results: [{ title, url, snippet, date, position }], answer?, source }',
+        description: 'web.search(query, { limit? }) -> { results: [{ title, url, snippet, date, position }], answer?, source }',
         execute: async (...args: unknown[]) => {
           const query = codemodeText({ value: args[0], parameter: 'web.search(query)' });
           const parsedOpts = v.safeParse(WebSearchOptionsSchema, args[1]);
@@ -401,7 +401,7 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
       },
       fetch: {
         planAllowed: true,
-        description: 'web.fetch(url) → { url, title?, retrievedAt, markdown }',
+        description: 'web.fetch(url) -> { url, title?, retrievedAt, markdown }',
         execute: async (...args: unknown[]) => provider.fetch(codemodeText({ value: args[0], parameter: 'web.fetch(url)' }), { signal: readExecSignal({ context: args[1] }) }),
       },
     },

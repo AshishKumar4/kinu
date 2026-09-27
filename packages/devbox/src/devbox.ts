@@ -516,7 +516,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       this.#invalidateGeneration();
 
       if (attached) {
-        const reason = `[deadline → repair] restoration did not settle inside the ${budgetMs}ms hook budget`;
+        const reason = `[deadline -> repair] restoration did not settle inside the ${budgetMs}ms hook budget`;
         await this.#settle({ phase: 'repair', incomplete: reason });
         await this.#record('process', reason);
       } else {
@@ -808,7 +808,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     if (!claim.admit) {
       // An unparsed ladder row gives no evidence, so nothing is destroyed on a guess; the claim
       // already normalised it to terminal, so `attachNow()` re-attempts and a success deletes it.
-      const reason = 'the attach-recovery record did not parse [unreadable → refuse]';
+      const reason = 'the attach-recovery record did not parse [unreadable -> refuse]';
       await this.#settle({ phase: 'unattached', reason, retry: false });
       await this.#record('attach', reason);
       // Terminal refusal drops the startup wake-up the start hook armed, as `#recover` does for
@@ -995,7 +995,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // this branch only logs it and falls off the end.
       if (this.#owns(generation)) {
         const failure = classifyRecovery({ cause });
-        await this.#record('attach', `[${failure} → retry] ${reason}`);
+        await this.#record('attach', `[${failure} -> retry] ${reason}`);
 
         if (this.#owns(generation)) await this.#arm(STARTUP_CALLBACK, 1);
       } else {
@@ -1200,7 +1200,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     // The tag leads: `recordIncident` truncates at INCIDENT_REASON_MAX_CHARS, and a long cause
     // chain would cut a trailing tag that the host's prose tells the agent to read.
-    const reason = `[${failure} → ${decision.action}] ${describe(thrown)}`;
+    const reason = `[${failure} -> ${decision.action}] ${describe(thrown)}`;
     const restoration = { phase: 'unattached', reason, retry: decision.action === 'retry' } as const;
 
     if (!await this.#settleRecovery(claim, generation, decision, restoration)) return;

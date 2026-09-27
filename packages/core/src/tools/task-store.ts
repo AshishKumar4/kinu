@@ -59,7 +59,7 @@ function toTask(r: Row): AgentTask {
   if (!status.success) {
     throw new Error(
       `agent_tasks row '${r.id}' stores unknown status '${r.status}'`
-      + ` — expected one of ${TASK_STATUSES.join(', ')}`,
+      + `: expected one of ${TASK_STATUSES.join(', ')}`,
     );
   }
 
@@ -155,7 +155,7 @@ export class TaskListStore {
         added: [],
         rejected: titles.map((title) => ({
           title,
-          reason: `${parent.id} is itself a subtask — subtasks nest one level only`,
+          reason: `${parent.id} is itself a subtask: subtasks nest one level only`,
         })),
       };
     }

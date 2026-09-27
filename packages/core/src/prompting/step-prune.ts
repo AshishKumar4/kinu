@@ -147,8 +147,8 @@ function truncateResultPart(part: ToolResultPart): ToolResultPart {
 
   if (serialized === null) return part;
 
-  if (serialized.includes('…[truncated:')) return part;
-  const marker = `…[truncated: full output was ${serialized.length} chars; re-run the tool if needed]`;
+  if (serialized.includes('...[truncated:')) return part;
+  const marker = `...[truncated: full output was ${serialized.length} chars; re-run the tool if needed]`;
 
   if (serialized.length <= PRUNED_OUTPUT_HEAD_CHARS + marker.length) return part;
   const value = serialized.slice(0, PRUNED_OUTPUT_HEAD_CHARS) + marker;

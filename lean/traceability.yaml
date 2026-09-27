@@ -190,7 +190,7 @@ requirements:
       - packages/cli-backend/src/branch-process.ts#createBranchSpawner
       - packages/cli-backend/src/branch-worker.ts#validateActor
       - packages/cf-backend/src/runtime.ts#createCFRuntime
-      - packages/cf-backend/src/exploration-hosting.ts#hostBranch
+      - packages/cf-backend/src/hosted-actors.ts#hostBranch
     remainingEvidence:
       - Actor separation is a premise of Expand, not a property proved of hostBranch or createBranchSpawner
       - That every statement binds the acting actor's id is read off the shipped queries, which take an ActorHandle; no fixture runs them against the model

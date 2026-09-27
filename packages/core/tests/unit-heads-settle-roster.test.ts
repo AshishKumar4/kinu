@@ -40,7 +40,7 @@ function spawn(id: string): HeadInput {
     task: `walk ${id}`, mode: 'build', rationale: 'one call site each',
     inheritedContext: [], budget: { maxDepth: 1, spawnedAt: 1_000 },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('head'),
+    loop: defaultLoopOrigin('run'),
   };
 }
 

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 /** The composer against wrapped one-line drafts, which a `split('\n')` row count cannot see. */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { composerVisibleRows } from '@kinu.run/core';
+import { composerVisibleRows } from '@kinu.run/core/tui';
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 
 const CAP = composerVisibleRows(10_000);

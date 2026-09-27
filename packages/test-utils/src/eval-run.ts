@@ -502,14 +502,14 @@ export function assessAdmissibility(
 
   const failures: string[] = [];
 
-  if (scored.length === 0) failures.push('no observation was scored — nothing to measure');
+  if (scored.length === 0) failures.push('no observation was scored: nothing to measure');
 
-  if (gradedTurns === 0) failures.push('zero graded turns — the ledger recorded no closed turn');
+  if (gradedTurns === 0) failures.push('zero graded turns: the ledger recorded no closed turn');
 
-  if (toolCalls === 0) failures.push('zero tool calls — no agent behaviour occurred');
+  if (toolCalls === 0) failures.push('zero tool calls: no agent behaviour occurred');
 
   if (outcomesScored === 0 && scored.length > 0) {
-    failures.push('no observation carried a task_outcome row — this run measured activity, '
+    failures.push('no observation carried a task_outcome row: this run measured activity, '
       + 'not whether any task was solved, so it is not evidence about task performance');
   }
 
@@ -519,14 +519,14 @@ export function assessAdmissibility(
 
   // A cancelled run is partial: settled work stands, but the record must say it is incomplete.
   if (incomplete > 0) {
-    failures.push(`${String(incomplete)} case(s) never settled — the run was cancelled `
+    failures.push(`${String(incomplete)} case(s) never settled: the run was cancelled `
       + 'mid-flight; this record is partial evidence, not a verdict');
   }
 
   // The model claim must survive the ledger. Omitted means the caller never observed, so it cannot fail here.
   if (model !== undefined && modelClaimRefuted(model.modelId, model.modelObserved)) {
     failures.push(`run claimed model ${model.modelId} but the ledger observed `
-      + `${model.modelObserved} serving its turns — the turns ran on a model the record does not name`);
+      + `${model.modelObserved} serving its turns: the turns ran on a model the record does not name`);
   }
 
   return {
@@ -611,7 +611,7 @@ export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null 
   if (inputs.observations.length === 0) {
     console.warn(`\nNO RECORD: the ${inputs.family} run attempted 0 of `
       + `${String(inputs.declaredTasks.length)} declared task(s), so it measured nothing and `
-      + 'the corpus takes no record of it. Every case skipped — with no credential that is '
+      + 'the corpus takes no record of it. Every case skipped, with no credential that is '
       + "the tier's normal credential-free pass, and `[skip]` above says which reason.\n");
 
     return null;
@@ -627,10 +627,10 @@ export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null 
 
 function covariateRate(row: { eligible: number; passed: number; unmeasured: boolean }): string {
   if (row.unmeasured) {
-    return `unmeasured — ${String(row.eligible)} observed opportunities, ${String(row.passed)} known successes`;
+    return `unmeasured: ${String(row.eligible)} observed opportunities, ${String(row.passed)} known successes`;
   }
 
-  if (row.eligible === 0) return 'n/a — no eligible opportunity';
+  if (row.eligible === 0) return 'n/a: no eligible opportunity';
 
   return `${String(row.passed)}/${String(row.eligible)} = ${(row.passed / row.eligible).toFixed(3)}`;
 }
@@ -640,16 +640,16 @@ export function formatRunRecord(record: EvalRunRecord): string {
   const a = record.admissibility;
 
   const lines = [
-    `run ${record.runId} — ${record.family}, `
+    `run ${record.runId}: ${record.family}, `
       + `${record.tier} (${record.modelId})`,
-    `  ledger observed: ${record.modelObserved ?? 'no serving model — the record carries no ledger check'}`,
-    `  commit ${record.gitSha.slice(0, 9)}${record.gitDirty ? ' [DIRTY — unreproducible]' : ''}`,
+    `  ledger observed: ${record.modelObserved ?? 'no serving model: the record carries no ledger check'}`,
+    `  commit ${record.gitSha.slice(0, 9)}${record.gitDirty ? ' [DIRTY: unreproducible]' : ''}`,
     `  arm: evolution ${record.arm.evolution ? 'ON' : 'OFF'}, settle ${record.arm.settle}, `
       + `${String(record.arm.tools.length)} tools, prompt ${record.arm.prompt ?? 'as written'}, `
       + `effort ${record.arm.effort ?? 'model default'}`,
     `  tasks ${String(record.executedTasks.length)}/${String(record.declaredTasks.length)} `
       + `× ${String(record.repeats)} repeats, seed ${String(record.seed)}`,
-    `  ADMISSIBLE: ${a.admissible ? 'yes' : 'NO'} — ${String(a.gradedTurns)} graded turns, `
+    `  ADMISSIBLE: ${a.admissible ? 'yes' : 'NO'}: ${String(a.gradedTurns)} graded turns, `
       + `${String(a.toolCalls)} tool calls, ${String(a.scored)} scored / ${String(a.inert)} inert`
       + (a.incomplete > 0 ? ` / ${String(a.incomplete)} INCOMPLETE (cancelled)` : ''),
   ];
@@ -675,14 +675,14 @@ export function formatRunRecord(record: EvalRunRecord): string {
   };
 
   const outcome = totals(TASK_OUTCOME);
-  lines.push(`  OUTCOME — did the agent solve the task:`);
+  lines.push(`  OUTCOME (did the agent solve the task):`);
   lines.push(`    ${TASK_OUTCOME.padEnd(20)} ${outcome.eligible === 0 || outcome.unmeasured
-    ? 'NOT MEASURED — ground truth or outcome attribution absent'
+    ? 'NOT MEASURED: ground truth or outcome attribution absent'
     : `${String(outcome.passed)}/${String(outcome.eligible)} = `
       + `${(outcome.passed / outcome.eligible).toFixed(3)} over `
       + `${String(a.outcomesScored)} scored attempts`}`);
 
-  lines.push('  covariates (mechanism telemetry — explanatory, never a score):');
+  lines.push('  covariates (mechanism telemetry: explanatory, never a score):');
 
   for (const name of BEHAVIOUR_SCORERS.map((s) => s.name)) {
     lines.push(`    ${name.padEnd(20)} ${covariateRate(totals(name))}`);

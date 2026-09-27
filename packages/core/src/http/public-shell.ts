@@ -192,7 +192,7 @@ text-transform:uppercase}
 .icon{display:inline-flex;padding:7px;color:var(--c-text-3);border-radius:var(--r-control)}
 .icon:hover{color:var(--c-accent);background:var(--c-fill)}
 
-/* ── Type ──────────────────────────────────────────────────────────────
+/* -- Type --------------------------------------------------------------
    Two voices per the design system: the grotesque at 600 for display and
    400 for reading; Fragment Mono names everything the machine touches.
    Gold is the emphasis of last resort - one phrase per screen. */
@@ -220,7 +220,7 @@ line-height:1.8;color:var(--c-text-3)}
 .stat-k{font-family:var(--font-mono);font-size:11px;letter-spacing:.16em;
 text-transform:uppercase;color:var(--c-accent)}
 
-/* ── Controls: sharp corners, mono labels ──────────────────────────────
+/* -- Controls: sharp corners, mono labels ------------------------------
    No radius anywhere on this surface; depth comes from the two background
    steps, never from shadows. */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
@@ -249,9 +249,9 @@ h1{margin:16px 0 0;font-family:var(--font-display);font-size:clamp(32px,4vw,45px
 line-height:1.05;font-weight:500;letter-spacing:-0.03em;max-width:30ch}
 h2{margin:0;font-family:var(--font-display);font-size:19px;font-weight:500;letter-spacing:-0.012em}
 /* The one gradient in the design: sheen along the thread, rationed to a single
-   hero phrase (never body text, never a panel). It runs accent → accent-ink →
-   ink, so each theme draws its own — champagne light on the dyed face, deep
-   dye on the undyed one — and engines without background-clip keep the plain
+   hero phrase (never body text, never a panel). It runs accent -> accent-ink ->
+   ink, so each theme draws its own: champagne light on the dyed face, deep
+   dye on the undyed one, and engines without background-clip keep the plain
    accent ink declared first. */
 /* The trailing padding keeps the italic overshoot inside the painted box:
    background-clip:text stops painting at the border box, so a swash past it

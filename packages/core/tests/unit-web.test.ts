@@ -520,7 +520,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
     history: storesFor(rt).history,
     craftedToolExecute: unusedCraftedExecute,
     codemode: createNodeCodemodeBuilder([createWebCodemodeProvider(provider)]),
-    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
     webSearch: provider,
   });
 }

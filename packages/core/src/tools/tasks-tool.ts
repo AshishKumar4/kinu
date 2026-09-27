@@ -81,7 +81,7 @@ export type TasksToolResult = TasksAdded | TaskUpdated | TasksListed | RoleSet;
 function addTasks(taskList: TaskListStore, args: TasksToolInput, now: number): TasksAdded {
   const titles = args.titles ?? [];
 
-  if (titles.length === 0) throw new KinuError('bad_input', 'tasks.add requires `titles` — one or more task titles');
+  if (titles.length === 0) throw new KinuError('bad_input', 'tasks.add requires `titles`: one or more task titles');
   const { added, rejected } = taskList.add(titles, args.parent ?? null, now);
 
   const result: TasksAdded = {
@@ -177,7 +177,7 @@ export function createTasksDispatcher(
         }
 
         if (!isValidRoleId(args.role)) {
-          throw new KinuError('bad_input', 'tasks.mode requires `role` — a kebab-case role id like task or researcher');
+          throw new KinuError('bad_input', 'tasks.mode requires `role`: a kebab-case role id like task or researcher');
         }
 
         const outcome = roleSwitch?.({ config, to: args.role }) ?? { kind: 'no-authority' };

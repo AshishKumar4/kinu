@@ -32,7 +32,7 @@ export async function modifyScaffold(
   const minRationaleLength = DEFAULT_CONFIG.scaffold.minRationaleLength;
 
   if (rationale.length < minRationaleLength) {
-    return { ok: false, stage: 1, error: `Rationale must be ≥${minRationaleLength} chars` };
+    return { ok: false, stage: 1, error: `Rationale must be >=${minRationaleLength} chars` };
   }
 
   const refused = scaffoldRefusal(code);

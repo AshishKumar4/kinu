@@ -5,8 +5,9 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { renderChangelogText } from '../src/tui/index';
 import {
-  buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog,
   executeChangelogRevert, revertChangelogEntryById,
   initScaffoldTables, initShadowTables, initTurnOutcomeTables, initReplayTables,
   initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
@@ -298,12 +299,12 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const items = present(outcomes.items, 'the graded-turn items');
 
     expect(items.map((i) => i.summary)).toEqual([
-      'accepted — "ship it"',
-      'corrected — "add pagination to the chat list"',
+      'accepted: "ship it"',
+      'corrected: "add pagination to the chat list"',
     ]);
     expect(items[1].evidence).toBe(
       "the user's reply read as corrected"
-      + ' — the user named a different list than the one that changed · confidence 75%',
+      + ': the user named a different list than the one that changed · confidence 75%',
     );
     expect(items[0].evidence).toBe('thumbs up from the user');
   });

@@ -315,7 +315,7 @@ transcript and a workspace, and no delegation authority. It runs
 `runHeadInference`, so each step is a claimed turn on its own actor's
 `ActorSession`, and the builtin arm runs the shared `runChat` loop. That loop is
 the one path that requests a model, dispatches tools, prunes context, and
-repairs an unpaired tool call. On the hosted backend, `exploration-hosting.ts`
+repairs an unpaired tool call. On the hosted backend, `hosted-actors.ts`
 hosts the swarm node as a logical actor of the workspace object.
 
 Work that runs past 30 s detaches, and its result arrives as a wake. When the

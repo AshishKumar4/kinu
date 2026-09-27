@@ -115,7 +115,7 @@ describe('tasks tool', () => {
 
   test('a bad call is refused with what was wrong, never silently', async () => {
     const tasks = setup();
-    await expect(tasks({ action: 'add', titles: [] })).rejects.toThrow('tasks.add requires `titles` — one or more task titles');
+    await expect(tasks({ action: 'add', titles: [] })).rejects.toThrow('tasks.add requires `titles`: one or more task titles');
     await expect(tasks({ action: 'update', status: 'done' })).rejects.toThrow('tasks.update requires `id`');
     await expect(tasks({ action: 'update', id: 't1', status: 'finished' })).rejects.toThrow('one of open, active, done, dropped; got "finished"');
     await expect(tasks({ action: 'update', id: 't9', status: 'done' })).rejects.toThrow('no task t9');

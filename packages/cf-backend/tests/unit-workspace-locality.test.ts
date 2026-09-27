@@ -238,8 +238,8 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     open0();
     actor.database.run(
-      `INSERT INTO workspace_actors (actor_id, workspace_id, name, storage_key, kind, lifetime, created_at, creation_id)
-       VALUES ('main-actor', 'w', 'Atlas', 'agent:main', 'main', 'durable', 1, 'c1')`,
+      `INSERT INTO workspace_actors (actor_id, workspace_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
+       VALUES ('main-actor', 'w', 'Atlas', 'agent:main', 'main', 'full', 'durable', 1, 'c1')`,
     );
     const open = bornWorkspace(actor);
     const first = open();
