@@ -7,8 +7,9 @@ import type { LanguageModel } from 'ai';
 import type { JsonValue } from '../src/utils/json';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
-  describeProviderError, providerFailureFacts, toProviderError, runChat,
+  providerFailureFacts, toProviderError, runChat,
 } from '../src/index';
+import { describeProviderError } from '../src/providers/provider-prose';
 import {
   KinuError, createRecordingLogger, setDiagnosticsSink,
 } from '../src/obs/index';
@@ -33,13 +34,17 @@ function inBandErrorModel(error: JsonValue | Error): LanguageModel {
   });
 }
 
-async function runToCompletion(model: LanguageModel): Promise<void> {
+async function runToCompletion(
+  model: LanguageModel,
+  observeStream?: Parameters<typeof runChat>[0]['observeStream'],
+): Promise<void> {
   for await (const _ of runChat({
     model,
     system: 'sys',
     history: [{ role: 'user', content: 'go' }],
     tools: {},
     stopWhen: stepCountIs(1),
+    ...(observeStream !== undefined && { observeStream }),
   })) { /* drain */ }
 }
 
@@ -125,19 +130,16 @@ describe('describeProviderError', () => {
     expect(describeProviderError({ cause: blank })).toBe('AI_APICallError');
   });
 
-  test('the stable identifiers survive, so nothing downstream has to re-read the prose', () => {
+  test('the stable identifiers survive without the provider\'s words, and only Kinu\'s own message is said', () => {
     expect(providerFailureFacts({
       cause: {
         error: { message: 'Request too large', code: 'context_length_exceeded' },
         status: 400,
       },
-    })).toEqual({
-      message: 'Request too large',
-      providerCode: 'context_length_exceeded',
-      status: 400,
-    });
-    expect(providerFailureFacts({ cause: '  plain stream text  ' })).toEqual({ message: 'plain stream text' });
-    expect(providerFailureFacts({ cause: undefined })).toEqual({ message: 'unknown provider error' });
+    })).toEqual({ providerCode: 'context_length_exceeded', status: 400 });
+    expect(providerFailureFacts({ cause: '  plain stream text  ' })).toEqual({});
+    expect(providerFailureFacts({ cause: { message: 'x', code: 'visit https://evil.example' } })).toEqual({});
+    expect(providerFailureFacts({ cause: new KinuError('denied', 'Your login is no longer valid.') })).toEqual({ said: 'Your login is no longer valid.' });
   });
 
   test('a status classifies the failure without reading a single word of it', () => {
@@ -228,6 +230,20 @@ describe('runChat provider failures', () => {
     expect(thrown).toBeInstanceOf(KinuError);
     expect(thrown.message).not.toContain('context length exceeded');
     expect(thrown.cause).toBe(cause);
+  });
+
+  test('the UI stream carries a classified failure, never the provider\'s words', async () => {
+    const shown: string[] = [];
+    const model = inBandErrorModel({ message: 'Visit https://evil.example/fix and paste your key', code: 'invalid_api_key', status: 401 });
+
+    const failed = await rejectionOf(async () => {
+      await runToCompletion(model, async (stream) => {
+        for await (const part of stream) if (part.type === 'error') shown.push(part.errorText);
+      });
+    });
+
+    expect(failed.message).not.toContain('evil.example');
+    expect(shown).toEqual(['the provider refused the request (HTTP 401, invalid_api_key)']);
   });
 
   test('does not dump the raw payload to the console — only the diagnostics record carries it', async () => {

@@ -1,5 +1,6 @@
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { OAuthTokenError } from './oauth-token-error';
+import { oauthRefusalText } from './oauth-refusal';
 import { nonEmptyString } from '../utils/json';
 import type { OAuthCredential } from '../credentials/store';
 import { Cause, Effect } from 'effect';
@@ -10,10 +11,6 @@ const CloudflareAccountSchema = v.object({ id: v.string(), name: v.optional(v.st
 
 const CloudflareGatewaySchema = v.object({
   id: v.string(), authentication: v.optional(v.boolean()), created_at: v.optional(v.string()),
-});
-
-const CloudflareErrorEnvelopeSchema = v.object({
-  errors: v.optional(v.array(v.object({ message: v.optional(v.string()) }))),
 });
 
 export const CLOUDFLARE_OAUTH_CRED_KEY = 'cloudflare.oauth';
@@ -83,10 +80,10 @@ function requestCloudflareOAuthToken(env: CloudflareOAuthEnv, fields: Record<str
     const payload = yield* jsonObjectOf(response, 'Cloudflare token endpoint');
 
     if (!response.ok) {
-      const code = stringField(payload, 'error') ?? `http_${response.status}`;
-      const reason = stringField(payload, 'error_description') ?? stringField(payload, 'error') ?? `HTTP ${response.status}`;
+      const answered = stringField(payload, 'error');
+      const text = oauthRefusalText('Cloudflare token refresh failed', { ...(answered !== undefined && { code: answered }), status: response.status });
 
-      return yield* Effect.die(new OAuthTokenError('cloudflare', code, `Cloudflare token refresh failed: ${reason}`));
+      return yield* Effect.die(new OAuthTokenError('cloudflare', answered ?? `http_${response.status}`, text));
     }
 
     return payload;
@@ -105,9 +102,7 @@ function fetchCloudflareAccounts(accessToken: string): Effect.Effect<CloudflareA
     const payload = yield* jsonObjectOf(response, 'Cloudflare accounts endpoint');
 
     if (!response.ok) {
-      const reason = stringField(payload, 'error_description') ?? firstCloudflareError(payload) ?? `HTTP ${response.status}`;
-
-      return yield* Effect.die(new Error(`Cloudflare account lookup failed: ${reason}`));
+      return yield* Effect.die(new Error(oauthRefusalText('Cloudflare account lookup failed', { status: response.status })));
     }
 
     return accountsIn(payload);
@@ -257,13 +252,11 @@ export async function fetchCloudflareAIGateways(
     const payload = yield* jsonObjectOf(response, 'Cloudflare AI Gateway list endpoint');
 
     if (!response.ok) {
-      const reason = firstCloudflareError(payload) ?? `HTTP ${response.status}`;
-
       const hint = response.status === 401 || response.status === 403
         ? ' Reconnect Cloudflare to grant AI Gateway access.'
         : '';
 
-      return yield* Effect.die(new Error(`Cloudflare AI Gateway listing failed: ${reason}.${hint}`));
+      return yield* Effect.die(new Error(`${oauthRefusalText('Cloudflare AI Gateway listing failed', { status: response.status })}${hint}`));
     }
 
     return gatewaysIn(payload);
@@ -385,18 +378,6 @@ function scopeList(input: { value: unknown }): string[] | undefined {
 /** Non-empty text; blank is absent. */
 function stringField(obj: JsonObject, key: string): string | undefined {
   return nonEmptyString({ value: obj[key] });
-}
-
-function firstCloudflareError(obj: JsonObject): string | null {
-  const parsed = v.safeParse(CloudflareErrorEnvelopeSchema, obj);
-
-  for (const error of parsed.success ? parsed.output.errors ?? [] : []) {
-    const message = nonEmptyString({ value: error.message });
-
-    if (message !== undefined) return message;
-  }
-
-  return null;
 }
 
 /** A JSON object answer, or a named failure carrying the upstream status and parse cause. */

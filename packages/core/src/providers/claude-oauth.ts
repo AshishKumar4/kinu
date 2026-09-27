@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { CLAUDE_CODE_SDK_VERSION } from './claude';
 import { OAuthTokenError } from './oauth-token-error';
+import { oauthRefusalText } from './oauth-refusal';
 import type { OAuthCredential } from '../credentials/store';
 import { createPkcePair } from '../utils/crypto';
 import { Effect } from 'effect';
@@ -31,16 +32,6 @@ const TokenResponseSchema = v.looseObject({
 });
 
 const TokenErrorSchema = v.looseObject({ error: v.optional(v.string()) });
-
-/** The error codes RFC 6749 (4.1.2.1, 5.2) defines; `error_description` and any other text is Claude's prose. */
-const OAUTH_ERROR_CODES: ReadonlySet<string> = new Set([
-  'invalid_request', 'unauthorized_client', 'access_denied', 'unsupported_response_type', 'invalid_scope',
-  'server_error', 'temporarily_unavailable', 'invalid_client', 'invalid_grant', 'unsupported_grant_type',
-]);
-
-function oauthCodeTag(code: string): string {
-  return OAUTH_ERROR_CODES.has(code) ? ` (${code})` : '';
-}
 
 export interface ClaudeSignIn {
   readonly url: string;
@@ -77,7 +68,7 @@ function signInCode(returned: string, state: string): Effect.Effect<string, Kinu
 
   const refused = address?.searchParams.get('error');
 
-  if (refused != null) return Effect.fail(new KinuError('denied', `Claude refused the sign-in${oauthCodeTag(refused)}.`));
+  if (refused != null) return Effect.fail(new KinuError('denied', oauthRefusalText('Claude refused the sign-in', { code: refused })));
 
   if (code === '') return Effect.fail(new KinuError('bad_input', 'that is not a Claude sign-in code or the address Claude sent you to'));
 
@@ -119,9 +110,9 @@ function tokenRequest(
     if (!response.ok) {
       const rejection = v.safeParse(TokenErrorSchema, tolerate<unknown>(() => parseJsonValue(text), 'malformed-input'));
       const code = rejection.success ? rejection.output.error ?? 'unknown' : 'unknown';
-      const tag = rejection.success ? oauthCodeTag(code) : ` (HTTP ${String(response.status)})`;
+      const refusal = oauthRefusalText('Claude\'s token endpoint refused the sign-in', rejection.success ? { code } : { status: response.status });
 
-      return yield* Effect.die(new OAuthTokenError('claude', code, `Claude's token endpoint refused the sign-in${tag}.`));
+      return yield* Effect.die(new OAuthTokenError('claude', code, refusal));
     }
 
     return v.parse(TokenResponseSchema, parseJsonValue(text));

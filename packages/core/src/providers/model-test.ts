@@ -81,7 +81,7 @@ function failed({ cause }: { readonly cause: unknown }): ModelTestResult {
 
   if (classified.code === 'budget' || credits) {
     // Kinu's own rate-limit wording, read as a time.
-    const until = /until (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC/u.exec(facts.message)?.[1];
+    const until = /until (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC/u.exec(facts.said ?? '')?.[1];
 
     return { ok: false, failure: 'spent', message, ...(until !== undefined && { until: Date.parse(`${until.replace(' ', 'T')}Z`) }) };
   }

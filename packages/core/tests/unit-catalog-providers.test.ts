@@ -13,7 +13,7 @@ import {
   reasoningEffortOptions,
   type ProviderDeps, type AuthResolution, type ModelProvider,
 } from '../src/index';
-import { describeProviderError } from '../src/providers/util';
+import { describeProviderError } from '../src/providers/provider-prose';
 import { getModelsDevModelEndpoint } from '../src/providers/models-dev';
 import { createMockFetch, present, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
 

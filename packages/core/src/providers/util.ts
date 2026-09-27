@@ -5,12 +5,11 @@ import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './t
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { withCallAccount } from './quota';
-import { evidenceWindow } from '../utils/evidence-window';
+import { describeProviderError, readProviderFailure } from './provider-prose';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { nonEmptyString } from '../utils/json';
 import {
-  KinuError, classifyErrorCode, diagnostics, settle, tolerate, type ErrorCode,
+  KinuError, classifyErrorCode, diagnostics, settle, type ErrorCode,
 } from '../obs/index';
 
 export interface AuthedFetchOptions {
@@ -154,128 +153,42 @@ export function positiveInteger(input: { value: unknown }): number | undefined {
   return parsed.success ? Math.floor(parsed.output) : undefined;
 }
 
-/** Nested `{ error: … }` depth: OpenAI nests once, gateways re-wrap. */
-const PROVIDER_ERROR_MAX_DEPTH = 3;
-
-const PROVIDER_ERROR_MAX_CHARS = 800;
-
-/** Structural `APICallError` fields, so a gateway's re-thrown shape reads the same. */
-const ApiCallErrorSchema = v.looseObject({
-  statusCode: v.optional(v.number()),
-  responseBody: v.optional(v.pipe(v.string(), v.trim(), v.nonEmpty())),
-});
-
-/** Stream `error` chunks carry a status without being an `Error`. */
-const StatusFieldSchema = v.looseObject({
-  status: v.optional(v.number()),
-  statusCode: v.optional(v.number()),
-});
-
-/** Provider failure facts as fields, so consumers never re-match prose. */
+/** What a user may be shown of a provider failure (KINU-043). */
 export interface ProviderFailureFacts {
-  /** The provider's own words, for diagnostics: never shown to a user or passed over RPC (KINU-043). */
-  readonly message: string;
-  /** The provider's stable error code (`code`, else `type`), verbatim. */
+  readonly said?: string;
   readonly providerCode?: string;
   readonly status?: number;
-}
-
-/** Read a provider failure (often a plain object, not an `Error`) down to its facts.
- *  A response body is parsed, never forwarded: it may echo the request's headers. */
-export function providerFailureFacts(failure: { readonly cause: unknown }): ProviderFailureFacts {
-  return readProviderFailure({ cause: failure.cause, depth: 0 })
-    ?? { message: 'unknown provider error' };
-}
-
-/** Null when nothing readable, so a caller keeps the reason it already had. */
-function readProviderFailure(
-  input: { readonly cause: unknown; readonly depth: number },
-): ProviderFailureFacts | null {
-  const { cause: error, depth } = input;
-
-  if (error instanceof Error) {
-    const envelope = v.safeParse(ApiCallErrorSchema, error);
-    const status = envelope.success ? envelope.output.statusCode : undefined;
-    const body = envelope.success ? envelope.output.responseBody : undefined;
-
-    // The reason lives in the body; `||` because an empty message says nothing.
-    const parsed = body === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
-      ? undefined
-      : tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
-
-    const fromBody = parsed === undefined
-      ? null
-      : readProviderFailure({ cause: parsed, depth: depth + 1 });
-
-    return {
-      message: fromBody?.message ?? (error.message || error.name),
-      providerCode: fromBody?.providerCode,
-      status,
-    };
-  }
-
-  const text = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), error);
-
-  if (text.success) return { message: text.output };
-
-  if (v.is(v.string(), error)) return null;
-
-  // Shallow, not `JsonObject`: the recursive schema overflows on self-referencing errors.
-  const record = v.safeParse(v.record(v.string(), v.unknown()), error);
-
-  if (!record.success) return null;
-
-  const fields = record.output;
-  const status = v.safeParse(StatusFieldSchema, fields);
-  const reported = status.success ? status.output.status ?? status.output.statusCode : undefined;
-  const providerCode = nonEmptyString({ value: fields.code }) ?? nonEmptyString({ value: fields.type });
-
-  const stated = nonEmptyString({ value: fields.message })
-    ?? nonEmptyString({ value: fields.error_description })
-    ?? nonEmptyString({ value: fields.detail });
-
-  // Gateways stamp code and status on the outer envelope.
-  const nested = stated !== undefined || fields.error === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
-    ? null
-    : readProviderFailure({ cause: fields.error, depth: depth + 1 });
-
-  // Name the keys, never the values: the values may leak.
-  const named = Object.keys(fields).join(', ') || 'no fields';
-
-  return {
-    message: stated ?? nested?.message ?? `unrecognised provider error (fields: ${named})`,
-    providerCode: nested?.providerCode ?? providerCode,
-    status: nested?.status ?? reported,
-  };
-}
-
-/** Reason plus identifiers it does not already state, bounded by `evidenceWindow`
- *  since the useful sentence is usually last. */
-export function describeProviderError(failure: { readonly cause: unknown }): string {
-  const facts = providerFailureFacts({ cause: failure.cause });
-  const tags: string[] = [];
-
-  if (facts.status !== undefined) tags.push(`HTTP ${String(facts.status)}`);
-  const code = facts.providerCode;
-
-  if (code !== undefined && !facts.message.toLowerCase().includes(code.toLowerCase())) tags.push(code);
-  const rendered = tags.length > 0 ? `${facts.message} (${tags.join(', ')})` : facts.message;
-
-  return evidenceWindow(rendered, PROVIDER_ERROR_MAX_CHARS);
 }
 
 /** A code field carrying prose is dropped. */
 const PROVIDER_CODE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 
-/** What a user may be shown of a provider failure: its HTTP status and its code, never its prose. */
+export function providerFailureFacts(failure: { readonly cause: unknown }): ProviderFailureFacts {
+  const { said, providerCode, status } = readProviderFailure(failure);
+
+  return {
+    ...(said !== undefined && { said }),
+    ...(providerCode !== undefined && PROVIDER_CODE.test(providerCode) && { providerCode }),
+    ...(status !== undefined && { status }),
+  };
+}
+
 export function providerFailureTags(facts: ProviderFailureFacts): string[] {
   const tags: string[] = [];
 
   if (facts.status !== undefined) tags.push(`HTTP ${String(facts.status)}`);
 
-  if (facts.providerCode !== undefined && PROVIDER_CODE.test(facts.providerCode)) tags.push(facts.providerCode);
+  if (facts.providerCode !== undefined) tags.push(facts.providerCode);
 
   return tags;
+}
+
+/** The one way a provider failure reaches a user as text. */
+export function providerFailureText(failure: { readonly cause: unknown }): string {
+  const facts = providerFailureFacts(failure);
+  const tags = providerFailureTags(facts);
+
+  return `${facts.said ?? 'the provider refused the request'}${tags.length > 0 ? ` (${tags.join(', ')})` : ''}`;
 }
 
 /** HTTP status to `obs/error.ts` class; null when the status says nothing. */
@@ -319,13 +232,15 @@ export function toProviderError(input: {
     provider?: string;
   }
 
+  const read = readProviderFailure({ cause: input.cause });
+
   const fields: ProviderFailureFields = {
     detail: describeProviderError({ cause: input.cause }),
   };
 
-  if (facts.status !== undefined) fields.status = facts.status;
+  if (read.status !== undefined) fields.status = read.status;
 
-  if (facts.providerCode !== undefined) fields.providerCode = facts.providerCode;
+  if (read.providerCode !== undefined) fields.providerCode = read.providerCode;
 
   if (input.provider !== undefined) fields.provider = input.provider;
 
