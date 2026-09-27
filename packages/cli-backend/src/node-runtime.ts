@@ -39,6 +39,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
     let vfs = origin.storage.vfs;
     let shell = origin.shell;
     let router = origin.executionRouter;
+    let release: (() => void) | undefined;
 
     if (node.isolation === 'private-home') {
       const plane = await deps.workspace.asAgent({ cred: node.cred, home: node.home, tmp: node.tmp });
@@ -60,7 +61,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
         ownContext,
       ]);
 
-      deps.workspace.mountTable(mounted, node.cred);
+      release = deps.workspace.mountTable(mounted, node.cred);
       vfs = mounted;
       ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs, shell, filesOwner: 'agent' }));
 
@@ -98,6 +99,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       checkpoints: origin.checkpoints,
       setShellApprovalChannel: origin.setShellApprovalChannel,
       setTurnFileLedgerProvider: origin.setTurnFileLedgerProvider,
+      ...(release !== undefined && { release }),
     };
   };
 }

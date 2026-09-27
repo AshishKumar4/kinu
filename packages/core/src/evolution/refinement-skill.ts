@@ -14,7 +14,7 @@ import type { VFS } from '../types/primitives';
 import { vfsDirname } from '../utils/vfs-helpers';
 import { renderThrownChain } from '../obs/index';
 import {
-  createRefinementStore, refinementRequestView, refinementStagingPath,
+  createRefinementStore, refinementRequestView, refinementStagingPath, releaseRefinementLane,
   type RefinementDeps, type RefinementEdit, type RefinementRequest,
   type RefinementRequestView, type RefinementRoute, type RefinementStage,
 } from './refinement';
@@ -246,6 +246,7 @@ export async function decideRefinementRoute(
   deps: RefinementDeps,
   input: RefinementDecisionInput,
 ): Promise<RefinementDecisionResult> {
+  releaseRefinementLane(deps.control.sql, deps.control.rt.actor.actorId);
   const found = locate(deps, input);
 
   if (!found.ok) return { ok: false, error: found.error };

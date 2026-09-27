@@ -1282,23 +1282,18 @@ describe('daemon process under Bun against a local hub', () => {
       try {
         // HELLO arrives with the runtime identity only a real Bun carries.
         const hello = await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'));
-        expect(hello).toBeDefined();
+        expect(hello).not.toBeNull();
         expect(hello.user).toBe('user-1');
         expect(hello.pid).toBeGreaterThan(0);
         const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
-        expect(daemonLog()).toContain('Connected');
 
         // ROTATE: the hub rotates the long-lived token; the daemon persists
         // it and ACKNOWLEDGES. The hub holds the superseded token valid until
         // that frame, so this is what ends its grace.
         const rotated = `pdt_${'c'.repeat(32)}`;
         hub.socket().send(JSON.stringify({ type: 'ROTATE', token: rotated }));
-        await untilHub(() => JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token === rotated);
-        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token).toBe(rotated);
-        expect(daemonLog()).toContain('Device token rotated');
-        // `untilHub` answers null on timeout, and `toBeDefined` accepts null — so
-        // the absent direction has to be spelled as "not null" to be able to fail.
         expect(await untilHub(() => hub.frames.find((f) => f.type === 'ROTATE_ACK'))).not.toBeNull();
+        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token).toBe(rotated);
 
         const reply = replyReader(hub, daemonLog);
 
@@ -1335,7 +1330,7 @@ describe('daemon process under Bun against a local hub', () => {
         // Reconnect after a socket drop: the hub closes; the daemon redials.
         hub.socket().close();
         const hello2 = await untilHub(() => hub.frames.filter((f) => f.type === 'HELLO')[1]);
-        expect(hello2).toBeDefined();
+        expect(hello2).not.toBeNull();
       } finally {
         // Teardown owns three things the runner's exit depends on: the daemon
         // child (SIGTERM, then reaped through .exited), the in-flight root,

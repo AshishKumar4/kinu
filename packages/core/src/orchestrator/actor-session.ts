@@ -162,6 +162,10 @@ export class ActorSession {
   private mode: WorkMode = 'build';
   private restoration: Promise<void> = Promise.resolve();
 
+  get currentTurnId(): string | null {
+    return this.active?.lease.turnId ?? null;
+  }
+
   constructor(private readonly options: ActorSessionOptions) {
     this.actorId = options.runtime.actor.actorId;
     this.runtime = options.runtime;
@@ -687,7 +691,7 @@ export class ActorSession {
         this.orchestrator.acc.recordStep({
           text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
           response: { messages: event.responseMessages, modelId: event.modelId }, usage: event.usage,
-          request: event.request, context: event.context, account: event.account, fallback: event.fallback,
+          request: event.request, context: event.context, account: event.account, egress: event.egress, fallback: event.fallback,
         });
         break;
       case 'error': {

@@ -33,6 +33,7 @@ export interface StepLike {
   /** The request body this step sent and when; a cache warm replays the turn's last one. */
   request?: { body?: unknown; sentAt?: number };
   account?: CallAccount | undefined;
+  egress?: string | undefined;
   /** The breakdown of the request this step sent. */
   context?: ContextComposition;
   /** The fallback spec that served this step; absent for the turn's own model. */
@@ -222,6 +223,7 @@ export class TurnAccumulator {
     const stepEvent: Parameters<NonNullable<TurnSinks['onStepEvent']>>[0] = {
       stepIndex: this.stepCount,
       account: ctx.account,
+      egress: ctx.egress,
     };
 
     const reason = v.safeParse(StringSchema, ctx.finishReason);

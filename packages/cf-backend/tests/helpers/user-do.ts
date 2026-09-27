@@ -120,7 +120,7 @@ export interface TestUserDO {
   attachDaemon(deviceId: string): FakeDaemon;
   /** Sockets accepted through the UserDO's upgrade path, with what it wrote to each. `drop`
    *  closes one from the far end: the hub refuses a second claimant while a socket is live. */
-  acceptedSockets: Array<{ sent: string[]; drop(): void; ws: WebSocket }>;
+  acceptedSockets: AcceptedSocket[];
   /** Join device responder fibers before inspecting asynchronous effects. */
   joinFibers(): Promise<void>;
   close(): void;
@@ -247,11 +247,18 @@ interface TestUserEnvironment {
   };
 }
 
+export interface AcceptedSocket {
+  readonly sent: string[];
+  drop(): void;
+  readonly ws: WebSocket;
+  forward(far: (data: string) => void): void;
+}
+
 /**
  * workerd hands a DO a socket pair; bun has none. Reinstalled per harness because other suites
  * replace the global `WebSocketPair`; each harness reads only sockets accepted after it was built.
  */
-const ACCEPTED_SOCKETS: Array<{ sent: string[]; drop(): void; ws: WebSocket }> = [];
+const ACCEPTED_SOCKETS: AcceptedSocket[] = [];
 
 /** Workspace object storages keyed on the harness database, so a revived harness meets the same consent stores. */
 const CONSENT_STORES = new WeakMap<Database, Map<string, DeviceConsentStore>>();
@@ -266,10 +273,14 @@ function installRecordingSocketPair(): void {
       constructor() {
         const sent: string[] = [];
         let attachment: JsonValue = null;
+        let far: ((data: string) => void) | null = null;
 
         const server = {
           readyState: 1,
-          send: (data: string) => { sent.push(data); },
+          send: (data: string) => {
+            sent.push(data);
+            far?.(data);
+          },
           close: () => { server.readyState = 3; },
           serializeAttachment: (value: JsonValue) => { attachment = value; },
           deserializeAttachment: () => attachment,
@@ -278,7 +289,7 @@ function installRecordingSocketPair(): void {
         // Delegates to `server` so `drop` is visible through it; the UserDO reads only
         // send, close, readyState and the attachment members.
         const ws: WebSocket = Object.create(server);
-        ACCEPTED_SOCKETS.push({ sent, drop: () => { server.readyState = 3; }, ws });
+        ACCEPTED_SOCKETS.push({ sent, drop: () => { server.readyState = 3; }, ws, forward: (to) => { far = to; } });
         this[0] = { readyState: 1 };
         this[1] = server;
       }

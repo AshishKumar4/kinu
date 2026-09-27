@@ -5,8 +5,11 @@
  */
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
+import { settle } from '../obs/effect';
+import { Effect } from 'effect';
 import type { JsonValue } from '../utils/json';
-import { DeviceTunnel, isDeviceUnknownMethodError, type TunnelSocket } from './device-tunnel';
+import { DeviceTunnel, NO_DEVICE_CONNECTED, isDeviceUnknownMethodError, type TunnelSocket } from './device-tunnel';
+import { DEVICE_RELAY, DeviceRelays, parseDeviceRelayFrame, type DeviceRelayRequest } from './device-relay';
 import { REAL_CLOCK } from '../types/clock';
 import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
 import { TOOLCHAIN_PROBE_BINARIES } from './toolchain';
@@ -52,9 +55,12 @@ const PROBE_UNANSWERABLE = 'unanswerable';
 
 const DeviceProbeSchema = v.union([DeviceToolchainSchema, v.literal(PROBE_UNANSWERABLE)]);
 
+const RELAY_UNANSWERABLE = 'unanswerable';
+
 const DeviceAttachmentSchema = v.object({
   device: v.string(),
   probe: v.optional(DeviceProbeSchema),
+  relay: v.optional(v.literal(RELAY_UNANSWERABLE)),
 });
 
 type DeviceProbe = DeviceToolchain | typeof PROBE_UNANSWERABLE;
@@ -82,6 +88,8 @@ interface TunnelEntry {
 
 export class DeviceSocketHub {
   private readonly tunnels = new Map<string, TunnelEntry>();
+
+  private readonly relays = new DeviceRelays();
 
   constructor(private readonly ctx: DeviceSocketCtx) {}
 
@@ -168,16 +176,60 @@ export class DeviceSocketHub {
   }
 
   private recordProbe(deviceId: string, probe: DeviceProbe): void {
-    const ws = this.liveSocket(deviceId);
-
-    if (!ws) return;
-
     // Field by field: this wire shape outlives its writer and is read back only by `DeviceAttachmentSchema`.
     const stored: JsonValue = probe === PROBE_UNANSWERABLE
       ? probe
       : { present: [...probe.present], asked: [...probe.asked], probedAt: probe.probedAt };
 
-    ws.serializeAttachment({ device: deviceId, probe: stored });
+    this.annotate(deviceId, { probe: stored });
+  }
+
+  private annotate(deviceId: string, patch: { probe?: JsonValue; relay?: typeof RELAY_UNANSWERABLE }): void {
+    const ws = this.liveSocket(deviceId);
+
+    if (!ws) return;
+    const held = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
+    const { probe, relay } = held.success ? held.output : {};
+
+    ws.serializeAttachment({
+      device: deviceId,
+      ...(probe !== undefined && { probe }),
+      ...(relay !== undefined && { relay }),
+      ...patch,
+    });
+  }
+
+  relayDevice(): string | null {
+    // A pane names its device too.
+    for (const id of this.connectedDeviceIds()) {
+      const ws = this.liveSocket(id);
+      const attachment = v.safeParse(DeviceAttachmentSchema, ws?.deserializeAttachment());
+
+      if (attachment.success && attachment.output.relay === undefined) return id;
+    }
+
+    return null;
+  }
+
+  /** Resolves at the answer's head. A daemon without the method is not picked again on this connection. */
+  relay(deviceId: string, id: string, request: DeviceRelayRequest): Promise<Response> {
+    const tunnel = this.tunnel(deviceId);
+
+    if (!tunnel) return settle(Effect.fail(new KinuError('unavailable', NO_DEVICE_CONNECTED)));
+
+    const params: JsonValue = { method: request.method, url: request.url, headers: request.headers.map(([name, value]) => [name, value]), body: request.body };
+
+    return this.relays.open({
+      id, deviceId,
+      cancel: () => { if (tunnel.isConnected()) tunnel.notify({ type: DEVICE_RELAY.cancel, relay: id }); },
+      answered: async () => {
+        const [outcome] = await Promise.allSettled([tunnel.rpc(DEVICE_RELAY.method, [params], { requestId: id, timeoutMs: 0, extra: { deviceId } })]);
+
+        if (outcome.status === 'rejected' && isDeviceUnknownMethodError({ cause: outcome.reason })) this.annotate(deviceId, { relay: RELAY_UNANSWERABLE });
+
+        return outcome;
+      },
+    });
   }
 
   isConnected(deviceId: string): boolean {
@@ -219,7 +271,19 @@ export class DeviceSocketHub {
     return tunnel;
   }
 
+  cancelRelay(id: string): void {
+    this.relays.cancel(id);
+  }
+
   handleMessage(deviceId: string, data: string): void {
+    const relayFrame = parseDeviceRelayFrame(data);
+
+    if (relayFrame !== null) {
+      this.relays.receive(deviceId, relayFrame);
+
+      return;
+    }
+
     this.tunnel(deviceId)?.handleMessage(data);
   }
 

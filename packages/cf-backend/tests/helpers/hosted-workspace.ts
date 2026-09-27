@@ -136,6 +136,7 @@ export async function hostedWorkspace(
     capabilityToken: () => 'harness-token',
     resolveProfile: () => Promise.resolve(fixtureProfile()),
     reportModelCall: () => undefined,
+    currentTurn: () => null,
     liveReadsMoved: () => undefined,
     modelOperations: () => undefined,
     pricing: () => null,
