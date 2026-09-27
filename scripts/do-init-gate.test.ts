@@ -691,10 +691,10 @@ ${hold.body}
     const file = 'packages/cf-backend/src/orchestrator.ts';
     const real = present(SOURCES.get(file), `the ${file} source`);
 
-    const anchor = '    const sweepsTruncated = this.maintenanceSweeps();\n';
-    expect(real).toContain(anchor);
+    const opening = '  async onStart(): Promise<void> {\n';
+    expect(real).toContain(opening);
 
-    const respawned = real.replace(anchor, `${anchor}    if (this.getOwnerUserId()) {
+    const respawned = real.replace(opening, `${opening}    if (this.getOwnerUserId()) {
       this.detachOwned(async () => {
         await this.hydrateTitle();
         const soul = await readSoul(this.rt.storage.vfs);
