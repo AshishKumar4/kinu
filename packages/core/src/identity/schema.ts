@@ -4,6 +4,8 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
 export const WORKSPACE_IDENTITY_DDL =
   `CREATE TABLE IF NOT EXISTS workspace_identity (
+    -- One row per database: a second identity is refused, not arbitrated by readers.
+    singleton  INTEGER NOT NULL DEFAULT 1 UNIQUE CHECK (singleton = 1),
     id         TEXT NOT NULL,
     name       TEXT NOT NULL,
     owner_user_id TEXT NOT NULL DEFAULT '',

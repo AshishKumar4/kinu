@@ -1482,6 +1482,7 @@
     "token TEXT NOT NULL"
   ],
   "workspace_identity@packages/core/src/identity/schema.ts": [
+    "singleton INTEGER NOT NULL DEFAULT 1 UNIQUE CHECK (singleton = 1)",
     "id TEXT NOT NULL",
     "name TEXT NOT NULL",
     "owner_user_id TEXT NOT NULL DEFAULT ''",

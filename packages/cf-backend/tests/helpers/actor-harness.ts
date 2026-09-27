@@ -739,7 +739,7 @@ export function tapDiagnostics(logger: Logger): () => void {
   };
 }
 
-/** Replace, not update: `workspace_identity` has no primary key and `onStart` seeds its own row after its first await. */
+/** Replace, not update: `onStart` seeds its own row after its first await. */
 export function seedMission(db: Database, mission: string): void {
   db.prepare('DELETE FROM workspace_identity').run();
   db.prepare(

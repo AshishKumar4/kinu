@@ -234,14 +234,13 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
   test('a pre-kernel soul is set aside as SOUL.md.unverified, the birth render sealed, and the owner told once', async () => {
     const actor = actorObject();
-    const open0 = bornWorkspace(actor);
+    const open = bornWorkspace(actor);
 
-    open0();
+    open();
     actor.database.run(
       `INSERT INTO workspace_actors (actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
        VALUES ('main-actor', 'Atlas', 'agent:main', 'main', 'full', 'durable', 1, 'c1')`,
     );
-    const open = bornWorkspace(actor);
     const first = open();
     // A soul last written before 2026-08-31: the agent's own, no row.
     const kernel = (await first.bundle.session()).vfs.as(CRED_KERNEL);

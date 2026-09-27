@@ -147,6 +147,14 @@ describe('one workspace actor directory', () => {
     expect(current.directory.resolveChild(replacement, 'reader')).toBeNull();
   });
 
+  test('a workspace stores one identity: a second row is refused, even under its own id', () => {
+    const { sql } = workspace('workspace', 'owner');
+
+    expect(() => sql`INSERT INTO workspace_identity (id, name, owner_user_id) VALUES ('other', 'other', 'owner')`).toThrow('constraint failed');
+    expect(() => sql`INSERT INTO workspace_identity (id, name, owner_user_id) VALUES ('workspace', 'again', 'owner')`).toThrow('constraint failed');
+    expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM workspace_identity`[0]?.n).toBe(1);
+  });
+
   test.each(['node', 'head', 'branch'])('an actor of kind %s cannot be stored or registered', (kind) => {
     const { directory, sql } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
