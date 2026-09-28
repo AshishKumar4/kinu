@@ -28,9 +28,10 @@
  * governed structurally instead: one compile helper, counted by a gate.
  *
  * Option shapes carry as much policy as the severities:
- * `consistent-type-assertions` is `assertionStyle: "never"`,
- * `no-floating-promises` keeps `ignoreVoid: false`, and `return-await` keeps
- * `error-handling-correctness-only`.
+ * `consistent-type-assertions` is `assertionStyle: "never"`, and `return-await`
+ * keeps `error-handling-correctness-only`. `no-floating-promises` takes its
+ * default `ignoreVoid: true`: whether a `void`-ed promise can reject is
+ * `gate:silent-drop`'s `voided_promise` class.
  *
  * Not enabled, measured 2026-09-21:
  * - `no-unnecessary-condition` needs `noUncheckedIndexedAccess`, which is off;
@@ -223,11 +224,6 @@ assert.equal(
   "the safety-comment rule is what governs an assertion in test code, so it must stay on",
 );
 assert.deepEqual(
-  config.rules["typescript/no-floating-promises"],
-  ["error", { ignoreVoid: false }],
-  "no-floating-promises must reject both bare and void-discarded promises",
-);
-assert.deepEqual(
   config.rules["typescript/return-await"],
   ["error", "error-handling-correctness-only"],
   "return-await must stay at error-handling-correctness-only",
@@ -297,10 +293,9 @@ export const label = String(point.x);
   },
   {
     rule: "no-floating-promises",
-    findings: 2,
-    red: `export function droppedPromises(): void {
+    findings: 1,
+    red: `export function droppedPromise(): void {
   Promise.resolve();
-  void Promise.resolve();
 }
 `,
     green: `export async function ownedPromises(): Promise<void> {
