@@ -527,8 +527,6 @@ describe('turn-pipeline correctness wiring', () => {
     expect(recorded[0].turn).toContain('partial');
   });
 
-  // Core's `creditedTurnId` decides; this pins that the orchestrator honours it. A completed plan
-  // turn is not an answer the captures competed against, so it purges them (as the CLI does).
   // `onStart`'s sweep re-pends every open lease, so the settle must close a lease for every drain
   // path, and only once the answer is durable.
   describe('a settled turn closes the delivery leases it answered, and only those', () => {
