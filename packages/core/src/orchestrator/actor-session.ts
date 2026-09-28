@@ -562,7 +562,6 @@ export class ActorSession {
       const events = this.turnEvents({ lease, active, profile, input, program, claim, stream, tally });
 
       for await (const event of events) {
-        this.requireTurn(lease);
         await stream.observe(event);
         this.tallyEvent(tally, event, active.abort.signal);
         await emit(event);
@@ -790,7 +789,6 @@ export class ActorSession {
   async recordTranscriptText(claim: ActorTurnClaim, purpose: 'answer' | 'report', text: string, output: readonly MessageReference[]): Promise<MessagePartReference | null> {
     if (text === '') return null;
     const streamed = await this.lastText(output);
-    this.canonical.assertClaimEpoch(claim.turnId, claim.epoch);
 
     if (streamed?.text === text) return streamed.reference;
     const id = `${claim.turnId}:${claim.epoch}:display-${purpose}`;
