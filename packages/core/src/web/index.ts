@@ -14,4 +14,4 @@ export { refusedResolution, assertSafeUrl, isSafeUrl, UnsafeUrlError, type HostR
 
 export { htmlToMarkdown, stripBase64Images, looksLikeHtml } from './markdown';
 
-export { MOVIE_CUES, MOVIE_END, type LandingMovieHandle, type MovieCue } from './landing-movie-contract';
+export { MOVIE_CUES, MOVIE_END, type LandingMovieHandle } from './landing-movie-contract';

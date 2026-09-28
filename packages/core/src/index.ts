@@ -300,7 +300,7 @@ export {
   LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
   type ShareKind, type LiveShareVisibility, type BlueprintAddress, type BlueprintInspection, type BlueprintView,
   type BlueprintFork, type BlueprintBundle,
-  type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry, type BlueprintWarning,
+  type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry,
   type ShareGrantMember, type ShareGrant, type SlateCapability,
   type SlateGraphMember, type SlateGraphBinding, type SlateCapabilityGraph,
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
@@ -326,7 +326,7 @@ export type { SlateProcess } from './slates/process';
 
 export {
   isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer,
-  type SlateSummary, type SlateProblem, type SlatesChangedEvent,
+  type SlateSummary, type SlateProblem,
 } from './slates/rpc';
 
 export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, routeSlateStorageCall, type SlateStorageOp } from './slates/state';
@@ -519,9 +519,6 @@ export {
   WEB_TOOL_ACTIONS,
   FILE_TOOL_ACTIONS,
   memoryActionsFor,
-  type WebToolAction,
-  type FileToolAction,
-  type TasksToolAction,
   AGENTS_TOOL_NOTES,
   renderToolSchemaDescription,
   renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
@@ -1460,9 +1457,7 @@ export {
   grantedEgressBindings,
   findEgressPlaceholders,
   egressSecretRule,
-  parseEgressSecretRule,
   egressHostMatches,
-  reviewEgressBinding,
   planEgress,
   scrubText,
   createScrubStream,
@@ -1746,7 +1741,7 @@ export {
 } from './orchestrator/heads-support';
 
 export {
-  parseSkillFile, stringifySkillFile, skillNameProblem,
+  parseSkillFile, skillNameProblem,
   discoverSkills, readSkillFile, workspaceSkillPath, compareSkillNames, skillBodyChars,
   BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, skillsMount,
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,

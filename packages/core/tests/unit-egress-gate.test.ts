@@ -11,10 +11,8 @@ import {
   gateExec,
   grantsAreSubset,
   isEgressPlaceholder,
-  parseEgressSecretRule,
   planEgress,
   resolveInheritedGrants,
-  reviewEgressBinding,
   scrubText,
   type ApprovalGrant,
   type EgressSecretBinding,
@@ -153,21 +151,6 @@ describe('planEgress', () => {
     }, []);
 
     expect(plan.kind).toBe('refuse');
-  });
-});
-
-describe('approval composition', () => {
-  test('binding a secret always gates, and names its rule in the shared vocabulary', () => {
-    const review = reviewEgressBinding(STRIPE);
-    expect(review.decision).toBe('gate');
-    expect(review.hits).toHaveLength(1);
-    expect(review.hits[0].rule).toBe('egress-secret:bind-stripe');
-    expect(parseEgressSecretRule(review.hits[0].rule)).toBe('bind-stripe');
-  });
-
-  test('a rule that is not an egress rule parses to null', () => {
-    expect(parseEgressSecretRule('rm-rf')).toBeNull();
-    expect(parseEgressSecretRule('egress-secret:')).toBeNull();
   });
 });
 

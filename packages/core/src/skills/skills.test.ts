@@ -9,7 +9,7 @@ import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { stepContextLimit } from '../context-window';
 import { estimateTokens } from '../llm';
 import {
-  parseSkillFile, stringifySkillFile,
+  parseSkillFile,
   discoverSkills, BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, refusedSkillFiles,
   resolveActiveSkills, extractExplicitInvocations,
   admitSkillsIndex, admitActiveSkills,
@@ -305,72 +305,6 @@ body
     if (!r.ok) return;
     expect(r.skill.ext.custom_field).toBe('hello');
     expect(r.skill.ext.also_custom).toBe(42);
-  });
-
-  test('round-trips parse → stringify → parse', () => {
-    const original = parseSkillFile(`---
-name: round-trip
-description: A skill that survives serialization.
-allowed-tools: [run, memory]
-user-invocable: false
----
-
-# Round trip
-
-Body content with **markdown**.
-`);
-
-    expect(original.ok).toBe(true);
-
-    if (!original.ok) return;
-    const ser = stringifySkillFile(original.skill);
-    const reparsed = parseSkillFile(ser);
-    expect(reparsed.ok).toBe(true);
-
-    if (!reparsed.ok) return;
-    expect(reparsed.skill.name).toBe(original.skill.name);
-    expect(reparsed.skill.description).toBe(original.skill.description);
-    expect(reparsed.skill.allowed_tools).toEqual(original.skill.allowed_tools);
-    expect(reparsed.skill.user_invocable).toBe(original.skill.user_invocable);
-    expect(reparsed.skill.body.trim()).toBe(original.skill.body.trim());
-  });
-
-  test('keeps type-looking strings as strings through stringify → parse', () => {
-    const base = parseSkillFile(`---
-name: x
-description: x
----
-body
-`);
-
-    expect(base.ok).toBe(true);
-
-    if (!base.ok) return;
-
-    const skill = {
-      ...base.skill,
-      ext: {
-        flag: 'true',
-        count: '123',
-        ratio: '1.5',
-        missing: 'null',
-        tilde: '~',
-        nested: { inner: 'false' },
-        tags: ['123', 'false', 'hello'],
-      },
-    };
-
-    const reparsed = parseSkillFile(stringifySkillFile(skill));
-    expect(reparsed.ok).toBe(true);
-
-    if (!reparsed.ok) return;
-    expect(reparsed.skill.ext.flag).toBe('true');
-    expect(reparsed.skill.ext.count).toBe('123');
-    expect(reparsed.skill.ext.ratio).toBe('1.5');
-    expect(reparsed.skill.ext.missing).toBe('null');
-    expect(reparsed.skill.ext.tilde).toBe('~');
-    expect(reparsed.skill.ext.nested).toEqual({ inner: 'false' });
-    expect(reparsed.skill.ext.tags).toEqual(['123', 'false', 'hello']);
   });
 });
 
