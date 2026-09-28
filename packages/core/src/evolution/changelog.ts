@@ -15,7 +15,7 @@ import { rollbackScaffold } from '../scaffold/rollback';
 import { listGepaRuns } from './gepa/persistence';
 import {
   applyPromptSectionDecision, getPendingPromptSection,
-  listPromptSectionVersions, promptSectionTrialRecord,
+  listPromptSectionVersions,
 } from '../prompting/section-store';
 import { listReplayEvals } from './replay';
 import {
@@ -304,16 +304,13 @@ const SECTION_SUMMARY: Record<ScaffoldStatus, string> = {
 
 /** Evidence leads with the byte trade, since sections are read every turn. */
 function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
-  const trials = promptSectionTrialRecord(sql, actor);
-
   return listPromptSectionVersions(sql, actor, limit).map((row) => {
     const bytes = Buffer.byteLength(row.source, 'utf8');
     const delta = bytes - row.incumbentBytes;
     const size = `${delta >= 0 ? '+' : ''}${String(delta)} bytes (${String(row.incumbentBytes)} -> ${String(bytes)})`;
-    const record = trials.get(`${row.sectionId}:${String(row.version)}`);
 
-    const trial = record && record.wins + record.losses + record.ties > 0
-      ? `shadow ${String(record.wins)}W-${String(record.losses)}L-${String(record.ties)}T`
+    const trial = row.wins + row.losses + row.ties > 0
+      ? `shadow ${String(row.wins)}W-${String(row.losses)}L-${String(row.ties)}T`
       : 'shadow untried';
 
     const entry: ChangelogEntry = {

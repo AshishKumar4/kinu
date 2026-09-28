@@ -36,7 +36,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { hostedWindowMay, PAGE_KEEPALIVE, requiredRpcAccess, rpcMovesOverview, type LiveRead } from "@kinu.run/core";
+import { hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -96,8 +96,8 @@ import {
   nanoid,
   type HeadJournal, LiveHeadJournal,
   type HeadStreamFrame,
-  type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
-  type SerializedMessage, type HeadRuntime, type HeadGrounding, type MergeResult,
+  type HeadId, type HeadInput, type HeadReport,
+  type SerializedMessage, type HeadRuntime, type HeadGrounding,
   readMemoryTail,
   type RunEventRecorder,
   // Spend governor is opt-in: no label means no cap.
@@ -782,9 +782,20 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private _subordinateRoster: SubordinateRosterStore | null = null;
 
+  protected get watchedExec(): SqlExec {
+    return {
+      exec: (query, ...bindings) => {
+        const cursor = this.ctx.storage.sql.exec(query, ...bindings);
+        this.liveReadsMoved(readsWrittenBy(query));
+
+        return cursor;
+      },
+    };
+  }
+
   protected get subordinateRoster(): SubordinateRosterStore {
     if (!this._subordinateRoster) {
-      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql, this.actorHandle());
+      this._subordinateRoster = new SubordinateRosterStore(this.watchedExec, this.actorHandle());
       this._subordinateRoster.ensureSchema();
     }
 
@@ -2124,8 +2135,8 @@ export abstract class ActorAgent extends Agent<Env> {
     this.headJournal.recordReport(report);
   }
 
-  async headJournalCacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): Promise<void> {
-    this.headJournal.cacheMerge(rootId, result, strategy);
+  async headJournalCacheMerge(rootId: HeadId, narrative: string): Promise<void> {
+    this.headJournal.cacheMerge(rootId, narrative);
   }
 
   private _evolutionSettling: AsyncTaskOwner | null = null;
@@ -2503,6 +2514,9 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this._claimsObserved) {
       this._claimsObserved = true;
       claims.observe(() => { this.turnClaimChanged(); });
+      claims.observeRecovered((claim) => {
+        this.tracing.turns({ id: this.actorHandle().actorId, kind: 'main' }).recovered(claim, claim.outcome);
+      });
     }
 
     return claims;
@@ -4078,6 +4092,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const providers = this.providerRegistry();
     liveTurn.modelSpec = providers.normalizeSpecSync(assembled.profile.tier.model);
     liveTurn.credentialOf = (spec) => this.ownedModelServices.credentialFor(spec);
+    liveTurn.retries = assembled.profile.retries;
     liveTurn.fallbacks = assembled.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
       spec: providers.normalizeSpecSync(spec),
       bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),

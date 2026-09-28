@@ -8,7 +8,9 @@ export interface CopyControl {
   copy: (text: string) => void;
 }
 
-export function useCopy(resetMs = 1500): CopyControl {
+const RESET_MS = 1500;
+
+export function useCopy(): CopyControl {
   const [status, setStatus] = useState<CopyStatus>("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -20,17 +22,17 @@ export function useCopy(resetMs = 1500): CopyControl {
       () => setStatus("copied"),
       () => setStatus("failed"),
     ).finally(() => {
-      timer.current = setTimeout(() => setStatus("idle"), resetMs);
+      timer.current = setTimeout(() => setStatus("idle"), RESET_MS);
     });
-  }, [resetMs]);
+  }, []);
 
   return { status, copy };
 }
 
-export function copyLabel(status: CopyStatus, idle = "Copy"): string {
+export function copyLabel(status: CopyStatus): string {
   if (status === "copied") return "Copied";
 
   if (status === "failed") return "Could not copy";
 
-  return idle;
+  return "Copy";
 }

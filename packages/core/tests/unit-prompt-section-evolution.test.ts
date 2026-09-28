@@ -387,8 +387,7 @@ describe('promotion runs on the scaffold\'s own calibrated rule', () => {
     const record = (winner: 'pending' | 'current' | 'tie', n: number) => {
       for (let i = 0; i < n; i += 1) {
         recordPromptSectionTrial(rt.storage.sql, rt.actor, {
-          sectionId: TARGET_ID, pendingVersion: pending.version, instanceId: `i${String(i)}-${winner}`,
-          currentScore: 0.5, pendingScore: 0.5, winner, feedback: '',
+          sectionId: TARGET_ID, pendingVersion: pending.version, winner,
         });
       }
     };
@@ -434,8 +433,7 @@ describe('the changelog reports it, and the operator can take it back', () => {
 
     if (!pending) throw new Error('expected a pending section');
     recordPromptSectionTrial(rt.storage.sql, rt.actor, {
-      sectionId: TARGET_ID, pendingVersion: pending.version, instanceId: 'i1',
-      currentScore: 0.4, pendingScore: 0.9, winner: 'pending', feedback: 'clearer',
+      sectionId: TARGET_ID, pendingVersion: pending.version, winner: 'pending',
     });
     applyPromptSectionDecision(rt.storage.sql, rt.actor, pending, 'promote');
 

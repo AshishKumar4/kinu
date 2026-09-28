@@ -384,7 +384,7 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly wakes: number[] = [];
   private sentStreaming = false;
   private fires = 0;
-  private armed: Promise<void> = Promise.resolve();
+  private wakeAt: number | null = null;
   private readonly woken: (() => void)[] = [];
   private refuseNext = false;
   private refused: string | null = null;
@@ -403,11 +403,11 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
 
       this.lane = new CacheWarmingLane({
         store: new CacheWarmStore(sql, actor),
+        // Recorded, and set as the alarm only when a case asks for the wake: a due alarm set by the arming RPC fired
+        // before the case's next RPC (a refusal, a real request) under load, and the case then measured another order.
         wake: (at) => {
           this.wakes.push(at);
-
-          // Soonest-wins on the object's one alarm slot, awaited by the arming RPC so it is durable.
-          this.armed = this.ctx.storage.setAlarm(Math.max(at, Date.now()));
+          this.wakeAt = this.wakeAt === null ? at : Math.min(this.wakeAt, at);
         },
         send: async ({ modelSpec, body }) => {
           if (modelSpec.provider !== 'anthropic') return null;
@@ -455,8 +455,6 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
       },
     });
 
-    await this.armed;
-
     return at;
   }
 
@@ -481,9 +479,14 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
     for (const resolve of this.woken.splice(0)) resolve();
   }
 
-  /** Waits on the state the delivery leaves: a frame already taken answers at once. */
+  /** Sets the recorded wake as the alarm and waits on the state its frame leaves; a frame already taken answers at once. */
   async reportAfterWake(): Promise<CacheWarmReport> {
-    if (this.fires === 0) await new Promise<void>((resolve) => { this.woken.push(resolve); });
+    if (this.fires === 0) {
+      const woken = new Promise<void>((resolve) => { this.woken.push(resolve); });
+
+      await this.ctx.storage.setAlarm(Math.max(this.wakeAt ?? Date.now(), Date.now()));
+      await woken;
+    }
 
     return this.report();
   }

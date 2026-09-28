@@ -67,10 +67,16 @@ export function delegationDismissAsk(name: string): string {
 /** agent-nested-chat: the task the grandchild owns, which the Work tab lists under its name. */
 export const NESTED_TASK_TITLE = 'Nested chat probe';
 
-/** agent-nested-chat: what the owner's helper is told, so a durable grandchild owns one open task. */
+/** agent-nested-chat: the word the grandchild answers with. */
+export const NESTED_WORD = 'NESTED';
+
+/** agent-nested-chat: the grandchild's mission, so it owns one open task and then answers. */
+export const NESTED_MISSION = `Use your tasks tool to add one task titled ${JSON.stringify(NESTED_TASK_TITLE)} and leave it open. `
+  + sayWordMission(NESTED_WORD);
+
+/** agent-nested-chat: what the owner's helper is told. A durable hire answers after the helper's turn, as a report. */
 export const NESTED_HIRE_ASK = 'Use your agents tool to hire one helper: action hire, role task, no lifetime (durable). '
-  + `Its mission: "Use your tasks tool to add one task titled ${JSON.stringify(NESTED_TASK_TITLE)} and leave it open. `
-  + `${sayWordMission('NESTED')}" When it answers, reply with exactly its answer and nothing else.`;
+  + `Its mission: "${NESTED_MISSION}" When it answers, reply with exactly its answer and nothing else.`;
 
 /** delegation-tree: the word the deep helper says, two levels below the root. */
 export const TREE_DEEP_WORD = 'emberfall';

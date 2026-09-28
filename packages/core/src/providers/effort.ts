@@ -43,7 +43,7 @@ export function workersAIEffortOption(
 }
 
 /** Levels Anthropic's `effort` accepts; others leave the model on its default rather than being refused. */
-const ANTHROPIC_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+export const ANTHROPIC_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 export function reasoningEffortOptions(
   effort: ReasoningEffort | null | undefined,

@@ -17,12 +17,14 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
-import { hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, WorkspaceWorkSchema } from '../../packages/core/src/index';
+import {
+  ChatHistoryEntrySchema, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, WorkspaceWorkSchema,
+} from '../../packages/core/src/index';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
-import { NESTED_HIRE_ASK, NESTED_TASK_TITLE } from './asks';
+import { NESTED_HIRE_ASK, NESTED_TASK_TITLE, NESTED_WORD } from './asks';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 
 const SUITE = 'First-run · agent-nested-chat';
@@ -50,6 +52,8 @@ const CreatedSchema = v.object({ name: v.string() });
 const SnapshotSchema = v.object({ name: v.string(), actorId: v.string() });
 
 const HistoryPageSchema = v.object({ status: v.string(), items: v.array(v.unknown()) });
+
+const AnswersPageSchema = v.object({ items: v.array(ChatHistoryEntrySchema) });
 
 /** Activating the owner, as the pane does: its socket at the owner's path, then its two mount reads. */
 async function followOwner(pane: PublicSocket, path: string, ownerName: string, subgoals: EvalSubgoal[]): Promise<void> {
@@ -88,6 +92,18 @@ async function followOwner(pane: PublicSocket, path: string, ownerName: string, 
       said: history?.success === true ? `answered ${String(history.output.items.length)} rows` : null,
     }),
   });
+}
+
+/** The actor's newest answer in its own chat, read as its pane reads it. */
+async function lastAnswer(pane: PublicSocket, name: string): Promise<string> {
+  const snapshotAnswer = await ask(pane, 'getActorSnapshot', [name]);
+  const snapshot = snapshotAnswer.ok ? v.safeParse(SnapshotSchema, snapshotAnswer.value) : null;
+
+  if (snapshot?.success !== true) return '';
+  const page = await ask(pane, 'getChatHistoryPage', [{ actor: snapshot.output.actorId, limit: 40 }]);
+  const answers = page.ok ? v.safeParse(AnswersPageSchema, page.value) : null;
+
+  return answers?.success === true ? answers.output.items.filter((entry) => entry.role === 'assistant').at(-1)?.content ?? '' : '';
 }
 
 /** What the Work tab reads, and the path of the owner it names for the grandchild's task. */
@@ -144,9 +160,11 @@ describe(SUITE, () => {
           const helper = open(created.output.name);
           let reply = '';
 
+          // A durable hire answers after the helper's turn: its report opens the helper's next turn, which relays it.
           try {
             const result = (await helper.opened) ? await helper.chat(NESTED_HIRE_ASK) : null;
-            reply = result?.landed === 'turn' ? result.text : '';
+
+            if (result?.landed === 'turn' && await helper.turnClosed()) reply = await lastAnswer(helper, created.output.name);
           } catch (error) {
             subgoals.push({ what: 'grandchild-answered', reached: false, detail: `the helper's turn failed: ${String(error).slice(0, 300)}` });
 
@@ -155,7 +173,7 @@ describe(SUITE, () => {
 
           subgoals.push({
             what: 'grandchild-answered',
-            reached: reply.includes('NESTED'),
+            reached: reply.includes(NESTED_WORD),
             detail: `the helper relayed: ${JSON.stringify(reply.slice(0, 240))}`,
           });
 

@@ -109,12 +109,8 @@ const CITATION_OPAQUE: Readonly<Record<string, true>> = {};
  * red-proof, and writing down how the instrument catches a bad citation made the
  * gate fire on the documentation. The only way to green the tree was to delete the
  * account of the check, which would make this an instrument for undocumented gates.
- * `LiteratureGate` hit the mirror image — a withdrawn number quoted inside the
- * paragraph that withdraws it, where a naive rule forces the CORRECTION to be
- * deleted — and its answer is the shape adopted here.
  *
- * THREE PROPERTIES, shared with `hand: 'withdrawn'` in `scripts/literature.ts`, and
- * the shape rather than the name is what is shared:
+ * THREE PROPERTIES:
  *
  * 1. ENROLLED, so adding one is a reviewable edit rather than a regex tweak. Same
  *    ratchet as `CITATION_OPAQUE`.
@@ -229,8 +225,7 @@ function expandBraces(path: string): string[] {
 
 /** What the scan reads and what it counted, built once and carried across the corpus.
  *  A factory rather than module state, so the red directions are provable against
- *  synthetic text instead of by mutating the tree the gate governs — the shape
- *  `scripts/literature-citations.ts` adopted for the same reason. */
+ *  synthetic text instead of by mutating the tree the gate governs. */
 export interface Citations {
   /** `qualified name -> the module that declares it`. */
   readonly declarations: Map<string, string>;
@@ -627,8 +622,7 @@ if (import.meta.main) {
   );
   // Printed on the SUCCESS path, not only on failure: a blind spot that appears only
   // in red output is invisible exactly when the tree is green, which is when it
-  // matters. Wording shared verbatim with `scripts/literature.ts`'s blind-spot block
-  // so a reader of either instrument learns the same thing in the same words.
+  // matters.
   console.log(
     `lean-citations: BLIND SPOTS — ${String(seen.illustrativeSites)} citations carry an`
     + ' author-declared category (CITATION_ILLUSTRATIVE): the declaration is TRUSTED, not'

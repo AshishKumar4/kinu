@@ -42,8 +42,8 @@ function toJob(r: Row): BackgroundJob {
   return {
     id: r.id, kind: r.kind, label: r.label, workMode: r.work_mode === 'plan' ? 'plan' : 'build', status,
     result: r.result, error: r.error, createdAt: r.created_at, settledAt: r.settled_at,
-    epoch: r.epoch ?? 0,
-    resumeAttempts: r.resume_attempts ?? 0,
+    epoch: r.epoch,
+    resumeAttempts: r.resume_attempts,
     retriedBy: r.retried_by ?? null,
     attemptStartedAt: r.attempt_started_at ?? r.created_at,
     resumeAfter: r.resume_after ?? null,
@@ -73,7 +73,6 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
     resume_attempts INTEGER NOT NULL DEFAULT 0,
     attempt_started_at INTEGER,
     resume_after INTEGER,
-    retried_by TEXT,
     retry_of TEXT,
     created_at  INTEGER NOT NULL,
     settled_at  INTEGER,
@@ -242,7 +241,7 @@ export class BackgroundJobStore {
     const rows = this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
       job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
-      COALESCE(job.retried_by, replacement.id) AS retried_by
+      replacement.id AS retried_by
       FROM background_jobs job
       LEFT JOIN background_jobs replacement
         ON replacement.actor_id=job.actor_id AND replacement.retry_of=job.id
@@ -257,7 +256,7 @@ export class BackgroundJobStore {
     return this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
       job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
-      COALESCE(job.retried_by, replacement.id) AS retried_by
+      replacement.id AS retried_by
       FROM background_jobs job
       LEFT JOIN background_jobs replacement
         ON replacement.actor_id=job.actor_id AND replacement.retry_of=job.id
@@ -288,9 +287,15 @@ export class BackgroundJobStore {
   listRunning(limit = 20): ActiveRoster<BackgroundJob> {
     this.actor.assertCurrent();
 
-    const items = this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at, resume_after, retried_by
-      FROM background_jobs WHERE actor_id=${this.actorId} AND status='running'
-      ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
+    const items = this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
+      job.status, job.result, job.error, job.created_at, job.settled_at,
+      job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
+      replacement.id AS retried_by
+      FROM background_jobs job
+      LEFT JOIN background_jobs replacement
+        ON replacement.actor_id=job.actor_id AND replacement.retry_of=job.id
+      WHERE job.actor_id=${this.actorId} AND job.status='running'
+      ORDER BY job.created_at DESC LIMIT ${limit}`.map(toJob);
 
     const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM background_jobs
       WHERE actor_id=${this.actorId} AND status='running'`[0]?.n ?? 0;

@@ -1,32 +1,10 @@
 import type { ReadWriteVFS } from "../vfs/types";
 
-export function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
-	const live = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-
-	if (live.length === 1) return live[0];
-	const controller = new AbortController();
-
-	const abort = (signal: AbortSignal) => {
-		if (!controller.signal.aborted) controller.abort(signal.reason);
-	};
-
-	for (const signal of live) {
-		if (signal.aborted) {
-			abort(signal);
-			break;
-		}
-
-		signal.addEventListener("abort", () => abort(signal), { once: true });
-	}
-
-	return controller.signal;
-}
-
 export function isAbortError<Failure>(err: Failure): err is Failure & Error {
 	return err instanceof Error && err.name === "AbortError";
 }
 
-/** Runs each op after the one before it has ended; an op's failure is its caller's and never stops the next. */
+/** Each op after the last has ended; a failure is its caller's and never stops the next. */
 export function serialQueue(): <T>(op: () => Promise<T>) => Promise<T> {
 	let tail: Promise<unknown> = Promise.resolve();
 

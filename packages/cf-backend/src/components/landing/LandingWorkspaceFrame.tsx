@@ -124,7 +124,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   // overrides the timeline's pending one.
   const [decided, setDecided] = useState<PlanReview | null>(() => (
     reduced && isMovie
-      ? { ...MOVIE_PLAN, status: 'approved', feedback: null, handoffAccepted: true, updatedAt: Date.now(), decidedAt: Date.now() }
+      ? { ...MOVIE_PLAN, status: 'approved', feedback: null, handoffAccepted: true, updatedAt: Date.now() }
       : null
   ));
 
@@ -526,7 +526,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
                   surface={surface} onSurface={onSurface}
                   pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}}
                   plan={plan} planRpc={rpc}
-                  snapshot={{ status: 'loading' }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent="" onSearchMemory={() => {}}
+                  snapshot={{ status: 'loading' }} onRetryLoad={() => {}} memory={[]} memoryContent="" onSearchMemory={() => {}}
                   mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={isMovie ? streaming : kind === 'checkout'}
                   executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
                   backgroundJobs={isMovie ? [] : work.jobs()} onRefreshJobs={() => setWorkVersion((version) => version + 1)}

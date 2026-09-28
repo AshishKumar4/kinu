@@ -3,7 +3,6 @@
  * Blueprints carry no credentials and warn on secret-shaped text rather than promise none (S8).
  */
 import * as v from 'valibot';
-import type { SecretSighting } from '../safety/secret-patterns';
 import { SLATE_BINDING_KINDS, type SlateBindingDeclaration } from './project';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
 
@@ -207,7 +206,6 @@ export type BlueprintInspection = v.InferOutput<typeof BlueprintInspectionSchema
 export const SlateShareRecordSchema = v.object({
   id: v.string(),
   slate: v.string(),
-  kind: v.picklist(SHARE_KINDS),
   publication: v.string(),
   included: v.array(v.string()),
   createdAt: v.number(),
@@ -300,7 +298,5 @@ export const BlueprintBundleSchema = v.object({
 });
 
 export type BlueprintBundle = v.InferOutput<typeof BlueprintBundleSchema>;
-
-export type BlueprintWarning = SecretSighting;
 
 export type { SlateBindingDeclaration };

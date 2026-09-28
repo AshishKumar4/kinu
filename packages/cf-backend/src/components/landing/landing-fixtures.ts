@@ -50,9 +50,9 @@ const QUIET = { activity: 'idle', decisionsWaiting: 0, hasUpdates: false, latest
 
 export const LANDING_ROSTER = {
   entries: [
-    { name: 'checkout-fixes', displayName: 'Checkout coupon bug', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
-    { name: 'perf-audit', displayName: 'Perf audit — landing', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
-    { name: 'email-triage', displayName: 'Email triage automation', createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
+    { name: 'checkout-fixes', displayName: 'Checkout coupon bug', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
+    { name: 'perf-audit', displayName: 'Perf audit — landing', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
+    { name: 'email-triage', displayName: 'Email triage automation', createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
   ].map((entry) => ({ ...entry, overview: { ...QUIET, slates: [], shares: [] }, decisions: 0 })),
   total: 3,
   nextCursor: null,
@@ -96,19 +96,19 @@ export const CHECKOUT_MESSAGES: UIMessage[] = [
 ];
 
 const CHECKOUT_TASKS = [
-  { id: 't1', parentId: null, title: 'Reproduce the SAVE20 coupon 500', status: 'done', createdAt: NOW - 52e5, updatedAt: NOW - 44e5, note: null, subtasks: [] },
+  { id: 't1', parentId: null, title: 'Reproduce the SAVE20 coupon 500', status: 'done', updatedAt: NOW - 44e5, note: null, subtasks: [] },
   {
-    id: 't2', parentId: null, title: 'Patch the coupon kind backfill', status: 'active', createdAt: NOW - 52e5, updatedAt: NOW - 8e5, note: null,
+    id: 't2', parentId: null, title: 'Patch the coupon kind backfill', status: 'active', updatedAt: NOW - 8e5, note: null,
     subtasks: [
-      { id: 't5', parentId: 't2', title: 'Backfill kind for percentage coupons', status: 'done', createdAt: NOW - 30e5, updatedAt: NOW - 21e5, note: null },
-      { id: 't6', parentId: 't2', title: 'Re-run the migration on a copy', status: 'active', createdAt: NOW - 30e5, updatedAt: NOW - 6e5, note: null },
+      { id: 't5', parentId: 't2', title: 'Backfill kind for percentage coupons', status: 'done', updatedAt: NOW - 21e5, note: null },
+      { id: 't6', parentId: 't2', title: 'Re-run the migration on a copy', status: 'active', updatedAt: NOW - 6e5, note: null },
     ],
   },
-  { id: 't3', parentId: null, title: 'Deploy to staging when the suite is green', status: 'open', createdAt: NOW - 52e5, updatedAt: NOW - 52e5, note: null, subtasks: [] },
-  { id: 't4', parentId: null, title: 'Add a regression test for the percentage case', status: 'done', createdAt: NOW - 52e5, updatedAt: NOW - 4e5, note: null, subtasks: [] },
+  { id: 't3', parentId: null, title: 'Deploy to staging when the suite is green', status: 'open', updatedAt: NOW - 52e5, note: null, subtasks: [] },
+  { id: 't4', parentId: null, title: 'Add a regression test for the percentage case', status: 'done', updatedAt: NOW - 4e5, note: null, subtasks: [] },
 ];
 
-const LANDING_OWNER = { actorId: 'actor-main', name: 'main', retired: false, path: [] };
+const LANDING_OWNER = { actorId: 'actor-main', name: 'main', title: 'main', retired: false, path: [] };
 
 const CHECKOUT_CHANGELOG = {
   seenAt: NOW - 30e5,
@@ -281,7 +281,6 @@ export const PLAN_FIXTURE: PlanReview = {
   handoffAccepted: false,
   createdAt: NOW - 3e5,
   updatedAt: NOW - 6e4,
-  decidedAt: null,
 };
 
 /** `base` null means no plan submitted yet: the Plans read answers empty and annotations or
@@ -325,7 +324,6 @@ export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview |
         feedback: feedback ?? null,
         handoffAccepted: true,
         updatedAt: Date.now(),
-        decidedAt: Date.now(),
       };
 
       onDecide(decided);
@@ -335,7 +333,7 @@ export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview |
 
     if (method === 'dismissPlanReview') {
       if (base === null) return answer({ ok: false, error: 'no plan under review', plan: null });
-      const dismissed: PlanReview = { ...base, status: 'dismissed', updatedAt: Date.now(), decidedAt: Date.now() };
+      const dismissed: PlanReview = { ...base, status: 'dismissed', updatedAt: Date.now() };
       onDecide(dismissed);
 
       return answer({ ok: true, plan: dismissed });

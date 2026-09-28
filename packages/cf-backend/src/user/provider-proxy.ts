@@ -16,8 +16,7 @@ import { errorResponse } from '@kinu.run/core';
 import { json } from '@kinu.run/core';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import { validateCredentialKey } from '@kinu.run/core';
-import { authoredRefusal, diagnostics } from '@kinu.run/core/obs';
-import { publicText } from '@kinu.run/core';
+import { authoredRefusal, diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import { beneath } from '../api/context';
 import { inferenceProxyGate, type CliEnv } from '../cli/routes';
 
@@ -74,7 +73,7 @@ async function listProxyableCredentials(
     } catch (cause) {
       const error = authoredRefusal({ doing: 'reading a credential\'s base URL', cause });
       diagnostics.failure('provider_proxy.base_url_unread', error, { key });
-      out.push({ key, failure: publicText(error) });
+      out.push({ key, failure: renderThrownChain({ cause: error }) });
       continue;
     }
 
@@ -103,7 +102,7 @@ async function forwardUpstream(
   if (!target) return errorResponse(400, `${PROXY_TARGET_HEADER} is required: name the upstream URL.`);
 
   try { validateCredentialKey(credKey); }
-  catch (cause) { return errorResponse(400, publicText(authoredRefusal({ doing: 'reading the credential key', cause }))); }
+  catch (cause) { return errorResponse(400, renderThrownChain({ cause: authoredRefusal({ doing: 'reading the credential key', cause }) })); }
 
   if (isProxyDeniedCredentialKey(credKey)) {
     return errorResponse(403, `${credKey} is not served by this proxy: Cloudflare-backed models go through /api/user/ai/v1, and Codex must be connected on the machine that uses it.`);

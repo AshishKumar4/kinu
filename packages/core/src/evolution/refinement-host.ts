@@ -9,7 +9,7 @@ import {
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
 } from './refinement';
 import { Effect } from 'effect';
-import { attempt, renderThrownChain, settle, type KinuError } from '../obs/index';
+import { attempt, settle, type KinuError } from '../obs/index';
 
 /** Explicit request; defaults to the unresolved outcomes at workspace scope. */
 export function requestOwnerRefinement(
@@ -37,8 +37,8 @@ export async function refinementPass(deps: RefinementDeps): Promise<RefinementLa
     await refinementDebtRequest(deps);
 
     return advanceRefinementLane(deps);
-  }).pipe(Effect.tapError((failure) => Effect.sync(() => {
-    holdRefinementLane(sql, rt.actor.actorId, renderThrownChain({ cause: failure }));
+  }).pipe(Effect.tapError(() => Effect.sync(() => {
+    holdRefinementLane(sql, rt.actor.actorId);
   }))));
 }
 

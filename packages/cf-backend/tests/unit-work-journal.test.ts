@@ -19,10 +19,10 @@ function job(over: Partial<BackgroundJob> & { id: string }): BackgroundJob {
 }
 
 function task(id: string, updatedAt: number): AgentTaskTree {
-  return { id, parentId: null, title: id, status: 'done', createdAt: 0, updatedAt, note: null, subtasks: [] };
+  return { id, parentId: null, title: id, status: 'done', updatedAt, note: null, subtasks: [] };
 }
 
-const MAIN: WorkspaceWorkOwner = { actorId: 'actor-main', name: 'main', retired: false, path: [] };
+const MAIN: WorkspaceWorkOwner = { actorId: 'actor-main', name: 'main', title: 'main', retired: false, path: [] };
 
 /** A closed task as the Work read hands it: with the owner it belongs to. */
 function closed(id: string, updatedAt: number, owner: WorkspaceWorkOwner = MAIN) {
@@ -82,7 +82,7 @@ describe('the work journal', () => {
   });
 
   test('a finished task keeps the owner it belongs to, so a helper with no tab still opens from it', () => {
-    const helper: WorkspaceWorkOwner = { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', retired: true, path: ['ask-refiner-fb0gr9'] };
+    const helper: WorkspaceWorkOwner = { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', title: 'ask-refiner-fb0gr9', retired: true, path: ['ask-refiner-fb0gr9'] };
     const [row] = buildJournal([], [closed('t', 1, helper)], []);
 
     expect(row?.kind === 'task' ? row.owner : null).toEqual(helper);
@@ -151,7 +151,7 @@ describe('Learnings lists what the workspace remembered', () => {
 
 /** A helper's tab is gone, so the task it owns is the door to its conversation. */
 describe('a task names its owner, and a subordinate owner opens from the row', () => {
-  const owner = (name: string, path: string[] | null): WorkspaceWorkOwner => ({ actorId: `actor-${name}`, name, retired: false, path });
+  const owner = (name: string, path: string[] | null): WorkspaceWorkOwner => ({ actorId: `actor-${name}`, name, title: name, retired: false, path });
   const open = { ...task('Tighten the turn-ending rule', 0), status: 'active' as const };
 
   const row = (shown: WorkspaceWorkOwner) => renderToStaticMarkup(createElement(TaskTree, { task: open, owner: shown, onOpenOwner: () => {} }));

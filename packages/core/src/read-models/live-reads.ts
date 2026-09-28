@@ -4,7 +4,7 @@ import { workspacePath } from '../vfs/workspace-path';
 export const LIVE_READS = [
   'getExposedPorts', 'getToolDescriptions', 'listSlates', 'getEvolutionChangelog', 'listPendingActions',
   'getMemoryContent', 'getExecutors', 'listBackgroundJobs', 'getWorkspaceTabPresence', 'getActivePlanReview',
-  'listWorkspaceWork',
+  'listWorkspaceWork', 'listWorkspaceAgents',
 ] as const;
 
 export type LiveRead = typeof LIVE_READS[number];
@@ -24,12 +24,13 @@ const QUEUE: readonly LiveRead[] = ['listPendingActions', 'getWorkspaceTabPresen
 
 const WORK: readonly LiveRead[] = ['listWorkspaceWork', 'getWorkspaceTabPresence'];
 
+const AGENTS: readonly LiveRead[] = ['listWorkspaceAgents'];
+
 /** Every write to one of these tables moves the reads that select from it. */
 const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string, readonly LiveRead[]>([
   ['agent_facts', LEDGER],
   ['crafted_tools', ['getToolDescriptions', ...LEDGER]],
   ['gepa_runs', LEDGER],
-  ['prompt_section_evaluations', LEDGER],
   ['prompt_section_versions', LEDGER],
   ['refinement_requests', LEDGER],
   ['replay_evals', LEDGER],
@@ -41,7 +42,11 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['plan_reviews', ['getActivePlanReview', 'getToolDescriptions', ...QUEUE, 'listWorkspaceWork']],
   ['background_jobs', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['agent_tasks', WORK],
-  ['agent_task_notes', WORK],
+  ['actor_subordinates', AGENTS],
+  ['actor_config', AGENTS],
+  ['actor_turn_claims', AGENTS],
+  ['head_journal', AGENTS],
+  ['head_runs', AGENTS],
 ]);
 
 /** Reads that ask only whether a row exists: updates never move them. */
@@ -61,8 +66,10 @@ export function readsWrittenBy(query: string): readonly LiveRead[] {
   if (table === undefined) return NONE;
 
   const membership = write?.[1]?.toUpperCase().startsWith('UPDATE') === false;
+  const byRow = READS_BY_TABLE.get(table) ?? NONE;
+  const byMembership = (membership ? READS_BY_MEMBERSHIP.get(table) : undefined) ?? NONE;
 
-  return READS_BY_TABLE.get(table) ?? (membership ? READS_BY_MEMBERSHIP.get(table) : undefined) ?? NONE;
+  return byMembership === NONE ? byRow : [...byRow, ...byMembership];
 }
 
 const MEMORY_FILE = workspacePath(MEMORY_PATH).slice(1);

@@ -3,6 +3,7 @@
  * orchestration through the BackendHost seam. Both CLI frontends drive one via send()/end().
  */
 
+import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { sameActorReference, testModel, type ModelTestResult } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
@@ -64,7 +65,7 @@ import { TierIdSchema,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
-  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial,
+  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial, readMission,
   takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
@@ -86,7 +87,7 @@ import { TierIdSchema,
   AdvisorRecoverySnapshotSchema,
   ADVISOR_LANE_FIBER, reviewRecordedTurn,
   advisorWorkspaceGuidance,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type Clock, type WebSearchProvider,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   createAgentsCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider,
@@ -158,7 +159,7 @@ import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from './runtime';
-import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, localActorMission, type LocalActorBinding } from './actor-identity';
+import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from './actor-identity';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
@@ -686,7 +687,6 @@ export class LocalAgentSession {
         this.eventRecorder.emit(this.chat.currentRunId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },
       announce: () => { this.host.broadcast({ type: 'pending_actions_changed' }); },
-      // The CLI asks for a write over the user's files; none parks.
       writes: null,
     });
 
@@ -1785,6 +1785,7 @@ export class LocalAgentSession {
       const normalize = (spec: string) => this.profiles().normalizeSpec(spec);
       liveTurn.modelSpec = normalize(profile.tier.model);
       liveTurn.credentialOf = (spec) => resolver.credentialFor(spec);
+      liveTurn.retries = profile.retries;
       liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
         spec: normalize(spec),
         bind: () => {
@@ -1816,7 +1817,8 @@ export class LocalAgentSession {
   /** What this turn owes, via core's `declareTerminalRoster`; this session supplies values, never
    *  decisions, so the CLI cannot drift from the Durable Object. */
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
-    const mission = localActorMission(this.rt, makeSqlExec(this.db));
+    // A child titles from its brief, as a hosted actor does; the workspace mission names only the root.
+    const mission = this.rt.actor.parentActorId === null ? readMission(this.rt.storage.sql) : null;
 
     // Decided on the live turn: `shouldGate` reads RAM a restart lacks, so the row's existence carries it.
     const gated = this.rt.shell !== undefined
@@ -2232,9 +2234,9 @@ export class LocalAgentSession {
     if (this._webSearchProvider) return this._webSearchProvider;
     const getAuth = this.modelResolver?.getAuth;
 
-    const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
+    const options: DefaultWebSearchProviderDeps = {
       fetch: globalThis.fetch,
-      clock: REAL_CLOCK,
+      resolve: async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((answer) => answer.address),
     };
 
     if (getAuth) options.getAuth = getAuth;

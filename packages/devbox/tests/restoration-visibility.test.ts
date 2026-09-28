@@ -76,4 +76,18 @@ describe('a box that is not attached is either visibly working or re-armable', (
     expect(container.schedules).toContain('devboxStartup');
     expect((await box.devboxState()).ready).toBe(false);
   });
+
+  // Staging, 2026-09-27 and 09-28: the platform refused every admission of a cold box, and each
+  // caller was told only that no restoration had run, which read as a restore out of order.
+  test('a caller of a box the platform refused a container learns that refusal, until it is granted', async () => {
+    const { box, container } = harness(TestBox);
+
+    const refusal = 'Maximum number of running container instances exceeded. Try again later, '
+      + 'or try configuring a higher value for max_instances';
+
+    container.startFaultBeforeRunning = new Error(refusal);
+
+    expect(await box.resolveReadiness()).toEqual({ kind: 'pending', reason: expect.stringContaining(refusal) });
+    expect(await box.resolveReadiness()).toEqual({ kind: 'restored' });
+  });
 });

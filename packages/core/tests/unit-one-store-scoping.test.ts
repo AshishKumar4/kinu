@@ -47,7 +47,7 @@ import {
 import {
   initPromptSectionTables, activePromptSectionOverrides, incumbentSectionSource,
   firstPendingPromptSection, getPendingPromptSection, applyPromptSectionDecision,
-  recordPromptSectionTrial, promptSectionTrialRecord, listPromptSectionVersions,
+  recordPromptSectionTrial, listPromptSectionVersions,
 } from '../src/prompting/section-store';
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import {
@@ -69,7 +69,7 @@ import {
 } from '../src/experience/imports';
 import { MissionBudgetLedger, listMissionSpend } from '../src/mission-budget';
 import { SubordinateRosterStore } from '../src/subordinates/roster';
-import { SubordinateIdentityStore, readSubordinateLiveStatus } from '../src/subordinates/support';
+import { readSubordinateLiveStatus } from '../src/subordinates/support';
 import { initEventsHubTables } from '../src/events/hub/schema';
 import { EventLog } from '../src/events/hub/log';
 import { ReplyChannelStore } from '../src/events/hub/reply-channel';
@@ -252,8 +252,8 @@ describe('two actors, one database: pattern_extractions', () => {
 
     // The store lives in the engine; the row identity is what is scoped.
     for (const [actor, answer] of [[w.a, 'from-a'], [w.b, 'from-b']] as const) {
-      void w.sql`INSERT INTO pattern_extractions (actor_id, effect_key, answer, created_at)
-        VALUES (${actor.actorId}, ${'turn-1:pattern'}, ${answer}, 1)`;
+      void w.sql`INSERT INTO pattern_extractions (actor_id, effect_key, answer)
+        VALUES (${actor.actorId}, ${'turn-1:pattern'}, ${answer})`;
     }
 
     expect(w.count('pattern_extractions')).toBe(2);
@@ -300,11 +300,11 @@ describe('two actors, one database: effect_tombstones', () => {
   test('one scope+key is done for one actor and still owed by the other', () => {
     const w = world();
     initEffectTombstoneTable(w.execRaw);
-    recordEffectDone(w.sql, w.a, { scope: 'turn_review', key: 'row-1' }, 7);
+    recordEffectDone(w.sql, w.a, { scope: 'turn_review', key: 'row-1' });
     expect(w.count('effect_tombstones')).toBe(1);
     expect(effectAlreadyDone(w.sql, w.a, 'turn_review', 'row-1')).toBe(true);
     expect(effectAlreadyDone(w.sql, w.b, 'turn_review', 'row-1')).toBe(false);
-    recordEffectDone(w.sql, w.b, { scope: 'turn_review', key: 'row-1' }, 8);
+    recordEffectDone(w.sql, w.b, { scope: 'turn_review', key: 'row-1' });
     expect(w.count('effect_tombstones')).toBe(2);
     w.close();
   });
@@ -387,8 +387,8 @@ describe('two actors, one database: gepa_runs and gepa_candidates', () => {
       aggregateScore: 1, createdAt: 1,
     });
 
-    persistGepaCandidate(w.sql, w.a, { runId: runA, candidate: candidate('from-a'), iteration: 0, accepted: true });
-    persistGepaCandidate(w.sql, w.b, { runId: runB, candidate: candidate('from-b'), iteration: 0, accepted: true });
+    persistGepaCandidate(w.sql, w.a, { runId: runA, candidate: candidate('from-a'), iteration: 0 });
+    persistGepaCandidate(w.sql, w.b, { runId: runB, candidate: candidate('from-b'), iteration: 0 });
 
     expect(w.count('gepa_candidates')).toBe(2);
     expect(loadGepaCandidates(w.sql, w.a, runA).map((c) => c.source)).toEqual(['from-a']);
@@ -587,7 +587,7 @@ describe('two actors, one database: proposed_tasks', () => {
   });
 });
 
-describe('two actors, one database: prompt_section_versions and prompt_section_evaluations', () => {
+describe('two actors, one database: prompt_section_versions', () => {
   test('one section id carries a different promoted source per actor', () => {
     const w = world();
     initPromptSectionTables(w.execRaw);
@@ -613,18 +613,13 @@ describe('two actors, one database: prompt_section_versions and prompt_section_e
     expect(firstPendingPromptSection(w.sql, w.b)).toBe(section.id);
     expect(listPromptSectionVersions(w.sql, w.a)).toHaveLength(1);
 
-    // Trials on the same section, version and instance.
+    // Trials on the same section and version.
     for (const [actor, winner] of [[w.a, 'pending'], [w.b, 'current']] as const) {
-      recordPromptSectionTrial(w.sql, actor, {
-        sectionId: section.id, pendingVersion: 1, instanceId: 'i1',
-        currentScore: 0.4, pendingScore: 0.6, winner, feedback: 'f', now: 1,
-      });
+      recordPromptSectionTrial(w.sql, actor, { sectionId: section.id, pendingVersion: 1, winner });
     }
 
-    expect(w.count('prompt_section_evaluations')).toBe(2);
-    const key = `${section.id}:1`;
-    expect(promptSectionTrialRecord(w.sql, w.a).get(key)).toEqual({ wins: 1, losses: 0, ties: 0 });
-    expect(promptSectionTrialRecord(w.sql, w.b).get(key)).toEqual({ wins: 0, losses: 1, ties: 0 });
+    expect(listPromptSectionVersions(w.sql, w.a)[0]).toMatchObject({ wins: 1, losses: 0, ties: 0 });
+    expect(listPromptSectionVersions(w.sql, w.b)[0]).toMatchObject({ wins: 0, losses: 1, ties: 0 });
 
     const pendingB = getPendingPromptSection(w.sql, w.b, section.id);
 
@@ -672,9 +667,9 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
     for (const [actor, mark] of [[w.a, 'a'], [w.b, 'b']] as const) {
       void w.sql`INSERT INTO alternate_takes
           (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
-           candidates, created_at, picked_at)
+           candidates, created_at)
         VALUES (${actor.actorId}, ${'take-1'}, ${null}, ${null}, ${mark}, ${'mcts'},
-                ${'n-1'}, ${null}, ${'[]'}, 10, ${null})`;
+                ${'n-1'}, ${null}, ${'[]'}, 10)`;
     }
 
     expect(unclaimedAlternateTakeIds(w.sql, w.a)).toEqual(['take-1']);
@@ -721,9 +716,9 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
 
       void w.sql`INSERT INTO alternate_takes
           (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
-           candidates, created_at, picked_at)
+           candidates, created_at)
         VALUES (${actor.actorId}, ${'take-1'}, ${'turn-1'}, ${'default'}, ${'t'}, ${'mcts'},
-                ${'n-1'}, ${null}, ${candidates}, 1, ${null})`;
+                ${'n-1'}, ${null}, ${candidates}, 1)`;
     }
 
     expect(w.count('search_nodes')).toBe(4);
@@ -761,7 +756,7 @@ describe('two actors, one database: exploration_records', () => {
     const write = {
       identity, descriptor: null, artifact: 'program-1', value: 1, detail: 'd',
       measured: null, preset: 'p', label: null, rootId: 'root-1', configDigest: 'cfg',
-      depth: 1, branches: 1, floor: null, costUsd: null, costTokens: null, at: 1,
+      depth: 1, branches: 1, floor: null, costTokens: null, at: 1,
     };
 
     const open = { kind: 'open' as const };
@@ -792,8 +787,8 @@ describe('two actors, one database: swarm_node_records', () => {
       conclusion, aggregated: [], tokens: null,
     });
 
-    recordSwarmNode(w.sql, w.a, { rootId: 'root-1', nodeId: 'n-1', record: record('a'), now: 1 });
-    recordSwarmNode(w.sql, w.b, { rootId: 'root-1', nodeId: 'n-1', record: record('b'), now: 1 });
+    recordSwarmNode(w.sql, w.a, { rootId: 'root-1', nodeId: 'n-1', record: record('a') });
+    recordSwarmNode(w.sql, w.b, { rootId: 'root-1', nodeId: 'n-1', record: record('b') });
     expect(w.count('swarm_node_records')).toBe(2);
 
     expect(readSwarmNodeRecords(w.sql, w.a, 'root-1')).toHaveLength(1);
@@ -845,8 +840,8 @@ describe('two actors, one database: mission_budget', () => {
     const a = new MissionBudgetLedger(w.sql, w.a, w.execRaw);
     const b = new MissionBudgetLedger(w.sql, w.b, w.execRaw);
 
-    a.declare('nightly', { usd: 1 }, null, 1);
-    b.declare('nightly', { usd: 1 }, null, 1);
+    a.declare('nightly', { usd: 1 }, null);
+    b.declare('nightly', { usd: 1 }, null);
     expect(w.count('mission_budget')).toBe(2);
 
     a.debit('nightly', { tokens: 100, usd: 0.5, blendedTokens: 0, calls: 1, spawns: 0 });
@@ -892,30 +887,6 @@ describe('two actors, one database: actor_subordinates', () => {
   });
 });
 
-describe('two actors, one database: subordinate_identity', () => {
-  test('the singleton row is per actor, not per database', () => {
-    const w = world();
-    const a = new SubordinateIdentityStore(w.exec, w.a);
-    const b = new SubordinateIdentityStore(w.exec, w.b);
-    a.ensureSchema();
-    b.ensureSchema();
-
-    a.seed({
-      name: 'reviewer', mission: 'review', parentWorkspace: 'ws', ownerUserId: 'u',
-      depth: 1, lifetime: 'durable',
-    });
-    b.seed({
-      name: 'scout', mission: 'scout', parentWorkspace: 'ws', ownerUserId: 'u',
-      depth: 2, lifetime: 'task',
-    });
-    expect(w.count('subordinate_identity')).toBe(2);
-    expect(a.read()?.name).toBe('reviewer');
-    expect(b.read()?.name).toBe('scout');
-    expect(b.read()?.depth).toBe(2);
-    w.close();
-  });
-});
-
 describe('two actors, one database: agent_log', () => {
   test('one upstream dedupe key admits an event for EACH actor', () => {
     const w = world();
@@ -956,31 +927,6 @@ describe('two actors, one database: agent_log', () => {
     expect(b.hasOpenDrainLease()).toBe(false);
     w.close();
   });
-
-  test('an audit row and its turn steps belong to the actor that appended them', () => {
-    const w = world();
-    initEventsHubTables(w.exec);
-    const a = new EventLog(w.exec, w.a);
-    const b = new EventLog(w.exec, w.b);
-
-    for (const [log, mark] of [[a, 'a'], [b, 'b']] as const) {
-      log.appendNonEventRow({
-        kind: 'phase', turn_id: 'turn-1', step_idx: null, parent_id: null,
-        trace_id: 'trace-1', payload: { phase: mark }, now: 1,
-      });
-      log.appendNonEventRow({
-        kind: 'step', turn_id: 'turn-1', step_idx: 0, parent_id: null,
-        trace_id: 'trace-1', payload: { text: mark }, now: 2,
-      });
-    }
-
-    expect(w.count('agent_log')).toBe(4);
-    expect(a.currentPhase('turn-1')?.phase).toBe('a');
-    expect(b.currentPhase('turn-1')?.phase).toBe('b');
-    expect(a.turnSteps('turn-1')).toHaveLength(1);
-    expect(b.turnSteps('turn-1')).toHaveLength(1);
-    w.close();
-  });
 });
 
 describe('two actors, one database: reply_channels', () => {
@@ -990,15 +936,11 @@ describe('two actors, one database: reply_channels', () => {
     const a = new ReplyChannelStore(w.exec, w.a);
     const b = new ReplyChannelStore(w.exec, w.b);
 
-    const opts = {
-      event_id: 'evt-1', kind: 'peer_back' as const, holder_addr: 'peer',
-      payload_policy: 'full' as const,
-    };
+    const opts = { event_id: 'evt-1', kind: 'peer_back' as const, holder_addr: 'peer' };
 
     const idA = a.open(opts, 1_000);
     const idB = b.open(opts, 1_000);
 
-    if (idA === null || idB === null) throw new Error('a peer_back channel is always persisted');
     expect(w.count('reply_channels')).toBe(2);
 
     expect(a.findOpenByEvent('evt-1')?.id).toBe(idA);
@@ -1141,7 +1083,7 @@ describe('a handle whose validation throws is refused before the statement runs'
           },
           descriptor: null, artifact: 'x', value: 1, detail: 'd', measured: null,
           preset: 'p', label: null, rootId: 'r', configDigest: 'c', depth: 1,
-          branches: 1, floor: null, costUsd: null, costTokens: null, at: 1,
+          branches: 1, floor: null, costTokens: null, at: 1,
         },
       })],
       ['swarm_node_records', () => recordSwarmNode(w.sql, w.revocable, {
@@ -1150,7 +1092,6 @@ describe('a handle whose validation throws is refused before the statement runs'
           outcome: { kind: 'incomplete', detail: 'cut' },
           conclusion: null, aggregated: [], tokens: null,
         },
-        now: 1,
       })],
       ['agent_log', () => events.publish({
         descriptor: {
@@ -1161,7 +1102,7 @@ describe('a handle whose validation throws is refused before the statement runs'
         now: 1,
       })],
       ['reply_channels', () => channels.open({
-        event_id: 'evt-1', kind: 'peer_back', holder_addr: 'p', payload_policy: 'full',
+        event_id: 'evt-1', kind: 'peer_back', holder_addr: 'p',
       }, 1)],
     ];
 

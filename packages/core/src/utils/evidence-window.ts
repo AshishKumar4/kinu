@@ -14,12 +14,6 @@ const HEAD_FRACTION = 0.5;
 
 /** Keeps both ends and names what was dropped; text within budget passes through byte-identical. */
 export function evidenceWindow(text: string, maxChars: number): string {
-  return settleSync(maxChars <= 0
-    ? Effect.die(new Error(`evidence budget must be positive, got ${maxChars}`))
-    : Effect.succeed(windowed(text, maxChars)));
-}
-
-function windowed(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   const headLen = Math.floor(maxChars * HEAD_FRACTION);
   const tailLen = maxChars - headLen;

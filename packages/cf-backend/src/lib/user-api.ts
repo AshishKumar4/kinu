@@ -3,15 +3,12 @@ import {
   DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   AccountUsageSchema, ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
   type Credential,
-  type DeviceSandboxStatus,
   type DeviceTier,
-  type DeviceUpdateState,
   type JsonValue,
   ModelTestResultSchema,
   type ModelTestResult,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
-  type ReasoningEffort,
   type RosterBucket,
   WorkspaceOverviewSchema,
 } from '@kinu.run/core';
@@ -19,25 +16,9 @@ import { tolerateAsync } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
 import * as v from 'valibot';
 
-export interface UserProfile {
-  email: string;
-  displayName: string | null;
-  createdAt: number;
-  lastSeenAt: number;
-  onboardedAt: number | null;
-  /** An account that already has a workspace is never sent through the wizard. */
-  workspaceCount: number;
-  /** Nav visibility only, decided by the function that guards `/api/control/*`; that gate answers for itself every request. */
-  controlPlane?: boolean;
-}
+export type UserProfile = NonNullable<v.InferOutput<typeof UserProfileSchema>>;
 
-export interface WorkspaceEntry {
-  name: string;
-  displayName: string;
-  createdAt: number;
-  lastVisited: number;
-  archivedAt: number | null;
-}
+export type WorkspaceEntry = v.InferOutput<typeof WorkspaceEntrySchema>;
 
 export type RosterEntry = v.InferOutput<typeof RosterEntrySchema>;
 
@@ -56,43 +37,16 @@ export interface RosterQuery {
   readonly q?: string;
 }
 
-export interface CredentialSummary {
-  key: string;
-  kind: 'bearer' | 'oauth' | 'openai-compat';
-  createdAt: number;
-  updatedAt: number;
-}
+export type CredentialSummary = v.InferOutput<typeof CredentialSummarySchema>;
 
-export interface CodexStatus {
-  connected: boolean;
-  accountId: string | null;
-  expiresAt: number | null;
-  startedFlow: { userCode: string; portalURL: string; pollIntervalSec: number } | null;
-}
+export type CodexStatus = v.InferOutput<typeof CodexStatusSchema>;
 
-export interface ModelMenuEntry {
-  spec: string;
-  label: string;
-  provider: string;
-  providerLabel?: string;
-  capabilities?: string[];
-  contextWindow?: number;
-  /** Absent when the catalog could not say; empty when the model takes none. */
-  reasoningEfforts?: ReasoningEffort[];
-}
+export type ModelMenuEntry = v.InferOutput<typeof ModelMenuEntrySchema>;
 
 /** A provider unreachable while building the menu, shown as a notice rather than an empty picker. */
-export interface ProviderFailure {
-  provider: string;
-  label?: string;
-  reason: string;
-}
+export type ProviderFailure = v.InferOutput<typeof ProviderFailureSchema>;
 
-export interface ModelMenu {
-  models: ModelMenuEntry[];
-  failures: ProviderFailure[];
-  accounts?: Readonly<Record<string, readonly string[]>>;
-}
+export type ModelMenu = v.InferOutput<typeof ModelMenuSchema>;
 
 const ErrorBodySchema = v.object({ error: v.optional(v.string()) });
 
@@ -100,14 +54,16 @@ const OkSchema = v.object({ ok: v.boolean() });
 
 const UserProfileSchema = v.nullable(v.object({
   email: v.string(), displayName: v.nullable(v.string()), createdAt: v.number(), lastSeenAt: v.number(),
-  onboardedAt: v.nullable(v.number()), workspaceCount: v.number(),
-  /** Optional so a client against an older Worker hides the nav entry instead of failing to parse. */
+  onboardedAt: v.nullable(v.number()),
+  /** An account that already has a workspace is never sent through the wizard. */
+  workspaceCount: v.number(),
+  /** Nav visibility only, decided by the function that guards `/api/control/*`; that gate answers for itself every request.
+   *  Optional so a client against an older Worker hides the nav entry instead of failing to parse. */
   controlPlane: v.optional(v.boolean()),
 }));
 
 const WorkspaceEntrySchema = v.object({
   name: v.string(), displayName: v.string(), createdAt: v.number(), lastVisited: v.number(),
-  archivedAt: v.nullable(v.number()),
 });
 
 const RosterEntrySchema = v.object({ ...WorkspaceEntrySchema.entries, overview: v.nullable(WorkspaceOverviewSchema), decisions: v.number() });
@@ -137,12 +93,12 @@ const CliSetupSchema = v.object({
 
 const CredentialSummarySchema = v.object({
   key: v.string(), kind: v.picklist(['bearer', 'oauth', 'openai-compat']),
-  createdAt: v.number(), updatedAt: v.number(),
 });
 
 const ModelMenuEntrySchema = v.object({
   spec: v.string(), label: v.string(), provider: v.string(), providerLabel: v.optional(v.string()),
   capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
+  /** Absent when the catalog could not say; empty when the model takes none. */
   reasoningEfforts: v.optional(v.array(v.picklist(REASONING_EFFORTS))),
 });
 
@@ -155,25 +111,11 @@ const ModelMenuSchema = v.object({
   accounts: v.optional(v.record(v.string(), v.array(v.string()))),
 });
 
-export interface DeviceFlowStart {
-  userCode: string;
-  deviceAuthId: string;
-  pollIntervalSec: number;
-  portalURL: string;
-}
+export type DeviceFlowStart = v.InferOutput<typeof DeviceFlowStartSchema>;
 
-export interface CliSetup {
-  publicOrigin: string;
-  installCommand: string;
-  setupCommand?: string;
-  authCommand: string;
-}
+export type CliSetup = v.InferOutput<typeof CliSetupSchema>;
 
-export interface PollResult {
-  connected: boolean;
-  accountId?: string;
-  error?: string;
-}
+export type PollResult = v.InferOutput<typeof PollResultSchema>;
 
 /** '' when the body is not a JSON `{error}` envelope. */
 async function errorDetail(res: Response): Promise<string> {
@@ -257,38 +199,9 @@ export async function touchWorkspace(name: string): Promise<boolean> {
 export const removeWorkspace    = (name: string) =>
   api(OkSchema, 'DELETE', `/workspaces/${encodeURIComponent(name)}`);
 
-export interface UserDevice {
-  id: string;
-  label: string;
-  os: string | null;
-  hostname: string | null;
-  connected: boolean;
-  createdAt: number;
-  lastSeenAt: number | null;
-  /** Measured from the last rotation (every accepted connect), so a machine in use never reaches it. */
-  expiresAt: number | null;
-  /** A stolen `device.json` shows up here: an unrecognised address or an uncaused replacement. */
-  lastIp: string | null;
-  lastAgent: string | null;
-  replacedAt: number | null;
-  revokedAt: number | null;
-  unstoppedAt: number | null;
-  /** Revoked because its retired key came back: a copy exists. */
-  reuseDetectedAt: number | null;
-  wholeMachine: boolean;
-  version: string | null;
-  servedVersion: string | null;
-  update: DeviceUpdateState;
-  /** Workspace-specific home and roots live on the runtime status, not here. */
-  sandbox: UserDeviceSandbox;
-}
+export type UserDevice = v.InferOutput<typeof UserDeviceSchema>;
 
-export type UserDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
-
-export interface RegisteredDevice {
-  origin: string;
-  installCommand: string;
-}
+export type RegisteredDevice = v.InferOutput<typeof RegisteredDeviceSchema>;
 
 const DeviceSandboxSchema = v.object({
   tier: v.picklist(DEVICE_TIERS),
@@ -304,11 +217,16 @@ const UNREPORTED_SANDBOX: v.InferOutput<typeof DeviceSandboxSchema> =
 
 const UserDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
-  connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()), expiresAt: v.nullable(v.number()),
-  lastIp: v.nullable(v.string()), lastAgent: v.nullable(v.string()), replacedAt: v.nullable(v.number()),
+  connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()),
+  /** Measured from the last rotation (every accepted connect), so a machine in use never reaches it. */
+  expiresAt: v.nullable(v.number()),
+  /** A stolen `device.json` shows up here as a replacement nobody caused. */
+  replacedAt: v.nullable(v.number()),
   revokedAt: v.nullable(v.number()), unstoppedAt: v.nullable(v.number()),
+  /** Revoked because its retired key came back: a copy exists. */
   reuseDetectedAt: v.optional(v.nullable(v.number()), null),
   wholeMachine: v.optional(v.boolean(), false),
+  /** Workspace-specific home and roots live on the runtime status, not here. */
   sandbox: v.optional(DeviceSandboxSchema, UNREPORTED_SANDBOX),
   version: v.optional(v.nullable(v.string()), null),
   servedVersion: v.optional(v.nullable(v.string()), null),
@@ -442,37 +360,25 @@ export async function testModel(spec: string, signal: AbortSignal): Promise<Mode
   return v.parse(ModelTestResultSchema, await res.json());
 }
 
-export interface ProviderCatalogEntry {
-  id: string;
-  credKey: string;
-  name: string;
-  doc?: string;
-  envVar?: string;
-  connected: boolean;
-}
+export type ProviderCatalogEntry = v.InferOutput<typeof ProviderCatalogEntrySchema>;
+
+const ProviderCatalogEntrySchema = v.object({
+  id: v.string(), credKey: v.string(), name: v.string(), doc: v.optional(v.string()),
+  envVar: v.optional(v.string()), connected: v.boolean(),
+});
 
 export const listProviderCatalog = () =>
-  api(v.array(v.object({
-    id: v.string(), credKey: v.string(), name: v.string(), doc: v.optional(v.string()),
-    envVar: v.optional(v.string()), connected: v.boolean(),
-  })), 'GET', '/providers/catalog');
+  api(v.array(ProviderCatalogEntrySchema), 'GET', '/providers/catalog');
 
-export interface CloudflareAccountSummary {
-  id: string;
-  name: string;
-}
+export type CloudflareAccountStatus = v.InferOutput<typeof CloudflareAccountStatusSchema>;
 
-export interface CloudflareAccountStatus {
-  connected: boolean;
-  selectedId: string | null;
-  accounts: CloudflareAccountSummary[];
-}
+const CloudflareAccountStatusSchema = v.object({
+  connected: v.boolean(), selectedId: v.nullable(v.string()),
+  accounts: v.array(v.object({ id: v.string(), name: v.string() })),
+});
 
 export const listCloudflareAccounts = () =>
-  api(v.object({
-    connected: v.boolean(), selectedId: v.nullable(v.string()),
-    accounts: v.array(v.object({ id: v.string(), name: v.string() })),
-  }), 'GET', '/cloudflare/accounts');
+  api(CloudflareAccountStatusSchema, 'GET', '/cloudflare/accounts');
 
 const putCloudflareSelection = (path: string, id: string | null) =>
   api(OkSchema, 'PUT', path, { id })
@@ -482,25 +388,16 @@ const putCloudflareSelection = (path: string, id: string | null) =>
 
 export const selectCloudflareAccount = (id: string) => putCloudflareSelection('/cloudflare/account', id);
 
-export interface CloudflareGatewaySummary {
-  id: string;
-  authenticated: boolean;
-  createdAt: string | null;
-}
+export type CloudflareGatewayStatus = v.InferOutput<typeof CloudflareGatewayStatusSchema>;
 
-export interface CloudflareGatewayStatus {
-  connected: boolean;
-  selectedId: string | null;
-  gateways: CloudflareGatewaySummary[];
-  error: string | null;
-}
+const CloudflareGatewayStatusSchema = v.object({
+  connected: v.boolean(), selectedId: v.nullable(v.string()),
+  gateways: v.array(v.object({ id: v.string(), authenticated: v.boolean(), createdAt: v.nullable(v.string()) })),
+  error: v.nullable(v.string()),
+});
 
 export const listCloudflareGateways = () =>
-  api(v.object({
-    connected: v.boolean(), selectedId: v.nullable(v.string()),
-    gateways: v.array(v.object({ id: v.string(), authenticated: v.boolean(), createdAt: v.nullable(v.string()) })),
-    error: v.nullable(v.string()),
-  }), 'GET', '/cloudflare/gateways');
+  api(CloudflareGatewayStatusSchema, 'GET', '/cloudflare/gateways');
 
 export const selectCloudflareGateway = (id: string | null) => putCloudflareSelection('/cloudflare/gateway', id);
 
@@ -514,25 +411,6 @@ export function cloudflareReconnectPath(returnTo: string): string {
 }
 
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';
-
-export type McpConnectionStatus =
-  | 'connecting' | 'authenticating' | 'connected'
-  | 'ready' | 'discovering' | 'failed' | 'unknown';
-
-export interface McpServerSummary {
-  id: string;
-  name: string;
-  serverUrl: string;
-  transport: McpTransport;
-  status: McpConnectionStatus;
-  error: string | null;
-  toolsCount: number;
-  authUrl: string | null;
-  allowedTools: string[] | null;
-  presetId: string | null;
-  createdAt: number;
-  updatedAt: number;
-}
 
 export interface McpServerInput {
   name?: string;
@@ -550,8 +428,9 @@ export const McpServerSummarySchema = v.object({
   status: v.picklist(['connecting', 'authenticating', 'connected', 'ready', 'discovering', 'failed', 'unknown']),
   error: v.nullable(v.string()), toolsCount: v.number(), authUrl: v.nullable(v.string()),
   allowedTools: v.nullable(v.array(v.string())), presetId: v.nullable(v.string()),
-  createdAt: v.number(), updatedAt: v.number(),
 });
+
+export type McpServerSummary = v.InferOutput<typeof McpServerSummarySchema>;
 
 export const listMcpServers = () => api(v.array(McpServerSummarySchema), 'GET', '/mcp/servers');
 
@@ -578,12 +457,7 @@ export interface CreateWebhookOpts {
   rate_limit_per_min?: number;
 }
 
-export interface CreateWebhookResult {
-  trigger_id: string;
-  url: string;
-  auth_mode: 'hmac' | 'bearer' | 'mtls';
-  secret: string | null;       // Returned once at creation; never again.
-}
+export type CreateWebhookResult = v.InferOutput<typeof CreateWebhookResultSchema>;
 
 interface AgentRequest<Schema extends v.GenericSchema> {
   schema: Schema;
@@ -611,6 +485,7 @@ async function agentApi<Schema extends v.GenericSchema>(
 
 const CreateWebhookResultSchema = v.object({
   trigger_id: v.string(), url: v.string(), auth_mode: v.picklist(['hmac', 'bearer', 'mtls']),
+  /** Returned once at creation; never again. */
   secret: v.nullable(v.string()),
 });
 

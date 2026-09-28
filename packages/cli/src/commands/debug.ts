@@ -69,16 +69,6 @@ type TurnRequestIndexRecord = v.InferOutput<typeof TurnRequestIndexSchema>;
 
 type TurnRequestPageRecord = v.InferOutput<typeof TurnRequestPageSchema>;
 
-/** Grouped by run rather than assumed to belong to one known search. */
-interface RawMctsNode extends JsonObject {
-  id: string; parent_id: string | null; root_id: string; depth: number;
-  visits: number; value: number; status: string; action: string; created_at: number;
-}
-
-interface DebugRun extends JsonObject {
-  runId: string;
-}
-
 /** The one place the bundle's JSON boundary is crossed. Absent usage stays absent. */
 function runEventRecord(event: DebugRunEvent): BundleRecord {
   const { usage, ...rest } = event;
@@ -127,71 +117,17 @@ function explorationRecordRecord(record: ExplorationRecord): BundleRecord {
     branches: record.branches,
     floorValue: record.floorValue,
     floorProof: record.floorProof,
-    costUsd: record.costUsd,
     costTokens: record.costTokens,
     firstRecordedAt: record.firstRecordedAt,
     displacements: record.displacements,
   };
 }
 
-interface DebugRunEvent {
-  eventIndex: number;
-  runId: string;
-  type: string;
-  timestamp: string;
-  caused_by?: string;
-  userMessage?: string;
-  name?: string;
-  args?: JsonValue;
-  result?: JsonValue;
-  error?: string;
-  message?: string;
-  usage?: Usage;
-  reason?: string;
-}
-
-interface DebugHead extends JsonObject {
-  status: string;
-}
-
-interface DebugHeadRun extends JsonObject {
-  rootId: string;
-  task: string;
-  status: string;
-  spawnedAt: number;
-  heads: DebugHead[];
-}
-
-interface DebugMctsSearchRun extends JsonObject {
-  rootId: string;
-  task: string;
-  status: string;
-  iteration: number;
-  budget: number;
-  updatedAt: number;
-}
-
-interface DebugBackgroundJob extends JsonObject {
-  id: string;
-  kind: string;
-  label: string | null;
-  status: string;
-  error: string | null;
-  createdAt: number;
-  settledAt: number | null;
-}
-
-interface DebugChangelogView {
-  entries: JsonObject[];
-  unseenCount: number;
-  seenAt?: number;
-}
-
 const JsonRowsSchema = v.array(JsonObjectSchema);
 
-const DebugRunSchema: v.GenericSchema<DebugRun> = v.objectWithRest({ runId: v.string() }, JsonValueSchema);
+const DebugRunSchema = v.objectWithRest({ runId: v.string() }, JsonValueSchema);
 
-const DebugRunEventSchema: v.GenericSchema<DebugRunEvent> = v.objectWithRest({
+const DebugRunEventSchema = v.objectWithRest({
   eventIndex: v.number(), runId: v.string(), type: v.string(), timestamp: v.string(),
   caused_by: v.optional(v.string()), userMessage: v.optional(v.string()), name: v.optional(v.string()),
   args: v.optional(JsonValueSchema), result: v.optional(JsonValueSchema), error: v.optional(v.string()),
@@ -200,29 +136,44 @@ const DebugRunEventSchema: v.GenericSchema<DebugRunEvent> = v.objectWithRest({
   reason: v.optional(v.string()),
 }, JsonValueSchema);
 
-const DebugHeadSchema: v.GenericSchema<DebugHead> = v.objectWithRest({ status: v.string() }, JsonValueSchema);
+const DebugHeadSchema = v.objectWithRest({ status: v.string() }, JsonValueSchema);
 
-const DebugHeadRunSchema: v.GenericSchema<DebugHeadRun> = v.objectWithRest({
+const DebugHeadRunSchema = v.objectWithRest({
   rootId: v.string(), task: v.string(), status: v.string(), spawnedAt: v.number(), heads: v.array(DebugHeadSchema),
 }, JsonValueSchema);
 
-const DebugMctsSearchRunSchema: v.GenericSchema<DebugMctsSearchRun> = v.objectWithRest({
+const DebugMctsSearchRunSchema = v.objectWithRest({
   rootId: v.string(), task: v.string(), status: v.string(), iteration: v.number(), budget: v.number(), updatedAt: v.number(),
 }, JsonValueSchema);
 
-const RawMctsNodeSchema: v.GenericSchema<RawMctsNode> = v.objectWithRest({
+const RawMctsNodeSchema = v.objectWithRest({
   id: v.string(), parent_id: v.nullable(v.string()), root_id: v.string(), depth: v.number(),
   visits: v.number(), value: v.number(), status: v.string(), action: v.string(), created_at: v.number(),
 }, JsonValueSchema);
 
-const DebugBackgroundJobSchema: v.GenericSchema<DebugBackgroundJob> = v.objectWithRest({
+const DebugBackgroundJobSchema = v.objectWithRest({
   id: v.string(), kind: v.string(), label: v.nullable(v.string()), status: v.string(),
   error: v.nullable(v.string()), createdAt: v.number(), settledAt: v.nullable(v.number()),
 }, JsonValueSchema);
 
-const DebugChangelogViewSchema: v.GenericSchema<DebugChangelogView> = v.object({
+const DebugChangelogViewSchema = v.object({
   entries: JsonRowsSchema, unseenCount: v.number(), seenAt: v.optional(v.number()),
 });
+
+/** Grouped by run rather than assumed to belong to one known search. */
+type RawMctsNode = v.InferOutput<typeof RawMctsNodeSchema>;
+
+type DebugRun = v.InferOutput<typeof DebugRunSchema>;
+
+type DebugRunEvent = v.InferOutput<typeof DebugRunEventSchema>;
+
+type DebugHeadRun = v.InferOutput<typeof DebugHeadRunSchema>;
+
+type DebugMctsSearchRun = v.InferOutput<typeof DebugMctsSearchRunSchema>;
+
+type DebugBackgroundJob = v.InferOutput<typeof DebugBackgroundJobSchema>;
+
+type DebugChangelogView = v.InferOutput<typeof DebugChangelogViewSchema>;
 
 const WorkspaceSnapshotSchema = v.object({ status: JsonObjectSchema });
 
@@ -235,7 +186,7 @@ const ExplorationRecordSchema: v.GenericSchema<ExplorationRecord> = v.object({
   preset: v.string(), label: v.nullable(v.string()), rootId: v.string(),
   configDigest: v.string(), depth: v.number(), branches: v.number(),
   floorDigest: v.nullable(v.string()), floorValue: v.nullable(v.number()),
-  floorProof: v.nullable(v.string()), costUsd: v.nullable(v.number()),
+  floorProof: v.nullable(v.string()),
   costTokens: v.nullable(v.number()), firstRecordedAt: v.number(), displacements: v.number(),
 });
 

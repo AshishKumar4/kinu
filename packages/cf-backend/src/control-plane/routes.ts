@@ -156,8 +156,6 @@ controlRoutes.get('/api/control/metrics/*', async (c) => {
 
   if (workspace !== null) ask.workspace = workspace;
 
-  if (url.searchParams.get('refresh') === '1') ask.forceRefresh = true;
-
   return json({ body: await controlPlaneMetrics(c.env, ask) });
 });
 

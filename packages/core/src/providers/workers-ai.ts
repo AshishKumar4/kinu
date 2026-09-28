@@ -1,4 +1,3 @@
-// Workers AI defaults.
 export const DEFAULT_WORKERS_AI_MODEL_ID = '@cf/zai-org/glm-5.3';
 
 export const DEFAULT_WORKERS_AI_MODEL_SPEC = `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`;

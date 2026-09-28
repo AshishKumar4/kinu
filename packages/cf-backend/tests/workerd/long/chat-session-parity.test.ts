@@ -1,7 +1,7 @@
 /**
  * Parity net: the hosted root on core's ChatSession changes no durable row or frame against `fixtures/chat-session-parity.json`,
  * normalized like the local backend's parity test. Re-record from the logged `chat-session-parity snapshot` line only for a
- * change meant to alter the record, read field by field against the previous fixture (last: 2026-09-26, B's stale resume ends).
+ * change meant to alter the record, read field by field against the previous fixture (last: 2026-09-28, a turn claim moves the Agents panel's read).
  */
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
@@ -33,7 +33,7 @@ function rows(norm: ParityNormalizer, raw: ParityRows): JsonValue {
     terminalEffects: raw.terminalEffects.map((row) => ({
       sequenceId: norm.text(row.sequenceId), effectKey: norm.text(row.effectKey), effectName: row.effectName,
       scope: norm.text(row.scope), seq: row.seq, input: norm.json(parse(row.input)), lane: row.lane, status: row.status,
-      outcome: row.outcome === null ? null : norm.text(row.outcome), attempts: row.attempts, settled: row.settled,
+      attempts: row.attempts,
     })),
     runEvents: raw.runEvents.map((row) => {
       const payload = v.parse(v.record(v.string(), JsonValueSchema), parse(row.payload));

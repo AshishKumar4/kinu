@@ -37,7 +37,7 @@ export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('methods'), id: SlateDirectoryName }),
   v.strictObject({ op: v.literal('call'), id: SlateDirectoryName, method: v.pipe(v.string(), v.check(isSlateMethodName)), args: v.optional(v.array(JsonValueSchema)) }),
   v.strictObject({ op: v.literal('commit'), id: SlateDirectoryName }),
-  v.strictObject({ op: v.literal('history'), id: SlateDirectoryName }),
+  v.strictObject({ op: v.literal('history'), id: SlateDirectoryName, after: v.optional(VersionId) }),
   v.strictObject({ op: v.literal('fork'), version: VersionId }),
   v.strictObject({ op: v.literal('restore'), id: SlateDirectoryName, version: VersionId }),
   // Ends processes, durable application and tree; versions stay.
@@ -72,7 +72,7 @@ export const SLATE_PROGRAM_MEMBERS = {
   preview: { on: 'slate', params: [] },
   methods: { on: 'slate', params: [] },
   commit: { on: 'slate', params: [] },
-  history: { on: 'slate', params: [] },
+  history: { on: 'slate', params: ['after'] },
   remove: { on: 'slate', params: [] },
   graph: { on: 'slate', params: [] },
   restore: { on: 'slate', params: ['version'] },
@@ -112,8 +112,3 @@ export interface SlateProblem extends Refusal {
 }
 
 export const SLATES_CHANGED_EVENT = 'slates_changed';
-
-export interface SlatesChangedEvent {
-  readonly type: typeof SLATES_CHANGED_EVENT;
-  readonly ids: readonly string[];
-}

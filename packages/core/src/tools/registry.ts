@@ -224,17 +224,11 @@ export function memoryActionsFor(hasFacts: boolean): readonly MemoryToolAction[]
 
 export const WEB_TOOL_ACTIONS = ['search', 'fetch'] as const;
 
-export type WebToolAction = (typeof WEB_TOOL_ACTIONS)[number];
-
 export const FILE_TOOL_ACTIONS = ['read', 'write', 'edit', 'list', 'stat', 'search'] as const;
-
-export type FileToolAction = (typeof FILE_TOOL_ACTIONS)[number];
 
 // `tasks` is separate from `memory`: live plan state for current work, not durable recall.
 
 export const TASKS_TOOL_ACTIONS = ['add', 'update', 'list', 'mode'] as const;
-
-export type TasksToolAction = (typeof TASKS_TOOL_ACTIONS)[number];
 
 
 export type MemoryToolAction =

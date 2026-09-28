@@ -1036,9 +1036,9 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       workspaceWork: async () => ({
         plans: [],
         tasks: [{
-          owner: { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', retired: true, path: ['ask-refiner-fb0gr9'] },
+          owner: { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', title: 'ask-refiner-fb0gr9', retired: true, path: ['ask-refiner-fb0gr9'] },
           plan: null,
-          tasks: [{ id: 't1', parentId: null, title: 'Tighten the turn-ending rule', status: 'done', createdAt: 1, updatedAt: 2, note: null, subtasks: [] }],
+          tasks: [{ id: 't1', parentId: null, title: 'Tighten the turn-ending rule', status: 'done', updatedAt: 2, note: null, subtasks: [] }],
         }],
       }),
       inspectSubordinate: async (request) => {
@@ -1073,9 +1073,9 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       workspaceWork: async () => ({
         plans: [],
         tasks: [{
-          owner: { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', retired: true, path: helper },
+          owner: { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', title: 'ask-refiner-fb0gr9', retired: true, path: helper },
           plan: null,
-          tasks: [{ id: 't1', parentId: null, title: 'Tighten the turn-ending rule', status: 'active', createdAt: 1, updatedAt: 1, note: null, subtasks: [] }],
+          tasks: [{ id: 't1', parentId: null, title: 'Tighten the turn-ending rule', status: 'active', updatedAt: 1, note: null, subtasks: [] }],
         }],
       }),
       inspectSubordinate: async (request) => {

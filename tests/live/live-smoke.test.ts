@@ -75,8 +75,6 @@ const DeployedDeviceSchema = v.strictObject({
   createdAt: v.number(),
   lastSeenAt: v.nullable(v.number()),
   expiresAt: v.nullable(v.number()),
-  lastIp: v.nullable(v.string()),
-  lastAgent: v.nullable(v.string()),
   replacedAt: v.nullable(v.number()),
   revokedAt: v.nullable(v.number()),
   unstoppedAt: v.nullable(v.number()),
@@ -432,14 +430,25 @@ describe('Live Smoke — one real turn per backend', () => {
 
       await clickAriaPrefix(page, 'Open menu');
 
-      const actions = await page.evaluate(() => [...document.querySelectorAll('a,button')]
+      const actions = await page.evaluate((workspaceName: string) => Object.fromEntries([...document.querySelectorAll('a,button')]
         .filter((element) => /^(Workspace settings|Rename workspace|Remove workspace)/
           .test(element.getAttribute('aria-label') ?? '')
-          && element.getAttribute('aria-label')?.endsWith('Staging UI Smoke') === true)
-        .filter((element) => element.getBoundingClientRect().width > 0)
-        .map((element) => getComputedStyle(element).opacity));
+          && element.getAttribute('aria-label')?.endsWith(workspaceName) === true
+          && element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }))
+        .map((element) => {
+          const label = element.getAttribute('aria-label') ?? '';
+          let action = 'remove';
 
-      expect(actions).toEqual(['0.6', '0.6', '0.6']);
+          if (label.startsWith('Workspace settings')) action = 'settings';
+          else if (label.startsWith('Rename workspace')) action = 'rename';
+
+          const box = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+
+          return [action, hit !== null && (element === hit || element.contains(hit)) && !element.matches(':disabled, [aria-disabled="true"]')];
+        })), 'Staging UI Smoke');
+
+      expect(actions).toEqual({ settings: true, rename: true, remove: true });
     } finally {
       await chrome.close();
     }

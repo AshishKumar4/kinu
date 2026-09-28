@@ -51,6 +51,7 @@ async function liveRead(agent: HarnessOrchestratorAgent, read: LiveRead): Promis
     getWorkspaceTabPresence: () => agent.getWorkspaceTabPresence(),
     getActivePlanReview: () => agent.getActivePlanReview(),
     listWorkspaceWork: () => agent.listWorkspaceWork(),
+    listWorkspaceAgents: () => agent.listWorkspaceAgents(),
   };
 
   await reads[read]();
@@ -185,4 +186,18 @@ test('a crafted tool and the changelog seen mark each name what they move', asyn
   endTick(agent);
   expect(named()).toContain('getEvolutionChangelog');
   await turns.settle({ messageId: 'a-tool', text: 'made' });
+});
+
+test('an agent dismissed names the Agents panel', async () => {
+  const { agent } = orchestratorHarness();
+  await agent.setSoul('# Purpose\n\nShip the coupon fix.');
+  const { name } = await agent.createSubordinateAgent();
+  const named = namedReads(agent);
+  endTick(agent);
+  named();
+
+  await agent.dismissSubordinate(name);
+  endTick(agent);
+
+  expect(named()).toContain('listWorkspaceAgents');
 });

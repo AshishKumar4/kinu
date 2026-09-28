@@ -360,26 +360,17 @@ describe('two actors, one database: the head journal', () => {
     w.close();
   });
 
-  test('evidence and the cached merge settle under their own owner', () => {
+  test('the cached merge settles under its own owner', () => {
     const w = world();
     const a = new HeadJournal(w.sql, w.a);
     const b = new HeadJournal(w.sql, w.b);
     a.insertSpawn(headInput('h0', 'root-1', 'A branch', 100));
     b.insertSpawn(headInput('h0', 'root-1', 'B branch', 100));
-    a.insertEvidence('h0', { id: 'e1', kind: 'fact', body: 'from a' });
-    b.insertEvidence('h0', { id: 'e1', kind: 'fact', body: 'from b' });
-    expect(a.readEvidence('h0').map((e) => e.body)).toEqual(['from a']);
-    expect(b.readEvidence('h0').map((e) => e.body)).toEqual(['from b']);
 
-    a.cacheMerge('root-1', {
-      mergedNarrative: 'a merged', selectedDecisions: [], unresolvedQuestions: [],
-      recommendations: [], blindSpots: [], evidenceAggregate: [], headIds: [], headScores: [],
-      fileChanges: [], grounded: false,
-      costSummary: { headCount: 1, headsWithFindings: 0, totalTokens: undefined, totalWallClockMs: 0, maxDepth: 1 },
-    }, 'synthesize');
+    a.cacheMerge('root-1', 'a merged');
 
-    expect(a.readCachedMerge('root-1')?.mergedNarrative).toBe('a merged');
-    expect(b.readCachedMerge('root-1')).toBeNull();
+    expect(a.readRun('root-1')?.merge?.narrative).toBe('a merged');
+    expect(b.readRun('root-1')?.merge).toBeNull();
     expect(a.findResumableRun('A branch')).toBeNull();
     w.close();
   });
@@ -487,8 +478,11 @@ describe('a fresh child actor', () => {
     const ledger = new MctsSearchStore(w.sql, w.b);
     facts.upsert('k', 'v');
 
-    // The stores captured `actorId` at construction; this is the drift `assertCurrent` catches.
-    void w.sql`UPDATE workspace_actors SET retiring_at = ${Date.now()} WHERE actor_id = ${w.b.actorId}`;
+    // The stores captured `actorId` at construction; this is the drift `assertCurrent` catches, in the same run.
+    w.actors.directory.apply(w.a, [], {
+      action: 'retire', name: 'sibling',
+      reference: { actorId: w.b.actorId, workspaceId: w.b.workspaceId, parentActorId: w.b.parentActorId },
+    });
 
     expect(() => facts.recall('k')).toThrow(/no longer present/);
     expect(() => taskList.count()).toThrow(/no longer present/);

@@ -6,7 +6,7 @@
  * PING_FRAME thirty seconds after open, PONG_DEADLINE_MS ten after that)
  * is a bare `ping` text frame the deployed hub never answers, so the daemon
  * closes its own live socket and redials. Every redial writes a fresh
- * `connected_at` on the device row (`acceptDeviceSocket` stamps it on every
+ * `last_seen_at` on the device row (`acceptDeviceSocket` stamps it on every
  * accept), and a workspace call that lands in the gap between close and
  * redial is answered "needs a computer of yours" — a card the connecting
  * daemon never retires, because nothing does.
@@ -26,9 +26,8 @@
  * registration `kinu connect` performs — because a case that borrows a
  * sibling's machine is measuring the sibling's socket age, not the link.
  *
- * WHAT "HELD" CAN BE READ AS. The routes do not serve `connected_at` itself;
- * they serve `lastSeenAt`, which the same `UPDATE` stamps on every accept,
- * plus `replacedAt` (set when a second socket takes a LIVE slot) and
+ * WHAT "HELD" CAN BE READ AS. The routes serve `lastSeenAt`, stamped on
+ * every accept, plus `replacedAt` (set when a second socket takes a LIVE slot) and
  * `connected` (the hub's own socket check). A redial is therefore read as a
  * NEW `lastSeenAt` — always written, never sampled — with `replacedAt` as
  * the second accept's own mark and `connected` polled through the gap.

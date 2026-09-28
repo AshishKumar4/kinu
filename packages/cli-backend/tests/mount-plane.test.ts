@@ -1,5 +1,5 @@
 // Local environments and the mount table: a directory-bound session works on the real bytes through one `workspace`
-// executor; `/pc` and `/sandbox` are stated absences locally, never empty folders.
+// executor, with no `/pc` or `/sandbox` mount.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -52,31 +52,23 @@ describe('the local backend file plane', () => {
     expect(v.parse(v.string(), out)).toContain('from the host');
   });
 
-  test('/pc states its absence: no machine is mounted in the CLI', async () => {
-    const mounted = freshRuntime().storage.vfs;
+  // Issue #36: the CLI registers no device or sandbox runtime, so no mount answers for one: `/pc` and `/sandbox`
+  // are ordinary paths, never a refusal naming a machine or a container the CLI cannot have.
+  test('a local workspace has no /pc or /sandbox mount, bound to a directory or not', async () => {
+    for (const rt of [freshRuntime(), freshRuntime(scratchDir('mount-plane-bound'))]) {
+      for (const path of ['/pc', '/sandbox']) {
+        let code: string | null = null;
 
-    let error: unknown;
+        try { await rt.storage.vfs.readdir(path); } catch (caught) { code = isVfsError(caught) ? caught.code : 'unclassified'; }
 
-    try { await mounted.readdir('/pc'); } catch (caught) { error = caught; }
+        expect(code).not.toBe('ENXIO');
+      }
+    }
 
-    if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
-    expect(error.code).toBe('ENXIO');
-    expect(await mounted.exists('/pc')).toBe(false);
-    expect(await mounted.stat('/pc')).toBeNull();
-  });
+    const unbound = freshRuntime().storage.vfs;
 
-  test('/sandbox states its absence: no container binding exists locally', async () => {
-    const mounted = freshRuntime().storage.vfs;
-
-    let error: unknown;
-
-    try { await mounted.readdir('/sandbox'); } catch (caught) { error = caught; }
-
-    if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
-    expect(error.code).toBe('ENXIO');
-    expect(error.message).toContain('/sandbox: no Sandbox container bound');
-    expect(await mounted.exists('/sandbox/workspace')).toBe(false);
-    expect(await mounted.stat('/sandbox')).toBeNull();
+    await unbound.writeFile('/sandbox/notes.md', 'a folder of the workspace');
+    expect(await unbound.readFile('/sandbox/notes.md', { encoding: 'utf8' })).toBe('a folder of the workspace');
   });
 
   test('the workspace tree stays canonical: host paths name nothing in it', async () => {

@@ -2,7 +2,8 @@ import { Button, Tabs } from '@cloudflare/kumo';
 import { TUI_ADVERTISED_HINTS, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS } from '@kinu.run/core/tui';
 import { useRef, useState, type ReactElement, type ReactNode } from 'react';
 
-import { useCopy, type CopyStatus } from '@/hooks/use-copy';
+import { useCopy } from '@/hooks/use-copy';
+import { COPY_LABEL } from './LandingHero';
 
 /** `tight` is for a head sharing its row, taking the lead's margin rather than the section's. */
 export function SectionHead({ label, lead, tight = false, children }: {
@@ -191,9 +192,6 @@ function TuiPreview(): ReactElement {
     </div>
   );
 }
-
-/** A failure asks for the click again rather than reporting itself: the command is on screen either way. */
-const COPY_LABEL: Record<CopyStatus, string> = { idle: 'Copy', copied: 'Copied', failed: 'Retry copy' };
 
 function CliPreview(): ReactElement {
   const { status, copy } = useCopy();

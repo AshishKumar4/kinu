@@ -1,16 +1,24 @@
-/**
- * The gallery build's owner is in its name, and the next build removes the
- * builds of owners that are gone. Sixty-one leaked builds, 71 MiB each,
- * exhausted a tmpfs quota on 2026-09-05; the `exit` handler that removes a
- * build never runs for a killed process, so liveness is the rule.
- */
+/** SIGKILL skips exit handlers; only builds whose owner has gone may be reclaimed. */
 
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 
-import { reclaimLeakedBuilds } from './gallery-harness';
+import { contrast, reclaimLeakedBuilds, rgba } from './gallery-harness';
+
+test('a contrast just below WCAG AA does not pass by rounding', () => {
+  // WCAG 2.2 SC 1.4.3 forbids rounding its threshold; this pair's ratio is 4.499795462746351:1.
+  const ratio = contrast(rgba('rgb(112, 121, 114)'), rgba('rgb(255, 255, 255)'));
+
+  expect(ratio).toBeLessThan(4.5);
+  expect(ratio).toBeGreaterThan(4.499);
+});
+
+test('fractional sRGB channels below the WCAG 2.2 cutoff stay on its linear branch', () => {
+  expect(contrast(rgba('rgb(10.3, 10.3, 10.3)'), rgba('rgb(255, 255, 255)')))
+    .toBeCloseTo(19.764211849397245, 10);
+});
 
 describe('gallery builds under the temp directory', () => {
   test('a dead owner\'s build is removed and a live owner\'s build stays', () => {

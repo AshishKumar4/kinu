@@ -7,15 +7,16 @@
 import { expect, test } from 'bun:test';
 import { AwaitedList } from '@kinu.run/test-utils';
 import {
-  GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness, rosterOver, wakeForDelegatedTask,
+  GATEWAY_CATALOG, driveUntil, gatewayWorkspace, reactivateOrchestratorHarness, rosterOver, wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { abandonHarnessFibers, joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 const BRIEF = 'Find someone to check the release notes.';
 
-/** The effect, then a wait the dying activation never sees end. */
-const CODE = "await tools.tasks({ action: 'add', titles: ['check the release notes'] }); await new Promise(() => {});";
+/** The effect, then a wait the dying activation never sees end: a hold the harness can name. */
+const CODE = "await tools.tasks({ action: 'add', titles: ['check the release notes'] }); "
+  + "await globalThis[Symbol.for('kinu.test.hold')]('the claimed eval, cut off');";
 
 test('a hosted turn cut off inside a claimed call makes it once and is told it may have taken effect', async () => {
   const parked = new AwaitedList<true>();
@@ -53,7 +54,7 @@ test('a hosted turn cut off inside a claimed call makes it once and is told it m
   await wakeForDelegatedTask(first, child.reference.actorId, BRIEF);
   await parked.until((seen) => seen.length === 1);
 
-  while (tasks() === 0) await new Promise<void>((resolve) => { setImmediate(resolve); });
+  await driveUntil(first, 'the claimed eval never wrote its task', () => tasks() > 0);
 
   abandonHarnessFibers();
   cut = false;

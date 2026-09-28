@@ -25,13 +25,11 @@ waits until the list is shown again. A plan owned by another actor, or no
 longer pending, opens read-only.
 
 A task created under an approved plan records that plan's id, revision and
-session in `plan_task_links`. Subtasks take their parent's link. Tasks created
-outside a plan, and tasks that existed before the table, stay unlinked. A later
-revision never relabels older tasks, and a status update changes progress, not
-the link. The task row and its link are written in one synchronous storage
-transaction. The table comes from the existing idempotent schema initializer,
-with no ALTER and no backfill. Only a verified approval links new work: an
-unrelated turn or metadata without the admitted approval cannot.
+session on its `agent_tasks` row. Subtasks take their parent's link. Tasks
+created outside a plan stay unlinked. A later revision never relabels older
+tasks, and a status update changes progress, not the link. Only a verified
+approval links new work: an unrelated turn or metadata without the admitted
+approval cannot.
 
 ## Authoring
 

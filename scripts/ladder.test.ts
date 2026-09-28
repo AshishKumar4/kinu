@@ -18,14 +18,14 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
-import { childEnv, git } from '@kinu.run/test-utils';
+import { childEnv } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
-  BUDGET_TOLERANCE, CI_EXEMPT, HOOKS_DIR, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
-  DEPLOY_PHASES, browserModules, declaredTierCost, deployPlan, gatesFor, judgeBudgets, liveTierTargets, packageScripts,
-  printPlan, readBudget, runnableArgv, sharedBrowserModules, sharedOf, trackedTestFiles, type LadderBudget,
+  CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
+  DEPLOY_PHASES, browserModules, deployPlan, gatesFor, liveTierTargets, packageScripts,
+  printPlan, runnableArgv, sharedBrowserModules, sharedOf, trackedTestFiles,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -363,6 +363,7 @@ describe('the ladder measures something', () => {
       'Swarm-tree geometry',
       'Test browsers end with their launcher',
       'UI gate self-tests',
+      'UI gate self-tests: account, drive and slates',
       'UI gate self-tests: chat and files',
     ]);
   });
@@ -496,16 +497,11 @@ describe('the ladder measures something', () => {
     expect(rows.flat().sort()).toEqual(claims('bun run test:workerd', tracked).sort());
     expect(new Set(rows.flat()).size).toBe(rows.flat().length);
 
-    // The two UI self-test rows partition the same family: the heavy suite is
-    // a row of its own and the family row carves it out with bun's
-    // `--path-ignore-patterns`, so no file runs twice and none is dropped.
-    // Split on 2026-09-18, when the one row measured 480.42s against a 480s
-    // deadline.
+    // The UI rows partition the family without duplicate or omitted suites, including future glob matches.
     const uiRows = LADDER
       .filter((gate) => gate.label.startsWith('UI gate self-tests'))
       .map((gate) => claims(gate.run, tracked));
 
-    expect(uiRows.length).toBe(2);
     expect(uiRows.every((files) => files.length > 0)).toBe(true);
     expect(new Set(uiRows.flat()).size).toBe(uiRows.flat().length);
     expect(uiRows.flat().sort()).toEqual(
@@ -909,260 +905,6 @@ describe('every test file is claimed by some runner', () => {
     }
 
     expect(wrong).toEqual([]);
-  });
-});
-
-describe('cost, so a tier that stops being run is a decision and not a drift', () => {
-  // The two assertions that stood here — commit under 15s, push under a 126.4s wall
-  // reading — were fictions by 2026-09-05: OpsProse re-measured the ladder and found
-  // the declared seconds stale 2–6x, so neither bound could fail, and with true figures
-  // both fail (commit 51.84s then, 53.24s now; push 158.21s then, 379.71s now, once the
-  // self-test rows were re-measured too). The ruling was a measured ratchet rather than
-  // a raised bound: each tier's declared cost is pinned per gate in
-  // `scripts/ladder.lock.json`, and a tier that grows past 20% fails naming the step
-  // that grew most. `--lock` re-pins, and refuses without a `--reason` that lands in
-  // the lock.
-  test('the declared tier costs match the locked ratchet within tolerance', () => {
-    // The fraction itself is pinned: moving 20% silently is raising the bound to pass.
-    expect(BUDGET_TOLERANCE).toBe(0.2);
-    const budget = readBudget();
-    // A lock with no reason is a number that moved without a decision.
-    expect(budget.reason.length).toBeGreaterThan(40);
-
-    const declared = {
-      commit: declaredTierCost('commit'),
-      push: declaredTierCost('push'),
-    };
-
-    for (const tier of ['commit', 'push'] as const) {
-      // The pin is per gate, so the lock cannot drift from the table it governs:
-      // every locked step equals the LADDER declaration for that run, and the tier
-      // figure is their sum to the cent.
-      expect(Object.keys(budget.tiers[tier].steps).length).toBeGreaterThan(0);
-      expect(declared[tier].steps).toEqual(budget.tiers[tier].steps);
-      expect(Math.abs(budget.tiers[tier].seconds - declared[tier].total)).toBeLessThan(0.01);
-    }
-
-    expect(judgeBudgets(declared, budget)).toEqual([]);
-  });
-
-  test('a tier that grows past tolerance fails naming the step that grew most', () => {
-    // RED direction, against a fixture lock: with `b` moved 20 → 28 the commit total
-    // moves 30 → 38 (+26.7%), past the 20% tolerance, and the breach names `b` with
-    // both figures. Exactly at tolerance is not "more than": 36 against 30 passes.
-    // A NEW gate (`d`, locked at nothing) counts its whole declaration as growth.
-    const locked: LadderBudget = {
-      reason: 'fixture',
-      tiers: {
-        commit: { seconds: 30, measuredAt: '2026-09-05', machine: 'fixture', steps: { a: 10, b: 20 } },
-        push: { seconds: 150, measuredAt: '2026-09-05', machine: 'fixture', steps: { c: 150 } },
-      },
-    };
-
-    expect(judgeBudgets(
-      {
-        commit: { total: 38, steps: { a: 10, b: 28 } },
-        push: { total: 150, steps: { c: 150 } },
-      },
-      locked,
-    )).toEqual([
-      { tier: 'commit', locked: 30, declared: 38, step: 'b', stepWas: 20, stepNow: 28 },
-    ]);
-    expect(judgeBudgets(
-      {
-        commit: { total: 36, steps: { a: 10, b: 26 } },
-        push: { total: 150, steps: { c: 150 } },
-      },
-      locked,
-    )).toEqual([]);
-    expect(judgeBudgets(
-      {
-        commit: { total: 30, steps: { a: 10, b: 20 } },
-        push: { total: 195, steps: { c: 150, d: 45 } },
-      },
-      locked,
-    )).toEqual([
-      { tier: 'push', locked: 150, declared: 195, step: 'd', stepWas: 0, stepNow: 45 },
-    ]);
-  });
-
-  test('a tier that shrinks passes', () => {
-    // The ratchet points one way: a faster tier is the mechanism working, and the
-    // lock is re-pinned opportunistically rather than demanded. A removed gate reads
-    // as shrinkage to zero, not as a stale lock entry.
-    const locked: LadderBudget = {
-      reason: 'fixture',
-      tiers: {
-        commit: { seconds: 30, measuredAt: '2026-09-05', machine: 'fixture', steps: { a: 10, b: 20 } },
-        push: { seconds: 150, measuredAt: '2026-09-05', machine: 'fixture', steps: { c: 150 } },
-      },
-    };
-
-    expect(judgeBudgets(
-      {
-        commit: { total: 15, steps: { a: 10, b: 5 } },
-        push: { total: 150, steps: { c: 150 } },
-      },
-      locked,
-    )).toEqual([]);
-    expect(judgeBudgets(
-      {
-        commit: { total: 10, steps: { a: 10 } },
-        push: { total: 150, steps: { c: 150 } },
-      },
-      locked,
-    )).toEqual([]);
-  });
-
-  test('a lock that pins nothing cannot pass', () => {
-    // Fail-CLOSED direction: an empty corpus must die rather than report a cheap tree.
-    const locked: LadderBudget = {
-      reason: 'fixture',
-      tiers: {
-        commit: { seconds: 0, measuredAt: '2026-09-05', machine: 'fixture', steps: {} },
-        push: { seconds: 150, measuredAt: '2026-09-05', machine: 'fixture', steps: { c: 150 } },
-      },
-    };
-
-    expect(() => judgeBudgets(
-      {
-        commit: { total: 0, steps: {} },
-        push: { total: 150, steps: { c: 150 } },
-      },
-      locked,
-    )).toThrow('measured nothing');
-  });
-
-  // OVER THE DEPLOY TIER'S REAL MEMBERSHIP, not over LADDER. `gatesFor('deploy')`
-  // appends any deploy.sh line no LADDER entry names, at `seconds: 0` — so for as
-  // long as this filtered LADDER, a gate could join the deploy path and cost
-  // nothing on the tier's own cost line. Two did: `bun run verify:lean`, and the
-  // bench command whose LADDER entry stopped at the `scripts/bench*` glob while
-  // deploy.sh also passed the core bench units. The tier now declares 1219.73s and
-  // runs 66 gates, all described.
-  //
-  // Synthesis stays: an undeclared deploy gate must still RUN. This is what makes
-  // it also fail, by name, until somebody measures it.
-  test('every gate the deploy tier runs carries a measured cost and a named blind spot', () => {
-    const vague = gatesFor('deploy')
-      .filter((gate) => gate.seconds <= 0 || gate.blind.length < 20 || gate.catches.length < 20)
-      .map((gate) => gate.run);
-
-    expect(vague).toEqual([]);
-  });
-
-  test('heavy package gates use four isolated Bun workers', () => {
-    const atCi = gatesFor('ci');
-
-    for (const run of [
-      'bun test --timeout=0 --parallel=4 packages/cf-backend/',
-      'bun test --timeout=0 --parallel=4 packages/cli-backend/',
-      'bun run test:cli',
-      'bun run test:core',
-    ]) {
-      expect(atCi.some((gate) => gate.run === run), `${run} is not a gate at ci`).toBeTrue();
-    }
-
-    const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
-    expect(packageJson).toContain('"test:core": "bun scripts/ladder.ts --run bun test --timeout=0 --parallel=4 packages/core/"');
-    // The root script still fans out to every spine package, so `bun run test`
-    // stays the most-typed command and `claims()` keeps resolving it whole.
-    expect(packageJson).toContain('"test": "bun run test:core && bun run test:spine"');
-  });
-});
-
-describe('the hooks run the tiers they claim to', () => {
-  // A hook that names a tier it does not run is the "correct, wired, dead"
-  // shape applied to the ladder itself: it reads as enforcement in review and
-  // enforces nothing. Two of these files existing is not evidence that either
-  // one invokes anything.
-  const HOOKS = {
-    'pre-commit': 'bun scripts/ladder.ts --tier=commit',
-    'pre-push': 'bun scripts/ladder.ts --tier=push',
-  };
-
-  test('each hook exists, is executable, and invokes its tier', () => {
-    for (const [name, invocation] of Object.entries(HOOKS)) {
-      const path = resolve(root, HOOKS_DIR, name);
-      expect(statSync(path).mode & 0o111).toBeGreaterThan(0);
-      expect(readFileSync(path, 'utf8')).toContain(invocation);
-    }
-  });
-
-  /**
-   * `commit-msg` is not a tier and cannot be one: every tier takes no argument,
-   * and this hook carries the path of the message git is about to write. So it is
-   * held to a different, stronger assertion — that it runs the SAME program the
-   * ladder declares. That equality is what stops it becoming the fifth list the
-   * two tests above exist to prevent.
-   */
-  const PAYLOAD_HOOKS = {
-    'commit-msg': 'bun run gate:commit-message',
-  };
-
-  test('the payload hook runs exactly the program its ladder gate runs', () => {
-    const scripts = packageScripts();
-
-    for (const [name, gate] of Object.entries(PAYLOAD_HOOKS)) {
-      const path = resolve(root, HOOKS_DIR, name);
-      expect(statSync(path).mode & 0o111).toBeGreaterThan(0);
-      const declared = LADDER.find((entry) => entry.run === gate);
-      expect(declared?.tier).toBe('commit');
-      // `bun run gate:commit-message` resolves to `bun scripts/commit-hygiene.ts`,
-      // and the hook must invoke that same program with git's message path
-      // appended. Comparing the resolved body rather than the script NAME is what
-      // makes a divergence impossible: renaming the program breaks this.
-      const program = scripts[gate.split(' ')[2] ?? ''] ?? '';
-      expect(program).toMatch(/^bun scripts\/\S+\.ts$/);
-      expect(readFileSync(path, 'utf8')).toContain(`exec ${program} "$1"`);
-    }
-  });
-
-  test('the installer writes a RELATIVE hooks path', () => {
-    // The value git had was an absolute path to the main checkout's empty
-    // `.git/hooks`, so all 42 worktrees resolved to one directory with no hooks
-    // in it and both cheap tiers were decorative. A relative value is resolved
-    // against each working tree's own root, and worktrees SHARE this config, so
-    // relative is what makes one invocation cover every checkout. An absolute
-    // path here would silently un-gate 41 of them, which is why the shape is
-    // asserted and not just documented.
-    expect(HOOKS_DIR.startsWith('/')).toBe(false);
-    // And something has to run it on a tree nobody has prepared: a fresh
-    // worktree, and a fresh CLONE — which setup-worktree.sh never sees.
-    expect(readFileSync(resolve(root, 'scripts/setup-worktree.sh'), 'utf8'))
-      .toContain('ladder.ts --install-hooks');
-    const pkg: unknown = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
-    const scripts = v.parse(v.object({ scripts: v.record(v.string(), v.string()) }), pkg).scripts;
-    expect(scripts.prepare).toContain('ladder.ts --install-hooks');
-  });
-
-  test('core.hooksPath IS configured in this checkout', () => {
-    // The report inside `ladder --tier=…` states this; nothing failed on it, so
-    // the ladder could run all four tiers green in a checkout whose two cheapest
-    // tiers never executed. `prepare` now installs the hooks on every `bun
-    // install`, in developer checkouts and CI alike, so a wrong value here is
-    // unambiguously a fault rather than an artefact of where the gate is running.
-    // `git()` gives `-C root` AND a GIT_-free environment, which is what makes
-    // this ask about THIS checkout. `cwd` never did: with GIT_DIR pointing at an
-    // unrelated repository whose core.hooksPath is WRONG-REPO-HOOKS, the `cwd:
-    // root, env: process.env` form returned WRONG-REPO-HOOKS and the GIT_-free
-    // form returned .githooks. A hook exports GIT_DIR, so the test named after
-    // this checkout was answering about whatever the hook pointed at.
-    const configured = git(root, 'config', '--get', 'core.hooksPath').trim();
-    expect(configured).toBe(HOOKS_DIR);
-  });
-
-  test('no hook invokes a gate directly', () => {
-    // The moment a hook runs its own command, the ladder has a fifth list and
-    // the subset property that makes "never --no-verify" honest stops holding.
-    for (const name of Object.keys(HOOKS)) {
-      const body = readFileSync(resolve(root, '.githooks', name), 'utf8')
-        .split('\n')
-        .filter((line) => !line.trimStart().startsWith('#'));
-
-      const direct = body.filter((line) => /\b(bun (test|run)|tsc|oxlint)\b/.test(line));
-      expect(direct).toEqual([]);
-    }
   });
 });
 

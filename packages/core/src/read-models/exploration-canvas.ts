@@ -64,25 +64,22 @@ function composeRuns(
 
   const journal = new HeadJournal(sql, actor);
 
+  const hasRecords = sql<{ readonly name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'swarm_node_records'`.length > 0;
+
   return runs.map((run) => ({
     run,
     params: params.get(run.id) ?? null,
     // Both halves: a swarm whose nodes are agents wrote both. Gated on the run's own facts.
     tree: run.hasSearchTree ? readSearchTree(sql, actor, run.id) : [],
     head: run.hasNodeTranscripts ? journal.readRun(run.id) : null,
-    frontier: readParetoFrontier(sql, actor, run.id),
+    frontier: hasRecords ? readParetoFrontier(sql, actor, run.id) : null,
   }));
 }
-
 
 function readParetoFrontier(
   sql: SqlExecutor, actor: ActorHandle, rootId: string,
 ): ParetoFrontier | null {
-  const table = sql<{ readonly name: string }>`
-    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'swarm_node_records'`;
-
-  if (table.length === 0) return null;
-
   const candidates = readSwarmNodeRecords(sql, actor, rootId).flatMap(({ nodeId, record }) =>
     record.outcome?.kind === 'pareto'
       ? [{ nodeId, axes: record.outcome.axes, evidence: record.outcome.evidence }]

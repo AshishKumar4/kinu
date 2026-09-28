@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import {
   CODEX_CRED_KEY,
-  PROVIDER_SDK_RETRIES,
+  DEFAULT_PROVIDER_RETRIES,
   OPENAI_CRED_KEY,
   catalogModelInfo,
   codexEgressAllowed,
@@ -230,7 +230,7 @@ describe('provider model catalogs', () => {
     let classified = toProviderError({ doing: 'calling the model', cause: new Error('a blocked call succeeded') });
 
     try {
-      await generateText({ model, prompt: 'hi', maxRetries: PROVIDER_SDK_RETRIES });
+      await generateText({ model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES });
     } catch (error) {
       classified = toProviderError({ doing: 'calling the model', cause: error });
     }

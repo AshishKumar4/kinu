@@ -72,7 +72,7 @@ export class ForkStagingState {
              staged_agent_config, staged_crafted_tools, staged_memory_chunks,
              staged_session_messages,
              staged_conversation_entries, staged_conversation_entry_parts, staged_context_members,
-             staged_files,
+             (SELECT COUNT(*) FROM fork_staged_files) AS staged_files,
              transfer_id, expected_seq, section_cursor, stream, file_path, file_bytes,
              want_agent_config, want_crafted_tools, want_memory_chunks,
              want_session_messages,
@@ -153,7 +153,7 @@ export class ForkStagingState {
   }
 
   /** Add taken rows for every section in one statement (a column name cannot be bound). */
-  count(delta: Partial<ForkStagedCounts>): void {
+  count(delta: Partial<Omit<ForkStagedCounts, 'files'>>): void {
     void this.sql`UPDATE fork_transfer SET
       staged_agent_config             = staged_agent_config             + ${delta.agentConfig ?? 0},
       staged_crafted_tools            = staged_crafted_tools            + ${delta.craftedTools ?? 0},
@@ -161,8 +161,7 @@ export class ForkStagingState {
       staged_session_messages         = staged_session_messages         + ${delta.sessionMessages ?? 0},
       staged_conversation_entries     = staged_conversation_entries     + ${delta.conversationEntries ?? 0},
       staged_conversation_entry_parts = staged_conversation_entry_parts + ${delta.conversationEntryParts ?? 0},
-      staged_context_members          = staged_context_members          + ${delta.contextMembers ?? 0},
-      staged_files                    = staged_files                    + ${delta.files ?? 0}
+      staged_context_members          = staged_context_members          + ${delta.contextMembers ?? 0}
       WHERE id = 1`;
   }
 

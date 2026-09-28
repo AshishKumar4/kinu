@@ -9,7 +9,6 @@ import { BUILTIN_TOOLS } from '../tools/registry';
 import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
 import type { CraftStore } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
-import type { CraftedTool } from '../types/craft';
 import type { ReasoningEffort } from '../providers/effort';
 import { transcriptRole } from '../utils/ui-message';
 import type { ChatHistoryEntry } from '../types/chat';
@@ -27,7 +26,6 @@ export interface AgentStatus {
   createdAt: number;
   scaffoldVersion: number;
   searchNodeCount: number;
-  craftedToolCount: number;
   messageCount: number;
   model: string;
   reasoningEffort: ReasoningEffort | null;
@@ -37,7 +35,6 @@ export interface AgentStatus {
 export interface ToolListEntry {
   name: string;
   description: string;
-  scope: CraftedTool['scope'];
   qualityScore: number;
   usageCount: number;
 }
@@ -78,7 +75,6 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
   const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes
     WHERE actor_id = ${actor.actorId}`;
 
-  const craftedTools = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
 
   return {
     name: identity[0]?.name ?? deps.name,
@@ -89,7 +85,6 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     scaffoldVersion: scaffoldVersion[0]?.v ?? 0,
     searchNodeCount: searchNodes[0]?.c ?? 0,
     messageCount,
-    craftedToolCount: craftedTools[0]?.c ?? 0,
     model: deps.model,
     reasoningEffort: deps.reasoningEffort,
     forkLineage: readForkLineage(sql),
@@ -129,7 +124,7 @@ export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
       SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
 
     return {
-      name: t.name, description: t.description, scope: t.scope,
+      name: t.name, description: t.description,
       qualityScore: scoreRow[0]?.score ?? CRAFT_NEUTRAL_PRIOR,
       usageCount: scoreRow[0]?.uses ?? 0,
     };

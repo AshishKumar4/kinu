@@ -8,10 +8,4 @@ describe('copy button label', () => {
     expect(copyLabel('failed')).not.toBe(copyLabel('idle'));
     expect(copyLabel('copied')).not.toBe(copyLabel('idle'));
   });
-
-  test('the idle label is the caller\'s, the outcome labels are not', () => {
-    expect(copyLabel('idle', 'Copy URL')).toBe('Copy URL');
-    expect(copyLabel('failed', 'Copy URL')).toBe(copyLabel('failed'));
-    expect(copyLabel('copied', 'Copy URL')).toBe(copyLabel('copied'));
-  });
 });

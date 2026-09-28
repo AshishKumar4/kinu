@@ -61,8 +61,9 @@ import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../types/turn';
 import { nanoid } from '../utils/nanoid';
 import {
-  diagnostics, KinuError, renderThrownChain, toKinuError, type ErrorCode, type Refusal, type TracedInvocation,
+  diagnostics, KinuError, renderThrownChain, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, type TurnTrace,
 } from '../obs/index';
+import { endWhenSettled } from '../turn-trace';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -853,7 +854,7 @@ export function resumableAgentsInput(kind: string, input: JsonValue): AgentsTool
 
 interface AgentsToolCallOptions {
   abortSignal?: AbortSignal;
-  trace?: TracedInvocation;
+  trace?: TurnTrace;
 }
 
 /** Invalid operation inputs fail before delegation; namespace adapters preserve branchable refusals. */
@@ -1742,10 +1743,13 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
 
       if (trace === undefined || !DELEGATING_ACTIONS.includes(parsed.action)) return dispatchAgentsAction(deps, parsed, toolOptions);
 
-      return trace.span('turn.delegation', (span) => {
-        span.setAttribute('kinu.delegation.action', parsed.action);
+      const timer = trace.begin('turn.delegation');
+      const action = parsed.action;
+      const stamp = (span: ScopedSpan): void => { span.setAttribute('kinu.delegation.action', action); };
 
-        return dispatchAgentsAction(deps, parsed, toolOptions);
+      return endWhenSettled(dispatchAgentsAction(deps, parsed, toolOptions), timer, {
+        stamp,
+        failed: (span) => { stamp(span); span.fail(new KinuError('io', 'the delegation failed')); },
       });
     },
   }));

@@ -11,7 +11,7 @@ import type { SqlExec } from '@kinu.run/core';
 import * as v from 'valibot';
 
 import {
-  MAX_WRITES_PER_INVOCATION, assertQuantileLevel, assertWithinPlatformLimits,
+  MAX_WRITES_PER_INVOCATION, assertWithinPlatformLimits,
 } from '@kinu.run/core/analytics';
 import {
   AGENT_METRICS_SCHEMA, ANALYTICS_SCHEMAS, CONTROL_PLANE_OPS_SCHEMA, FEEDBACK_MARKERS_SCHEMA,
@@ -951,14 +951,6 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     expect(tokens).toContain(
       'SUM(_sample_interval * double12) / SUM(_sample_interval * double13) AS usdPerPricedCall',
     );
-  });
-
-  test('a quantile outside (0,1) is refused rather than emitted as SQL', () => {
-    // A percentage where a fraction belongs gets a column of nulls from AE, not an error.
-    expect(() => assertQuantileLevel(0)).toThrow(/strictly between/);
-    expect(() => assertQuantileLevel(1)).toThrow(/strictly between/);
-    expect(() => assertQuantileLevel(95)).toThrow(/strictly between/);
-    expect(() => assertQuantileLevel(0.95)).not.toThrow();
   });
 
   test('a built query names the dataset, bounds the window, and aliases by slot name', () => {

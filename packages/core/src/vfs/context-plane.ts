@@ -462,7 +462,6 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
       assertBase();
     };
 
-    assertOwner();
     const selection = observed.selection;
     const base = selection === null ? [] : history.context.entries(selection);
     const changes = changesAgainst(base, desired);

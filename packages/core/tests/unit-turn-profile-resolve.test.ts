@@ -29,16 +29,23 @@ const SCOUT: RoleDefinition = {
 interface CatalogFixture {
   readonly roles: Readonly<Record<string, RoleDefinition>>;
   readonly tiers: TierAssignments;
+  readonly modelFallbacks?: Readonly<Record<string, readonly string[]>>;
+  readonly retries?: number;
 }
 
 interface CatalogOverrides {
   readonly roles?: Readonly<Record<string, RoleDefinition>>;
   readonly tiers?: TierAssignments;
+  readonly modelFallbacks?: Readonly<Record<string, readonly string[]>>;
+  readonly retries?: number;
 }
 
-
 function catalog(overrides: CatalogOverrides = {}): CatalogFixture {
-  return { roles: overrides.roles ?? {}, tiers: overrides.tiers ?? TIERS };
+  return {
+    roles: overrides.roles ?? {}, tiers: overrides.tiers ?? TIERS,
+    ...(overrides.modelFallbacks !== undefined && { modelFallbacks: overrides.modelFallbacks }),
+    ...(overrides.retries !== undefined && { retries: overrides.retries }),
+  };
 }
 
 function envelope(catalogFixture: CatalogFixture): ProfileCatalogEnvelope {
@@ -389,6 +396,26 @@ describe('fallback chains', () => {
     const profile = run({ provider: provider(['m-fast', 'm-last']) });
 
     expect(profile.tier).toMatchObject({ model: 'm-default', fallbacks: chainOf('m-backup', 'm-last') });
+  });
+
+  test("a model's own chain beats its tier's, for the turn and for every slot that runs that model", () => {
+    const profile = resolveTurnProfile({
+      envelope: envelope(catalog({ tiers: chained, modelFallbacks: { 'm-default': ['m-last'], 'm-fast': ['m-backup'] } })),
+      provider: provider(['m-default', 'm-fast', 'm-backup', 'm-last']),
+      roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [],
+    });
+
+    expect(profile.tier).toMatchObject({ model: 'm-default', fallbacks: chainOf('m-last') });
+    expect(profile.tiers.fast?.fallbacks).toEqual([{ model: 'm-backup', reasoningEffort: 'low' }]);
+    expect(run({ workspaceModel: 'm-backup' }).tier).toMatchObject({ model: 'm-backup', fallbacks: chainOf('m-last') });
+  });
+
+  test('the retry count is the catalog\'s, 3 when the owner set none', () => {
+    expect(run({}).retries).toBe(3);
+    expect(resolveTurnProfile({
+      envelope: envelope(catalog({ tiers: chained, retries: 1 })), provider: provider(['m-default', 'm-fast', 'm-backup', 'm-last']),
+      roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [],
+    }).retries).toBe(1);
   });
 
   test('a chain none of whose models is listed refuses, naming the tier model and its fallbacks', () => {

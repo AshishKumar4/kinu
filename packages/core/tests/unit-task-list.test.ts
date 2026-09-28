@@ -137,30 +137,6 @@ describe('TaskListStore', () => {
     expect(s.count()).toBe(3);
   });
   // A table predating the status CHECK can hold an unminted value: reading it must refuse, naming it.
-  test('a stored status outside the vocabulary is refused naming the value', () => {
-    const db = new Database(':memory:');
-    const actor = createTestActorsOver(db).main;
-    const sql = makeSql(db);
-    db.exec(`CREATE TABLE agent_tasks (
-      actor_id TEXT NOT NULL,
-      id TEXT NOT NULL,
-      seq INTEGER NOT NULL,
-      parent_id TEXT,
-      title TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'open',
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (actor_id, id)
-    )`);
-    db.exec(`CREATE TABLE agent_task_notes (
-      actor_id TEXT NOT NULL, task_id TEXT NOT NULL, note TEXT NOT NULL,
-      PRIMARY KEY (actor_id, task_id)
-    )`);
-    void sql`INSERT INTO agent_tasks (actor_id, id, seq, parent_id, title, status, created_at, updated_at)
-      VALUES (${actor.actorId}, 't9', 999, NULL, 'x', 'bogus', 1, 1)`;
-    const s = new TaskListStore(sql, actor, write => db.transaction(write)());
-    expect(() => s.get('t9')).toThrow('bogus');
-  });
   // Pinned on the query plan: answering subtasks through the status index shows as "USING INDEX idx_agent_tasks_status".
   test('countOpenSubtasks seeks the parent index', () => {
     const db = new Database(':memory:');

@@ -125,7 +125,7 @@ function setupEnv(opts: {
 
   if (opts.evalService) {
     // The direct path calls only `run`; the gateway half is the same binding's `gateway`.
-    env.DEV_USER_EMAIL = 'eval-service@kinu.run';
+    env.WORKERS_AI_VIA_BINDING = 'on';
 
     env.AI = {
       gateway: () => ({ run: () => { throw new Error('AI.gateway: not reachable in this test'); } }),

@@ -480,14 +480,14 @@ describe('agent status', () => {
     const sql = makeSql(db);
     // This UPDATE stands in for a real usage history on the crafted_tools row.
     await rt.craftStore.create({
-      name: 'summarize', description: 'sum', params: null, code: 'x', scope: 'local',
+      name: 'summarize', description: 'sum', code: 'x',
     });
     void sql`UPDATE crafted_tools SET score = 0.9, uses = 7 WHERE name = 'summarize'`;
 
     const list = getToolList(sql, rt.craftStore);
     expect(list.builtIn.length).toBeGreaterThan(0);
     expect(list.crafted).toEqual([
-      { name: 'summarize', description: 'sum', scope: 'local', qualityScore: 0.9, usageCount: 7 },
+      { name: 'summarize', description: 'sum', qualityScore: 0.9, usageCount: 7 },
     ]);
     // An unscored tool reads as the neutral prior, never as zero.
     void sql`UPDATE crafted_tools SET score = 0.5, uses = 0 WHERE name = 'summarize'`;
@@ -761,19 +761,8 @@ describe('config plane', () => {
     expect(config.getModel()).toBe('openai/gpt-5.1');
     expect(invalidations).toBe(1);
 
-    // The provider's own message is the CAUSE, not spliced into the wrapper.
-    expect(() => setModel(deps, 'nonsense')).toThrow('setModel(nonsense) failed');
-
-    const failure = (() => {
-      try {
-        setModel(deps, 'nonsense');
-
-        return null;
-      } catch (error) { return error; }
-    })();
-
-    expect(failure instanceof Error && failure.cause instanceof Error ? failure.cause.message : null)
-      .toBe('unknown provider: nonsense');
+    // The provider's own message reaches the caller unwrapped.
+    expect(() => setModel(deps, 'nonsense')).toThrow('unknown provider: nonsense');
     // A rejected spec neither stores nor invalidates.
     expect(config.getModel()).toBe('openai/gpt-5.1');
     expect(invalidations).toBe(1);
@@ -824,8 +813,8 @@ describe('config plane', () => {
 describe('changelog view', () => {
   test('unseen counts against the stored watermark, and marking seen zeroes it', () => {
     const { db, sql, actor, config } = workspace();
-    void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
-      VALUES ('summarize', 'sum', NULL, 'x', 'local', ${Date.now()}, ${Date.now()})`;
+    void sql`INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
+      VALUES ('summarize', 'sum', 'x', ${Date.now()}, ${Date.now()})`;
 
     expect(getEvolutionChangelog(sql, actor).entries).toHaveLength(1);
     expect(getEvolutionChangelog(sql, actor).unseenCount).toBe(1);

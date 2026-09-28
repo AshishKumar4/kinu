@@ -11,7 +11,7 @@ import {
   agentsActionsFor, buildBuiltinTools, createAgentsTool, parseAgentsToolInput,
   renderAgentsToolDescription, resumableAgentsInput,
   AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS,
-  delegationBudgetAtDepth, ROOT_DELEGATION_BUDGET,
+  deriveChildDelegationBudget, ROOT_DELEGATION_BUDGET,
   PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
   classifyToolFailure, JsonObjectSchema, failedToolOutcome,
   type AgentsToolInput,
@@ -439,13 +439,17 @@ describe('agents tool — the field contract', () => {
 // Depth cap: primarily enforced by not wiring `team` at the cap; these cover the seam, since a
 // ToolSet is cached across turns and a facet's identity is seeded after it is built.
 
+/** A hire chain `depth` levels below the root. */
+const budgetAt = (depth: number) =>
+  Array.from({ length: depth }, () => 0).reduce((budget) => deriveChildDelegationBudget(budget), ROOT_DELEGATION_BUDGET);
+
 describe('agents tool — delegation depth', () => {
   const depthDeps = (depth: number, extra: Partial<AgentsToolDeps> = {}) => {
     const team = makeTeam();
 
     return {
       team,
-      deps: withBuildMode({ team: { ...team.deps, delegation: delegationBudgetAtDepth(depth) }, profile: () => testProfile(), ...extra }),
+      deps: withBuildMode({ team: { ...team.deps, delegation: budgetAt(depth) }, profile: () => testProfile(), ...extra }),
     };
   };
 

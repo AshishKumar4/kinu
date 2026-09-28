@@ -52,7 +52,7 @@ const HeadCommitSchema = v.pipe(v.string(), v.hexadecimal(), v.minLength(40), v.
 
 /**
  * `hash` is a digest of a file's bytes, null past one row; a text file's body is stored once per hash, a binary file's
- * never. `vfs_baseline_generation` names the generation each one replaced, for Undo.
+ * never. The one inactive generation a prune leaves is the one the active one replaced, for Undo.
  */
 export function initWorkspaceBaselineTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_manifest (
@@ -70,12 +70,6 @@ export function initWorkspaceBaselineTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_blob (
     hash    TEXT PRIMARY KEY,
     content TEXT NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_generation (
-    actor_id   TEXT NOT NULL,
-    generation TEXT NOT NULL,
-    replaced   TEXT,
-    PRIMARY KEY (actor_id, generation)
   )`);
 }
 
@@ -337,23 +331,22 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<Wo
   return { files, trackedSince: manifest.capturedAt, baseline: manifest.generation };
 }
 
-/** The generation the active one replaced, kept for Undo. */
+/** The generation the active one replaced, kept for Undo: every prune leaves it the only inactive one. A capture in
+ *  flight is not it, because its '' marker is written last. */
 function replacedGeneration(rt: WorkspaceBaselineRuntime): string | null {
-  const actorId = rt.actor.actorId;
-
-  return rt.storage.sql<{ replaced: string | null }>`SELECT g.replaced FROM vfs_baseline_generation g
-    JOIN vfs_baseline_manifest m ON m.actor_id = g.actor_id AND m.generation = g.generation
-    WHERE g.actor_id = ${actorId} AND m.active = 1 AND m.path = '' LIMIT 1`[0]?.replaced ?? null;
+  return rt.storage.sql<{ generation: string }>`SELECT generation FROM vfs_baseline_manifest
+    WHERE actor_id = ${rt.actor.actorId} AND active = 0 AND path = '' LIMIT 1`[0]?.generation ?? null;
 }
 
-/** Drops every generation but the active one and the one it replaced, then the bodies nothing names. */
-function pruneBaselines(rt: WorkspaceBaselineRuntime): void {
-  const actorId = rt.actor.actorId;
+/** Generations a capture is still writing: an overlapping review or Undo must not prune them mid-walk. */
+const capturing = new Set<string>();
 
-  void rt.storage.sql`DELETE FROM vfs_baseline_manifest WHERE actor_id = ${actorId} AND active = 0
-    AND generation IS NOT ${replacedGeneration(rt)}`;
-  void rt.storage.sql`DELETE FROM vfs_baseline_generation WHERE actor_id = ${actorId}
-    AND generation NOT IN (SELECT generation FROM vfs_baseline_manifest WHERE actor_id = ${actorId})`;
+/** Drops every inactive generation but `kept` and those still being written, then the bodies nothing names. */
+function pruneBaselines(rt: WorkspaceBaselineRuntime, kept: string | null): void {
+  const writing = JSON.stringify([...capturing]);
+
+  void rt.storage.sql`DELETE FROM vfs_baseline_manifest WHERE actor_id = ${rt.actor.actorId} AND active = 0
+    AND generation IS NOT ${kept} AND generation NOT IN (SELECT value FROM json_each(${writing}))`;
   void rt.storage.sql`DELETE FROM vfs_baseline_blob
     WHERE hash NOT IN (SELECT hash FROM vfs_baseline_manifest WHERE hash IS NOT NULL)`;
 }
@@ -375,14 +368,11 @@ async function capture(rt: WorkspaceBaselineRuntime, held: BaselineManifest | nu
   const generation = nanoid();
   const capturedAt = Date.now();
   const entries = new Map<string, ManifestEntry>();
+  let flipped = false;
+
+  capturing.add(generation);
 
   try {
-    // The marker makes an intentionally empty snapshot representable.
-    for (const marker of ['', PLANE_ROOT]) {
-      void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
-        VALUES (${actorId}, ${generation}, ${marker}, ${0}, ${capturedAt}, ${null}, ${0})`;
-    }
-
     await walkWorkspaceFiles(rt, async (path, st) => {
       const kept = held?.entries.get(path);
       let entry: ManifestEntry = { size: st.size, mtimeMs: st.mtimeMs, hash: null };
@@ -403,14 +393,21 @@ async function capture(rt: WorkspaceBaselineRuntime, held: BaselineManifest | nu
         VALUES (${actorId}, ${generation}, ${path}, ${entry.size}, ${entry.mtimeMs}, ${entry.hash}, ${0})`;
       entries.set(path, entry);
     });
-    void rt.storage.sql`INSERT INTO vfs_baseline_generation (actor_id, generation, replaced)
-      VALUES (${actorId}, ${generation}, ${held?.generation ?? null})`;
+
+    // The marker makes an intentionally empty snapshot representable.
+    for (const marker of [PLANE_ROOT, '']) {
+      void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
+        VALUES (${actorId}, ${generation}, ${marker}, ${0}, ${capturedAt}, ${null}, ${0})`;
+    }
+
     void rt.storage.sql`UPDATE vfs_baseline_manifest
       SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END
       WHERE actor_id = ${actorId}`;
+    flipped = true;
   } finally {
-    // A failed partial write goes with the older generations; the error propagates.
-    pruneBaselines(rt);
+    capturing.delete(generation);
+    // A failed partial write goes; the undo target is read now, because another review may have finished meanwhile.
+    pruneBaselines(rt, flipped ? held?.generation ?? null : replacedGeneration(rt));
   }
 
   return { capturedAt, generation, entries };
@@ -430,7 +427,7 @@ export function restoreWorkspaceBaseline(rt: WorkspaceBaselineRuntime): { ok: tr
   void rt.storage.sql`UPDATE vfs_baseline_manifest
     SET active = CASE WHEN generation = ${replaced} THEN 1 ELSE 0 END
     WHERE actor_id = ${actorId}`;
-  pruneBaselines(rt);
+  pruneBaselines(rt, null);
 
   return { ok: true, capturedAt: marker.mtime_ms };
 }

@@ -70,11 +70,11 @@ function boundDelivery(
     `INSERT INTO agent_log
        (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
         trust, priority, payload_visibility, payload, received_at,
-        schema_version, dedupe_key, consumed_at)
+        dedupe_key, consumed_at)
      VALUES (?, ?, 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
              'authenticated', 'normal', 'full',
              '{"webhook_id":"w1","http_method":"POST","http_headers":{},"body":{"x":1},"delivery_id":"d1"}',
-             1, 1, NULL, ?)`,
+             1, NULL, ?)`,
   ).run(workspaceMainActor(harness.db).actorId, eventId, drainTurnId, consumedAt);
 }
 

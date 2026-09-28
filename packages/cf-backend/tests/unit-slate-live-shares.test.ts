@@ -61,8 +61,8 @@ async function ownerWorld(): Promise<World> {
   await owner.agent.installWorkspaceCapability(capability);
   const caller = await testOwner();
   await user.userDO.userMcp_list(caller);
-  user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-    VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL, 0, 0)`);
+  user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
+    VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL)`);
   seedMcpTools('connection-id', [
     { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
     { name: 'create_issue', inputSchema: { type: 'object' } },

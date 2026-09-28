@@ -4,13 +4,11 @@ import { createWorkspace as createWorkspaceFilesystem, workspaceGenerationStorag
 import type { WorkspaceBundle, WorkspaceOptions } from '../vfs/nimbus-workspace';
 import { readTailWithVfsOps, type VfsNativeReads } from '../vfs/mounts';
 import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
-import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils/stores';
+import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
 import type { CraftStore } from '../types/agent-runtime';
 import type {
-  Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExec, SqlExecutor, SqlValue, Storage, VFS,
+  Executor, Memory, RawSqlExec, SqlExec, SqlExecutor, SqlValue, Storage, VFS,
 } from '../types/primitives';
-import type { ActorHandle } from './actor-handle';
-import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
 import * as v from 'valibot';
@@ -97,15 +95,14 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
       // Asked, not caught: an unreadable file must not index as absent.
       if (!await vfs.exists(path)) return;
       const content = v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
-      const now = Date.now();
       // Replace the chunk set and keep the FTS5 shadow in step for the real MemoryStore.
       void sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE path = ${path})`;
       void sql`DELETE FROM memory_chunks WHERE path = ${path}`;
 
       for (const chunk of await chunkMarkdown(content)) {
         const id = `${path}:${chunk.startLine}-${chunk.endLine}`;
-        void sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
-          VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash}, ${chunk.text}, ${now})`;
+        void sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text)
+          VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash}, ${chunk.text})`;
         void sql`INSERT INTO memory_chunks_fts (rowid, text) SELECT rowid, text FROM memory_chunks WHERE id = ${id}`;
       }
     },
@@ -129,7 +126,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
 }
 
 export function createInlineCraftStore(db: AgentDatabase): CraftStore {
-  return craftStoreView(new AgentUtilsCraftStore(wrapDatabase(db).sql));
+  return new AgentUtilsCraftStore(wrapDatabase(db).sql);
 }
 
 export function createInlineExecutor(): Executor {
@@ -149,30 +146,6 @@ export function createInlineExecutor(): Executor {
           error: renderThrownChain({ cause: error }),
         };
       }
-    },
-  };
-}
-
-export function createInlineSchedule(sql: SqlExecutor, actor: ActorHandle): Schedule {
-  // Fiber names repeat across actors, so rows are keyed by actor.
-  const actorId = actor.actorId;
-
-  return {
-    after: async (_ms, fn) => { await fn(); },
-    cron: async () => {},
-    fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
-      actor.assertCurrent();
-      const id = nanoid();
-      void sql`INSERT INTO fibers (actor_id, id, name, snapshot, created_at)
-        VALUES (${actorId}, ${id}, ${name}, ${null}, ${Date.now()})`;
-
-      const stash: FiberCtx['stash'] = (data) => {
-        void sql`UPDATE fibers SET snapshot = ${JSON.stringify(data)}
-          WHERE actor_id = ${actorId} AND id = ${id}`;
-      };
-
-      try { return await fn({ stash, snapshot: null }); }
-      finally { void sql`DELETE FROM fibers WHERE actor_id = ${actorId} AND id = ${id}`; }
     },
   };
 }

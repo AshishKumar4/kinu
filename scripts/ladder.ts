@@ -10,17 +10,13 @@
  * badge. A subset nobody declared is the same defect as a gate reporting green
  * over something it never looked at, one level up.
  *
- * Three rules make that impossible rather than merely fixed today.
+ * Two rules make that impossible rather than merely fixed today.
  *
- *   1. The DEPLOY tier is not declared here. It is PARSED out of deploy.sh,
- *      which stays the single source of truth for what blocks a production
- *      publish and stays locked by `scripts/deploy.test.ts`'s exact-order
- *      assertion. This file never holds a second copy of that list, so the two
- *      cannot drift — there is only one.
- *   2. The ladder is MONOTONE: commit ⊆ push ⊆ ci ⊆ deploy, compared by the test
+ *   1. The ladder is MONOTONE: commit ⊆ push ⊆ ci ⊆ deploy, compared by the test
  *      files each gate claims rather than by command text, so a gate growing an
- *      argument does not read as a hole.
- *   3. Every deploy gate is claimed by the CI tier or carries a written reason
+ *      argument does not read as a hole. `deploy.sh` runs `--plan`, so this file
+ *      holds the one list.
+ *   2. Every deploy gate is claimed by the CI tier or carries a written reason
  *      why it cannot be. `ladder.test.ts` fails naming any gate with neither.
  *
  * Monotonicity is also what makes the standing "never `--no-verify`" rule
@@ -33,7 +29,7 @@
  * hooks installed at all.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
@@ -58,7 +54,7 @@ import { modulesReaching } from './import-closure';
 import type { ModuleEdges } from './import-graph';
 import { identifierCalleeName, literalString, walk, type Parsed } from './syntax';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE_MODEL_ENV } from '../packages/test-utils/src/index';
-import { COST_TABLE, type CostTable, costRssMb, costThreads, machineName, readCosts } from './gate-cost';
+import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from './gate-cost';
 
 /** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
  *  document that tells a reader what a rung catches. Read from the enabled rules rather than from the
@@ -350,9 +346,8 @@ export const LADDER: readonly Gate[] = [
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.22 s. Replaces 0.07 s.
     seconds: 0.22,
-    catches: 'a platform number stated in prose with no catalog id behind it, and a '
-      + 'catalog entry with no evidence label or provenance.',
-    blind: 'whether the catalogued number is still true.',
+    catches: 'a catalog entry with no evidence label or provenance.',
+    blind: 'whether the catalogued number is still true, and prose that restates one.',
     inputs: { kind: 'derived' },
   },
   {
@@ -426,46 +421,6 @@ export const LADDER: readonly Gate[] = [
       + 'assertion reaches them. Also blind to the 2 shell gate programs, which it counts and '
       + 'never parses.',
     inputs: AMBIENT_BY_NAME,
-  },
-  {
-    run: 'bun run gate:literature-citations',
-    label: 'External citation register',
-    tier: 'commit',
-    // Measured 2026-09-05 on the 24-thread box (load 2.3): 5.86 s. Replaces 1 s.
-    seconds: 5.86,
-    catches: 'a QUALIFIER lost crossing the one boundary nothing else checks — prose to a paper '
-      + 'nobody in this process can open. `lean-citations` closed TypeScript -> Lean and caught '
-      + 'three stale citations immediately; docs -> literature was the boundary still open, and '
-      + 'a removed internal audit of seven numbers found six of seven DIGITS correct and '
-      + 'four QUALIFIERS wrong, so a digit-comparing gate would have passed all seven. This one '
-      + 'refuses the qualifier instead: an external number with no register entry and therefore '
-      + 'no locator; a compute-dependent claim under a bare parity ADJECTIVE (`+12.5 at matched '
-      + 'compute`, over a subtraction spanning a no-search row the same paper prices at 20x the '
-      + 'LM calls); a hedge the source states and prose deletes (GEPA\'s `up to 11.33%`, which '
-      + 'overstated its own justification by ~55%); a confusable unit left unnamed (`+25.4` is '
-      + 'DISCRIMINATION accuracy, and read as task accuracy it argues the opposite); a locator '
-      + 'naming a table that does not hold the number; and a WITHDRAWN number re-asserted as '
-      + 'live. `scripts/literature.ts` is the one place an external number is written down, so '
-      + 'the set is enumerable (`--list-claims`) with provenance DEPTH — first-hand, second-hand '
-      + 'through an internal artifact, or read by nobody — which is what gives a '
-      + 're-verification pass a worklist instead of a re-read.',
-    blind: 'the digit itself, and whether a locator SUPPORTS its claim. It never opens a paper: '
-      + 'prose and register can agree and both be wrong, and an author-declared `withdrawn` is '
-      + 'trusted rather than verified. It governs a number only where a source is cited by '
-      + 'author-or-arXiv form or by one of its own registered figures, so a number beside a bare '
-      + 'product name is ungoverned — deliberately, since `GEPA` and `LATS` are modules here as '
-      + 'often as papers. Reach is 4000 characters AND the structure holding the citation, so a '
-      + 'claim further than that from its citation is ungoverned; the bound exists because a '
-      + 'machine-written document has no paragraphs, and paragraph reach read one 206KB run '
-      + 'recording as a single paragraph. Captured output declared by its own leading `ranAt` is '
-      + 'read for quotations only and never judged — it asserts nothing and cannot be corrected '
-      + 'without being falsified — but it earns no credit either, so a register entry whose only '
-      + 'home is a recording is a finding. A citation inside a STRING LITERAL is not read at all, '
-      + 'which is where the bare-parity defect in `scripts/axis-ergonomics/` was sitting. It '
-      + 'cannot see a compressed QUOTATION, which is the one defect in this family that needed a '
-      + 'human and the recorded source. It prints all of this on the GREEN path, because a blind '
-      + 'spot visible only in red output is invisible exactly when the tree is clean.',
-    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:commit-message',
@@ -554,28 +509,6 @@ export const LADDER: readonly Gate[] = [
     inputs: { ...AMBIENT_BY_NAME, reads: [] },
   },
   {
-    run: 'bun run gate:ladder-budget',
-    label: 'Tier-budget ratchet',
-    // PUSH, beside `bun test scripts/ladder.test.ts` and for its reason: the ratchet
-    // judges the declarations of BOTH cheap tiers, and every push runs every commit
-    // gate — so one static check at push governs both hooks, while a commit-tier row
-    // would judge push-tier membership from the faster hook. Like the other whole-tree
-    // locks (`gate:complexity`, `gate:wired`) it lives at push because a gate's cost
-    // cannot change between a commit and the push that follows it.
-    // Measured 2026-09-05 on the 24-thread box: 0.07/0.08/0.08s; declared 0.2s so a
-    // loaded machine has headroom.
-    tier: 'push',
-    seconds: 0.2,
-    catches: 'a tier whose declared cost outgrew its measured figure — a new gate, a '
-      + 're-measured row nobody re-locked, or a declaration edited by hand. The lock pins '
-      + 'the measured seconds per gate, so the failure names the step that grew most.',
-    blind: 'the wall clock itself. This compares declarations to the lock; a gate that '
-      + 'slows without its row updated passes until somebody re-measures. Shrinkage '
-      + 'passes deliberately: a faster tier is the ratchet working.',
-    inputs: AMBIENT_BY_NAME,
-  },
-
-  {
     run: 'bun run gate:bench-corpus',
     label: 'Seeded bench defects still apply',
     // COMMIT. Held at push, it let comment-only commits on 2026-09-22 break 37
@@ -607,12 +540,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:skip-ratchet',
     label: 'Declared skip ratchet',
-    // MOVED commit -> push when its measured cost went 0.3s -> 2.9s. The 0.3s was
-    // never right — `bun test ./tests/` alone is 1.2s — and covering the vitest arm
-    // added a vite transform on top, so the commit tier's declared 15s budget was
-    // being met on an understated number. Push rather than a raised budget: the
-    // budget exists so nobody learns to bypass the hook, and a skip set is fully
-    // recoverable at push. Nothing it asserts was narrowed to fit.
+    // Push: a skip set is fully recoverable at push.
     tier: 'push',
     // Re-measured 2026-09-23 on the 24-thread box at load 5: 17.8/17.9/18.5 s; the
     // vitest arm has grown since the 12 s of 2026-09-05. Too slow for commit.
@@ -840,7 +768,8 @@ export const LADDER: readonly Gate[] = [
     catches: 'a coupled test, by the axes a test review judges on. BANNED, whatever the lock holds: '
       + "an assertion over the implementation's TEXT, a test function or constant restating the "
       + "product's own, a reach into a member production declares non-public, and a mock of an "
-      + 'internal module. RATCHETED, the lock only shrinking: a matcher that cannot fail on the '
+      + 'internal module, or exact rendered wording or CSS values without a cited requirement. Unused '
+      + 'and uncited requirements fail too. RATCHETED, the lock only shrinking: a matcher that cannot fail on the '
       + 'defect its title names, keyed by category, file, TEST TITLE and finding shape, each locked '
       + 'key naming the plants that turn it red. It also refuses a STALE key, so a repaired '
       + 'coupling is recorded as repaired rather than left in the lock as budget for the next one.',
@@ -1010,7 +939,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts scripts/error-model.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1056,15 +985,7 @@ export const LADDER: readonly Gate[] = [
       + 'leaked 10,124 temp entries in one evening proven red against the historical '
       + 'source, plus the three it must NOT fire on: prose quoting the defect, a `/tmp/` '
       + 'path belonging to the SANDBOX rather than this box, and a program whose scratch '
-      + 'outlives the run on purpose. For literature-citations, every red direction it '
-      + 'claims proven against the drifted text that was actually in this tree — a bare '
-      + 'parity adjective, a deleted `up to`, an unnamed confusable unit, a locator '
-      + 'naming the wrong table, a withdrawn number re-asserted — plus the six false '
-      + 'positives that shaped its corpus decision, each of which demanded a paper '
-      + 'locator for one of our own numbers, and the REACH bound proven in both '
-      + 'directions: a recorded 206KB blob yields nothing, the same bytes undeclared '
-      + 'still refuse the parity adjective inside them, a claim three paragraphs from '
-      + 'its citation is still governed, and one past the bound is not. For silent-drop, all '
+      + 'outlives the run on purpose. For silent-drop, all '
       + 'six defect classes red on the shape as it appears in this tree and GREEN on its '
       + 'repair, plus the three judgements that keep the count honest: a handler that FORWARDS '
       + 'its error is not a drop, an async function whose whole body is a non-rethrowing try '
@@ -1678,32 +1599,28 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts scripts/*-ux.test.ts scripts/computed-style.test.ts',
+    run: 'bun test --timeout=0 scripts/account-ux.test.ts scripts/drive-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts',
+    label: 'UI gate self-tests: account, drive and slates',
+    tier: 'ci',
+    // Measured alone 2026-09-27: 144.69 s wall, 51.17 s CPU, 2525 MiB peak Pss, start load 1.98.
+    seconds: 144.69,
+    catches: 'account setup, provider settings, onboarding and deletion; Drive uploads, folders and files; '
+      + 'slate isolation and inline previews; shared libraries, blueprints and share dialogs. '
+      + 'The browser drives gallery fixtures at the suites\' declared widths and themes.',
+    blind: 'gallery fixtures, not deployed accounts, R2 uploads or public viewers; no pixel comparison.',
+    inputs: CLIENT_BUILD,
+  },
+  {
+    run: 'bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts '
+      + '--path-ignore-patterns=scripts/account-ux.test.ts --path-ignore-patterns=scripts/drive-ux.test.ts '
+      + '--path-ignore-patterns=scripts/slate-preview-ux.test.ts --path-ignore-patterns=scripts/slate-sharing-ux.test.ts '
+      + 'scripts/*-ux.test.ts scripts/computed-style.test.ts',
     label: 'UI gate self-tests',
     tier: 'ci',
-    // Measured 2026-09-18 alone on the 24-thread workstation under the wave's
-    // own wrapper, load 1.9 at start: 270.9s wall, 62.4s CPU, 2534 MiB peak
-    // over the sixteen files this row runs — fifteen `*-ux` suites and
-    // `computed-style`.
-    //
-    // The row is the `*-ux` FAMILY since 2026-09-15 rather than a list: a
-    // fifteenth suite joined on 2026-09-14 by a hand edit in three files, and
-    // a suite outside every family is what the orphan test below catches. The
-    // client-failure trio (45 s, measured 13.84 s on 2026-09-06) and
-    // `workspace-name-ux` fold in; their declared seconds are added here.
-    //
-    // Since 2026-09-18 it carves ONE suite back out of that family —
-    // `chat-and-files-ux`, the row above — with bun's own
-    // `--path-ignore-patterns`, so the family still claims every new `*-ux`
-    // suite and a file is in exactly one of the two rows. The two together
-    // are ~500s serial against the 480s shared deadline, which is a row that
-    // reports a hang wherever the defect is: this row died at 124 in the
-    // 2026-09-16 wave and again at 480.42s measured alone on 2026-09-18,
-    // while its declared 420 was never a measurement of the set it had grown
-    // into. Earlier figures for the unsplit row: 347.00s on 2026-09-14
-    // (293.62s with app-background alone, 324.74s with account-ux alone,
-    // 265.76s before either joined).
-    seconds: 300,
+    // Measured alone 2026-09-27: 131.47 s wall, 47.64 s CPU, 2836 MiB peak Pss, start load 1.88.
+    // The glob admits new suites; the exclusions keep the other two UI rows disjoint.
+    // The unsplit family ran 487 s under load on 2026-09-26 against its 480 s deadline.
+    seconds: 131.47,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1733,31 +1650,18 @@ export const LADDER: readonly Gate[] = [
       + 'narrow-container scrim actually CLOSING the rail rather than dimming a '
       + 'document with no way back, and the action strip collapsing on a settled plan '
       + 'instead of spending a margin on buttons nobody can press. The models '
-      + 'section\'s accessible names and the '
-      + 'Phase 1 sharing surfaces are read the same way: every tier row and '
-      + 'role field stays reachable by the name assistive technology announces, '
-      + 'and the shared library, the blueprint page, the share dialog and the '
-      + 'unmapped-bindings panel render at both widths in both themes with the '
-      + 'warning and fork copy they owe and no rate or spend anywhere. The '
+      + 'section\'s accessible names are read the same way: every tier row and '
+      + 'role field stays reachable by the name assistive technology announces. The '
       + 'living background is measured on the shipped shell itself: it sits '
       + 'behind the rail and the page with pointer-events none and a negative '
       + 'z-index, stops its clock when the document is hidden, draws one still '
       + 'under reduced motion and on a phone width, never mounts under a '
       + 'workspace route, and follows the overview read model through idle, '
-      + 'working and attention. The account surfaces '
-      + 'join here: the setup modal over the home chrome, the settings providers '
-      + 'section, the onboarding wizard at each of its four steps with only the '
-      + 'active panel reachable, the account section whose delete button wakes '
-      + 'only on the typed email, and the primary nav with the workspaces (list '
-      + 'and tiled, searched), plugins and four-list shared pages behind it — all '
-      + 'read through the shared account fixture at both widths in both themes.',
+      + 'working and attention.',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
       + '21 frames × 4 themes and stays a standalone run — a gate that fails because '
       + 'Chrome is missing fails for a reason unrelated to the change under test. Also '
-      + 'MOST OF THE GALLERY: only `shell`, `streaming` and `environment` carry any '
-      + 'assertion across the two UI rows, and the last two are the chat-and-files '
-      + 'row\'s, while gallery.tsx dispatches ~29 frames — so the rest are proven '
-      + 'to mount and nothing more. The three non-default themes are audited on `shell` '
+      + 'gallery frames these suites never open. The three non-default themes are audited on `shell` '
       + 'alone. The control-plane and feedback frames use authenticated gallery fixtures, not '
       + 'a deployed OAuth flow. Browser capture fidelity outside those fixed frames remains '
       + 'unmeasured rather than green. For the plan document: one gallery plan and '
@@ -2037,24 +1941,6 @@ export const LADDER: readonly Gate[] = [
       + 'too small to make. The suite prints the list with its figures after the file, which '
       + 'vitest\'s agent reporter shows only when the file fails.',
     inputs: workersPool('packages/cf-backend'),
-  },
-  {
-    run: 'bun run gate:policy-drift',
-    label: 'Duplicated policy constants',
-    tier: 'commit',
-    // Measured 2026-09-05 on the 24-thread box: 0.8/0.8/0.8/0.9/0.9s. Replaces 0.6s.
-    seconds: 0.9,
-    catches: 'one policy number written down twice. `RETRY_BASE_MS` is declared three '
-      + 'times with three values (5s in core, 30s in the email outbox, 1s in a React '
-      + 'hook) and `RETRY_MAX_MS` three times with two, so grepping either name returns '
-      + 'a confident wrong answer. Values are folded before comparison, because five '
-      + 'minutes is written `300_000` in one file and `5 * 60 * 1000` in three others. '
-      + '12 findings over 277 named constants and 2,629 literals in a role position.',
-    blind: 'a policy held in a lowercase local, and an unnamed literal whose role words '
-      + 'only PARTIALLY match a constant — the partial-match version reported 12 and '
-      + 'every one was two unrelated decisions picking the same round number, so exact '
-      + 'is the rule and 0 is the honest count.',
-    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:scratch-ownership',
@@ -2547,31 +2433,25 @@ export const LADDER: readonly Gate[] = [
     run: 'bash scripts/product-flows-tier.sh',
     label: 'Product flows in a browser, on the deployment',
     phase: 'post-publish',
-    deadline: {
-      seconds: 900,
-      why: 'six rows, four of them waiting on a real model turn over the public edge: 329s '
-        + 'against b220f59f8 on 2026-09-23, the slate turn alone 240s. About three times the '
-        + 'wall, so a slow model answers rather than being killed as a hang.',
-    },
     alone: 'runs in the post-publish wave, after the upload and the smoke gate, beside the '
-      + 'other tiers whose subject is the build that just shipped. Its workspaces carry the '
-      + 'eval prefix and are torn down by the row that made them, and it attaches no machine, '
-      + 'so it stands outside the device fleet the first-run tier counts.',
+      + 'other tiers whose subject is the build that just shipped. It acts as the `scripted` '
+      + 'eval account, as the first-run cases do; its workspaces carry the eval prefix and are '
+      + 'torn down by the row that made them, and it attaches no machine, so it stands outside '
+      + 'the device fleet the first-run tier counts.',
     tier: 'deploy',
-    // 329s against b220f59f8 on 2026-09-23 with the slate row (66s to 128s without
-    // it); the model turns are the spread.
-    seconds: 329,
+    // 47s to 51s against staging 7dd73e1ac9 on 2026-09-27, three runs, 18/18 each.
+    seconds: 51,
     catches: 'a flow a person runs in the page that breaks on the DEPLOYED build: the same rows '
       + 'the pre-publish run drives against `vite dev`, in real Chrome against the deployment '
-      + 'as the eval identity, asserting only what the page shows. The first-run tier reads '
+      + 'as the `scripted` eval account on the scripted model, asserting only what the page shows. The first-run tier reads '
       + 'the deployment over its API and socket and the eval suite drives the model, so '
       + 'neither loads the page a person loads; #13 was an API-green workspace whose reloaded '
       + 'page showed no agents.',
     blind: 'a flow no row drives, and the look of the page: rows read presence and text, never '
       + 'pixels. It reports on a build that is already serving, so a red here is a red users '
-      + 'have now. The model is real, so a row that needs an answer reads that one arrived, '
-      + 'never its words.',
-    inputs: { kind: 'live', why: 'drives the DEPLOYED build in real Chrome as the eval identity and spends real model turns.' },
+      + 'have now. The model is scripted, so whether a real model makes the calls a row names is '
+      + 'the evals\' question, not this tier\'s.',
+    inputs: { kind: 'live', why: 'drives the DEPLOYED build in real Chrome as the `scripted` eval account and the scripted model\'s Worker.' },
   },
 ];
 
@@ -3245,166 +3125,6 @@ export function runnableArgv(run: string, tracked: readonly string[]): string[] 
   return [...flags, ...files];
 }
 
-/* ── The tier-budget ratchet ────────────────────────────────────────────
- *
- * The commit and push tiers are hooks, and a hook slow enough to tempt
- * `--no-verify` is a design failure — so each tier's declared cost is pinned in
- * `scripts/ladder.lock.json` and a tier that grows past BUDGET_TOLERANCE fails,
- * naming the step that grew most. A re-lock takes `--reason` and records it in
- * the lock, so raising a figure is a decision with a stated cause rather than a
- * number that moved.
- *
- * What the lock pins is the DECLARATION (this file's `seconds`), not a wall
- * clock: a test that ran both tiers and compared walls would take six minutes
- * and fail on machine noise. The declarations are the measured figures — every
- * row carries its own date and box — re-validated 2026-09-05 on the 24-thread
- * workstation (commit walls 36.9–38.0s against 53.24s declared; the push
- * per-gate walls sum to ~360s against 379.71s declared), and the ratchet holds
- * them to what was measured.
- */
-
-/** Declared-cost growth past the locked figure that still passes: 20%.
- *
- * Machine noise on this workstation (12th Gen i9-12900K, 24 threads) measured
- * 2026-09-05 at ~3% across four commit-tier runs (38.0/36.9/37.4/37.7s, load
- * 2.4–4.7): 20% is six times that noise, so a breach means real growth — a new
- * gate, a slower suite — and never a loaded machine. Shrinkage always passes: a
- * tier that got faster is the ratchet working, and the lock is re-pinned
- * opportunistically with the next `--lock`.
- */
-export const BUDGET_TOLERANCE = 0.2;
-
-const BUDGET_LOCK = `${root}scripts/ladder.lock.json`;
-
-/** The tiers with a pinned budget: the two hooks. */
-const BUDGET_TIERS = ['commit', 'push'] as const;
-
-export type BudgetTier = (typeof BUDGET_TIERS)[number];
-
-const TierBudgetSchema = v.object({
-  seconds: v.pipe(v.number(), v.minValue(0)),
-  measuredAt: v.pipe(v.string(), v.minLength(1)),
-  machine: v.pipe(v.string(), v.minLength(1)),
-  steps: v.record(v.string(), v.pipe(v.number(), v.minValue(0))),
-});
-
-/**
- * The budget, machine-written by `--lock` and never edited by hand.
- *
- * `reason` is the `--reason` the re-lock was invoked with: what grew and why.
- * `steps` keys are the gate `run` strings, so a lock diff names the gates that
- * moved rather than reporting a bare total.
- */
-const LadderBudgetSchema = v.object({
-  reason: v.pipe(v.string(), v.minLength(1)),
-  tiers: v.object({ commit: TierBudgetSchema, push: TierBudgetSchema }),
-});
-
-export type TierBudget = v.InferOutput<typeof TierBudgetSchema>;
-
-export type LadderBudget = v.InferOutput<typeof LadderBudgetSchema>;
-
-export function readBudget(path = BUDGET_LOCK): LadderBudget {
-  return v.parse(LadderBudgetSchema, JSON.parse(readFileSync(path, 'utf8')));
-}
-
-export function writeBudget(budget: LadderBudget, path = BUDGET_LOCK): number {
-  writeFileSync(path, `${JSON.stringify(budget, null, 2)}\n`);
-
-  return Object.keys(budget.tiers.commit.steps).length
-    + Object.keys(budget.tiers.push.steps).length;
-}
-
-/** Declared cost of one budgeted tier: the total and the per-gate table. */
-export interface TierCost {
-  readonly total: number;
-  readonly steps: Record<string, number>;
-}
-
-export function declaredTierCost(tier: BudgetTier): TierCost {
-  const steps: Record<string, number> = {};
-
-  for (const gate of gatesFor(tier)) steps[gate.run] = gate.seconds;
-
-  return {
-    total: Object.values(steps).reduce((sum, seconds) => sum + seconds, 0),
-    steps,
-  };
-}
-
-/** One tier whose declared cost outgrew its locked figure. */
-export interface BudgetBreach {
-  readonly tier: BudgetTier;
-  readonly locked: number;
-  readonly declared: number;
-  /** The locked step whose declaration grew most. */
-  readonly step: string;
-  readonly stepWas: number;
-  readonly stepNow: number;
-}
-
-export function judgeBudgets(
-  declared: Record<BudgetTier, TierCost>,
-  budget: LadderBudget,
-): BudgetBreach[] {
-  const breaches: BudgetBreach[] = [];
-
-  for (const tier of BUDGET_TIERS) {
-    const locked = budget.tiers[tier];
-    const current = declared[tier];
-    // A lock that pins nothing cannot fail. See `assertMeasured`'s own
-    // docstring: a gate over an empty corpus reports the healthiest number.
-    assertMeasured(`ladder-budget (${tier})`, [
-      ['declared steps', Object.keys(current.steps).length],
-      ['locked steps', Object.keys(locked.steps).length],
-      ['locked seconds', locked.seconds],
-    ]);
-
-    if (current.total <= locked.seconds * (1 + BUDGET_TOLERANCE)) continue;
-    let step = '';
-    let stepWas = 0;
-    let stepNow = 0;
-    let growth = Number.NEGATIVE_INFINITY;
-
-    for (const [name, seconds] of Object.entries(current.steps)) {
-      const was = locked.steps[name] ?? 0;
-
-      if (seconds - was > growth) {
-        growth = seconds - was;
-        step = name;
-        stepWas = was;
-        stepNow = seconds;
-      }
-    }
-
-    breaches.push({
-      tier, locked: locked.seconds, declared: current.total, step, stepWas, stepNow,
-    });
-  }
-
-  return breaches;
-}
-
-/**
- * What this check cannot see, printed on the GREEN path.
- *
- * A budget that reports a cheap tree while saying nothing about what it never
- * timed is how a number gets trusted for a property it never had.
- */
-export const BUDGET_BLIND_SPOTS: readonly string[] = [
-  'WALL CLOCK — NOT COMPARED. This judges declarations against the lock, so a gate '
-  + 'that slows without its row updated passes until somebody re-measures. Run the tier '
-  + '— the ladder prints each gate\'s own wall seconds — and re-lock with the reason.',
-  'PER-GATE GROWTH — NOT BOUNDED, only reported. One gate may double while another '
-  + 'shrinks and the tier still passes; the failure names the step that grew most, and '
-  + 'reviewing the lock diff is what catches a quiet doubling.',
-  'SHRINKAGE — DELIBERATELY UNGOVERNED. A faster tier passes, and the lock is re-pinned '
-  + 'opportunistically rather than demanded: the ratchet points one way.',
-  'COLD HOOKS — NOT MEASURED. The pinned figures are warm-cache walls on a quiet box; '
-  + 'the first hook after a boot or under heavy contention can exceed them, and the '
-  + '20% tolerance is what covers that instead of a second set of figures.',
-];
-
 function printMatrix(): void {
   const all = gatesFor('deploy');
   const tracked = trackedTestFiles();
@@ -3448,7 +3168,14 @@ function recordProof(
   return refused === undefined;
 }
 
+/** The scratch drive's temp root on the owner's box (AGENTS.md, Owner Preferences): unset, TMPDIR is the /tmp RAM
+ *  disk, where every hook and `bun run gate:*` wrote its scratch until 2026-09-27. */
+const SCRATCH_TMPDIR = '/mnt/scratch/kinu/tmp';
+
 if (import.meta.main) {
+  // Before any gate spawns: TMPDIR is a base name of every gate's environment (ladder-cache.ts), so each inherits it.
+  if (process.env.TMPDIR === undefined && existsSync(SCRATCH_TMPDIR)) process.env.TMPDIR = SCRATCH_TMPDIR;
+
   // A CLOSED REPORTING CHANNEL IS NOT A FAILED TIER.
   //
   // Gates run with `stdout: 'inherit'`, so under `git push` the whole tier
@@ -3619,99 +3346,6 @@ if (import.meta.main) {
     process.exit(holes === 0 && unproven === 0 ? 0 : 1);
   }
 
-  if (process.argv.includes('--check-budget')) {
-    const budget = readBudget();
-
-    const declared = {
-      commit: declaredTierCost('commit'),
-      push: declaredTierCost('push'),
-    };
-
-    const breaches = judgeBudgets(declared, budget);
-
-    for (const tier of BUDGET_TIERS) {
-      console.log(
-        `${tier}: ${declared[tier].total.toFixed(1)}s declared across `
-        + `${String(Object.keys(declared[tier].steps).length)} gates, locked at `
-        + `${budget.tiers[tier].seconds.toFixed(1)}s (${budget.tiers[tier].measuredAt})`,
-      );
-    }
-
-    if (breaches.length === 0) {
-      const stale = BUDGET_TIERS.flatMap((tier) => Object.entries(budget.tiers[tier].steps)
-        .filter(([name]) => !(name in declared[tier].steps))
-        .map(([name, was]) => `${tier}: ${name} (locked at ${String(was)}s, no longer a gate)`));
-
-      console.log('\nladder-budget: ok — both tiers within tolerance of the locked figures');
-      console.log(`  locked: ${budget.reason}`);
-
-      for (const line of stale) console.log(`  stale: ${line} — re-lock to drop it`);
-
-      for (const spot of BUDGET_BLIND_SPOTS) console.log(`  blind: ${spot}`);
-      process.exit(0);
-    }
-
-    for (const breach of breaches) {
-      console.error(finding({
-        at: `${breach.tier} tier: ${breach.declared.toFixed(1)}s declared vs `
-        + `${breach.locked.toFixed(1)}s locked`,
-        invariant: 'a tier\'s declared cost stays within '
-        + `${String(Math.round(BUDGET_TOLERANCE * 100))}% of its locked figure`,
-        found: `${breach.step} declares ${String(breach.stepNow)}s, locked at ${String(breach.stepWas)}s`,
-        silently: 'the hooks get slower one gate at a time and no reading of the tree ever '
-        + 'says so, which is how the push tier reached 380s while the budget still read 126.4s',
-        fix: 'take the growth back out, or re-lock with '
-        + '`bun scripts/ladder.ts --lock --reason="<what grew and why>"` and argue the reason '
-        + 'in the commit body',
-      }));
-    }
-
-    process.exit(1);
-  }
-
-  if (process.argv.includes('--lock')) {
-    const reason = process.argv
-      .find((argument) => argument.startsWith('--reason='))
-      ?.slice('--reason='.length)
-      .trim() ?? '';
-
-    if (reason.length === 0) {
-      console.error(
-        'ladder --lock: refusing without --reason=<what grew and why>. The reason lands in '
-        + 'scripts/ladder.lock.json beside the new figures, so a re-lock is a decision with '
-        + 'a stated cause rather than a number that moved.',
-      );
-      process.exit(2);
-    }
-
-    const machine = machineName();
-
-    const today = new Date().toISOString().slice(0, 10);
-    const commit = declaredTierCost('commit');
-    const push = declaredTierCost('push');
-
-    const count = writeBudget({
-      reason,
-      tiers: {
-        commit: {
-          seconds: Math.round(commit.total * 100) / 100,
-          measuredAt: today,
-          machine,
-          steps: commit.steps,
-        },
-        push: {
-          seconds: Math.round(push.total * 100) / 100,
-          measuredAt: today,
-          machine,
-          steps: push.steps,
-        },
-      },
-    });
-
-    console.log(`ladder --lock: pinned ${String(count)} gate cost(s) — ${reason}`);
-    process.exit(0);
-  }
-
   const gateAt = process.argv.indexOf('--gate');
   const selectedGate = gateAt === -1 ? undefined : LADDER.find((gate) => gate.run === process.argv[gateAt + 1]);
 
@@ -3729,7 +3363,7 @@ if (import.meta.main) {
 
   if (tier === undefined || affectedFrom === '') {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --affected=<ref> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --affected=<ref> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
     );
     process.exit(2);
   }

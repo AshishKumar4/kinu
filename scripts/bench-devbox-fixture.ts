@@ -111,7 +111,7 @@ const ATTACH_OUTCOME_KINDS = ['empty', 'attached', 'already-attached'] as const;
 const BENCH_DIR = join(REPO_ROOT, 'packages/devbox/bench');
 
 /** The account every devbox fixture is raised on; exported so the deployed lifecycle suite
- *  names this one rather than a second copy (`gate:policy-drift` checks this). */
+ *  names this one rather than a second copy. */
 export const BENCH_ACCOUNT_ID = 'f44999d1ddda7012e9a87729eba250f1';
 
 const FIXTURE_BASE = 'kinu-devbox-bench';

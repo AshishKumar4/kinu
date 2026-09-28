@@ -1,13 +1,13 @@
 {
-  "measuredAt": "2026-09-22",
+  "measuredAt": "2026-09-27",
   "packages": {
-    "agent-utils": 2883,
-    "cf-backend": 366183,
-    "cli": 62849,
-    "cli-backend": 61862,
-    "compaction": 5939,
-    "core": 746035,
+    "agent-utils": 2341,
+    "cf-backend": 365448,
+    "cli": 62832,
+    "cli-backend": 60921,
+    "compaction": 5932,
+    "core": 744598,
     "devbox": 67460,
-    "test-utils": 39886
+    "test-utils": 29138
   }
 }

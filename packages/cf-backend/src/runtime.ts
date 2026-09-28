@@ -50,7 +50,7 @@ import { previewHostSuffix } from "@kinu.run/core";
 import { SANDBOX_TRANSPORT, sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
-import { CraftStore as AgentUtilsCraftStore, craftStoreView } from "@kinu.run/agent-utils/stores";
+import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
 import { createRuntimeExecutor } from "./codemode-sandbox";
 import type { Agent } from "agents";
 import {
@@ -272,12 +272,10 @@ export function createCFRuntime(
   initActorTables(execRaw, sql);
   const memoryConfig = actor.actor.config;
 
-  const craftStoreImpl = new AgentUtilsCraftStore(sql);
-  craftStoreImpl.ensureSchema();
+  const craftStore = new AgentUtilsCraftStore(sql);
+  craftStore.ensureSchema();
 
   const memory = adaptMemory(memoryStore, originVfs, vectorStore, memoryConfig);
-
-  const craftStore = craftStoreView(craftStoreImpl);
 
   const envForExec = env;
 

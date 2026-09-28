@@ -248,7 +248,6 @@ describe('harvesting a capped swarm', () => {
         aggregated: [],
         tokens: null,
       },
-      now: 2_000,
     });
     expect(harvestSwarm({ sql, ledger, actor }, TASK)).toBeNull();
   });
@@ -259,13 +258,12 @@ describe('harvesting a capped swarm', () => {
       VALUES
         (${actor.actorId}, 'bad', 'harvest-root', 'harvest-root', ${TASK}, 'bad artifact', 1),
         (${actor.actorId}, 'good', 'harvest-root', 'harvest-root', ${TASK}, 'usable answer', 1)`;
-    void sql`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json, created_at)
-      VALUES (${actor.actorId}, 'bad', 'harvest-root', '{', 2_000)`;
+    void sql`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json)
+      VALUES (${actor.actorId}, 'bad', 'harvest-root', '{')`;
     recordSwarmNode(sql, actor, {
       rootId: 'harvest-root',
       nodeId: 'good',
       record: { outcome: null, conclusion: null, aggregated: [], tokens: null },
-      now: 2_000,
     });
     const harvest = harvestSwarm({ sql, ledger, actor }, TASK);
     expect(harvest?.candidates.map((candidate) => candidate.nodeId)).toEqual(['good']);
@@ -280,15 +278,14 @@ describe('harvesting a capped swarm', () => {
       VALUES
         (${actor.actorId}, 'future', 'harvest-root', 'harvest-root', ${TASK}, 'future answer', 1),
         (${actor.actorId}, 'good', 'harvest-root', 'harvest-root', ${TASK}, 'usable answer', 1)`;
-    void sql`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json, created_at)
+    void sql`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json)
       VALUES (${actor.actorId}, 'future', 'harvest-root', ${JSON.stringify({
         v: 99, outcome: null, conclusion: null, aggregated: [], tokens: null,
-      })}, 2_000)`;
+      })})`;
     recordSwarmNode(sql, actor, {
       rootId: 'harvest-root',
       nodeId: 'good',
       record: { outcome: null, conclusion: null, aggregated: [], tokens: null },
-      now: 2_000,
     });
 
     const harvest = harvestSwarm({ sql, ledger, actor }, TASK);
@@ -301,8 +298,8 @@ describe('harvesting a capped swarm', () => {
     void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
       VALUES (${actor.actorId}, 'bad', 'harvest-root', 'harvest-root', ${TASK},
               'unreadable answer', 1)`;
-    void sql`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json, created_at)
-      VALUES (${actor.actorId}, 'bad', 'harvest-root', '{', 2_000)`;
+    void sql`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json)
+      VALUES (${actor.actorId}, 'bad', 'harvest-root', '{')`;
     expect(() => harvestSwarm({ sql, ledger, actor }, TASK)).toThrow('none can be decoded');
   });
 
@@ -337,7 +334,6 @@ describe('harvesting a capped swarm', () => {
         aggregated: [],
         tokens: 10,
       },
-      now: 2_000,
     });
     const harvest = harvestSwarm({ sql, ledger, actor }, TASK);
     expect(harvest?.candidates[0]?.breach).toEqual(breach);
@@ -355,7 +351,6 @@ describe('harvesting a capped swarm', () => {
       rootId: 'harvest-root',
       nodeId: 'good',
       record: { outcome: null, conclusion: null, aggregated: [], tokens: null },
-      now: 2_000,
     });
     expect(harvestSwarm({ sql, ledger, actor }, TASK)?.candidates.map((c) => c.nodeId))
       .toEqual(['good']);
@@ -412,7 +407,7 @@ describe('the durable record envelope is versioned', () => {
   test('the writer stamps v1 and the reader round-trips it', () => {
     const fixture = resumeFixture();
     recordSwarmNode(fixture.sql, fixture.actor, {
-      rootId: 'root', nodeId: 'n1', record: A_RECORD, now: 2_000,
+      rootId: 'root', nodeId: 'n1', record: A_RECORD,
     });
 
     const [stored] = fixture.sql<{ record_json: string }>`
@@ -426,37 +421,37 @@ describe('the durable record envelope is versioned', () => {
   test('an unstamped row is corruption, not an older shape', () => {
     const fixture = resumeFixture();
     void fixture.sql`INSERT INTO swarm_node_records
-        (actor_id, node_id, root_id, record_json, created_at)
-      VALUES (${fixture.actor.actorId}, 'n1', 'root', ${JSON.stringify(A_RECORD)}, 2_000)`;
+        (actor_id, node_id, root_id, record_json)
+      VALUES (${fixture.actor.actorId}, 'n1', 'root', ${JSON.stringify(A_RECORD)})`;
     expect(() => reenter(fixture)).toThrow('corruption rather than an old shape');
   });
 
   test('an unknown envelope version refuses and names the version', () => {
     const fixture = resumeFixture();
     void fixture.sql`INSERT INTO swarm_node_records
-        (actor_id, node_id, root_id, record_json, created_at)
+        (actor_id, node_id, root_id, record_json)
       VALUES (${fixture.actor.actorId}, 'n1', 'root',
-              ${JSON.stringify({ v: 99, ...A_RECORD })}, 2_000)`;
+              ${JSON.stringify({ v: 99, ...A_RECORD })})`;
     expect(() => reenter(fixture)).toThrow(/schema version 99/);
   });
 
   test('a stamped row this build cannot parse refuses, naming itself as the writer', () => {
     const badArm = resumeFixture();
     void badArm.sql`INSERT INTO swarm_node_records
-        (actor_id, node_id, root_id, record_json, created_at)
+        (actor_id, node_id, root_id, record_json)
       VALUES (${badArm.actor.actorId}, 'n1', 'root', ${JSON.stringify({
         v: RECORD_SCHEMA_VERSION,
         ...A_RECORD,
         outcome: { ...A_RECORD.outcome, kind: 'teleported' },
-      })}, 2_000)`;
+      })})`;
     expect(() => reenter(badArm)).toThrow('corruption rather than an old shape');
 
     const missingField = resumeFixture();
     void missingField.sql`INSERT INTO swarm_node_records
-        (actor_id, node_id, root_id, record_json, created_at)
+        (actor_id, node_id, root_id, record_json)
       VALUES (${missingField.actor.actorId}, 'n1', 'root', ${JSON.stringify({
         v: RECORD_SCHEMA_VERSION, outcome: null, conclusion: null, aggregated: [],
-      })}, 2_000)`;
+      })})`;
     expect(() => reenter(missingField)).toThrow('under its own schema version 1');
   });
 });
@@ -1490,7 +1485,6 @@ describe('harvested witness verdict', () => {
         aggregated: [],
         tokens: 1,
       },
-      now: 2_000,
     });
 
     const harvest = harvestSwarm({ sql, ledger, actor }, TASK);

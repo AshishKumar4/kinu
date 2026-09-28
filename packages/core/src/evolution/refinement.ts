@@ -200,7 +200,6 @@ export interface RefinementRequest {
   readonly trigger: RefinementTrigger;
   readonly scope: RefinementScope;
   readonly stage: RefinementStage;
-  readonly sessionId: string | null;
   /** Turns stay in `turn_outcomes`; this is a reference only. */
   readonly turnIds: readonly string[];
   /** The automatic trigger's idempotency key; null for an explicit request. */
@@ -260,7 +259,6 @@ export function initRefinementTables(execRaw: RawSqlExec): void {
     -- identity, never a deadline: it says WHO is planning, and nothing at all
     -- about for how long.
     claim      TEXT,
-    session_id TEXT,
     turn_ids   TEXT NOT NULL,
     debt_key   TEXT,
     proposal   TEXT,
@@ -278,22 +276,19 @@ export function initRefinementTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS refinement_lane_holds (
     actor_id  TEXT PRIMARY KEY,
     -- Answered helpers when it failed: one more is new input.
-    answered  INTEGER NOT NULL,
-    detail    TEXT NOT NULL,
-    held_at   INTEGER NOT NULL
+    answered  INTEGER NOT NULL
   )`);
 }
 
-export function holdRefinementLane(sql: SqlExecutor, actorId: string, detail: string): void {
-  void sql`INSERT INTO refinement_lane_holds (actor_id, answered, detail, held_at)
-    VALUES (${actorId}, (SELECT COUNT(*) FROM evolution_helpers WHERE actor_id = ${actorId} AND answer_status IS NOT NULL),
-      ${detail}, ${nowMs()})
-    ON CONFLICT(actor_id) DO UPDATE SET answered = excluded.answered, detail = excluded.detail, held_at = excluded.held_at`;
+export function holdRefinementLane(sql: SqlExecutor, actorId: string): void {
+  void sql`INSERT INTO refinement_lane_holds (actor_id, answered)
+    VALUES (${actorId}, (SELECT COUNT(*) FROM evolution_helpers WHERE actor_id = ${actorId} AND answer_status IS NOT NULL))
+    ON CONFLICT(actor_id) DO UPDATE SET answered = excluded.answered`;
 }
 
 export function refinementAnswerStored(sql: SqlExecutor, actorId: string, requestId: string): boolean {
   return sql<{ one: number }>`SELECT 1 AS one FROM evolution_helpers
-    WHERE actor_id = ${actorId} AND lane = 'refinement' AND lane_request_id = ${requestId} AND answer_status IS NOT NULL
+    WHERE actor_id = ${actorId} AND lane_request_id = ${requestId} AND answer_status IS NOT NULL
     LIMIT 1`.length > 0;
 }
 
@@ -312,7 +307,7 @@ export function nextEvolutionAnswerAt(sql: SqlExecutor, actorId: string): number
         AND (stage = 'requested' OR (stage = 'planning' AND (claim IS NULL OR claim NOT IN (SELECT value FROM json_each(${live})))))
       ORDER BY created_at ASC, id ASC LIMIT 1
     ) r
-    JOIN evolution_helpers h ON h.actor_id = ${actorId} AND h.lane = 'refinement' AND h.lane_request_id = r.id
+    JOIN evolution_helpers h ON h.actor_id = ${actorId} AND h.lane_request_id = r.id
     WHERE h.answer_status IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM refinement_lane_holds hd WHERE hd.actor_id = ${actorId}
         AND hd.answered >= (SELECT COUNT(*) FROM evolution_helpers e WHERE e.actor_id = ${actorId} AND e.answer_status IS NOT NULL))`;
@@ -324,7 +319,6 @@ export interface OpenRefinementInput {
   readonly trigger: RefinementTrigger;
   readonly scope: RefinementScope;
   readonly turnIds: readonly string[];
-  readonly sessionId?: string;
   /** Present only for the automatic trigger — the batch's identity. */
   readonly debtKey?: string;
   readonly now?: number;
@@ -374,7 +368,6 @@ interface Row {
   trigger: string;
   scope: string;
   stage: string;
-  session_id: string | null;
   turn_ids: string;
   debt_key: string | null;
   proposal: string | null;
@@ -416,7 +409,6 @@ function toRequest(row: Row): RefinementRequest {
     trigger: v.parse(v.picklist(REFINEMENT_TRIGGERS), row.trigger),
     scope: v.parse(v.picklist(REFINEMENT_SCOPES), row.scope),
     stage: v.parse(v.picklist(REFINEMENT_STAGES), row.stage),
-    sessionId: row.session_id,
     turnIds: decodeColumn<string[]>(TurnIdsSchema, row.turn_ids, [], row.id),
     debtKey: row.debt_key,
     proposal,
@@ -441,7 +433,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
   const one = (id: string): RefinementRequest | null => {
     authorize();
 
-    const rows = sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
+    const rows = sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
              proposal, routes, detail, created_at, updated_at
       FROM refinement_requests WHERE actor_id = ${actorId} AND id = ${id} LIMIT 1`;
 
@@ -489,7 +481,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       authorize();
 
       if (input.debtKey !== undefined) {
-        const existing = sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
+        const existing = sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
                  proposal, routes, detail, created_at, updated_at
           FROM refinement_requests
           WHERE actor_id = ${actorId} AND debt_key = ${input.debtKey} LIMIT 1`;
@@ -500,9 +492,9 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       const id = `refine-${nanoid()}`;
       const at = input.now ?? nowMs();
       void sql`INSERT INTO refinement_requests
-        (actor_id, id, trigger, scope, stage, session_id, turn_ids, debt_key, proposal, routes, detail,
+        (actor_id, id, trigger, scope, stage, turn_ids, debt_key, proposal, routes, detail,
          created_at, updated_at)
-        VALUES (${actorId}, ${id}, ${input.trigger}, ${input.scope}, 'requested', ${input.sessionId ?? null},
+        VALUES (${actorId}, ${id}, ${input.trigger}, ${input.scope}, 'requested',
                 ${JSON.stringify([...input.turnIds])}, ${input.debtKey ?? null}, ${null}, '[]', '',
                 ${at}, ${at})`;
       const opened = one(id);
@@ -523,7 +515,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
     list(limit = 50) {
       authorize();
 
-      return sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
+      return sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
                proposal, routes, detail, created_at, updated_at
         FROM refinement_requests WHERE actor_id = ${actorId}
         ORDER BY created_at DESC, id DESC LIMIT ${limit}`.map(toRequest);
@@ -532,7 +524,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
     nextRequested() {
       authorize();
 
-      const rows = sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
+      const rows = sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
                proposal, routes, detail, created_at, updated_at
         FROM refinement_requests WHERE actor_id = ${actorId} AND stage = 'requested'
         ORDER BY created_at ASC, id ASC LIMIT 1`;
@@ -543,7 +535,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
     settleable() {
       authorize();
 
-      return sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
+      return sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
                proposal, routes, detail, created_at, updated_at
         FROM refinement_requests
         WHERE actor_id = ${actorId} AND stage IN ('gated', 'evaluating')

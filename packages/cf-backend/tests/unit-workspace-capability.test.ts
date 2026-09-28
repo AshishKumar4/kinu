@@ -49,12 +49,11 @@ describe('capability token mint', () => {
     const CapabilityTokenRowSchema = v.object({
       workspace_name: v.string(),
       token_hash: v.string(),
-      created_at: v.number(),
     });
 
     const rows = v.parse(
       v.array(CapabilityTokenRowSchema),
-      db.prepare('SELECT workspace_name, token_hash, created_at FROM workspace_capability_tokens').all(),
+      db.prepare('SELECT workspace_name, token_hash FROM workspace_capability_tokens').all(),
     );
 
     expect(rows).toHaveLength(1);

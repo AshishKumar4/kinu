@@ -88,9 +88,8 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
   };
 }
 
-/** Relative paths and plane-root aliases (`/workspace`, `/home/main`, `/`, and `/slates` for its `slates/`) stay in
- *  the tree, a `..` out of one is EACCES; any other absolute path is that host path. A guard against path confusion,
- *  not a sandbox. */
+/** Relative paths and aliases (`/workspace`, `/home/main`, `/`, `/slates`) stay in the tree, or EACCES; any other
+ *  absolute path is that host path. Not a sandbox. */
 function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: string; readonly outside: boolean } {
   const root = resolve(cwd);
 
@@ -117,11 +116,11 @@ export function directoryFileReach(cwd: string | null, table: MountedVfs | null)
   if (cwd === null) return { userRoots, locate: null, parksWrites: false };
   const locate = cwdPlaneLocator(cwd);
 
-  // A mounted path is its mount's, never the directory's. The CLI asks: nothing parks a write here.
+  // A mounted path is its mount's; the CLI asks, so nothing parks.
   return { userRoots, locate: (path) => ((table?.mountOf(path) ?? null) === null ? locate(path) : { hostPath: path, outside: false }), parksWrites: false };
 }
 
-/** The working directory as the workspace file plane ({@link cwdPlaneLocator}); agent state stays in `agentStateVfs`. */
+/** The working directory as the file plane ({@link cwdPlaneLocator}). */
 export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
   const host = createHostMountVFS(resolve(cwd), checkpoints);
   const locate = cwdPlaneLocator(cwd);

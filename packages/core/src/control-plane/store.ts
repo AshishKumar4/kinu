@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { KinuError } from '../obs/index';
 import type { ControlPlaneSql, ControlPlaneSqlValue } from './sql';
 import {
-  FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS, FEEDBACK_MAX_USER_AGENT_CHARS,
+  FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS,
   type FeedbackRecord,
 } from '../feedback/contract';
 
@@ -51,9 +51,7 @@ const DDL = [
      route         TEXT    NOT NULL,
      workspace     TEXT,
      object_key    TEXT,
-     content_type  TEXT,
-     bytes         INTEGER,
-     user_agent    TEXT
+     bytes         INTEGER
    )`,
   `CREATE INDEX IF NOT EXISTS cp_feedback_created ON cp_feedback (created_at DESC, id)`,
   `CREATE TABLE IF NOT EXISTS cp_audit (
@@ -219,10 +217,6 @@ function clampText(value: string, max: number): string {
   return value.length <= max ? value : value.slice(0, max);
 }
 
-function run(sql: ControlPlaneSql, query: string, ...bindings: ControlPlaneSqlValue[]): void {
-  sql.exec(query, ...bindings);
-}
-
 /** Parsed, not asserted: stored rows may predate the current column set. */
 function select<Row>(
   sql: ControlPlaneSql, schema: v.GenericSchema<Row>, query: string, ...bindings: ControlPlaneSqlValue[]
@@ -239,8 +233,7 @@ function count(sql: ControlPlaneSql, query: string, ...bindings: ControlPlaneSql
 /** Upsert: `email` is refreshed because a provider can change the verified address. */
 export function observeUser(sql: ControlPlaneSql, observation: UserObservation, now = Date.now()): void {
   const at = observation.at ?? now;
-  run(sql,
-    `INSERT INTO cp_users (user_id, email, display_name, first_seen_at, last_seen_at)
+  sql.exec(`INSERT INTO cp_users (user_id, email, display_name, first_seen_at, last_seen_at)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET
        email = excluded.email,
@@ -261,8 +254,7 @@ function writeWorkspaceRow(
   sql: ControlPlaneSql, observation: WorkspaceObservation, now: number, onConflict: string,
 ): void {
   const at = observation.at ?? now;
-  run(sql,
-    `INSERT INTO cp_workspaces (user_id, name, display_name, created_at, last_seen_at, removed_at)
+  sql.exec(`INSERT INTO cp_workspaces (user_id, name, display_name, created_at, last_seen_at, removed_at)
      VALUES (?, ?, ?, ?, ?, NULL)
      ON CONFLICT(user_id, name) DO UPDATE SET${onConflict}`,
     observation.userId, observation.name, observation.displayName,
@@ -287,8 +279,7 @@ export function touchWorkspace(
 export function forgetWorkspace(
   sql: ControlPlaneSql, target: { userId: string; name: string; at?: number }, now = Date.now(),
 ): void {
-  run(sql,
-    `UPDATE cp_workspaces SET removed_at = ?
+  sql.exec(`UPDATE cp_workspaces SET removed_at = ?
      WHERE user_id = ? AND name = ? AND removed_at IS NULL`,
     target.at ?? now, target.userId, target.name);
 }
@@ -308,8 +299,7 @@ export function replaceUserWorkspaces(
 ): ReconcileOutcome {
   for (const row of live) {
     // Keep last_seen_at monotone: the use feed advances it beyond the registry.
-    run(sql,
-      `INSERT INTO cp_workspaces (user_id, name, display_name, created_at, last_seen_at, removed_at)
+    sql.exec(`INSERT INTO cp_workspaces (user_id, name, display_name, created_at, last_seen_at, removed_at)
        VALUES (?, ?, ?, ?, ?, NULL)
       ON CONFLICT(user_id, name) DO UPDATE SET
         display_name = excluded.display_name,
@@ -325,8 +315,7 @@ export function replaceUserWorkspaces(
     `SELECT COUNT(*) AS n FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL`, userId);
 
   const placeholders = names.map(() => '?').join(', ');
-  run(sql,
-    `UPDATE cp_workspaces SET removed_at = ?
+  sql.exec(`UPDATE cp_workspaces SET removed_at = ?
      WHERE user_id = ? AND removed_at IS NULL
        ${names.length > 0 ? `AND name NOT IN (${placeholders})` : ''}`,
     now, userId, ...names);
@@ -476,8 +465,7 @@ export function appendAudit(sql: ControlPlaneSql, draft: AuditDraft, now = Date.
     detail: draft.detail,
   };
 
-  run(sql,
-    `INSERT INTO cp_audit
+  sql.exec(`INSERT INTO cp_audit
        (id, at, actor_email, actor_user, operation, target_kind, target, outcome, detail)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     row.id, row.at, row.actorEmail, row.actorUserId,
@@ -494,8 +482,7 @@ export function settleAudit(
   sql: ControlPlaneSql,
   settlement: { id: string; outcome: AuditSettlement; detail: string },
 ): ControlAuditRow | null {
-  run(sql,
-    `UPDATE cp_audit SET outcome = ?, detail = ? WHERE id = ? AND outcome = 'pending'`,
+  sql.exec(`UPDATE cp_audit SET outcome = ?, detail = ? WHERE id = ? AND outcome = 'pending'`,
     settlement.outcome, settlement.detail, settlement.id);
 
   const found = select(sql, AuditSqlRowSchema,
@@ -567,9 +554,7 @@ const FeedbackSqlRowSchema = v.object({
   route: v.string(),
   workspace: v.nullable(v.string()),
   object_key: v.nullable(v.string()),
-  content_type: v.nullable(v.string()),
   bytes: v.nullable(v.number()),
-  user_agent: v.nullable(v.string()),
 });
 
 type FeedbackSqlRow = v.InferOutput<typeof FeedbackSqlRowSchema>;
@@ -578,17 +563,14 @@ export interface FeedbackWritten { id: string }
 
 /** Screenshot bytes live elsewhere; the row carries only `objectKey`. */
 export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): FeedbackWritten {
-  run(sql,
-    `INSERT INTO cp_feedback
-       (id, created_at, user_id, email, note, route, workspace,
-        object_key, content_type, bytes, user_agent)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  sql.exec(`INSERT INTO cp_feedback
+       (id, created_at, user_id, email, note, route, workspace, object_key, bytes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO NOTHING`,
     row.id, row.createdAt, row.userId, row.email,
     clampText(row.note, FEEDBACK_MAX_NOTE_CHARS),
     clampText(row.route, FEEDBACK_MAX_ROUTE_CHARS),
-    row.workspace, row.objectKey, row.contentType, row.bytes,
-    row.userAgent === null ? null : clampText(row.userAgent, FEEDBACK_MAX_USER_AGENT_CHARS));
+    row.workspace, row.objectKey, row.bytes);
 
   return { id: row.id };
 }
@@ -596,8 +578,7 @@ export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): Feedb
 export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlFeedbackRow> {
   return seekNewest(sql, request, {
     schema: FeedbackSqlRowSchema,
-    columns: `id, created_at, user_id, email, note, route, workspace,
-            object_key, content_type, bytes, user_agent`,
+    columns: 'id, created_at, user_id, email, note, route, workspace, object_key, bytes',
     from: 'cp_feedback',
     at: 'created_at',
     id: 'id',
@@ -616,8 +597,6 @@ function projectFeedback(row: FeedbackSqlRow): ControlFeedbackRow {
     route: row.route,
     workspace: row.workspace,
     objectKey: row.object_key,
-    contentType: row.content_type,
     bytes: row.bytes,
-    userAgent: row.user_agent,
   };
 }

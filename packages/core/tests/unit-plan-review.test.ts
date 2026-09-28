@@ -296,7 +296,7 @@ describe('submit_plan native tool', () => {
               id: 'plan-1', sessionId: 'default', revision: 1, content: '# Plan',
               status: 'pending' as const, annotations: [], feedback: null,
               handoffAccepted: false,
-              createdAt: 1, updatedAt: 1, decidedAt: null,
+              createdAt: 1, updatedAt: 1,
             },
           };
         },

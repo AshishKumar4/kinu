@@ -21,7 +21,7 @@ export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
     PRIMARY KEY (share_id, user_id)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS slate_viewer_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, share_id TEXT NOT NULL, viewer TEXT NOT NULL, slate_id TEXT NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT, share_id TEXT NOT NULL, viewer TEXT NOT NULL,
     path TEXT NOT NULL, calls TEXT NOT NULL, outcome TEXT NOT NULL, created_at INTEGER NOT NULL, settled_at INTEGER
   )`);
 }
@@ -83,12 +83,12 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
   }
 
   /** The returned row id is the request number later calls record against. */
-  openRequest(input: { share: string; viewer: string; slate: string; path: string }): number {
+  openRequest(input: { share: string; viewer: string; path: string }): number {
     const createdAt = this.now();
 
     const row = this.db.exec(
-      'INSERT INTO slate_viewer_requests (share_id, viewer, slate_id, path, calls, outcome, created_at, settled_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL) RETURNING id',
-      input.share, input.viewer, input.slate, input.path, '[]', 'open', createdAt,
+      'INSERT INTO slate_viewer_requests (share_id, viewer, path, calls, outcome, created_at, settled_at) VALUES (?, ?, ?, ?, ?, ?, NULL) RETURNING id',
+      input.share, input.viewer, input.path, '[]', 'open', createdAt,
     ).toArray()[0];
 
     return v.parse(v.object({ id: v.number() }), row).id;
@@ -112,7 +112,8 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
   }
 
   requests(share: string): ViewerRequestRecord[] {
-    return this.db.exec('SELECT * FROM slate_viewer_requests WHERE share_id = ? ORDER BY id DESC', share)
+    return this.db.exec(`SELECT r.*, s.slate_id FROM slate_viewer_requests r JOIN slate_live_shares s ON s.id = r.share_id
+      WHERE r.share_id = ? ORDER BY r.id DESC`, share)
       .toArray().map((row) => this.request(v.parse(RequestRow, row)));
   }
 

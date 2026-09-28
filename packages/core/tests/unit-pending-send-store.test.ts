@@ -3,6 +3,8 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initPendingSendTables, PendingSendStore } from '../src/orchestrator/inbox';
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from '../src/cloud-wire';
+import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { makeSql, makeExecRaw } from './helpers';
 
 function setup() {
@@ -11,7 +13,7 @@ function setup() {
   const sql = makeSql(db);
   const store = (actorId: string) => new PendingSendStore(sql, actorId);
 
-  return { sql, store };
+  return { db, sql, store };
 }
 
 const FILE = { filename: 'a.png', mediaType: 'image/png', url: 'data:image/png;base64,x' };
@@ -31,6 +33,31 @@ describe('PendingSendStore — the reservation', () => {
     ]);
     expect(sends.files('s-1')).toEqual([FILE, FILE_B]);
     expect(sends.files('s-2')).toEqual([]);
+  });
+
+  test('a send carrying two of the largest attachments the composer admits fits the platform row cap', () => {
+    const { db, store } = setup();
+
+    const largest = (name: string) => ({
+      filename: name, mediaType: 'application/octet-stream',
+      url: `data:application/octet-stream;base64,${Buffer.alloc(CLOUD_MAX_INLINE_ATTACHMENT_BYTES, 7).toString('base64')}`,
+    });
+
+    const files = [largest('one.bin'), largest('two.bin')];
+
+    store('actor-a').reserve({ id: 's-big', turnId: 'turn-1', mode: 'build', text: 'both attached', files });
+
+    const tables = db.query<{ name: string }, []>(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'pending_steer%'`).all();
+
+    const widest = Math.max(...tables.map(({ name }) => {
+      const columns = db.query<{ name: string }, []>(`SELECT name FROM pragma_table_info('${name}')`).all()
+        .map((column) => `COALESCE(length(CAST(${column.name} AS BLOB)), 0)`).join(' + ');
+
+      return db.query<{ bytes: number }, []>(`SELECT MAX(${columns}) AS bytes FROM ${name}`).get()?.bytes ?? 0;
+    }));
+
+    expect(widest).toBeLessThan(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
+    expect(store('actor-a').files('s-big')).toEqual(files);
   });
 
   test('retire spends the row AND its attachments, and no other actor\'s', () => {
@@ -60,27 +87,6 @@ describe('PendingSendStore — the reservation', () => {
 });
 
 describe('PendingSendStore — the reads a restart composes', () => {
-  test('forTurn names only rows bound to that turn', () => {
-    const { store } = setup();
-    const sends = store('actor-a');
-    sends.reserve({ id: 's-1', turnId: 'turn-1', mode: 'build', text: 'this turn' });
-    sends.reserve({ id: 's-2', turnId: 'turn-2', mode: 'build', text: 'another turn' });
-    sends.reserve({ id: 's-3', turnId: null, mode: 'build', text: 'idle-queued' });
-
-    expect(sends.forTurn('turn-1').map((row) => row.id)).toEqual(['s-1']);
-  });
-
-  test('sweepDead excludes the live turn AND keeps idle-queued rows out of the orphan set', () => {
-    const { store } = setup();
-    const sends = store('actor-a');
-    sends.reserve({ id: 's-live', turnId: 'turn-live', mode: 'build', text: 'in flight' });
-    sends.reserve({ id: 's-dead', turnId: 'turn-dead', mode: 'build', text: 'turn is gone' });
-    sends.reserve({ id: 's-idle', turnId: null, mode: 'build', text: 'queued, nobody owns it' });
-
-    // NULL turn_id <> 'turn-live' is NULL: the idle-queued row is not an orphan.
-    expect(sends.sweepDead('turn-live').map((row) => row.id)).toEqual(['s-dead']);
-  });
-
   test('ensureReserved binds a fresh id to the admitting turn and keeps an existing row untouched', () => {
     const { store } = setup();
     const sends = store('actor-a');
@@ -93,7 +99,6 @@ describe('PendingSendStore — the reads a restart composes', () => {
     expect(sends.files('s-1')).toEqual([FILE]);
 
     sends.ensureReserved({ id: 's-2', turnId: 'turn-rerun', mode: 'build', text: 'merged words' });
-    expect(sends.restore().map((row) => row.id)).toEqual(['s-1', 's-2']);
-    expect(sends.forTurn('turn-rerun').map((row) => row.id)).toEqual(['s-2']);
+    expect(sends.restore().map((row) => [row.id, row.turnId])).toEqual([['s-1', 'turn-1'], ['s-2', 'turn-rerun']]);
   });
 });

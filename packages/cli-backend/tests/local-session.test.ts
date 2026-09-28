@@ -912,6 +912,35 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(text).not.toContain('OFFLINE');
   });
 
+  // Issue #36: a local workspace has neither mount, so nothing the model reads may offer one.
+  test('cli-local offers no /pc or /sandbox in its prompt or its tool schemas', async () => {
+    const base = fakeModel('ok');
+    let sent = '';
+
+    const model = new TestLanguageModelV2({
+      provider: base.provider,
+      modelId: base.modelId,
+      doGenerate: base.doGenerate,
+      doStream: async (options) => {
+        sent = JSON.stringify({ prompt: options.prompt, tools: options.tools });
+
+        return base.doStream(options);
+      },
+    });
+
+    const { session } = setup('ok', model);
+    await session.send('hi', { id: crypto.randomUUID() });
+
+    // The project's own AGENTS.md is the user's text, and it may name anything.
+    // The block as the prompt opens and closes it, newlines escaped by JSON; prose may name the tag inline.
+    const start = sent.indexOf('<workspace_instructions>\\n');
+    const end = sent.indexOf('\\n</workspace_instructions>', start);
+    const ours = start === -1 || end === -1 ? sent : sent.slice(0, start) + sent.slice(end);
+
+    expect(ours).toContain('Relative paths resolve at the workspace root');
+    expect(ours.match(/\/pc\b|\/sandbox\b|sandbox:\/\//gu)).toBeNull();
+  });
+
   test('head-inherited context drops file-part data URLs, keeps the reference', () => {
     const serialized = serializeContentForHeads([
       { type: 'file', data: 'data:image/png;base64,AAAA', mediaType: 'image/png', filename: 'square.png' },
@@ -2776,14 +2805,13 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     ).get()?.c === 1);
 
     const row = db.query<{
-      outcome: string; source: string; turn_id: string; session_id: string; followup: string;
+      outcome: string; source: string; turn_id: string; followup: string;
     }, []>(`SELECT * FROM turn_outcomes`).get();
 
     if (!row) throw new Error('turn outcome row is missing');
     expect(row.outcome).toBe('corrected');
     expect(row.source).toBe('classifier');
     expect(row.followup).toContain('STAGING');
-    expect(row.session_id).toBe('default');
 
     const firstAssistant = (await transcript(rt)).find((entry) => entry.role === 'assistant');
 
@@ -3967,7 +3995,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
       name: 'local_helper', description: 'a locally crafted helper',
-      code: 'async () => 1', params: null, scope: 'local',
+      code: 'async () => 1',
     });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                         VALUES (${rt.actor.actorId}, 'editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
@@ -3989,7 +4017,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
   test('revert by id forgets the fact for real; a crafted tool is informational and has no revert', async () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
-      name: 'kept_tool', description: 'stays', code: 'async () => 2', params: null, scope: 'local',
+      name: 'kept_tool', description: 'stays', code: 'async () => 2',
     });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                         VALUES (${rt.actor.actorId}, 'stale', '"value"', 1.0, NULL, ${Date.now()})`;

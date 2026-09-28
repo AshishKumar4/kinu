@@ -25,13 +25,13 @@ import {
   type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
-import { isWorkspaceTerminal, publicText, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
+import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
 import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
-import { TRANSCRIPT_WINDOW, type ChatWire } from './chat-transport';
+import type { ChatWire } from './chat-transport';
 import { DELEGATION_LANE_FIBER } from './fiber-recovery';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
@@ -83,7 +83,7 @@ import {
   nanoid, type HeadRunView,
   // Delegation runner shared with the local host: an assignment is a whole turn input
   // and no reactor may digest it.
-  drainAssignments,
+  drainAssignments, delegatedTaskMetadata, type AdmittedAssignment,
   appendMemoryNote,
   parseMemoryNotes,
   type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview, answerParts,
@@ -108,7 +108,7 @@ import {
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type BackgroundJob, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
-  type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
+  type AlarmScheduler,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
   listReplayEvals, type ReplayEvalSummary,
   alignmentConvergence, type AlignmentConvergence,
@@ -126,6 +126,7 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
+  readWorkspaceAgents, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
@@ -133,7 +134,6 @@ import {
   // Recovery has no live turn, so the owed answer is read from the transcript.
   answersForDrainTurns,
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
-  // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore, deviceFileCheckpoints,
   CommandResultSchema,
   type CheckpointAvailability, type FileCheckpointListing, type FileCheckpointReads,
@@ -349,6 +349,9 @@ const ACTIVITY_LOG_WINDOW = 200;
  * The clip is always declared, never silent; see {@link OrchestratorAgent.getExecutorOutput}. */
 const EXECUTOR_OUTPUT_CLIP = 16 * 1024;
 
+/** The terminal rows a reload shows per executor, and all `executor_output` keeps: an older row reaches no reader. */
+const EXECUTOR_HISTORY_ROWS = 50;
+
 /** `stdout_len`/`stderr_len` are the stored lengths, so a reader can tell a short command
  *  from a clipped one. */
 interface ExecutorOutputRow {
@@ -379,12 +382,12 @@ function clampLimit(requested: number | undefined, max: number): number {
 /** agents 0.22 reads this key back at start when `ctx.id` has no name. */
 const PERSISTED_NAME_KEY = '__ps_name';
 
-/** A terminal that cannot open: the chain goes to diagnostics, the pane reads the refusal. */
+/** A terminal that cannot open: the owner's pane reads the whole chain. */
 function terminalRefusal(failure: { doing: string; cause: unknown }): string {
   const error = authoredRefusal({ ...failure });
   diagnostics.failure('terminal.prepare_failed', error);
 
-  return publicText(error);
+  return renderThrownChain({ cause: error });
 }
 
 interface HostedTarget {
@@ -702,7 +705,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       exec: this.boundExec(),
       directory: this.workspaceActors(),
       transaction: (body) => this.ctx.storage.transactionSync(body),
-      roster: (actor) => new SubordinateRosterStore(this.ctx.storage.sql, actor.handle),
+      roster: (actor) => new SubordinateRosterStore(this.watchedExec, actor.handle),
       vfs: () => this.rt.storage.vfs,
       // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
       // surface are framed from it.
@@ -952,7 +955,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => subordinateDelegatesOf(
-        new SubordinateRosterStore(this.ctx.storage.sql, actor.handle).list(),
+        new SubordinateRosterStore(this.watchedExec, actor.handle).list(),
       ),
     });
   }
@@ -966,7 +969,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       recordSplit: async (rootId, rationale, spawnedAt) => { await this.headJournalRecordSplit(rootId, rationale, spawnedAt); },
       insertSpawn: async (childInput) => { await this.headJournalInsertSpawn(childInput); },
       recordReport: async (report) => { await this.headJournalRecordReport(report); },
-      cacheMerge: async (rootId, result, strategy) => { await this.headJournalCacheMerge(rootId, result, strategy); },
+      cacheMerge: async (rootId, narrative) => { await this.headJournalCacheMerge(rootId, narrative); },
     };
 
     const runtimeForSplit = this.getCFHeadRuntime();
@@ -1200,7 +1203,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const room = this.chatRooms.hostedRoom(record.actorId);
         const answerId = crypto.randomUUID();
 
-        await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: task.messageId !== undefined, carried: [] });
+        // A hirer's delivery opens the chat as an event naming the hirer; a chat send wrote its own row.
+        if (task.messageId === undefined) await this.recordDelegatedTask(reference, record, task);
+
+        // Every delivery has its opening row now, so open panes are sent the transcript holding it.
+        await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: true, carried: [] });
 
         try {
           await runHostedTask(seams, reference, task, {
@@ -1406,32 +1413,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
   protected get replyChannels(): ReplyChannelStore {
     if (!this._replyChannels) {
-      const wsDispatcher: ReplyDispatcher = {
-        dispatch: async (_channel: ReplyChannelRow, payload: JsonValue) => {
-          try {
-            const parsedText = v.safeParse(v.string(), payload);
-            const parsedContent = v.safeParse(v.looseObject({ content: v.optional(JsonValueSchema) }), payload);
-            const content = parsedContent.success ? parsedContent.output.content ?? payload : payload;
-            const text = parsedText.success ? parsedText.output : JSON.stringify(content);
-
-            const message = {
-              id: nanoid(),
-              role: 'assistant',
-              parts: [{ type: 'text', text }],
-            } as const;
-
-            this.broadcast(JSON.stringify({
-              type: 'cf_agent_chat_messages',
-              messages: [...await this.chatTranscript.history(undefined, TRANSCRIPT_WINDOW), message],
-            }));
-
-            return { delivered: true };
-          } catch (err) {
-            return { delivered: false, detail: renderThrownChain({ cause: err }) };
-          }
-        },
-      };
-
       // Context resolves per dispatch so binding/display-name changes never go stale.
       const emailDispatcher = createEmailThreadDispatcher(() => ({
         email: this.env.EMAIL,
@@ -1440,7 +1421,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }));
 
       this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, this.actorHandle(), {
-        ws_session: wsDispatcher,
         // Lazily bound: PeerHub needs this store to construct.
         peer_back: {
           dispatch: (channel, payload) => this.peerHub.dispatchPeerBack(channel, payload),
@@ -1550,7 +1530,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.emailOutbox.nextRetryAt(),
       this.eventLog.nextPendingDrainAt(now),
       nextEvolutionAnswerAt(this.boundSql, this.actorHandle().actorId),
-      // Prompt-cache warm; its tick phase is `alarm.cache_warm`.
       this.cacheWarming.nextWarmAt(),
       // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
       // and the phase releases that record whenever it refuses.
@@ -1712,7 +1691,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Promotion-gate evidence runs on the cadence lane so rollouts don't block the chat queue.
         ...this.shadowTrialPorts,
       });
-      // The session-end changelog digest is also emailed to the owner.
       this._engine.onEvent((event) => {
         if (event.type !== 'changelog_digest') return;
         this.emailOwnerNotification('Evolution changelog digest', event.message);
@@ -1866,7 +1844,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private rosterOf(parent: ActorHandle): SubordinateRosterStore {
-    return parent.actorId === this.actorHandle().actorId ? this.subordinateRoster : new SubordinateRosterStore(this.ctx.storage.sql, parent);
+    return parent.actorId === this.actorHandle().actorId ? this.subordinateRoster : new SubordinateRosterStore(this.watchedExec, parent);
   }
 
   protected override hostedWindowName(actorId: string): string | null {
@@ -1949,6 +1927,28 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Records a hosted turn's answer into that actor's own chat; `runHeadInference` writes only the
    *  run ledger. */
+  /** The task row cli-backend's host writes too (`delegatedTaskMetadata`), under the delivery's own id. */
+  private async recordDelegatedTask(reference: ActorReference, record: WorkspaceActor, task: AdmittedAssignment): Promise<void> {
+    const bound = this.actorHost().bindStores(reference);
+    const history = bound.stores.history;
+    const rows = history.transcript(CHAT_SESSION_ID);
+
+    if (rows.has(task.sequenceId)) return;
+    const hirer = record.parentActorId === null ? null : this.workspaceActors().list().find((actor) => actor.actorId === record.parentActorId);
+    const from = hirer === undefined || hirer === null || hirer.parentActorId === null ? MAIN_AGENT : hirer.name;
+
+    const message = await history.admitInput({
+      id: task.sequenceId, turnId: task.sequenceId, message: turnInputMessage({ text: task.body }),
+      assertOwner: () => bound.handle.assertCurrent(),
+    });
+
+    const prepared = await rows.prepareUser({
+      id: task.sequenceId, turnId: task.sequenceId, message, metadata: delegatedTaskMetadata(from, task.mode),
+    });
+
+    this.ctx.storage.transactionSync(() => rows.appendUser(prepared));
+  }
+
   private async recordHostedChatAnswer(reference: ActorReference, id: string, completion: HeadReport['canonicalCompletion']): Promise<void> {
     if (completion === undefined) return;
     const history = this.actorHost().bindStores(reference).stores.history;
@@ -2211,10 +2211,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       craft_usage: terminalEffect({
         input: v.object({ messageId: v.string(), toolNames: v.array(v.string()) }),
         run: ({ messageId, toolNames }) => {
-          void this.sql`INSERT INTO turn_craft_usage (actor_id, message_id, tool_names, created_at)
-                   VALUES (${this.actorHandle().actorId}, ${messageId}, ${JSON.stringify(toolNames)}, ${Date.now()})
-                   ON CONFLICT(actor_id, message_id) DO UPDATE SET
-                     tool_names = excluded.tool_names, created_at = excluded.created_at`;
+          void this.sql`INSERT INTO turn_craft_usage (actor_id, message_id, tool_names)
+                   VALUES (${this.actorHandle().actorId}, ${messageId}, ${JSON.stringify(toolNames)})
+                   ON CONFLICT(actor_id, message_id) DO UPDATE SET tool_names = excluded.tool_names`;
 
           return { status: 'completed' };
         },
@@ -2517,8 +2516,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private persistSleepTimeUpdate(key: string, update: SleepTimeUpdate): void {
-    void this.sql`INSERT INTO sleep_time_updates (effect_key, update_json, created_at)
-      VALUES (${key}, ${JSON.stringify(update)}, ${Date.now()})
+    void this.sql`INSERT INTO sleep_time_updates (effect_key, update_json)
+      VALUES (${key}, ${JSON.stringify(update)})
       ON CONFLICT(effect_key) DO NOTHING`;
   }
 
@@ -2681,6 +2680,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async clearBackgroundJobs(): Promise<{ ok: boolean }> {
     return this.countJobOperation('clear', await clearBackgroundJobs(this.jobs));
+  }
+
+  @callable()
+  async listWorkspaceAgents(): Promise<PanelAgent[]> {
+    return readWorkspaceAgents({
+      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main',
+      actors: this.workspaceActors().list({ retired: true }),
+    });
   }
 
   /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */
@@ -2848,22 +2855,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       actor_id   TEXT NOT NULL,
       message_id TEXT NOT NULL,
       feedback   TEXT NOT NULL CHECK (feedback IN ('positive','negative')),
-      created_at INTEGER NOT NULL,
       PRIMARY KEY (actor_id, message_id)
     )`);
     // Persisting the paid-for answer between model call and fact mutation makes a replay
     // apply the same update instead of buying another.
     execRaw(`CREATE TABLE IF NOT EXISTS sleep_time_updates (
       effect_key  TEXT PRIMARY KEY,
-      update_json TEXT NOT NULL,
-      created_at  INTEGER NOT NULL
+      update_json TEXT NOT NULL
     )`);
     // Same per-actor key as turn_feedback: the thumbs re-score reads this table.
     execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
       actor_id   TEXT NOT NULL,
       message_id TEXT NOT NULL,
       tool_names TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
       PRIMARY KEY (actor_id, message_id)
     )`);
     // Owned by this root: the container is the workspace's; subordinates ride their parent's.
@@ -3387,7 +3391,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         latestAt: unseen[0]?.at ?? Date.now(),
       },
       curriculum: listProposedTasks(this.rt, 'pending'),
-      pendingPlans: listPendingPlanReviews(this.boundSql, this.rt.actor.workspaceId),
+      pendingPlans: listPendingPlanReviews(this.boundSql),
     });
   }
 
@@ -3677,11 +3681,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       throw new KinuError('bad_input', `feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
     }
 
-    void this.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
-             VALUES (${this.actorHandle().actorId}, ${messageId}, ${feedback}, ${Date.now()})
-             ON CONFLICT(actor_id, message_id) DO UPDATE SET
-               feedback   = excluded.feedback,
-               created_at = excluded.created_at`;
+    void this.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback)
+             VALUES (${this.actorHandle().actorId}, ${messageId}, ${feedback})
+             ON CONFLICT(actor_id, message_id) DO UPDATE SET feedback = excluded.feedback`;
 
     let rescored = 0;
 
@@ -3909,8 +3911,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** One branch's transcript across both fork mechanisms; core picks the store, not the client.
    *  See read-models/node-transcript.ts for what each store can report. */
   @callable()
-  async getNodeTranscript(runId: string, nodeId: string, request?: PageRequest): Promise<NodeTranscriptView | null> {
-    return readNodeTranscript(this.boundSql, this.actorHandle(), { runId, nodeId }, request ?? {});
+  /** `owner`: the path of the agent whose swarm it is. */
+  async getNodeTranscript(runId: string, nodeId: string, request?: PageRequest, owner?: string): Promise<NodeTranscriptView | null> {
+    const actor = owner === undefined ? this.actorHandle() : this.hostedTarget(owner)?.handle;
+
+    return actor === undefined ? null : readNodeTranscript(this.boundSql, actor, { runId, nodeId }, request ?? {});
   }
 
   /**
@@ -4136,10 +4141,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.eventRecorder.spendByAccount();
   }
 
+  /** The machine's name is read from the account, so it is current. */
+  private async codexRoute(egress: string | undefined, deviceId: string | null): Promise<NonNullable<ActivitySnapshot['latest']>['route']> {
+    if (egress === 'relay') return { kind: 'container' };
+
+    if (deviceId === null) return null;
+    const { stub, caller } = await this.userHub();
+
+    return { kind: 'device', id: deviceId, name: await stub.deviceName(caller, deviceId) };
+  }
+
   /**
    * `steps` bounds only the telemetry sample; `spend` is summed in SQL over the whole log, never windowed.
    * `telemetry` is this agent's own turns; `spend` covers every producer in the workspace.
    */
+
   @callable()
   async getActivitySnapshot(opts?: { steps?: number; logs?: number }): Promise<ActivitySnapshot> {
     const windowLimit = clampLimit(opts?.steps, ACTIVITY_STEP_WINDOW);
@@ -4155,6 +4171,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // something" is `usageReported` — never a presence check on the field.
     const measured = steps.filter((e) => usageReported(e.usage ?? {}));
     const newest = measured[measured.length - 1];
+    const deviceId = newest?.egress?.startsWith('device ') === true ? newest.egress.slice('device '.length) : null;
 
     return {
       latest: newest === undefined
@@ -4166,6 +4183,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           // Non-empty by construction: `measured` kept only reporting steps.
           usage: newest.usage ?? {},
           context: newest.context ?? null,
+          modelId: newest.modelId ?? null,
+          route: await this.codexRoute(newest.egress, deviceId),
         },
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
@@ -4566,14 +4585,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Streams are clipped to {@link EXECUTOR_OUTPUT_CLIP} chars with true length beside them.
    * Must filter by actor: executor ids are shared across actors in the workspace box.
    */
-  async getExecutorOutput(executorId: string, limit = 50) {
+  async getExecutorOutput(executorId: string) {
     return this.sql<ExecutorOutputRow>`SELECT id, executor, command,
         substr(stdout, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stdout, length(stdout) AS stdout_len,
         substr(stderr, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stderr, length(stderr) AS stderr_len,
         exit_code, created_at
       FROM executor_output
       WHERE actor_id = ${this.actorHandle().actorId} AND executor = ${executorId}
-      ORDER BY created_at DESC LIMIT ${limit}`;
+      ORDER BY created_at DESC, rowid DESC LIMIT ${EXECUTOR_HISTORY_ROWS}`;
+  }
+
+  private recordExecutorOutput(
+    executorId: string, command: string, output: { stdout: string | null; stderr: string; exitCode: number },
+  ): void {
+    const actorId = this.actorHandle().actorId;
+
+    void this.sql`INSERT INTO executor_output (actor_id, executor, command, stdout, stderr, exit_code)
+      VALUES (${actorId}, ${executorId}, ${command}, ${output.stdout}, ${output.stderr}, ${output.exitCode})`;
+    void this.sql`DELETE FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
+      AND rowid NOT IN (SELECT rowid FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
+        ORDER BY created_at DESC, rowid DESC LIMIT ${EXECUTOR_HISTORY_ROWS})`;
   }
 
   /** Seals reportless branch heads with an error report; the status change is the cursor.
@@ -4634,7 +4665,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
         name: e.name,
-        outputs: await this.getExecutorOutput(e.name, 50),
+        outputs: await this.getExecutorOutput(e.name),
       })),
     );
 
@@ -4825,8 +4856,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         ? { stdout: result, stderr: '', exitCode: 0 }
         : { stdout: result.error, stderr: result.error, exitCode: 1, refusal: result };
 
-      void this.sql`INSERT INTO executor_output (actor_id, executor, command, stdout, stderr, exit_code)
-        VALUES (${this.actorHandle().actorId}, ${executorId}, ${command}, ${output.stdout}, ${output.stderr}, ${output.exitCode})`;
+      this.recordExecutorOutput(executorId, command, output);
 
       this.broadcast(JSON.stringify({
         type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now(),
@@ -4836,8 +4866,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     } catch (err) {
       const refusal = refusalOf(toKinuError({ doing: 'execute on ' + executorId, cause: err, otherwise: 'io' }));
       const errMsg = refusal.error;
-      void this.sql`INSERT INTO executor_output (actor_id, executor, command, stderr, exit_code)
-        VALUES (${this.actorHandle().actorId}, ${executorId}, ${command}, ${errMsg}, ${1})`;
+      this.recordExecutorOutput(executorId, command, { stdout: null, stderr: errMsg, exitCode: 1 });
       // Broadcast errors too: the UI terminal renders only from broadcasts. (STABILITY-AUDIT §B4.)
       this.broadcast(JSON.stringify({
         type: 'executor-output', executor: executorId, command, stdout: '',
@@ -5496,12 +5525,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listRefinements(this.refinementDeps, limit);
   }
 
-  /** Called by `webhookDeliveryRoutes` so publish + dedupe + reply channel open run atomically in this DO. */
+  /** Called by `webhookDeliveryRoutes` so publish + dedupe run atomically in this DO. */
   async acceptWebhookDelivery(opts: WebhookDelivery): Promise<WebhookDeliveryResult> {
     return acceptWebhookDelivery({
       triggers: this.triggerRegistry,
       log: this.eventLog,
-      replies: this.replyChannels,
       vfs: this.rt.storage.vfs,
       secrets: this.webhookSecrets,
       sql: this.ctx.storage.sql,

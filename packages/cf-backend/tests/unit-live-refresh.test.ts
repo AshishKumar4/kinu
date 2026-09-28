@@ -355,14 +355,13 @@ describe('workspace live refresh failures', () => {
       pendingActions: 'offline',
       mcts: 'offline',
       memoryContent: 'offline',
-      tools: 'offline',
       executors: 'offline',
       slates: 'offline',
       consents: 'offline',
       plan: 'offline',
     }, true)).toEqual({
       severity: 'partial',
-      title: 'Background jobs, pending actions, MCTS, memory content, tools, executors, slates, device consents, and active plan could not be refreshed.',
+      title: 'Background jobs, pending actions, MCTS, memory content, executors, slates, device consents, and active plan could not be refreshed.',
       scope: 'The conversation is available. Showing last known data.',
       detail: 'offline',
       retry: 'Retry',
@@ -399,11 +398,11 @@ describe('workspace live refresh failures', () => {
 
     await Promise.all([
       refreshLiveResource({
-        source: 'tools',
+        source: 'executors',
         read: () => Promise.reject('catalog offline'),
         apply: keep,
         report: errors.report,
-        isCurrent: admission.admit(TEST_ACTOR, 'tools'),
+        isCurrent: admission.admit(TEST_ACTOR, 'executors'),
       }),
       refreshLiveResource({
         source: 'slates',
@@ -415,17 +414,17 @@ describe('workspace live refresh failures', () => {
     ]);
     expect(formatWorkspaceError(errors.errors, true)).toEqual({
       severity: 'partial',
-      title: 'Tools and slates could not be refreshed.',
+      title: 'Executors and slates could not be refreshed.',
       scope: 'The conversation is available. Showing last known data.',
       detail: 'catalog offline',
       retry: 'Retry',
     });
     await refreshLiveResource({
-      source: 'tools',
+      source: 'executors',
       read: () => Promise.resolve(['ready']),
       apply: keep,
       report: errors.report,
-      isCurrent: admission.admit(TEST_ACTOR, 'tools'),
+      isCurrent: admission.admit(TEST_ACTOR, 'executors'),
     });
     expect(formatWorkspaceError(errors.errors, true)).toEqual({
       severity: 'partial',
@@ -447,7 +446,7 @@ describe('workspace live refresh failures', () => {
 
 const CONNECTION_LOST = 'Network connection lost.';
 
-const SEEDED: readonly LiveRefreshSource[] = ['memoryContent', 'tools', 'executors', 'presence', 'plan'];
+const SEEDED: readonly LiveRefreshSource[] = ['memoryContent', 'executors', 'presence', 'plan'];
 
 describe('the workspace banner', () => {
   test('one dropped connection is one reason, printed once', () => {
@@ -539,22 +538,22 @@ describe('resource-scoped workspace notices', () => {
   });
 
   test('a failed optional read is partial, names only that resource, and never blocks the composer', () => {
-    const notice = formatWorkspaceError({ tools: 'catalog offline' }, true);
+    const notice = formatWorkspaceError({ executors: 'catalog offline' }, true);
     expect(notice?.severity).toBe('partial');
-    expect(notice?.title).toBe('Tools could not be refreshed.');
+    expect(notice?.title).toBe('Executors could not be refreshed.');
     expect(notice?.scope).toContain('The conversation is available.');
-    expect(notice?.retry).toBe('Retry loading tools');
+    expect(notice?.retry).toBe('Retry loading executors');
   });
 
   test('the essential read wins when both fail', () => {
-    const notice = formatWorkspaceError({ snapshot: CONNECTION_LOST, tools: 'catalog offline' }, false);
+    const notice = formatWorkspaceError({ snapshot: CONNECTION_LOST, executors: 'catalog offline' }, false);
     expect(notice?.severity).toBe('blocking');
     expect(notice?.title).toBe("Could not open this workspace");
     expect(notice?.retry).toBe('Retry');
   });
 
   test('inline credentials never reach the technical detail', () => {
-    const notice = formatWorkspaceError({ tools: 'provider answered 401 with api_key=sk-live-abc123' }, true);
+    const notice = formatWorkspaceError({ executors: 'provider answered 401 with api_key=sk-live-abc123' }, true);
     expect(notice?.detail).not.toContain('sk-live-abc123');
     expect(notice?.detail).toContain('api_key=<redacted>');
   });
@@ -581,7 +580,7 @@ describe('loading the workspace snapshot', () => {
     const errors = reporter({
       snapshot: CONNECTION_LOST,
       memoryContent: CONNECTION_LOST,
-      tools: CONNECTION_LOST,
+      executors: CONNECTION_LOST,
       jobs: 'the jobs table is still unreachable',
     });
 

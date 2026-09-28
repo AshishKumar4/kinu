@@ -150,17 +150,22 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     let read = 0;
 
     while (id !== null && rows.length <= limit) {
-      const entry = this.read(id);
+      const chunk = this.walk(id, 2 * (limit + 1 - rows.length));
 
-      if (entry === null) throw new KinuError('missing', 'conversation ancestry entry is missing');
-      read += 1;
+      if (chunk.length === 0) throw new KinuError('missing', 'conversation ancestry entry is missing');
 
-      if (entry.role !== 'tool') {
-        rows.push({ id: entry.id });
-        spans.push(read);
+      for (const entry of [...chunk].reverse()) {
+        read += 1;
+
+        if (entry.role !== 'tool') {
+          rows.push({ id: entry.id });
+          spans.push(read);
+        }
+
+        id = entry.parentId;
+
+        if (rows.length > limit) break;
       }
-
-      id = entry.parentId;
     }
 
     const page = seekPage(rows, limit, row => row.id);
@@ -221,27 +226,52 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 
   read(id: string): ConversationEntry | null {
+    return this.walk(id, 1)[0] ?? null;
+  }
+
+  /** The entry and up to `limit - 1` of its ancestors, oldest first, with their parts, in one statement. Stops at the
+   *  first parent no row holds. `CROSS JOIN` keeps the planner walking from the chain: left free, it scanned every
+   *  child row per step. */
+  private walk(leafId: string, limit: number): ConversationEntry[] {
     this.actor.assertCurrent();
+    const { actorId } = this.actor;
 
-    const row = this.sql<EntryRow>`SELECT id,parent_id,role,turn_id,run_id,recorded_at,metadata_json,metadata_path,metadata_digest,context_id,context_revision FROM conversation_entries
-      WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND id=${id}`[0];
+    const rows = this.sql<EntryRow & { depth: number } & { [K in keyof EntryPartRow]: EntryPartRow[K] | null }>`WITH RECURSIVE chain(id, depth) AS (
+        SELECT id, 0 FROM conversation_entries WHERE actor_id=${actorId} AND session_id=${this.sessionId} AND id=${leafId} AND ${limit} > 0
+        UNION ALL SELECT e.parent_id, chain.depth + 1 FROM chain CROSS JOIN conversation_entries e
+          ON e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=chain.id
+          WHERE e.parent_id IS NOT NULL AND chain.depth + 1 < ${limit})
+      SELECT e.id,e.parent_id,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,e.metadata_digest,e.context_id,e.context_revision,
+        chain.depth,p.message_id,p.part_no,p.text_start,p.text_length
+      FROM chain CROSS JOIN conversation_entries e ON e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=chain.id
+      LEFT JOIN conversation_entry_parts p ON p.actor_id=e.actor_id AND p.session_id=e.session_id AND p.entry_id=e.id
+      ORDER BY chain.depth DESC, p.position`;
 
-    if (row === undefined) return null;
-    let metadata: SessionPayload | null = null;
+    const entries: Array<ConversationEntry & { parts: ConversationPartReference[] }> = [];
 
-    if (row.metadata_json !== null) metadata = { json: row.metadata_json, path: null, digest: null };
-    else if (row.metadata_path !== null && row.metadata_digest !== null) metadata = { json: null, path: row.metadata_path, digest: row.metadata_digest };
-    const parts = this.sql<EntryPartRow>`SELECT message_id,part_no,text_start,text_length FROM conversation_entry_parts WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND entry_id=${id} ORDER BY position`;
+    for (const row of rows) {
+      let entry = entries.at(-1);
 
-    return { id: row.id, parentId: row.parent_id, role: row.role, turnId: row.turn_id, runId: row.run_id, recordedAt: row.recorded_at, metadata,
-      context: row.context_id === null || row.context_revision === null ? null : { contextId: row.context_id, revision: row.context_revision },
-      parts: parts.map(part => {
-        const reference: ConversationPartReference = { messageId: part.message_id, partNo: part.part_no };
+      if (entry?.id !== row.id) {
+        let metadata: SessionPayload | null = null;
 
-        if (part.text_start !== null && part.text_length !== null) reference.textRange = { start: part.text_start, length: part.text_length };
+        if (row.metadata_json !== null) metadata = { json: row.metadata_json, path: null, digest: null };
+        else if (row.metadata_path !== null && row.metadata_digest !== null) metadata = { json: null, path: row.metadata_path, digest: row.metadata_digest };
 
-        return reference;
-      }) };
+        entry = { id: row.id, parentId: row.parent_id, role: row.role, turnId: row.turn_id, runId: row.run_id, recordedAt: row.recorded_at, metadata,
+          context: row.context_id === null || row.context_revision === null ? null : { contextId: row.context_id, revision: row.context_revision },
+          parts: [] };
+        entries.push(entry);
+      }
+
+      if (row.message_id === null || row.part_no === null) continue;
+      const reference: ConversationPartReference = { messageId: row.message_id, partNo: row.part_no };
+
+      if (row.text_start !== null && row.text_length !== null) reference.textRange = { start: row.text_start, length: row.text_length };
+      entry.parts.push(reference);
+    }
+
+    return entries;
   }
 
 
@@ -252,28 +282,28 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 
   count(): number {
-    return this.ancestry().length;
+    const leafId = this.newestId();
+
+    if (leafId === null) return 0;
+    const { actorId } = this.actor;
+
+    return this.sql<{ n: number }>`WITH RECURSIVE chain(id) AS (
+        SELECT ${leafId}
+        UNION ALL SELECT e.parent_id FROM chain CROSS JOIN conversation_entries e
+          ON e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=chain.id
+          WHERE e.parent_id IS NOT NULL)
+      SELECT COUNT(*) AS n FROM chain`[0]?.n ?? 0;
   }
 
   ancestry(leafId = this.newestId(), limit = 10_000): readonly ConversationEntry[] {
-    this.actor.assertCurrent();
-
     if (!Number.isSafeInteger(limit) || limit < 0) throw new KinuError('bad_input', 'history limit must be a nonnegative integer');
-    const chain: ConversationEntry[] = [];
-    const seen = new Set<string>();
-    let id = leafId;
 
-    while (id !== null && chain.length < limit) {
-      if (seen.has(id)) throw new KinuError('io', 'conversation ancestry contains a cycle');
-      seen.add(id);
-      const entry = this.read(id);
+    if (leafId === null || limit === 0) return [];
+    const chain = this.walk(leafId, limit);
 
-      if (entry === null) throw new KinuError('missing', 'conversation ancestry entry is missing');
-      chain.push(entry);
-      id = entry.parentId;
-    }
+    if (chain.length === 0 || (chain.length < limit && chain[0]?.parentId !== null)) throw new KinuError('missing', 'conversation ancestry entry is missing');
 
-    return chain.reverse();
+    return chain;
   }
 
   /** Each text part among `references`, oldest first. */
@@ -281,8 +311,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return (await this.parts(references)).flatMap((part) => (part.type === 'text' ? [v.parse(v.string(), part.text)] : []));
   }
 
-  async parts(references: readonly ConversationPartReference[]): Promise<JsonObject[]> {
-    const cache = new Map<string, readonly StoredPart[]>();
+  async parts(references: readonly ConversationPartReference[], cache = new Map<string, readonly StoredPart[]>()): Promise<JsonObject[]> {
     const parts: JsonObject[] = [];
 
     for (const ref of references) {
@@ -312,7 +341,10 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   async history(leafId = this.newestId(), limit = 10_000): Promise<UIMessage[]> {
     const messages: UIMessage[] = [];
 
-    for (const entry of this.ancestry(leafId, limit)) messages.push(await this.materializeEntry(entry));
+    const entries = this.ancestry(leafId, limit);
+    const parts = await this.messages.materializePartsOf([...new Set(entries.flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
+
+    for (const entry of entries) messages.push(await this.materializeEntry(entry, parts));
 
     return messages;
   }
@@ -376,8 +408,8 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return entry === null ? null : this.materializeEntry(entry);
   }
 
-  private async materializeEntry(entry: ConversationEntry): Promise<UIMessage> {
-      const parts = await this.parts(entry.parts);
+  private async materializeEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>): Promise<UIMessage> {
+      const parts = await this.parts(entry.parts, cache);
       const projected: JsonObject[] = [];
       const calls = new Map<string, JsonObject>();
 

@@ -9,7 +9,7 @@ import {
   agentArtifactDirectory, agentHome, CHAT_SESSION_ID, MAIN_AGENT,
   FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver, NativeSinkPlan, SOUL_PATH,
   foldForkStream, forkTransferFrames, initWorkspaceSchema, readForkLineage, sealForkFrame,
-  SessionHistory, summarizeSoulBytes, WorkspaceActorDirectory, openWorkspaceMainActor,
+  SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
   type ForkFileSource, type ForkFrame, type ForkLineageRow, type ForkNativeFilePort, type ForkResult,
   type ForkStaging, type SqlExecutor, type SqlValue, type VFS, type VfsEntryStat,
 } from '@kinu.run/core';
@@ -28,7 +28,7 @@ export const PROBE_SOURCE_NAME = 'fork-source';
 
 const SOUL_CONTENT = '# Mission\nProve a fork survives an eviction.\n';
 
-export const PROBE_SOUL_MISSION = summarizeSoulBytes(new TextEncoder().encode(SOUL_CONTENT));
+export const PROBE_SOUL_MISSION = summarizeSoul(SOUL_CONTENT);
 
 /** workerd's streaming digest; the ambient `Crypto` type does not declare it. */
 interface WorkerdDigestStream extends WritableStream<ArrayBufferView | ArrayBuffer> {
@@ -302,15 +302,14 @@ export class ForkSourceProbeDO extends ForkProbeDO {
     const actor = new WorkspaceActorDirectory(this.sql, { workspaceId: 'source-workspace', ownerUserId: '' }).createMain({ name: PROBE_SOURCE_NAME });
     actor.config.setModel('probe/model-1');
     actor.config.set('reasoning_effort', 'high — long enough that this row needs a frame of its own');
-    void this.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
-      VALUES (${'probe_tool'}, ${'Counts what a fork carried.'}, ${null},
-              ${'export default () => 1;'}, ${'workspace'}, ${1_760_000_000_001}, ${1_760_000_000_002})`;
+    void this.sql`INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
+      VALUES (${'probe_tool'}, ${'Counts what a fork carried.'},
+              ${'export default () => 1;'}, ${1_760_000_000_001}, ${1_760_000_000_002})`;
 
     for (const n of [1, 2]) {
-      void this.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
+      void this.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text)
         VALUES (${`chunk-${n}`}, ${'memory/notes.md'}, ${n}, ${n + 1}, ${`hash-${n}`},
-                ${`Chunk ${n} of the parent's memory index, wide enough to need its own frame.`},
-                ${1_760_000_000_003})`;
+                ${`Chunk ${n} of the parent's memory index, wide enough to need its own frame.`})`;
     }
 
     const history = new SessionHistory({
@@ -473,7 +472,7 @@ export class ForkTargetProbeDO extends ForkProbeDO {
         publish: async (targetPath, bytes) => {
           await this.plane.writeFile(targetPath, bytes);
 
-          return { mission: summarizeSoulBytes(bytes) };
+          return { mission: summarizeSoul(new TextDecoder().decode(bytes)) };
         },
       }),
     );

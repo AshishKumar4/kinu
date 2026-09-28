@@ -113,7 +113,6 @@ function instructionState(row: InstructionSourceRow): string {
   if (row.reason !== undefined) return `not readable: ${row.reason}`;
 
   switch (row.decision) {
-    case 'grandfathered': return 'carried over';
     case 'approved': return 'approved';
     case 'revoked': return 'refused';
     case 'none': return 'not decided';
@@ -1157,7 +1156,6 @@ export function renderStatusLines(status: AgentClientStatus): string[] {
     row('Scaffold:', status.scaffoldVersion === undefined ? undefined : `v${status.scaffoldVersion}`),
     row('Messages:', status.messageCount),
     row('MCTS:', status.searchNodeCount === undefined ? undefined : `${status.searchNodeCount} nodes`),
-    row('Crafted:', status.craftedToolCount),
     row('Tasks:', status.taskCount),
     row('Tools:', status.toolCount),
     row('Memory:', status.memorySize === undefined ? undefined : `${status.memorySize} B`),

@@ -7,8 +7,7 @@ import { abortableSleep, providerPacer, type ProviderPacer } from './pacing';
 import type { ProviderWaitInfo } from './types';
 
 
-/** The SDK's own default transport retries, stated so a vendor update cannot move it silently. */
-export const PROVIDER_SDK_RETRIES = 2;
+import { DEFAULT_PROVIDER_RETRIES } from '../types/profile';
 
 /** Full-jitter backoff when a 429 lacks `Retry-After`; BASE and MAX are unmeasured. */
 const DEFAULT_BASE_DELAY_MS = 2_000;
@@ -21,8 +20,8 @@ const DEFAULT_MAX_DELAY_MS = 60_000;
  *  time: the account is spent until then. */
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 
-/** A chain call with a next model hands over on 429; never sent upstream. */
-export const RATE_LIMIT_HANDOVER_HEADER = 'x-kinu-rate-limit-handover';
+/** This call's 429 retries; never sent upstream. */
+export const PROVIDER_RETRIES_HEADER = 'x-kinu-retries';
 
 export interface RateLimitRetryOptions {
   baseDelayMs?: number;
@@ -62,10 +61,11 @@ export function withRateLimitRetry(
 
   return asFetchFunction(async (input, requested) => {
     const headers = copyHeaders(requested?.headers);
-    const handover = headers.has(RATE_LIMIT_HANDOVER_HEADER);
+    const stated = headers.get(PROVIDER_RETRIES_HEADER);
+    const retries = stated === null ? DEFAULT_PROVIDER_RETRIES : Number(stated);
 
-    headers.delete(RATE_LIMIT_HANDOVER_HEADER);
-    const init: RequestInit | undefined = handover ? { ...requested, headers } : requested;
+    headers.delete(PROVIDER_RETRIES_HEADER);
+    const init: RequestInit | undefined = stated === null ? requested : { ...requested, headers };
 
     if (!hasReplayableBody(input, init)) return fetchImpl(input, init);
 
@@ -73,9 +73,15 @@ export function withRateLimitRetry(
     const lane = opts.lane === undefined ? host : `${host} ${opts.lane}`;
     const signal = init?.signal ?? undefined;
 
-    const handedOver = (status: number | null, resetsInMs: number | null): KinuError => new KinuError('unavailable',
-      `${host} is rate-limiting this account${status === null ? '' : ` (HTTP ${String(status)})`}`
-      + `${resetsInMs === null ? '' : `; it resets in ${fmtSpan(resetsInMs)}`}`);
+    const handedOver = (status: number | null, resetsInMs: number | null): APICallError => new APICallError({
+      message: `${host} is rate-limiting this account${status === null ? '' : ` (HTTP ${String(status)})`}`
+        + `${resetsInMs === null ? '' : `; it resets in ${fmtSpan(resetsInMs)}`}`,
+      url: input instanceof Request ? input.url : input.toString(),
+      requestBodyValues: undefined,
+      ...(status !== null && { statusCode: status }),
+      ...(resetsInMs !== null && { responseHeaders: { 'retry-after-ms': String(resetsInMs) } }),
+      isRetryable: false,
+    });
 
     const reportWait = (waitMs: number, attempt: number, source: ProviderWaitInfo['source'], status?: number): void => {
       if (opts.onWait === undefined) return;
@@ -110,7 +116,7 @@ export function withRateLimitRetry(
             throw waitTooLong({ input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: maxRetryDelayMs, reason });
           }
 
-          if (handover) throw handedOver(null, waitMs);
+          if (retries === 0) throw handedOver(null, waitMs);
 
           if (untilMs === ownedCooldownUntil.ms) return;
 
@@ -148,7 +154,7 @@ export function withRateLimitRetry(
       const untilMs = now() + waitMs;
       pacer.declareWait(lane, waitMs);
 
-      if (handover) throw handedOver(limit.status, retryAfterMs);
+      if (attempt > retries) throw handedOver(limit.status, retryAfterMs ?? waitMs);
       ownedCooldownUntil.ms = untilMs;
       warn(
         `[kinu] ${host} rate-limited: waiting ${fmtSpan(waitMs)} `

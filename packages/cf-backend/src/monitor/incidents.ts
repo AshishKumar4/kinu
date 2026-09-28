@@ -21,17 +21,8 @@ CREATE TABLE IF NOT EXISTS monitor_incidents (
   detail     TEXT    NOT NULL,
   opened_at  INTEGER NOT NULL,
   alerted_at INTEGER,
-  failures   INTEGER NOT NULL DEFAULT 1,
-  seen_at    INTEGER NOT NULL
+  failures   INTEGER NOT NULL DEFAULT 1
 )`;
-
-interface IncidentRow {
-  probe: string;
-  detail: string;
-  opened_at: number;
-  alerted_at: number | null;
-  failures: number;
-}
 
 const IncidentRowSchema = v.object({
   probe: v.string(),
@@ -40,6 +31,8 @@ const IncidentRowSchema = v.object({
   alerted_at: v.nullable(v.number()),
   failures: v.number(),
 });
+
+type IncidentRow = v.InferOutput<typeof IncidentRowSchema>;
 
 export interface MonitorRunResult {
   failing: string[];
@@ -77,14 +70,14 @@ export async function recordProbeRun(deps: MonitorDeps, outcomes: ProbeOutcome[]
     if (existing) {
       // Still broken: record the latest state but never re-alert.
       deps.sql.exec(
-        `UPDATE monitor_incidents SET detail = ?, failures = failures + 1, seen_at = ? WHERE probe = ?`,
-        outcome.detail, deps.now, outcome.probe,
+        `UPDATE monitor_incidents SET detail = ?, failures = failures + 1 WHERE probe = ?`,
+        outcome.detail, outcome.probe,
       );
     } else {
       deps.sql.exec(
-        `INSERT INTO monitor_incidents (probe, detail, opened_at, alerted_at, failures, seen_at)
-         VALUES (?, ?, ?, NULL, 1, ?)`,
-        outcome.probe, outcome.detail, deps.now, deps.now,
+        `INSERT INTO monitor_incidents (probe, detail, opened_at, alerted_at, failures)
+         VALUES (?, ?, ?, NULL, 1)`,
+        outcome.probe, outcome.detail, deps.now,
       );
     }
   }
