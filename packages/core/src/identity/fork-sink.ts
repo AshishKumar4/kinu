@@ -1,6 +1,8 @@
 /** Workspace fork staged file plan: where streamed byte ranges land before a file exists. */
 
 import { createHash } from 'node:crypto';
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import { FORK_FRAME_BYTES, type ForkWireEntry } from './fork-transfer';
 
 export interface ForkFileMeta {
@@ -57,6 +59,10 @@ export interface ForkFileSink {
  * One sibling-temp file plan. The destination is untouched until `commitFile`. The temp name derives
  * from destination and transfer so every activation of one transfer adopts the same staging.
  */
+const noOpenFile = (path: string): Error => new Error(`fork file sink has no open file ${JSON.stringify(path)}`);
+
+const noBytes = (path: string): Error => new Error(`fork protected destination ${JSON.stringify(path)} received no bytes`);
+
 export class NativeSinkPlan implements ForkFileSink {
   private target: string | null = null;
   private temp: string | null = null;
@@ -68,106 +74,120 @@ export class NativeSinkPlan implements ForkFileSink {
     private readonly protect?: ForkProtectedPublisher,
   ) {}
 
-  async beginFile(path: string, staged: number): Promise<void> {
-    if (this.target !== null) throw new Error(`fork file sink already stages ${JSON.stringify(this.target)}`);
-    this.target = path;
+  beginFile(path: string, staged: number): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (this.target !== null) return yield* Effect.die(new Error(`fork file sink already stages ${JSON.stringify(this.target)}`));
+      this.target = path;
 
-    if (this.protect?.owns(path)) {
-      // A protected destination is one frame in one activation; staged bytes mean transfer and sink disagree.
-      if (staged > 0) {
-        throw new Error(
-          `fork protected destination ${JSON.stringify(path)} cannot adopt ${staged} staged bytes; `
-          + 'a protected write carries a whole file in one argument and stages nothing',
-        );
+      if (this.protect?.owns(path)) {
+        // A protected destination is one frame in one activation; staged bytes mean transfer and sink disagree.
+        if (staged > 0) {
+          return yield* Effect.die(new Error(
+            `fork protected destination ${JSON.stringify(path)} cannot adopt ${staged} staged bytes; `
+            + 'a protected write carries a whole file in one argument and stages nothing',
+          ));
+        }
+
+        return;
       }
 
-      return;
-    }
+      const slash = path.lastIndexOf('/');
+      const dir = slash < 0 ? '' : path.slice(0, slash + 1);
+      const name = slash < 0 ? path : path.slice(slash + 1);
+      const temp = `${dir}.${name}.fork-${this.tempSuffix}.tmp`;
+      this.temp = temp;
 
-    const slash = path.lastIndexOf('/');
-    const dir = slash < 0 ? '' : path.slice(0, slash + 1);
-    const name = slash < 0 ? path : path.slice(slash + 1);
-    this.temp = `${dir}.${name}.fork-${this.tempSuffix}.tmp`;
-
-    if (staged === 0) await this.files.writeRange(this.temp, 0, new Uint8Array(0));
-    // Trim, not truncate: a range written but never counted must not survive as a stale tail.
-    await this.files.truncate(this.temp, staged);
+      if (staged === 0) yield* Effect.promise(() => this.files.writeRange(temp, 0, new Uint8Array(0)));
+      // Trim, not truncate: a range written but never counted must not survive as a stale tail.
+      yield* Effect.promise(() => this.files.truncate(temp, staged));
+    }));
   }
 
-  async writeRange(path: string, offset: number, bytes: Uint8Array, last: boolean): Promise<void> {
-    if (path !== this.target) throw new Error(`fork file sink has no open file ${JSON.stringify(path)}`);
+  writeRange(path: string, offset: number, bytes: Uint8Array, last: boolean): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (path !== this.target) return yield* Effect.die(noOpenFile(path));
+      const temp = this.temp;
 
-    if (this.temp === null) {
-      // Refuse on the first range so nothing is held for a protected file that cannot fit one frame.
-      if (!last) {
-        throw new Error(
-          `fork protected destination ${JSON.stringify(path)} spans more than one frame; `
-          + 'the protected write carries a whole file in one argument and cannot be streamed',
-        );
+      if (temp === null) {
+        // Refuse on the first range so nothing is held for a protected file that cannot fit one frame.
+        if (!last) {
+          return yield* Effect.die(new Error(
+            `fork protected destination ${JSON.stringify(path)} spans more than one frame; `
+            + 'the protected write carries a whole file in one argument and cannot be streamed',
+          ));
+        }
+
+        if (this.held !== null) return yield* Effect.die(new Error(`fork protected destination ${JSON.stringify(path)} received a second range`));
+
+        if (offset !== 0) return yield* Effect.die(new Error(`fork protected destination ${JSON.stringify(path)} started at offset ${offset}`));
+        this.held = bytes;
+
+        return;
       }
 
-      if (this.held !== null) throw new Error(`fork protected destination ${JSON.stringify(path)} received a second range`);
-
-      if (offset !== 0) throw new Error(`fork protected destination ${JSON.stringify(path)} started at offset ${offset}`);
-      this.held = bytes;
-
-      return;
-    }
-
-    await this.files.writeRange(this.temp, offset, bytes);
+      yield* Effect.promise(() => this.files.writeRange(temp, offset, bytes));
+    }));
   }
 
   /** Digest of the staging, read back one `FORK_FRAME_BYTES` range at a time.
      *  A protected destination hashes its held frame. */
-  async stagedDigest(path: string, bytes: number): Promise<string> {
-    if (path !== this.target) throw new Error(`fork file sink has no open file ${JSON.stringify(path)}`);
-    const hash = createHash('sha256');
+  stagedDigest(path: string, bytes: number): Promise<string> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (path !== this.target) return yield* Effect.die(noOpenFile(path));
+      const hash = createHash('sha256');
+      const temp = this.temp;
 
-    if (this.temp === null) {
-      const held = this.held;
+      if (temp === null) {
+        const held = this.held;
 
-      if (held === null) throw new Error(`fork protected destination ${JSON.stringify(path)} received no bytes`);
-      hash.update(held);
+        if (held === null) return yield* Effect.die(noBytes(path));
+        hash.update(held);
 
-      return hash.digest('hex');
-    }
-
-    for (let offset = 0; offset < bytes; offset += FORK_FRAME_BYTES) {
-      const length = Math.min(FORK_FRAME_BYTES, bytes - offset);
-      const range = await this.files.readRange(this.temp, offset, length);
-
-      if (range.byteLength !== length) {
-        throw new Error(
-          `fork transfer staged ${JSON.stringify(path)} read back ${range.byteLength} bytes of ${length} `
-          + `at offset ${offset}; the staging is not what the transfer wrote`,
-        );
+        return hash.digest('hex');
       }
 
-      hash.update(range);
-    }
+      for (let offset = 0; offset < bytes; offset += FORK_FRAME_BYTES) {
+        const length = Math.min(FORK_FRAME_BYTES, bytes - offset);
+        const at = offset;
+        const range = yield* Effect.promise(() => this.files.readRange(temp, at, length));
 
-    return hash.digest('hex');
+        if (range.byteLength !== length) {
+          return yield* Effect.die(new Error(
+            `fork transfer staged ${JSON.stringify(path)} read back ${range.byteLength} bytes of ${length} `
+            + `at offset ${offset}; the staging is not what the transfer wrote`,
+          ));
+        }
+
+        hash.update(range);
+      }
+
+      return hash.digest('hex');
+    }));
   }
 
-  async commitFile(path: string, meta: ForkFileMeta): Promise<ForkFileCommit> {
-    if (path !== this.target) throw new Error(`fork file sink has no open file ${JSON.stringify(path)}`);
+  commitFile(path: string, meta: ForkFileMeta): Promise<ForkFileCommit> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (path !== this.target) return yield* Effect.die(noOpenFile(path));
+      const temp = this.temp;
 
-    if (this.temp === null) {
-      const publisher = this.protect;
-      const bytes = this.held;
+      if (temp === null) {
+        const publisher = this.protect;
+        const bytes = this.held;
 
-      if (!publisher || bytes === null) throw new Error(`fork protected destination ${JSON.stringify(path)} received no bytes`);
+        if (!publisher || bytes === null) return yield* Effect.die(noBytes(path));
+        this.clear();
+
+        return yield* Effect.promise(() => publisher.publish(path, bytes));
+      }
+
+      yield* Effect.promise(() => this.files.rename(temp, path));
+      yield* Effect.promise(() => this.files.stamp(path, meta));
       this.clear();
 
-      return publisher.publish(path, bytes);
-    }
+      const committed: ForkFileCommit = {};
 
-    const temp = this.temp;
-    await this.files.rename(temp, path);
-    await this.files.stamp(path, meta);
-    this.clear();
-
-    return {};
+      return committed;
+    }));
   }
 
   /** Drop what this file staged (for a protected destination, the held frame). */
@@ -179,21 +199,23 @@ export class NativeSinkPlan implements ForkFileSink {
     if (temp !== null) await this.files.unlink(temp);
   }
 
-  async place(entries: readonly ForkWireEntry[]): Promise<void> {
-    for (const entry of entries) {
-      if (this.protect?.owns(entry.path)) {
-        throw new Error(`fork protected destination ${JSON.stringify(entry.path)} arrived as a whole entry, not through its protected write`);
-      }
+  place(entries: readonly ForkWireEntry[]): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      for (const entry of entries) {
+        if (this.protect?.owns(entry.path)) {
+          return yield* Effect.die(new Error(`fork protected destination ${JSON.stringify(entry.path)} arrived as a whole entry, not through its protected write`));
+        }
 
-      if (entry.kind === 'symlink') {
-        await this.files.symlink(entry.target, entry.path);
-        continue;
-      }
+        if (entry.kind === 'symlink') {
+          yield* Effect.promise(() => this.files.symlink(entry.target, entry.path));
+          continue;
+        }
 
-      if (entry.kind === 'directory') await this.files.mkdir(entry.path);
-      else await this.files.writeFile(entry.path, entry.bytes);
-      await this.files.stamp(entry.path, entry);
-    }
+        if (entry.kind === 'directory') yield* Effect.promise(() => this.files.mkdir(entry.path));
+        else yield* Effect.promise(() => this.files.writeFile(entry.path, entry.bytes));
+        yield* Effect.promise(() => this.files.stamp(entry.path, entry));
+      }
+    }));
   }
 
   async remove(paths: readonly string[]): Promise<void> {

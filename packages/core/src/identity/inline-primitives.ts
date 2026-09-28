@@ -7,12 +7,13 @@ import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memo
 import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils/stores';
 import type { CraftStore } from '../types/agent-runtime';
 import type {
-  Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExec, SqlExecutor, SqlValue, Storage, VFS,
+  ExecuteResult, Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExec, SqlExecutor, SqlValue, Storage, VFS,
 } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue } from '../utils/json';
-import { renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settle } from '../obs/index';
 import * as v from 'valibot';
 
 export interface AgentDatabase {
@@ -134,20 +135,16 @@ export function createInlineCraftStore(db: AgentDatabase): CraftStore {
 export function createInlineExecutor(): Executor {
   return {
     languages: ['javascript'],
-    async execute(code) {
-      try {
-        const fn = new Function(`return (async () => { ${code} })()`);
-        const result: unknown = await fn();
+    execute(code) {
+      return settle(Effect.tryPromise({
+        try: async (): Promise<ExecuteResult> => {
+          const fn = new Function(`return (async () => { ${code} })()`);
+          const result: unknown = await fn();
 
-        return {
-          result: result === undefined ? '(no return value)' : decodeJsonValue({ value: result }),
-        };
-      } catch (error) {
-        return {
-          result: undefined,
-          error: renderThrownChain({ cause: error }),
-        };
-      }
+          return { result: result === undefined ? '(no return value)' : decodeJsonValue({ value: result }) };
+        },
+        catch: (cause) => ({ cause }),
+      }).pipe(Effect.catch((failed) => Effect.succeed<ExecuteResult>({ result: undefined, error: renderThrownChain(failed) }))));
     },
   };
 }

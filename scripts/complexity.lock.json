@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-28",
   "files": 2835,
-  "functions": 70247,
+  "functions": 70297,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -110,19 +110,11 @@
       "complexity": 36
     },
     {
-      "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage",
-      "complexity": 36
-    },
-    {
       "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 36
     },
     {
       "key": "packages/cli/src/cc-transcript.ts#mineSession",
-      "complexity": 35
-    },
-    {
-      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive",
       "complexity": 35
     },
     {
