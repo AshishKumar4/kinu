@@ -1,8 +1,8 @@
 /** Status, transcript and tool inventory: folds over agent-owned storage, so none is backend-shaped. */
 
 import type { ActorHandle } from '../identity/actor-handle';
-import { conversationCount } from '../identity/conversation-store';
-import type { SessionTranscriptReader } from '../session/transcript';
+import { readSessionTranscript, type SessionTranscriptReader } from '../session/transcript';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { ownerMissionOf, soulReadsSql } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
@@ -12,7 +12,7 @@ import type { SqlExecutor } from '../types/primitives';
 import type { ReasoningEffort } from '../providers/effort';
 import { transcriptRole } from '../utils/ui-message';
 import type { ChatHistoryEntry } from '../types/chat';
-import { mapPage, type Page, type PageRequest } from '../session/page';
+import { mapPage, type Page, type PositionCursor, type PositionPageRequest } from '../session/page';
 
 export type { ChatHistoryEntry } from '../types/chat';
 
@@ -71,7 +71,7 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions
     WHERE actor_id = ${actor.actorId}`;
 
-  const messageCount = conversationCount(sql, actor);
+  const messageCount = readSessionTranscript(sql, actor, CHAT_SESSION_ID, null).count();
 
   const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes
     WHERE actor_id = ${actor.actorId}`;
@@ -94,20 +94,20 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
   };
 }
 
-/** Newest page first, each page displayed oldest-first; cursors count raw entries. */
+/** Newest page first, each page displayed oldest-first; a cursor names a position. */
 export async function getChatHistoryPage(
   transcript: SessionTranscriptReader,
-  request: PageRequest = {},
+  request: PositionPageRequest = {},
 ): Promise<ChatHistoryPage> {
   const page = await transcript.page(request);
 
-  return { ...mapPage(page, rows => rows.flatMap(row => {
+  return mapPage(page, rows => rows.flatMap(row => {
     const role = normalizeUiRole(row.role);
 
     if (!role) return [];
 
     const entry: ChatHistoryEntry = {
-      id: row.id, role: transcriptRole({ id: row.id, role, metadata: row.metadata }),
+      id: row.id, position: row.position, role: transcriptRole({ id: row.id, role, metadata: row.metadata }),
       content: row.content, createdAt: row.recordedAt,
     };
 
@@ -116,10 +116,10 @@ export async function getChatHistoryPage(
     if (row.unavailable === true) entry.unavailable = true;
 
     return [entry];
-  }).reverse()), walked: page.walked };
+  }).reverse());
 }
 
-export type ChatHistoryPage = Page<ChatHistoryEntry> & { readonly walked: number };
+export type ChatHistoryPage = Page<ChatHistoryEntry, PositionCursor>;
 
 export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
   const crafted = craftStore.list().map((t) => {

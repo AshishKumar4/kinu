@@ -27,7 +27,7 @@ import {
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { isWorkspaceTerminal, publicText, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
-import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
+import { CHAT_SESSION_ID, readSessionTranscript, turnInputMessage, type HeadReport, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
@@ -1884,7 +1884,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sql: null,
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
-      history: (limit) => rows.history(undefined, limit),
+      history: (limit) => rows.history(limit),
       admitted: (id) => rows.has(id),
       send: async (input) => {
         // Opening row first, under the client's id: the hook resends its whole list, and `admitted`
@@ -1950,14 +1950,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (completion === undefined) return;
     const history = this.actorHost().bindStores(reference).stores.history;
     const transcript = history.transcript(CHAT_SESSION_ID);
-    const parentId = transcript.newestId();
 
-    if (parentId === null) return;
+    if (transcript.newestId() === null) return;
 
     const metadata = await this.takeTurnSlates(reference.actorId, completion.turnId, () => transcript.narration(answerParts(completion.outputPartReferences, completion.finalTextReference)));
 
     const entry = await transcript.prepareAssistant({
-      id, parentId, turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
+      id, turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
       finalText: completion.finalTextReference, ...(metadata !== null && { metadata }),
     });
 
@@ -4084,7 +4083,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       reasoningEffort: profile.tier.reasoningEffort,
       activePlan: child.stores.planReviews.getActive(CHAT_SESSION_ID),
       // Counted in the store: the pane holds only a window.
-      messageCount: conversationCount(this.boundSql, child.handle),
+      messageCount: readSessionTranscript(this.boundSql, child.handle, CHAT_SESSION_ID, null).count(),
       // Read with the child's actor id; same rule as `pendingSteerRuns()`: a steer is a row bound to a turn.
       pendingSteers: new PendingSendStore(this.boundSql, child.handle.actorId).restore()
         .filter((row) => row.turnId !== null)

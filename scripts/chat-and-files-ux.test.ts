@@ -1705,11 +1705,11 @@ describe('a hosted actor’s cards stay out of the workspace’s own chat', () =
 
 /**
  * KINU-071. The fixture mounts the exact ConversationStartBoundary used by both
- * WorkspacePage columns over the real paged-scroll hook. Its first page is held
+ * WorkspacePage columns over the real chat thread hook. Its first page is held
  * by a fixture promise, then rejects once; Retry returns status:end. This is a
  * browser test because the defect was which mutually-exclusive surface painted
  * during that interleaving. Blind spot: the agent socket is not involved; its
- * delivered-empty distinction is the startFrom("newest") input stated here.
+ * delivered-empty distinction is the `seeded` input stated here.
  */
 describe('an empty transcript waits for the history store to speak', () => {
   test('held → skeleton; failed → Retry; status:end → authoritative empty', async () => {
@@ -2000,7 +2000,7 @@ describe('file preview request generation at the actual FilesSurface boundary', 
 
 /**
  * KINU-060, remaining two authorities. The frames mount the shipped
- * usePagedScroll and WorkspaceRosterProvider; controls only hold/release their
+ * useChatThread and WorkspaceRosterProvider; controls only hold/release their
  * network transport. Clear/reset and local rename are public transitions, not
  * fixture copies of the generations they exercise.
  */

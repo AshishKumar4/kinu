@@ -8,14 +8,16 @@ export function createDurableMctsSession(history: SessionHistory, sessionId: str
   const transcript = history.transcript(sessionId);
 
   return {
-    async appendMessage(msg: SessionMessage, parentId?: string | null): Promise<void> {
+    async appendMessage(msg: SessionMessage): Promise<void> {
       const content = msg.parts.map((p) => p.text).join('');
-      await history.record(sessionId, { id: msg.id, parentId: parentId ?? null, message: { role: msg.role, content }, origin: msg.role === 'user' ? 'input' : 'output' });
+      await history.record(sessionId, { id: msg.id, message: { role: msg.role, content }, origin: msg.role === 'user' ? 'input' : 'output' });
     },
     async getHistory(leafId: string): Promise<Array<{ role: string; content: string }>> {
       const result: Array<{ role: string; content: string }> = [];
 
-      for (const entry of transcript.ancestry(leafId)) {
+      const leaf = transcript.read(leafId);
+
+      for (const entry of leaf === null ? [] : transcript.entries().filter((earlier) => earlier.position <= leaf.position)) {
         const projected = await transcript.project(entry.id);
 
         if (projected !== null) result.push({ role: projected.role, content: projected.content });

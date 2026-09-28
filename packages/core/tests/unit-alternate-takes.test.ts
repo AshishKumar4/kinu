@@ -151,9 +151,9 @@ async function capturedSet(sql: ReturnType<typeof makeSql>, actor: ActorHandle, 
   insertNode(sql, actor, { id: 'alt', value: 0.85, text: 'alternative approach' });
   captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
   claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-9', sessionId: 'default', startedAt: 0 });
-  await history.record(CHAT_SESSION_ID, { id: 'u-9', parentId: null, origin: 'input',
+  await history.record(CHAT_SESSION_ID, { id: 'u-9', origin: 'input',
     message: { role: 'user', content: 'please solve it' } });
-  await history.record(CHAT_SESSION_ID, { id: 'msg-9', parentId: 'u-9', origin: 'output',
+  await history.record(CHAT_SESSION_ID, { id: 'msg-9', origin: 'output',
     message: { role: 'assistant', content: 'I used the winning approach' } });
 
   return present(latestAlternateTakeSet(sql, actor), 'the latest take set');

@@ -10,7 +10,7 @@
     "assistantMessages": [
       {
         "id": "input-PARITY-ONE",
-        "parentId": null,
+        "position": 0,
         "role": "user",
         "content": {
           "id": "input-PARITY-ONE",
@@ -29,7 +29,7 @@
       },
       {
         "id": "<uuid#1>",
-        "parentId": "input-PARITY-ONE",
+        "position": 1,
         "role": "assistant",
         "content": {
           "id": "<uuid#1>",
@@ -48,7 +48,7 @@
       },
       {
         "id": "input-PARITY-TWO",
-        "parentId": "<uuid#1>",
+        "position": 2,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO",
@@ -67,7 +67,7 @@
       },
       {
         "id": "<uuid#2>",
-        "parentId": "input-PARITY-TWO",
+        "position": 3,
         "role": "assistant",
         "content": {
           "id": "<uuid#2>",
@@ -86,7 +86,7 @@
       },
       {
         "id": "input-PARITY-TWO-STEER",
-        "parentId": "<uuid#2>",
+        "position": 4,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO-STEER",
@@ -111,7 +111,7 @@
       },
       {
         "id": "<uuid#3>",
-        "parentId": "input-PARITY-TWO-STEER",
+        "position": 5,
         "role": "assistant",
         "content": {
           "id": "<uuid#3>",
@@ -317,7 +317,7 @@
     "assistantMessages": [
       {
         "id": "input-PARITY-ONE",
-        "parentId": null,
+        "position": 0,
         "role": "user",
         "content": {
           "id": "input-PARITY-ONE",
@@ -336,7 +336,7 @@
       },
       {
         "id": "<uuid#1>",
-        "parentId": "input-PARITY-ONE",
+        "position": 1,
         "role": "assistant",
         "content": {
           "id": "<uuid#1>",
@@ -355,7 +355,7 @@
       },
       {
         "id": "input-PARITY-TWO",
-        "parentId": "<uuid#1>",
+        "position": 2,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO",
@@ -374,7 +374,7 @@
       },
       {
         "id": "<uuid#2>",
-        "parentId": "input-PARITY-TWO",
+        "position": 3,
         "role": "assistant",
         "content": {
           "id": "<uuid#2>",
@@ -393,7 +393,7 @@
       },
       {
         "id": "input-PARITY-TWO-STEER",
-        "parentId": "<uuid#2>",
+        "position": 4,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO-STEER",
@@ -418,7 +418,7 @@
       },
       {
         "id": "<uuid#3>",
-        "parentId": "input-PARITY-TWO-STEER",
+        "position": 5,
         "role": "assistant",
         "content": {
           "id": "<uuid#3>",
@@ -437,7 +437,7 @@
       },
       {
         "id": "input-PARITY-THREE",
-        "parentId": "<uuid#3>",
+        "position": 6,
         "role": "user",
         "content": {
           "id": "input-PARITY-THREE",
@@ -456,7 +456,7 @@
       },
       {
         "id": "input-PARITY-FOUR-TOOL",
-        "parentId": "input-PARITY-THREE",
+        "position": 7,
         "role": "user",
         "content": {
           "id": "input-PARITY-FOUR-TOOL",
@@ -805,7 +805,7 @@
     "assistantMessages": [
       {
         "id": "input-PARITY-ONE",
-        "parentId": null,
+        "position": 0,
         "role": "user",
         "content": {
           "id": "input-PARITY-ONE",
@@ -824,7 +824,7 @@
       },
       {
         "id": "<uuid#1>",
-        "parentId": "input-PARITY-ONE",
+        "position": 1,
         "role": "assistant",
         "content": {
           "id": "<uuid#1>",
@@ -843,7 +843,7 @@
       },
       {
         "id": "input-PARITY-TWO",
-        "parentId": "<uuid#1>",
+        "position": 2,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO",
@@ -862,7 +862,7 @@
       },
       {
         "id": "<uuid#2>",
-        "parentId": "input-PARITY-TWO",
+        "position": 3,
         "role": "assistant",
         "content": {
           "id": "<uuid#2>",
@@ -881,7 +881,7 @@
       },
       {
         "id": "input-PARITY-TWO-STEER",
-        "parentId": "<uuid#2>",
+        "position": 4,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO-STEER",
@@ -906,7 +906,7 @@
       },
       {
         "id": "<uuid#3>",
-        "parentId": "input-PARITY-TWO-STEER",
+        "position": 5,
         "role": "assistant",
         "content": {
           "id": "<uuid#3>",
@@ -925,7 +925,7 @@
       },
       {
         "id": "input-PARITY-THREE",
-        "parentId": "<uuid#3>",
+        "position": 6,
         "role": "user",
         "content": {
           "id": "input-PARITY-THREE",
@@ -944,7 +944,7 @@
       },
       {
         "id": "input-PARITY-FOUR-TOOL",
-        "parentId": "input-PARITY-THREE",
+        "position": 7,
         "role": "user",
         "content": {
           "id": "input-PARITY-FOUR-TOOL",
@@ -963,7 +963,7 @@
       },
       {
         "id": "input-PARITY-FOUR-STEER",
-        "parentId": "input-PARITY-FOUR-TOOL",
+        "position": 8,
         "role": "user",
         "content": {
           "id": "input-PARITY-FOUR-STEER",
@@ -988,7 +988,7 @@
       },
       {
         "id": "<uuid#11>",
-        "parentId": "input-PARITY-FOUR-STEER",
+        "position": 9,
         "role": "assistant",
         "content": {
           "id": "<uuid#11>",
@@ -1023,7 +1023,7 @@
       },
       {
         "id": "input-PARITY-FIVE",
-        "parentId": "<uuid#11>",
+        "position": 10,
         "role": "user",
         "content": {
           "id": "input-PARITY-FIVE",
@@ -1042,7 +1042,7 @@
       },
       {
         "id": "<uuid#12>",
-        "parentId": "input-PARITY-FIVE",
+        "position": 11,
         "role": "assistant",
         "content": {
           "id": "<uuid#12>",

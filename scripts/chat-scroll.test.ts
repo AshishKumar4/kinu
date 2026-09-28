@@ -357,6 +357,8 @@ interface Walked {
  */
 const LongFrameSchema = v.object({
   realInView: v.boolean(), atStart: v.boolean(), scrollTop: v.number(), thumbPx: v.number(), anchorTop: v.nullable(v.number()),
+  /** The drive's gesture has run: frames the recorder takes before it show the page as it was. */
+  afterGesture: v.boolean(),
 });
 
 type LongFrame = v.InferOutput<typeof LongFrameSchema>;
@@ -370,6 +372,11 @@ interface LongChat {
   readonly fling: readonly LongFrame[];
   readonly reservedBeforeDrag: number;
   readonly drag: readonly LongFrame[];
+  /** History pages the drag to the top asked for, and the drag's wall time until the first row painted. */
+  readonly dragAsks: number;
+  readonly dragMs: number;
+  /** A drag to the middle: the first page it read (`from-to`), and the history index of the first row in view once one landed. */
+  readonly middle: { readonly read: string; readonly shown: number | null };
 }
 
 interface Observed {
@@ -515,6 +522,7 @@ async function paintedFrames(page: Page, drive: () => Promise<void>): Promise<Lo
     const scroller = document.querySelector<HTMLElement>(selector);
 
     document.documentElement.dataset.probeRecording = '';
+    delete document.documentElement.dataset.probeGesture;
 
     if (scroller === null) {
       reject(new Error(`no ${selector} to record`));
@@ -537,6 +545,7 @@ async function paintedFrames(page: Page, drive: () => Promise<void>): Promise<Lo
       return {
         realInView,
         atStart: (scroller.textContent ?? '').includes('Beginning of the conversation'),
+        afterGesture: document.documentElement.dataset.probeGesture !== undefined,
         scrollTop: scroller.scrollTop,
         thumbPx: (scroller.scrollTop / scroller.scrollHeight) * scroller.clientHeight,
         anchorTop: anchor === null ? null : anchor.getBoundingClientRect().top - box.top,
@@ -686,6 +695,9 @@ async function measureLong(newPage: Gallery['newPage'], origin: string): Promise
   let fling: LongFrame[] = [];
   let drag: LongFrame[] = [];
   let reservedBeforeDrag = 0;
+  let dragAsks = 0;
+  let dragMs = 0;
+  let middle: LongChat['middle'] = { read: '', shown: null };
 
   try {
     // Held pages: each older page lands when released, and nothing lands between a painted frame and its reading.
@@ -711,19 +723,50 @@ async function measureLong(newPage: Gallery['newPage'], origin: string): Promise
     await flung.close();
 
     // The scrollbar dragged to the top: the reader stays at the top while history fills, and lands on the first row.
-    const dragged = await openLong(newPage, origin, 'history=2000&historyLatency=50');
+    const dragged = await openLong(newPage, origin, 'history=5000&historyLatency=250');
 
     reservedBeforeDrag = await dragged.$eval(LONG, (el) => el.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0);
+    const asksBefore = await dragged.evaluate(() => Number(document.documentElement.dataset.historyAsks ?? 0));
+    const dragStart = performance.now();
+
     drag = await paintedFrames(dragged, async () => {
-      await dragged.$eval(LONG, (el) => { el.scrollTop = 0; });
+      await dragged.$eval(LONG, (el) => {
+        document.documentElement.dataset.probeGesture = '';
+        el.scrollTop = 0;
+      });
       await untilLong(dragged, { kind: 'start' }, 'the drag to the top never reached the first row');
       await nextPaint(dragged);
     });
+    dragMs = performance.now() - dragStart;
+    dragAsks = await dragged.evaluate(() => Number(document.documentElement.dataset.historyAsks ?? 0)) - asksBefore;
     await dragged.close();
 
-    return { refused: null, stillReader, uneven, fling, reservedBeforeDrag, drag };
+    // The scrollbar dragged to the middle: the page read is the one under the reader, not the next one up.
+    const halfway = await openLong(newPage, origin, 'history=5000&historyLatency=250');
+    const readsBefore = await halfway.evaluate(() => (document.documentElement.dataset.historyReads ?? '').trim().split(' ').length);
+    const rowsBefore = await halfway.$eval(LONG, (el) => el.children.length);
+
+    await halfway.$eval(LONG, (el) => {
+      el.scrollTop = Math.round((el.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0) / 2);
+    });
+    await untilLong(halfway, { kind: 'rowsAbove', rows: rowsBefore }, 'the drag to the middle never landed a page');
+    await nextPaint(halfway);
+    await nextPaint(halfway);
+    middle = {
+      read: await halfway.evaluate((skip) => (document.documentElement.dataset.historyReads ?? '').trim().split(' ')[skip] ?? '', readsBefore),
+      shown: await halfway.$eval(LONG, (el) => {
+        const view = el.getBoundingClientRect();
+        const row = [...el.children].find((child) => !child.hasAttribute('data-scroll-edge') && child.getBoundingClientRect().bottom > view.top);
+        const index = /(?:Question|Answer) (\d+)/.exec(row?.textContent ?? '')?.[1];
+
+        return index === undefined ? null : Number(index);
+      }),
+    };
+    await halfway.close();
+
+    return { refused: null, stillReader, uneven, fling, reservedBeforeDrag, drag, dragAsks, dragMs, middle };
   } catch (err) {
-    return { refused: firstLine({ cause: err }), stillReader, uneven, fling, reservedBeforeDrag, drag };
+    return { refused: firstLine({ cause: err }), stillReader, uneven, fling, reservedBeforeDrag, drag, dragAsks, dragMs, middle };
   }
 }
 
@@ -892,8 +935,25 @@ describe('a long workspace chat, as the reader sees it', () => {
     expect(observed.long.reservedBeforeDrag).toBeGreaterThan(100_000);
   });
 
+  // Owner 2026-09-28: dragging to the top of 5,000 messages took 9-10 s, one page per round trip.
+  test('the thumb dragged to the top of a long chat reads the first page in one round trip', () => {
+    console.log(`drag to the top at 5,000 messages: ${String(observed.long.dragAsks)} page(s), ${observed.long.dragMs.toFixed(0)} ms`);
+    expect(observed.long.dragAsks).toBe(1);
+  });
+
+  test('the thumb dragged to the middle reads the page under the reader in one round trip', () => {
+    const [from = NaN, to = NaN] = observed.long.middle.read.split('-').map(Number);
+    const shown = observed.long.middle.shown ?? NaN;
+
+    expect(shown).toBeGreaterThanOrEqual(2250);
+    expect(shown).toBeLessThanOrEqual(2750);
+    expect(from).toBeLessThanOrEqual(shown);
+    expect(to).toBeGreaterThan(shown);
+  });
+
   test('the thumb dragged to the top stays at the top while history fills, and the reader lands on the first row', () => {
-    const drag = observed.long.drag;
+    // 2026-09-28: frames painted before the drag, recorded while the gesture was still on its way, failed this under load.
+    const drag = observed.long.drag.filter((frame) => frame.afterGesture);
 
     expect(drag.length).toBeGreaterThan(0);
     expect(drag.filter((frame) => frame.scrollTop !== 0)).toEqual([]);

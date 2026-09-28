@@ -189,9 +189,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     const { db, rt, session, events } = setup('streamed answer');
     db.exec(`CREATE TRIGGER fail_first_turn_persist
       BEFORE INSERT ON conversation_entries
-      WHEN NEW.role = 'assistant'
-        AND (SELECT parent_id FROM conversation_entries
-             WHERE actor_id = NEW.actor_id AND session_id = NEW.session_id AND id = NEW.parent_id) IS NULL
+      WHEN NEW.role = 'assistant' AND NEW.position = 1
       BEGIN
         SELECT RAISE(FAIL, 'forced persist failure');
       END`);

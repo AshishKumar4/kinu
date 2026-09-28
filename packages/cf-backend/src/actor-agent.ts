@@ -121,7 +121,7 @@ import {
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   readDeviceRequestChannel, type DeviceRequestChannel,
   cancelCurrentWork, getStoredModelSpec, setModel, getChatHistoryPage,
-  type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest,
+  type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId, type MCTSProgressEvent,
   EventLog,
   resolveTurnSkills, filterToolNamesBySkills,
@@ -1910,7 +1910,7 @@ export abstract class ActorAgent extends Agent<Env> {
       sql: this.boundSql,
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
-      history: (limit) => this.chatTranscript.history(undefined, limit),
+      history: (limit) => this.chatTranscript.history(limit),
       admitted: (id) => this.admittedSend(id),
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
       interrupt: () => { this.chatLoop.interrupt(); },
@@ -3531,8 +3531,9 @@ export abstract class ActorAgent extends Agent<Env> {
    * The root's pane names none and reads this actor's conversation.
    */
   @callable()
-  async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<ChatHistoryPage> {
-    const { actor, ...page } = request ?? {};
+  async getChatHistoryPage(request: PositionPageRequest & { actor?: string } = {}): Promise<ChatHistoryPage> {
+    // Strict: a dropped id cursor from an old client re-reads the newest page forever.
+    const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
 
     return getChatHistoryPage(actor === undefined ? this.chatTranscript : this.subordinateChat(actor), page);
   }

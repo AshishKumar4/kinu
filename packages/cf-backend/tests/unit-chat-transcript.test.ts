@@ -42,14 +42,14 @@ function transcript() {
 }
 
 describe('the CF public transcript over canonical references', () => {
-  test('replayed admission is idempotent and steers retain parentage and metadata', async () => {
+  test('replayed admission is idempotent and steers keep their order and metadata', async () => {
     const t = transcript();
     await t.user('opening', 'build the slate');
     await t.user('opening', 'build the slate');
     await t.user('steer', 'also check staging', { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: 2 });
 
-    expect(t.store.ancestry().map((entry) => [entry.id, entry.parentId])).toEqual([
-      ['opening', null], ['steer', 'opening'],
+    expect(t.store.entries().map((entry) => [entry.id, entry.position])).toEqual([
+      ['opening', 0], ['steer', 1],
     ]);
     expect((await t.store.history()).map((message) => message.id)).toEqual(['opening', 'steer']);
     expect(await t.store.lastUserMetadata()).toMatchObject({ [STEER_STEP_METADATA_KEY]: 2 });
@@ -71,7 +71,7 @@ describe('the CF public transcript over canonical references', () => {
     const finalText = parts.at(-1);
 
     if (finalText === undefined) throw new Error('fixture has no final text reference');
-    const entry = await t.store.prepareAssistant({ id: 'answer', parentId: 'opening', turnId: 'opening', runId: 'run', parts, finalText });
+    const entry = await t.store.prepareAssistant({ id: 'answer', turnId: 'opening', runId: 'run', parts, finalText });
     t.store.appendAssistant(entry);
     const answer = (await t.store.history()).at(-1);
 
@@ -98,7 +98,7 @@ describe('the CF public transcript over canonical references', () => {
     const finalText = final[0];
 
     if (finalText === undefined) throw new Error('fixture has no display text reference');
-    t.store.appendAssistant(await t.store.prepareAssistant({ id: 'answer', parentId: 'opening', turnId: 'opening', runId: 'run', parts, finalText }));
+    t.store.appendAssistant(await t.store.prepareAssistant({ id: 'answer', turnId: 'opening', runId: 'run', parts, finalText }));
     expect((await t.store.history()).at(-1)?.parts.at(-1)).toEqual({ type: 'text', text: 'The check passed.', state: 'done' });
     const selected = t.history.context.selected();
 

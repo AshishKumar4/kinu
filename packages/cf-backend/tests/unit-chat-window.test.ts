@@ -9,7 +9,7 @@ import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import type { ChatHistoryEntry, ChatHistoryPage, Rpc } from '@kinu.run/core';
+import { PositionCursorSchema, type ChatHistoryEntry, type ChatHistoryPage, type Rpc } from '@kinu.run/core';
 
 import { useChatThread } from '../src/hooks/use-chat-thread';
 
@@ -77,25 +77,35 @@ describe('the older pages under a sliding window', () => {
     }
   });
 
-  function entry(id: string): ChatHistoryEntry {
-    return { id, role: 'user', content: id, createdAt: 0 };
+  function entries(...ids: string[]): ChatHistoryEntry[] {
+    return ids.map((id, position) => ({ id, position, role: 'user', content: id, createdAt: 0 }));
   }
 
-  const Query = v.tuple([v.object({ cursor: v.optional(v.unknown()) })]);
+  const Query = v.tuple([v.object({ cursor: v.optional(PositionCursorSchema), limit: v.number() })]);
 
-  /** The store: forty rows older than `m41`, and nothing older than anything else. Sent as JSON, as the socket does. */
-  const stored: Rpc = async (_method, args) => {
-    const [{ cursor }] = v.parse(Query, args);
+  /** Answers position pages over `store`, sent as JSON, as the socket does. */
+  function storeOf(store: () => readonly ChatHistoryEntry[]): Rpc {
+    return async (_method, args) => {
+      const [{ cursor, limit }] = v.parse(Query, args);
+      const end = Math.min(cursor?.before ?? store().length, store().length);
+      const start = Math.max(0, end - limit);
+      const items = store().slice(start, end);
+      const page: ChatHistoryPage = start === 0 ? { status: 'end', items } : { status: 'more', items, next: { before: start } };
 
-    const page: ChatHistoryPage = JSON.stringify(cursor ?? null).includes('m41')
-      ? { status: 'end', items: Array.from({ length: 40 }, (_, index) => entry(`m${String(index + 1)}`)), walked: 40 }
-      : { status: 'end', items: [], walked: 0 };
+      return JSON.parse(JSON.stringify(page));
+    };
+  }
 
-    return JSON.parse(JSON.stringify(page));
-  };
+  let lastTranscript: readonly UIMessage[] = [];
 
-  /** Each frame rendered in turn; `reachEdge` is the scroller reporting the reader at the top. */
-  async function shownThrough(frames: readonly (readonly UIMessage[])[], reachEdge = false): Promise<string[][]> {
+  const FORTY_TWO = entries(...Array.from({ length: 42 }, (_, index) => `m${String(index + 1)}`));
+
+  /** Each frame rendered in turn over its store; `reachEdge` is the scroller reporting the reader at the top. */
+  async function shownThrough(
+    frames: readonly (readonly UIMessage[])[], reachEdge = false, stores: readonly (readonly ChatHistoryEntry[])[] = [FORTY_TWO],
+  ): Promise<string[][]> {
+    let at = 0;
+    const stored = storeOf(() => stores[Math.min(at, stores.length - 1)] ?? []);
     const listens = { addEventListener() {}, removeEventListener() {} };
     const container: Element = Object.create(null, Object.getOwnPropertyDescriptors({ nodeType: 1, tagName: 'DIV', namespaceURI: null, ownerDocument: listens, ...listens }));
     const root = createRoot(container);
@@ -106,12 +116,14 @@ describe('the older pages under a sliding window', () => {
     function Pane({ frame }: { frame: readonly UIMessage[] }): null {
       const thread = useChatThread({ rpc: stored, live: frame, seeded: true });
       shown = thread.transcript.map((message) => message.id);
+      lastTranscript = thread.transcript;
       loadMore = thread.history.loadMore;
 
       return null;
     }
 
-    for (const frame of frames) {
+    for (const [index, frame] of frames.entries()) {
+      at = index;
       await act(async () => { root.render(createElement(Pane, { frame })); });
 
       if (reachEdge) await act(async () => { loadMore(); });
@@ -135,8 +147,17 @@ describe('the older pages under a sliding window', () => {
     expect(first?.length).toBe(42);
   });
 
+  // A reconnect can re-seed a wider window, so one row legitimately arrives both ways; React drops a duplicate key silently.
+  test('a row read from the store and held live renders once, as the live copy', async () => {
+    const live: UIMessage[] = [{ id: 'm41', role: 'user', parts: [{ type: 'text', text: 'm41' }], metadata: { kinuSignal: 'live' } }, ...rows('m42')];
+    const [first] = await shownThrough([live], true);
+
+    expect(first).toEqual(FORTY_TWO.map((entry) => entry.id));
+    expect(lastTranscript.find((message) => message.id === 'm41')?.metadata).toEqual({ kinuSignal: 'live' });
+  });
+
   test('a clear from another tab drops the older pages with the kept rows', async () => {
-    const seen = await shownThrough([rows('m41', 'm42'), [], rows('n1')], true);
+    const seen = await shownThrough([rows('m41', 'm42'), [], rows('n1')], true, [FORTY_TWO, [], entries('n1')]);
 
     expect(seen.slice(1)).toEqual([[], ['n1']]);
   });

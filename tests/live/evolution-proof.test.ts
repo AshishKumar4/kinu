@@ -154,9 +154,9 @@ async function chatTurn(turn: ChatTurn): Promise<TurnResult> {
   const responseText = collectStepText(result);
 
   const id = crypto.randomUUID();
-  await rt.stores.history.record(sessionId, { id, parentId: null, message: { role: 'user', content: userMessage }, origin: 'input' });
+  await rt.stores.history.record(sessionId, { id, message: { role: 'user', content: userMessage }, origin: 'input' });
   await rt.stores.history.record(sessionId, {
-    id: crypto.randomUUID(), parentId: id, message: { role: 'assistant', content: responseText }, origin: 'output',
+    id: crypto.randomUUID(), message: { role: 'assistant', content: responseText }, origin: 'output',
   });
 
   return {

@@ -584,7 +584,8 @@ describe('LocalAgentHost', () => {
 
     const assistantRows = checkSql<{ n: number }>`
       SELECT COUNT(*) AS n FROM conversation_entries
-      WHERE actor_id = ${checkActorId} AND parent_id = ${wakeId} AND role = 'assistant'`[0];
+      WHERE actor_id = ${checkActorId} AND role = 'assistant' AND position = (
+        SELECT position + 1 FROM conversation_entries WHERE actor_id = ${checkActorId} AND id = ${wakeId})`[0];
 
     const orphanRows = check.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM fibers WHERE id = 'orphan-fiber'",

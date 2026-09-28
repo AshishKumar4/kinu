@@ -91,7 +91,7 @@ async function noticeRows(db: Database): Promise<{ id: string; content: string }
   const transcript = chatStore(db).transcript;
   const rows: { id: string; content: string }[] = [];
 
-  for (const entry of transcript.ancestry()) {
+  for (const entry of transcript.entries()) {
     const projected = await transcript.project(entry.id);
 
     if (projected === null) throw new Error(`entry ${entry.id} vanished between read and projection`);
@@ -158,7 +158,7 @@ describe('a settled background job announces itself once, and not as the owner',
     await runner.wake(JOB);
     const owner = chatStore(ws.db);
     await owner.history.record(CHAT_SESSION_ID, {
-      id: 'typed-1', parentId: owner.transcript.newestId(), origin: 'input',
+      id: 'typed-1', origin: 'input',
       message: { role: 'user', content: 'find me a domain' },
     });
 

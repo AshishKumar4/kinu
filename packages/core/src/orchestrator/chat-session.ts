@@ -1023,8 +1023,7 @@ export class ChatSession {
     const metadata = await answerMetadata(this.ports, lease.turnId, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), end.reason);
 
     const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
-      id: this.messageId, parentId: this.actorSession.landedSteers.at(-1)?.id ?? lease.turnId,
-      turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
+      id: this.messageId, turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
       ...(metadata !== null && { metadata }),
     }) : null;
 
@@ -1246,15 +1245,14 @@ export class ChatSession {
 
   // The pending-send ledger: a send is a row before the client hears it.
 
-  /** Landed rows and spent reservations in one transaction; rows chain from the opening message. */
+  /** Landed rows and spent reservations in one transaction; rows follow the opening message. */
   private async prepareLandedSteers(rows: readonly LandedSteerRow[], reference: MessageReference): Promise<(context: ContextSelection) => void> {
     const turnId = this.turnId;
     const runId = this.runId;
 
     if (turnId === null || runId === null) throw new KinuError('denied', 'steer publication requires an active turn');
     const opening = this.openingRow;
-    const parentId = this.actorSession.landedSteers.at(-1)?.id ?? turnId;
-    const prepared = await this.transcript.prepareSteers({ rows, reference, turnId, runId, parentId });
+    const prepared = await this.transcript.prepareSteers({ rows, reference, turnId, runId });
 
     return context => {
       if (opening !== null && this.actorSession.landedSteers.length === 0) this.transcript.appendUser(opening);

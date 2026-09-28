@@ -21,7 +21,7 @@ async function sourceWorkspace(): Promise<ForkSourceFixture> {
   const workspace = createTestWorkspace();
   const chat = await seedForkSource(workspace, { workspaceId: 'SRC', workspaceName: 'atlas' });
   // The cut is looked up in THIS actor's rows, so the seeded transcript names it.
-  await chat.say({ id: 'm1', role: 'user', text: 'hello', parentId: null });
+  await chat.say({ id: 'm1', role: 'user', text: 'hello' });
   await chat.say({ id: 'm2', role: 'assistant', text: 'hi' });
 
   return { workspace, actor: chat.actor };

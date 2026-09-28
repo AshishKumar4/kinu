@@ -327,8 +327,6 @@ export class ForkSourceProbeDO extends ForkProbeDO {
       { id: PROBE_CUT_MESSAGE_ID, role: 'assistant', text: 'Done. This is the cut point.' },
     ] as const;
 
-    let parentId: string | null = null;
-
     for (const [index, turn] of turns.entries()) {
       const reference = await history.append({
         id: turn.id,
@@ -339,11 +337,10 @@ export class ForkSourceProbeDO extends ForkProbeDO {
       });
 
       transcript.record({
-        id: turn.id, parentId, role: turn.role, turnId: null, runId: null, metadata: null,
+        id: turn.id, role: turn.role, turnId: null, runId: null, metadata: null,
         parts: [{ messageId: reference.messageId, partNo: 0 }],
       });
 
-      parentId = turn.id;
       void this.sql`UPDATE conversation_entries SET recorded_at = ${PROBE_CUT_RECORDED_AT - (turns.length - 1 - index) * 1000}
         WHERE actor_id = ${actor.actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${turn.id}`;
     }

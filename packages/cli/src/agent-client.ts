@@ -10,7 +10,7 @@ import type {
   StagedSkillResult,
   ReasoningEffort, TierId, Usage, RunEvent, JsonObject, ToolOutcome,
   AdmittedInstructionDecision,
-  InstructionSourceRow, InstructionSourceView, Page, PageRequest,
+  InstructionSourceRow, InstructionSourceView, Page, PageRequest, PositionCursor, PositionPageRequest,
   DeferredApproval, DeferredApprovalAnswer,
   PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
   SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
@@ -158,10 +158,10 @@ export interface AgentForkResult {
 /** A durable conversation, oldest first, over either backend's `getChatHistoryPage`. Never capped: a fork
  *  pivot past a cap would read as not found. */
 export async function readConversation(
-  page: (request: PageRequest) => Promise<Page<ChatHistoryEntry>>,
+  page: (request: PositionPageRequest) => Promise<Page<ChatHistoryEntry, PositionCursor>>,
 ): Promise<AgentTranscriptMessage[]> {
   const messages: AgentTranscriptMessage[] = [];
-  let request: PageRequest = {};
+  let request: PositionPageRequest = {};
 
   for (;;) {
     const read = await page(request);

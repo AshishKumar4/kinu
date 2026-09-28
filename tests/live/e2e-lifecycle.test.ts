@@ -152,9 +152,9 @@ async function chatTurn(turn: ChatTurn): Promise<ConversationTurn> {
   history.push(...result.response.messages);
   const responseText = collectStepText(result);
   const id = crypto.randomUUID();
-  await rt.stores.history.record('e2e', { id, parentId: null, message: { role: 'user', content: userMessage }, origin: 'input' });
+  await rt.stores.history.record('e2e', { id, message: { role: 'user', content: userMessage }, origin: 'input' });
   await rt.stores.history.record('e2e', {
-    id: crypto.randomUUID(), parentId: id, message: { role: 'assistant', content: responseText }, origin: 'output',
+    id: crypto.randomUUID(), message: { role: 'assistant', content: responseText }, origin: 'output',
   });
 
   return {

@@ -92,20 +92,13 @@ function startMockAgentServer(options: ({
 
         // Pages of two, so a client that reads only the first page fails.
         if (method === 'getChatHistoryPage') {
-          const cursor = v.parse(v.optional(v.object({ cursor: v.optional(v.object({ after: v.string() })) })), args[0]);
-          const after = cursor?.cursor?.after;
-
-          const end = after === undefined
-            ? chatMessages.length
-            : chatMessages.findIndex((m) => m.id === after);
-
-          if (end < 0) return Response.json({ error: `Stale cursor: ${after}` }, { status: 409 });
+          const cursor = v.parse(v.optional(v.object({ cursor: v.optional(v.object({ before: v.number() })) })), args[0]);
+          const end = cursor?.cursor?.before ?? chatMessages.length;
           const start = Math.max(0, end - 2);
+          const items = chatMessages.slice(start, end).map((message, offset) => ({ ...message, position: start + offset }));
 
           return Response.json({
-            result: start === 0
-              ? { status: 'end', items: chatMessages.slice(start, end) }
-              : { status: 'more', items: chatMessages.slice(start, end), next: { after: chatMessages[start].id } },
+            result: start === 0 ? { status: 'end', items } : { status: 'more', items, next: { before: start } },
           });
         }
 
@@ -259,7 +252,7 @@ describe('CloudAgentClient protocol', () => {
       const history = await client.history();
       expect(history.map((message) => message.id)).toEqual(['event-1', 'user-2', 'assistant-3']);
       expect(history[0]?.metadata).toEqual(metadata);
-      expect(restoredRows([v.parse(ChatHistoryEntrySchema, row)])[0]?.metadata).toEqual(history[0]?.metadata);
+      expect(restoredRows([v.parse(ChatHistoryEntrySchema, { ...row, position: 0 })])[0]?.metadata).toEqual(history[0]?.metadata);
     } finally {
       await client.close();
     }
