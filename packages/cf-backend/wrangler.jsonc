@@ -22,7 +22,7 @@
   // which is what the 2026-07-13 abrupt-stop incident's root error looked like
   // once it was persisted.
   //
-  // It costs nothing against the 10 MB script budget: source maps travel as
+  // It costs nothing against the 64 MiB script size limit: source maps travel as
   // separate `application/source-map` parts and are NOT in the module list
   // wrangler measures (`printBundleSize` receives `modules` and the entry, never
   // `sourceMaps`; their own limit is 15 MB gzipped). The maps that get uploaded
