@@ -292,14 +292,15 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
 
 const TRANSCRIPT_FALLBACK_MS = 4_000;
 
-export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas, running = false }: {
+export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas, running }: {
   runId: string | null;
   nodeId: string | null;
   rpc: Rpc;
   headActivity: ReadonlyMap<string, number>;
   headDeltas: HeadDeltas;
-  /** Seed only: once loaded, the journal's own status decides the cadence. */
-  running?: boolean;
+  /** Seed only: once loaded, the journal's own status decides the cadence. Required, so every reader arms the
+   *  fallback re-read after a missed `head_activity` frame: a branch chip has one node and cannot recover by hand. */
+  running: boolean;
 }) {
   const load = useCallback(
     () => runId === null || nodeId === null
