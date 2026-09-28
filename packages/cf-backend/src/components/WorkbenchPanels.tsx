@@ -21,6 +21,7 @@ export interface WorkbenchPanelsProps {
 export interface WorkbenchHandle {
   /** A collapsed inspector opens; on a phone, the Workspace pane replaces the chat. */
   readonly reveal: () => void;
+  readonly showChat: () => void;
 }
 
 export interface InspectorControl {
@@ -76,6 +77,7 @@ export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspect
       if (desktopPanels) reveal();
       else setMobilePane("workspace");
     },
+    showChat: () => { setMobilePane("chat"); },
   }), [desktopPanels, reveal]);
 
   const waiting = contents.pendingActions.length;
@@ -106,9 +108,9 @@ export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspect
           </div>
         </Panel>
 
+        {/* No width of its own: a gap broke the rule under the strips. */}
         {desktopPanels && (
           <PanelResizeHandle
-        {/* No width of its own: a gap broke the rule under the strips. */}
             aria-label="Resize the inspector; press Enter to hide or show it"
             title="Drag to resize the inspector · Enter hides or shows it"
             {...layout.separatorProps}

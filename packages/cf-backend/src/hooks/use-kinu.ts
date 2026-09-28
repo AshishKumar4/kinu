@@ -20,7 +20,7 @@ import type {
   SendLanding,
 } from "@kinu.run/core";
 import type { BackgroundJob, SubordinateRosterEntry } from "@kinu.run/core/protocol";
-import type { ExecutorInfo } from "@kinu.run/core";
+import type { ExecutorInfo, PanelAgent } from "@kinu.run/core";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "@kinu.run/core";
 import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
@@ -440,6 +440,7 @@ export type LiveRefreshSource =
   | "mcts"
   | "memoryContent"
   | "executors"
+  | "agents"
   | "slates"
   | "consents"
   | "consentResolution"
@@ -461,6 +462,7 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "memoryContent", label: "memory content" },
   { source: "presence", label: "tab presence" },
   { source: "executors", label: "executors" },
+  { source: "agents", label: "the agents panel" },
   { source: "slates", label: "slates" },
   { source: "consents", label: "device consents" },
   { source: "consentResolution", label: "device consents" },
@@ -829,6 +831,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const error = formatWorkspaceError(liveErrors, agentStatus !== null);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
+  const [workspaceAgents, setWorkspaceAgents] = useState<PanelAgent[]>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
   // Listing ports never provisions a sandbox: getExposedPorts returns [] unless the executor is already active.
@@ -1522,6 +1525,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     getExposedPorts: refreshExposedPorts,
     getMemoryContent: () => refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
     getExecutors: () => refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
+    listWorkspaceAgents: () => refreshCurrentLiveResource("agents", () => rpc<PanelAgent[]>("listWorkspaceAgents", []), setWorkspaceAgents),
     listBackgroundJobs: refreshBackgroundJobs,
     listPendingActions: refreshPendingActions,
     getWorkspaceTabPresence: refreshTabPresence,
@@ -1666,6 +1670,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     try {
       await Promise.all([
         refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshPendingConsents(),
+        ...(isSubordinate ? [] : [liveReads.listWorkspaceAgents?.()]),
       ]);
     } catch (cause) {
       diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
@@ -2001,6 +2006,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setReasoningEffort,
     setDisplayName,
     executors,
+    workspaceAgents,
     executorOutputs,
     lastActiveExecutor,
     executeInExecutor,

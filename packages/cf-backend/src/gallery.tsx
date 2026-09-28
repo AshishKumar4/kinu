@@ -6,7 +6,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import type { UIMessage } from "ai";
-import { threadLiveTail, type TurnLiveness, requestUrl } from "@kinu.run/core";
+import { threadLiveTail, type PanelAgent, type TurnLiveness, requestUrl } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };
@@ -1539,6 +1539,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     }] : [],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
+  listWorkspaceAgents: () => GALLERY_AGENTS,
   // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
   // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture.
@@ -1720,6 +1721,18 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
     : { status: "more", items, next: { after: first.id }, walked };
 }
 
+const GALLERY_AGENTS: PanelAgent[] = [
+  { key: "a-main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true },
+  { key: "a-docs", label: "Docs writer", category: "user", activity: "idle", parent: "Main", open: { kind: "chat", path: "docs" }, tab: true, input: true },
+  { key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "Main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true },
+  { key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "Coupon auditor", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true },
+  { key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "Main",
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false },
+  { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "Main",
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false },
+  { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "Main", open: { kind: "chat", path: "refiner" }, tab: false, input: false },
+];
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getChatHistoryPage" && HISTORY_ROWS > 0) return rpcResult(await galleryHistoryPage(args)).json<T>();
 
@@ -1785,12 +1798,20 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
   const page = WORKSPACE_PAGE_RPC.get(method);
 
   if (page !== undefined) return rpcResult(v.parse(JsonValueSchema, page(args))).json<T>();
+
+  return agentPageFallback<T>(method, args);
+};
+
+/** The agent's own reads, then a swarm worker's transcript opened from the Agents panel, then the blanket stub. */
+async function agentPageFallback<T>(method: string, args: unknown[] | undefined): Promise<T> {
   const agent = AGENT_RPC.get(method);
 
   if (agent !== undefined) return rpcResult(agent).json<T>();
 
+  if (EXPLORATION_READS.has(method)) return rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? []))).json<T>();
+
   return stubRpc<T>(method, args);
-};
+}
 
 /** A named-preset search. `prove` because its resolved axes are the least guessable from its name. */
 // `lean/Checkout/Coupon.lean` is invented along with the coupon table; the module does not exist. Enrolled in `CITATION_ILLUSTRATIVE`.

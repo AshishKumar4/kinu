@@ -1660,6 +1660,11 @@ export {
 
 export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema } from './read-models/workspace-work';
 
+export {
+  readWorkspaceAgents, agentActive,
+  type PanelAgent, type AgentCategory, type AgentActivity, type AgentOpening,
+} from './read-models/workspace-agents';
+
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
 
 export {
@@ -2308,7 +2313,7 @@ export {
   type SlateSurfaceKind,
   type SurfaceContent,
   type SurfaceKind,
-  ACTIVITY_SURFACE,
+  ACTIVITY_SURFACE, AGENTS_SURFACE,
   SLATE_PREFIX,
   SURFACES,
   landedSurface,
