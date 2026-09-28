@@ -165,7 +165,9 @@ blocks plus whole small files in one delta object, so a 64 KiB overwrite in a
 64 MiB file publishes under 196,608 bytes (`C3_BYTES_BOUND`). Decided
 2026-09-09 (`edecd1e38`, `7962b3624`) from COST-2026-09-09-chain-publication.md,
 which measured whole-delta publication re-uploading unchanged dirty data
-quadratically. D2 changes where the delta is consumed, not how it is written.
+quadratically. D2 changes where the delta is consumed, not how it is written. The hand-run
+live-record checker `scripts/bench-c3-overwrite-cell.ts` left the tree
+2026-09-27; restore from `4ed6396663`.
 
 D5. Snapshot-chain is refused full strategy admission on 2026-09-13.
 Settlement run `20260913154111`, clean `a292c7488c`, ran from

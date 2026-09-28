@@ -365,13 +365,6 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/core/src/providers/structured.ts",
-      "kind": "hand-parser",
-      "owner": "extractBalancedJson",
-      "sourceSha256": "4cf0e02736d26c5eaa962107ae1438d4bb795a4f07be3a933431f53de557f207",
-      "decision": "framing"
-    },
-    {
       "file": "packages/core/src/read-models/background-event.ts",
       "kind": "hand-parser",
       "owner": "parseDrainedEvents",
@@ -461,20 +454,6 @@
       "owner": "parseSkillFile",
       "sourceSha256": "127508da4c12dfdd6ee5c3cda6f8b28ff6043632b99950472b55683e2bb8dfef",
       "decision": "lexical"
-    },
-    {
-      "file": "packages/core/src/tui/context-status.ts",
-      "kind": "hand-parser",
-      "owner": "stripKnownProvider",
-      "sourceSha256": "e41b2bd0d7a20cf88067b46fe3b82a4bf4b1f46553a1145c06fcfaebab55aab4",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/core/src/utils/markdown-frontmatter.ts",
-      "kind": "hand-parser",
-      "owner": "parseFlatYaml",
-      "sourceSha256": "303dfaf4a1a8ec624b803327ece19c33d9c654b6452ae8bea5360fd56f076bfa",
-      "decision": "frontmatter"
     },
     {
       "file": "packages/core/src/utils/markdown-frontmatter.ts",
@@ -778,20 +757,6 @@
       "decision": "framing"
     },
     {
-      "file": "scripts/devbox-holder-probe.ts",
-      "kind": "hand-parser",
-      "owner": "scan",
-      "sourceSha256": "3af71376f6acceac41eb3af608c12290bc9f3ae6cd6cfe3a0f7a50636a0b4104",
-      "decision": "protected"
-    },
-    {
-      "file": "scripts/eval-workspaces.ts",
-      "kind": "hand-parser",
-      "owner": "parseArgs",
-      "sourceSha256": "14ecc19b299e0aa7fe22213b31c53b5d312c2a24671d446ed5d3fac34e9cbfe1",
-      "decision": "cli"
-    },
-    {
       "file": "scripts/patch-parity.ts",
       "kind": "hand-parser",
       "owner": "parsePatch",
@@ -809,13 +774,6 @@
       "file": "scripts/review-package.ts",
       "kind": "regex-literal",
       "owner": "artifactHtml",
-      "sourceSha256": "7eb623284311613b1d5f5d089b629a265cfd2d210d9b1ee62fa659c6f51f7aa0",
-      "decision": "lexical"
-    },
-    {
-      "file": "scripts/review-round2.ts",
-      "kind": "regex-literal",
-      "owner": "html",
       "sourceSha256": "7eb623284311613b1d5f5d089b629a265cfd2d210d9b1ee62fa659c6f51f7aa0",
       "decision": "lexical"
     },
