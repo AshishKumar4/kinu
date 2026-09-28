@@ -2,7 +2,8 @@
 // it is the only sentence that tells a person what to change.
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
-import { tolerate } from '../obs/index';
+import { Effect } from 'effect';
+import { settleSync, tolerate } from '../obs/index';
 
 const CLOUDFLARE_API_ROOT = 'https://api.cloudflare.com/client/v4';
 
@@ -88,7 +89,7 @@ export function readEnvelope<Result>(
   const envelope = v.safeParse(EnvelopeSchema, response.body);
 
   if (!envelope.success) {
-    throw new CloudflareApiError(response.status, path, renderNonEnvelope(response), []);
+    return settleSync(Effect.die(new CloudflareApiError(response.status, path, renderNonEnvelope(response), [])));
   }
 
   const errors: CloudflareErrorDetail[] = (envelope.output.errors ?? [])
@@ -98,18 +99,18 @@ export function readEnvelope<Result>(
   const refused = response.status < 200 || response.status >= 300 || envelope.output.success === false;
 
   if (refused) {
-    throw new CloudflareApiError(response.status, path, errors[0]?.message ?? `HTTP ${response.status}`, errors);
+    return settleSync(Effect.die(new CloudflareApiError(response.status, path, errors[0]?.message ?? `HTTP ${response.status}`, errors)));
   }
 
   const result = v.safeParse(schema, envelope.output.result);
 
   if (!result.success) {
-    throw new CloudflareApiError(
+    return settleSync(Effect.die(new CloudflareApiError(
       response.status,
       path,
       `the answer did not carry ${describe(result.issues)}`,
       errors,
-    );
+    )));
   }
 
   return result.output;

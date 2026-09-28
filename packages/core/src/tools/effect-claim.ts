@@ -5,7 +5,8 @@
 
 import type { ToolSet } from 'ai';
 import { argumentDigest } from '../safety/argument-digest';
-import { KinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settle } from '../obs/index';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { parseJsonValue, projectJsonValue, type JsonValue } from '../utils/json';
@@ -88,50 +89,47 @@ export interface EffectClaimDeps {
 export function withEffectClaims(
   tools: ToolSet,
   deps: EffectClaimDeps,
-  options?: { readonly safe?: ReadonlySet<string> },
+  opts?: { readonly safe?: ReadonlySet<string> },
 ): ToolSet {
   // Built by assignment so the compiler checks every entry; `fromEntries` would need an unchecked cast.
   const claimed: ToolSet = {};
 
   for (const [name, entry] of Object.entries(tools)) {
-    claimed[name] = replayPolicyFor(name) === 'safe' || options?.safe?.has(name) === true
-      ? entry
-      : withEffectClaim(name, entry, deps);
+    const execute = entry.execute;
+
+    if (replayPolicyFor(name) === 'safe' || opts?.safe?.has(name) === true || !execute) {
+      claimed[name] = entry;
+      continue;
+    }
+
+    claimed[name] = {
+      ...entry,
+      execute: async (input, options) => {
+        const key: ToolEffectKey = {
+          turnId: deps.turnId(),
+          callId: options.toolCallId,
+          digest: argumentDigest({ tool: name, args: projectJsonValue({ value: input }) }),
+        };
+
+        // A program's own call streams no part.
+        if (options.messages.length > 0) await deps.durable(options.toolCallId, options.abortSignal);
+        const claim = claimToolEffect(deps.sql, deps.actor, key);
+
+        if (claim.kind === 'settled') return claim.result;
+
+        if (claim.kind === 'indeterminate') return settle(Effect.fail(new KinuError('denied', indeterminateEffectMessage(name, key.callId))));
+        const output = await execute(input, options);
+        // Durable before published: the row must exist before the caller reads this value.
+        settleToolEffect(
+          deps.sql, deps.actor, key, JSON.stringify(projectJsonValue({ value: output })),
+        );
+
+        return output;
+      },
+    };
   }
 
   return claimed;
-}
-
-function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaimDeps): ToolSet[string] {
-  const execute = entry.execute;
-
-  if (!execute) return entry;
-
-  return {
-    ...entry,
-    execute: async (input, options) => {
-      const key: ToolEffectKey = {
-        turnId: deps.turnId(),
-        callId: options.toolCallId,
-        digest: argumentDigest({ tool: name, args: projectJsonValue({ value: input }) }),
-      };
-
-      // A program's own call streams no part.
-      if (options.messages.length > 0) await deps.durable(options.toolCallId, options.abortSignal);
-      const claim = claimToolEffect(deps.sql, deps.actor, key);
-
-      if (claim.kind === 'settled') return claim.result;
-
-      if (claim.kind === 'indeterminate') throw new KinuError('denied', indeterminateEffectMessage(name, key.callId));
-      const output = await execute(input, options);
-      // Durable before published: the row must exist before the caller reads this value.
-      settleToolEffect(
-        deps.sql, deps.actor, key, JSON.stringify(projectJsonValue({ value: output })),
-      );
-
-      return output;
-    },
-  };
 }
 
 function indeterminateEffectMessage(name: string, callId: string): string {

@@ -8,13 +8,12 @@ import { decodeJsonValue } from '../utils/json';
 import {
   createTasksDispatcher, TaskParentSchema, TaskRoleSchema, TaskStatusSchema, TaskTitlesSchema, type RoleSwitch,
 } from './tasks-tool';
-import { refusedInput } from '../obs/index';
+import { Effect } from 'effect';
+import { refusedInput, settle, type KinuError } from '../obs/index';
 import { branchableToolCall } from './outcome';
 
-function parsed<T>(call: string, result: z.ZodSafeParseResult<T>): T {
-  if (!result.success) throw refusedInput(call, result.error);
-
-  return result.data;
+function parsed<T>(call: string, result: z.ZodSafeParseResult<T>): Effect.Effect<T, KinuError> {
+  return result.success ? Effect.succeed(result.data) : Effect.fail(refusedInput(call, result.error));
 }
 
 const STATUS_UNION = TASK_STATUSES.map((s) => `"${s}"`).join(' | ');
@@ -45,23 +44,23 @@ export function createTasksCodemodeProvider(
       add: {
         planAllowed: true,
         description: 'Write down the whole plan in one call: one title per task.',
-        execute: (...args: unknown[]) => branchableToolCall(async () => {
-          const titles = parsed('tasks.add(titles)', TaskTitlesSchema.safeParse(args[0]));
-          const parent = parsed('tasks.add(parent)', TaskParentSchema.safeParse(args[1]));
+        execute: (...args: unknown[]) => branchableToolCall(() => settle(Effect.gen(function* () {
+          const titles = yield* parsed('tasks.add(titles)', TaskTitlesSchema.safeParse(args[0]));
+          const parent = yield* parsed('tasks.add(parent)', TaskParentSchema.safeParse(args[1]));
 
           return decodeJsonValue({ value: run({ action: 'add', titles, parent }) });
-        }),
+        }))),
       },
       update: {
         planAllowed: true,
         description: 'Move one task to active/done/dropped by id.',
-        execute: (...args: unknown[]) => branchableToolCall(async () => {
-          const status = parsed('tasks.update(id, status)', TaskStatusSchema.safeParse(args[1]));
+        execute: (...args: unknown[]) => branchableToolCall(() => settle(Effect.gen(function* () {
+          const status = yield* parsed('tasks.update(id, status)', TaskStatusSchema.safeParse(args[1]));
 
           return decodeJsonValue({
             value: run({ action: 'update', id: codemodeText({ value: args[0], parameter: 'tasks.update(id)' }), status }),
           });
-        }),
+        }))),
       },
       list: {
         planAllowed: true,
@@ -71,12 +70,12 @@ export function createTasksCodemodeProvider(
       mode: {
         planAllowed: true,
         description: 'Switch your durable active role by id (applies from your next turn), or read the current role id with no argument.',
-        execute: (...args: unknown[]) => branchableToolCall(async () => {
+        execute: (...args: unknown[]) => branchableToolCall(() => settle(Effect.gen(function* () {
           // `null` reads the role, as no argument does.
-          const role = parsed('tasks.mode(role)', TaskRoleSchema.safeParse(args[0] ?? undefined));
+          const role = yield* parsed('tasks.mode(role)', TaskRoleSchema.safeParse(args[0] ?? undefined));
 
           return decodeJsonValue({ value: run({ action: 'mode', role }) });
-        }),
+        }))),
       },
     },
   };
