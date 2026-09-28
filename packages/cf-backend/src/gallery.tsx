@@ -1385,7 +1385,8 @@ packages/
 The same request either applies one valid coupon atomically or returns \`coupon_ineligible\` without changing the cart.`;
 
 /* `?plan=late-heading` (mid-document h1) and `?plan=annotated-heading` (anchor on the leading h1): the header must promote
-   neither. `?plan=read-only` is a settled plan. */
+   neither. `?plan=read-only` is a settled plan. `?plan=code-path` names a file and line inline, the text Plannotator's own
+   inline renderer turns into a hover preview that fetches `/api/doc`. */
 const GALLERY_PLAN_VARIANT = new URLSearchParams(location.search).get("plan");
 
 const GALLERY_PLAN_LATE_HEADING = `The guard runs after the discount lands, so an archived coupon still applies.
@@ -1410,9 +1411,29 @@ const GALLERY_PLAN_TITLE_NOTE: ReviewAnnotation = {
   author: "Owner",
 };
 
-const GALLERY_PLAN_CONTENT = GALLERY_PLAN_VARIANT === "late-heading"
-  ? GALLERY_PLAN_LATE_HEADING
-  : GALLERY_PLAN_MARKDOWN;
+const GALLERY_PLAN_CODE_PATH = `# Repair the \`applyCoupon\` eligibility guard
+
+Move the eligibility check in \`packages/core/src/checkout/apply-coupon.ts:42\` ahead of the cart update.
+
+[Reference](https://example.test/reference) [Jump](#details) [Local](/readme.md) [Unsafe](javascript:alert(1))
+
+4. First operation
+5. Second operation
+
+| Name | Value |
+| --- | --- |
+| Separator | alpha\\|beta |
+
+\`\`\`mermaid
+graph TD; A-->B
+\`\`\``;
+
+const GALLERY_PLAN_CONTENTS = new Map([
+  ["late-heading", GALLERY_PLAN_LATE_HEADING],
+  ["code-path", GALLERY_PLAN_CODE_PATH],
+]);
+
+const GALLERY_PLAN_CONTENT = GALLERY_PLAN_CONTENTS.get(GALLERY_PLAN_VARIANT ?? "") ?? GALLERY_PLAN_MARKDOWN;
 
 const GALLERY_PLAN_ANNOTATIONS: readonly ReviewAnnotation[] =
   GALLERY_PLAN_VARIANT === "annotated-heading" ? [GALLERY_PLAN_TITLE_NOTE] : [];
