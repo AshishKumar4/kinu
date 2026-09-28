@@ -344,7 +344,7 @@ class ProviderCall {
     const egress = step.response.headers?.[EGRESS_ROUTE_HEADER];
     const { modelId } = step.response;
     const { body } = step.request;
-    // The SDK keeps each step record.
+    // The SDK keeps each step record until the call ends; left there, each body is a copy of the transcript.
     Reflect.deleteProperty(step.request, 'body');
 
     this.pendingStepEvents.push({

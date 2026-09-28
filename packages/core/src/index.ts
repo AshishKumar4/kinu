@@ -1,4 +1,3 @@
-// Identity
 export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
@@ -149,7 +148,6 @@ export {
 
 export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
 
-// Evolution
 export {
   EvolutionEngine, buildScaffoldProposalPrompt,
   type ProposalArchiveContext,
@@ -252,7 +250,6 @@ export {
   type ChangelogRevertContext, type ChangelogRevertResult,
 } from './evolution/changelog';
 
-// Configuration
 export { DEFAULT_CONFIG } from './config';
 
 export { UNBOUNDED_STEPS } from './chat';
@@ -265,7 +262,6 @@ export {
   type AgentConfigStore, type MctsOverrides, type ShellApprovalMode,
 } from './config/index';
 
-// Types
 export type * from './types/primitives';
 
 export { VfsRevisionSchema } from './types/primitives';
@@ -443,7 +439,6 @@ export {
   type OverflowRecoveryDecision,
 } from './turn-failure';
 
-// LLM
 export {
   createVercelAILLM, collectStepText, createChatModel, createCompletionLLM, estimateTokens,
   // Surfaces import this instead of retyping the number.
@@ -512,7 +507,6 @@ export {
   type CompactionSummaryPromptInput,
 } from './compaction';
 
-// Tool registry
 export {
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
@@ -870,7 +864,6 @@ export { collectDynamicContext, subordinateDelegatesOf } from './state/dynamic-c
 
 export type { DynamicContextInput } from './state/dynamic-context';
 
-// MCTS
 export { runMCTS, SEARCH_FIBER_NAME, BranchExplorationSchema, BranchReflectionSchema } from './mcts/engine';
 
 export { selectNode } from './mcts/uct';
@@ -952,7 +945,6 @@ export {
   type TranscriptFold, type TranscriptPart, type TurnSegment,
 } from './read-models/transcript';
 
-// Schemas
 export { initSearchTables } from './mcts/schemas';
 
 export { initSwarmNodeRecords } from './strategy/swarm-resume';
@@ -968,7 +960,6 @@ export {
 
 export { initScaffoldTables } from './scaffold/schemas';
 
-// Scaffolds
 export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap';
 
 export { modifyScaffold, type ModifyResult, type ModifyScaffoldOpts } from './scaffold/modify';
@@ -1060,7 +1051,6 @@ export { periodicCraftConsolidation } from './craft/consolidation';
 
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict';
 
-// Execution
 export {
   DefaultExecutionRouter,
   withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach,
@@ -1256,7 +1246,6 @@ export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/mark
 
 export { compareCodeUnits } from './utils/text';
 
-// Sleep-time compute
 export {
   runSleepTimeCompute, applySleepTimeUpdate,
   SleepTimeUpdateSchema,
@@ -1329,7 +1318,6 @@ export {
 // EventsHub. Spec: docs/ARCHITECTURE.md "Events and ingress".
 export * from './events/hub/index';
 
-// Ingress
 export * from './events/ingress/index';
 
 export * from './subordinates/ingress';
@@ -1342,7 +1330,6 @@ export * from './strategy/index';
 // Bench harness: pure math; the runner lives in scripts/bench.ts.
 export * from './bench/index';
 
-// Curriculum
 export * from './curriculum/index';
 
 // Providers. Secrets stay inside UserDO and never enter the provider layer.
@@ -1567,7 +1554,6 @@ export {
 
 export { revealMisrepresenting } from './safety/untrusted-text';
 
-// Utils
 export { fnv1a64, Fnv1a64 } from './utils/fnv1a';
 
 export { nanoid } from './utils/nanoid';
@@ -1638,7 +1624,6 @@ export {
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel,
 } from './jobs/index';
 
-// Tasks
 export {
   TaskListStore, initTaskListTable, TASK_STATUSES, MAX_TASK_TITLE_CHARS,
   type AgentTask, type AgentTaskTree, type TaskStatus,
@@ -1652,7 +1637,6 @@ export {
   taskReminderIdempotencyKey,
 } from './tasks/reminder';
 
-// Orchestration
 export {
   TurnAccumulator,
   type StepLike, type ToolResultLike, type TurnSinks,
@@ -1756,7 +1740,6 @@ export {
   inheritedContextOmissionNote,
 } from './orchestrator/heads-support';
 
-// Skills
 export {
   parseSkillFile, stringifySkillFile, skillNameProblem,
   discoverSkills, readSkillFile, workspaceSkillPath, compareSkillNames, skillBodyChars,
@@ -1863,7 +1846,6 @@ export type {
   ConformancePlane, ConformanceReport, ConformanceRoot, ObservedSurface, RootStatuses,
 } from './conformance/index';
 
-// Read models
 export {
   classifyEvolutionType, getRunTimeline, runEventToSpan, toolKindFor,
   RUN_TIMELINE_MAX,
@@ -2054,7 +2036,6 @@ export type {
   EvolutionConfigView, MctsConfigView, SetModelDeps,
 } from './read-models/config-plane';
 
-// Advisor
 export {
   ADVISOR_EVENT_TYPE,
   ADVISOR_NOTE_MAX_CHARS,
