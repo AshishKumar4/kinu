@@ -60,8 +60,6 @@ EVOLUTION_EVENTS = frozenset({
     "craft_discovered",
     "scaffold_proposed",
     "consolidation",
-    "mcts_started",
-    "mcts_complete",
     "turn_complete",
     "replay_eval",
     "changelog_digest",

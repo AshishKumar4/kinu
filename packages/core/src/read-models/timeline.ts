@@ -44,8 +44,6 @@ export function classifyEvolutionType(type: string): TimelineKind {
 
   if (type.startsWith('scaffold')) return 'scaffold';
 
-  if (type.startsWith('mcts')) return 'mcts';
-
   if (type === 'consolidation' || type === 'craft_discovered') return 'craft';
 
   if (type === 'fiber_recovered') return 'recovery';
