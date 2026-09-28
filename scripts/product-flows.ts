@@ -534,6 +534,9 @@ export interface AgentPresence {
   readonly sidebar: string | null;
 }
 
+/** The sidebar's workspace list has its answer: it stops reading busy. */
+const SIDEBAR_LISTED = `document.querySelector('aside ul[aria-busy="false"]') !== null`;
+
 const AgentPresenceSchema = v.object({ tab: v.nullable(v.string()), sidebar: v.nullable(v.string()) });
 
 async function agentPresence(page: Page, workspace: string, agent: string): Promise<AgentPresence> {
@@ -619,6 +622,9 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     // Back to the workspace, the way a person returns: its own page, not the agent's.
     await back.goto(`${target.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'load' });
     await settledAfter(back, ledger, 'getWorkspaceSnapshot', 'getChatHistoryPage');
+    // The sidebar's workspaces arrive over HTTP once the roster socket opens, which the ledger does not see.
+    await until(back, "the sidebar's workspace list", SIDEBAR_LISTED);
+    await painted(back);
 
     const after = await agentPresence(back, workspace, agent);
 
