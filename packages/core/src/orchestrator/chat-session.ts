@@ -11,13 +11,14 @@ import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { ChatEvent } from '../chat';
+import type { CompactionTrigger } from '../extension';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { PartialToolCall, RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, type Refusal } from '../obs/index';
+import { attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, toWire, type Refusal } from '../obs/index';
 import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
@@ -34,7 +35,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
-import { CLEAR_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
+import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
@@ -646,6 +647,25 @@ export class ChatSession {
     this.actorSession.orchestrator.track(measuring.then(() => { if (this.revision === measuring) this.revision = null; }), 'measuring the revised context');
   }
 
+  /** A failed fold leaves the conversation as it was and arms nothing; a turn sent meanwhile waits. */
+  compact(): Promise<void> {
+    const folded = (this.revision ?? Promise.resolve()).then(() => settleEffect(toWire(this.fold(), (failure) => failure)));
+    const revision = folded.then(() => undefined);
+    this.revision = revision;
+    this.actorSession.orchestrator.track(revision.then(() => { if (this.revision === revision) this.revision = null; }), 'folding the conversation');
+
+    return folded.then((outcome) => settleEffect(outcome.ok ? Effect.void : Effect.fail(outcome.error)));
+  }
+
+  private fold(): Effect.Effect<void, KinuError> {
+    return this.pumpActive || this.queue.length > 0
+      ? Effect.fail(new KinuError('denied', COMPACT_NEEDS_IDLE))
+      : attempt(
+        { doing: 'folding the conversation into a summary', otherwise: 'unavailable' },
+        () => this.measureNextRequest({ counted: true, trigger: 'user' }),
+      );
+  }
+
   /** Uncounted, on an empty conversation, so it folds nothing. */
   measureSessionStart(): void {
     const { provider, gate } = this.eventRecorder.readContextMeasures();
@@ -656,15 +676,15 @@ export class ChatSession {
   measureContextRevision(options: { readonly counted: boolean }): Promise<void> {
     return settleEffect(this.pumpActive || this.queue.length > 0 ? Effect.void : attempt(
       { doing: 'measuring the next request after the context changed', otherwise: 'unavailable' },
-      () => this.measureNextRequest(options),
+      () => this.measureNextRequest({ ...options, trigger: 'auto' }),
     ).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('context.revision_measure_failed', failure); }))));
   }
 
-  private async measureNextRequest(options: { readonly counted: boolean }): Promise<void> {
+  private async measureNextRequest(options: { readonly counted: boolean; readonly trigger: CompactionTrigger }): Promise<void> {
     const { execution, profile } = await this.ports.composeRequest();
     const { countInputTokens, ...uncounted } = execution.chat;
     const counted = options.counted && countInputTokens !== undefined ? { ...uncounted, countInputTokens } : uncounted;
-    const measured = await this.actorSession.measureNextRequest({ ...execution, chat: { ...counted, transformTrigger: 'auto' } }, profile);
+    const measured = await this.actorSession.measureNextRequest({ ...execution, chat: { ...counted, transformTrigger: options.trigger } }, profile);
 
     if (measured !== null) this.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'context_admitted', ...measured });
   }

@@ -20,6 +20,8 @@ export interface SlashCommandInfo {
   usage?: string;
   /** Only offered when the client exposes this capability surface. */
   requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans';
+  /** The phase line while it runs. */
+  working?: string;
 }
 
 interface SlashContext {
@@ -66,7 +68,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/copy', description: 'Copy the last answer to the clipboard', run: copyCommand },
   { name: '/export', description: 'Write this conversation to a Markdown file', usage: '/export [path]', run: exportCommand },
   { name: '/resume', description: 'Open another workspace and continue its conversation', run: resumeCommand },
-  { name: '/compact', description: 'Fold this conversation into a summary, keeping its last exchanges, before the next turn', requires: 'localControls', run: compactCommand },
+  { name: '/compact', description: 'Fold this conversation into a summary now, keeping its last exchanges', requires: 'localControls', working: 'summarizing the conversation', run: compactCommand },
   { name: '/clear', description: 'Start a new conversation in this workspace; files and memory stay', aliases: ['/new'], requires: 'localControls', run: clearCommand },
   { name: '/queue', description: 'Send a message after the running turn ends', usage: '/queue <text>', run: queueCommand },
   { name: '/branch', description: 'Try another direction alongside the running turn', usage: '/branch <text>', run: branchCommand },
@@ -520,11 +522,11 @@ function resumeCommand(): SlashOutcome {
   };
 }
 
-function compactCommand({ client, command }: SlashContext): SlashOutcome {
+async function compactCommand({ client, command }: SlashContext): Promise<SlashOutcome> {
   if (!client.localControls) return { kind: 'unknown', command };
-  client.localControls.compactNow();
+  await client.localControls.compact();
 
-  return { kind: 'text', text: 'The next turn starts from a summary of this conversation and its last exchanges.', contextChanged: true };
+  return { kind: 'text', text: 'Folded this conversation into a summary; its last exchanges stay as they were.', contextChanged: true };
 }
 
 function stopCommand({ client }: SlashContext): SlashOutcome {

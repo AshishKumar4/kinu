@@ -150,6 +150,8 @@ export const REVERT_NEEDS_IDLE = 'Stop the turn that is running before you rever
 
 export const CLEAR_NEEDS_IDLE = 'Stop the turn that is running before you start a new conversation.';
 
+export const COMPACT_NEEDS_IDLE = 'Stop the turn that is running before you compact the conversation.';
+
 /** An actor's mutable execution state, apart from its host, which keeps admission, queueing and settlement and
  *  may share immutable catalogs, never this context, orchestrator or abort. */
 export class ActorSession {

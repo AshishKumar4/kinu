@@ -1136,7 +1136,7 @@ export class LocalAgentSession {
     return this.chat.closed;
   }
 
-  /** Send the user's message. `mode` is the composer's; a Plan message runs a Plan turn. */
+  /** `mode` is the composer's; a Plan message runs a Plan turn. */
   send(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
     opts: Pick<SendOptions, 'tier' | 'id' | 'mode'>,
@@ -1180,7 +1180,11 @@ export class LocalAgentSession {
     return this.chat.clear();
   }
 
-  /** One-shot: 'user' folds all but the last exchanges (/compact); 'force' folds to the ladder's target. */
+  compact(): Promise<void> {
+    return this.chat.compact();
+  }
+
+  /** Overflow recovery's fold, at the next turn. */
   armCompaction(kind: ArmedCompaction): void {
     this.compactionState.armCompaction(this.cacheIdentity().sessionKey, kind);
   }

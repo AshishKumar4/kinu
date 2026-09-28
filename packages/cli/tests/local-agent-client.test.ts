@@ -11,6 +11,7 @@ import {
   NO_COUNT_ENDPOINT, openWorkspaceMainActor, profileCatalogDigest, type LLMProviderConfig, type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { createCLIRuntime, makeSql, type LocalModelResolver , makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { LocalAgentClient } from '../src/local-agent-client';
@@ -23,13 +24,25 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'openai-compat', baseURL: 'http://localhost:0', headers: { Authorization: 'x' }, model: 'fake-model',
 };
 
-function fakeModel(answer: string, onPrompt?: (prompt: LanguageModelV2Prompt) => void): LanguageModel {
+interface SummaryScript {
+  readonly onCall?: () => void | Promise<void>;
+  readonly fail?: Error;
+}
+
+function fakeModel(answer: string, onPrompt?: (prompt: LanguageModelV2Prompt) => void, summary: SummaryScript = {}): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const [a, b] = [answer.slice(0, answer.length >> 1), answer.slice(answer.length >> 1)];
 
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
+    doGenerate: async () => {
+      await summary.onCall?.();
+
+      if (summary.fail) throw summary.fail;
+
+      return { content: [{ type: 'text', text: '## Decisions\n- the parts were looked into in order' }], finishReason: 'stop', usage, warnings: [] };
+    },
     doStream: async (options) => {
       onPrompt?.(options.prompt);
 
@@ -138,6 +151,22 @@ function gateMeasures(home: string): number {
   db.close();
 
   return rows;
+}
+
+function asksSentWith(prompts: readonly LanguageModelV2Prompt[], ask: string): string[] {
+  return (prompts.filter((prompt) => JSON.stringify(prompt.at(-1)).includes(ask)).at(-1) ?? [])
+    .flatMap((message) => (message.role === 'user' ? message.content : []))
+    .flatMap((part) => (part.type === 'text' && part.text.startsWith('look into part') ? [part.text] : []));
+}
+
+function gateSizes(client: LocalAgentClient): number[] {
+  const sizes: number[] = [];
+
+  client.subscribe((event) => {
+    if (event.type === 'run-event' && event.event.type === 'context_admitted') sizes.push(event.event.tokens);
+  });
+
+  return sizes;
 }
 
 function setup(model: LanguageModel, profileAuthority: CliProfileSource = async () => null) {
@@ -579,7 +608,7 @@ describe('LocalAgentClient', () => {
     await client.close();
   });
 
-  test('/compact folds all but the last exchange out of the next prompt; without it every turn is sent', async () => {
+  test('/compact folds all but its last exchanges out of the next prompt; without it every turn is sent', async () => {
     // Folded turns survive only inside the summary; as messages of their own, only the kept tail is sent.
     const turnsSentAsMessages = async (compact: boolean): Promise<string[]> => {
       const prompts: LanguageModelV2Prompt[] = [];
@@ -588,7 +617,7 @@ describe('LocalAgentClient', () => {
 
       for (let turn = 0; turn < 5; turn++) await client.send(`turn ${String(turn)}: ${'context '.repeat(200)}`, { cwd: '/work' });
 
-      if (compact) client.localControls.compactNow();
+      if (compact) await client.localControls.compact();
       await client.send('what came first?', { cwd: '/work' });
       await client.close();
       const asked = prompts.filter((prompt) => JSON.stringify(prompt.at(-1)).includes('what came first?')).at(-1) ?? [];
@@ -598,7 +627,94 @@ describe('LocalAgentClient', () => {
     };
 
     expect(await turnsSentAsMessages(false)).toEqual(['turn 0', 'turn 1', 'turn 2', 'turn 3', 'turn 4']);
-    expect(await turnsSentAsMessages(true)).toEqual(['turn 4']);
+    // Folded before the next ask exists: the kept tail is the last two exchanges.
+    expect(await turnsSentAsMessages(true)).toEqual(['turn 3', 'turn 4']);
+  });
+
+  test('/compact folds at once: the number is the folded request, and the next turn sends the fold without a second one', async () => {
+    let summaries = 0;
+    const prompts: LanguageModelV2Prompt[] = [];
+    const { client } = setup(fakeModel('findings '.repeat(600), (prompt) => prompts.push(prompt), { onCall: () => { summaries += 1; } }));
+    await client.connect();
+    const turns = gateSizes(client);
+
+    for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+    const lastTurn = turns.at(-1) ?? 0;
+    const measured = nextContextFill(client);
+    await client.localControls.compact();
+    const tokens = await measured;
+    const folds = summaries;
+
+    expect(folds).toBeGreaterThan(0);
+    expect((await client.status()).context).toMatchObject({ tokens, source: 'gate' });
+    expect(tokens).toBeLessThan(lastTurn);
+
+    await client.send('what came first?', { cwd: '/work' });
+    await client.send('and after that?', { cwd: '/work' });
+    await client.close();
+
+    expect(asksSentWith(prompts, 'what came first?')).toEqual(['look into part 3', 'look into part 4']);
+    expect(asksSentWith(prompts, 'and after that?')).toEqual(['look into part 3', 'look into part 4']);
+    expect(summaries).toBe(folds);
+  });
+
+  test('a /compact whose summary fails says why, leaves the conversation as it was and arms nothing', async () => {
+    const prompts: LanguageModelV2Prompt[] = [];
+    const { client } = setup(fakeModel('findings '.repeat(600), (prompt) => prompts.push(prompt), { fail: new Error('the summarizer is out of credit') }));
+    await client.connect();
+
+    for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+    const before = await client.history();
+    let refusal = '';
+
+    try {
+      await client.localControls.compact();
+    } catch (err) {
+      refusal = renderThrownChain({ cause: err });
+    }
+
+    expect(refusal).toContain('the summarizer is out of credit');
+    expect(await client.history()).toEqual(before);
+
+    await client.send('what came first?', { cwd: '/work' });
+    await client.close();
+
+    expect(asksSentWith(prompts, 'what came first?')).toHaveLength(5);
+  });
+
+  test('a turn sent while /compact folds waits for the fold and runs on it', async () => {
+    const order: string[] = [];
+    const summarizing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+
+    const model = fakeModel('findings '.repeat(600), (prompt) => {
+      if (JSON.stringify(prompt.at(-1)).includes('what came first?')) order.push('turn');
+    }, {
+      onCall: async () => {
+        summarizing.resolve();
+        await release.promise;
+        order.push('summary');
+      },
+    });
+
+    const { client } = setup(model);
+    await client.connect();
+
+    for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+    const folding = client.localControls.compact();
+    await summarizing.promise;
+    const sent = client.send('what came first?', { cwd: '/work' });
+    release.resolve();
+    await folding;
+    await sent;
+    await client.close();
+
+    expect(order.at(-1)).toBe('turn');
+    expect(order.filter((step) => step === 'turn')).toHaveLength(1);
+    expect(order.indexOf('turn')).toBe(order.lastIndexOf('summary') + 1);
   });
 
   test('a new session shows the gate\'s measure of its first request before any turn, measured once', async () => {
@@ -623,11 +739,7 @@ describe('LocalAgentClient', () => {
   test('after /clear, before any turn, the number is the gate\'s measure of the emptied request', async () => {
     const { client } = setup(fakeModel('findings '.repeat(600)));
     await client.connect();
-    const turns: number[] = [];
-
-    client.subscribe((event) => {
-      if (event.type === 'run-event' && event.event.type === 'context_admitted') turns.push(event.event.tokens);
-    });
+    const turns = gateSizes(client);
 
     for (let turn = 0; turn < 3; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
 
@@ -679,17 +791,12 @@ describe('LocalAgentClient', () => {
     // Short asks and long answers, as a working session reads: the fold keeps each ask and summarizes the answers.
     const admittedSizes = async (compact: boolean): Promise<number[]> => {
       const { client } = setup(fakeModel('findings '.repeat(600)));
-      const sizes: number[] = [];
-
-      client.subscribe((event) => {
-        if (event.type === 'run-event' && event.event.type === 'context_admitted') sizes.push(event.event.tokens);
-      });
-
+      const sizes = gateSizes(client);
       await client.connect();
 
       for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
 
-      if (compact) client.localControls.compactNow();
+      if (compact) await client.localControls.compact();
       await client.send('what came first?', { cwd: '/work' });
       await client.close();
 

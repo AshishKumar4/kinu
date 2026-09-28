@@ -30,6 +30,7 @@ import {
 } from '../agent-client';
 import {
   commandsForClient,
+  type SlashCommandInfo,
   describeBranchStatus,
   describeTakePick,
   executeSlashCommand,
@@ -230,6 +231,7 @@ function ChatScene({
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   const [turnPhase, setTurnPhase] = useState<string | null>(null);
+  const [commandPhase, setCommandPhase] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
   const [modelSpec, setModelSpec] = useState<string>('');
@@ -1191,6 +1193,7 @@ function ChatScene({
       }
 
       clientActionCountRef.current += 1;
+      setCommandPhase(commandWorking(commands, submitted));
 
       try {
         const outcome = await executeSlashCommand(client, submitted);
@@ -1268,6 +1271,7 @@ function ChatScene({
 
         await applySlashOutcome(outcome);
       } finally {
+        setCommandPhase(null);
         clientActionCountRef.current -= 1;
       }
     } catch (err) {
@@ -2044,7 +2048,7 @@ function ChatScene({
         }}
       >
         <MessageList messages={messages} toolDetailsExpanded={toolDetailsExpanded} />
-        <PhaseLine label={phaseLineLabel(isProcessing, turnPhase, nextTier)} meter={turnMeterRef} />
+        <PhaseLine label={phaseLineLabel(isProcessing, turnPhase, nextTier, commandPhase)} meter={turnMeterRef} />
       </scrollbox>
 
       {inputState.queue.length > 0 && (
@@ -2170,8 +2174,16 @@ function countStreamed(meter: TurnMeter | null, delta: string): void {
   if (meter) meter.streamedChars += delta.length;
 }
 
-function phaseLineLabel(isProcessing: boolean, turnPhase: string | null, nextTier: TierId | null): string | null {
+function commandWorking(commands: readonly SlashCommandInfo[], submitted: string): string | null {
+  const name = submitted.split(/\s/u)[0]?.toLowerCase();
+
+  return commands.find((command) => command.name === name)?.working ?? null;
+}
+
+function phaseLineLabel(isProcessing: boolean, turnPhase: string | null, nextTier: TierId | null, commandPhase: string | null): string | null {
   if (isProcessing) return turnPhase ?? 'thinking';
+
+  if (commandPhase !== null) return commandPhase;
 
   return nextTier === null ? null : `next turn · ${nextTier}`;
 }
