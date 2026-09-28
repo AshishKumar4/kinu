@@ -943,6 +943,13 @@ gate 256 ms and 297 ms). A cut turn keeps all but its last window.
 Pins: `packages/cli-backend/tests/local-session-turns.test.ts` "a streamed answer
 mints a revision per step" and `packages/core/tests/unit-session-context-store.test.ts`
 "a sealed message is projected once", both red on the old code.
+(5) 2026-09-28 (lane/turn-sql): text windows are cut where a tab's replay store
+cuts its chunks (`flush-cadence.ts`: the first content event, then every ten, and
+each settled tool result), and the `step_partial` run events that re-wrote the
+whole cumulative step at that cadence are gone: a turn cut mid-step resumes from
+its open output in `stream_parts`. Reasoning keeps the 64-delta or 4 KB window.
+Pins: `packages/cli-backend/tests/turn-continuation.test.ts` "A STEP CUT
+MID-STREAM" and `packages/core/tests/unit-partial-flush-cadence.test.ts`.
 
 D23-N. Every instance of the host namespace answers `supervisorOp` with the
 hosted runtime (2026-09-21, this commit; the Nimbus upgrade to core 0.12.0,

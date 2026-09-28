@@ -130,9 +130,11 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * 760 on the list transcript (c7d177a6d8); 681 once the sleep-time window read its entries' messages in one statement;
  * 663 once the workspace capability token was read once, not per hub call; 615 once the tile's fold skipped the
  * owed-work probes while a turn works, the only time it cannot show them; 600 once a sequence's terminal effects were
- * claimed in one statement and the plan review was read only for an operator Build turn.
+ * claimed in one statement and the plan review was read only for an operator Build turn; 608 once the context gate
+ * recorded its measure (context-one-2); 593 once a step's partial lived in the stream buffer alone (no step_partial
+ * rows) and a flush checked the claim inside its own append.
  */
-const TURN_STATEMENTS = 600;
+const TURN_STATEMENTS = 593;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

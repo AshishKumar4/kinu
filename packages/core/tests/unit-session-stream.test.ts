@@ -127,7 +127,7 @@ test('a message a reset activation left open seals at the turn\'s next admission
     await stream.nativePart({ type: 'text-start', id: '0' });
     await stream.nativePart({ type: 'text-delta', id: '0', text: 'cut ' });
     await stream.nativePart({ type: 'text-delta', id: '0', text: 'short' });
-    // Nothing durable yet under 64 deltas.
+    // Nothing durable yet between cadence flushes.
     const [open] = s.open();
 
     if (open === undefined) throw new Error('the answer is open');
@@ -138,6 +138,22 @@ test('a message a reset activation left open seals at the turn\'s next admission
   } finally { s.testSql.close(); }
 });
 
+// 2026-09-28 (turn-sql): the claim check moved into the append's own statement; a superseded stream still writes nothing.
+test('a stream whose claim moved on writes nothing at its next flush', async () => {
+  const s = setup();
+
+  try {
+    const { stream } = await s.turn('t1');
+    await stream.nativePart({ type: 'text-start', id: '0' });
+    await stream.nativePart({ type: 'text-delta', id: '0', text: 'kept' });
+    s.testSql.db.run('UPDATE actor_turn_claims SET epoch = epoch + 1');
+
+    for (let i = 0; i < 9; i++) await stream.nativePart({ type: 'text-delta', id: '0', text: 'late' });
+    await expect(stream.nativePart({ type: 'text-delta', id: '0', text: 'late' })).rejects.toThrow('no longer current');
+    expect(s.rows()).toEqual(['kept']);
+  } finally { s.testSql.close(); }
+});
+
 test('a window never splits a surrogate pair across two statements', async () => {
   const s = setup();
 
@@ -145,13 +161,13 @@ test('a window never splits a surrogate pair across two statements', async () =>
     const { stream } = await s.turn('t1');
     await stream.nativePart({ type: 'text-start', id: '0' });
 
-    // The next 63 plus the high surrogate fill one window; the surrogate is held back.
-    for (let i = 0; i < 64; i++) await stream.nativePart({ type: 'text-delta', id: '0', text: 'a' });
+    // The first delta opens the part; the flush ten deltas later falls on the high surrogate, which is held back.
+    for (let i = 0; i < 10; i++) await stream.nativePart({ type: 'text-delta', id: '0', text: 'a' });
     await stream.nativePart({ type: 'text-delta', id: '0', text: '\ud83d' });
-    expect(s.rows()).toEqual(['a'.repeat(64)]);
+    expect(s.rows()).toEqual(['a'.repeat(10)]);
     await stream.nativePart({ type: 'text-delta', id: '0', text: '\ude00' });
     await stream.nativePart({ type: 'text-end', id: '0' });
-    expect(s.rows()).toEqual([`${'a'.repeat(64)}😀`]);
+    expect(s.rows()).toEqual([`${'a'.repeat(10)}😀`]);
   } finally { s.testSql.close(); }
 });
 
