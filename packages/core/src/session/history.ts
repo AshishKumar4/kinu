@@ -60,6 +60,12 @@ export interface MaterializedContext {
   readonly rendered: readonly CarriedRender[];
 }
 
+/** What a step cut mid-stream had streamed: its text, and whether it had called a tool. */
+export interface CutStep {
+  readonly text: string;
+  readonly calledTools: boolean;
+}
+
 export class SessionHistory {
   readonly messages: SessionMessages;
   readonly context: SessionContext;
@@ -105,6 +111,33 @@ export class SessionHistory {
         } });
       });
     }
+  }
+
+  /** The outputs a run left open: its cut step's. A claim's {@link sealAbandoned} seals them, so they are named before it. */
+  openOutputs(runId: string): readonly string[] {
+    this.dependencies.actor.assertCurrent();
+
+    return this.dependencies.sql<{ message_id: string }>`SELECT m.message_id FROM session_messages m
+      JOIN actor_requests r ON r.actor_id=m.actor_id AND r.request_id=m.request_id
+      WHERE m.actor_id=${this.dependencies.actor.actorId} AND r.run_id=${runId} AND m.origin='output' AND m.sealed_at IS NULL
+      ORDER BY m.rowid`.map((row) => row.message_id);
+  }
+
+  /** Read from the stream buffer, or from the content a seal gave it: the same parts either way. Null when it streamed neither. */
+  async cutStep(outputs: readonly string[]): Promise<CutStep | null> {
+    const parts = await this.messages.materializePartsOf(outputs);
+    let text = '';
+    let calledTools = false;
+
+    for (const id of outputs) {
+      for (const part of parts.get(id) ?? []) {
+        if (part.kind === 'text') text += v.parse(v.string(), part.value.text);
+
+        if (part.kind === 'tool-call') calledTools = true;
+      }
+    }
+
+    return text === '' && !calledTools ? null : { text, calledTools };
   }
 
   transcript(sessionId: string): SessionTranscript {

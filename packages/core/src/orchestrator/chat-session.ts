@@ -16,7 +16,7 @@ import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
-import type { PartialToolCall, RunEvent } from '../events/types';
+import type { RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
 import { attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, toWire, type Refusal } from '../obs/index';
 import { contextFill, type ContextFill } from '../read-models/context-fill';
@@ -47,6 +47,7 @@ import {
   type CompactionTriggerState, type RunEndClassification, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
 import { answerParts, type SessionTranscript, type PreparedConversationEntry } from '../session/transcript';
+import type { CutStep } from '../session/history';
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
@@ -58,39 +59,6 @@ import type { TaskListStore } from '../tools/task-store';
 import { inheritedAsModelMessage } from '../heads/head-inference';
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
-
-/** One cadence for the step ledger and a backend's wire replay store, so they agree on what survived. */
-const PARTIAL_FLUSH_EVERY = 10;
-
-export type PartialFlushSignal = 'content' | 'settled' | 'none';
-
-/** First content chunk flushes, then every {@link PARTIAL_FLUSH_EVERY}, and a settled tool result at once; a step boundary resets. */
-export interface PartialFlushCadence {
-  flushes(signal: PartialFlushSignal): boolean;
-  reset(): void;
-}
-
-export function partialFlushCadence(): PartialFlushCadence {
-  let sinceFlush = 0;
-  let flushedContent = false;
-
-  return {
-    flushes: (signal) => {
-      if (signal === 'none') return false;
-      sinceFlush += 1;
-
-      if (signal !== 'settled' && flushedContent && sinceFlush < PARTIAL_FLUSH_EVERY) return false;
-      sinceFlush = 0;
-      flushedContent = true;
-
-      return true;
-    },
-    reset: () => {
-      sinceFlush = 0;
-      flushedContent = false;
-    },
-  };
-}
 
 /** None: reclamation runs under the single-driver lease, so every open lease is a dead process's. */
 const NO_STRANDED_DELIVERY_GRACE = 0;
@@ -156,7 +124,8 @@ interface TurnContinuation {
   readonly messageId: string;
   readonly steps: readonly ModelMessage[];
   readonly finishedSteps: number;
-  readonly partial: { readonly text: string; readonly toolCalls: readonly PartialToolCall[] } | null;
+  /** The outputs the cut step left open, named before a claim seals them. */
+  readonly openOutputs: readonly string[];
 }
 
 
@@ -173,12 +142,10 @@ export function turnInputMessage(item: Pick<ChatTurnInput, 'text' | 'files'>): M
 
 /** The cut step's text heads the answer only when that step was the answer; narration-step text stays with its step. */
 function continuedAnswer(
-  continuation: TurnContinuation | undefined,
+  partial: CutStep | null,
   execution: Pick<ActorExecutionResult, 'text' | 'steps' | 'interrupted'>,
 ): string {
-  const partial = continuation?.partial;
-
-  if (partial === undefined || partial === null || partial.toolCalls.length > 0) return execution.text;
+  if (partial === null || partial.calledTools) return execution.text;
 
   return execution.interrupted || execution.steps <= 1 ? partial.text + execution.text : execution.text;
 }
@@ -392,6 +359,8 @@ export class ChatSession {
   }
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
+  /** Settles once no measure or fold is pending. */
+  get revised(): Promise<void> { return this.revision ?? Promise.resolve(); }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
   /** Open on purpose, so the wake reconcile must not seal them. */
@@ -970,58 +939,6 @@ export class ChatSession {
   }
 
   /** Everything here may throw; processTurn owns what that means. */
-  /** `step_finish` supersedes it; indices count from the steps a continuation already carries. */
-  private partialLedger(continuation: TurnContinuation | undefined) {
-    let stepIndex = (continuation?.steps.length ?? 0) + 1;
-    let text = '';
-    let toolCalls: PartialToolCall[] = [];
-    const cadence = partialFlushCadence();
-
-    const flush = (signal: PartialFlushSignal): void => {
-      if (!cadence.flushes(signal) || this.runId === null) return;
-      this.eventRecorder.emit(this.runId, { type: 'step_partial', stepIndex, text, toolCalls });
-    };
-
-    return {
-      observe: (event: ChatEvent) => {
-        switch (event.type) {
-          case 'text-delta':
-            text += event.delta;
-            flush('content');
-
-            return;
-          case 'tool-call':
-            toolCalls = [...toolCalls, { toolCallId: event.toolCallId, toolName: event.toolName, args: event.args }];
-            flush('content');
-
-            return;
-          case 'tool-result':
-            toolCalls = toolCalls.map((call) => call.toolCallId === event.toolCallId
-              ? { ...call, ...(event.success ? { result: event.result } : { error: event.error ?? event.result }) }
-              : call);
-            flush('settled');
-            // Any tool result is progress on the last reminder.
-            this.taskReminders.noteToolResult();
-
-            return;
-          case 'step-finish':
-            stepIndex += 1;
-            text = '';
-            toolCalls = [];
-            cadence.reset();
-
-            return;
-          case 'reasoning-delta':
-          case 'model-fallback':
-          case 'context-admitted':
-          case 'done':
-          case 'error':
-            return;
-        }
-      },
-    };
-  }
-
   private async runTurn(item: QueueItem, eventName: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
     const input: ChatTurnInput = item;
 
@@ -1033,9 +950,9 @@ export class ChatSession {
 
     const prepared = await this.ports.prepareTurn(input, lease);
 
-    const partial = this.partialLedger(item.continuation);
+    const partial = item.continuation === undefined ? null : await this.actorSession.canonical.cutStep(item.continuation.openOutputs);
     /** A Stop before any output leaves the operator's row alone. */
-    let streamed = item.continuation?.partial !== null && item.continuation?.partial !== undefined;
+    let streamed = partial !== null;
 
     // Before this turn's request voids the lane.
     const lastRequestAt = this.actorSession.lastRequestAt();
@@ -1050,10 +967,11 @@ export class ChatSession {
       cacheKeptAliveUntil,
       ...(item.continuation !== undefined && {
         resumedSteps: item.continuation.finishedSteps,
-        resumedMidStep: item.continuation.partial !== null,
+        resumedMidStep: partial !== null,
       }),
     }, (event) => {
-      partial.observe(event);
+      // Any tool result is progress on the last reminder.
+      if (event.type === 'tool-result') this.taskReminders.noteToolResult();
 
       if (event.type === 'model-fallback') this.recordModelFallback(event);
 
@@ -1068,7 +986,7 @@ export class ChatSession {
         || event.type === 'error') return this.emit(event);
     });
 
-    const fullText = continuedAnswer(item.continuation, execution);
+    const fullText = continuedAnswer(partial, execution);
     const interrupted = execution.interrupted;
     let runError: string | null = null;
     let overflowRetry = false;
@@ -1359,7 +1277,8 @@ export class ChatSession {
     const open = this.eventRecorder.openTurn();
 
     if (open === null) return;
-    const { runId, turn, steps, finishedSteps, partial } = open;
+    const { runId, turn, steps, finishedSteps } = open;
+    const openOutputs = this.actorSession.canonical.openOutputs(runId);
 
     const item: QueueItem = {
       text: turn.text,
@@ -1374,7 +1293,7 @@ export class ChatSession {
         messageId: turn.messageId,
         steps,
         finishedSteps,
-        partial: partial === null ? null : { text: partial.text, toolCalls: partial.toolCalls },
+        openOutputs,
       },
       settle: () => {},
     };
@@ -1388,7 +1307,7 @@ export class ChatSession {
     this.emit({
       type: 'background', event: 'turn_reopened',
       message: `continuing the turn the last process left: ${String(steps.length)} step${steps.length === 1 ? '' : 's'} kept`
-        + (partial === null ? '' : `, resuming mid-step ${String(partial.stepIndex)}`),
+        + (openOutputs.length === 0 ? '' : `, resuming mid-step ${String(finishedSteps + 1)}`),
     });
 
     queueMicrotask(() => {

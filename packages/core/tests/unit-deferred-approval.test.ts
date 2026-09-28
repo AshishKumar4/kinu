@@ -2,20 +2,24 @@
 // never reported as a success, and an approval is never reported as an effect.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { toolExecute } from '@kinu.run/test-utils';
+import { createMemoryVfs, fakeMossaic, toolExecute } from '@kinu.run/test-utils';
 import {
   DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools,
-  formatApprovalGrant, createShellSession,
+  formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs,
+  ParkedWriteFiles,
   type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
-  type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT,
+  type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, type VFS, WORKSPACE_ROOT,
 } from '../src/index';
+import type { BoundFileWrite } from '../src/safety/bound-write';
+import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { buildPendingActions } from '../src/read-models/pending-actions';
 import { gateProviderExec } from '../src/execution/approval';
 import { commandResult, formatExecResult, type CommandResult } from '../src/execution/exec-result';
 import { createRecordingLogger, setDiagnosticsSink, KinuError, refusalOf } from '../src/obs/index';
 import type { ExecutorProvider } from '../src/execution/types';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, createTestWorkspace, createWorkspaceBundle, storesFor } from './helpers';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -62,6 +66,7 @@ function setup(opts: {
   const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
 
   const queue = new DeferredApprovalQueue({
+    writes: null,
     store,
     inbox: { send: async (signal) => {
       delivered.push(signal);
@@ -102,7 +107,7 @@ function setup(opts: {
   };
 
   return {
-    queue, store, shell, executed, delivered, granted, audited, shellTool,
+    queue, store, sql, shell, executed, delivered, granted, audited, shellTool,
     advance: (ms: number) => { elapsed += ms; },
   };
 }
@@ -115,6 +120,7 @@ describe('a gated action nobody is there to approve', () => {
     const restore = setDiagnosticsSink(log);
 
     const queue = new DeferredApprovalQueue({
+      writes: null,
       store: new DeferredApprovalStore(sql, actor),
       inbox: { send: async () => 'queued' }, remember: () => {},
       audit: () => { throw new Error('audit unavailable'); },
@@ -381,7 +387,9 @@ describe('what an approval actually buys', () => {
     await queue.decide(['defer-2'], 'approved');
 
     expect(store.get('defer-1')).toBeNull();
+    expect(store.hits('defer-1')).toEqual([]);
     expect(store.get('defer-2')?.status).toBe('approved');
+    expect(store.hits('defer-2')).toEqual([{ rule: 'package-publish', decision: 'gate' }]);
   });
 
   test('"always" runs this command AND stops the queue asking about that rule again', async () => {
@@ -413,6 +421,20 @@ describe('what an approval actually buys', () => {
     expect(executed).toEqual(['rm -rf dist']);
   });
 
+  test('the reason text is display only: rewording it keeps what "always" grants and what the agent is told', async () => {
+    // A row parked under older reason wording.
+    const { shellTool, queue, store, granted, sql } = setup();
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    void sql`UPDATE deferred_approvals SET reason = ${'Needs approval: force-pushing rewrites the remote.'}`;
+
+    expect(store.get('defer-1')?.reason).toBe('Needs approval: force-pushing rewrites the remote.');
+    await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('git-force-push') });
+
+    await queue.decide(['defer-1'], 'always');
+
+    expect(granted).toEqual(['git-force-push@workspace']);
+  });
+
   test('an "always" grant does not travel to another rule', async () => {
     const { shellTool, queue, executed, granted } = setup();
     await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
@@ -436,6 +458,7 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     ]);
     // The row is deleted, not flipped to a terminal status.
     expect(store.get('defer-1')).toBeNull();
+    expect(store.hits('defer-1')).toEqual([]);
   });
 
   test('one grant is one audit and one run — a re-issue parks, never replays', async () => {
@@ -454,7 +477,7 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     // While spent, the row is invisible to `standing()` and a second spend gets nothing.
     const { sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
-    store.create({ id: 'defer-s', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
+    store.create({ id: 'defer-s', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 }, []);
     expect(store.decide('defer-s', 'approved', 2)?.status).toBe('approved');
 
     const spent = store.spend('defer-s');
@@ -473,8 +496,8 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
   test('re-opening the workspace keeps parked and approved rows intact', () => {
     const { db, sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
-    store.create({ id: 'defer-parked', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
-    store.create({ id: 'defer-blessed', command: `${GATED} --twice`, executor: 'workspace', reason: 'gate', requestedAt: 2 });
+    store.create({ id: 'defer-parked', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 }, []);
+    store.create({ id: 'defer-blessed', command: `${GATED} --twice`, executor: 'workspace', reason: 'gate', requestedAt: 2 }, []);
     expect(store.decide('defer-blessed', 'approved', 3)?.status).toBe('approved');
 
     initDeferredApprovalsTable(makeExecRaw(db));
@@ -489,7 +512,7 @@ describe('the parked action stays visible until it is decided', () => {
   test('every step of the turn re-states that it has not happened', () => {
     // The per-step dynamic-context block carries the missing effect until the owner answers.
     const { queue, store } = setup();
-    store.create({ id: 'defer-x', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 10 });
+    store.create({ id: 'defer-x', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 10 }, []);
 
     expect(queue.approvals()).toEqual([
       { id: 'defer-x', kind: 'queued command (NOT run)', detail: GATED },
@@ -526,7 +549,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     // A parked action must survive DO eviction; a promise map would lose it.
     const { sql, actor } = approvalsDb();
     const first = new DeferredApprovalStore(sql, actor);
-    first.create({ id: 'defer-9', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
+    first.create({ id: 'defer-9', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 }, []);
 
     const reopened = new DeferredApprovalStore(sql, actor);
     const parked = reopened.listQueued();
@@ -539,9 +562,10 @@ describe('durability — the wait is a night, not a prompt window', () => {
     // The row is the record; the signal is only the notification.
     const { sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
-    store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
+    store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 }, []);
 
     const queue = new DeferredApprovalQueue({
+      writes: null,
       store,
       inbox: { send: () => Promise.reject(new Error('no host')) },
       remember: () => { throw new Error('not an always answer'); },
@@ -560,6 +584,7 @@ describe('"always" grants the rules the owner was shown', () => {
     const granted: string[] = [];
 
     const queue = new DeferredApprovalQueue({
+      writes: null,
       store: new DeferredApprovalStore(sql, actor),
       inbox: { send: async () => 'queued' },
       remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
@@ -639,6 +664,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
 
     const queue = new DeferredApprovalQueue({
+      writes: null,
       store,
       inbox: { send: async () => 'queued' },
       remember: () => { throw new Error('not an always answer'); },
@@ -783,18 +809,18 @@ describe('an approval outlives an attempt that never reached the machine', () =>
 
     if (!spend) throw new Error('the approved grant must be spendable');
 
-    queue.channel.settle(spend.spend, 'did-not-run');
+    await queue.channel.settle(spend.spend, 'did-not-run');
     expect(store.standing(GATED, 'device', 1_010)?.id).toBe('defer-1');
 
-    queue.channel.settle(spend.spend, 'did-not-run');
+    await queue.channel.settle(spend.spend, 'did-not-run');
     expect(store.standing(GATED, 'device', 1_010)?.id).toBe('defer-1');
 
     const second = store.spend('defer-1');
     expect(second).not.toBeNull();
 
     if (!second) throw new Error('the refunded grant must be spendable again');
-    queue.channel.settle(second.spend, 'spent');
-    queue.channel.settle(spend.spend, 'did-not-run');
+    await queue.channel.settle(second.spend, 'spent');
+    await queue.channel.settle(spend.spend, 'did-not-run');
     expect(store.standing(GATED, 'device', 1_010)).toBeNull();
     expect(store.get('defer-1')).toBeNull();
   });
@@ -813,7 +839,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     // Consumer B parks its own row.
     expect(await exec(GATED)).toMatchObject({ error: expect.stringContaining('NOT RUN: queued for owner approval (defer-2)') });
     // A never reached the machine, so the grant comes back beside defer-2.
-    queue.channel.settle(spend.spend, 'did-not-run');
+    await queue.channel.settle(spend.spend, 'did-not-run');
 
     answerWith(() => 'ran');
     expect(await exec(GATED)).toBe('ran');
@@ -848,4 +874,123 @@ test('an executed exit-one command remains a command failure even if stdout look
   expect(commandResult(result)).toMatchObject({ reason: 'io', execution: { exitCode: 1 } });
   expect(rendered).toContain(stdout);
   expect(rendered).toContain('process failure');
+});
+
+/** The kernel's view of the workspace file plane, where parked bytes live. */
+async function kernelFiles() {
+  const session = await createWorkspaceBundle(createTestWorkspace().db).session();
+
+  return session.vfs.as(CRED_KERNEL);
+}
+
+/** Found under the kernel's /etc by digest, not restated from the store's constant. */
+function parkedFile(kernel: Awaited<ReturnType<typeof kernelFiles>>, digest: string): string | null {
+  for (const { name } of kernel.readdir('/etc')) {
+    if (kernel.exists(`/etc/${name}/${digest}`)) return `/etc/${name}/${digest}`;
+  }
+
+  return null;
+}
+
+const sha256 = (text: string | Uint8Array): string => new Bun.CryptoHasher('sha256').update(text).digest('hex');
+
+/** The owner's Drive at /shared, over the agent's own files, with a queue nobody has answered yet; parked bytes live
+ *  on a real workspace file plane. */
+async function driveWithQueue(perform: (plane: VFS, write: BoundFileWrite, bytes: Uint8Array) => Promise<'written' | 'changed'> = performBoundWrite) {
+  const { sql, actor } = approvalsDb();
+  const store = new DeferredApprovalStore(sql, actor);
+  const drive = mossaicVfs(fakeMossaic().tenant('owner'));
+  const plane = withMountTable(createMemoryVfs().vfs, [sharedDriveMount(() => drive, () => 'no Drive')]);
+  const kernel = await kernelFiles();
+  const woken: string[] = [];
+  let seq = 0;
+
+  const queue = new DeferredApprovalQueue({
+    store, remember: () => {}, newId: () => `defer-${String(++seq)}`,
+    inbox: { send: async (signal) => {
+      woken.push(signal.text);
+
+      return 'queued';
+    } },
+    writes: {
+      content: new ParkedWriteFiles(async () => kernel),
+      perform: (write, bytes) => perform(plane, write, bytes),
+    },
+  });
+
+  const policy: ShellApprovalPolicy = { mode: () => 'strict', deferrals: queue.channel };
+  const files = withApprovalGatedFiles(plane, 'workspace', { userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, policy);
+
+  return { drive, files, queue, store, woken, kernel };
+}
+
+test('a new file on the Drive is free; an overwrite parks, and a write that fails on approval waits for the same bytes', async () => {
+  let outage = true;
+
+  const { drive, files, queue, store, woken } = await driveWithQueue(async (plane, write, bytes) => {
+    if (outage) throw new KinuError('unavailable', 'the Drive is not answering');
+
+    return await performBoundWrite(plane, write, bytes);
+  });
+
+  await files.writeFile('/shared/new.md', 'created\n');
+  await drive.writeFile('/notes.md', 'the owner\u2019s\n');
+  await expect(files.writeFile('/shared/notes.md', 'rewritten\n')).rejects.toMatchObject({ code: 'unavailable' });
+  expect(queue.list().map((row) => row.command)).toEqual([expect.stringMatching(/^file write \/shared\/notes\.md sha256:[0-9a-f]{64} over sha256:[0-9a-f]{64}$/u)]);
+
+  await queue.decide(['defer-1'], 'approved');
+  expect(await drive.readFile('/notes.md', { encoding: 'utf8' })).toBe('the owner\u2019s\n');
+  expect(store.get('defer-1')?.status).toBe('approved');
+  expect(woken.at(-1)).toContain('APPROVED, still not run: re-issue once');
+
+  outage = false;
+  await files.writeFile('/shared/notes.md', 'rewritten\n');
+  expect(await drive.readFile('/notes.md', { encoding: 'utf8' })).toBe('rewritten\n');
+  expect(await drive.readFile('/new.md', { encoding: 'utf8' })).toBe('created\n');
+  expect(store.get('defer-1')).toBeNull();
+});
+
+test('a parked write that is denied leaves no bytes behind', async () => {
+  const { drive, files, queue, kernel } = await driveWithQueue();
+
+  await drive.writeFile('/notes.md', 'the owner\u2019s\n');
+  await expect(files.writeFile('/shared/notes.md', 'rewritten\n')).rejects.toMatchObject({ code: 'unavailable' });
+  expect(parkedFile(kernel, sha256('rewritten\n'))).not.toBeNull();
+
+  await queue.decide(['defer-1'], 'denied');
+  expect(parkedFile(kernel, sha256('rewritten\n'))).toBeNull();
+  expect(await drive.readFile('/notes.md', { encoding: 'utf8' })).toBe('the owner\u2019s\n');
+});
+
+test('two parked writes of the same bytes keep them until both close', async () => {
+  const { drive, files, queue, kernel } = await driveWithQueue();
+  const same = sha256('one template\n');
+
+  await drive.writeFile('/a.md', 'a\n');
+  await drive.writeFile('/b.md', 'b\n');
+  await expect(files.writeFile('/shared/a.md', 'one template\n')).rejects.toMatchObject({ code: 'unavailable' });
+  await expect(files.writeFile('/shared/b.md', 'one template\n')).rejects.toMatchObject({ code: 'unavailable' });
+  expect(queue.list()).toHaveLength(2);
+
+  await queue.decide(['defer-1'], 'denied');
+  expect(parkedFile(kernel, same)).not.toBeNull();
+
+  await queue.decide(['defer-2'], 'approved');
+  expect(await drive.readFile('/b.md', { encoding: 'utf8' })).toBe('one template\n');
+  expect(await drive.readFile('/a.md', { encoding: 'utf8' })).toBe('a\n');
+  expect(parkedFile(kernel, same)).toBeNull();
+});
+
+test('a write larger than one storage chunk parks and lands byte for byte', async () => {
+  const { drive, files, queue, kernel } = await driveWithQueue();
+  const big = Uint8Array.from({ length: 3 * CHUNK_SIZE + 17 }, (_, index) => (index * 31) % 251 || 1);
+
+  await drive.writeFile('/big.bin', 'small\n');
+  await expect(files.writeFile('/shared/big.bin', big)).rejects.toMatchObject({ code: 'unavailable' });
+
+  await queue.decide(['defer-1'], 'approved');
+  const landed = await drive.readFile('/big.bin');
+
+  expect(landed instanceof Uint8Array ? landed : new TextEncoder().encode(landed)).toEqual(big);
+  expect(parkedFile(kernel, sha256(big))).toBeNull();
 });

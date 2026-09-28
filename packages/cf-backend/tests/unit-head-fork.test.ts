@@ -33,14 +33,8 @@ setSandboxSdk({
 
     return {
       resolveReadiness: async () => ({ kind: 'restored' as const }),
-      // A command with no deadline takes the process lane; `exec` is the SDK's bounded lane and not what the handle reaches.
-      startProcess: async () => ({
-        id: 'p1',
-        exitCode: 0,
-        waitForExit: async () => ({ exitCode: 0 }),
-        getStatus: async () => 'exited',
-      }),
-      getProcessLogs: async () => ({ stdout: '', stderr: '' }),
+      // A command with no deadline takes the untimed lane; `exec` is the SDK's bounded lane and not what the handle reaches.
+      execUntimed: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
       exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       readFile: async () => ({ content: '', exitCode: 0 }),
       writeFile: async () => ({ exitCode: 0 }),

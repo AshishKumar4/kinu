@@ -322,7 +322,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   tools.file = createFileTool({
-    vfs: rt.storage.vfs,
+    vfs: rt.toolFiles,
     ledger: deps.fileLedger ?? new TurnFileLedger(),
     budget,
     memory,

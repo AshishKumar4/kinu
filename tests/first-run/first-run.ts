@@ -88,6 +88,7 @@ export const FIRST_RUN_CASES = [
   'snapshot-after-turn',
   'every-tool',
   'sandbox-mount-write',
+  'sandbox-exec-output',
   'public-share',
   'share-capability-cut',
   'blueprint-fork',
@@ -308,6 +309,20 @@ export const FIRST_RUN_DEFECTS = {
       + '(reason io, FileNotFoundError on a path the list at event 7 showed absent), event 12 is '
       + 'the namespace write succeeding where the mount write failed and listFiles(\'\') refusing '
       + 'on ValidationFailedError.',
+  },
+  'sandbox-exec-output': {
+    id: 'sandbox-exec-output',
+    found: 'A background command\'s output vanished: the first-run background-settle case on staging '
+      + '690e3a6040 (2026-09-28) ran `sleep 45 && echo KINU_SETTLED_AFTER_DETACH`, which exited 0, and the '
+      + 'product answered "(no output)".',
+    missedBecause: 'the SDK\'s process lane passes output through FIFOs its own monitor can delete before '
+      + 'the command opens them; the command then writes into a plain file nothing reads. It happens only '
+      + 'under concurrent commands on a container that has been running a while, and no suite ran more than '
+      + 'one untimed sandbox command at once, so every pre-deploy exec test met the lane at rest.',
+    provedRedAt: '690e3a6040',
+    redDirection: 'this case against staging serving 690e3a6040 on 2026-09-28 (the old lane), three runs: '
+      + '595, 596 and 596 of 600 marks returned. The probe behind it (docs/DEVBOX-DECISIONS.md D37): 143 of '
+      + '1175 final lines lost through startProcess at 16 at once, 0 of 1200 through ctx.container.exec.',
   },
   'device-link': {
     id: 'device-link',
@@ -699,6 +714,7 @@ const SHORT_SUBJECT = {
   'snapshot-after-turn': 'snapshot',
   'every-tool': 'tools',
   'sandbox-mount-write': 'mount',
+  'sandbox-exec-output': 'execout',
   'public-share': 'public',
   'share-capability-cut': 'cut',
   'blueprint-fork': 'fork',

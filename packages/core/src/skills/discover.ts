@@ -262,7 +262,6 @@ export async function readSkillFile(
     : readTextFile(vfs, ref.path, admissionBytes(admissionTokens));
 }
 
-/** Where the workspace writes its own skill of this name. */
 export function workspaceSkillPath(name: string): string {
   return `${WORKSPACE_SKILLS_DIR}/${name}/${SKILL_FOLDER_FILE}`;
 }

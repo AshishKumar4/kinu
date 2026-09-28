@@ -14,7 +14,7 @@ import type { ScriptedAnswer, ScriptedCall, ScriptedRequest } from '../../script
 import {
   CONSENT_ASK, CRAFT_ASK, CRAFT_INPUT, DELEGATION_ROSTER_ASK, DELEGATION_TASK_ASK, DELEGATION_WORD, FLEET_ALPHA,
   HELLO_SLATE_ASK, HELLO_SLATE_ID,
-  INTERNAL_FETCH_MISSION, INTERNAL_FETCH_PROGRAM, INTERNAL_URL, ISOLATION_ASK, MOUNT_ASK, MOUNT_BYTES,
+  EXEC_OUTPUT_ASK, EXEC_OUTPUT_PROGRAM, INTERNAL_FETCH_MISSION, INTERNAL_FETCH_PROGRAM, INTERNAL_URL, ISOLATION_ASK, MOUNT_ASK, MOUNT_BYTES,
   MOUNT_LISTING_PROGRAM, MOUNT_TARGET, NAMED_MACHINE_ASK, PANES_ASK, PANES_PROBE, RELAY_MISSION, SEARCH_ASK,
   SEARCH_QUERY, SETTLE_ASK, SETTLE_MARKER, STANDBY_MISSION, SWARM_ASK, SWARM_TASK, TOOLS_CODEMODE_MARK, TOOLS_FACT,
   TOOLS_HEALTH_URL, TOOLS_LIST_ASK, TOOLS_PROBE_BYTES, TOOLS_PROBE_PATH, TOOLS_RUN_MARK, TOOLS_TASK_TITLE,
@@ -193,6 +193,11 @@ const sandboxMountWrite: Script = (request) => latest(request) !== MOUNT_ASK ? n
   call('eval', { code: MOUNT_LISTING_PROGRAM }),
 ], () => `Wrote ${MOUNT_TARGET}.`);
 
+/** sandbox-exec-output: the one program, answered with the line it returned. */
+const sandboxExecOutput: Script = (request) => latest(request) !== EXEC_OUTPUT_ASK ? null : steps(request, [
+  call('eval', { code: EXEC_OUTPUT_PROGRAM }),
+], ([ran]) => oneLine(ran?.result));
+
 /** two-machines: an unnamed call, answered with what the executor said; then a call naming alpha. */
 const MACHINE_ASKS = new Map([[UNNAMED_MACHINE_ASK, 'device'], [NAMED_MACHINE_ASK, FLEET_ALPHA]]);
 
@@ -280,7 +285,7 @@ const nestedChat: Script = (request) => {
 /** The words every case sends its root agent: a conversation holding one is a case's, never a helper's. */
 const CASE_ASKS: readonly string[] = [
   STEER_TURN, SETTLE_ASK, WAKE_ASK, ISOLATION_ASK, DELEGATION_TASK_ASK, DELEGATION_ROSTER_ASK, TREE_ASK, SWARM_ASK,
-  CONSENT_ASK, MOUNT_ASK, UNNAMED_MACHINE_ASK, NAMED_MACHINE_ASK, SEARCH_ASK, PANES_ASK, TOOLS_LIST_ASK, TOOLS_USE_ASK,
+  CONSENT_ASK, MOUNT_ASK, EXEC_OUTPUT_ASK, UNNAMED_MACHINE_ASK, NAMED_MACHINE_ASK, SEARCH_ASK, PANES_ASK, TOOLS_LIST_ASK, TOOLS_USE_ASK,
   CRAFT_ASK, HELLO_SLATE_ASK,
 ];
 
@@ -312,7 +317,7 @@ const helper: Script = (request) => {
 
 const SCRIPTS: readonly Script[] = [
   steerCorrection, backgroundSettle, backgroundWake, capabilityIsolation, delegation, delegationTree, exploration,
-  machineConsent, sandboxMountWrite, twoMachines, webSearch, workspacePanes, everyTool, codemodeCraft, helloSlate, jobWake,
+  machineConsent, sandboxMountWrite, sandboxExecOutput, twoMachines, webSearch, workspacePanes, everyTool, codemodeCraft, helloSlate, jobWake,
   nestedChat, helper,
 ];
 

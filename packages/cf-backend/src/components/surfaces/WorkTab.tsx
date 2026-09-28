@@ -10,7 +10,7 @@ import {
   NotePencilIcon, ArrowLeftIcon, DatabaseIcon,
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, revealMisrepresenting, timeAgo } from "@kinu.run/core";
-import type { AgentTaskTree, ChangelogEntry, MemoryEntry, OwnedPlan, PendingAction, PendingActionKind, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
+import type { AgentTaskTree, ChangelogEntry, MemoryEntry, Omitted, OwnedPlan, PanelAgent, ParkedWriteReview, PendingAction, PendingActionKind, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
 import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -18,12 +18,13 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { Section } from "./shared";
-import { isClosedTree, PlanProgress, TaskTree } from "./work-tasks";
+import { HelperRow, isClosedTree, PlanProgress, TaskTree } from "./work-tasks";
 import { JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog, type ChangelogView } from "./changelog-entries";
 import type { SurfaceKind } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { WorkPlans } from "./WorkPlans";
+import { FileBody } from "./changes/ChangesPanel";
 
 const PlanReviewView = lazy(() => import("./PlanReviewView"));
 
@@ -69,10 +70,11 @@ export interface WorkTabProps {
   rpc: Rpc;
   memory?: MemoryEntry[];
   readMoves?: ReadMoves;
+  agents?: { readonly list: readonly PanelAgent[]; readonly open: (agent: PanelAgent) => void };
 }
 
 export function WorkTab({
-  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, rpc, memory = [], readMoves = {},
+  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, rpc, memory = [], readMoves = {}, agents,
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
   const [hasPlans, setHasPlans] = useState(plan !== null);
@@ -113,6 +115,7 @@ export function WorkTab({
   const openTasks = taskRows.filter(({ task }) => !isClosedTree(task));
   const closedTasks = taskRows.filter(({ task }) => isClosedTree(task));
   const runningJobs = backgroundJobs.filter((job) => job.status === "running");
+  const helpers = useMemo(() => (agents?.list ?? []).filter((agent) => agent.category === "background"), [agents]);
   const settledJobs = backgroundJobs.filter((job) => job.status !== "running");
 
   const journal = useMemo(
@@ -179,7 +182,7 @@ export function WorkTab({
     <div className="space-y-6 animate-fade-in">
       <WorkPlans work={work} owner={planOwner ?? "main"} arrival={workspacePlanArrival} onPresence={setHasPlans} onNewPlan={onNewPlan} onOpenReview={openReview} />
       <NeedsYou pendingActions={pendingActions} rpc={rpc} onDecided={onRefreshQueue} onOpenSurface={onOpenSurface} onOpenReview={setReview} />
-      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} runningJobs={runningJobs} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
+      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} runningJobs={runningJobs} helpers={helpers} onOpenHelper={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
       <WorkJournal journal={journal} filter={filter} onFilter={setFilter} view={changelog} seenAt={changelogSeenAt} seenError={changelogSeenError} resource={changelogResource} onReload={reloadChangelog} rpc={rpc} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} />
       <Learnings memory={memory} onOpenSurface={onOpenSurface} />
     </div>
@@ -266,18 +269,20 @@ export interface WorkTaskRow {
 }
 
 /** The read's tri-state gates only the work half, so a running job never waits behind the plan's spinner. */
-function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
+function WorkNow({ work, taskRows, openTasks, runningJobs, helpers, onOpenHelper, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
   work: WorkspaceWork | null;
   taskRows: WorkTaskRow[];
   openTasks: WorkTaskRow[];
   runningJobs: BackgroundJob[];
+  helpers: readonly PanelAgent[];
+  onOpenHelper?: (agent: PanelAgent) => void;
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
   onRefreshJobs: () => void;
   onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
   rpc: Rpc;
 }) {
-  const nowEmpty = work !== null && openTasks.length === 0 && runningJobs.length === 0;
+  const nowEmpty = work !== null && openTasks.length === 0 && runningJobs.length === 0 && helpers.length === 0;
 
   if (nowEmpty && resource.status !== "error") return null;
 
@@ -304,6 +309,11 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, on
             {runningJobs.map((job) => (
               <JobCard key={job.id} job={job} onRefresh={onRefreshJobs} rpc={rpc} />
             ))}
+          </div>
+        )}
+        {helpers.length > 0 && (
+          <div className="space-y-1">
+            {helpers.map((agent) => <HelperRow key={agent.key} agent={agent} onOpen={onOpenHelper} />)}
           </div>
         )}
       </div>
@@ -522,6 +532,9 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
             </span>
           </label>
         ))}
+        {actions.filter((action) => action.write !== undefined).map((action) => (
+          <ParkedWriteChange key={`change-${action.id}`} id={action.id} rpc={rpc} />
+        ))}
       </div>
 
       {state.error && <div className="p-t-status p-danger">{state.error}</div>}
@@ -542,6 +555,52 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
           Deny {countLabel(chosen.size, actions.length)}
         </Button>
       </div>
+    </div>
+  );
+}
+
+const OMITTED_TEXT: Record<Omitted, string> = { binary: "Binary content", large: "Too large to show line by line" };
+
+function byteCount(bytes: number): string {
+  return `${bytes.toLocaleString()} byte${bytes === 1 ? "" : "s"}`;
+}
+
+/** The parked bytes against the file as it is now: approving writes exactly these. */
+function ParkedWriteChange({ id, rpc }: { id: string; rpc: Rpc }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="rounded-md px-2 py-1.5 p-elevated" data-parked-write={id}>
+      <button type="button" className="p-meta p-accent-fg hover:underline" onClick={() => setOpen((was) => !was)} aria-expanded={open}>
+        {open ? "Hide the change" : "Show the change"}
+      </button>
+      {open && <ParkedWriteDiff id={id} rpc={rpc} />}
+    </div>
+  );
+}
+
+function ParkedWriteDiff({ id, rpc }: { id: string; rpc: Rpc }) {
+  const load = useCallback(() => rpc<ParkedWriteReview | null>("reviewParkedWrite", [id]), [rpc, id]);
+  const { resource, reload } = useAsyncResource(load);
+  const review = lastValue(resource);
+
+  if (review === null) {
+    return resource.status === "error"
+      ? <LoadFailure what="the change" message={resource.message} onRetry={reload} />
+      : <div className="flex justify-center py-2"><Loader size="sm" /></div>;
+  }
+
+  const sizes = `${review.currentBytes === null ? "New file" : byteCount(review.currentBytes)} → ${byteCount(review.nextBytes)}`;
+
+  return (
+    <div className="mt-1.5 space-y-1.5">
+      <div className="p-meta p-text-3">{review.path} · {sizes}</div>
+      {review.changedSinceAsked && (
+        <div className="p-t-status p-warning">The file changed after the agent asked, so approving writes nothing.</div>
+      )}
+      {review.diff.omitted === undefined
+        ? <div className="overflow-hidden rounded-md border p-border"><FileBody file={review.diff} stacked={false} onOpenInFiles={null} /></div>
+        : <div className="p-meta p-text-2">{OMITTED_TEXT[review.diff.omitted]}.</div>}
     </div>
   );
 }

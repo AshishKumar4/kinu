@@ -5,7 +5,9 @@
  * only, so an outcome is a property of the final state.
  */
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { settleSync } from '../obs/effect';
 import type {
   CarrySuppression, Floor, FloorBreach, MeasuredValue,
   Objective, ObjectiveDirection, ObjectiveScale,
@@ -158,7 +160,7 @@ export function dominatesPareto(
     const r = right[axis.id];
 
     if (l === undefined || r === undefined || !Number.isFinite(l) || !Number.isFinite(r)) {
-      throw new Error(`cannot compare Pareto evidence on axis "${axis.id}"`);
+      return settleSync(Effect.die(new Error(`cannot compare Pareto evidence on axis "${axis.id}"`)));
     }
 
     if (axis.direction === 'maximise' ? l < r : l > r) return false;
@@ -176,7 +178,7 @@ export function paretoFront<Candidate extends { readonly evidence: ParetoEvidenc
   for (const candidate of candidates) {
     const checked = validateParetoEvidence(axes, candidate.evidence);
 
-    if ('reason' in checked) throw new Error(checked.reason);
+    if ('reason' in checked) return settleSync(Effect.die(new Error(checked.reason)));
   }
 
   return candidates.filter((candidate, index) =>

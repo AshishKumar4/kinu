@@ -89,7 +89,6 @@ export interface SwarmRunDeps {
   readonly originContext?: readonly ModelMessage[];
   /** Per-node home provisioner (*Isolation*). Absent: every node reports `shared-origin-plane`. */
   readonly provisionHome?: NodeWorkspaceProvisioner;
-  /** See {@link NodeAgentDeps.runtimeForWorkspace}. */
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
   readonly nodeCodemode?: NodeCodemode;
   readonly webSearch?: WebSearchProvider;

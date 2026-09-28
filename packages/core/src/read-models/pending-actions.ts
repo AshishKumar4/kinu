@@ -4,6 +4,7 @@
  */
 
 import type { DeferredApproval } from '../safety/deferred-approval';
+import { boundWriteOf } from '../safety/bound-write';
 import type { PendingConsent } from '../protocol';
 import type { PlanReview } from '../types/plans';
 import { planTitle } from '../plans/review';
@@ -26,6 +27,8 @@ export interface PendingAction {
   readonly at: number;
   /** Lets the click find the row in the work read without reparsing a formatted id. */
   readonly planRef?: { readonly owner: string; readonly id: string; readonly revision: number };
+  /** A parked write over the user's file: its review is `reviewParkedWrite` of this id. */
+  readonly write?: { readonly path: string };
 }
 
 /** What a workspace asks of the person now. */
@@ -73,13 +76,22 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
 
   for (const action of input.deferredActions) {
     if (action.status !== 'queued') continue;
-    actions.push({
+    const write = boundWriteOf(action.command);
+
+    actions.push(write === null ? {
       id: action.id,
       kind: 'deferred_action',
       // Name the machine: commands against the agent's own sandbox never reach this queue.
       title: `Approve: a command the agent wants to run on ${action.executor}`,
       detail: action.command,
       at: action.requestedAt,
+    } : {
+      id: action.id,
+      kind: 'deferred_action',
+      title: `Replace ${write.path}`,
+      detail: null,
+      at: action.requestedAt,
+      write: { path: write.path },
     });
   }
 

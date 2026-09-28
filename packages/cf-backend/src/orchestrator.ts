@@ -16,7 +16,7 @@ import {
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
-  mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners, DELEGATED_TURN_SLOTS,
+  mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners,
   type ActorHost, type ActorToolsetDeps, type AgentsSwarmDeps, type AgentsToolDeps, type ResumableActorTurn,
   type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
@@ -58,6 +58,7 @@ import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
@@ -221,7 +222,8 @@ import {
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
-  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, performBoundWrite, ParkedWriteFiles,
+  reviewParkedWrite, type ParkedWriteReview,
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
   type DeferredApprovalNotice, type ApprovalGrant,
   TURN_AUTHOR_METADATA_KEY,
@@ -1161,7 +1163,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected readonly delegatedTurns = new DelegatedTurnRunners({
-    slots: DELEGATED_TURN_SLOTS,
     pass: (record) => this.drainActorAssignments(record),
     holdLane: async (body) => {
       await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
@@ -1200,7 +1201,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const below = subordinateDescendants(this.workspaceActors().list(), actorId).filter((actor) => !ownerMade(actor));
 
     if (below.length === 0) return;
-    this.delegatedTurns.cancelQueued(below.map((actor) => actor.actorId));
 
     this.detachOwned(async () => {
       for (const actor of below) {
@@ -1303,7 +1303,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const swept = await drainAssignments(log, {
       now: Date.now(), budget: HOSTED_DELEGATION_DRAIN_BUDGET, staleMs: STALE_EVENT_DELIVERY_MS,
-      run: (task) => this.delegatedTurns.turn(record.actorId, async () => {
+      run: async (task) => {
         const room = this.chatRooms.hostedRoom(record.actorId);
         const answerId = crypto.randomUUID();
 
@@ -1334,7 +1334,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           this.releaseIdleHosted(reference);
         }
-      }),
+      },
       onFailure: ({ cause }) => {
         diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
           doing: 'running a delegated turn this workspace admitted', cause, otherwise: 'io',
@@ -2882,7 +2882,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.consents.list();
   }
 
-  // Deferred approval: nothing is ever reported as having run (core safety/deferred-approval.ts).
+  // Deferred approval (core safety/deferred-approval.ts): only a parked write runs on approval.
   protected _deferrals: DeferredApprovalQueue | null = null;
   protected get deferrals(): DeferredApprovalQueue {
     this._deferrals ??= new DeferredApprovalQueue({
@@ -2900,6 +2900,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         });
       },
       announce: (notice) => this.announceDeferral(notice),
+      writes: {
+        content: new ParkedWriteFiles(async () => (await this.hostedWorkspace().bundle.session()).vfs.as(CRED_KERNEL)),
+        perform: (write, bytes) => performBoundWrite(this.rt.storage.vfs, write, bytes),
+      },
     });
 
     return this._deferrals;
@@ -2924,6 +2928,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async listDeferredApprovals(): Promise<DeferredApproval[]> {
     return this.deferrals.list();
+  }
+
+  /** A parked write's bytes against the file now, so the owner sees what an approval writes. */
+  @callable()
+  async reviewParkedWrite(id: string): Promise<ParkedWriteReview | null> {
+    return reviewParkedWrite(this.deferrals, this.rt.storage.vfs, id);
   }
 
   /** Decides one or many parked actions: one durable write per row, one wake for the batch. */
@@ -4615,6 +4625,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const signal = workspaceGenesisSignal(readMission(this.boundSql));
 
     if (!signal) return { started: false };
+    // Held behind the start measure, genesis would yield to the owner's first prompt.
+    await this.chatLoop.revised;
     // The send admits the turn before its first await; only the wait is detached.
     const sent = this.orch.inbox.send(signal);
     this.detachOwned(async () => {

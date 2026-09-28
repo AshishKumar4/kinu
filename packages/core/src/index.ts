@@ -657,7 +657,7 @@ export {
   type TemporaryRunRequest,
 } from './subordinates/temporary';
 
-export { DELEGATED_TURN_SLOTS, DelegatedTurnRunners, type DelegatedTurnRunnerDeps } from './subordinates/delegated-turns';
+export { DelegatedTurnRunners, type DelegatedTurnRunnerDeps } from './subordinates/delegated-turns';
 
 // The depth cap is derived per child, never stated by one.
 export {
@@ -1033,7 +1033,7 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 
 export {
   DefaultExecutionRouter,
-  withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach,
+  withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach,
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
@@ -1529,6 +1529,14 @@ export {
   type SecretPattern,
   type SecretFinding,
   type SecretSighting,
+  boundWriteOf,
+  performBoundWrite,
+  ParkedWriteFiles,
+  type ParkedWriteFileOps,
+  type ApprovalContent,
+  type BoundFileWrite,
+  type WriteSubject,
+  type ParkedWrites,
 } from './safety/index';
 
 export {
@@ -1641,8 +1649,10 @@ export {
 
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
+export { flushSignal, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal } from './orchestrator/flush-cadence';
+
 export {
-  ChatSession, turnInputMessage, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
+  ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
@@ -1965,6 +1975,8 @@ export type {
 
 export { buildPendingActions, needsTheUser } from './read-models/pending-actions';
 
+export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
+
 export {
   listInstructionApprovals, readInstructionSource, openInstructionSource,
   previewInstruction, gatherApprovableInstructions,
@@ -2106,7 +2118,7 @@ export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
   type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
-  type TabPresence, ownerFacingSubordinate,
+  type TabPresence, evolutionHelper, ownerFacingSubordinate,
 } from './protocol';
 
 export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';

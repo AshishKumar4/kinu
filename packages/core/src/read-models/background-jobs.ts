@@ -10,7 +10,8 @@ import type { BackgroundRetryRequest } from '../jobs/runner';
 import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
 import { resumableAgentsInput } from '../delegation/agents-tool';
-import { renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settleSync } from '../obs/index';
 
 /** BackgroundJobRunner's surface as this plane uses it. `cancelRunning` is deliberately absent:
  *  nothing here stops a job whose id it was not given. */
@@ -44,24 +45,23 @@ export async function cancelBackgroundJob(jobRunner: BackgroundJobControl, jobId
   return { ok: await jobRunner.cancel(jobId) };
 }
 
-export function dismissBackgroundJob(jobs: BackgroundJobStore, jobId: string) {
-  try {
-    jobs.dismiss(jobId);
-
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: renderThrownChain({ cause: error }) };
-  }
+export interface JobCommandOutcome {
+  readonly ok: boolean;
+  readonly error?: string;
 }
 
-export function clearBackgroundJobs(jobs: BackgroundJobStore) {
-  try {
-    jobs.clearSettled();
+export function dismissBackgroundJob(jobs: BackgroundJobStore, jobId: string): JobCommandOutcome {
+  return settleSync(Effect.try({ try: () => { jobs.dismiss(jobId); }, catch: (cause) => ({ cause }) }).pipe(Effect.match({
+    onSuccess: (): JobCommandOutcome => ({ ok: true }),
+    onFailure: (failed): JobCommandOutcome => ({ ok: false, error: renderThrownChain(failed) }),
+  })));
+}
 
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: renderThrownChain({ cause: error }) };
-  }
+export function clearBackgroundJobs(jobs: BackgroundJobStore): JobCommandOutcome {
+  return settleSync(Effect.try({ try: () => { jobs.clearSettled(); }, catch: (cause) => ({ cause }) }).pipe(Effect.match({
+    onSuccess: (): JobCommandOutcome => ({ ok: true }),
+    onFailure: (failed): JobCommandOutcome => ({ ok: false, error: renderThrownChain(failed) }),
+  })));
 }
 
 /**
@@ -69,45 +69,51 @@ export function clearBackgroundJobs(jobs: BackgroundJobStore) {
  * the same `resumableAgentsInput` narrowing as the evict-resume path; declined kinds replay as stored.
  */
 export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string): RetryOutcome {
-  const job = deps.jobs.get(jobId);
+  return settleSync(Effect.gen(function* () {
+    const job = deps.jobs.get(jobId);
 
-  if (!job) return { ok: false, error: 'job not found' };
+    if (!job) return { ok: false, error: 'job not found' };
 
-  if (job.status === 'running') return { ok: false, error: 'job still running' };
+    if (job.status === 'running') return { ok: false, error: 'job still running' };
 
-  if (job.retriedBy) return { ok: false, error: `job already retried as ${job.retriedBy}` };
-  const inputJson = deps.jobs.getInput(jobId);
+    if (job.retriedBy) return { ok: false, error: `job already retried as ${job.retriedBy}` };
+    const inputJson = deps.jobs.getInput(jobId);
 
-  if (inputJson == null) return { ok: false, error: 'no stored input to retry' };
-  const tool = deps.rawTools(job.workMode)[job.kind];
+    if (inputJson == null) return { ok: false, error: 'no stored input to retry' };
+    const tool = deps.rawTools(job.workMode)[job.kind];
 
-  if (!tool?.execute) return { ok: false, error: `tool "${job.kind}" unavailable` };
-  let input: JsonValue;
+    if (!tool?.execute) return { ok: false, error: `tool "${job.kind}" unavailable` };
 
-  try { input = parseJsonValue(inputJson); }
-  catch (error) { return { ok: false, error: `stored input is unreadable: ${renderThrownChain({ cause: error })}` }; }
+    const stored = yield* Effect.try({ try: () => parseJsonValue(inputJson), catch: (cause) => ({ cause }) }).pipe(Effect.match({
+      onSuccess: (value) => ({ readable: true as const, value }),
+      onFailure: (failed) => ({ readable: false as const, why: renderThrownChain(failed) }),
+    }));
 
-  const translated = resumableAgentsInput(job.kind, input);
+    if (!stored.readable) return { ok: false, error: `stored input is unreadable: ${stored.why}` };
+    let input: JsonValue = stored.value;
 
-  if (translated) input = decodeJsonValue({ value: translated });
-  const controller = new AbortController();
-  const newId = deps.jobRunner.createRetry({ sourceId: jobId, kind: job.kind, input, mode: job.workMode, controller });
+    const translated = resumableAgentsInput(job.kind, input);
 
-  if (newId === null) {
-    const replacement = deps.jobs.get(jobId)?.retriedBy;
+    if (translated) input = decodeJsonValue({ value: translated });
+    const controller = new AbortController();
+    const newId = deps.jobRunner.createRetry({ sourceId: jobId, kind: job.kind, input, mode: job.workMode, controller });
 
-    return { ok: false, error: replacement ? `job already retried as ${replacement}` : 'job retry could not be reserved' };
-  }
+    if (newId === null) {
+      const replacement = deps.jobs.get(jobId)?.retriedBy;
 
-  deps.logActivity('bg_job_retry', `${jobId} -> ${newId}`);
+      return { ok: false, error: replacement ? `job already retried as ${replacement}` : 'job retry could not be reserved' };
+    }
 
-  const promise = Promise.resolve(tool.execute(input, {
-      abortSignal: controller.signal, toolCallId: newId, messages: [],
-    })).then((result) => result === undefined ? undefined : decodeJsonValue({ value: result }));
+    deps.logActivity('bg_job_retry', `${jobId} -> ${newId}`);
 
-  deps.jobRunner.detach(newId, job.kind, promise);
+    const promise = Promise.resolve(tool.execute(input, {
+        abortSignal: controller.signal, toolCallId: newId, messages: [],
+      })).then((result) => result === undefined ? undefined : decodeJsonValue({ value: result }));
 
-  return { ok: true, jobId: newId };
+    deps.jobRunner.detach(newId, job.kind, promise);
+
+    return { ok: true, jobId: newId };
+  }));
 }
 
 /** `unknown` is an honest daemon result, not success: the request may still be running. */
