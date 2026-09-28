@@ -1,4 +1,4 @@
-// Workers AI provider, billed to the user's Cloudflare OAuth account; evals may use a direct binding.
+// Workers AI provider, billed to the user's Cloudflare OAuth account, or to the deployment's through its binding.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import { type ModelProvider, type ModelInfo } from './types';
@@ -17,14 +17,14 @@ export interface WorkersAIOptions {
 
 export function createWorkersAIProvider(
   opts: WorkersAIOptions = {},
-  developmentBinding?: Parameters<typeof createDirectWorkersAIFetch>[0],
+  deploymentBinding?: Parameters<typeof createDirectWorkersAIFetch>[0],
 ): ModelProvider {
   return {
     id: 'workers-ai',
     label: 'Cloudflare Workers AI',
     defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
     async isAvailable(deps) {
-      if (developmentBinding) return true;
+      if (deploymentBinding) return true;
       const auth = await deps.getAuth(CLOUDFLARE_OAUTH_CRED_KEY);
 
       return Boolean(auth?.baseURL);
@@ -37,12 +37,12 @@ export function createWorkersAIProvider(
     createModel(modelId, deps): LanguageModel {
       const requestHeaders = opts.sessionAffinity ? { 'x-session-affinity': opts.sessionAffinity } : undefined;
 
-      if (developmentBinding) {
+      if (deploymentBinding) {
         return createOpenAICompatible({
           name: 'workers-ai',
           baseURL: 'https://kinu-direct-workers-ai.invalid',
           headers: requestHeaders,
-          fetch: createDirectWorkersAIFetch(developmentBinding, {
+          fetch: createDirectWorkersAIFetch(deploymentBinding, {
             provider: 'workers-ai',
             modelId,
             ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),

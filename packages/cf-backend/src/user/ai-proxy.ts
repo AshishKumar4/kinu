@@ -21,7 +21,7 @@ const ChatCompletionRouteSchema = v.object({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
 });
 
-/** The eval identity's direct transport calls `run` on the same binding the gateway path uses. */
+/** The deployment's direct transport calls `run` on the same binding the gateway path uses. */
 export interface UserAIProxyEnv<Id> extends AvailableModelsEnv<Id>, OwnerCapabilityEnv {
   AI?: NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createDirectWorkersAIFetch>[0]>;
 }

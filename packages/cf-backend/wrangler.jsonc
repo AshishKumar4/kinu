@@ -386,8 +386,8 @@
   // embeddings, HTML→markdown, and the `ai-gateway` provider's chat transport
   // (providers/gateway-binding-fetch.ts) — binding calls are pre-authenticated
   // in-account, which is why that provider needs no API token. A signed-in
-  // user's own chat calls deliberately do NOT ride this binding: they carry that
-  // user's Cloudflare OAuth credential so the usage bills to their account.
+  // user's own chat calls ride it only under WORKERS_AI_VIA_BINDING=on; without
+  // it they carry that user's Cloudflare OAuth credential and bill to them.
   "ai": { "binding": "AI" },
   // Browser Rendering: the headless browser that photographs a slate after it renders.
   "browser": { "binding": "BROWSER" },
