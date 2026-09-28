@@ -18,7 +18,7 @@ their surface. Crafted tools are called as `tools.<name>(args)` inside `eval`.
 | `agents` | Delegation: `swarm \| hire \| msg \| list \| dismiss` |
 | `memory` | Durable state: `save \| search` prose notes, `remember \| recall \| forget` keyed facts, `conversations` to search or browse this agent's past conversation |
 | `tasks` | The agent's task list and active role: `add` titles (with a `parent` for subtasks), `update` one item's status or note, `list` it back, `mode` to set or read the role. One row per item in `agent_tasks`; open items render into the live context block every step and into the Tasks tab |
-| `web` | `search` returns ranked results (title, url, snippet, date); `fetch` returns one URL as markdown. Works without a key through DuckDuckGo and the Cloudflare markdown service; a stored `tavily` credential upgrades search |
+| `web` | `search` returns ranked results (title, url, snippet, date); `fetch` returns one URL as markdown. Works without a key through DuckDuckGo and the Cloudflare markdown service; a stored `tavily` credential upgrades search, at `https://api.tavily.com` or at the credential's own `baseURL` (a bearer credential's optional endpoint, for a proxy) |
 | `report` | A subordinate's progress back to its orchestrator: `progress \| completed \| blocked` |
 
 `submit_plan` is not one of the eight. `buildBuiltinTools` adds it only on a
@@ -337,7 +337,8 @@ files through the ordinary file plane, then call
 `workspace.slates.<id>.$preview()` to boot a live preview.
 `workspace.slates.<id>.<method>(...args)` calls a class method with JSON
 arguments, as the slate's own client does. `$commit()` freezes source,
-`$history()` reads versions, `workspace.slates.$fork(version)` copies a committed
+`$history(after?)` reads versions a page at a time, oldest first, and names the
+cursor for the next page, `workspace.slates.$fork(version)` copies a committed
 version into a new slate, and `$restore(version)` restores a version's tree.
 `$`-named members are lifecycle, which no class method can shadow. Running
 previews live as long as the isolate and are not durable records. These members

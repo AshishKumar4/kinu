@@ -11,10 +11,8 @@ function ev(event: Exclude<RunEventInput, { type: 'step_finish' }> | (Extract<Ru
 }
 
 describe('toolKindFor', () => {
-  test('maps tool names to runtime/mcts/skills/tool-call', () => {
+  test('maps tool names to runtime/tool-call', () => {
     expect(toolKindFor('shell')).toBe('runtime-exec');
-    expect(toolKindFor('think')).toBe('mcts');
-    expect(toolKindFor('skills')).toBe('skills');
     expect(toolKindFor('eval')).toBe('tool-call');
     expect(toolKindFor('memory')).toBe('tool-call');
   });

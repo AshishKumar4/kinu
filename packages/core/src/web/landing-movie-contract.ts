@@ -31,9 +31,6 @@ export const MOVIE_CUES = {
 
 export const MOVIE_END = MOVIE_CUES.end;
 
-/** A beat name from the published table. */
-export type MovieCue = keyof typeof MOVIE_CUES;
-
 /** The movie's deterministic drive, installed on `window`; tests drive the same timeline through it. */
 export interface LandingMovieHandle {
   readonly duration: number;

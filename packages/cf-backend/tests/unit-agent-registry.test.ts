@@ -116,7 +116,7 @@ describe('AgentProviderRegistry composition', () => {
     expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
-  test('the eval identity runs Workers AI through the direct binding', async () => {
+  test('WORKERS_AI_VIA_BINDING runs Workers AI through the direct binding, and nothing else does', async () => {
     const calls: Array<{ model: string; stream: boolean }> = [];
 
     const ai = Object.assign(stubAiBinding().binding, {
@@ -142,8 +142,14 @@ describe('AgentProviderRegistry composition', () => {
 
     const directBinding: Ai = Object.create(ai);
 
+    // KINU-001(b): a bound AI alone routes nothing directly; the eval identity's email is not even an input.
+    const unflagged = createAgentProviderRegistry({ env: { AI: directBinding }, userDO: fakeUserDOStub() });
+
+    await expect(generateText({ model: unflagged.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'), prompt: 'reply' })).rejects.toThrow();
+    expect(calls).toEqual([]);
+
     const env = {
-      DEV_USER_EMAIL: 'eval-service@kinu.run',
+      WORKERS_AI_VIA_BINDING: 'on',
       AI: directBinding,
     };
 

@@ -52,7 +52,6 @@ export function SlateFallbackFrame({ rpc }: { rpc: Rpc }) {
           onRefreshPorts={() => {}}
           plan={null}
           snapshot={{ status: "loading" }}
-          tools={[]}
           memory={[]}
           memoryContent=""
           onRetryLoad={() => {}}

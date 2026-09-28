@@ -141,11 +141,7 @@ process.on('message', async (rawMessage: JsonValue) => {
   try {
     switch (msg.method) {
       case BRANCH_EXPLORE: {
-        const { history, siblings } = msg.args;
-        const [language, ...alternates] = msg.args.languages;
-
-        if (!language) throw new Error('Branch exploration requires at least one executor language');
-        const languages: [string, ...string[]] = [language, ...alternates];
+        const { history, siblings, languages } = msg.args;
 
         const result = await exploreRollout(lowEffortRoute(), {
           mode: msg.args.mode,
@@ -193,7 +189,6 @@ process.once('exit', () => {
 });
 
 function readStoredModelSpec(): string | null {
-  validateActor();
   const row = db.query<{ value: string }, [string]>("SELECT value FROM actor_config WHERE actor_id = ? AND key = 'model' LIMIT 1").get(bootstrap.parent.actorId);
 
   return row?.value ?? null;

@@ -21,7 +21,6 @@ export {
   RESUME_REDRIVE_OPTION,
   readResumeRedrive,
   type BackgroundHandle,
-  type BackgroundRefusal,
   type BackgroundPolicy,
   type DetachOutcome,
   type InvocationSurface,

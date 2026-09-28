@@ -24,14 +24,6 @@ CREATE TABLE IF NOT EXISTS monitor_incidents (
   failures   INTEGER NOT NULL DEFAULT 1
 )`;
 
-interface IncidentRow {
-  probe: string;
-  detail: string;
-  opened_at: number;
-  alerted_at: number | null;
-  failures: number;
-}
-
 const IncidentRowSchema = v.object({
   probe: v.string(),
   detail: v.string(),
@@ -39,6 +31,8 @@ const IncidentRowSchema = v.object({
   alerted_at: v.nullable(v.number()),
   failures: v.number(),
 });
+
+type IncidentRow = v.InferOutput<typeof IncidentRowSchema>;
 
 export interface MonitorRunResult {
   failing: string[];

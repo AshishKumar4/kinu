@@ -187,7 +187,6 @@ export function applySignalCard(
   return cards.map((c) => c.id === event.id ? { ...c, state: "shown" } : c);
 }
 
-/** Parse a broadcast frame into a card event, or null when it is not one. */
 export function parseSignalCardEvent(frame: { value: unknown }): SignalCardEvent | null {
   const parsed = v.safeParse(SignalCardEventSchema, frame.value);
 

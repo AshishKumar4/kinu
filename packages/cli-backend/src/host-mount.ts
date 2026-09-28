@@ -92,8 +92,7 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
  * The working directory as the workspace file plane; agent state stays in
  * `agentStateVfs`. Accepts relative paths, plane-root aliases (`/workspace`,
  * `/home/main`, `/`, and `/slates` for its `slates/`) and real absolute paths inside
- * the tree; with `outside`, any other absolute path without `..`, gated as its shell command. Else EACCES.
- * A lexical guard against path confusion, not a sandbox.
+ * the tree; with `outside`, any absolute path without `..`, gated. Else EACCES. Not a sandbox.
  */
 export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined, outside?: ShellApprovalPolicy): VFS {
   const root = resolve(cwd);
@@ -117,7 +116,6 @@ export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | un
     return { at: direct, outside: true };
   };
 
-  /** `command`: the operation as a shell command, so the shell's rules and grants decide it. */
   const gated = async <T>(path: string, command: (at: string) => string, op: (at: string) => Promise<T>): Promise<T> => {
     const target = hostPath(path);
 

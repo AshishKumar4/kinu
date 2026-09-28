@@ -34,7 +34,6 @@ export function agentViewMount(state: VFS, scaffoldDir: string): VfsMount {
       : Effect.succeed(source);
   };
 
-  /** The state plane's own failure, its VFS code kept. */
   const fromState = <A>(doing: string, run: () => Promise<A>): Effect.Effect<A, KinuError | VfsError> => Effect.tryPromise({
     try: run,
     catch: (cause) => (isVfsError(cause)

@@ -1,9 +1,10 @@
 /** Semantic memory recall over Vectorize; fused with FTS5 hits via RRF. The cf-backend wires the bindings. */
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { IndexedChunk } from '@kinu.run/agent-utils/memory';
 import { renderIssues, type JsonObject } from '../utils/json';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, settle, toKinuError } from '../obs/index';
 
 /** Duck-typed so core stays dependency-free. */
 export interface VectorMutation {
@@ -138,40 +139,38 @@ export function createCloudflareVectorStore(opts: {
   }
 
   /** Trips the cooldown and rethrows. */
-  async function tripping<T>(operation: string, call: () => Promise<T>): Promise<T> {
-    try {
-      return await call();
-    } catch (err) {
-      diagnostics.failure(
-        'vector.backend_tripped',
-        toKinuError({ doing: 'reach the vector backend', cause: err, otherwise: 'unavailable' }),
-        { operation },
-      );
-      unavailableUntil = Date.now() + VECTOR_BACKEND_COOLDOWN_MS;
-      throw err;
-    }
+  function tripping<T>(operation: string, call: () => Promise<T>): Effect.Effect<T> {
+    return Effect.tryPromise({ try: call, catch: (cause) => ({ cause }) }).pipe(
+      Effect.tapError((failed) => Effect.sync(() => {
+        diagnostics.failure(
+          'vector.backend_tripped',
+          toKinuError({ doing: 'reach the vector backend', cause: failed.cause, otherwise: 'unavailable' }),
+          { operation },
+        );
+        unavailableUntil = Date.now() + VECTOR_BACKEND_COOLDOWN_MS;
+      })),
+      Effect.catch((failed) => Effect.die(failed.cause)),
+    );
   }
 
 
   return {
     get available() { return Date.now() >= unavailableUntil; },
 
-    async upsertChunk(chunk: IndexedChunk) {
-      await tripping('upsert', async () => index.upsert(await toRecords([chunk])));
+    upsertChunk(chunk: IndexedChunk) {
+      return settle(Effect.asVoid(tripping('upsert', async () => index.upsert(await toRecords([chunk])))));
     },
 
-    async upsertChunks(chunks: readonly IndexedChunk[]) {
-      if (chunks.length === 0) return;
-      await tripping('batch upsert', async () => index.upsert(await toRecords(chunks)));
+    upsertChunks(chunks: readonly IndexedChunk[]) {
+      return settle(chunks.length === 0 ? Effect.void : Effect.asVoid(tripping('batch upsert', async () => index.upsert(await toRecords(chunks)))));
     },
 
-    async deleteChunks(ids: readonly string[]) {
-      if (ids.length === 0) return;
-      await tripping('delete', async () => index.deleteByIds(await Promise.all(ids.map(storageId))));
+    deleteChunks(ids: readonly string[]) {
+      return settle(ids.length === 0 ? Effect.void : Effect.asVoid(tripping('delete', async () => index.deleteByIds(await Promise.all(ids.map(storageId))))));
     },
 
     search(text: string, topK = 10) {
-      return tripping('query', async () => {
+      return settle(tripping('query', async () => {
         const res = await index.query(await embedder.embed(text), {
           topK,
           returnMetadata: true,
@@ -199,7 +198,7 @@ export function createCloudflareVectorStore(opts: {
             score: m.score,
           }];
         });
-      });
+      }));
     },
   };
 }

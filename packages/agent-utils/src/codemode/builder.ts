@@ -7,7 +7,3 @@ export interface CraftedTool {
   createdAt: number;
   updatedAt: number;
 }
-
-export interface CraftedToolProvider {
-  getAll(): CraftedTool[];
-}

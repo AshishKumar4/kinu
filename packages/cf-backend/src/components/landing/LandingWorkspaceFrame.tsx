@@ -526,7 +526,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
                   surface={surface} onSurface={onSurface}
                   pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}}
                   plan={plan} planRpc={rpc}
-                  snapshot={{ status: 'loading' }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent="" onSearchMemory={() => {}}
+                  snapshot={{ status: 'loading' }} onRetryLoad={() => {}} memory={[]} memoryContent="" onSearchMemory={() => {}}
                   mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={isMovie ? streaming : kind === 'checkout'}
                   executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
                   backgroundJobs={isMovie ? [] : work.jobs()} onRefreshJobs={() => setWorkVersion((version) => version + 1)}

@@ -3,7 +3,6 @@
  * `_sample_interval`; no unweighted form exists. Columns resolve by slot name, never `blobN`.
  * Pure text: no env, binding or request.
  */
-import { assertQuantileLevel } from './limits';
 import {
   AGENT_METRICS_SCHEMA, CONTROL_PLANE_OPS_SCHEMA,
   blobColumn, doubleColumn, indexColumn,
@@ -25,10 +24,9 @@ function weightedAvg<S extends AnalyticsSchema>(schema: S, metric: DoubleName<S>
 function weightedQuantile<S extends AnalyticsSchema>(
   schema: S,
   metric: DoubleName<S>,
+  /** A fraction: `95` gets a column of nulls from `quantileExactWeighted`, not an error. */
   quantile: number,
 ): string {
-  assertQuantileLevel(quantile);
-
   return `quantileExactWeighted(${quantile})(${doubleColumn(schema, metric)}, _sample_interval)`;
 }
 

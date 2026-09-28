@@ -11,11 +11,10 @@ export const ActorReferenceSchema = v.strictObject({
 
 export type ActorReference = Readonly<v.InferOutput<typeof ActorReferenceSchema>>;
 
-const ActorIdentitySchema = v.strictObject({
-  ...ActorReferenceSchema.entries, name: v.pipe(v.string(), v.nonEmpty()), storageKey: v.pipe(v.string(), v.nonEmpty()),
-});
-
-export type ActorIdentity = Readonly<v.InferOutput<typeof ActorIdentitySchema>>;
+export interface ActorIdentity extends ActorReference {
+  readonly name: string;
+  readonly storageKey: string;
+}
 
 /** Project a bound handle onto the immutable reference that can cross RPC. */
 export function actorReferenceOf(actor: ActorReference): ActorReference {
@@ -33,9 +32,8 @@ export interface ActorHandle extends ActorIdentity {
   readonly programState: ProgramStateStore;
 }
 
-/** Bind a validated identity to physical storage without exposing its SQL. */
-export function bindActorHandle(sql: SqlExecutor, reference: ActorIdentity, validate: () => void): ActorHandle {
-  const identity = v.parse(ActorIdentitySchema, reference);
+/** Bind an identity to physical storage without exposing its SQL. */
+export function bindActorHandle(sql: SqlExecutor, identity: ActorIdentity, validate: () => void): ActorHandle {
   validate();
   let config: AgentConfigStore | undefined;
   let programState: ProgramStateStore | undefined;

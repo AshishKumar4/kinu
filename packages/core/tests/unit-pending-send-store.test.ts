@@ -87,27 +87,6 @@ describe('PendingSendStore — the reservation', () => {
 });
 
 describe('PendingSendStore — the reads a restart composes', () => {
-  test('forTurn names only rows bound to that turn', () => {
-    const { store } = setup();
-    const sends = store('actor-a');
-    sends.reserve({ id: 's-1', turnId: 'turn-1', mode: 'build', text: 'this turn' });
-    sends.reserve({ id: 's-2', turnId: 'turn-2', mode: 'build', text: 'another turn' });
-    sends.reserve({ id: 's-3', turnId: null, mode: 'build', text: 'idle-queued' });
-
-    expect(sends.forTurn('turn-1').map((row) => row.id)).toEqual(['s-1']);
-  });
-
-  test('sweepDead excludes the live turn AND keeps idle-queued rows out of the orphan set', () => {
-    const { store } = setup();
-    const sends = store('actor-a');
-    sends.reserve({ id: 's-live', turnId: 'turn-live', mode: 'build', text: 'in flight' });
-    sends.reserve({ id: 's-dead', turnId: 'turn-dead', mode: 'build', text: 'turn is gone' });
-    sends.reserve({ id: 's-idle', turnId: null, mode: 'build', text: 'queued, nobody owns it' });
-
-    // NULL turn_id <> 'turn-live' is NULL: the idle-queued row is not an orphan.
-    expect(sends.sweepDead('turn-live').map((row) => row.id)).toEqual(['s-dead']);
-  });
-
   test('ensureReserved binds a fresh id to the admitting turn and keeps an existing row untouched', () => {
     const { store } = setup();
     const sends = store('actor-a');
@@ -120,7 +99,6 @@ describe('PendingSendStore — the reads a restart composes', () => {
     expect(sends.files('s-1')).toEqual([FILE]);
 
     sends.ensureReserved({ id: 's-2', turnId: 'turn-rerun', mode: 'build', text: 'merged words' });
-    expect(sends.restore().map((row) => row.id)).toEqual(['s-1', 's-2']);
-    expect(sends.forTurn('turn-rerun').map((row) => row.id)).toEqual(['s-2']);
+    expect(sends.restore().map((row) => [row.id, row.turnId])).toEqual([['s-1', 'turn-1'], ['s-2', 'turn-rerun']]);
   });
 });

@@ -74,6 +74,12 @@ const ProfileCatalogObjectSchema = v.strictObject({
     v.pipe(v.string(), v.check(isProviderScope, 'a provider id is a-z, 0-9, dots, colons and dashes')),
     v.pipe(v.string(), v.check(isAccountName, 'an account name is a-z, 0-9 and dashes')),
   )),
+  modelFallbacks: v.optional(v.record(ModelSpecSchema, v.pipe(
+    v.array(ModelSpecSchema),
+    v.minLength(1),
+    v.check((chain) => new Set(chain).size === chain.length, 'a model chain names each fallback once'),
+  ))),
+  retries: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(10))),
 });
 
 function allSpawnReferencesExist(

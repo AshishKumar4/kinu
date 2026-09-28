@@ -927,6 +927,35 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(text).not.toContain('with the Worker');
   });
 
+  // Issue #36: a local workspace has neither mount, so nothing the model reads may offer one.
+  test('cli-local offers no /pc or /sandbox in its prompt or its tool schemas', async () => {
+    const base = fakeModel('ok');
+    let sent = '';
+
+    const model = new TestLanguageModelV2({
+      provider: base.provider,
+      modelId: base.modelId,
+      doGenerate: base.doGenerate,
+      doStream: async (options) => {
+        sent = JSON.stringify({ prompt: options.prompt, tools: options.tools });
+
+        return base.doStream(options);
+      },
+    });
+
+    const { session } = setup('ok', model);
+    await session.send('hi', { id: crypto.randomUUID() });
+
+    // The project's own AGENTS.md is the user's text, and it may name anything.
+    // The block as the prompt opens and closes it, newlines escaped by JSON; prose may name the tag inline.
+    const start = sent.indexOf('<workspace_instructions>\\n');
+    const end = sent.indexOf('\\n</workspace_instructions>', start);
+    const ours = start === -1 || end === -1 ? sent : sent.slice(0, start) + sent.slice(end);
+
+    expect(ours).toContain('Relative paths resolve at the workspace root');
+    expect(ours.match(/\/pc\b|\/sandbox\b|sandbox:\/\//gu)).toBeNull();
+  });
+
   test('head-inherited context drops file-part data URLs, keeps the reference', () => {
     const serialized = serializeContentForHeads([
       { type: 'file', data: 'data:image/png;base64,AAAA', mediaType: 'image/png', filename: 'square.png' },

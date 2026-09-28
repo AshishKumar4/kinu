@@ -178,7 +178,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
     const fence: ReleaseFence = { released: false };
 
-    const handle = deps.directory.openFenced(reference.actorId, () => {
+    const handle = deps.directory.open(reference.actorId, () => {
       if (fence.released) {
         throw new KinuError('missing', 'The hosted actor was released by its root.');
       }
@@ -193,6 +193,14 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       () => deps.filesFor(binding),
     );
 
+    const tracing = deps.tracing;
+
+    if (tracing !== undefined) {
+      stores.claims.observeRecovered((claim) => {
+        tracing().turns({ id: record.actorId, kind: record.kind }).recovered(claim, claim.outcome);
+      });
+    }
+
     return { bound: { ...binding, stores }, fence };
   };
 
@@ -202,7 +210,8 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     let built = false;
 
     try {
-      // Children need handle identity for release.
+      // Children need handle identity so release revokes every statement. The root's runtime
+      // belongs to its opener and is never released individually, so same actor id suffices.
       const rootBinding = reference.parentActorId === null;
 
       if (runtime.actor !== bound.handle
@@ -246,7 +255,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
       return { actor: { ...bound, runtime, session }, fence };
     } finally {
-      // A failed build frees its runtime.
+      // A failed build still lets its runtime go.
       if (!built) runtime.release?.();
     }
   };

@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AgentSurface } from '../src/components/surfaces/AgentSurface';
 import type { AgentStatus } from '../src/hooks/use-kinu';
 import type { AsyncResource } from '../src/hooks/use-async-resource';
-import type { Rpc, ToolInfo } from '@kinu.run/core';
+import type { Rpc } from '@kinu.run/core';
 
 /** Server rendering has no storage for `Section`'s fold state, so the suite provides one. */
 beforeAll(() => {
@@ -34,22 +34,10 @@ const STATUS: AgentStatus = {
   createdAt: 0,
   scaffoldVersion: 3,
   searchNodeCount: 0,
-  craftedToolCount: 0,
   messageCount: 4,
   model: 'anthropic/claude-opus-4',
   reasoningEffort: null,
   forkLineage: null,
-};
-
-const TOOL: ToolInfo = {
-  name: 'shell',
-  description: 'Run a command.',
-  summary: 'Run a command.',
-  learned: false,
-  usageCount: 2,
-  qualityScore: 0,
-  exposure: 'native',
-  wired: true,
 };
 
 const MEMORY_MD = '## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n';
@@ -69,13 +57,12 @@ function readable(markup: string): string {
 
 function render(
   snapshot: AsyncResource<AgentStatus>,
-  overrides: { tools?: ToolInfo[]; memoryContent?: string } = {},
+  overrides: { memoryContent?: string } = {},
 ): string {
-  const { tools = [], memoryContent = '' } = overrides;
+  const { memoryContent = '' } = overrides;
 
   return readable(renderToStaticMarkup(createElement(AgentSurface, {
     snapshot,
-    tools,
     memory: [],
     memoryContent,
     onSearchMemory: () => {},
@@ -93,13 +80,6 @@ describe('panes fed by the workspace snapshot', () => {
     expect(markup).toContain('Retry');
   });
 
-  test('the same failure never claims the agent has no tools', () => {
-    const markup = render({ status: 'error', message: CONNECTION_LOST, last: null });
-
-    expect(markup).not.toContain('No tools yet');
-    expect(markup).toContain('Could not load tools');
-  });
-
   test('no pane repeats the reason the banner already gives once', () => {
     const markup = render({ status: 'error', message: CONNECTION_LOST, last: null });
 
@@ -110,7 +90,6 @@ describe('panes fed by the workspace snapshot', () => {
     const markup = render({ status: 'loading' });
 
     expect(markup).not.toContain('No memories yet');
-    expect(markup).not.toContain('No tools yet');
     expect(markup).not.toContain('Could not load');
   });
 
@@ -118,18 +97,16 @@ describe('panes fed by the workspace snapshot', () => {
     const markup = render({ status: 'ready', value: STATUS });
 
     expect(markup).toContain('No memories yet');
-    expect(markup).toContain('No tools yet');
     expect(markup).not.toContain('Could not load memory');
   });
 
   test('a dropped connection keeps the last snapshot on screen rather than emptying it', () => {
     const markup = render(
       { status: 'error', message: CONNECTION_LOST, last: STATUS },
-      { tools: [TOOL], memoryContent: MEMORY_MD },
+      { memoryContent: MEMORY_MD },
     );
 
     expect(markup).toContain('/api/cart/apply');
-    expect(markup).toContain(TOOL.name);
     expect(markup).not.toContain('No memories yet');
     expect(markup).not.toContain('Could not load memory');
     expect(markup).toContain(STATUS.displayName);

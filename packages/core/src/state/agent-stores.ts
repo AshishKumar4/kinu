@@ -25,7 +25,6 @@ export interface AgentStores {
   /** Also the live fork roster the dynamic context reads. */
   readonly headJournal: HeadJournal;
   readonly eventRecorder: RunEventRecorder;
-  /** Durable admission ledger. */
   readonly claims: ActorClaimStore;
   readonly jobs: BackgroundJobStore;
   /** Actor-scoped: a plan is approved for the actor that wrote it. */

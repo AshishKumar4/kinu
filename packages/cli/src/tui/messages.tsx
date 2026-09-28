@@ -261,7 +261,7 @@ function ToolResultRow({ message, call, previewWidth, expanded }: {
 
   // A file edit or write draws its change-set, not the result's JSON line.
   if (diff !== null) {
-    return <FileDiffCard view={diff} expanded={expanded} previewWidth={previewWidth} lineCap={EXPANDED_RESULT_LINES} />;
+    return <FileDiffCard view={diff} expanded={expanded} previewWidth={previewWidth} />;
   }
 
   const { success } = message;

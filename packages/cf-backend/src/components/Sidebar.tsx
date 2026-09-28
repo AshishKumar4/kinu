@@ -41,12 +41,6 @@ function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
 // Deleting an agent must first leave all of these: a mounted socket auto-reconnects and resurrects the DO.
 const WORKSPACE_SCOPED_SECTIONS = ["workspace", "mcts", "settings", "triggers"];
 
-interface SidebarAgent {
-  name: string;
-  displayName: string;
-  status: string;
-}
-
 const SidebarAgentSchema = v.object({
   name: v.string(),
   displayName: v.string(),
@@ -69,11 +63,7 @@ function connectionWait(status: ConnectionStatus): string {
   return "Could not connect";
 }
 
-interface WorkspaceActivity {
-  running: boolean;
-  unseenChangelog: number;
-  agents: SidebarAgent[];
-}
+type WorkspaceActivity = Omit<v.InferOutput<typeof WorkspaceActivityEventSchema>, 'name'>;
 
 const WorkspaceActivityEventSchema = v.object({
   name: v.string(),

@@ -72,14 +72,6 @@ describe('the terminal transition claim', () => {
     expect(claims().map((row) => row.call_id).sort()).toEqual(['terminal:response:a-final', 'terminal:response:a-step']);
   });
 
-  /** Invented identities would collide: every unclaimable turn would share one key. */
-  test('a turn with no durable identity is unclaimed rather than invented', () => {
-    const { transitions, claims } = ledger();
-
-    expect(transitions.begin(null)).toBe('unclaimed');
-    expect(claims()).toEqual([]);
-  });
-
   /**
    * A sequence the live process runs is deferred, not woken on its overdue instant (which re-arms
    * every second) nor excluded (a fired one-shot wake leaves no carrier).

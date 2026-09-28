@@ -6,8 +6,14 @@ import {
 } from '@agent-core/core/slates';
 import * as v from 'valibot';
 import type { SqlExec } from '../types/primitives';
+import { PLATFORM_CATALOG } from '../platform-catalog';
+import { Effect } from 'effect';
+import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 
 const StoredBytes = v.object({ bytes: v.instance(ArrayBuffer) });
+
+const StoredVersionRow = v.object({ id: v.string(), bytes: v.instance(ArrayBuffer) });
 
 type RecordTable = 'slate_versions' | 'slate_publications';
 
@@ -16,6 +22,9 @@ interface OwnedRecord {
   readonly workspaceId: WorkspaceId;
   readonly slateId: SlateId;
 }
+
+/** One RPC answer holds this many rows at the SQLite row ceiling. */
+const SLATE_HISTORY_PAGE = Math.floor(PLATFORM_CATALOG['rpc.arg_bytes'].limit.value / PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
 
 function binary(bytes: Uint8Array): ArrayBuffer {
   if (bytes.buffer instanceof ArrayBuffer && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) return bytes.buffer;
@@ -110,6 +119,33 @@ export class SqliteSlateStore extends SlateStore {
   }
   getVersion(id: SlateVersionId): SlateVersion | undefined { return this.get('slate_versions', id, SlateVersion.codec); }
   listVersions(id: SlateId): readonly SlateVersion[] { return this.list('slate_versions', id, SlateVersion.codec); }
+
+  versionPage(id: SlateId, after?: string) {
+    return settleSync(Effect.map(this.cursorRow(id, after), (from) => this.versionsFrom(id, from)));
+  }
+
+  private cursorRow(id: SlateId, after: string | undefined): Effect.Effect<number, KinuError> {
+    if (after === undefined) return Effect.succeed(0);
+    const row = this.db.exec('SELECT rowid AS at FROM slate_versions WHERE id = ? AND slate_id = ?', after, id.value).toArray()[0];
+
+    return row === undefined
+      ? Effect.fail(new KinuError('missing', 'The history cursor names no version of this slate'))
+      : Effect.succeed(v.parse(v.object({ at: v.number() }), row).at);
+  }
+
+  private versionsFrom(id: SlateId, from: number) {
+    const rows = this.db.exec(
+      'SELECT id, bytes FROM slate_versions WHERE slate_id = ? AND rowid > ? ORDER BY rowid LIMIT ?',
+      id.value, from, SLATE_HISTORY_PAGE + 1,
+    ).toArray().map((row) => v.parse(StoredVersionRow, row));
+
+    const page = rows.slice(0, SLATE_HISTORY_PAGE);
+
+    return {
+      versions: page.map((row) => SlateVersion.codec.decode(new Uint8Array(row.bytes))),
+      next: rows.length > SLATE_HISTORY_PAGE ? page.at(-1)?.id ?? null : null,
+    };
+  }
 
   addPublication(publication: SlatePublication): void {
     this.requireRecord(this.getVersion(publication.versionId), publication);

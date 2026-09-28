@@ -5,16 +5,7 @@ import { chunkMarkdown } from "./chunker";
 import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from "./query";
 import type { MemorySearchResult } from "./query";
 
-const DEFAULT_SNIPPET_MAX_CHARS = 700;
-
-export interface MemoryConfig {
-	memoryDir?: string;
-	logsDir?: string;
-	curatedFile?: string;
-	indexedPrefixes?: string[];
-	indexedFiles?: string[];
-	snippetMaxChars?: number;
-}
+const SNIPPET_MAX_CHARS = 700;
 
 interface FtsRow { id: string; path: string; start_line: number; end_line: number; text: string; rank: number }
 
@@ -56,34 +47,10 @@ export function initMemoryChunkTables(sql: SqlExecutor): void {
 }
 
 export class MemoryStore {
-	private readonly vfs: ReadWriteVFS;
-	private readonly sql: SqlExecutor;
-	private readonly memoryDir: string;
-	private readonly logsDir: string;
-	readonly curatedFile: string;
-	private readonly indexedPrefixes: string[];
-	private readonly indexedFiles: string[];
-	private readonly snippetMaxChars: number;
-
-	constructor(vfs: ReadWriteVFS, sql: SqlExecutor, config?: MemoryConfig) {
-		this.vfs = vfs;
-		this.sql = sql;
-		this.memoryDir = config?.memoryDir ?? "memory";
-		this.logsDir = config?.logsDir ?? `${this.memoryDir}/logs`;
-		this.curatedFile = config?.curatedFile ?? `${this.memoryDir}/MEMORY.md`;
-		this.indexedPrefixes = config?.indexedPrefixes ?? ["memory/", "identity.md"];
-		this.indexedFiles = config?.indexedFiles ?? [];
-		this.snippetMaxChars = config?.snippetMaxChars ?? DEFAULT_SNIPPET_MAX_CHARS;
-	}
+	constructor(private readonly vfs: ReadWriteVFS, private readonly sql: SqlExecutor) {}
 
 	ensureSchema(): void {
 		initMemoryChunkTables(this.sql);
-	}
-
-	shouldIndex(path: string): boolean {
-		if (this.indexedFiles.includes(path)) return true;
-
-		return this.indexedPrefixes.some((p) => path.startsWith(p));
 	}
 
 	async writeFile(path: string, content: string): Promise<void> {
@@ -103,26 +70,15 @@ export class MemoryStore {
 		await this.writeFile(path, existing + content);
 	}
 
-	async readFile(path: string, lineRange?: { start: number; end: number }): Promise<string | null> {
+	async readFile(path: string): Promise<string | null> {
 		try {
-			const content = await readVfsText(this.vfs, path);
-
-			if (!lineRange) return content;
-			const lines = content.split("\n");
-			const start = Math.max(0, lineRange.start - 1);
-			const end = Math.min(lines.length, lineRange.end);
-
-			return lines.slice(start, end).join("\n");
+			return await readVfsText(this.vfs, path);
 		} catch (err) {
 			// Only a missing file is absence; null would read as a legitimately empty file.
 			if (!isMissingFileError(err)) throw err;
 
 			return null;
 		}
-	}
-
-	async readCurated(): Promise<string | null> {
-		return this.readFile(this.curatedFile);
 	}
 
 	/** (Re)index a file into FTS5 (source of truth) and return the delta for the vector index. */
@@ -175,11 +131,6 @@ export class MemoryStore {
 		return rows.map((r) => ({ id: r.id, path: r.path, startLine: r.start_line, endLine: r.end_line, text: r.text }));
 	}
 
-	removeIndex(path: string): void {
-		void this.sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE path = ${path})`;
-		void this.sql`DELETE FROM memory_chunks WHERE path = ${path}`;
-	}
-
 	/** Ranked hits: strict all-term page, then partial matches up to `limit` (see {@link fillToCapacity}). */
 	search(query: string, limit = 10): MemorySearchResult[] {
 		if (!query.trim()) return [];
@@ -197,8 +148,8 @@ export class MemoryStore {
 			path: r.path,
 			startLine: r.start_line,
 			endLine: r.end_line,
-			snippet: r.text.length > this.snippetMaxChars
-				? r.text.slice(0, this.snippetMaxChars) + "..."
+			snippet: r.text.length > SNIPPET_MAX_CHARS
+				? r.text.slice(0, SNIPPET_MAX_CHARS) + "..."
 				: r.text,
 			score: Math.abs(r.rank) / (1 + Math.abs(r.rank)),
 		}));
@@ -213,40 +164,6 @@ export class MemoryStore {
 			ORDER BY rank ASC, mc.rowid ASC
 			LIMIT ${limit}
 		`;
-	}
-
-	todayLogPath(): string {
-		const d = new Date();
-		const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-
-		return `${this.logsDir}/${date}.md`;
-	}
-
-	async listLogFiles(): Promise<string[]> {
-		try {
-			const entries = await this.vfs.readdir(this.logsDir);
-
-			return entries
-				.filter((name: string) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name))
-				.sort((a: string, b: string) => b.localeCompare(a))
-				.map((name: string) => `${this.logsDir}/${name}`);
-		} catch (err) {
-			// A missing logs directory is no logs; other failures must not read as empty history.
-			if (!isMissingFileError(err)) throw err;
-
-			return [];
-		}
-	}
-
-	async listFiles(prefix?: string): Promise<string[]> {
-		const dir = prefix ?? this.memoryDir;
-
-		try { return await this.vfs.readdir(dir); }
-		catch (err) {
-			if (!isMissingFileError(err)) throw err;
-
-			return [];
-		}
 	}
 }
 

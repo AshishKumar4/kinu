@@ -1,8 +1,12 @@
 /**
- * FIRST RUN: a live web search answers on the deployed product.
+ * FIRST RUN: a web search answers on the deployed product.
  *
- * THE ASK. An end-to-end pass of the web search capability: the deployed agent
- * searches the live web with its `web` tool and uses what came back. Every
+ * THE ASK. An end-to-end pass of the keyed web search path: the deployed agent
+ * searches with its `web` tool through the account's `tavily` credential, which
+ * points at the tiers' scripted search (scripts/scripted-search.ts), and uses
+ * what came back. From a Worker, key-less DuckDuckGo answered 522 or its bot
+ * page on every staging run of 2026-09-27, which measured the provider, not the
+ * product; whether a real provider answers is the evals' question. Every
  * check reads durable state — the ledger's `tool_call_end` row and the stored
  * reply — never the model's own account of what it did.
  *
