@@ -92,7 +92,7 @@ import {
 } from './sync';
 
 /** Bounded wait for `running` to clear after an acknowledged stop: an unbounded wait pins the
- *  attempt, and `kickStartup` early-returns on a pinned attempt, so nothing re-arms. */
+ *  attempt, and `#armStartup` early-returns on a pinned attempt, so nothing re-arms. */
 const CONTAINER_STOP_ATTEMPTS = 50;
 
 const CONTAINER_STOP_INTERVAL_MS = 100;
@@ -125,6 +125,9 @@ const SETTLED_KEY = 'devbox:restoration';
 
 const REPLACED_COUNT_KEY = 'devbox:replaced-count';
 
+/** Idle origin for a box no caller has used. */
+const STARTED_AT_KEY = 'devbox:started-at';
+
 /** Scheduled-callback names. Each MUST name a public method on the class:
  *  `Container.schedule` rejects anything it cannot call back. */
 const STARTUP_CALLBACK = 'devboxStartup';
@@ -134,6 +137,9 @@ const CHECKPOINT_CALLBACK = 'devboxCheckpoint';
 const HEARTBEAT_CALLBACK = 'devboxHeartbeat';
 
 const INCIDENT_CALLBACK = 'devboxIncidents';
+
+/** Rows a destroyed box neither keeps nor arms. */
+const CONTAINER_CALLBACKS: readonly string[] = [STARTUP_CALLBACK, HEARTBEAT_CALLBACK, CHECKPOINT_CALLBACK];
 
 /** A classified recovery obligation; executed outside the SDK start block. */
 const RECOVERY_ACTION_KEY = 'devbox:recovery-action';
@@ -202,6 +208,12 @@ interface Flight {
   readonly since: number;
 }
 
+function unawaited(work: Promise<unknown>, lost: string): void {
+  void work.catch((cause: LateStartFailure['cause']) => {
+    console.error(`[devbox] ${lost}: ${describe({ cause })}`);
+  });
+}
+
 export class Devbox<Env = unknown> extends Sandbox<Env> {
   #storage: DevboxStorage | undefined;
   #gateRestore: Flight | undefined;
@@ -212,6 +224,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  attempt's result is already discarded. */
   #startup: Flight | undefined;
   #disarmAdmission: (() => void) | undefined;
+  readonly #admissions = new Set<{ readonly abort: () => void; readonly settled: Promise<void> }>();
+  #refused: { readonly generation: number; readonly reason: string } | undefined;
+  /** Set by `destroy`, cleared by a caller or a host (D36). */
+  #closed = false;
   /** Opened by the attempt on its hook; every phase stamp reads it until the attempt settles.
    *  Memory only: a witness needing stamps past a reset keeps them via `onRestorePhase`. */
   #phaseClock: RestoreClock | undefined;
@@ -256,10 +272,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     super(ctx, env);
     // Unawaited: the gate holds every event until activation settles, and a storage failure
     // here is the object's own SQLite failing, which the first request reports itself.
-    void ctx.blockConcurrencyWhile(() => this.#activate())
-      .catch((cause: LateStartFailure['cause']) => {
-        console.error(`[devbox] activation failed: ${describe({ cause })}`);
-      });
+    unawaited(ctx.blockConcurrencyWhile(() => this.#activate()), 'activation failed');
   }
 
   /** Constructor work is storage-only; it does not yet have control-port proof. */
@@ -416,8 +429,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return REAL_START_CLOCK;
   }
 
-  /** Plain SDK starts must also prove the control listener before our hook. */
+  /** Plain SDK starts reopen a destroyed box, and prove the control listener before our hook. */
   override start(...args: Parameters<Sandbox<Env>['start']>): Promise<void> {
+    this.#closed = false;
+
     return this.startAndWaitForPorts({
       ports: this.defaultPort,
       startOptions: args[0],
@@ -430,6 +445,13 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     });
   }
 
+  /** Every start, the SDK's own included, is decided here, after any destroy (D36). */
+  override startAndWaitForPorts(...args: Parameters<Sandbox<Env>['startAndWaitForPorts']>): Promise<void> {
+    if (this.#closed) return Promise.reject(new Error('this devbox was destroyed; only a caller or a host starts it again'));
+
+    return super.startAndWaitForPorts(...args);
+  }
+
   /** Runs inside the SDK's start block (D26): nothing else reaches the object until it settles.
    *  A timer set before the block holds every timer the hook sets, so the admission window goes. */
   override onStart(): Promise<void> {
@@ -440,6 +462,12 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** Joins a re-entered hook; adopts a settled boot without re-attaching. */
   async #restoreInStartGate(): Promise<void> {
+    if (this.#closed) {
+      this.#trace('startup.hook.closed', { generation: this.#generation });
+
+      return;
+    }
+
     const pending = this.#gateRestore;
 
     if (pending?.generation === this.#generation) {
@@ -530,7 +558,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     if (this.#restoration.phase === 'attached') await this.#restartSync();
 
-    if (this.#admission() !== undefined) this.deleteSchedules(STARTUP_CALLBACK);
+    if (this.#admission() !== undefined) {
+      this.deleteSchedules(STARTUP_CALLBACK);
+      await this.ctx.storage.put(STARTED_AT_KEY, Date.now());
+    }
   }
 
   /** Every settle writes the durable row a post-reset activation adopts, never memory alone.
@@ -547,10 +578,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     if (this.#owns(generation)) this.#restoration = restoration;
   }
 
-  /** The startup row goes through `kickStartup`, not a bare `#arm`: a box with nothing restored
+  /** The startup row goes through `#armStartup`, not a bare `#arm`: a box with nothing restored
    *  would otherwise arm a successor every second; `#arm` is future-only for periodic rows. */
   async #armContainerSchedules(): Promise<void> {
-    await this.kickStartup();
+    await this.#armStartup();
 
     if (this.ambientCheckpoints && !this.#syncsInContainer()) {
       await this.#arm(CHECKPOINT_CALLBACK, Math.ceil(this.policy.checkpointIntervalMs / 1000));
@@ -652,7 +683,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       '[devbox] the restored container was replaced; refusing this commit until the start hook restores it',
     );
     this.#invalidateGeneration();
-    await this.kickStartup();
+    await this.#armStartup();
     throw new Error('this devbox is not ready: the restored container was replaced; a startup is armed');
   }
 
@@ -887,7 +918,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     try {
       await this.#dispatch(STARTUP_CALLBACK, async () => {
-        // A stale buffered startup row cannot reopen a settled running generation (D12).
+        // A buffered row reopens neither a destroyed box nor a settled running generation (D12).
+        if (this.#closed) return;
+
         if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
         await this.#startContainer();
 
@@ -973,16 +1006,22 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     this.#disarmAdmission = disarm;
 
+    const admitting = this.startAndWaitForPorts({
+      ports: this.defaultPort,
+      cancellationOptions: {
+        instanceGetTimeoutMS: this.policy.portWaitMs,
+        portReadyTimeoutMS: this.policy.portWaitMs,
+        waitInterval: ADMISSION_POLL_INTERVAL_MS,
+        abort: window.signal,
+      },
+    });
+
+    const admission = { abort: () => { window.abort(); }, settled: admitting };
+    this.#admissions.add(admission);
+
     try {
-      await this.startAndWaitForPorts({
-        ports: this.defaultPort,
-        cancellationOptions: {
-          instanceGetTimeoutMS: this.policy.portWaitMs,
-          portReadyTimeoutMS: this.policy.portWaitMs,
-          waitInterval: ADMISSION_POLL_INTERVAL_MS,
-          abort: window.signal,
-        },
-      });
+      await admitting;
+      this.#refused = undefined;
       this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation) });
     } catch (cause) {
       const reason = describe({ cause });
@@ -991,9 +1030,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         running: this.ctx.container?.running === true, reason,
       });
 
-      // A superseded admission is a newer claim on this generation, not a failure to tolerate;
-      // this branch only logs it and falls off the end.
+      // Only this generation's refusal is an incident.
       if (this.#owns(generation)) {
+        this.#refused = { generation, reason };
         const failure = classifyRecovery({ cause });
         await this.#record('attach', `[${failure} -> retry] ${reason}`);
 
@@ -1002,6 +1041,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         console.error(`[devbox] superseded admission refused: ${reason}`);
       }
     } finally {
+      this.#admissions.delete(admission);
       disarm();
 
       if (this.#disarmAdmission === disarm) this.#disarmAdmission = undefined;
@@ -1101,10 +1141,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     this.#adoptionPending = false;
     // A standing settled row would let the next activation adopt a restoration it never ran.
     // Not awaited: the next adoption reads only after awaits of its own.
-    void this.ctx.storage.delete(SETTLED_KEY)
-      .catch((cause: LateStartFailure['cause']) => {
-        console.error(`[devbox] settled phase was not cleared: ${describe({ cause })}`);
-      });
+    unawaited(this.ctx.storage.delete(SETTLED_KEY), 'settled phase was not cleared');
     // A generation turnover means the container is gone or going, so its runtime directory is too;
     // the next command that stands in it must create it again.
     this.#runtimeDirReady = false;
@@ -1222,13 +1259,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     this.deleteSchedules(STARTUP_CALLBACK);
   }
 
-  /** Cancels exec work abandoned at the attach deadline; `destroy` acks before `running` flips. */
+  /** Cancels exec work abandoned at the attach deadline; `destroy` acks before `running` flips.
+   *  `super`: a replaced identity is restarted, not closed. */
   async #replaceContainer(reason: string): Promise<void> {
     this.#invalidateGeneration(this.#startup);
     const replacing = this.#generation;
 
     try {
-      await this.destroy();
+      await super.destroy();
       await this.#awaitContainerStopped();
     } catch (error) {
       if (!this.#owns(replacing)) throw error;
@@ -1400,15 +1438,19 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return false;
   }
 
-  /** Arm the only start coordinator. This method never touches the container. */
+  /** A host asking: reopens a destroyed box and arms the only start coordinator. */
   async kickStartup(): Promise<void> {
-    // A retryable unattach is pending work; an idle box has only this poll to re-arm a lost row.
-    // Terminal classes stay unarmed: repeating refused work would storm the incident ledger.
+    this.#closed = false;
+    await this.#armStartup();
+  }
+
+  async #armStartup(): Promise<void> {
+    // A retryable unattach re-arms a lost row; a terminal one stays unarmed, or refused work
+    // would storm the incident ledger.
     if (this.#startup !== undefined || this.#gateRestore !== undefined) return;
     const held = this.#restoration;
 
-    // An attempt in flight owes nothing: it will settle into a phase, and this
-    // poll's job is to notice a box with nobody working on it.
+    // An attempt in flight settles into a phase on its own.
     if (held.phase === 'restoring') return;
 
     if (held.phase === 'attached' || held.phase === 'repair') return;
@@ -1420,6 +1462,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** Requests may start a stopped box, then adopt the hook's settled generation (D26). */
   async resolveReadiness(): Promise<RestoreReadiness> {
+    this.#closed = false;
     const wasRunning = this.ctx.container?.running === true;
     this.#trace('readiness.enter', { generation: this.#generation, running: wasRunning, phase: this.#restoration.phase });
 
@@ -1433,7 +1476,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     if (admission !== undefined) return admission;
 
-    await this.kickStartup();
+    await this.#armStartup();
 
     if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
       throw new Error(terminalRefusal(this.#restoration.reason));
@@ -1491,6 +1534,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** The only transition that clears a terminal refusal; keeps the `replace` stage, so a failed
    *  retry refuses again instead of destroying. Also re-runs an incomplete restoration. */
   async attachNow(): Promise<AttachOutcome> {
+    this.#closed = false;
     this.stampInteraction();
 
     if (this.#restoration.phase === 'repair') {
@@ -1701,6 +1745,20 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // The attach evidence describes the discarded bytes, so it is deleted with them.
     await this.ctx.storage.delete(LAST_ATTACH_KEY);
   }
+
+  /** Also ends the box's own starts (D36). */
+  override async destroy(): Promise<void> {
+    this.#closed = true;
+    this.#invalidateGeneration();
+    const admissions = [...this.#admissions];
+
+    for (const admission of admissions) admission.abort();
+    await Promise.allSettled(admissions.map((admission) => admission.settled));
+
+    for (const callback of CONTAINER_CALLBACKS) this.deleteSchedules(callback);
+    await super.destroy();
+  }
+
   /** Totals say how many failures were filed; only these reasons say what they were.
    *  Bounded by the ledger cap. */
   async devboxIncidentReasons(): Promise<readonly IncidentReasonRow[]> {
@@ -1851,13 +1909,19 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   }
 
   #unready(): string | undefined {
+    const refused = this.#refused;
+
+    if (this.#restoration.phase === 'unstarted' && refused?.generation === this.#generation) {
+      return `the platform refused this box a container: ${refused.reason}`;
+    }
+
     return unreadyOf(this.#restoration, this.#gateRestore !== undefined);
   }
 
   /** Answers without attaching storage. A poll may reactivate a stopped container so its
    *  scheduled startup can run, but never drives that startup inline. */
   async devboxState(): Promise<DevboxReport> {
-    await this.kickStartup();
+    await this.#armStartup();
     await this.#resolveAdoption();
 
     const [supervised, ports, incidents] = await Promise.all([
@@ -2076,9 +2140,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     });
   }
 
-  /** Never calls `stampInteraction()`: a box's own maintenance traffic is not use.
-   *  Quiesce needs all three gates and quiet confirmed across heartbeats; a stopped container
-   *  arms no successor, its next start does. */
+  /** Never stamps interaction: maintenance traffic is not use. A quiesce needs all three gates and
+   *  confirmed quiet; a stopped container arms no successor (D34). */
   async devboxHeartbeat(): Promise<void> {
     const beat = this.policy.heartbeatSeconds;
     await this.#scheduled(HEARTBEAT_CALLBACK, beat, async () => {
@@ -2087,7 +2150,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       this.renewActivityTimeout();
 
       if (this.ctx.container?.running !== true) {
-        // The last tick records when the stop was noticed.
         await this.#tick({ running: false, ping: 'skipped', armedNext: false });
 
         return null;
@@ -2098,7 +2160,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
       if (!settled) {
         await this.#tick({ running: true, ping: 'unready', armedNext: true });
-        await this.kickStartup();
+        await this.#armStartup();
 
         return beat;
       }
@@ -2122,7 +2184,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       if (await this.#containerWasReplaced({ bootId: observed })) {
         this.#invalidateGeneration();
         await this.#tick({ running: true, ping: 'ok', armedNext: true, replaced: true });
-        await this.kickStartup();
+        await this.#armStartup();
 
         return beat;
       }
@@ -2153,7 +2215,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         now,
         containerRunning: true,
         lastInteractionAt: this.#lastInteraction
-          ?? await this.ctx.storage.get<number>(LAST_INTERACTION_KEY) ?? now,
+          ?? await this.ctx.storage.get<number>(LAST_INTERACTION_KEY)
+          ?? await this.ctx.storage.get<number>(STARTED_AT_KEY) ?? now,
         quietSince: await this.ctx.storage.get<number>(QUIET_SINCE_KEY),
         backgroundWork,
         idleMs: this.policy.idleMs,
@@ -2177,8 +2240,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
       if (decision.action !== 'quiesce') return beat;
 
-      // A refused stop must not strand the lease open forever: the next
-      // heartbeat retries the whole decision with fresh evidence.
+      // The next beat retries a refused stop with fresh evidence.
       return (await this.quiesce()).kind === 'failed' ? beat : null;
     });
   }
@@ -2280,10 +2342,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     this.#lastInteractionPersisted = now;
     // Not awaited on this hot path: the in-memory stamp already renewed this incarnation,
     // so a lost write costs at most one extra heartbeat cycle of lease, never a leak.
-    void this.ctx.storage.put(LAST_INTERACTION_KEY, now)
-      .catch((cause: LateStartFailure['cause']) => {
-        console.error(`[devbox] lease stamp was not persisted: ${describe({ cause })}`);
-      });
+    unawaited(this.ctx.storage.put(LAST_INTERACTION_KEY, now), 'lease stamp was not persisted');
   }
 
   /** Commands and supervised starts have no resource lane (no safe scope / no process yet),
@@ -2469,6 +2528,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  its own row looks past it; any other caller counts a due row, because it is still owed and
    *  arming beside it moves the alarm away (D14). */
   async #arm(callback: string, delaySeconds: number): Promise<void> {
+    if (this.#closed && CONTAINER_CALLBACKS.includes(callback)) return;
+
     if (!needsArming(await this.listSchedules(callback), Date.now() / 1000, this.#dispatching.has(callback))) return;
     await this.schedule(delaySeconds, callback, null);
   }

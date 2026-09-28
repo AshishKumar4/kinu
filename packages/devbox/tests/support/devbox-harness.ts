@@ -341,6 +341,9 @@ export class FakeSandbox {
   /** Container is running, but the SDK has not invoked the port-proven hook. */
   containerHookGate: Gate | undefined;
   execGate: Gate | undefined;
+  /** Parks a session exec where the SDK reads its object's state (`containerFetch`,
+   *  `startContainerForRPC`): issued, but not yet at the container. */
+  stateReadGate: Gate | undefined;
   /** Delay inside the container per command, modelling a counted loop (`awaitLayer`, `awaitListenerCommand`).
    *  A real wait: the test checks whether one command's duration can extend a caller's window. */
   execDelayMs = 0;
@@ -411,6 +414,18 @@ export class FakeSandbox {
     command: string,
     options?: { readonly cwd?: string },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const reading = this.stateReadGate;
+
+    if (reading !== undefined) {
+      this.stateReadGate = undefined;
+      reading.enter();
+      await reading.promise;
+    }
+
+    // The SDK starts a stopped container before a command reaches it, through the one start both
+    // transports share (0.12.9), so a subclass's `startAndWaitForPorts` decides.
+    if (!this.running.running) await this.startAndWaitForPorts({ ports: this.defaultPort });
+
     const refusedChdir = this.#chdir(options?.cwd);
 
     if (refusedChdir !== null) return refusedChdir;
