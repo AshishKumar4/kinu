@@ -1,6 +1,6 @@
 // The stub origin serves poison at the retired /pc/daemon.js route, so a connect that fetches
 // executable bytes shows up as poison on disk.
-import { runToExit } from '@kinu.run/test-utils';
+import { killAndAwaitExit, recordedIn, runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
@@ -40,14 +40,28 @@ function newProjectDir(): string {
 
 const sleepers: Subprocess[] = [];
 
-const deviceDaemonPids: number[] = [];
+/** Homes whose pidfile names a daemon a case started through connect or a handover. */
+const daemonHomes: string[] = [];
+
+/** Daemons a case spawned itself. */
+const spawnedDaemons: Subprocess[] = [];
 
 const stubs: Server<unknown>[] = [];
 
 const updateHubs: UpdateHub[] = [];
 
 afterEach(async () => {
-  for (const pid of deviceDaemonPids.splice(0)) tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
+  // Each daemon writes into its home until it exits.
+  for (const proc of spawnedDaemons.splice(0)) {
+    proc.kill('SIGKILL');
+    await proc.exited;
+  }
+
+  for (const home of daemonHomes.splice(0)) {
+    const daemon = recordedIn(join(home, 'pc-agent.pid'));
+
+    if (daemon !== null) await killAndAwaitExit(daemon);
+  }
 
   for (const proc of sleepers.splice(0)) proc.kill();
 
@@ -855,7 +869,7 @@ describe('device-connect install hardening', () => {
     }, 'esrch')).toBe(true);
     const daemonPid = Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim());
     expect(daemonPid).toBeGreaterThan(0);
-    deviceDaemonPids.push(daemonPid);
+    daemonHomes.push(home);
   });
 
   test('concurrent connects leave one daemon owner and no partial files', async () => {
@@ -893,7 +907,7 @@ describe('device-connect install hardening', () => {
     expect(live).toHaveLength(1);
     expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(live[0]);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
-    deviceDaemonPids.push(...live);
+    daemonHomes.push(home);
   });
 });
 
@@ -928,7 +942,7 @@ describe('device daemon single-instance lock', () => {
       stderr: 'pipe',
     });
 
-    if (proc.pid) deviceDaemonPids.push(proc.pid);
+    spawnedDaemons.push(proc);
 
     return { proc, ...readProcessOutput(proc.stdout) };
   }
@@ -973,7 +987,7 @@ describe('device daemon single-instance lock', () => {
 
     const successorPid = await waitForDaemonPid(home);
     expect(successorPid).not.toBe(oldPid);
-    deviceDaemonPids.push(successorPid);
+    daemonHomes.push(home);
     expect(await waitForPidExit(oldPid)).toBe(true);
     expect(await liveDaemons(join(home, 'pc-agent.js'))).toEqual([successorPid]);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(newDaemon);

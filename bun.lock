@@ -260,6 +260,7 @@
       "dependencies": {
         "@kinu.run/core": "workspace:*",
         "capnweb": "0.8.0",
+        "effect": "4.0.0-rc.117",
       },
       "devDependencies": {
         "ai": "6.0.214",
