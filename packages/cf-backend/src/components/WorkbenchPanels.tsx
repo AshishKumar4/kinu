@@ -108,6 +108,7 @@ export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspect
 
         {desktopPanels && (
           <PanelResizeHandle
+        {/* No width of its own: a gap broke the rule under the strips. */}
             aria-label="Resize the inspector; press Enter to hide or show it"
             title="Drag to resize the inspector · Enter hides or shows it"
             {...layout.separatorProps}
@@ -117,7 +118,7 @@ export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspect
               layout.toggleCollapsed();
             }}
             onDoubleClick={layout.resetToDefault}
-            className="group z-[2] -ml-[5px] w-[13px] shrink-0 cursor-col-resize bg-transparent touch-none select-none focus:outline-none"
+            className="group z-[2] -ml-[5px] -mr-[8px] w-[13px] shrink-0 cursor-col-resize bg-transparent touch-none select-none focus:outline-none"
           >
             <span aria-hidden="true" className="mx-auto block h-full w-[3px] bg-transparent transition-colors group-hover:bg-[var(--c-accent)]/60 group-focus-visible:bg-[var(--c-accent)] group-data-[separator=hover]:bg-[var(--c-accent)]/60 group-data-[separator=active]:bg-[var(--c-accent)] group-data-[separator=focus]:bg-[var(--c-accent)]" />
           </PanelResizeHandle>
