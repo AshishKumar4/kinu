@@ -12,7 +12,6 @@ function parked(id: string, command: string): DeferredApproval {
 
 type QueueControls = Pick<LocalSessionControls, 'listDeferredApprovals' | 'decideDeferredApprovals'>;
 
-/** The session's queue as the TUI reaches it: listing shows what is still parked, deciding removes it. */
 function queue(initial: DeferredApproval[]) {
   const waiting = [...initial];
   const decisions: Array<{ ids: string[]; answer: DeferredApprovalAnswer }> = [];
@@ -84,7 +83,6 @@ test('/parked denies by id, and names an id that was not waiting', async () => {
 });
 
 test('a read that lands after a newer one never re-announces a command', async () => {
-  // Each list read answers only when released, newest first: the order two broadcasts' reads can land in.
   const waiting: DeferredApproval[] = [];
   const reads: Array<() => void> = [];
 
