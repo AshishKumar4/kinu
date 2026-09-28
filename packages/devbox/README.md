@@ -47,12 +47,12 @@ on every call.
    the sync, disables keep-alive, then sends `SIGTERM`.
 6. A lifecycle failure is stored before delivery retries until the host accepts
    it.
-7. `destroy` closes the box. It aborts and awaits a start in flight, and
-   deletes its startup, heartbeat and checkpoint rows before the SDK's
-   destroy. Until a caller or a host asks again, no container starts: every
-   start, the SDK's own included, passes `startAndWaitForPorts`, which
-   refuses, so a beat or a checkpoint already under way cannot revive one,
-   and a start hook still in flight restores nothing (D36).
+7. `destroy` closes the box. It cancels every start under way and waits for
+   it, deletes its startup, heartbeat and checkpoint rows, then runs the SDK's
+   destroy, so nothing such a start launched is still running when it
+   returns. Until a caller or a host asks again, Devbox's
+   `startAndWaitForPorts` refuses to start a container, and a request that
+   arrived before the destroy is refused when it reaches readiness (D36).
 
 `DevboxStorage` hides durable bytes behind the three methods every strategy
 needs:
