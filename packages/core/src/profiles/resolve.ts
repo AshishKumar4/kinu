@@ -8,7 +8,7 @@ import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
 import { REASONING_EFFORT_FOR_STAGE, REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
 import type { NamedSwarmPreset } from '../strategy/swarm-presets';
-import { ROLE_ID_RE, isValidRoleId } from '../types/profile';
+import { DEFAULT_PROVIDER_RETRIES, ROLE_ID_RE, isValidRoleId } from '../types/profile';
 import { TierIdSchema, tierIdsOf,
   BUILTIN_PROFILE_CATALOG, deriveRoleLabel, effectiveRoleCatalog,
   profileCatalogDigest, validateProfileCatalogEnvelope,
@@ -138,6 +138,7 @@ export interface ResolvedTurnProfile {
     readonly replaced: string | null;
   };
   readonly tiers: Readonly<Record<TierId, TierRoute>>;
+  readonly retries: number;
   readonly workMode: WorkMode;
   readonly skills: readonly string[];
   readonly allowedTools: readonly string[];
@@ -277,6 +278,9 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   const effortFor = (spec: string, wanted: ReasoningEffort): ReasoningEffort | null =>
     declaredReasoningEffort(wanted, provider.reasoningEfforts[specWithoutAccount(spec)]);
 
+  const chainFor = (model: string, tierChain: readonly string[]): readonly string[] =>
+    (envelope.catalog.modelFallbacks?.[model] ?? tierChain).filter((spec) => spec !== model);
+
   const chainOf = (specs: readonly string[], wanted: ReasoningEffort): readonly TierFallback[] => Object.freeze(
     specs.map((spec) => Object.freeze({ model: spec, reasoningEffort: effortFor(spec, wanted) })),
   );
@@ -348,7 +352,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     return Object.freeze({
       model: slot.model,
       reasoningEffort: effortFor(slot.model, wanted),
-      fallbacks: chainOf(slot.fallbacks ?? [], wanted),
+      fallbacks: chainOf(chainFor(slot.model, slot.fallbacks ?? []), wanted),
     });
   };
 
@@ -371,7 +375,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
       source,
       model,
       reasoningEffort: effortFor(model, wantedEffort),
-      fallbacks: chainOf(tierFallbacks.filter((spec) => spec !== model), wantedEffort),
+      fallbacks: chainOf(chainFor(model, tierFallbacks), wantedEffort),
       replaced,
     }),
     workMode,
@@ -382,6 +386,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     catalogVersion: envelope.version,
     providerRevision: provider.revision,
     tiers: Object.freeze(tiers),
+    retries: envelope.catalog.retries ?? DEFAULT_PROVIDER_RETRIES,
   };
 
   const profileDigest = sha256Hex(stableStringify(v.parse(JsonValueSchema, resolved)));
