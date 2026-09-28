@@ -1,6 +1,6 @@
 /** Failure → `{message, hint}`: classify by status/code first, wording only as fallback. */
 
-import { providerFailureFacts, providerFailureText } from '@kinu.run/core';
+import { describeProviderError, providerFailureFacts } from '@kinu.run/core';
 import { MODEL_OPTION_FLAG } from './options';
 
 interface GuidedFailure {
@@ -74,13 +74,12 @@ const CLASSES: ReadonlyArray<{ match: RegExp; hint: string }> = [
   },
 ];
 
-/** `said`: text Kinu already rendered. */
-export function guideFailure(failure: { readonly cause: unknown } | { readonly said: string }): GuidedFailure {
-  const cause = 'said' in failure ? undefined : failure.cause;
-  const message = 'said' in failure ? failure.said.trim() || 'unknown failure' : providerFailureText({ cause });
+/** Messages that already name their commands get no hint. */
+export function guideFailure(failure: { readonly cause: unknown }): GuidedFailure {
+  const message = describeProviderError({ cause: failure.cause });
 
   if (/kinu [a-z]/.test(message)) return { message };
-  const facts = providerFailureFacts({ cause });
+  const facts = providerFailureFacts({ cause: failure.cause });
 
   // Code is more specific than status.
   const hint = (facts.providerCode === undefined ? undefined : HINT_BY_PROVIDER_CODE.get(facts.providerCode))

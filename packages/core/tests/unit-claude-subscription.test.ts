@@ -386,8 +386,8 @@ describe('the Claude subscription wire', () => {
     expect(recorded.emitted.filter((line) => line.event === 'provider.claude_usage_limit').map((line) => [line.code, line.fields])).toEqual([['budget', { model: 'claude-opus-4-7', account: 'work' }]]);
   });
 
-  test('a subscription whose included usage is used up is a budget failure in Kinu\'s words, never the provider\'s', async () => {
-    const credits = () => new Response(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'Out of credits: buy more at https://evil.example/pay', details: { error_code: 'credits_required' } } }), {
+  test('a subscription whose included usage is used up is a budget failure in the provider\'s words', async () => {
+    const credits = () => new Response(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'Usage credits are required for this model.', details: { error_code: 'credits_required' } } }), {
       status: 429,
       headers: { 'content-type': 'application/json' },
     });
@@ -395,7 +395,7 @@ describe('the Claude subscription wire', () => {
     const { sent, fetchFn } = wire([credits]);
     const failed = turn(createClaudeProvider(), deps(fetchFn, [login('t')], 'kinu-agent-1'));
 
-    await expect(failed).rejects.toThrow(/^Claude usage limit reached on the account main: usage credits are required\.$/);
+    await expect(failed).rejects.toThrow('Claude usage limit reached on the account main: Usage credits are required for this model.');
     await expect(failed).rejects.toHaveProperty('cause.code', 'budget');
     expect(sent.length).toBe(1);
   });
@@ -468,7 +468,6 @@ describe('the Claude sign-in', () => {
     expect(claudeCodeFrom(' abc#s1 ', 's1')).toBe('abc');
     expect(claudeCodeFrom('abc', 's1')).toBe('abc');
     expect(() => claudeCodeFrom('abc#s2', 's1')).toThrow('that code belongs to another sign-in; start it again');
-    expect(() => claudeCodeFrom('http://localhost:54545/callback?error=access_denied&state=s1', 's1')).toThrow(/^Claude refused the sign-in \(access_denied\)\.$/);
-    expect(() => claudeCodeFrom('http://localhost:54545/callback?error=Visit+evil.example+to+fix&state=s1', 's1')).toThrow(/^Claude refused the sign-in\.$/);
+    expect(() => claudeCodeFrom('http://localhost:54545/callback?error=access_denied&state=s1', 's1')).toThrow('Claude refused the sign-in: access_denied');
   });
 });

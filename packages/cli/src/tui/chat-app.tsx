@@ -2173,7 +2173,7 @@ function phaseLineLabel(isProcessing: boolean, turnPhase: string | null, nextTie
 
 /** Plain text: the TUI styles system messages itself. */
 function errorLine(message: string): string {
-  const guided = guideFailure({ said: message });
+  const guided = guideFailure({ cause: message });
 
   return guided.hint ? `Error: ${guided.message}\n${guided.hint}` : `Error: ${guided.message}`;
 }
