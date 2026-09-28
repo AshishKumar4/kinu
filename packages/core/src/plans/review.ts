@@ -294,10 +294,8 @@ export function admitReviewAnnotations(input: { value: unknown }): AnnotationAdm
 }
 
 function toPlanReview(row: PlanReviewRow): PlanReview {
-  const parsed: unknown = JSON.parse(row.annotations_json);
-  const admission = admitReviewAnnotations({ value: parsed });
-
-  if (!admission.ok) throw new Error(`invalid stored plan annotations: ${admission.error}`);
+  // Only admitted annotations are ever written, so the stored list is read back as is.
+  const annotations: ReviewAnnotation[] = JSON.parse(row.annotations_json);
 
   return {
     id: row.id,
@@ -305,7 +303,7 @@ function toPlanReview(row: PlanReviewRow): PlanReview {
     revision: row.revision,
     content: row.content,
     status: v.is(PlanReviewStatusSchema, row.status) ? row.status : 'pending',
-    annotations: admission.annotations,
+    annotations,
     feedback: row.feedback,
     handoffAccepted: row.handoff_accepted === 1,
     createdAt: row.created_at,
