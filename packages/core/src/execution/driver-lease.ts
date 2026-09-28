@@ -31,7 +31,6 @@ export interface DriverLeaseHolder {
   readonly kind: DriverKind;
 }
 
-/** This process's pid and a liveness check for other pids; injected for tests. */
 export interface LeaseProcess {
   readonly pid: number;
   isAlive(pid: number): boolean;
@@ -76,13 +75,39 @@ interface DriverLeaseHolderRow extends DriverLeaseHolder {
   readonly token: string;
 }
 
-/** Compare-and-swap on the read token, decided by re-reading: the SQL seam returns no row count. */
+const CLAIM_ATTEMPTS = 4;
+
+/**
+ * Compare-and-swap on the read token, decided by re-reading: the SQL seam returns no row count. A row that moved under
+ * the write is decided again: a daemon releases and re-takes after every pass.
+ */
 function acquireDriverLease(
   deps: DriverLeaseDeps,
   kind: DriverKind,
 ): DriverLeaseResult {
-  const proc = deps.proc;
   initDriverLeaseTable(deps.execRaw);
+  let settled: DriverLeaseHolderRow | null = null;
+
+  for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
+    const outcome = claimOnce(deps, kind);
+
+    if (!('moved' in outcome)) return outcome;
+    settled = outcome.moved;
+  }
+
+  const holder = settled ?? { pid: deps.proc.pid, kind };
+
+  return {
+    refused: refusalOf(new KinuError(
+      'unavailable',
+      `another ${holder.kind} driver (process ${String(holder.pid)}) kept claiming this conversation first`,
+    )),
+    holder: { pid: holder.pid, kind: holder.kind },
+  };
+}
+
+function claimOnce(deps: DriverLeaseDeps, kind: DriverKind): DriverLeaseResult | { readonly moved: DriverLeaseHolderRow | null } {
+  const proc = deps.proc;
   const current = readRow(deps.sql);
   const token = crypto.randomUUID();
 
@@ -117,19 +142,7 @@ function acquireDriverLease(
 
   const settled = readRow(deps.sql);
 
-  if (settled?.token === token) {
-    return { held: { token, kind, pid: proc.pid } };
-  }
-
-  const holder = settled ?? { pid: proc.pid, kind, token };
-
-  return {
-    refused: refusalOf(new KinuError(
-      'unavailable',
-      `another ${holder.kind} driver (process ${String(holder.pid)}) claimed this conversation first`,
-    )),
-    holder: { pid: holder.pid, kind: holder.kind },
-  };
+  return settled?.token === token ? { held: { token, kind, pid: proc.pid } } : { moved: settled };
 }
 
 /** Check before every gated operation: a lease can be preempted between operations. */
