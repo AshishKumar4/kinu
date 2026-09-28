@@ -274,13 +274,6 @@
       "decision": "cli"
     },
     {
-      "file": "packages/cli/src/device-connect.ts",
-      "kind": "regex-literal",
-      "owner": "daemonSiblingNames",
-      "sourceSha256": "aa650df96fcdfb8765ac6962799234120eecaf9c8a44ebfc06dbad010f442327",
-      "decision": "daemon"
-    },
-    {
       "file": "packages/cli/src/tui/actions.tsx",
       "kind": "hand-parser",
       "owner": "parseStroke",

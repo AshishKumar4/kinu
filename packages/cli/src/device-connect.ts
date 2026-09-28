@@ -33,16 +33,12 @@ const VERSION_STAMP_PATH = join(AGENT_HOME, 'pc-agent.version');
 /** Written by the daemon while its successor starts; with a stale pidfile, the successor died and `.prev` last ran. */
 const UPDATE_PENDING_PATH = join(AGENT_HOME, 'pc-agent.update-pending');
 
-/** Every sibling the daemon `require`s; install refuses a daemon whose require lines this table does not cover. */
+/** Every sibling the daemon `require`s. */
 const DAEMON_SIBLINGS: readonly { readonly name: string; readonly source: string }[] = [
   { name: 'sandbox.js', source: PC_AGENT_SANDBOX_SOURCE },
   { name: 'pty.js', source: PC_AGENT_PTY_SOURCE },
   { name: 'update.js', source: PC_AGENT_UPDATE_SOURCE },
 ];
-
-function daemonSiblingNames(daemonSource: string): readonly string[] {
-  return [...daemonSource.matchAll(/require\('\.\/([^']+)'\)/g)].map((m) => m[1] ?? '').filter((n) => n !== '');
-}
 
 export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
 
@@ -357,48 +353,15 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     root: process.cwd(),
   }, null, 2)}\n`;
 
-  const scriptTemporary = stageInstallFile(
-    SCRIPT_PATH,
-    PC_AGENT_DAEMON_SOURCE,
-    0o700,
-    (temporary) => verifyStagedDaemon(temporary),
-  );
+  const scriptTemporary = stageInstallFile(SCRIPT_PATH, PC_AGENT_DAEMON_SOURCE, 0o700);
 
-  // Siblings ship with the release, never fetched; checked against the daemon's require lines before anything lands.
-  const required = daemonSiblingNames(PC_AGENT_DAEMON_SOURCE);
-  const shipped = new Set(DAEMON_SIBLINGS.map((sibling) => sibling.name));
-  const unshipped = required.filter((name) => !shipped.has(name));
-
-  if (unshipped.length > 0) {
-    throw new KinuError('io', `this CLI ships no ${unshipped.join(', ')} beside the device daemon that requires it`);
-  }
-
+  // Siblings ship with the release, never fetched.
   const siblingTemporaries = DAEMON_SIBLINGS.map((sibling) => ({
     target: join(AGENT_HOME, sibling.name),
-    temporary: stageInstallFile(
-      join(AGENT_HOME, sibling.name),
-      sibling.source,
-      0o700,
-      (temporary) => {
-        if (readFileSync(temporary, 'utf-8') !== sibling.source) {
-          throw new KinuError('io', `the staged device daemon module ${sibling.name} does not match this release`);
-        }
-      },
-    ),
+    temporary: stageInstallFile(join(AGENT_HOME, sibling.name), sibling.source, 0o700),
   }));
 
-  const stamp = `${VERSION}\n`;
-
-  const stampTemporary = stageInstallFile(
-    VERSION_STAMP_PATH,
-    stamp,
-    0o600,
-    (temporary) => {
-      if (readFileSync(temporary, 'utf-8') !== stamp) {
-        throw new KinuError('io', 'the staged device daemon version stamp does not match this release');
-      }
-    },
-  );
+  const stampTemporary = stageInstallFile(VERSION_STAMP_PATH, `${VERSION}\n`, 0o600);
 
   let scriptPending: string | null = scriptTemporary;
   let stampPending: string | null = stampTemporary;
@@ -406,16 +369,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
   let configPending: string | null = null;
 
   try {
-    const configTemporary = stageInstallFile(
-      DEVICE_CONFIG_PATH,
-      config,
-      0o600,
-      (temporary) => {
-        if (readFileSync(temporary, 'utf-8') !== config) {
-          throw new KinuError('io', 'temporary device configuration verification failed');
-        }
-      },
-    );
+    const configTemporary = stageInstallFile(DEVICE_CONFIG_PATH, config, 0o600);
 
     configPending = configTemporary;
 
@@ -457,12 +411,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
   }
 }
 
-function stageInstallFile(
-  file: string,
-  content: string,
-  mode: number,
-  verify: (temporary: string) => void,
-): string {
+function stageInstallFile(file: string, content: string, mode: number): string {
   const temporary = `${file}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
   let created = false;
 
@@ -478,7 +427,6 @@ function stageInstallFile(
     }
 
     enforceOwnerOnly(temporary, mode);
-    verify(temporary);
 
     return temporary;
   } catch (cause) {
@@ -500,12 +448,6 @@ function stageInstallFile(
 }
 
 /** Byte equality with the daemon this CLI carries; a served digest would only prove the download arrived whole. */
-function verifyStagedDaemon(temporary: string): void {
-  if (readFileSync(temporary, 'utf-8') !== PC_AGENT_DAEMON_SOURCE) {
-    throw new KinuError('io', 'the staged device daemon does not match the daemon this CLI ships');
-  }
-}
-
 function syncAgentDirectory(): void {
   if (process.platform === 'win32') return;
   const descriptor = openSync(AGENT_HOME, 'r');

@@ -169,7 +169,6 @@ interface AgentStatusInfo {
   scaffoldVersion: number;
   searchNodeCount: number;
   taskCount: number;
-  memorySize: number;
 }
 
 export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: {
@@ -204,7 +203,6 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
   console.log(DIM(`${BOX.v}${'─'.repeat(w - 3)}`));
 
   console.log(boxRow(L('Tools:'), `${BUILTIN_TOOLS.length} built-in`, w));
-  console.log(boxRow(L('Memory:'), formatBytes(info.memorySize), w));
   console.log(boxEdge(BOX.bl, w));
   console.log('');
 }
