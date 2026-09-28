@@ -1,11 +1,10 @@
 /**
- * The workspace loopback over a real library workspace: `provisionWorkspaceRuntimes` binds `node` and `curl`
- * to the workspace kernel, so a listening port answers and an empty one refuses as a refused connection.
+ * The workspace loopback over a real library workspace: NimbusWorkspace binds `curl` to its own kernel, so a
+ * listening port answers and an empty one refuses as a refused connection.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import { provisionWorkspaceRuntimes } from '../src/vfs/workspace-runtimes';
 import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 
 async function loopbackWorkspace(): Promise<{ database: Database; workspace: NimbusWorkspace }> {
@@ -19,8 +18,6 @@ async function loopbackWorkspace(): Promise<{ database: Database; workspace: Nim
     generation: 1,
     cwd: '/home/user',
   });
-
-  await provisionWorkspaceRuntimes({ workspace, runtimes: [] });
 
   return { database, workspace };
 }

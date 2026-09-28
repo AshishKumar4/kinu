@@ -22,7 +22,7 @@ import {
   settleWorkspaceSlates, resealWorkspaceSoul,
   type HomeRootVfs, type TmpConfiner,
 } from './agent-home';
-import { provisionWorkspaceRuntimes, workspaceCommandNotFound } from './workspace-runtimes';
+import { registerNpm, workspaceCommandNotFound } from './workspace-runtimes';
 import * as v from 'valibot';
 import type { VFS, VfsLinkStat, Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
@@ -223,7 +223,6 @@ export interface WorkspaceSession {
 export interface WorkspaceBundle {
   vfs: WorkspaceVFS;
   shell: Shell;
-  stats(): Promise<{ files: number; dirs: number; usedBytes: number }>;
   privileged(): Promise<WorkspacePrivileged>;
   /** Cached per uid and idempotent: a shell holds state (`cd`, exports). */
   asAgent(agent: WorkspaceAgent): Promise<WorkspaceAgentPlane>;
@@ -284,11 +283,14 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
       env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
       processes,
       fabric: opts.fabric,
+      // Each supplied runtime's bins are stubs that install it on first use; a reopened workspace rehydrates it.
+      runtimes: opts.runtimes ?? [],
+      runtimeInstall: 'on-demand',
     };
 
-    if (opts.runtimeSource !== undefined) {
-      creation = { ...creation, runtimeSource: opts.runtimeSource, runtimeInstall: 'on-demand' };
-    }
+    if (opts.runtimeFacets !== undefined) creation = { ...creation, facets: opts.runtimeFacets };
+
+    if (opts.runtimeSource !== undefined) creation = { ...creation, runtimeSource: opts.runtimeSource };
 
     const workspace = await shellOver(creation);
 
@@ -300,14 +302,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
     resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);
 
-    // After substrate registrations so a runtime bin never shadows a coreutil.
-    const provisioning: Parameters<typeof provisionWorkspaceRuntimes>[0] = {
-      workspace,
-      runtimes: opts.runtimes ?? [],
-    };
-
-    if (opts.runtimeFacets !== undefined) provisioning.facets = opts.runtimeFacets;
-    await provisionWorkspaceRuntimes(provisioning);
+    await registerNpm(workspace);
     const root = workspace.vfs.as(CRED_KERNEL);
     const main = agentIdentity(opts.sql, MAIN_AGENT);
     provisionAgentHome(root, MAIN_AGENT, main);
@@ -363,7 +358,6 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
       return () => { if (mountTables.get(uid) === plane) mountTables.delete(uid); };
     },
-    async stats() { return (await open()).stats(); },
     async privileged() {
       const workspace = await open();
 
