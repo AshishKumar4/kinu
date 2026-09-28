@@ -295,8 +295,9 @@ describe('default compaction over the real storage plane', () => {
       });
 
       const { model, prompts } = capturingModel();
-      state.armCompaction(SESSION, kind);
-      const trigger = state.takeArmedCompaction(SESSION);
+
+      if (kind === 'force') state.armCompaction(SESSION, kind);
+      const trigger = kind === 'force' ? state.takeArmedCompaction(SESSION) : kind;
 
       const options: ChatOptions = {
         model,

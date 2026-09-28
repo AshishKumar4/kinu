@@ -76,7 +76,6 @@ interface LocalAgentClientOptions {
   baseUrl?: string;
   auth?: string;
   noAutoEvolve?: boolean;
-  /** One task turn, then exit — see LocalAgentClientDeps.oneShot. */
   oneShot?: boolean;
   transcript?: CliSessionOptions;
   surface?: InvocationSurface;
@@ -258,7 +257,7 @@ export class LocalAgentClient implements AgentClient {
       approveInstruction: (path, digest) => this.session.approveInstruction(path, digest),
       revokeInstruction: (path) => this.session.revokeInstruction(path),
       clearConversation: () => this.session.clearConversation(),
-      compactNow: () => { this.session.armCompaction('user'); },
+      compact: () => this.session.compact(),
       listModelProviders: async () => (await this.session.listModelProviders()).map((provider) => ({
         id: provider.id,
         available: provider.available,
@@ -471,6 +470,7 @@ export class LocalAgentClient implements AgentClient {
       dbSize: statSync(this.deps.dbPath).size,
       toolCount: this.session.toolNames().length,
       autoEvolve: !this.deps.noAutoEvolve,
+      context: this.session.contextFill(),
     };
   }
 

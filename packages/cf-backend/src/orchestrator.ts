@@ -31,6 +31,7 @@ import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, 
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
+import { contextFill, type ContextFill } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
 import { DELEGATION_LANE_FIBER } from './fiber-recovery';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
@@ -2181,6 +2182,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.invalidateModelCaches();
       await this.ensureOwnedScaffold();
 
+      // Detached: the loop is never built inside the init gate.
+      if (exists.length === 0) this.detachOwned(async () => { this.chatLoop.measureSessionStart(); });
+
       return { owner: userId, capabilityHash };
     }
 
@@ -3403,7 +3407,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ...status,
       roleId: profile?.role.id ?? this.activeRoleLabel(),
       tierId: profile?.tier.id ?? 'default',
+      context: this.contextFill(),
     };
+  }
+
+  private contextFill(): ContextFill | null {
+    return contextFill(this.eventRecorder.readContextMeasures(), this.modelCatalog.contextWindow() || null);
   }
 
   async getToolList() {
@@ -4103,7 +4112,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return runScaffoldCaptureText(this.scaffoldControl, task, candidateCode);
   }
 
-  /** Not @callable. */
   async getTurnRequests(turnId: string, actor?: string): Promise<TurnRequestIndex> {
     return turnRequestIndex(this.turnRequestSources(actor), turnId);
   }
@@ -4278,6 +4286,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
       contextWindow: this.modelCatalog.contextWindow() || null,
+      fill: this.contextFill(),
       // Every step in the window, reporting or not: `summarizeSteps` counts the
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.

@@ -1278,7 +1278,10 @@ export {
   type RunEventQuery,
   type BoundedRunEventQuery,
   type StoredRunEvent,
+  type ContextMeasures,
 } from './events/index';
+
+export { contextFill, type ContextFill } from './read-models/context-fill';
 
 // Durable retry outbox; spec: `events/outbox.ts`.
 export {
@@ -1633,7 +1636,7 @@ export {
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
 export {
-  ChatSession, turnInputMessage, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
+  ChatSession, turnInputMessage, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 

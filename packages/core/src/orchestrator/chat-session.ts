@@ -9,15 +9,20 @@
 
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import type { ChatEvent } from '../chat';
+import type { CompactionTrigger } from '../extension';
+import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { PartialToolCall, RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, toWire, type Refusal } from '../obs/index';
+import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
+import type { ResolvedTurnProfile } from '../profiles';
 import type { CacheWarmingLane } from '../providers/cache-warming';
 import { DEFAULT_CACHE_RETENTION } from '../providers/types';
 import type { ToolOutcome } from '../tools/outcome';
@@ -30,7 +35,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
-import { CLEAR_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
+import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
@@ -222,7 +227,6 @@ export interface OwedTerminalEffectsInput {
   readonly answeredDeliveries: ReadonlySet<string>;
   /** At most one continuation is owed. */
   readonly outputContinuation: boolean;
-  /** Null when the decision said none. */
   readonly taskReminder: { readonly text: string } | null;
 }
 
@@ -234,10 +238,17 @@ async function answerMetadata(
   return Object.keys(metadata).length === 0 ? null : metadata;
 }
 
+export interface ComposedRequest {
+  readonly execution: Omit<ActorExecutionInput, 'task'>;
+  readonly profile: ResolvedTurnProfile;
+}
+
 /** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
   prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn>;
+  /** Never consumes an armed compaction. */
+  composeRequest(): Promise<ComposedRequest>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
   answerMetadata?(turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
@@ -255,7 +266,6 @@ export interface ChatSessionPorts {
   taskList(): TaskListStore;
   /** A reminder fired behind such work would race its wake. */
   hasPendingAsyncWake(): boolean;
-  /** `steerSkillsBlock`. */
   steerSkills(text: string): Promise<string | null>;
   /** A backend with no review surface refuses a plan turn at admission. */
   planTurnRefusal(): string | null;
@@ -269,7 +279,6 @@ export interface ChatSessionOptions {
   readonly actorSession: ActorSession;
   readonly sessionId: string;
   readonly transcript: SessionTranscript;
-  /** Core's PendingSendStore, bound to the session's own actor id. */
   readonly pendingSends: PendingSendStore;
   readonly eventLog: EventLog;
   readonly eventRecorder: RunEventRecorder;
@@ -313,6 +322,8 @@ export class ChatSession {
   /** Settled where the fate is decided, never at admission. A send admitted via `admit` has no entry: its fate goes out as steer_status. */
   private readonly landings = new Map<string, SendLandingWaiter>();
   private readonly eventLog: EventLog;
+  private revision: Promise<void> | null = null;
+  private readonly unobserveMeasures: () => void;
   private readonly eventRecorder: RunEventRecorder;
   private readonly compactionState: CompactionTriggerState;
   private readonly transaction: <T>(body: () => T) => T;
@@ -329,7 +340,6 @@ export class ChatSession {
   private messageId = '';
   /** Armed only by a one-shot task turn (completion-gate.ts). */
   readonly completionGate = new CompletionGate();
-  /** core tasks/reminder.ts. */
   private readonly taskReminders = new TaskReminders();
   /** Drained by a single serialized pump so turns never interleave. */
   private readonly queue: QueueItem[] = [];
@@ -362,6 +372,23 @@ export class ChatSession {
     });
     this.restoreOpenTurn();
     this.restorePendingSends();
+    this.unobserveMeasures = this.eventRecorder.observe((event) => {
+      if (event.type === 'context_admitted' || (event.type === 'step_finish' && event.usage?.input !== undefined)) this.broadcastContextFill();
+    });
+  }
+
+  contextFill(catalogWindow: number | null): ContextFill | null {
+    return contextFill(this.eventRecorder.readContextMeasures(), catalogWindow);
+  }
+
+  private broadcastContextFill(): void {
+    const fill = contextFill(this.eventRecorder.readContextMeasures(), null);
+
+    if (fill === null) return;
+    this.emit({
+      type: 'broadcast',
+      event: { type: 'context_fill', contextTokens: fill.tokens, ...(fill.window !== null && { contextWindow: fill.window }) },
+    });
   }
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
@@ -373,7 +400,10 @@ export class ChatSession {
   }
   get currentTurnId(): string | null { return this.turnId; }
   /** The owner's teardown calls this first. */
-  close(): void { this.ended = true; }
+  close(): void {
+    this.ended = true;
+    this.unobserveMeasures();
+  }
   get closed(): boolean { return this.ended; }
 
   /**
@@ -607,6 +637,55 @@ export class ChatSession {
     await this.actorSession.clearConversation(this.sessionId, () => {
       if (this.turnInFlight()) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
     });
+    this.reviseContext({ counted: true });
+  }
+
+  reviseContext(options: { readonly counted: boolean }): void {
+    const measuring = (this.revision ?? Promise.resolve()).then(() => this.measureContextRevision(options));
+    this.revision = measuring;
+    this.actorSession.orchestrator.track(measuring.then(() => { if (this.revision === measuring) this.revision = null; }), 'measuring the revised context');
+  }
+
+  /** A failed fold leaves the conversation as it was and arms nothing; a turn sent meanwhile waits. */
+  compact(): Promise<void> {
+    const folded = (this.revision ?? Promise.resolve()).then(() => settleEffect(toWire(this.fold(), (failure) => failure)));
+    const revision = folded.then(() => undefined);
+    this.revision = revision;
+    this.actorSession.orchestrator.track(revision.then(() => { if (this.revision === revision) this.revision = null; }), 'folding the conversation');
+
+    return folded.then((outcome) => settleEffect(outcome.ok ? Effect.void : Effect.fail(outcome.error)));
+  }
+
+  private fold(): Effect.Effect<void, KinuError> {
+    return this.pumpActive || this.queue.length > 0
+      ? Effect.fail(new KinuError('denied', COMPACT_NEEDS_IDLE))
+      : attempt(
+        { doing: 'folding the conversation into a summary', otherwise: 'unavailable' },
+        () => this.measureNextRequest({ counted: true, trigger: 'user' }),
+      );
+  }
+
+  /** Uncounted, on an empty conversation, so it folds nothing. */
+  measureSessionStart(): void {
+    const { provider, gate } = this.eventRecorder.readContextMeasures();
+
+    if (provider === null && gate === null && this.actorSession.history.length === 0) this.reviseContext({ counted: false });
+  }
+
+  measureContextRevision(options: { readonly counted: boolean }): Promise<void> {
+    return settleEffect(this.pumpActive || this.queue.length > 0 ? Effect.void : attempt(
+      { doing: 'measuring the next request after the context changed', otherwise: 'unavailable' },
+      () => this.measureNextRequest({ ...options, trigger: 'auto' }),
+    ).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('context.revision_measure_failed', failure); }))));
+  }
+
+  private async measureNextRequest(options: { readonly counted: boolean; readonly trigger: CompactionTrigger }): Promise<void> {
+    const { execution, profile } = await this.ports.composeRequest();
+    const { countInputTokens, ...uncounted } = execution.chat;
+    const counted = options.counted && countInputTokens !== undefined ? { ...uncounted, countInputTokens } : uncounted;
+    const measured = await this.actorSession.measureNextRequest({ ...execution, chat: { ...counted, transformTrigger: options.trigger } }, profile);
+
+    if (measured !== null) this.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'context_admitted', ...measured });
   }
 
   /** Bypasses the debounce, for a batch tick that ends the session right after. Interactive sessions keep the debounced path. */
@@ -686,6 +765,8 @@ export class ChatSession {
       let item: QueueItem | undefined;
 
       while ((item = this.queue.shift())) {
+        // So the turn's own measure is the newer.
+        await this.revision;
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
         // compensates.
         const refusal = this.ports.driverGate();
@@ -976,8 +1057,9 @@ export class ChatSession {
 
       if (event.type === 'model-fallback') this.recordModelFallback(event);
 
-      if (event.type === 'context-admitted') {
-        this.emit({ type: 'broadcast', event: { type: 'context_admitted', requestTokens: event.tokens, contextWindow: event.contextWindow } });
+      // Durable beside the turn's steps: a reload reads it and never measures.
+      if (event.type === 'context-admitted' && this.runId !== null) {
+        this.eventRecorder.emit(this.runId, { type: 'context_admitted', tokens: event.tokens, contextWindow: event.contextWindow });
       }
 
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;

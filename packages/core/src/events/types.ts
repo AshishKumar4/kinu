@@ -32,6 +32,7 @@ export type RunEventType =
   | 'model_call'
   | 'provider_wait'
   | 'model_fallback'
+  | 'context_admitted'
   | 'model_operation'
   | 'head_split'
   | 'head_merge'
@@ -161,6 +162,7 @@ export type RunEvent =
       source: 'header' | 'backoff' | 'cooldown';
     })
   | (RunEventBase & { type: 'model_fallback'; from: string; to: string; reason: string })
+  | (RunEventBase & { type: 'context_admitted'; tokens: number; contextWindow: number })
   | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
   /** `totalTokens` is absent when no head reported usage: unknown, not zero. */
   | (RunEventBase & { type: 'head_merge'; rootId: string; headCount: number;

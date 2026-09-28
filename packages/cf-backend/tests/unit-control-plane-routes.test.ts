@@ -84,6 +84,7 @@ function unrunActivity(): ActivitySnapshot {
   return {
     latest: null,
     contextWindow: null,
+    fill: null,
     telemetry: {
       steps: 0,
       windowLimit: 0,

@@ -5187,6 +5187,7 @@ const ACTIVITY_ACCOUNTS: readonly AccountSpend[] = [
 const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
   latest: ACTIVITY_LATEST,
   contextWindow: 200_000,
+  fill: { tokens: ACTIVITY_LATEST.usage.input, window: 200_000, source: "provider", at: new Date(ACTIVITY_LATEST.at).toISOString() },
   telemetry: {
     steps: 344, windowLimit: 2000, tokens: AGENT_TOKENS_METERED, cacheHit: ACTIVITY_CACHE_HIT,
     usd: 11.98, pricedSteps: 344, unpricedSteps: 0, stepsWithoutUsage: 0,
@@ -5239,6 +5240,7 @@ const ACTIVITY_CLEAN: ActivitySnapshot = {
 const ACTIVITY_FRESH: ActivitySnapshot = {
   latest: null,
   contextWindow: null,
+  fill: null,
   telemetry: {
     steps: 0, windowLimit: 2000, tokens: {}, usd: 0, pricedSteps: 0, unpricedSteps: 0,
     stepsWithoutUsage: 0,
