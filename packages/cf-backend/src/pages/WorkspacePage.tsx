@@ -1075,7 +1075,7 @@ export default function WorkspacePage() {
             )}
             {shownNode === null && (subName ? (
               <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}
-                input={shownAgent?.input ?? false} />
+                input={shownAgent?.input ?? true} />
             ) : (
             <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${agentId}/main`}
               {...chatDrop}>
