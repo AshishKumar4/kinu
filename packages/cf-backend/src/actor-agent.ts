@@ -572,10 +572,13 @@ export abstract class ActorAgent extends Agent<Env> {
    * Null before claim. Kept out of actor_config and never readable via RPC. */
   protected workspaceCapabilityToken(): string | null {
     // The constructor owns the table, so a failure here is real, never "no token".
-    const rows = this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`;
+    this.capabilityToken ??= this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`[0]?.token || null;
 
-    return rows[0]?.token || null;
+    return this.capabilityToken;
   }
+
+  /** Read once: {@link installWorkspaceCapability} is the row's only writer, and a destroy ends the isolate. */
+  private capabilityToken: string | null | undefined;
 
   /** Hash of the held token, or null. Safe to share; lets the UserDO detect a mismatch. */
   protected async workspaceCapabilityHash(): Promise<string | null> {
@@ -590,6 +593,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!token) throw new KinuError('denied', 'capability token required');
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
+    this.capabilityToken = token;
     this.invalidateModelCaches();
     // The first tile, so a workspace nobody opens still shows.
     this.overviewChanged();
