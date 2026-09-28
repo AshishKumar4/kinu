@@ -629,6 +629,24 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		expect(await drive.readFile('/new.txt', { encoding: 'utf8' })).toBe('hello\nmore\n');
 	});
 
+	test('df, mount and /proc/mounts list every live mount beside the root, and no absent one', async () => {
+		const { shell } = await workspaceWithMounts();
+
+		for (const command of ['df -h', 'df', 'mount', 'cat /proc/mounts']) {
+			const listed = await shell.exec(command);
+
+			const points = listed.stdout.split('\n').filter((line) => line.trim() !== '')
+				.map((line) => line.split(/\s+/).find((field) => field.startsWith('/')));
+
+			expect({ command, exitCode: listed.exitCode, points: points.filter((point) => point !== undefined).sort() })
+				.toEqual({ command, exitCode: 0, points: expect.arrayContaining(['/', '/sandbox', '/shared']) });
+			expect({ command, stdout: listed.stdout }).not.toMatchObject({ stdout: expect.stringContaining('/pc') });
+		}
+
+		expect((await shell.exec('echo x > /proc/mounts')).exitCode).not.toBe(0);
+		expect((await shell.exec('cat /proc/mounts')).stdout).toContain('/shared');
+	});
+
 	test('mv between two mounts copies across, since each mount is its own device', async () => {
 		const { shell, drive, container } = await workspaceWithMounts();
 
