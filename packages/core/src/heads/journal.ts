@@ -290,7 +290,7 @@ export class HeadJournal {
   }
 
   /**
-   * The unfinished run for this task, so one request stays one run across re-drives. Keyed like MCTS: the
+   * The unfinished run for this task, so one request stays one run across re-drives. Keyed by the
    * task plus no `head_merge_results` row; independent of head status, which `abandonRunning` may already
    * have settled. The owner predicate is what makes the task key safe.
    */

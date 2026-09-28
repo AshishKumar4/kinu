@@ -202,7 +202,6 @@ const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({
   turnId: v.nullable(v.string()),
   sessionId: v.nullable(v.string()),
   task: v.string(),
-  source: v.picklist(['branch', 'heads']),
   winnerNodeId: v.string(),
   chosenNodeId: v.nullable(v.string()),
   candidates: v.array(AlternateTakeCandidateSchema),

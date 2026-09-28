@@ -229,7 +229,7 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
     expect(outcome.ok).toBe(true);
 
     const set = present(latestAlternateTakeSet(sql, actor), 'the latest alternate-take set');
-    expect(set).toMatchObject({ source: 'branch', turnId: 'turn-9', sessionId: 'default', task: 'use approach B instead' });
+    expect(set).toMatchObject({ turnId: 'turn-9', sessionId: 'default', task: 'use approach B instead' });
     expect(set.candidates).toHaveLength(2);
     expect(set.candidates[0]).toMatchObject({ text: 'A-style answer', origin: 'live' });
     expect(set.candidates[1]).toMatchObject({ text: 'B-style answer', origin: 'branch' });

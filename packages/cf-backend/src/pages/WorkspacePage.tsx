@@ -866,7 +866,7 @@ export default function WorkspacePage() {
     });
   }, [state.connectionStatus, state.rpc, reportSide]);
 
-  // Refreshed when a turn settles: a think convergence may have produced a fresh near-tied set.
+  // Refreshed when a turn settles: a settled /branch redirect may have produced a fresh set.
   const [takesByTurn, setTakesByTurn] = useState<Record<string, AlternateTakeSet>>({});
 
   // A signal that started a turn renders on its message; one spliced into a running turn

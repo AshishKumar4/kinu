@@ -29,7 +29,7 @@ const DUMMY_LLM: LLMProviderConfig = {
 async function workspace(name: string, stored: { displayName?: string; nameOrigin?: 'user' | 'auto' } = {}) {
   const dir = scratchDir('title-agent');
   const db = new Database(join(dir, 'agent.db'));
-  const rt = createCLIRuntime(db, { dbPath: join(dir, 'agent.db'), llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
   initAgentConfigTable(rt.storage.execRaw);
   const config = rt.actor.config;
 

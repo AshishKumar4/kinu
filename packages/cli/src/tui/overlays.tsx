@@ -703,7 +703,7 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
 
   return (
     <PaletteFrame
-      title={`Alternate takes · ${set.candidates.length} explored`}
+      title={`Alternate takes · ${set.candidates.length} answers`}
       width={paletteWidth}
       height={paletteHeight}
       left={position.left}

@@ -22,7 +22,7 @@ import {
 } from '@kinu.run/core';
 import { scriptedTurnModel, scratchPath, toolExecute, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
-import { openLocalActor, registerLocalNode } from '../src/actor-identity';
+import { openLocalActor, registerLocalNode } from '@kinu.run/core';
 import { nodeSeatFactory } from './actor-fixture';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -62,7 +62,6 @@ function cliRuntime(label: string): CLIRuntime {
   initWorkspaceSchema(makeWorkspaceSchemaSql(database));
 
   return createCLIRuntime(database, {
-    dbPath: database.filename,
     llm: DUMMY_LLM,
   });
 }

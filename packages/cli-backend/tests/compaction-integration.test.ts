@@ -117,7 +117,6 @@ describe('default compaction over the real storage plane', () => {
     const db = new Database(scratchPath('compaction-integration', 'agent.db'), { create: true });
 
     const rt = createCLIRuntime(db, {
-      dbPath: db.filename,
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
 
@@ -280,7 +279,6 @@ describe('default compaction over the real storage plane', () => {
       const db = new Database(scratchPath(`compaction-${kind}`, 'agent.db'), { create: true });
 
       const rt = createCLIRuntime(db, {
-        dbPath: db.filename,
         llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
       });
 
@@ -331,7 +329,6 @@ describe('default compaction over the real storage plane', () => {
     const db = new Database(scratchPath('compaction-integration-rung', 'agent.db'), { create: true });
 
     const rt = createCLIRuntime(db, {
-      dbPath: db.filename,
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
 

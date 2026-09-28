@@ -3,7 +3,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, VFS, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
 import type { CLIRuntime } from './runtime';
-import { requireLocalActorWorkspace } from './actor-identity';
+import { requireLocalActorWorkspace } from '@kinu.run/core';
 
 export interface LocalNodeRuntimeDeps {
   readonly workspace: WorkspaceBundle;

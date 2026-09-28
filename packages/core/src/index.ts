@@ -104,7 +104,7 @@ export {
   type ConversationTurnPair,
 } from './identity/conversation-store';
 
-export { CHAT_SESSION_ID, MCTS_SESSION_ID } from './session/transcript-schema';
+export { CHAT_SESSION_ID } from './session/transcript-schema';
 
 export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
@@ -573,6 +573,10 @@ export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
+export {
+  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, registerLocalNode, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
+} from './state/local-actors';
+
 // open-38: one physical workspace SQLite for every logical actor.
 export {
   createActorHost, recoverActorTurns, childContextResolver, registeredParent,
@@ -862,7 +866,7 @@ export { collectDynamicContext, subordinateDelegatesOf } from './state/dynamic-c
 
 export type { DynamicContextInput } from './state/dynamic-context';
 
-// MCTS
+// Search-tree primitives the swarm runs on
 export { selectNode } from './mcts/uct';
 
 export { backpropagate } from './mcts/backpropagation';
@@ -893,7 +897,7 @@ export {
   initAlternateTakesTable,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
   recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence, AlternateTakeCandidateSchema,
-  type AlternateTakeCandidate, type AlternateTakeSet, type AlternateTakeSource,
+  type AlternateTakeCandidate, type AlternateTakeSet,
   type TakePickRecord, type TakePickOutcome,
 } from './mcts/takes';
 

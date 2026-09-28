@@ -1,7 +1,7 @@
 import type { ToolSet } from 'ai';
 import { REFUSAL_TYPE } from '../types/tool-outcome';
 
-/** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts, UI, and MCTS scoring. */
+/** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts and UI. */
 
 // Reach is not permission: an actor gets reach ∩ the deps its backend wires (conformance/manifest.ts).
 // A capability owns its codemode namespace when `codemode` equals its own key; *-codemode.ts factories rely on that.

@@ -1,5 +1,5 @@
 /**
- * Zero-LLM FTS5 transcript search over every session except MCTS trees. The index is derived and
+ * Zero-LLM FTS5 transcript search over every session. The index is derived and
  * disposable, fed from the canonical store by a rowid watermark; operations are async because entry
  * text is projected by `SessionTranscriptReader.project`.
  */
@@ -11,8 +11,6 @@ import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { boundedInt } from '../utils/bounds';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
-// MCTS sessions hold tree nodes, not conversation: excluded from indexing and browse.
-import { MCTS_SESSION_ID } from '../session/transcript-schema';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SessionTranscriptReader } from '../session/transcript';
@@ -204,7 +202,7 @@ export class ConversationSearchStore {
     const groups = this.sql<{ session_id: string; n: number; started_at: number; last_active: number }>`
       SELECT session_id, COUNT(*) AS n, MIN(recorded_at) AS started_at, MAX(recorded_at) AS last_active
       FROM conversation_entries
-      WHERE actor_id = ${this.actorId} AND session_id <> ${MCTS_SESSION_ID}
+      WHERE actor_id = ${this.actorId}
       GROUP BY session_id ORDER BY last_active DESC LIMIT ${lim}`;
 
     const conversations: ConversationSummary[] = [];
@@ -280,7 +278,7 @@ export class ConversationSearchStore {
 
       const rows = this.sql<EntryRow>`
         SELECT id, session_id, role, recorded_at, rowid AS rid FROM conversation_entries
-        WHERE actor_id = ${this.actorId} AND session_id <> ${MCTS_SESSION_ID}
+        WHERE actor_id = ${this.actorId}
           AND role IN ('user', 'assistant') AND rowid > ${watermark}
         ORDER BY rowid ASC`;
 

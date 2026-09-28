@@ -446,7 +446,7 @@ async function takesCommand({ client, arg }: SlashContext): Promise<SlashOutcome
   const set = await client.latestTakes();
 
   if (!set || set.candidates.length < 2) {
-    return { kind: 'text', text: 'No alternate takes yet. They appear after a swarm search with near-tied approaches, or after a /branch redirect settles.' };
+    return { kind: 'text', text: 'No alternate takes yet. They appear after a /branch redirect settles.' };
   }
 
   if (!arg) return { kind: 'takes', set };

@@ -251,7 +251,7 @@ function systemCapturingModel(answer: string, sink: (system: string) => void): T
 function workspaceRuntime() {
   const db = new Database(scratchPath('local-session', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
   return { db, rt };
 }
@@ -1522,7 +1522,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     mkdirSync(join(project, 'dist'));
     const db = new Database(scratchPath('local-session-placed', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM, cwd: project });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: project });
     const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: () => {}, noAutoEvolve: true });
     const shell = present(rt.shell, 'the placed shell');
 
@@ -2756,7 +2756,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
   ) {
     const db = new Database(scratchPath('local-session-review', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
     // The classifier and reflection ride rt.llm.complete; stub it so the review
     const completions: string[] = [];
 
@@ -4185,7 +4185,6 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     expect(streamPrompts).toHaveLength(1);
 
     const set = present(session.latestAlternateTakes(), 'the alternate takes set');
-    expect(set.source).toBe('branch');
     expect(set.candidates.map((c) => c.text)).toEqual(['the live answer', 'the branch answer']);
     expect(set.candidates.map((c) => c.origin)).toEqual(['live', 'branch']);
     expect(set.winnerNodeId).toBe(set.candidates[0].nodeId);
@@ -5017,7 +5016,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // Production initializer: a swarm node claims a working revision in the workspace's tables
     // (without it, `no such table: actor_working_revisions`).
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
     return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() } }, calls };
   }
@@ -5517,7 +5516,7 @@ describe('LocalAgentSession — a workspace bound to a directory', () => {
     const root = scratchDir('local-session-bound-prefix');
     const db = new Database(scratchPath('local-session-bound-prefix', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM, cwd: root });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: root });
     const systems: string[] = [];
 
     const session = new LocalAgentSession({

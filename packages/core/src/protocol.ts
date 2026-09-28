@@ -26,7 +26,6 @@ export interface ForkNode {
 	children: ForkNode[];
 	task?: string;
 	observation?: string;
-	codeUsed?: string | null;
 	createdAt?: number;
 	/** The head journal's recorded word, shown to the reader; absent for a search node. */
 	lifecycle?: ForkNodeLifecycle;

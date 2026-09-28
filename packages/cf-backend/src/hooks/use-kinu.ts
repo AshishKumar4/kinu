@@ -206,8 +206,6 @@ const MctsRowSchema = v.object({
   action: v.string(),
   task: v.string(),
   observation: v.string(),
-  code_used: v.optional(v.nullable(v.string())),
-  msg_id: v.optional(v.nullable(v.string())),
   created_at: v.optional(v.number()),
 });
 

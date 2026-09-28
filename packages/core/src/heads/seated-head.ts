@@ -24,7 +24,7 @@ export interface SeatedHeadDeps {
   split(seat: HeadSeat, input: HeadInput): (request: HeadSplitRequest) => Promise<HeadSplitResult>;
   mission(input: HeadInput, spec: string | null): MissionScope | null;
   reportStep(headId: string, seq: number, step: HeadStep): void | Promise<void>;
-  readonly reportDelta?: ReportHeadDelta;
+  readonly reportDelta: ReportHeadDelta;
 }
 
 /** The one head runner, on the head's own actor. */
@@ -52,9 +52,9 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
       profile: seat.profile,
       dynamic: seat.dynamic,
       reportStep: (seq, step) => deps.reportStep(input.id, seq, step),
+      reportDelta: deps.reportDelta,
     };
 
-    if (deps.reportDelta !== undefined) inference.reportDelta = deps.reportDelta;
     const mission = deps.mission(input, spec);
 
     if (mission !== null) inference.mission = mission;

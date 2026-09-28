@@ -901,7 +901,7 @@ window.WebSocket = new Proxy(window.WebSocket, {
 });
 
 
-/** A real MCTS tree at the size the view must survive; rows, not a tree, so it enters through `buildTree` like the socket payload. */
+/** A real swarm tree at the size the view must survive; rows, not a tree, so it enters through `buildTree` like the socket payload. */
 const MCTS_ACTIONS = [
   "Backfill coupon.kind from the discount table",
   "Add a NOT NULL default and re-run the migration",
@@ -989,7 +989,6 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
         observation: status === "failed"
           ? "Branch errored: the staging DB refused the ALTER while checkout held the lock."
           : `Scored ${score.toFixed(2)} — ${status === "pruned" ? "below the prune floor, dropped" : "kept for the next round"}.`,
-        code_used: onWinningLine ? "await db.exec(`UPDATE coupons SET kind = ...`)" : null,
         created_at: NOW - 36e5 + rows.length * 9e3,
       });
 
@@ -1891,7 +1890,6 @@ const PROVE_ROWS: MctsRow[] = [
     id: "pv005", parent_id: "pv003", depth: 3, visits: 5, value: 0.94, own_score: 0.94, status: "terminal",
     action: "Discharge the null case from the guard",
     observation: "Checker accepted 3 of 3 goals. No sorries remain.",
-    code_used: "theorem applyCoupon_terminates : ∀ c, Terminates (applyCoupon c) := by",
     created_at: NOW - 75e5,
   },
 ];
@@ -1940,7 +1938,6 @@ const SWARM_ROWS: MctsRow[] = [
     id: "sw007", parent_id: "sw004", depth: 3, visits: 6, value: 0.93, own_score: 0.93, status: "terminal",
     action: "Drop the redundant second lookup",
     observation: "p95 = 188ms. The guard's fixture still passes.",
-    code_used: "const kind = cached ?? inferKind(coupon);",
     created_at: NOW - 19e5,
   },
   {
@@ -2148,7 +2145,7 @@ const FORK_RUNS: ForkRunSummary[] = [
     // Derived: `forkbig` generates 520 rows for this same run.
     id: "n000", name: "SAVE20 500s",
     task: "Find why the SAVE20 coupon 500s", startedAt: NOW - 36e5,
-    // From the same stores as each row's halves: an MCTS search has the tree only, a swarm has both.
+    // From the same stores as each row's halves: a swarm writes both.
     status: "completed", hasSearchTree: true, hasNodeTranscripts: false,
     branches: MCTS_ROWS.length - 1, winnerScore: 0.91,
   },
@@ -2355,7 +2352,6 @@ const TRANSCRIPTS = {
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
       { id: "root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", depth: 1, status: "completed" },
     ],
-    codeUsed: null,
   },
   "root-merge-1-h1": {
     origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h1",
@@ -2375,7 +2371,6 @@ const TRANSCRIPTS = {
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "running" },
       { id: "root-merge-1-h1", label: "packages/cart/src/serializer.ts", depth: 1, status: "running" },
     ],
-    codeUsed: null,
   },
   "root-merge-1-h2": {
     origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h2",
@@ -2389,7 +2384,6 @@ const TRANSCRIPTS = {
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
       { id: "root-merge-1-h2", label: "packages/admin/src/coupon-report.ts", depth: 1, status: "errored" },
     ],
-    codeUsed: null,
   },
   // A competed branch: no tool loop, its `observation` is the whole output.
   n003: {
@@ -2405,7 +2399,6 @@ const TRANSCRIPTS = {
       { id: "n001", label: "Look at the coupon rules table", depth: 1, status: "open" },
       { id: "n003", label: "Guard the kind lookup at the reader", depth: 2, status: "terminal" },
     ],
-    codeUsed: "const rule = rules[coupon.kind ?? inferKind(coupon)];\nif (!rule) throw new BadCoupon(coupon.code);\nreturn rule.apply(cart, coupon);",
   },
   // A Steer-as-Branch run: one head, its id derived from the run id.
   "steer-b7f21-head": {
@@ -2435,7 +2428,6 @@ const TRANSCRIPTS = {
     path: [
       { id: "steer-b7f21-head", label: "Check the staging snapshot first", depth: 0, status: "completed" },
     ],
-    codeUsed: null,
   },
   // Two nodes of the live run, reachable from the run pane's node list.
   lv001: {
@@ -2480,7 +2472,6 @@ const TRANSCRIPTS = {
       { id: "lv000", label: "Audit every reader of coupon.kind", depth: 0, status: "running" },
       { id: "lv001", label: "Walk the cart serializer's null path", depth: 1, status: "completed" },
     ],
-    codeUsed: null,
   },
   lv003: {
     origin: "head", runId: "lv000", nodeId: "lv003",
@@ -2517,7 +2508,6 @@ const TRANSCRIPTS = {
       { id: "lv000", label: "Audit every reader of coupon.kind", depth: 0, status: "running" },
       { id: "lv003", label: "Trace the pricing refactor's readers", depth: 1, status: "running" },
     ],
-    codeUsed: null,
   },
 } satisfies Record<string, NodeTranscriptView>;
 
@@ -2645,14 +2635,12 @@ function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
     task: row.task ?? "",
     action: row.action,
     observation: row.observation ?? "",
-    code_used: row.code_used ?? null,
     visits: row.visits,
     value: row.value,
     own_score: row.own_score,
     depth: row.depth,
     // `running` is a merged-head status the search_nodes CHECK constraint cannot hold.
     status: row.status === "running" ? "open" : row.status,
-    msg_id: row.msg_id ?? null,
     created_at: row.created_at ?? NOW,
   };
 }

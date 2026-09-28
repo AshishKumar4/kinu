@@ -312,7 +312,7 @@ export async function runSwarm(
   let aborted = false;
   /**
    * Mission ledger for thought nodes (agent nodes guard and debit inside `runHeadInference`).
-   * The level is guarded, never the child, as in `mcts/engine.ts`.
+   * The level is guarded, never the child.
    */
   const mission = missionMeter(deps.mission);
   /** True when the ledger, not the expansion budget, ended the run, so `stop` says `budget`. */

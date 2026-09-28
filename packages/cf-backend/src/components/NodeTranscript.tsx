@@ -12,7 +12,7 @@ import { ChatLiveTail, MessageView } from "@/components/MessageView";
 import {
   deltaAsMessage, stepAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
-import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, CodeBlock } from "@/components/surfaces/shared";
+import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { cleanNodeLabel, findForkNode } from "@kinu.run/core/swarm-view";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -80,7 +80,7 @@ function SearchPath({ view, onSelect }: {
       <TreeStructureIcon size={11} className="p-text-3 shrink-0" />
       {view.path.map((crumb, index) => {
         const here = index === view.path.length - 1 || onSelect === undefined;
-        // An empty first-crumb label (always, for MCTS) falls back to its depth.
+        // An empty first-crumb label (a search root's always) falls back to its depth.
         const label = cleanNodeLabel(crumb.label, `depth ${crumb.depth}`);
 
         return (
@@ -124,12 +124,6 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
           <div className="mt-1 prose-chat p-text max-h-64 overflow-y-auto">
             <MarkdownContent content={view.answer} />
           </div>
-        </div>
-      )}
-      {view.codeUsed && (
-        <div className="shrink-0 border-b p-border px-4 py-2.5">
-          <div className="p-eyebrow">Code draft</div>
-          <div className="max-h-40 overflow-auto"><CodeBlock className="language-js">{view.codeUsed}</CodeBlock></div>
         </div>
       )}
     </>
