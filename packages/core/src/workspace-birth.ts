@@ -5,7 +5,7 @@ import { initAllTables } from './state/workspace-schema';
 import { seedSoul, UNTITLED_WORKSPACE_NAME } from './identity/soul';
 import {
   createInlineCraftStore, createInlineExecutor, createInlineMemory,
-  createInlineSchedule, createInlineWorkspace, wrapDatabase, type AgentDatabase,
+  createInlineWorkspace, wrapDatabase, type AgentDatabase,
 } from './identity/inline-primitives';
 import { INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap';
 import { nanoid } from './utils/nanoid';
@@ -14,6 +14,7 @@ import { createVercelAILLM } from './llm';
 import { unpricedLedgerSink } from './events/model-call-event';
 import { initRunEventTables, RunEventRecorder } from './events/recorder';
 import { buildRuntime } from './runtime-builder';
+import { createSqlFiber } from './execution/fiber';
 import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from './read-models/workspace-diff';
 import type { WorkspaceBundle } from './vfs/nimbus-workspace';
 import { writeWorkspaceSoul } from './vfs/workspace-planes';
@@ -54,7 +55,7 @@ function buildComponents(components: WorkspaceComponents) {
     source: 'reflection', report: unpricedLedgerSink(new RunEventRecorder(sql, actor)),
   });
 
-  const schedule = createInlineSchedule(sql, actor);
+  const schedule = { after: async (_ms: number, fn: () => Promise<void>) => { await fn(); }, cron: async () => {}, fiber: createSqlFiber(sql, actor) };
 
   return buildRuntime({
     actor,

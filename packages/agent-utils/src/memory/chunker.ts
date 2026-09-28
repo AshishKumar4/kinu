@@ -1,6 +1,6 @@
-const DEFAULT_CHUNK_TARGET_CHARS = 1600;
+const CHUNK_TARGET_CHARS = 1600;
 
-const DEFAULT_CHUNK_OVERLAP_CHARS = 320;
+const CHUNK_OVERLAP_CHARS = 320;
 
 export interface Chunk {
 	text: string;
@@ -18,14 +18,10 @@ async function hashText(text: string): Promise<string> {
 }
 
 /** Line-aware sliding window chunking, matching OpenClaw's algorithm. */
-export async function chunkMarkdown(
-	content: string,
-	targetChars = DEFAULT_CHUNK_TARGET_CHARS,
-	overlapCharSize = DEFAULT_CHUNK_OVERLAP_CHARS,
-): Promise<Chunk[]> {
+export async function chunkMarkdown(content: string): Promise<Chunk[]> {
 	const lines = content.split("\n");
-	const maxChars = Math.max(32, targetChars);
-	const overlapChars = Math.max(0, overlapCharSize);
+	const maxChars = CHUNK_TARGET_CHARS;
+	const overlapChars = CHUNK_OVERLAP_CHARS;
 
 	const chunks: Chunk[] = [];
 	let current: Array<{ line: string; lineNo: number }> = [];

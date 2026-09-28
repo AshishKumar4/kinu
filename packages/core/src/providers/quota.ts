@@ -4,37 +4,23 @@ import { fmtSpan, fmtTokens } from '../utils/format';
 
 const CALL_ACCOUNT_HEADER = 'x-kinu-account';
 
-export interface QuotaWindow {
-  readonly measure: string;
-  readonly limit?: number;
-  readonly remaining?: number;
-  readonly usedPercent?: number;
-  readonly resetsAt?: number;
-}
-
-export interface QuotaSnapshot {
-  readonly at: number;
-  readonly windows: readonly QuotaWindow[];
-}
-
-export interface CallAccount {
-  readonly provider: string;
-  readonly name: string;
-  readonly quota?: QuotaSnapshot;
-}
-
-export const QuotaSnapshotSchema = v.object({
-  at: v.number(),
-  windows: v.array(v.object({
-    measure: v.string(),
-    limit: v.optional(v.number()),
-    remaining: v.optional(v.number()),
-    usedPercent: v.optional(v.number()),
-    resetsAt: v.optional(v.number()),
-  })),
+const QuotaWindowSchema = v.object({
+  measure: v.string(),
+  limit: v.optional(v.number()),
+  remaining: v.optional(v.number()),
+  usedPercent: v.optional(v.number()),
+  resetsAt: v.optional(v.number()),
 });
 
+export type QuotaWindow = v.InferOutput<typeof QuotaWindowSchema>;
+
+export const QuotaSnapshotSchema = v.object({ at: v.number(), windows: v.array(QuotaWindowSchema) });
+
+export type QuotaSnapshot = v.InferOutput<typeof QuotaSnapshotSchema>;
+
 export const CallAccountSchema = v.object({ provider: v.string(), name: v.string(), quota: v.optional(QuotaSnapshotSchema) });
+
+export type CallAccount = v.InferOutput<typeof CallAccountSchema>;
 
 export function withCallAccount(response: Response, provider: string, credentialKey: string): Response {
   const headers = new Headers(response.headers);

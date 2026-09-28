@@ -6,6 +6,7 @@ import {
   BUILTIN_SKILL_HEADERS,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_SPECS,
+  DEFAULT_PROVIDER_RETRIES,
   NAMED_SWARM_PRESETS,
   TIER_IDS,
   deriveRoleLabel,
@@ -50,6 +51,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
   const [newRoleId, setNewRoleId] = useState('');
   const [addingRole, setAddingRole] = useState(false);
   const [newTierId, setNewTierId] = useState('');
+  const [newChainModel, setNewChainModel] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const roleNav = useRef<HTMLElement>(null);
@@ -235,6 +237,30 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
     return next;
   });
 
+  const setRetries = (retries: number) => {
+    if (!draft || !Number.isInteger(retries) || retries < 0 || retries > 10) return;
+    setDraft({ ...draft, retries });
+  };
+
+  const setModelChain = (model: string, chain: readonly string[]) => {
+    if (!draft) return;
+    const modelFallbacks = { ...draft.modelFallbacks };
+
+    if (chain.length === 0) delete modelFallbacks[model];
+    else modelFallbacks[model] = [...chain];
+    setDraft({ ...draft, modelFallbacks });
+  };
+
+  const editChain = (model: string, chain: readonly string[]) => {
+    setModelChain(model, chain);
+
+    if (model === newChainModel) setNewChainModel('');
+  };
+
+  const dropChain = (model: string) => editChain(model, []);
+
+  const chainedModels = draft === null ? [] : [...new Set([...Object.keys(draft.modelFallbacks ?? {}), ...(newChainModel ? [newChainModel] : [])])];
+
   const saveWhat = tiersOnly ? 'Save tiers' : 'Save roles and tiers';
 
   const defaultModel = draft === null ? '' : draft.tiers.default.model;
@@ -308,8 +334,8 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                       ]}
                       onChange={(effort) => setTierEffort(tierId, effort)}
                     />
-                    <TierFallbacks
-                      tierId={tierId}
+                    <FallbackChain
+                      label={tierId}
                       chain={resolved.fallbacks ?? []}
                       model={resolved.model}
                       menu={menu}
@@ -331,6 +357,50 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
               />
               <Button size="sm" variant="secondary" disabled={!newTierId.trim()} onClick={addTier}>Add</Button>
             </Field>
+            <div className="border-t p-border pt-3" data-section="retry-and-fallback">
+              <Field inline label="Retries"
+                hint="How many times the last model of a chain retries a failure that may pass. Earlier models hand over at once.">
+                <input
+                  type="number"
+                  min={0}
+                  max={10}
+                  className={`${selectSmCls} w-20`}
+                  aria-label="Retries"
+                  value={draft.retries ?? DEFAULT_PROVIDER_RETRIES}
+                  onChange={(event) => setRetries(event.target.valueAsNumber)}
+                />
+              </Field>
+              <div className="p-meta p-text-3 pt-2">A model's own chain runs instead of its tier's, whichever tier runs it.</div>
+              {chainedModels.map((model) => (
+                <div key={model} data-model-chain={model} className="grid gap-x-3 gap-y-2 py-2 md:grid-cols-[8rem_minmax(0,1fr)_9rem] md:items-center">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-xs p-text">{labelOfSpec(menu, model)}</span>
+                    <Button variant="ghost" size="sm" icon={<TrashIcon size={12} />} aria-label={`Remove the ${model} chain`}
+                      onClick={() => dropChain(model)} />
+                  </div>
+                  <FallbackChain
+                    label={model}
+                    chain={draft.modelFallbacks?.[model] ?? []}
+                    model={model}
+                    menu={menu}
+                    onChange={(chain) => editChain(model, chain)}
+                  />
+                </div>
+              ))}
+              <Field inline label="Add a model chain">
+                <ModelPicker
+                  models={menu.models.filter((entry) => !chainedModels.includes(entry.spec))}
+                  failures={menu.failures}
+                  value=""
+                  onChange={(spec) => setNewChainModel(spec)}
+                  placeholder="Pick a model…"
+                  label="Add a model chain"
+                  test={testModel}
+                  size="sm"
+                  className="w-56"
+                />
+              </Field>
+            </div>
           </>
         )}
       </Card>
@@ -450,8 +520,8 @@ function labelOfSpec(menu: ModelMenu, spec: string): string {
   return account === undefined ? label : `${label} · ${account}`;
 }
 
-function TierFallbacks(props: {
-  tierId: TierId;
+function FallbackChain(props: {
+  label: string;
   chain: readonly string[];
   model: string;
   menu: ModelMenu;
@@ -467,15 +537,15 @@ function TierFallbacks(props: {
   const freeVariant = (spec: string) => variants(spec).find((variant) => !taken.has(variant));
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 md:col-span-2 md:col-start-2" role="group" aria-label={`${props.tierId} fallbacks`}>
+    <div className="flex flex-wrap items-center gap-1.5 md:col-span-2 md:col-start-2" role="group" aria-label={`${props.label} fallbacks`}>
       <span className="p-meta p-text-3">Fallbacks</span>
       {props.chain.map((spec, index) => (
         <span key={spec} data-spec={spec} className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 text-xs p-text">
           <span className="p-text-3">{index + 1}.</span>
           {labelOfSpec(props.menu, spec)}
-          <AccountPicker spec={spec} accounts={accountsOf(spec)} label={`${props.tierId} fallback ${index + 1} account`}
+          <AccountPicker spec={spec} accounts={accountsOf(spec)} label={`${props.label} fallback ${index + 1} account`}
             onChange={(next) => props.onChange(props.chain.map((entry, at) => (at === index ? next : entry)))} />
-          <button type="button" className="p-text-3 hover:p-text" aria-label={`Remove ${spec} from the ${props.tierId} fallbacks`}
+          <button type="button" className="p-text-3 hover:p-text" aria-label={`Remove ${spec} from the ${props.label} fallbacks`}
             onClick={() => props.onChange(props.chain.filter((entry) => entry !== spec))}>
             <XIcon size={11} />
           </button>
@@ -491,7 +561,7 @@ function TierFallbacks(props: {
           if (free !== undefined) props.onChange([...props.chain, free]);
         }}
         placeholder={props.chain.length === 0 ? 'Add a fallback model…' : 'Add another…'}
-        label={`${props.tierId} add fallback`}
+        label={`${props.label} add fallback`}
         test={testModel}
         size="sm"
         className="w-56"

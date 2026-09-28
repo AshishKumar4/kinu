@@ -2,7 +2,7 @@
  * Pure hostname classifier for destinations untrusted code must never reach. Shared by backend
  * egress (`cf-backend/src/egress/outbound.ts`) and `assertSafeUrl` so both refuse the same set.
  * Literal-based on WHATWG-canonical hostnames; a name that resolves to a private address is not
- * caught here, so each backend must bound that DNS residual itself.
+ * caught here; see `web/url-safety.ts`.
  */
 
 import { refusalOf, KinuError, type Refusal } from '../obs/error';

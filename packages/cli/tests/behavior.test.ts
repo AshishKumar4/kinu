@@ -2,7 +2,7 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   JsonValueSchema,
   parseJsonObject,
@@ -10,7 +10,6 @@ import {
   type JsonObject,
   type JsonValue,
 } from "@kinu.run/core";
-import { tolerate } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import { present, runToExit } from '@kinu.run/test-utils';
 
@@ -19,13 +18,8 @@ function toText(output: string): string {
   return Bun.stripANSI(output).replaceAll('\r\n', '\n');
 }
 
-const tempDirs: string[] = [];
-
 function newProjectDir(): string {
-  const dir = scratchDir("test-project");
-  tempDirs.push(dir);
-
-  return dir;
+  return scratchDir("test-project");
 }
 
 const repoRoot = resolve(__dirname, "../../..");
@@ -61,7 +55,6 @@ const SteeringEnvelopeSchema = v.object({
 const ErrorEventSchema = v.object({
   type: v.literal("error"),
   message: v.string(),
-  hint: v.string(),
 });
 
 /** `--json` turn-end usage; an absent field means the provider did not report it. */
@@ -72,26 +65,10 @@ const LedgerRowSchema = v.object({
   event: v.objectWithRest({ type: v.string() }, JsonValueSchema),
 });
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    stopLocalDaemon(dir);
-  }
-});
-
-/** Local one-shot commands auto-start the scheduler daemon; kill it before the home is removed. */
-function stopLocalDaemon(home: string): void {
-  const pidfile = tolerate(() => readFileSync(join(home, "daemon.pid"), "utf-8"), "enoent");
-
-  if (pidfile === undefined) return;
-  const pid = parseInt(pidfile.trim(), 10);
-
-  if (Number.isInteger(pid) && pid > 1) tolerate(() => process.kill(pid, "SIGTERM"), "esrch");
-}
-
 function runCli(args: string[], opts: { home?: string; stdin?: string; env?: Record<string, string> } = {}) {
-  const env = { ...process.env, ...opts.env };
-
-  if (opts.home) env.KINU_HOME = opts.home;
+  // No scheduler daemon: none of these rows is about it, and a detached one outlives the run and races `exec` for the
+  // conversation's driver lease.
+  const env = { ...process.env, KINU_SKIP_DAEMON: "1", ...opts.env, ...(opts.home !== undefined && { KINU_HOME: opts.home }) };
 
   return runToExit([process.execPath, cliBin, ...args], { cwd: newProjectDir(), env, stdin: opts.stdin });
 }
@@ -118,7 +95,6 @@ function shellQuote(value: string): string {
 describe("CLI behavior", () => {
   test("setup --account-only with an existing account does not enter the local model wizard", async () => {
     const home = scratchDir("cli-setup-account");
-    tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
       accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
@@ -138,7 +114,6 @@ describe("CLI behavior", () => {
 
   test("interactive setup can be rerun and reaches provider choices", async () => {
     const home = scratchDir("cli-setup-rerun");
-    tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
       accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
@@ -159,7 +134,6 @@ describe("CLI behavior", () => {
 
   test("setup --local-model keeps local provider setup explicit", async () => {
     const home = scratchDir("cli-setup-local");
-    tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
       accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
@@ -176,7 +150,6 @@ describe("CLI behavior", () => {
 
   test("provider list summarizes connected providers without leaking credentials", async () => {
     const home = scratchDir("cli-providers");
-    tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
       accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
@@ -236,7 +209,6 @@ describe("CLI behavior", () => {
 
   test("alias prints the command it wrote, and the listing shows it once the process has exited", async () => {
     const home = scratchDir("cli-alias");
-    tempDirs.push(home);
     writeConfig(home, {
       agents: {
         jarvis: {
@@ -260,7 +232,6 @@ describe("CLI behavior", () => {
 
   test("no-name chat can select a configured cloud agent", async () => {
     const home = scratchDir("cli-chat");
-    tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
       accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
@@ -289,7 +260,6 @@ describe("CLI behavior", () => {
 describe("kinu exec (headless)", () => {
   test("requires a task prompt and exits nonzero", async () => {
     const home = scratchDir("cli-exec-usage");
-    tempDirs.push(home);
 
     const proc = await runCli(["exec"], { home });
     expect(proc.exitCode).toBe(1);
@@ -298,7 +268,6 @@ describe("kinu exec (headless)", () => {
 
   test("demands --workspace when several workspaces are configured", async () => {
     const home = scratchDir("cli-exec-agents");
-    tempDirs.push(home);
     const stamp = new Date(0).toISOString();
     writeConfig(home, {
       agents: {
@@ -317,7 +286,6 @@ describe("kinu exec (headless)", () => {
 
   test("runs a local workspace end-to-end with --json and honest exit codes", async () => {
     const home = scratchDir("cli-exec-smoke");
-    tempDirs.push(home);
     const server = startMockLlm("Hello from mock.");
 
     try {
@@ -386,7 +354,6 @@ describe("kinu exec (headless)", () => {
 
   test("exits nonzero when the model endpoint fails", async () => {
     const home = scratchDir("cli-exec-fail");
-    tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startFailingLlm();
 
@@ -415,7 +382,6 @@ describe("kinu exec (headless)", () => {
 
   test("--no-auto-evolve runs the turn normally on a local workspace", async () => {
     const home = scratchDir("cli-exec-noevolve");
-    tempDirs.push(home);
     const server = startMockLlm("Hello from mock.");
 
     try {
@@ -440,7 +406,6 @@ describe("kinu exec (headless)", () => {
 
   test("--no-auto-evolve is rejected for cloud workspaces", async () => {
     const home = scratchDir("cli-exec-noevolve-cloud");
-    tempDirs.push(home);
     const stamp = new Date(0).toISOString();
     writeConfig(home, {
       origin: "https://kinu.example.com",
@@ -461,7 +426,6 @@ describe("kinu exec (headless)", () => {
 describe("kinu run — a tool refusal is rendered for the person, not the model", () => {
   test("a refused escalation prints prose under ✗ and its diagnostic lands in cli.log", async () => {
     const home = scratchDir("cli-run-refusal");
-    tempDirs.push(home);
 
     const server = startToolLoopMockLlm(
       { name: "shell", arguments: JSON.stringify({ command: "true", runtime: "nonexistent" }) },
@@ -491,7 +455,6 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
       expect(stderr).not.toContain("AI SDK Warning");
       expect(readFileSync(join(home, "cli.log"), "utf-8")).toContain("shell.escalation_refused");
     } finally {
-      stopLocalDaemon(home);
       await server.stop();
     }
   });
@@ -500,7 +463,6 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
 describe("kinu exec --json — a mechanical steer is observable from outside", () => {
   test("a turn reports the steering row it wrote, with trigger, tool and conversion", async () => {
     const home = scratchDir("cli-exec-nudge");
-    tempDirs.push(home);
 
     const server = startToolLoopMockLlm(
       { name: "shell", arguments: JSON.stringify({ command: "true", runtime: "nonexistent" }) },
@@ -547,7 +509,6 @@ describe("kinu exec --json — a mechanical steer is observable from outside", (
 describe("kinu exec --json — the turn-end usage payload", () => {
   test("carries no usage at all when the provider reported none", async () => {
     const home = scratchDir("cli-exec-unmetered");
-    tempDirs.push(home);
     // No `usage` block: @ai-sdk/openai-compatible reports all-undefined and `normalizeUsage` returns {}.
     const server = startMockLlm("Hello from mock.", null);
 
@@ -751,7 +712,6 @@ function startEmptyModelMenuOrigin() {
 describe("kinu create — an unusable model is named at creation", () => {
   test("warns when the workspace's model has no connected provider", async () => {
     const home = scratchDir("cli-create-unusable");
-    tempDirs.push(home);
     const origin = startEmptyModelMenuOrigin();
 
     try {
@@ -782,7 +742,6 @@ describe("kinu create — an unusable model is named at creation", () => {
 
   test("stays quiet when the model resolves through a working provider", async () => {
     const home = scratchDir("cli-create-usable");
-    tempDirs.push(home);
     const server = startMockLlm("ok");
 
     try {
@@ -809,9 +768,8 @@ describe("kinu exec — provider failures are legible and actionable", () => {
     error: { message: "Your account is not active.", type: "invalid_request_error", code: "billing_not_active" },
   };
 
-  test("renders the provider's own words once, with the command that resolves it", async () => {
+  test("renders the provider's own words once, and no fix command", async () => {
     const home = scratchDir("cli-provider-err");
-    tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startInBandErrorLlm(BILLING_ERROR);
 
@@ -833,16 +791,15 @@ describe("kinu exec — provider failures are legible and actionable", () => {
       expect(proc.exitCode).toBe(1);
       expect(output).not.toContain("[object Object]");
       expect(output.split("Your account is not active.").length - 1).toBe(1);
-      expect(output).toContain("kinu provider");
+      expect(output).not.toContain("hint:");
     } finally {
       await good.stop();
       await bad.stop();
     }
   });
 
-  test("--json carries the guidance as a field, not just as terminal decoration", async () => {
+  test("--json carries the provider's words as a field, not just as terminal decoration", async () => {
     const home = scratchDir("cli-provider-err-json");
-    tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startInBandErrorLlm(BILLING_ERROR);
 
@@ -871,7 +828,6 @@ describe("kinu exec — provider failures are legible and actionable", () => {
 
       expect(error).toBeDefined();
       expect(error?.message).toContain("Your account is not active.");
-      expect(error?.hint).toContain("kinu provider");
     } finally {
       await good.stop();
       await bad.stop();

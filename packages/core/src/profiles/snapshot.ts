@@ -70,6 +70,7 @@ const ResolvedTurnProfileSchema = v.strictObject({
     default: TierSlotSchema,
     deep: TierSlotSchema,
   }),
+  retries: v.number(),
   workMode: v.picklist(['plan', 'build']),
   skills: v.array(v.string()),
   allowedTools: v.array(v.string()),

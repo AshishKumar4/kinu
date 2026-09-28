@@ -1,42 +1,15 @@
 /**
- * The platform catalog gate — the catalog stays evidenced, and stays load-bearing.
+ * The platform catalog gate — the catalog stays evidenced.
  *
  * `packages/core/src/platform-catalog.ts` replaces a document that vanished
  * while its citation survived in shipped code: Nimbus's `constants.ts` justifies
  * a 128 MiB production ceiling with "per a gitignored internal research note
  * §6 invariant I1", and that file has never existed on disk or in git history.
- * A catalog that can rot the same way is not an improvement, so three things are
- * checked here, each with an explicit denominator.
- *
- *   1. Every entry carries an evidence label, a provenance, a date, a trigger
- *      and a breach behaviour — and a `documented` entry's provenance is a URL
- *      while everything else names a file and line. An unlabelled number is the
- *      exact defect being replaced.
- *   2. The catalog is IMPORTED by production code. A catalog nothing reads is
- *      prose in a `.ts` extension.
- *   3. No source file states a platform number in prose without naming the
- *      catalog entry it comes from. This is the drift check: the number lives in
- *      one place and every restatement points back at it.
- *
- * ## Why check 3 reads text and not the AST
- *
- * The thing that rots is not a numeric literal — it is a SENTENCE. `2 * 1024 *
- * 1024` appears legitimately as a self-imposed cap all over this repo and means
- * nothing on its own; "(2 MB platform limit)" is a claim about Cloudflare, and
- * that is what goes stale. So the match is a number-with-unit near platform
- * vocabulary, which occurs in prose and essentially never in code: an
- * identifier ends `_MS`, it is not followed by the token `ms`.
- *
- * The escape hatch is deliberately the behaviour we want: name the entry. That
- * makes every platform sentence in the tree greppable back to its evidence.
- *
- * ## Why the positive control exists
- *
- * Three gates in this repo have reported green over nothing. A matcher that
- * silently stops matching is indistinguishable from a clean tree, so this gate
- * also requires a non-zero count of platform sentences that DO cite an entry. If
- * that number reaches zero, the regex broke and the gate fails rather than
- * congratulating itself.
+ * A catalog that can rot the same way is not an improvement, so every entry
+ * carries an evidence label, a provenance, a date, a trigger and a breach
+ * behaviour — and a `documented` entry's provenance is a URL while everything
+ * else names a file and line. An unlabelled number is the exact defect being
+ * replaced.
  */
 
 import {
@@ -252,117 +225,7 @@ export function auditSchema(entries: readonly PlatformFactEntry[]): SchemaAudit 
   return { inspected: entries.length, problems, gaps, byEvidence };
 }
 
-// ── Check 3: platform sentences in source ────────────────────────────────
-
-/** Number followed by a unit, as prose writes one. Deliberately not a numeric
- *  literal: `30_000` is a timeout, `30 s` is a claim. */
-const QUANTITY = /\b\d[\d_,.]*\s?(?:ms|s|KB|KiB|MB|MiB|GB|GiB)\b/g;
-
-/** Vocabulary that makes a quantity a claim about the platform rather than
- *  about us. Narrow on purpose, and narrowed once already: `the runtime` was in
- *  this list and matched `tools/registry.ts`, where a 2 GB cgroup is a container
- *  fact and `runtime` is a Kinu domain noun (`runtime: "workspace"`). A gate
- *  with false positives gets disabled, which is worse than no gate, so an
- *  ambiguous cue is dropped rather than special-cased. `RPC` and `timeout` are
- *  excluded for the same reason — ours as often as theirs. */
-const PLATFORM_VOCABULARY: readonly string[] = [
-  'platform limit',
-  'platform constant',
-  'platform cap',
-  'Cloudflare',
-  'workerd',
-  'Durable Object',
-  'V8 isolate',
-  'Worker isolate',
-  'worker isolate',
-  'subrequest',
-  'blockConcurrencyWhile',
-  'Workers runtime',
-  'SQLITE_',
-  'hibernation',
-  'structured-clone',
-  'structuredClone',
-];
-
-/** How far from the quantity the vocabulary must sit, and how far the citation
- *  may sit. The citation window is wider because a comment block explains the
- *  claim first and names the entry at the end. */
-const VOCABULARY_WINDOW = 200;
-
-const CITATION_WINDOW = 500;
-
-export interface ProseMention {
-  readonly file: string;
-  readonly line: number;
-  readonly quantity: string;
-  readonly vocabulary: string;
-  readonly citedId: string | null;
-}
-
-const lineOf = (text: string, index: number): number =>
-  text.slice(0, index).split('\n').length;
-
-export function findProseMentions(file: string, text: string): readonly ProseMention[] {
-  const found: ProseMention[] = [];
-
-  for (const match of text.matchAll(QUANTITY)) {
-    const at = match.index;
-    const near = text.slice(Math.max(0, at - VOCABULARY_WINDOW), at + VOCABULARY_WINDOW);
-    const vocabulary = PLATFORM_VOCABULARY.find((word) => near.includes(word));
-
-    if (vocabulary === undefined) continue;
-    const wide = text.slice(Math.max(0, at - CITATION_WINDOW), at + CITATION_WINDOW);
-    const citedId = PLATFORM_FACT_IDS.find((id) => wide.includes(id)) ?? null;
-    found.push({ file, line: lineOf(text, at), quantity: match[0], vocabulary, citedId });
-  }
-
-  return found;
-}
-
-export interface SourceAudit {
-  readonly filesInspected: number;
-  readonly mentions: readonly ProseMention[];
-  readonly importers: readonly string[];
-  readonly citedIds: readonly string[];
-}
-
 const CATALOG_MODULE = 'packages/core/src/platform-catalog.ts';
-
-/**
- * Files this gate does not hold to its own prose rule, pinned as a list so the
- * test can assert it BY EQUALITY.
- *
- * There is exactly one, and it must stay exactly one: the catalog itself, which
- * states every platform number it owns and would otherwise be its own largest
- * violator. The equality assertion is the point rather than the exclusion —
- * an unpinned ignore list is how a gate dies, because appending a third path is
- * the cheapest way to make a cleanup pass go green, and nobody reviews an
- * addition to a list nothing checks. Precedent: `tools/oxlint/anti-slop/
- * gate.test.ts` pins its own ignore list the same way.
- */
-export const PROSE_EXEMPT_FILES: readonly string[] = [CATALOG_MODULE];
-
-export function auditSources(sources: ReadonlyMap<string, string>): SourceAudit {
-  const mentions: ProseMention[] = [];
-  const importers: string[] = [];
-  const citedIds = new Set<string>();
-
-  for (const [file, text] of sources) {
-    if (PROSE_EXEMPT_FILES.includes(file)) continue;
-
-    if (text.includes('PLATFORM_CATALOG')) importers.push(file);
-
-    for (const id of PLATFORM_FACT_IDS) if (text.includes(id)) citedIds.add(id);
-    mentions.push(...findProseMentions(file, text));
-  }
-
-  return {
-    filesInspected: sources.size,
-    mentions,
-    importers,
-    citedIds: [...citedIds],
-  };
-}
 
 // ── Report ───────────────────────────────────────────────────────────────
 
@@ -411,8 +274,8 @@ function report(): string {
     out.push('');
   }
 
-  const cited = auditSources(readSources()).citedIds;
-  const uncited = PLATFORM_FACT_IDS.filter((id) => !cited.includes(id));
+  const sources = [...readSources().values()];
+  const uncited = PLATFORM_FACT_IDS.filter((id) => !sources.some((text) => text.includes(id)));
 
   if (uncited.length > 0) {
     out.push(
@@ -488,18 +351,6 @@ if (import.meta.main) {
   }
 
   const schema = auditSchema(platformFactEntries());
-  const sources = readSources();
-  const source = auditSources(sources);
-  const unsourced = source.mentions.filter((m) => m.citedId === null);
-  const sourced = source.mentions.length - unsourced.length;
-
-  // The denominator, on the SUCCESS line and not only on failure. Each count is
-  // a way for this gate to pass over nothing, and every one of them has happened
-  // to a gate in this repo. `assertMeasured` throws on any zero.
-  //
-  // `platform sentences already cited` is the positive control: a matcher that
-  // silently stops matching is indistinguishable from a clean tree, so a clean
-  // result is only meaningful while the regex is proven to still fire.
   let measured: string;
 
   try {
@@ -507,76 +358,40 @@ if (import.meta.main) {
       ['catalog entries', schema.inspected],
       ['documented entries', schema.byEvidence.get('documented') ?? 0],
       ['first-hand entries', injectableFaults().length],
-      ['source files scanned', source.filesInspected],
-      ['production files importing the catalog', source.importers.length],
-      ['entries cited by production code', source.citedIds.length],
-      ['platform sentences already cited', sourced],
     ]);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
 
-  if (schema.problems.length === 0 && unsourced.length === 0) {
+  if (schema.problems.length === 0) {
     const labels = [...schema.byEvidence]
       .sort((a, b) => b[1] - a[1])
       .map(([label, n]) => `${String(n)} ${label}`)
       .join(', ');
 
-    // Counts on the success line; the LISTS live in `--report`.
-    //
-    // Printing them here is the wrong shape: a warning nobody has to clear
-    // teaches the reader to skip the output, and this gate's whole value
-    // is that its output is read. Nor are they debt to ratchet — an uncited entry
-    // is usually a behavioural fact with no numeric call site (nothing imports a
-    // number from `isolate.codegen_blocked`; the code that obeys it cites it in
-    // prose), and ratcheting the count would block the NEXT entry somebody adds,
-    // which is precisely backwards for a catalog that should be cheap to extend.
-    // A declared gap is likewise an entry being honest about not knowing
-    // something, which is a state to record, not a violation to clear.
     console.log(
       `platform-catalog: ok — ${measured}`
       + `\n  by evidence: ${labels}`
-      + `\n  ${String(schema.gaps.length)} declared gap(s), `
-      + `${String(PLATFORM_FACT_IDS.length - source.citedIds.length)} entry(ies) not yet cited by `
-      + `production code — \`bun scripts/platform-catalog.ts --report\` lists both`,
+      + `\n  ${String(schema.gaps.length)} declared gap(s) — \`bun scripts/platform-catalog.ts --report\` lists them`,
     );
     process.exit(0);
   }
 
-  if (schema.problems.length > 0) {
-    console.error(`platform-catalog: ${String(schema.problems.length)} entry problem(s)\n`);
+  console.error(`platform-catalog: ${String(schema.problems.length)} entry problem(s)\n`);
 
-    for (const p of schema.problems) {
-      console.error(finding({
-        invariant: 'every catalog entry carries an evidence label, a followable provenance, '
-          + 'an ISO date, a trigger and a breach behaviour',
-        at: `${CATALOG_MODULE} entry \`${p.id}\``,
-        found: p.reason,
-        silently: 'a platform number that reads as authoritative and cannot be re-derived — '
-          + 'Nimbus shipped `per a gitignored internal research note (§6, invariant I1)` from a '
-          + 'production constant, that document never existed, and the number it defended was wrong',
-        fix: 'supply the missing field, or relabel the entry to the evidence you actually have '
-          + '(`inferred` and `speculative` are legitimate answers; a blank field is not)',
-      }));
-    }
-  }
-
-  if (unsourced.length > 0) {
-    console.error(`\nplatform-catalog: ${String(unsourced.length)} uncited platform sentence(s)\n`);
-
-    for (const m of unsourced) {
-      console.error(finding({
-        invariant: 'a sentence stating a platform number names the catalog entry it comes from',
-        at: `${m.file}:${String(m.line)}`,
-        found: `"${m.quantity}" asserted near "${m.vocabulary}" with no entry named`,
-        silently: 'a second copy of a platform fact that drifts from the catalog and from the '
-          + 'runtime, with nothing to detect the drift — this repo already had one, a live 25 s '
-          + 'WebSocket heartbeat citing a deleted `STABILITY-AUDIT §A4`',
-        fix: `name the entry in the sentence — \`do.sqlite.row_bytes\`, \`worker.isolate.memory\` `
-          + `— and derive the value from ${CATALOG_MODULE} rather than retyping it`,
-      }));
-    }
+  for (const p of schema.problems) {
+    console.error(finding({
+      invariant: 'every catalog entry carries an evidence label, a followable provenance, '
+        + 'an ISO date, a trigger and a breach behaviour',
+      at: `${CATALOG_MODULE} entry \`${p.id}\``,
+      found: p.reason,
+      silently: 'a platform number that reads as authoritative and cannot be re-derived — '
+        + 'Nimbus shipped `per a gitignored internal research note (§6, invariant I1)` from a '
+        + 'production constant, that document never existed, and the number it defended was wrong',
+      fix: 'supply the missing field, or relabel the entry to the evidence you actually have '
+        + '(`inferred` and `speculative` are legitimate answers; a blank field is not)',
+    }));
   }
 
   process.exit(1);

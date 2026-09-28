@@ -1,5 +1,6 @@
 /** Keeps the Vectorize index in step with the FTS5 memory store; separate from runtime.ts to stay dependency-light. */
 
+import { Effect } from 'effect';
 import { type AgentConfigStore } from '../config/store';
 import { type Memory, type VFS } from '../types/primitives';
 import { type VectorStore } from './vector-store';
@@ -7,7 +8,7 @@ import { type VfsNativeReads } from '../vfs/mounts';
 import { AGENT_CONFIG_KEYS } from '../config/store';
 import { readTailWithVfsOps } from '../vfs/mounts';
 import type { MemoryStore } from "@kinu.run/agent-utils/memory";
-import { diagnostics, toKinuError } from "../obs/index";
+import { diagnostics, settle, toKinuError } from "../obs/index";
 
 /** Clearing the completeness marker and cursor hands the repair to the idempotent backfill. */
 function invalidateSemanticIndex(config: AgentConfigStore): void {
@@ -26,26 +27,27 @@ export function adaptMemory(
   return {
     write: (path, content) => store.writeFile(path, content),
     append: (path, content) => store.appendToFile(path, content),
-    async index(path) {
-      const content = await store.readFile(path);
+    index(path) {
+      return settle(Effect.gen(function* () {
+        const content = yield* Effect.promise(() => store.readFile(path));
 
-      if (!content) return;
-      const delta = await store.indexFile(path, content);
+        if (!content) return;
+        const delta = yield* Effect.promise(() => store.indexFile(path, content));
 
-      if (!vectorStore.available) return;
+        if (!vectorStore.available) return;
 
-      try {
-        if (delta.deletedIds.length > 0) await vectorStore.deleteChunks(delta.deletedIds);
+        yield* Effect.tryPromise({
+          try: async () => {
+            if (delta.deletedIds.length > 0) await vectorStore.deleteChunks(delta.deletedIds);
 
-        if (delta.upserted.length > 0) await vectorStore.upsertChunks(delta.upserted);
-      } catch (err) {
-        diagnostics.failure('memory.vector_sync_failed', toKinuError({
-          doing: 'syncing the memory chunk delta into the vector index',
-          cause: err,
-          otherwise: 'unavailable',
-        }), { path });
-        invalidateSemanticIndex(config);
-      }
+            if (delta.upserted.length > 0) await vectorStore.upsertChunks(delta.upserted);
+          },
+          catch: (cause) => toKinuError({ doing: 'syncing the memory chunk delta into the vector index', cause, otherwise: 'unavailable' }),
+        }).pipe(Effect.catch((failure) => Effect.sync(() => {
+          diagnostics.failure('memory.vector_sync_failed', failure, { path });
+          invalidateSemanticIndex(config);
+        })));
+      }));
     },
     search: (query, limit) => Promise.resolve(store.search(query, limit)),
     read: (path) => store.readFile(path),

@@ -113,9 +113,7 @@ export interface Executor {
   execute(
     code: string,
     providers: ResolvedProvider[] | Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>,
-    /** Omitted `timeoutMs` gets the executor default; executors that cannot honour it may ignore it. */
     opts?: {
-      timeoutMs?: number;
       /** Omitted means the executor's first declared language. */
       language?: string;
     },

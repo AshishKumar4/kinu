@@ -20,7 +20,8 @@ import {
   MODEL_OPERATION_KINDS, MODEL_OPERATION_PHASES, MODEL_OPERATION_OUTCOMES,
   type AccountSpend, type ModelOperationSink, type SpendSource, type SpendTally,
 } from './model-call';
-import { diagnostics, KinuError, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, KinuError, settleSync, toKinuError } from '../obs/index';
 import { ToolOutcomeSchema } from '../types/tool-outcome';
 import { turnAuthor } from '../utils/ui-message';
 import { CallAccountSchema, QuotaSnapshotSchema } from '../providers/quota';
@@ -330,17 +331,12 @@ export class RunEventRecorder {
 
     return {
       event,
-      publish: () => {
-        for (const listener of this.listeners) {
-          try { listener(event); } catch (err) {
-            diagnostics.failure(
-              'event.listener_failed',
-              toKinuError({ doing: 'notify a run-event listener', cause: err, otherwise: 'io' }),
-              { runId, eventType: event.type },
-            );
-          }
-        }
-      },
+      publish: () => settleSync(Effect.forEach(this.listeners, (listener) => Effect.try({
+        try: () => listener(event),
+        catch: (cause) => toKinuError({ doing: 'notify a run-event listener', cause, otherwise: 'io' }),
+      }).pipe(Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('event.listener_failed', failure, { runId, eventType: event.type });
+      }))), { discard: true })),
     };
   }
 
@@ -639,11 +635,11 @@ export class RunEventRecorder {
       WHERE actor_id = ${this.actorId} AND run_id = ${pointer.run_id} AND type = ${'run_start' satisfies RunEventType}
       ORDER BY event_index LIMIT 1`[0];
 
-    if (row === undefined) throw new KinuError('io', `run ${pointer.run_id} is recorded open with no start`);
+    if (row === undefined) return settleSync(Effect.fail(new KinuError('io', `run ${pointer.run_id} is recorded open with no start`)));
     // An unparseable start row propagates.
     const start = parseStoredRunEvent(row.payload);
 
-    if (start.type !== 'run_start' || start.turn === undefined) throw new KinuError('io', `run ${row.run_id} is recorded open without a turn`);
+    if (start.type !== 'run_start' || start.turn === undefined) return settleSync(Effect.fail(new KinuError('io', `run ${row.run_id} is recorded open without a turn`)));
 
     const steps = this.transcript(row.run_id);
 
@@ -861,15 +857,12 @@ export function recordModelOperations(
   recorder: { emit(runId: string, input: RunEventInput): void },
   runId: () => string,
 ): ModelOperationSink {
-  return (event) => {
-    try {
-      recorder.emit(runId(), { type: 'model_operation', ...event });
-    } catch (err) {
-      diagnostics.failure(
-        'event.model_operation_emit_failed',
-        toKinuError({ doing: 'recording a model_operation run event', cause: err, otherwise: 'io' }),
-        { operationId: event.operationId, phase: event.phase, source: event.source },
-      );
-    }
-  };
+  return (event) => settleSync(Effect.try({
+    try: () => { recorder.emit(runId(), { type: 'model_operation', ...event }); },
+    catch: (cause) => toKinuError({ doing: 'recording a model_operation run event', cause, otherwise: 'io' }),
+  }).pipe(Effect.catch((failure) => Effect.sync(() => {
+    diagnostics.failure('event.model_operation_emit_failed', failure, {
+      operationId: event.operationId, phase: event.phase, source: event.source,
+    });
+  }))));
 }

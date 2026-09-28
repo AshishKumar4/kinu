@@ -9,7 +9,7 @@ import {
 } from '@kinu.run/core/obs';
 
 import {
-  clearAnalyticsCache, runAnalyticsBatch, type AnalyticsSqlEnv,
+  runAnalyticsBatch, type AnalyticsSqlEnv,
 } from '@kinu.run/core/control-plane';
 
 const CONFIGURED: AnalyticsSqlEnv = {
@@ -17,7 +17,7 @@ const CONFIGURED: AnalyticsSqlEnv = {
   ANALYTICS_SQL_API_TOKEN: 'token',
 };
 
-/** A Map because `AnalyticsQuerySet` is one, so the set and its cache key cannot drift. */
+/** A Map because `AnalyticsQuerySet` is one. */
 const ONE: ReadonlyMap<string, string> = new Map([['ops', 'SELECT 1']]);
 
 const originalFetch = globalThis.fetch;
@@ -25,14 +25,12 @@ const originalFetch = globalThis.fetch;
 let logs: RecordingLogger;
 
 beforeEach(() => {
-  clearAnalyticsCache();
   logs = createRecordingLogger();
   setDiagnosticsSink(logs);
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  clearAnalyticsCache();
   setDiagnosticsSink(createRecordingLogger());
 });
 
@@ -101,56 +99,5 @@ describe('an error response that IS the envelope', () => {
 
     expect(await reasonOf()).toBe('analytics API 404');
     expect(logs.emitted).toEqual([]);
-  });
-});
-
-describe('a batch fill that rejects', () => {
-  /** `analyticsMissingSettings` runs before `runAnalyticsSql`'s own try, so only the fill's catch can absorb this. */
-  function poisoned() {
-    let reads = 0;
-
-    const env = {
-      get CLOUDFLARE_ACCOUNT_ID(): string {
-        reads += 1;
-        throw new Error('the account id binding is not readable');
-      },
-      ANALYTICS_SQL_API_TOKEN: 'token',
-    } satisfies AnalyticsSqlEnv;
-
-    return { env, reads: () => reads };
-  }
-
-  test('the rejection reaches the caller classified, with the cause under it', async () => {
-    const { env } = poisoned();
-    await expect(runAnalyticsBatch(env, ONE)).rejects.toMatchObject({
-      code: 'unavailable',
-      message: 'filling a control-plane analytics batch',
-    });
-  });
-
-  test('the rejected fill is evicted, so the next open re-runs it', async () => {
-    const { env, reads } = poisoned();
-
-    // Same key within the TTL: a cached rejection would skip the fill.
-    await expect(runAnalyticsBatch(env, ONE, 1_000)).rejects.toThrow('filling a control-plane analytics batch');
-    await expect(runAnalyticsBatch(env, ONE, 1_001)).rejects.toThrow('filling a control-plane analytics batch');
-
-    expect(reads()).toBe(2);
-  });
-
-  test('a batch that succeeded is still cached, so one open is one round trip', async () => {
-    let calls = 0;
-    globalThis.fetch = asFetchFunction(async () => {
-      calls += 1;
-
-      return new Response(JSON.stringify({ data: [{ n: 1 }] }), { status: 200 });
-    });
-
-    const first = await runAnalyticsBatch(CONFIGURED, ONE, 2_000);
-    const second = await runAnalyticsBatch(CONFIGURED, ONE, 2_001);
-
-    expect(first.ops).toEqual({ status: 'ok', rows: [{ n: 1 }] });
-    expect(second).toBe(first);
-    expect(calls).toBe(1);
   });
 });

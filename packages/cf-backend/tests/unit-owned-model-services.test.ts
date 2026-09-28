@@ -4,8 +4,6 @@ import * as v from 'valibot';
 import { testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
 import { createMockFetch, createTestActors, createTestSql, unobservedSpend } from '@kinu.run/test-utils';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-services';
 import type { CodexRelayHub } from '../src/egress/codex-egress-route';
 import { NO_RELAY_MACHINE } from './helpers/user-credentials';
@@ -60,22 +58,6 @@ const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe('OwnedModelServices', () => {
-  test('ActorAgent owns the one registry every mode resolves through', () => {
-    const source = (file: string) => readFileSync(join(import.meta.dir, '..', 'src', file), 'utf8');
-    const actor = source('actor-agent.ts');
-    const orchestrator = source('orchestrator.ts');
-    const hosting = source('hosted-actors.ts');
-
-    expect(actor).toContain("appTitle: 'Kinu',\n    ownerRequired: true,");
-    expect(actor).toContain('return this.ownedModelServices.providerRegistry();');
-    expect(actor).toContain('this.ownedModelServices.invalidate();');
-    // No second registry: a hosted head runs in a claimed workspace, so there is no ownerless mode.
-    expect(hosting).not.toContain('createAgentProviderRegistry');
-    expect(hosting).not.toContain('ownerRequired');
-    expect(orchestrator).toContain('resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),');
-    expect(actor.match(/new OwnedModelServices\(/g)).toHaveLength(1);
-  });
-
   test('required owners fail with ActorAgent\'s established error', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(),

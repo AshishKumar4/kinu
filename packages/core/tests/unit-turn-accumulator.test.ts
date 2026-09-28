@@ -180,13 +180,12 @@ describe('TurnAccumulator', () => {
     expect(details[0]).toContain('tools=3[by-toolname,by-name,?]');
   });
 
-  test('a non-string finishReason reaches the step sink as undefined, not as "undefined"', () => {
+  test('a step without a finishReason reaches the step sink as undefined, not as "undefined"', () => {
     const reasons: Array<string | undefined> = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => reasons.push(e.reason) });
     a.recordStep({ finishReason: 'stop' });
     a.recordStep({});
-    a.recordStep({ finishReason: { type: 'stop' } });
-    expect(reasons).toEqual(['stop', undefined, undefined]);
+    expect(reasons).toEqual(['stop', undefined]);
   });
 
   test("the step event carries the provider's own report, priced and attributed as siblings", () => {

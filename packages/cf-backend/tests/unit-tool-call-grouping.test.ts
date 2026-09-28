@@ -52,7 +52,6 @@ describe('tool effects follow the operation', () => {
     { name: 'web', input: { action: 'search' }, effect: 'read' },
     { name: 'agents', input: { action: 'hire' }, effect: 'mutate' },
     { name: 'agents', input: { action: 'list' }, effect: 'read' },
-    { name: 'agents', input: { action: 'status' }, effect: 'read' },
     { name: 'shell', input: { command: 'touch notes.txt' }, effect: 'unknown' },
     { name: 'shell', input: { command: 'bun test' }, effect: 'unknown' },
     { name: 'shell', input: { command: 'curl https://example.com' }, effect: 'unknown' },
@@ -89,7 +88,6 @@ describe('tool effects follow the operation', () => {
     expect(toolCallEffect('shell', undefined)).toBe('unknown');
     expect(toolCallEffect('crafted_unknown', { action: 'read' })).toBe('unknown');
     expect(toolCallEffect('file', 'read a')).toBe('unknown');
-    expect(toolCallEffect('web_search', { query: 'docs' })).toBe('read');
   });
 });
 
@@ -208,11 +206,7 @@ describe('what a call does, from its own arguments', () => {
     expect(describeToolCall('file', { action: 'list' })).toBe('Listed');
   });
 
-  test('agents reports the fan-out it was actually given', () => {
-    expect(describeToolCall('agents', { action: 'fork', forks: [{}, {}, {}] }))
-      .toBe('Delegated to 3 parallel forks');
-    expect(describeToolCall('agents', { action: 'fork', forks: [{}] })).toBe('Delegated to 1 parallel fork');
-    expect(describeToolCall('agents', { action: 'fork' })).toBe('Delegated to a fork');
+  test('agents names the delegation it made', () => {
     expect(describeToolCall('agents', { action: 'hire', agent: 'scout' })).toBe('Asked scout');
     expect(describeToolCall('agents', { action: 'hire', scope: 'workspace' })).toBe('Hired a workspace');
   });

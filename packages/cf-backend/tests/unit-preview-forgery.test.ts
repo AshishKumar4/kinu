@@ -258,3 +258,17 @@ describe('the premise this gate rests on', () => {
     expect(sdk).toContain('headers.set(PREVIEW_PROXY_TOKEN_HEADER, token)');
   });
 });
+
+describe('a preview host failure', () => {
+  test('answers the route table\'s JSON failure, never an unhandled throw', async () => {
+    const p = probe();
+    Object.assign(p.kv, { get: async () => { throw new Error('KV read failed: storage node sk-live-SECRET unreachable'); } });
+
+    const res = await worker.fetch(new Request(MINTED_URL), p.env, p.ctx);
+
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(JSON.stringify(await res.json())).not.toContain('sk-live-SECRET');
+    expect(p.resolved).toEqual([]);
+  });
+});

@@ -28,11 +28,11 @@ function OwnerMark({ owner, onOpenOwner }: TaskOwnership) {
 
   const path = owner.path ?? [];
 
-  if (onOpenOwner === undefined || path.length === 0) return <span className="p-meta p-text-3"> · {owner.name}</span>;
+  if (onOpenOwner === undefined || path.length === 0) return <span className="p-meta p-text-3"> · {owner.title}</span>;
 
   return (
-    <> · <button type="button" className="p-meta p-accent hover:underline" aria-label={`Open ${owner.name}'s conversation`}
-      onClick={() => void onOpenOwner(path.join("/"), owner.actorId)}>{owner.name}</button></>
+    <> · <button type="button" className="p-meta p-accent hover:underline" aria-label={`Open ${owner.title}'s conversation`}
+      onClick={() => void onOpenOwner(path.join("/"), owner.actorId)}>{owner.title}</button></>
   );
 }
 

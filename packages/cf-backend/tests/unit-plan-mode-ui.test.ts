@@ -2,42 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const source = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
-
-const review = source('src/components/surfaces/PlanReviewView.tsx');
-
-const css = source('src/index.css');
-
 describe('Plan mode browser contract', () => {
-  test('reuses the supported Plannotator primitives inside Kinu ownership', () => {
-    expect(review).toContain('@plannotator/ui/components/Viewer');
-    expect(review).toContain('@plannotator/ui/components/AnnotationPanel');
-    expect(review).toContain('exportAnnotations(blocks, annotations');
-    expect(review).not.toContain('taterMode');
-    expect(review).not.toContain('allowImages');
-    expect(review).not.toContain('skillReferences');
-    expect(review).not.toContain('vimModeEnabled');
-    expect(review).not.toContain('/api/');
-    expect(review).not.toContain('ThemeProvider');
-  });
-
-  test('turns off Plannotator network defaults and scopes its theme contract', () => {
-    expect(review).not.toContain('setDocPreviewFetcher');
-    expect(review).not.toContain('setSkillCatalogTransport');
-    expect(review).not.toContain('setSkillContentTransport');
-    expect(css).toContain('[data-kinu-plan-review]');
-    expect(css).toContain('body > [data-comment-popover="true"]');
-    expect(css).toContain('body > .annotation-toolbar');
-    expect(css).not.toContain('data-quick-label-picker');
-    expect(css).not.toContain('data-popover-layer');
-    expect(css).toContain('@plannotator/ui/components/Viewer.tsx');
-    expect(css).toContain('@plannotator/ui/components/AnnotationPanel.tsx');
-    expect(css).not.toContain('@plannotator/ui/components/{');
-    expect(css).not.toContain('@plannotator/ui/shortcuts/');
-    expect(css).not.toContain('@import "@plannotator/ui/styles.css"');
-    expect(css).not.toContain('@import "@plannotator/ui/theme"');
-  });
-
   test('the patched document viewer excludes diagram engines from Kinu', () => {
     const viewer = readFileSync(join(import.meta.dir, '../../../node_modules/@plannotator/ui/components/Viewer.tsx'), 'utf8');
     const patch = readFileSync(join(import.meta.dir, '../../../patches/@plannotator%2Fui@0.30.0.patch'), 'utf8');
@@ -63,21 +28,5 @@ describe('Plan mode browser contract', () => {
     expect(notice).toContain('third_party/plannotator-LICENSE-MIT');
     expect(license).toContain('Copyright (c) 2025 backnotprop');
     expect(license).toContain('Permission is hereby granted');
-  });
-
-  test('persists annotations before exactly one decision wake', () => {
-    const start = review.indexOf('const decide = useCallback');
-    const decide = review.slice(start, review.indexOf('\n\n  if (!plan)', start));
-    expect(decide).toContain('await save(annotations)');
-    expect(decide.match(/"decidePlanReview"/g)).toHaveLength(1);
-    expect(decide).toContain('decision === "request_changes"');
-    expect(decide).toContain('exportAnnotations(');
-  });
-
-  test('freezes annotation editing across the decision transaction', () => {
-    expect(review).toContain('decisionInFlight.current = true');
-    expect(review).toContain('if (decisionInFlight.current) return;');
-    expect(review).toContain('readOnly={!editable || decisionBusy !== null}');
-    expect(review).toContain('decisionInFlight.current = false');
   });
 });

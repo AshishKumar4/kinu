@@ -53,11 +53,20 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0 };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false };
 
 /** The text of every user message a request carries. */
 function userTexts(messages: readonly object[]): string[] {
   return messages.flatMap((message) => ('role' in message && message.role === 'user' && 'content' in message ? [JSON.stringify(message.content)] : []));
+}
+
+/** Holds a helper's model call while `holdHelper` is set. */
+async function parkHelper(): Promise<void> {
+  if (!model.holdHelper) return;
+  model.helperParked = true;
+
+  while (model.holdHelper) await scheduler.wait(20);
+  model.helperParked = false;
 }
 
 /** Steps each hired helper works before it answers. */
@@ -94,6 +103,25 @@ export class ScriptedAI extends WorkerEntrypoint {
 
       if (!root) {
         const steps = messages.filter((message) => 'role' in message && message.role === 'tool').length;
+
+        const briefed = messages.some((message) => 'role' in message && (message.role === 'system' || message.role === 'user')
+          && 'content' in message && JSON.stringify(message.content).includes('SUB-HELPER'));
+
+        // Nested: the helper's own hire, held on its first call while the helper and the root wait on it.
+        if (model.nest && briefed) {
+          await parkHelper();
+
+          return new Response(`data: ${JSON.stringify({ response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+        }
+
+        if (model.nest && steps === HELPER_STEPS) {
+          const hire = { id: `sub-${String(model.calls)}`, name: 'agents', arguments: { action: 'hire', role: 'task', lifetime: 'task', mission: 'SUB-HELPER: answer done.' } };
+
+          return new Response(`data: ${JSON.stringify({ response: '', tool_calls: [hire] })}\n\n${USAGE}data: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+        }
+
+        // Held at its last working step, a helper turn carries its whole transcript into a model call.
+        if (!model.nest && steps === HELPER_STEPS - 1) await parkHelper();
 
         // A helper works a page per step, with a cheap tool call, then answers in one word.
         if (steps < HELPER_STEPS) {
@@ -154,13 +182,17 @@ export default {
 
       if (url.searchParams.has('released')) model.released = Number(url.searchParams.get('released'));
 
+      if (url.searchParams.has('holdHelper')) model.holdHelper = url.searchParams.get('holdHelper') === '1';
+
+      if (url.searchParams.has('nest')) model.nest = url.searchParams.get('nest') === '1';
+
       if (url.searchParams.has('hires')) {
         model.hires = Number(url.searchParams.get('hires'));
         model.helpersAnswered = 0;
         model.stepping = false;
       }
 
-      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered });
+      return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked });
     }
 
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');

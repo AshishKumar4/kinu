@@ -66,10 +66,17 @@ export function programIdentityOf(program: ActorTurnProgram, installedBuild: str
 
 interface ClaimRow { turn_id: string; run_id: string; epoch: number; work_mode: WorkMode; program_kind: ActorProgramIdentity['kind']; program_version: number; program_digest: string | null; program_build: string | null; outcome: ClaimOutcome | null; claimed_at: number }
 
+export interface RecoveredClaim {
+  readonly turnId: string;
+  readonly epoch: number;
+  readonly outcome: ClaimOutcome;
+}
+
 /** Execution fencing and immutable prepared-request references. It never owns message bodies. */
 export class ActorClaimStore {
   readonly actorId: string;
   private readonly listeners = new Set<() => void>();
+  private readonly recoveredListeners = new Set<(claim: RecoveredClaim) => void>();
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle,
     private readonly transactionSync: <T>(write: () => T) => T, readonly history: SessionHistory) { this.actorId = actor.actorId; }
 
@@ -77,6 +84,12 @@ export class ActorClaimStore {
     this.listeners.add(listener);
 
     return () => { this.listeners.delete(listener); };
+  }
+
+  observeRecovered(listener: (claim: RecoveredClaim) => void): () => void {
+    this.recoveredListeners.add(listener);
+
+    return () => { this.recoveredListeners.delete(listener); };
   }
 
   async admit(input: { readonly runId: string; readonly turnId: string; readonly workMode: WorkMode; readonly program: ActorProgramIdentity; readonly context: ContextSelection; readonly installedBuild?: string | null }): Promise<ActorTurnClaim> {
@@ -106,7 +119,7 @@ export class ActorClaimStore {
         VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},${input.program.kind},${input.program.version},${input.program.digest},${input.program.build},NULL,${nowMs()})
         ON CONFLICT(actor_id,turn_id) DO UPDATE SET run_id=excluded.run_id,epoch=excluded.epoch,work_mode=excluded.work_mode,program_kind=excluded.program_kind,
           program_version=excluded.program_version,program_digest=excluded.program_digest,program_build=excluded.program_build,outcome=NULL,claimed_at=excluded.claimed_at`;
-      this.history.requests.record(admission, () => this.assertLive(admitted));
+      this.history.requests.record(admission);
 
       return admitted;
     });
@@ -119,7 +132,6 @@ export class ActorClaimStore {
   }
 
   async consume(claim: ActorTurnClaim, input: { readonly index: number; readonly messages: readonly ModelMessage[]; readonly cache?: PromptCacheRoute | undefined }): Promise<ConsumedContext> {
-    this.assertLive(claim);
     const source = this.history.context.selected();
 
     if (source === null || source.contextId !== claim.workingContextId) throw new KinuError('denied', 'claimed working context is not selected');
@@ -137,7 +149,7 @@ export class ActorClaimStore {
       const selected = this.history.context.selected();
 
       if (selected?.contextId !== source.contextId || selected.revision !== source.revision) throw new KinuError('denied', 'working selection changed during request preparation');
-      this.history.requests.recordPrepared(prepared, () => this.assertLive(claim));
+      this.history.requests.recordPrepared(prepared);
 
       return { requestId: prepared.request.id, revision: prepared.request.revision };
     });
@@ -173,8 +185,13 @@ export class ActorClaimStore {
 
   settleRecovered(turnId: string, epoch: number, outcome: ClaimOutcome): void {
     this.actor.assertCurrent();
+    const open = this.read(turnId);
     void this.sql`UPDATE actor_turn_claims SET outcome=${outcome} WHERE actor_id=${this.actorId} AND turn_id=${turnId} AND epoch=${epoch} AND outcome IS NULL`;
     this.changed();
+
+    if (open?.epoch !== epoch || open.status !== 'admitted') return;
+
+    this.notify(this.recoveredListeners, { turnId, epoch, outcome });
   }
 
   read(turnId: string): StoredActorClaim | null {
@@ -201,8 +218,11 @@ export class ActorClaimStore {
     return { requestId: id, revision: request.revision, epoch: request.epoch, workingRevision: request.source.revision, workingContextId: request.source.contextId, stepIndex: request.step, messages };
   }
   private changed(): void {
-    for (const listener of this.listeners) {
-      try { listener(); } catch (cause) {
+    this.notify(this.listeners, undefined);
+  }
+  private notify<T>(listeners: ReadonlySet<(value: T) => void>, value: T): void {
+    for (const listener of listeners) {
+      try { listener(value); } catch (cause) {
         diagnostics.failure('actor.claim_listener_failed',
           toKinuError({ doing: 'notify a turn-claim listener', cause, otherwise: 'io' }), { actorId: this.actorId });
       }
@@ -214,9 +234,6 @@ export class ActorClaimStore {
       status: row.outcome === null ? 'admitted' : 'settled', outcome: row.outcome, claimedAt: row.claimed_at });
   }
   private assertLive(claim: ActorTurnClaim): void {
-    this.actor.assertCurrent();
-
-    if (claim.actorId !== this.actorId) throw new KinuError('denied', 'claim belongs to another actor');
     const current = this.read(claim.turnId);
 
     if (current === null || current.epoch !== claim.epoch) throw new KinuError('denied', 'actor turn is owned by another execution epoch');

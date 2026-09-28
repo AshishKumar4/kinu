@@ -74,7 +74,7 @@ export const FileEditInputSchema = z.object({
 const FileToolInputSchema = z.object({
   action: oneOf(FILE_TOOL_ACTIONS),
   path: z.string().trim().min(1)
-    .describe('Relative paths resolve at the workspace root. A bound container\'s files are under /sandbox, a connected machine\'s under /pc.'),
+    .describe('Relative paths resolve at the workspace root.'),
   offset: z.number().describe('For read: the first line, 1-indexed (default 1).').optional(),
   limit: z.number().describe('For read: lines to return (default: as many as fit).').optional(),
   content: z.string().describe('For write: the whole new content.').optional(),

@@ -11,7 +11,7 @@ import type {
   Shell,
   VFS,
 } from './primitives';
-import type { CraftStoreView } from '@kinu.run/agent-utils';
+import type { CraftStore as SqlCraftStore } from '@kinu.run/agent-utils';
 import type { CraftedTool } from './craft';
 import type { Usage } from '../usage';
 import type { ExecutionRouter } from '../execution/types';
@@ -25,7 +25,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 /** Live channel for 'gate'-tier shell approvals (ACP `session/request_permission`). */
 export type RequestShellApproval = (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
 
-export type CraftStore = CraftStoreView;
+export type CraftStore = Pick<SqlCraftStore, 'create' | 'update' | 'get' | 'delete' | 'list' | 'search'>;
 
 /** One rollout and its cost. A branch runs outside the mission ledger, so `usage` travels back
  *  for the engine to debit; a backend that cannot measure omits it rather than guessing. */

@@ -1,9 +1,9 @@
 // The ready+activity bridge lives on `Devbox`, so every host inherits it: a terminal lane
 // stamps the durable interaction only after the readiness gate admits the box.
-import { describe, expect, setSystemTime, test } from 'bun:test';
+import { describe, expect, setSystemTime, test, vi } from 'bun:test';
 
 import { DEFAULT_DEVBOX_POLICY, LAST_INTERACTION_KEY, QUIET_SINCE_KEY, type DevboxPolicy } from '../src/lifecycle';
-import { Devbox, harness } from './support/devbox-harness';
+import { Devbox, harness, wakeWhileArmed } from './support/devbox-harness';
 
 /** The shipped policy with a test-length probe: nothing here is about budgets. */
 class TestBox extends Devbox<unknown> {
@@ -229,6 +229,27 @@ describe('a box rests only once no command it ran is still running', () => {
       expect((await box.devboxState()).lastTick?.decision).toBe('quiesce');
     } finally {
       setSystemTime();
+    }
+  });
+});
+
+// Staging, 2026-09-28: a box whose own startup got a container after its caller had gone was never
+// used, so its idle clock read "now" on every beat and it never rested.
+describe('a box no caller used rests from its start', () => {
+  test('a box its own startup started rests after the idle window and quiet confirmation', async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    try {
+      const { box, container } = harness(TestBox);
+      await box.devboxStartup();
+
+      // The shipped policy rests an idle box after about forty beats.
+      await wakeWhileArmed(container, (to) => { now = Math.max(now, to); }, 120);
+
+      expect({ running: container.running.running, alarm: container.alarmAt }).toEqual({ running: false, alarm: null });
+    } finally {
+      clock.mockRestore();
     }
   });
 });

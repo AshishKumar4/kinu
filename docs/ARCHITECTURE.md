@@ -555,8 +555,10 @@ Two policies apply to every provider:
 - Every model fetch waits out rate limits of a minute or less.
   `withRateLimitRetry` (`rate-limit-retry.ts`) wraps all four fetch paths: the
   shared `createAuthedFetch`, Workers AI, AI Gateway, and codex. A rate-limited
-  request follows the provider's `Retry-After` until success, another failure,
-  or caller cancel; elapsed time and attempt count never end it. A `Retry-After`
+  request follows the provider's `Retry-After` at most the owner's retry count
+  (`ProfileCatalog.retries`, default 3), and none while a fallback chain entry
+  is left: that model hands over at once and cools down (`fallback-cooldown.ts`,
+  oh-my-pi's `cooldown-expiry`). A `Retry-After`
   (seconds or HTTP date) above 60 s (`maxRetryDelayMs`, after oh-my-pi) ends the
   call at once as a spent allowance (`budget`) naming the reset time, and a
   sibling that meets that declared cooldown in the pacer ends the same way; the
@@ -570,9 +572,8 @@ Two policies apply to every provider:
   declared. Waits are declared before they are taken, so siblings join one
   cooldown. The pacer counts no requests: Workers bounds connections per
   invocation, and an isolate-wide count hung the requests queued on it (1101s
-  on kinu.run, 2026-09-23). The AI SDK transport retry stays at
-  its default of 2, stated as `PROVIDER_SDK_RETRIES` so a vendor update cannot
-  move it silently.
+  on kinu.run, 2026-09-23). The AI SDK transport retry takes the same count,
+  stated at the `streamText` call so a vendor update cannot move it.
 
 Reasoning effort is set by the user. `/effort` in chat or
 `kinu effort <name> [level]` stores `reasoning_effort` in the workspace

@@ -106,6 +106,23 @@ day (Workers Logs, `containers` dataset): the heartbeat's read of a boot id, a
 NUL and a running sync's `alive` came back as one 41-character line
 (`stdoutLen 41`) on both running boxes (D33).
 
+P7. A container application can refuse a start as over `max_instances`, with
+fewer instances running than that, for about a minute and a half after a
+sibling instance is destroyed. The refusal reads `Maximum number of running
+container instances exceeded. Try again later, or try configuring a higher
+value for max_instances`. Measured in Workers Logs on staging's sandbox
+(`max_instances` 3), 2026-09-27 and 2026-09-28. In the 30 minutes before each
+refusal, one other box's container ran: `fb30af5d…`, granted 15:55:46Z and
+destroyed 15:56:33.965Z on 09-27, and `7de7d8f4…`, granted 00:27:24Z and
+destroyed 00:28:11.620Z on 09-28. The next box's admission was refused on
+every attempt until 73.6 s (09-27) and 73.5 s (09-28) after that destroy.
+Its next attempt was granted, and that admission settled 93.8 s and 96.8 s
+after the destroy, cold start and restore included. One destroyed sibling
+against three slots does not explain the refusal. The Containers docs read
+2026-09-28 (FAQ, Limits, Scaling and Routing, Rollouts) say neither what else
+counts toward `max_instances` nor how long a destroyed instance holds its
+place. Staging now takes production's 10 (D36).
+
 ## Decisions
 
 D1. Admission is port-proven. The container-start path proves the control
@@ -148,7 +165,9 @@ blocks plus whole small files in one delta object, so a 64 KiB overwrite in a
 64 MiB file publishes under 196,608 bytes (`C3_BYTES_BOUND`). Decided
 2026-09-09 (`edecd1e38`, `7962b3624`) from COST-2026-09-09-chain-publication.md,
 which measured whole-delta publication re-uploading unchanged dirty data
-quadratically. D2 changes where the delta is consumed, not how it is written.
+quadratically. D2 changes where the delta is consumed, not how it is written. The hand-run
+live-record checker `scripts/bench-c3-overwrite-cell.ts` left the tree
+2026-09-27; restore from `4ed6396663`.
 
 D5. Snapshot-chain is refused full strategy admission on 2026-09-13.
 Settlement run `20260913154111`, clean `a292c7488c`, ran from
@@ -1446,6 +1465,82 @@ use. No container was ever left idle, so the idle path never ran. The window
 did confirm D34: each stopped box took one heartbeat that armed nothing
 (`devbox.schedule.exit` with no `nextSeconds`). There were 81 `KinuSandbox`
 alarm invocations in all, and none of the 58 boxes looped.
+
+D36. A destroyed box starts nothing of its own, a refused box says so, and a
+box no caller used rests (2026-09-28). Staging's first-run case
+`sandbox-mount-write` failed on 2026-09-27 and 2026-09-28 with `this devbox
+is not ready: no restoration has run for this container yet`. No call reached
+the box before its restoration settled. The platform refused the box a
+container on every admission (P7), and each of the case's three tool calls
+waited inside those refusals, for 10, 19 and 20 s. Three defects sat in that
+chain.
+
+- The caller was told no restoration had run, and the platform's refusal went
+  only to the incident ledger. A pending or failed answer now names it (`the
+  platform refused this box a container: …`) until an admission is granted.
+  The refusal is kept per generation, so a later generation never shows it.
+- The case's teardown (`discardState`, then `destroy`) did not stop the box's
+  own start. Each refusal had armed a startup row. On 09-28 that row won a
+  container at 00:29:48Z, 22 s after the teardown, and the container was
+  restored and watched. It still ran hours later, holding one of staging's
+  three slots; the 09-27 one ran 3 h 15 min. `destroy` now closes the box.
+  Before its first await it sets a closed flag and counts one more teardown.
+  It then cancels every start under way and waits for each to settle, deletes
+  the startup, heartbeat and checkpoint rows, and only then runs the SDK's
+  destroy, which stops whatever such a start launched. Incident delivery
+  carries on. While the box is closed, Devbox's `startAndWaitForPorts` refuses
+  to start a container and tracks every start it lets through, the start hook
+  restores nothing, and the three rows are not armed. A request is judged by
+  the teardown count it arrived under: one that arrived before a destroy is
+  refused when it reaches readiness, however long it waited for its lane, and
+  reopens nothing. `resolveReadiness`, `attachNow`, `kickStartup` and `start`
+  reopen the box for a request that arrived after the destroy. In the
+  installed SDK (containers 0.3.7, sandbox 0.12.9, source read 2026-09-28),
+  `containerFetch` and `startContainerForRPC` start through
+  `startAndWaitForPorts`, and a start checks its cancellation only after it
+  has launched a stopped container, so one cancelled by a destroy can still
+  launch a container before it rejects; that is why the destroy waits before
+  its own kill. The tests below model this path in the harness and do not run
+  the SDK. The flag and the count live in
+  memory. `#replaceContainer` keeps the SDK's destroy: a replaced identity is
+  restarted, not closed. The bench drives that destroy a box ask again
+  through `/create` or `/wake`.
+- A box no caller used never rested: its idle clock fell back to each beat's
+  `now`. It now falls back to when its container last started
+  (`devbox:started-at`, written as the start hook settles).
+
+Staging's sandbox takes production's `max_instances` of 10 (was 3).
+
+Tests, red before and green after:
+- `tests/restoration-visibility.test.ts`: a caller of a refused box learns the
+  refusal, then is restored once granted. Red on cbfd32def6: `no restoration
+  has run`.
+- `tests/lifecycle-generation.test.ts`, each asserting that nothing is running
+  and no startup, heartbeat or checkpoint row is left once the teardown and
+  the parked work have settled:
+  - the box's own start, parked inside the start when the teardown lands,
+    also restores nothing (red on cbfd32def6: running, heartbeat armed, one
+    restore stamp);
+  - a beat parked at the SDK's state read, before the refusal (red on
+    f1d4b5bc40: the beat's command restarted the container and the beat
+    re-armed itself);
+  - a plain `start` and a beat's command, each parked inside the start past
+    the refusal (red on 491f9b0f67: running);
+  - a file write queued on its path behind another before the teardown is
+    refused with `destroyed after this request arrived` (red on 491f9b0f67:
+    it reopened the box, started a container and wrote);
+  - a startup row delivered after the teardown starts nothing (red on
+    cbfd32def6: one start, running, two rows).
+  A caller and a host's kick still reopen the box, green before and after.
+  The harness's session exec reads its state and starts a stopped container
+  through `startAndWaitForPorts`, as the SDK source does.
+- `tests/terminal-activity.test.ts`: a box its own startup started rests after
+  the idle window. Red on cbfd32def6: still running with its alarm armed after
+  120 passes.
+
+Deployed re-proof owed: `sandbox-mount-write` passes on a staging cold start,
+and no staging box logs `devbox.alarm.enter` with `running: true` after its
+workspace's `sandbox.destroy`.
 
 ## Measurement contract for a strategy comparison
 

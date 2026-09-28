@@ -19,7 +19,7 @@ export const BranchCallSchema = v.variant('method', [
     id: v.number(),
     args: v.object({
       history: v.array(v.object({ role: v.string(), content: v.string() })),
-      languages: v.pipe(v.array(v.string()), v.minLength(1)),
+      languages: v.tupleWithRest([v.string()], v.string()),
       mode: v.picklist(['plan', 'build']),
       siblings: v.optional(v.array(v.string()), []),
     }),
