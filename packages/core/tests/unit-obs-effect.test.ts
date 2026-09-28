@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test';
 import { inspect } from 'node:util';
 import { Effect } from 'effect';
 import { attempt, KinuError, settle, settleSync } from '../src/obs/index';
+import { isVfsError, makeVfsError, type VfsError } from '../src/vfs/errno';
 
 describe('settle', () => {
   test('resolves the success value', async () => {
@@ -37,6 +38,43 @@ describe('settle', () => {
     controller.abort(reason);
     await expect(pending).rejects.toBeInstanceOf(KinuError);
     await expect(pending).rejects.toMatchObject({ code: 'cancelled', message: 'stopped before the answer', cause: reason });
+  });
+});
+
+describe('a VFS failure on the channel', () => {
+  /** A file plane read in Effect form: its failure is a VfsError, which callers switch on by `code`. */
+  const readOnlyWrite = (path: string): Effect.Effect<never, VfsError> => Effect.fail(makeVfsError('EROFS', 'read-only file system', path));
+
+  const expectErofs = (failed: { readonly thrown: unknown }): void => {
+    expect(isVfsError(failed.thrown)).toBe(true);
+    expect(failed.thrown).toMatchObject({ code: 'EROFS', errno: -30, path: '/mnt/ro/a.txt' });
+    expect(failed.thrown).not.toBeInstanceOf(KinuError);
+  };
+
+  test('settle rejects with the VfsError itself, code, errno and path intact', async () => {
+    const write = (allowed: boolean) => settle(Effect.gen(function* () {
+      if (!allowed) return yield* new KinuError('denied', 'not this caller');
+
+      return yield* readOnlyWrite('/mnt/ro/a.txt');
+    }));
+
+    expect.assertions(3);
+
+    try {
+      await write(true);
+    } catch (error) {
+      expectErofs({ thrown: error });
+    }
+  });
+
+  test('settleSync throws the same VfsError synchronously', () => {
+    expect.assertions(3);
+
+    try {
+      settleSync(readOnlyWrite('/mnt/ro/a.txt'));
+    } catch (error) {
+      expectErofs({ thrown: error });
+    }
   });
 });
 

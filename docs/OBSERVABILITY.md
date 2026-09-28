@@ -558,14 +558,16 @@ failure channel, one slice at a time, with `KinuError` as its only typed
 failure. `effect` is pinned exactly to 4.0.0-rc.117, because 4.0.0 is still a
 release candidate.
 
-A function that can fail returns `Effect<A, KinuError>`. A defect is anything
+A function that can fail returns `Effect<A, KinuError>`; a file-plane function
+returns `Effect<A, VfsError>`, whose POSIX `code` callers switch on with
+`isVfsError`. A defect is anything
 else thrown or died; readers render it as reason `null`, as they do today. The
 boundary is `obs/effect.ts`:
 
 | Function | What it does |
 | --- | --- |
 | `attempt({ doing, otherwise }, run)` | A Promise-returning call as an effect. A rejection becomes `toKinuError`, so it keeps its cause and its class. |
-| `settle(effect, { signal, interrupted })` | The only runner. It resolves the value, or rejects with the `KinuError` or the defect unchanged. An abort interrupts the run and rejects with `cancelled`. |
+| `settle(effect, { signal, interrupted })` | The only runner. It resolves the value, or rejects with the `KinuError`, the `VfsError` or the defect unchanged. An abort interrupts the run and rejects with `cancelled`. |
 | `toWire(effect, encode)` | An outcome as a `Wire<T, F>` union, the value RPC can carry. |
 
 `settle` runs on a microtask scheduler. Effect's default scheduler yields to a

@@ -1198,6 +1198,8 @@ export {
 // Memory writes
 export { memoryBytes } from './memory/note';
 
+export { agentViewMount } from './vfs/agent-view';
+
 export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
 
 export {

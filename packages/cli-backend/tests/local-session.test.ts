@@ -897,9 +897,12 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(block).not.toContain('OLD-STALE-MARKER');
   });
 
-  test('cli-local has no device row: the machine is the workspace', async () => {
+  test('a placed workspace is told it is the machine, with no device row', async () => {
     let observed: PromptMessage[] = [];
-    const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }));
+    const db = new Database(scratchPath('local-session-placed-prompt', 'agent.db'));
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM, cwd: scratchDir('local-session-placed-prompt') });
+    const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }), { rt, db });
     await session.send('hi', { id: crypto.randomUUID() });
 
     const system = present(observed.find((m) => m.role === 'system'), 'the system prompt message');
@@ -910,6 +913,17 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(text).not.toContain('device tunnel');
     expect(text).not.toContain('asks the user for consent');
     expect(text).not.toContain('OFFLINE');
+  });
+
+  test('a workspace opened without a directory is told it lives in its database, not in a directory', async () => {
+    let observed: PromptMessage[] = [];
+    const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }));
+    await session.send('hi', { id: crypto.randomUUID() });
+
+    const text = String(present(observed.find((m) => m.role === 'system'), 'the system prompt message').content);
+    expect(text).toContain('kept in this workspace\'s database');
+    expect(text).not.toContain('rooted in the directory');
+    expect(text).not.toContain('with the Worker');
   });
 
   // Issue #36: a local workspace has neither mount, so nothing the model reads may offer one.
