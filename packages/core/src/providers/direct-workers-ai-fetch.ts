@@ -10,7 +10,6 @@ import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
 import { createCachedUsageRepair } from './stream-usage-repair';
 import { watchSseTerminal } from './sse-terminal';
-import { REAL_CLOCK } from '../types/clock';
 
 /** The routed fields; a validating parse of the rest copied the transcript. */
 const ChatCompletionRouteSchema = v.object({
@@ -235,7 +234,7 @@ async function sseResponse(
   reader.releaseLock();
 
   return new Response(
-    watchSseTerminal(body, REAL_CLOCK, first.value).pipeThrough(openAIChunkTransform(model)),
+    watchSseTerminal(body, first.value).pipeThrough(openAIChunkTransform(model)),
     { headers: { 'content-type': 'text/event-stream' } },
   );
 }

@@ -112,8 +112,3 @@ export interface SlateProblem extends Refusal {
 }
 
 export const SLATES_CHANGED_EVENT = 'slates_changed';
-
-export interface SlatesChangedEvent {
-  readonly type: typeof SLATES_CHANGED_EVENT;
-  readonly ids: readonly string[];
-}

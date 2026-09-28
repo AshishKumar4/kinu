@@ -4,9 +4,8 @@
  */
 
 import { Effect } from 'effect';
-import * as v from 'valibot';
 import { settleSync } from '../obs/effect';
-import { isJsonObject, type JsonObject, type JsonValue } from './json';
+import type { JsonObject, JsonValue } from './json';
 
 export interface MarkdownDoc {
   frontmatter: JsonObject;
@@ -52,24 +51,6 @@ function frontmatterDoc(src: string): Effect.Effect<MarkdownDoc> {
   const body = src.slice(closeMatch.index + closeMatch[0].length);
 
   return Effect.map(flatYaml(fmRaw), (frontmatter) => ({ frontmatter, body }));
-}
-
-/** Round-trips everything `parseMarkdownFrontmatter` can read. */
-export function stringifyMarkdownFrontmatter(
-  doc: MarkdownDoc,
-): string {
-  const fm = doc.frontmatter;
-
-  if (Object.keys(fm).length === 0) return doc.body;
-  const lines: string[] = ['---'];
-
-  for (const [key, value] of Object.entries(fm)) {
-    lines.push(...renderEntry(key, value, 0));
-  }
-
-  lines.push('---', '');
-
-  return lines.join('\n') + doc.body;
 }
 
 function flatYaml(src: string): Effect.Effect<JsonObject> {
@@ -227,68 +208,4 @@ function parseScalar(s: string): FrontmatterScalar {
   if (/^-?\d+\.\d+$/.test(t)) return Number(t);
 
   return t;
-}
-
-function renderEntry(key: string, value: JsonValue, indent: number): string[] {
-  const pad = '  '.repeat(indent);
-
-  if (value === null) {
-    return [`${pad}${key}: null`];
-  }
-
-  const bool = v.safeParse(v.boolean(), value);
-
-  if (bool.success) {
-    return [`${pad}${key}: ${String(bool.output)}`];
-  }
-
-  const number = v.safeParse(v.number(), value);
-
-  if (number.success) {
-    return [`${pad}${key}: ${String(number.output)}`];
-  }
-
-  const string = v.safeParse(v.string(), value);
-
-  if (string.success) {
-    return [`${pad}${key}: ${quoteIfNeeded(string.output)}`];
-  }
-
-  if (Array.isArray(value)) {
-    if (value.length === 0) return [`${pad}${key}: []`];
-    const lines: string[] = [`${pad}${key}:`];
-
-    for (const item of value) {
-      if (isJsonObject(item)) {
-        lines.push(`${pad}  - ${JSON.stringify(item)}`);
-      } else {
-        const itemString = v.safeParse(v.string(), item);
-        lines.push(`${pad}  - ${itemString.success ? quoteIfNeeded(itemString.output) : JSON.stringify(item)}`);
-      }
-    }
-
-    return lines;
-  }
-
-  if (isJsonObject(value)) {
-    const inner = Object.entries(value);
-
-    if (inner.length === 0) return [`${pad}${key}: {}`];
-    const lines: string[] = [`${pad}${key}:`];
-
-    for (const [innerKey, innerValue] of inner) lines.push(...renderEntry(innerKey, innerValue, indent + 1));
-
-    return lines;
-  }
-
-  return [`${pad}${key}: ${JSON.stringify(value)}`];
-}
-
-function quoteIfNeeded(s: string): string {
-  const structural = s === '' || /[:#"'\\[\]{},]/.test(s) || /^[-?\s]/.test(s) || /\s$/.test(s) || s.includes('\n');
-
-  // Quote only when the parser would retype or reshape the bare scalar.
-  if (!structural && parseScalar(s) === s) return s;
-
-  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
 }

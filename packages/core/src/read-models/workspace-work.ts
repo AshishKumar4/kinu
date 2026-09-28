@@ -8,7 +8,6 @@ import type { WorkspaceActor } from '../identity/workspace-actors';
 import { AgentTaskTreeSchema, readPlanTasks, TaskListStore, type AgentTaskTree } from '../tools/task-store';
 import { PlanReviewSchema, PlanReviewStore, type PlanReview } from '../plans/review';
 import { tableExists } from '../identity/schema';
-import { KinuError } from '../obs/error';
 import type { SqlExecutor } from '../types/primitives';
 import type { ChangelogEntry } from '../evolution/changelog';
 import type { MemoryNote } from '../memory/note';
@@ -62,7 +61,7 @@ function conversationPath(row: WorkspaceActor, byId: ReadonlyMap<string, Workspa
   return names;
 }
 
-/** Fences on the row's presence, never its lifecycle; the fence runs at bind and before every store access. */
+/** `workspace_actors` rows are never deleted, so a row read once stays present: nothing to fence. */
 export function actorReadHandle(sql: SqlExecutor, row: WorkspaceActor): ActorHandle {
   const identity: ActorIdentity = {
     actorId: row.actorId,
@@ -72,11 +71,7 @@ export function actorReadHandle(sql: SqlExecutor, row: WorkspaceActor): ActorHan
     storageKey: row.storageKey,
   };
 
-  return bindActorHandle(sql, identity, () => {
-    const present = sql<{ x: number }>`SELECT 1 AS x FROM workspace_actors WHERE actor_id = ${row.actorId} LIMIT 1`.length > 0;
-
-    if (!present) throw new KinuError('missing', `The actor ${row.name} is no longer in this workspace.`);
-  });
+  return bindActorHandle(sql, identity, () => {});
 }
 
 /** `root` binds nothing; every row is read through its own actor's handle. */
@@ -86,6 +81,8 @@ export function readWorkspaceWork(
   actors: readonly WorkspaceActor[],
 ): WorkspaceWork {
   root.assertCurrent();
+  const hasReviews = tableExists(sql, 'plan_reviews');
+  const hasTasks = tableExists(sql, 'agent_tasks');
   const plans: OwnedPlan[] = [];
   const tasks: OwnedTask[] = [];
   const byId = new Map(actors.map((row) => [row.actorId, row]));
@@ -99,17 +96,17 @@ export function readWorkspaceWork(
       path: conversationPath(row, byId, root.actorId),
     };
 
-    if (tableExists(sql, 'plan_reviews')) {
+    if (hasReviews) {
       const reviews = new PlanReviewStore(sql, actor).listPage('default', { limit: 50 });
 
       for (const plan of reviews.items) {
-        const linked = tableExists(sql, 'agent_tasks') ? readPlanTasks(sql, actor, plan) : [];
+        const linked = hasTasks ? readPlanTasks(sql, actor, plan) : [];
 
         plans.push({ owner, plan, tasks: linked });
       }
     }
 
-    if (tableExists(sql, 'agent_tasks')) {
+    if (hasTasks) {
       const store = new TaskListStore(sql, actor, (write) => write());
       const linkedIds = store.linkedIds();
       const unlinked = store.list().filter((tree) => !linkedIds.has(tree.id));

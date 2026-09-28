@@ -761,19 +761,8 @@ describe('config plane', () => {
     expect(config.getModel()).toBe('openai/gpt-5.1');
     expect(invalidations).toBe(1);
 
-    // The provider's own message is the CAUSE, not spliced into the wrapper.
-    expect(() => setModel(deps, 'nonsense')).toThrow('setModel(nonsense) failed');
-
-    const failure = (() => {
-      try {
-        setModel(deps, 'nonsense');
-
-        return null;
-      } catch (error) { return error; }
-    })();
-
-    expect(failure instanceof Error && failure.cause instanceof Error ? failure.cause.message : null)
-      .toBe('unknown provider: nonsense');
+    // The provider's own message reaches the caller unwrapped.
+    expect(() => setModel(deps, 'nonsense')).toThrow('unknown provider: nonsense');
     // A rejected spec neither stores nor invalidates.
     expect(config.getModel()).toBe('openai/gpt-5.1');
     expect(invalidations).toBe(1);

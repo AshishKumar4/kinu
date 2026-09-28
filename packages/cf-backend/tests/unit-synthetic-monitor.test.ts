@@ -8,7 +8,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { EmailOutbox, asFetchFunction, type OutboundEmailMessage } from '@kinu.run/core';
 import { analyticsDigest } from '@kinu.run/core/analytics';
-import { clearAnalyticsCache, sampleFleet, settleFleet, type FleetEnv } from '@kinu.run/core/control-plane';
+import { sampleFleet, settleFleet, type FleetEnv } from '@kinu.run/core/control-plane';
 import { ensureMonitorSchema, recordProbeRun, listIncidents, type MonitorDeps } from '../src/monitor/incidents';
 import { runSyntheticProbes, type ProbeDeps, type ProbeOutcome } from '@kinu.run/core';
 import { CLI_DIST_PATHS } from '@kinu.run/core';
@@ -382,7 +382,6 @@ describe('fleet signals share the ledger', () => {
 
   async function tick(l: ReturnType<typeof ledger>, env: FleetEnv, now: number, probes: readonly ProbeOutcome[] = []) {
     const open = new Map(listIncidents(l.sql).map((row) => [row.probe, row.detail]));
-    clearAnalyticsCache();
 
     return recordProbeRun(l.deps(now), [...probes, ...settleFleet(l.sql, await sampleFleet(env, now, globalThis.fetch), open)]);
   }

@@ -77,10 +77,3 @@ export function assertWithinPlatformLimits(census: SlotCensus): void {
     );
   }
 }
-
-/** `quantileExactWeighted` takes a fraction; `95` returns a column of nulls, not an error. */
-export function assertQuantileLevel(level: number): void {
-  if (!(level > 0 && level < 1)) {
-    throw new RangeError(`a quantile must be strictly between 0 and 1, not ${level}`);
-  }
-}

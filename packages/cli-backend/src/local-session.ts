@@ -2235,7 +2235,6 @@ export class LocalAgentSession {
 
     const options: DefaultWebSearchProviderDeps = {
       fetch: globalThis.fetch,
-      clock: REAL_CLOCK,
       resolve: async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((answer) => answer.address),
     };
 
