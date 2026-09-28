@@ -1,7 +1,7 @@
 // Grounded MCTS branch evaluator: execution picks the score band, then a k-sample judge median.
 import { describe, test, expect } from 'bun:test';
 import { evaluateWithMultiModelJudging } from '../src/index';
-import { executionObservation, isParseFailure, judgeCallBudget } from '../src/mcts/evaluation';
+import { isParseFailure, judgeCallBudget } from '../src/mcts/evaluation';
 import { DEFAULT_CONFIG } from '../src/config';
 import { createScriptedLLM, createJSONLLM } from '@kinu.run/test-utils';
 import type { Executor, LLM } from '../src/index';
@@ -825,13 +825,6 @@ describe('partial credit: the fail band is positioned by MEASURED checks, not th
     expect(all.execution?.passed).toBe(true);
     expect(all.execution?.passedChecks).toBe(4);
     expect(all.score).toBeCloseTo(0.6 + 0.4 * 0.5, 10);
-  });
-
-  test('the child inherits the tally, not just a verdict', async () => {
-    const partial = await evaluate(2);
-    const observation = executionObservation(partial.execution);
-    expect(observation).toContain('passed 2 of 4');
-    expect(observation).toContain('CHECK_C failed');
   });
 
   test('no suite means no fraction — the judge positions, and absent is not zero', async () => {

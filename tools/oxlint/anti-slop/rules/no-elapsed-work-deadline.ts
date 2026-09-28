@@ -22,8 +22,6 @@ import type { ESTree } from "@oxlint/plugins";
  *
  * A callback that only resolves bounds a wait without ending live work. An opt-in timer with a
  * same-value no-timer branch is also outside the rule because the caller selected that bound.
- * `branch-process.ts` stays governed for its historical RPC regression; only its complete child
- * readiness handshake is exempt, after the `ready` message or child error/exit settles the promise.
  *
  * Deliberate limits: this does not infer an ending through an identifier callback, does not catch a
  * `Date.now()` delta checked elsewhere, and does not follow an `AbortSignal.timeout` binding into a
@@ -78,7 +76,6 @@ export const ELAPSED_WORK_SOURCE_ROOTS = {
   swarm: [
     "packages/core/src/strategy/",
     "packages/core/src/mcts/",
-    "packages/cli-backend/src/branch-worker.ts",
   ],
   head: [
     "packages/core/src/heads/",
@@ -95,17 +92,12 @@ export const ELAPSED_WORK_SOURCE_ROOTS = {
   ],
 } as const;
 
-/** The historical RPC source remains in scope even though its filename names no policy domain. */
-export const BRANCH_PROCESS_SOURCE = "packages/cli-backend/src/branch-process.ts";
-
-
 /** The rule and its gate share this path predicate so they cannot govern different file sets. */
 export function isElapsedWorkDeadlineSource(filename: string): boolean {
   const normalized = filename.replaceAll("\\", "/");
   if (ELAPSED_TEST_FILE.test(normalized)) return false;
-  return normalized.includes(BRANCH_PROCESS_SOURCE)
-    || Object.values(ELAPSED_WORK_SOURCE_ROOTS)
-      .some((roots) => roots.some((root) => normalized.includes(root)));
+  return Object.values(ELAPSED_WORK_SOURCE_ROOTS)
+    .some((roots) => roots.some((root) => normalized.includes(root)));
 }
 
 
@@ -225,180 +217,6 @@ function hasNoTimerAlternative(node: ESTree.CallExpression): boolean {
   return false;
 }
 
-type FunctionLike = ESTree.ArrowFunctionExpression | ESTree.Function;
-
-function isFunctionLike(node: ESTree.Node | null | undefined): node is FunctionLike {
-  return node?.type === "ArrowFunctionExpression" || node?.type === "FunctionExpression";
-}
-
-function identifierName(node: ESTree.Node | null | undefined): string | null {
-  return node?.type === "Identifier" ? node.name : null;
-}
-
-function isStringLiteral(node: ESTree.Node | null | undefined, value: string): boolean {
-  if (node?.type !== "Literal") return false;
-  return node.value === value;
-}
-
-function callsIdentifier(node: ESTree.Node, name: string, firstArgument?: string): boolean {
-  if (node.type === "ExpressionStatement") return callsIdentifier(node.expression, name, firstArgument);
-  if (node.type === "BlockStatement") {
-    return node.body.some((statement) => callsIdentifier(statement, name, firstArgument));
-  }
-  if (node.type === "IfStatement") {
-    return callsIdentifier(node.consequent, name, firstArgument)
-      || (node.alternate !== null && callsIdentifier(node.alternate, name, firstArgument));
-  }
-  if (node.type === "ReturnStatement") {
-    return node.argument !== null && callsIdentifier(node.argument, name, firstArgument);
-  }
-  if (node.type === "AwaitExpression") return callsIdentifier(node.argument, name, firstArgument);
-  if (node.type === "TSNonNullExpression"
-    || node.type === "TSAsExpression"
-    || node.type === "TSSatisfiesExpression") {
-    return callsIdentifier(node.expression, name, firstArgument);
-  }
-  if (node.type === "UnaryExpression" && node.operator === "void") {
-    return callsIdentifier(node.argument, name, firstArgument);
-  }
-  if (node.type !== "CallExpression" || node.callee.type !== "Identifier" || node.callee.name !== name) {
-    return false;
-  }
-  return firstArgument === undefined || identifierName(node.arguments[0]) === firstArgument;
-}
-
-function declaredFunction(body: ESTree.BlockStatement, name: string): FunctionLike | null {
-  for (const statement of body.body) {
-    if (statement.type !== "VariableDeclaration") continue;
-    for (const declaration of statement.declarations) {
-      if (identifierName(declaration.id) === name && isFunctionLike(declaration.init)) {
-        return declaration.init;
-      }
-    }
-  }
-  return null;
-}
-
-type ChildListener = {
-  readonly childName: string;
-  readonly listener: FunctionLike;
-};
-
-function childListener(
-  body: ESTree.BlockStatement,
-  childName: string | null,
-  event: string,
-): ChildListener | null {
-  for (const statement of body.body) {
-    if (statement.type !== "ExpressionStatement" || statement.expression.type !== "CallExpression") continue;
-    const call = statement.expression;
-    const callee = call.callee;
-    if (callee.type !== "MemberExpression"
-      || callee.computed
-      || callee.object.type !== "Identifier"
-      || callee.property.type !== "Identifier"
-      || callee.property.name !== "on"
-      || (childName !== null && callee.object.name !== childName)
-      || !isStringLiteral(call.arguments[0], event)) {
-      continue;
-    }
-    const listener = call.arguments[1];
-    if (isFunctionLike(listener)) return { childName: callee.object.name, listener };
-    if (listener?.type === "Identifier") {
-      const declared = declaredFunction(body, listener.name);
-      if (declared !== null) return { childName: callee.object.name, listener: declared };
-    }
-  }
-  return null;
-}
-
-function isReadyMessageTest(node: ESTree.Expression, messageName: string): boolean {
-  if (node.type !== "BinaryExpression" || node.operator !== "===") return false;
-  const leftIsMessageMethod = node.left.type === "MemberExpression"
-    && !node.left.computed
-    && node.left.object.type === "Identifier"
-    && node.left.object.name === messageName
-    && node.left.property.type === "Identifier"
-    && node.left.property.name === "method";
-  const rightIsMessageMethod = node.right.type === "MemberExpression"
-    && !node.right.computed
-    && node.right.object.type === "Identifier"
-    && node.right.object.name === messageName
-    && node.right.property.type === "Identifier"
-    && node.right.property.name === "method";
-  return (leftIsMessageMethod && isStringLiteral(node.right, "ready"))
-    || (isStringLiteral(node.left, "ready") && rightIsMessageMethod);
-}
-
-function resolvesOnReady(listener: FunctionLike, resolveName: string, timerName: string): boolean {
-  const messageName = identifierName(listener.params[0]);
-  const body = listener.body;
-  if (messageName === null || body?.type !== "BlockStatement") return false;
-  return body.body.some((statement) =>
-    statement.type === "IfStatement"
-      && isReadyMessageTest(statement.test, messageName)
-      && callsIdentifier(statement.consequent, "clearTimeout", timerName)
-      && callsIdentifier(statement.consequent, resolveName));
-}
-
-function settlesOnChildEvent(listener: FunctionLike, rejectName: string, timerName: string): boolean {
-  const body = listener.body;
-  if (body === null) return false;
-  const clearsTimer = callsIdentifier(body, "clearTimeout", timerName);
-  return clearsTimer && callsIdentifier(body, rejectName);
-}
-
-function promiseExecutor(node: ESTree.Node): FunctionLike | null {
-  let parent = node.parent;
-  while (parent !== null && parent.type !== "Program") {
-    if (parent.type === "NewExpression"
-      && parent.callee.type === "Identifier"
-      && parent.callee.name === "Promise") {
-      const executor = parent.arguments[0];
-      return isFunctionLike(executor) ? executor : null;
-    }
-    parent = parent.parent;
-  }
-  return null;
-}
-
-/**
- * The branch worker's fork-ready wait is process startup, not an elapsed work deadline. Every
- * condition below is required: the timer rejects this promise; `ready` resolves it; and the same
- * child has error and exit listeners that clear the timer and reject. A timer that merely resembles
- * one piece of this sequence stays governed.
- */
-function isBranchReadyStartupHandshake(node: ESTree.CallExpression): boolean {
-  const callback = node.arguments[0];
-  const executor = promiseExecutor(node);
-  const executorBody = executor?.body;
-  const timerName = node.parent?.type === "VariableDeclarator" && node.parent.init === node
-    ? identifierName(node.parent.id)
-    : null;
-  if (!isFunctionLike(callback)
-    || callback.body === null
-    || executor === null
-    || executorBody?.type !== "BlockStatement"
-    || timerName === null) {
-    return false;
-  }
-  const resolveName = identifierName(executor.params[0]);
-  const rejectName = identifierName(executor.params[1]);
-  if (resolveName === null
-    || rejectName === null
-    || !callsIdentifier(callback.body, rejectName)) {
-    return false;
-  }
-  const message = childListener(executorBody, null, "message");
-  if (message === null || !resolvesOnReady(message.listener, resolveName, timerName)) return false;
-  const error = childListener(executorBody, message.childName, "error");
-  const exit = childListener(executorBody, message.childName, "exit");
-  return error !== null
-    && exit !== null
-    && settlesOnChildEvent(error.listener, rejectName, timerName)
-    && settlesOnChildEvent(exit.listener, rejectName, timerName);
-}
-
 export const noElapsedWorkDeadlineRule = defineRule({
   meta: {
     type: "problem",
@@ -431,10 +249,7 @@ export const noElapsedWorkDeadlineRule = defineRule({
           || callback.body === null) {
           return;
         }
-        if (!endsWork(callback.body)
-          || hasNoTimerAlternative(node)
-          || (context.filename.replaceAll("\\", "/").includes(BRANCH_PROCESS_SOURCE)
-            && isBranchReadyStartupHandshake(node))) {
+        if (!endsWork(callback.body) || hasNoTimerAlternative(node)) {
           return;
         }
 

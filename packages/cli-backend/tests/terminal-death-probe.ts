@@ -5,7 +5,7 @@
  */
 import type { SqlExecutor, SqlValue } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
-import { armShadowTrials, captureTakes, openTerminalWorkspace, scriptedModel } from './terminal-workspace';
+import { armShadowTrials, openTerminalWorkspace, scriptedModel } from './terminal-workspace';
 
 const MODES = ['before-settle', 'inside-claim', 'inside-title'] as const;
 
@@ -28,8 +28,6 @@ function die(at: string): never {
 const { db, rt } = openTerminalWorkspace(dbPath);
 
 await armShadowTrials(rt);
-
-captureTakes(rt, 'root-child');
 
 if (mode === 'inside-claim') {
   // The roster's first row, inside the commit holding the outer claim; installed before the session is built.

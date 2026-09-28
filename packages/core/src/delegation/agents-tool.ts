@@ -57,7 +57,6 @@ import {
 import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from '../strategy/node-workspace';
 import type { HostedNodeSeat, NodeCodemode } from '../strategy/node-agent';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../types/turn';
 import { nanoid } from '../utils/nanoid';
 import {
@@ -261,8 +260,6 @@ export interface AgentsSwarmDeps {
   resolveModel?: (spec: string) => LanguageModel;
   /** Caller conversation at dispatch, frozen into the search ledger so `context:'inherit'` survives re-drive. */
   originContext?: () => readonly ModelMessage[];
-  /** Pricing for projected-spend gates; absent, the gate blends and says so. */
-  costModel?: () => CostModel;
   /** Host-owned async provisioner for one node's private home, resolved per swarm call.
    *  Absent: no credentialed home, and nodes report the shared plane. */
   provisionNodeHome?: () => NodeWorkspaceProvisioner;

@@ -81,7 +81,6 @@ export interface AgentClientStatus {
   scaffoldVersion?: number;
   messageCount?: number;
   searchNodeCount?: number;
-  taskCount?: number;
   memorySize?: number;
   dbSize?: number;
   toolCount?: number;

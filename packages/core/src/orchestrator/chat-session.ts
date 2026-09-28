@@ -214,7 +214,6 @@ export interface OwedTerminalEffectsInput {
   /** Decided before the commit; null when none is owed. */
   readonly owedReport: OwedReport | null;
   readonly completed: boolean;
-  readonly startedAt: number;
   readonly trialContext: readonly ModelMessage[];
   /** A cold replay has no live toolset to ask. */
   readonly reachableTools: readonly string[];
@@ -1199,7 +1198,6 @@ export class ChatSession {
         owedReport: input.owedReport,
         completed: runError === null,
         taskReminder,
-        startedAt: input.startedAt,
         trialContext: input.trialContext,
         answeredDeliveries: this.answeredDeliveries(item),
         outputContinuation,

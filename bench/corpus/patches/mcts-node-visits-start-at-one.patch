@@ -1,10 +1,10 @@
 diff --git a/packages/core/src/mcts/schemas.ts b/packages/core/src/mcts/schemas.ts
 --- a/packages/core/src/mcts/schemas.ts
 +++ b/packages/core/src/mcts/schemas.ts
-@@ -30,7 +30,7 @@
+@@ -19,7 +19,7 @@
+       action           TEXT NOT NULL DEFAULT '',
        observation      TEXT NOT NULL DEFAULT '',
        code_used        TEXT,
-       code_language    TEXT,
 -      visits           INTEGER NOT NULL DEFAULT 0,
 +      visits           INTEGER NOT NULL DEFAULT 1,
        value            REAL NOT NULL DEFAULT 0,

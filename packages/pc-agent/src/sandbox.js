@@ -133,8 +133,7 @@ const ENV_ALLOWLIST_FAMILY = /^LC_[A-Z_]+$/;
 /**
  * What never crosses into a command of either tier: the credentials Kinu's
  * CLI reads from its environment (cli-backend model-resolver.ts
- * PROVIDER_CREDENTIAL_ENV and SESSION_CREDENTIAL_ENV, branch-process.ts
- * BRANCH_CREDENTIAL_ENV; this file ships alone and cannot import them, so
+ * PROVIDER_CREDENTIAL_ENV and SESSION_CREDENTIAL_ENV; this file ships alone and cannot import them, so
  * cli-backend's cwd-plane test holds the lists together), and the two
  * settings this daemon itself reads: its update key and its predecessor.
  */

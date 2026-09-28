@@ -59,10 +59,9 @@
  *     a 4:1 noise ratio over the defect this gate exists to catch, and an unused
  *     barrel entry is surface bloat, not dead logic.
  *
- * Two entry points are declared in the `knip` config because no tool can see
- * them: `cf-backend/src/gallery.tsx` is a second vite build, and
- * `cli-backend/src/branch-worker.ts` is spawned by path via `child_process.fork`
- * from `branch-process.ts`. Those are entry points, not exemptions.
+ * One entry point is declared in the `knip` config because no tool can see it:
+ * `cf-backend/src/gallery.tsx` is a second vite build. It is an entry point,
+ * not an exemption.
  *
  * The cf-backend test glob is declared there too, for a different and
  * sharper reason: that workspace has TWO test runners. knip auto-detects

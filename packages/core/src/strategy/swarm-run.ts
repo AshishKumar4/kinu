@@ -285,11 +285,7 @@ export async function runSwarm(
     searchLedger.begin({
       rootId,
       task: resolved.task,
-      engine: 'swarm',
-      // A swarm's root is the workspace as found, not a message in a conversation.
-      rootMsgId: null,
       config: ledgerConfig,
-      budget: expansionBudget,
       now: Date.now(),
     });
   }
@@ -567,14 +563,12 @@ export async function runSwarm(
 
     // Retire unpromising nodes. Its visit gate protects single-visit leaves, so a flat run is unaffected.
     if (isTreeAdvance(resolved.config.advance.kind)) {
-      await pruneLowValueBranches(
-        deps.rt, rootId, resolved.config.pruneThreshold, resolved.config.minVisitsForPrune,
-      );
+      pruneLowValueBranches(deps.rt, rootId, resolved.config.pruneThreshold, resolved.config.minVisitsForPrune);
     }
 
     // The level barrier is the run's heartbeat (`updated_at`), fenced on this run's lease.
     searchLedger.touch(rootId, ledgerEpoch, Date.now());
-    // Logged like `mcts.checkpoint_reached`, so a working search is distinguishable from a hung one.
+    // Logged so a working search is distinguishable from a hung one.
     log.event('swarm.checkpoint_reached', {
       preset: resolved.preset,
       root_id: rootId,

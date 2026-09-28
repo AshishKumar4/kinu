@@ -20,7 +20,7 @@ import type { LLMProviderConfig, VFS, VfsNativeReads } from '@kinu.run/core';
 import { inWorkMode } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
-  initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
+  initAlternateTakesTable, recordBranchTakeSet, MAX_CONCURRENT_DETACHED_JOBS,
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox,
   backgroundJobNotice,
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID,
@@ -43,7 +43,6 @@ import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } 
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { discoverAgentsMd } from '../src/agents-md';
 import { nodeSeatFactory } from './actor-fixture';
-import { CAPTURED_DURING_THE_TURN } from './terminal-workspace';
 import * as v from 'valibot';
 
 const resolverRest = {
@@ -4043,130 +4042,30 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
 });
 
 describe('LocalAgentSession — Alternate Takes parity', () => {
-  function seedTakes(rt: ReturnType<typeof createCLIRuntime>) {
-    initSearchTables(rt.storage.execRaw);
+  /** A steer branch's take set on the turn that answered: the live answer first, the branch's second. */
+  async function answeredWithTakes(session: ReturnType<typeof setup>['session'], rt: ReturnType<typeof createCLIRuntime>) {
     initAlternateTakesTable(rt.storage.execRaw);
-    // Takes join through `search_nodes` owned by this actor (mcts/record-node.ts:111); another owner is unreachable.
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
-                        VALUES (${rt.actor.actorId}, 'win', 'win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
-                        VALUES (${rt.actor.actorId}, 'win', 'alt', 'pick a strategy', 'B', 'go with approach B', 0.86, 2, 1, 'open')`;
-    // Production captures mid-turn; a stamp no turn's start can pass keeps the scoped claim from purging the seed as stale.
-    captureAlternateTakes(rt.storage.sql, rt.actor, { rootId: 'win', task: 'pick a strategy', winnerId: 'win', epsilon: 0.1, now: CAPTURED_DURING_THE_TURN });
-    void rt.storage.sql`UPDATE search_nodes SET status = 'terminal' WHERE id = 'win'`;
-    void rt.storage.sql`UPDATE search_nodes SET status = 'pruned' WHERE id = 'alt'`;
+    await session.send('solve it', { id: crypto.randomUUID() });
+    const turnId = present((await transcript(rt)).filter((entry) => entry.role === 'assistant').at(-1), 'the last assistant entry').id;
+
+    const set = present(recordBranchTakeSet(rt.storage.sql, rt.actor, {
+      task: 'pick a strategy', turnId, sessionId: 'default', liveText: 'go with approach A', branchText: 'go with approach B',
+    }), 'the take set');
+
+    return { set, win: set.candidates[0].nodeId, alt: set.candidates[1].nodeId };
   }
 
-  test('takes captured mid-turn are claimed for the turn at turn end', async () => {
-    const { session, rt } = setup('answered with A');
-    seedTakes(rt);
-    await session.send('solve it', { id: crypto.randomUUID() });
-
-    const turnId = present((await transcript(rt)).filter((entry) => entry.role === 'assistant').at(-1), 'the last assistant entry').id;
-
-    expect(session.latestAlternateTakes()).toMatchObject({ turnId, sessionId: 'default', chosenNodeId: null });
-    await session.end();
-  });
-
-  test('an errored turn purges its unclaimed takes instead of claiming them', async () => {
-    // An errored turn has no durable answer, so its captured takes are purged, matching cf.
-    const erroringModel = new TestLanguageModelV2({
-      provider: 'fake', modelId: 'fake-model',
-      doStream: async () => ({
-        stream: new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: 'stream-start', warnings: [] });
-            controller.error(new Error('provider exploded'));
-          },
-        }),
-        response: { headers: {} },
-      }),
-    });
-
-    const { session, rt, events } = setup('unused', erroringModel);
-    seedTakes(rt);
-
-    await session.send('solve it', { id: crypto.randomUUID() });
-
-    expect(events.some((e) => e.type === 'error')).toBe(true);
-    const turnEnd = events.find((event) => event.type === 'turn-end');
-
-    if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
-    expect(turnEnd.turn.hadError).toBe(true);
-    expect(session.latestAlternateTakes()).toBeNull();
-    await session.end();
-  });
-
-  // Core's `creditedTurnId` reads whether the turn ended; `acc.hadError` is set by any failed tool result and would
-  // purge takes of a turn that recovered.
-  test('a turn that answered despite a failing tool call still claims its takes', async () => {
-    let step = 0;
-    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
-
-    const failingToolModel = new TestLanguageModelV2({
-      provider: 'fake', modelId: 'fake-model',
-      doStream: async () => {
-        step += 1;
-
-        return {
-          stream: new ReadableStream({
-            start(controller) {
-              controller.enqueue({ type: 'stream-start', warnings: [] });
-
-              if (step === 1) {
-                controller.enqueue({
-                  type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
-                  input: JSON.stringify({ action: 'save', content: 'note' }),
-                });
-                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
-              } else {
-                controller.enqueue({ type: 'text-start', id: '0' });
-                controller.enqueue({ type: 'text-delta', id: '0', delta: 'answered with A' });
-                controller.enqueue({ type: 'text-end', id: '0' });
-                controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
-              }
-
-              controller.close();
-            },
-          }),
-          response: { headers: {} },
-        };
-      },
-    });
-
-    const { session, rt, events } = setup('unused', failingToolModel);
-    rt.memory.append = async () => { throw new Error('disk full'); };
-
-    seedTakes(rt);
-
-    await session.send('solve it', { id: crypto.randomUUID() });
-
-    const turnEnd = events.find((event) => event.type === 'turn-end');
-
-    if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
-    expect(turnEnd.turn.hadError).toBe(true);
-
-    const turnId = present((await transcript(rt)).filter((entry) => entry.role === 'assistant').at(-1), 'the last assistant entry').id;
-
-    expect(session.latestAlternateTakes()).toMatchObject({ turnId, sessionId: 'default' });
-    await session.end();
-  });
-
-  test('picking a sibling writes the take_pick ledger row, re-points, and queues the continuation', async () => {
+  test('picking the branch writes the take_pick ledger row and queues the continuation', async () => {
     const { session, rt, events } = setup('answered with A');
-    seedTakes(rt);
-    await session.send('solve it', { id: crypto.randomUUID() });
-    const set = present(session.latestAlternateTakes(), 'the alternate takes set');
+    const { set, alt } = await answeredWithTakes(session, rt);
 
-    const result = await session.pickAlternateTake(set.id, 'alt');
+    const result = await session.pickAlternateTake(set.id, alt);
     expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true, continuationQueued: true });
 
     const row = rt.storage.sql<{ outcome: string; source: string; followup: string | null; turn_id: string }>`
       SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0];
 
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'go with approach B', turn_id: set.turnId });
-    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0].status).toBe('terminal');
-    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0].status).toBe('pruned');
 
     await waitFor(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'));
     const continuation = present(turnStarts(events).find((s) => s.event === 'take_pick'), 'the take_pick continuation turn');
@@ -4176,13 +4075,11 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     await session.end();
   });
 
-  test('confirming the answered winner records acceptance and queues nothing', async () => {
+  test('confirming the answered take records acceptance and queues nothing', async () => {
     const { session, rt, events } = setup('answered with A');
-    seedTakes(rt);
-    await session.send('solve it', { id: crypto.randomUUID() });
-    const set = present(session.latestAlternateTakes(), 'the alternate takes set');
+    const { set, win } = await answeredWithTakes(session, rt);
 
-    const result = await session.pickAlternateTake(set.id, 'win');
+    const result = await session.pickAlternateTake(set.id, win);
     expect(result).toMatchObject({ outcome: 'accepted', changedAnswer: false, continuationQueued: false });
     expect(rt.storage.sql<{ source: string }>`SELECT source FROM turn_outcomes`[0].source).toBe('take_pick');
     expect(turnStarts(events).every((s) => s.kind === 'user')).toBe(true);
@@ -4407,67 +4304,6 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     // The live turn's call and the branch head's: a fork of a budgeted turn cannot spend outside its budget.
     expect(session.budget.snapshot('q3').map((mission) => mission.calls)).toEqual([2]);
     await session.end();
-  });
-});
-
-describe('LocalAgentSession — the lifetime search', () => {
-  /** The branch lane's two calls: exploring one approach, and reflecting on the traces. */
-  const isBranchCall = (body: string): boolean =>
-    body.includes('You are an expert agent exploring one approach') || body.includes('Task: Given my purpose');
-
-  test("a lifetime search's branch calls are billed once each", async () => {
-    // Branches run in their own processes against the configured endpoint, so the endpoint is a local server.
-    let branchCalls = 0;
-
-    const server = Bun.serve({
-      port: 0,
-      async fetch(request) {
-        if (isBranchCall(await request.text())) branchCalls += 1;
-
-        return Response.json({
-          id: 'cmpl-lifetime', object: 'chat.completion', created: 1, model: 'test-model',
-          choices: [{ index: 0, message: { role: 'assistant', content: 'Cache the token table.' }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
-        });
-      },
-    });
-
-    try {
-      const db = new Database(scratchPath('local-session-lifetime', 'agent.db'));
-      // Opened in the mode the CLI opens its database (openWorkspaceCLI): the branch processes open this file too.
-      db.exec('PRAGMA journal_mode = WAL');
-      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-
-      const rt = createCLIRuntime(db, {
-        dbPath: db.filename,
-        llm: {
-          name: 'workers-ai', baseURL: `http://127.0.0.1:${String(server.port)}/v1`,
-          headers: { Authorization: 'Bearer lifetime' }, model: 'test-model',
-        },
-      });
-
-      const events: SessionEvent[] = [];
-      const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: (event) => events.push(event) });
-      // Four windows closed in an earlier life, so this session's first window starts the search.
-      void rt.storage.sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${rt.actor.actorId}, 'closed_turn_windows', '4')`;
-
-      for (let turn = 1; turn <= 5; turn++) await session.send(`turn ${turn}`, { id: crypto.randomUUID() });
-      await waitFor(() => events.some((event) => event.type === 'evolution' && event.event === 'mcts_complete'));
-
-      // The search ran to its end rather than failing to start its branches.
-      expect(events.flatMap((event) => event.type === 'evolution' && event.event === 'mcts_complete' ? [event.message] : []))
-        .toEqual([expect.stringMatching(/^Evolution (explored|converged)/u)]);
-
-      // The search runs between turns, so its calls are filed under the workspace's own run.
-      const billed = session.getRunEvents(WORKSPACE_RUN_ID)
-        .filter((event) => event.type === 'model_call' && event.source === 'mcts');
-
-      expect(branchCalls).toBeGreaterThan(0);
-      expect(billed).toHaveLength(branchCalls);
-      await session.end();
-    } finally {
-      await server.stop(true);
-    }
   });
 });
 

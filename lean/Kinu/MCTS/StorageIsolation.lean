@@ -2,10 +2,7 @@
   Kinu.MCTS.StorageIsolation — branches never write the orchestrator's rows.
   0 sorry, 0 axioms.
 
-  Every MCTS branch runs as its own actor: a hosted logical actor on the
-  workspace's one SQLite (`packages/cf-backend/src/exploration-hosting.ts#hostBranch`), or a
-  forked process that binds its own actor row in the same database file
-  (`packages/cli-backend/src/branch-process.ts#createBranchSpawner`). Every row
+  A search branch runs as its own actor on the workspace's one SQLite. Every row
   is keyed by the actor that wrote it (`ActorHandle`, `actor_id = …` on every
   statement). So the invariant is actor separation: no branch runs as the
   orchestrator's actor (`transition_preserves_isolation`), and a write under one

@@ -1,6 +1,6 @@
 {
   "measuredAt": "2026-09-28",
-  "total": 172,
+  "total": 169,
   "files": {
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
@@ -57,12 +57,6 @@
     },
     "packages/cf-backend/tests/workerd/worker.ts": {
       "sleep": 3
-    },
-    "packages/cli-backend/tests/branch-rpc.test.ts": {
-      "sleep": 2
-    },
-    "packages/cli-backend/tests/branch-worker.test.ts": {
-      "sleep": 1
     },
     "packages/cli-backend/tests/chat-session-parity.ts": {
       "clock-compare": 1,

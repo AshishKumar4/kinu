@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import type {
   AgentRuntime, AgentsToolAction, AgentsSwarmDeps, AgentsToolDeps, BuiltinToolName,
   LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope,
-  ProviderCatalogSnapshot, SessionMessage, SessionWriter, ToolCallRecord,
+  ProviderCatalogSnapshot, ToolCallRecord,
 } from '../../packages/core/src/index';
 import {
   activePromptSectionOverrides, agentsActionsFor, buildActorTools,
@@ -233,36 +233,6 @@ export function createStepToolCallLog(): StepToolCallLog {
   };
 
   return log;
-}
-
-/**
- * Nowhere for an MCTS to put a trajectory that no suite measures.
- *
- * Two suites drove `runMCTS` with their own identical copy — same array, same
- * leaf walk — because the engine requires a sink and what it holds is not the
- * subject. One copy, so a fix to the walk cannot land in one suite and not the
- * other.
- */
-export function makeSessionWriter(): SessionWriter {
-  const msgs: Array<{ id: string; parentId?: string | null; role: string; content: string }> = [];
-
-  return {
-    async appendMessage(msg: SessionMessage, parentId?: string | null) {
-      msgs.push({ id: msg.id, parentId, role: msg.role, content: msg.parts.map((p) => p.text).join('') });
-    },
-    async getHistory(leafId: string) {
-      const result: Array<{ role: string; content: string }> = [];
-      let cur = msgs.find((m) => m.id === leafId);
-
-      while (cur) {
-        result.unshift({ role: cur.role, content: cur.content });
-        const parentId = cur.parentId;
-        cur = parentId ? msgs.find((m) => m.id === parentId) : undefined;
-      }
-
-      return result;
-    },
-  };
 }
 
 /**

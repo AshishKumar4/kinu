@@ -68,7 +68,6 @@ const neverHost: HostedActorSeams = {
   publishDelta() { throw new Error('mergeLLM published a head stream frame'); },
   mission() { throw new Error('mergeLLM read the mission ledger'); },
   split() { throw new Error('mergeLLM reached the recursive split'); },
-  get sql(): never { throw new Error('mergeLLM read the workspace SQL'); },
   get exec(): never { throw new Error('mergeLLM read the workspace executor'); },
   get directory(): never { throw new Error('mergeLLM read the actor directory'); },
   transaction() { throw new Error('mergeLLM opened a transaction'); },

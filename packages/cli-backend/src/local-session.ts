@@ -56,7 +56,7 @@ import { TierIdSchema,
   readMemoryTail,
   agentsActionsFor,
   facetHomeProvisioner, facetHomeReleaser, headAgentName, explorationActorKey,
-  type HostedNodeSeat, type NodeIdentity, type ModelPricing,
+  type HeadSeat, type HostedNodeSeat, type NodeIdentity, type ModelPricing,
   type ShadowTrialTurn, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialDrain,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
@@ -66,7 +66,7 @@ import { TierIdSchema,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial, readMission,
-  takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
+  branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
@@ -111,7 +111,6 @@ import { TierIdSchema,
   type StagedSkillResult,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
   revertChangelogEntryById, type ChangelogRevertResult,
-  unclaimedAlternateTakeIds,
   latestAlternateTakeSet,
   type ScaffoldRunOptions,
   bootstrapScaffold,
@@ -163,7 +162,7 @@ import { localActorDirectory, registerLocalActor, retireLocalActor, registerLoca
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
-import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps, type HostedHeadSeat } from './head-runtime';
+import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
 import { detectOrphanedFibers, type OrphanedFiber } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
@@ -217,7 +216,6 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
-    reportModelCall: (report) => { input.session().reportModelCall(report); },
     // Local replay runs with tools disabled: re-running tools would re-execute shell work on the
     // user's machine, so CLI replay measures prompt/model config only.
     replayTaskRunner: (task) => input.session().runReplayTask(task),
@@ -1849,12 +1847,7 @@ export class LocalAgentSession {
     };
 
     const parts: Writable<TerminalTurnParts> = {};
-    parts.takes = {
-      credited: input.credited,
-      startedAt: input.startedAt,
-      // Read here: a retry selecting "unclaimed now" would claim a later turn's captures.
-      takeIds: unclaimedAlternateTakeIds(this.rt.storage.sql, this.rt.actor),
-    };
+    parts.credited = input.credited;
     parts.branches = this.pendingBranches.map(({ id, task }) => ({ id, task }));
 
     if (input.taskReminder !== null) parts.taskReminder = { text: input.taskReminder.text };
@@ -1905,7 +1898,6 @@ export class LocalAgentSession {
     const relay = this.parentRelay;
 
     const base = {
-      takes: takesTerminalEffect({ sql: this.rt.storage.sql, actor: this.rt.actor, sessionId: this.sessionId }),
       branches: branchesTerminalEffect({
         sql: this.rt.storage.sql,
         actor: this.rt.actor,
@@ -2571,10 +2563,6 @@ export class LocalAgentSession {
       nodeCodemode: (actor) => hostedCodemodeTool(actor, this.headCodemodeExtras()),
       webSearch: this.getWebSearchProvider(),
       originContext: () => this.actorSession.history,
-      costModel: () => ({
-        spec: this.effectiveModelSpec(),
-        pricing: this.modelCatalog.pricing(),
-      }),
       // Only the runner knows which profile snapshot applies (caller's, or frozen on re-drive), so it
       // picks the spec; a swarm with a profile refuses rather than run the caller's model.
       resolveModel: (spec: string) => this.resolveModelForSpec(spec),
@@ -2859,7 +2847,7 @@ export class LocalAgentSession {
    * Seat one head as a logical actor: its own directory row, runtime objects, claimed loop and, on
    * release, retirement. Public so callers without a session (bench panel, eval arm) can seat heads.
    */
-  async hostHead(input: HeadInput, writes: WriteObserver): Promise<HostedHeadSeat> {
+  async hostHead(input: HeadInput, writes: WriteObserver): Promise<HeadSeat> {
     // Both named before acquire: the host seeds the loop and builds the runtime while building the actor.
     const { binding, seat } = await this.seatRunActor(input.id, (actorId) => {
       this.loopOrigins.set(actorId, input.loop);

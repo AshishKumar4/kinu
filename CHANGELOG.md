@@ -19,6 +19,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **`/stats`: usage per account.** Every model call now records the provider account that paid for it and the quota the provider reported with the answer (Anthropic, OpenAI and ChatGPT-plan windows). `/stats` in the TUI and the web's Usage settings count every workspace you hold (on this machine and, signed in, in the cloud) per account: calls, tokens and API-equivalent cost, with the quota left and when it resets, and they name any workspace they could not read. Each OpenRouter key also shows the credit it has left, read live from OpenRouter. `kinu spend` and the web Activity panel show the same per workspace.
 - **Claude Pro and Max subscriptions sign in to Kinu.** `kinu provider connect claude` opens Claude's sign-in in your browser and keeps the login on this machine; `kinu provider connect claude work` adds a second account. Kinu sends each request as Claude Code's CLI does (after oh-my-pi), refreshes the login before it expires, and names the fix when Claude refuses it. When Anthropic asks for a newer Claude Code, the call is retried once at that version. This replaces running the `claude` command: Claude Code need not be installed, and `claude logout` no longer disconnects Kinu (`kinu provider disconnect claude` does).
 
+### Fixed
+
+- **Background work a provider refuses for good stops retrying.** A turn's after-work (memory compression, naming the chat, prompt tuning and the like) whose model call is answered with a permanent refusal, such as a 404 from an AI Gateway route that no longer exists, is now recorded as failed after one attempt, shown once in the Activity log with the status the provider gave, and no longer wakes the workspace every minute to try again. Rate limits, timeouts and server errors are still retried.
+
 ### Changed
 
 - **A compacted conversation re-summarizes its oldest turns once.** The first line of a stored summary no longer carries a dash, so a summary written before this release no longer counts as one: the next compaction writes it again from the turns, without the old summary as its starting point. This happens once per conversation, and later summaries build on each other as before.
@@ -688,6 +692,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Removed
 
+- **MCTS is folded into swarm.** Swarm's tree search is now the one search engine, and these go with the lifetime MCTS search: `kinu evolve`, the MCTS settings card and its `getMctsConfig`/`setMctsConfig` calls, the per-workspace MCTS settings keys, the lifetime background search every fifth session window (craft consolidation still runs there), the `mcts` spend row, and the task-history ledger. `kinu mcts`, `/tree` and the explorer page still show swarm search trees. Ships with the production reset: stored MCTS search rows and task history are not carried over.
 - **Releases.** The Releases tab, the `release.*` eval namespace, the MCP server's `release` tool and `kinu release <name>` are gone, with the release board's tables. A workspace's pending release approvals no longer count toward its roster tile.
 - **Every schema compatibility path, because production is reset.** A table's
   `CREATE TABLE IF NOT EXISTS` is now its genesis. Gone: the column reconcile

@@ -35,7 +35,7 @@ import {
   listBackgroundJobs, retryBackgroundJob, type BackgroundJobControl,
 } from '../src/read-models/background-jobs';
 import {
-  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getShellApprovalMode,
+  getAlwaysActiveSkills, getEvolutionConfig, getShellApprovalMode,
   setAlwaysActiveSkills, setEvolutionConfig, setModel, setReasoningEffort, setShellApprovalMode,
 } from '../src/read-models/config-plane';
 import { getEvolutionChangelog, markChangelogSeen } from '../src/read-models/evolution-views';
@@ -789,14 +789,6 @@ describe('config plane', () => {
     expect(setAlwaysActiveSkills(config, ['review', 'debugging'])).toEqual({ ok: true, names: ['review', 'debugging'] });
     expect(getAlwaysActiveSkills(config)).toEqual({ names: ['review', 'debugging'] });
     expect(setAlwaysActiveSkills(config, [])).toEqual({ ok: true, names: [] });
-    db.close();
-  });
-
-  test('the MCTS view is stored overrides over engine defaults', () => {
-    const { db, config } = workspace();
-    const defaults = getMctsConfig(config);
-    config.setMctsOverrides({ budget: 3 });
-    expect(getMctsConfig(config)).toEqual({ ...defaults, maxIterations: 3 });
     db.close();
   });
 

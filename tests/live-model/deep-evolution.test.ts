@@ -24,7 +24,7 @@ import {
 import { provisionLocalTarget, type LocalTarget } from './target-local';
 import {
   finalIntegerAnswer,
-  liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
+  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
@@ -136,9 +136,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     rt = target.runtime;
 
     events = [];
-    engine = new EvolutionEngine(rt, rt.stores.history, {
-      enabled: true, reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
-    });
+    engine = new EvolutionEngine(rt, rt.stores.history, { enabled: true });
     engine.onEvent(e => events.push(e));
 
     // The model is resolved BEFORE the surface, because the production actor

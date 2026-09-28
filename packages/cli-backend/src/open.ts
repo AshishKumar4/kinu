@@ -18,7 +18,6 @@ export interface WorkspaceInfo {
   soul: string;
   scaffoldVersion: number;
   searchNodeCount: number;
-  taskCount: number;
   memorySize: number;
   createdAt: number;
 }
@@ -78,9 +77,6 @@ export async function openWorkspaceCLI(
   const searchNodeCount = sql<{ c: number }>`
     SELECT COUNT(*) as c FROM search_nodes WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
 
-  const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history
-    WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
-
   const memorySize = await memoryBytes(rt.agentStateVfs ?? rt.storage.vfs);
 
   return {
@@ -92,7 +88,6 @@ export async function openWorkspaceCLI(
       soul,
       scaffoldVersion,
       searchNodeCount,
-      taskCount,
       memorySize,
       createdAt: identity.created_at,
     },

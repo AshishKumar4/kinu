@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-28",
-  "files": 2847,
-  "functions": 70482,
+  "files": 2804,
+  "functions": 69189,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -11,10 +11,6 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 58
-    },
-    {
-      "key": "packages/core/src/mcts/engine.ts#runMCTS>fiber",
       "complexity": 58
     },
     {
@@ -283,10 +279,6 @@
     },
     {
       "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 30
-    },
-    {
-      "key": "packages/core/src/orchestrator/terminal-roster.ts#declareTerminalRoster",
       "complexity": 30
     },
     {

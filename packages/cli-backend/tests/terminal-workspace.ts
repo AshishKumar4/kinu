@@ -2,7 +2,7 @@
 import { Database } from 'bun:sqlite';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
-  captureAlternateTakes, initAgentConfigTable,
+  initAgentConfigTable,
   initAlternateTakesTable, initScaffoldTables, initSearchTables,
   INITIAL_SCAFFOLD_SOURCE,
   type LLMProviderConfig,
@@ -40,20 +40,6 @@ export async function armShadowTrials(rt: CLIRuntime): Promise<void> {
   void rt.storage.sql`INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${rt.actor.actorId}, 1, ${Date.now()}, ${'candidate'}, ${'pending'})`;
   rt.actor.config.setShadowSampleRate(1);
-}
-
-/** Past the start of any turn a test runs, as that turn's own captures are: the claim purges unclaimed captures
- *  older than its turn's start. */
-export const CAPTURED_DURING_THE_TURN = Number.MAX_SAFE_INTEGER;
-
-export function captureTakes(rt: CLIRuntime, rootId: string): void {
-  void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
-    VALUES (${rt.actor.actorId}, ${rootId}, ${rootId}, ${'pick a strategy'}, ${'A'}, ${'go with A'}, 0.9, 3, 1, 'open')`;
-  void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
-    VALUES (${rt.actor.actorId}, ${rootId}, ${`${rootId}-alt`}, ${'pick a strategy'}, ${'B'}, ${'go with B'}, 0.85, 3, 1, 'open')`;
-  captureAlternateTakes(rt.storage.sql, rt.actor, {
-    rootId, task: 'pick a strategy', winnerId: rootId, epsilon: 0.1, now: CAPTURED_DURING_THE_TURN,
-  });
 }
 
 /**

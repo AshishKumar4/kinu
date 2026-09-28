@@ -117,7 +117,6 @@ import {
   type EnsembleReport, type EnsembleRunResult,
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
-  unclaimedAlternateTakeIds,
   listAlternateTakeSets, latestAlternateTakeSet,
   type AlternateTakeSet, type TakePickOutcome,
   startBranchHead, newBranchId, PendingSendStore,
@@ -181,11 +180,11 @@ import {
   jobResult, listBackgroundJobs, retryBackgroundJob, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
-  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getProviderAccounts, getReasoningEffort,
+  getAlwaysActiveSkills, getEvolutionConfig, getProviderAccounts, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   setAlwaysActiveSkills, setEvolutionConfig,
-  setMctsConfig, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
-  type EvolutionConfigView, type MctsConfigView,
+  setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
+  type EvolutionConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   workModeUnderReview,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
@@ -250,7 +249,7 @@ import { sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
 import {
   terminalEffect, keyedScope, declareTerminalRoster, owesShadowTrial,
-  takesTerminalEffect, branchesTerminalEffect,
+  branchesTerminalEffect,
   type OwedEffect, type OwedTerminalEffectsInput, type TerminalEffectTable, type TerminalTurnFacts,
   type TerminalTurnParts,
 } from "@kinu.run/core";
@@ -699,7 +698,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected hostedSeams(): HostedActorSeams {
     return {
       host: this.actorHost(),
-      sql: this.boundSql,
       exec: this.boundExec(),
       directory: this.workspaceActors(),
       transaction: (body) => this.ctx.storage.transactionSync(body),
@@ -719,9 +717,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
       whileWaiting: (actorId, waited) => this.delegatedTurns.whileWaiting(actorId, waited),
       rederiveWake: () => { this.armDurableWake(); },
-      register: async ({ creationId, toolProfile, loop }) => {
+      register: async ({ creationId, loop }) => {
         const entry = await this.actorDirectory({
-          action: 'register', creationId, name: explorationActorKey(creationId), kind: 'run', toolProfile, lifetime: 'task',
+          action: 'register', creationId, name: explorationActorKey(creationId), kind: 'run', lifetime: 'task',
         });
 
         if (loop) this._chosenLoopOrigins.set(entry.reference.actorId, loop);
@@ -884,11 +882,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       nodeCodemode: (actor) => nodeCodemodeTool(seams, actor),
       webSearch: seams.webSearch(),
       resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
-      // Same catalog session as the mission ledger, so a search's estimate and its debit read one rate.
-      costModel: () => ({
-        spec: this.effectiveModelSpec(),
-        pricing: this.modelCatalog.pricing(),
-      }),
       // Workspace-level seams: a node is an actor of the workspace whoever spawned it.
       hostNode: (node) => hostNodeSeat(seams, node),
       provisionNodeHome: () => async (node) => seams.nodeHome((await hostNodeSeat(seams, node)).actor),
@@ -1681,9 +1674,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         transaction: (body) => { this.ctx.storage.transactionSync(body); },
         // The turn review's model calls debit the reviewed turn's mission; unbudgeted turns never reach it.
         governor: this.budget,
-        reportModelCall: (report) => { this.reportModelCall(report); },
-        // Same broadcast sink as agents(action:'swarm') in ActorAgent.
-        onMctsProgress: (event) => this.onMctsProgress(event),
         // Replay-eval rollout runs the live scaffold with the real LLM and tool bridges.
         replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
         // Promotion-gate evidence runs on the cadence lane so rollouts don't block the chat queue.
@@ -2166,11 +2156,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const parts: TerminalTurnParts = {
       // Over the row the transcript is about to persist, so a cut turn's announcement replays from it.
       turnEndExtensions: true,
-      takes: {
-        credited: input.credited,
-        startedAt: input.startedAt,
-        takeIds: unclaimedAlternateTakeIds(this.boundSql, this.actorHandle()),
-      },
+      credited: input.credited,
       craftedToolsUsed: this.acc.craftedToolsUsed(),
       eventReplies: { answered: input.answeredDeliveries, requestId: input.messageId },
       branches: this._pendingBranches.map((branch) => ({ id: branch.id, task: branch.task })),
@@ -2204,7 +2190,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override terminalEffectTable(): TerminalEffectTable {
     return {
       ...this.sharedTerminalEffects(),
-      takes: takesTerminalEffect({ sql: this.boundSql, actor: this.actorHandle(), sessionId: 'default' }),
 
       craft_usage: terminalEffect({
         input: v.object({ messageId: v.string(), toolNames: v.array(v.string()) }),
@@ -3103,7 +3088,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private hasLiveExploration(): boolean {
-    return this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSearches();
+    return this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms();
   }
 
   // Kinu's timer, dispatched by `Agent.alarm()` from `cf_agents_schedules` (see `armTimer`); not an
@@ -3537,7 +3522,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return applyScaffoldDecision(this.scaffoldControl, mode);
   }
 
-  /** Reads `scaffold_evaluations` (regressions-first), not `task_history` (the MCTS ledger). */
+  /** Reads `scaffold_evaluations`, regressions first. */
   @callable()
   async getShadowVerdict(version?: number): Promise<ShadowVerdict> {
     const pendingVersion = version ?? getPendingScaffold(this.boundSql, this.rt.actor)?.version ?? null;
@@ -5154,14 +5139,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this._cachedSoulText = null;
 
     return { soul: text, purpose: summarizeSoul(text) };
-  }
-
-  @callable() async getMctsConfig(): Promise<MctsConfigView> {
-    return getMctsConfig(this.config);
-  }
-
-  @callable() async setMctsConfig(config: Partial<MctsConfigView>) {
-    return setMctsConfig(this.config, config);
   }
 
   @callable() async getEvolutionConfig(): Promise<EvolutionConfigView> {

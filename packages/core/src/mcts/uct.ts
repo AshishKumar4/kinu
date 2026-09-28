@@ -1,5 +1,5 @@
 /**
- * UCT selection. Reference: docs/MCTS.md "UCT Formula"; LATS arXiv:2310.04406 §3.2 Eq. (1).
+ * UCT selection: LATS arXiv:2310.04406 §3.2 Eq. (1).
  * SQLite log() is log10, so ln(x) = log(x) / log(exp(1.0)).
  */
 

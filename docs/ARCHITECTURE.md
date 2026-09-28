@@ -440,15 +440,14 @@ The other three belong to the `EvolutionEngine`
   the CraftStore.
 - Session level: `onSessionReflection()` consolidates patterns and can call
   `maybeEvolveScaffold()` to propose a new `agent.js`.
-- Lifetime: `onLifetimeEvolution()` runs replay eval, craft consolidation, and
-  a full `runMCTS()`.
+- Lifetime: `onLifetimeEvolution()` runs craft consolidation.
 
 Hosted actors tick the step clock only: they record no turn into the evolution
 window.
 
-MCTS branch rewards are execution-grounded on both backends. One scorer
+Swarm node rewards are execution-grounded on both backends. One scorer
 (`packages/core/src/mcts/evaluation.ts`) lets the execution outcome dominate the
-judge for hosted branches and CLI child-process branches alike. Checks run
+judge. Checks run
 before a scaffold mutation takes effect: the misevolution gate
 (`safety/misevolution.ts`) rejects harmful edits by fixed criteria, the
 shadow veto (`scaffold/shadow.ts`, `maxRegressions: 1`, `minDecisiveTrials: 5`,
@@ -457,7 +456,7 @@ Monte-Carlo-derived) rejects regressions, and the DGM-style archive
 re-branching by clade-metaproductivity (what a lineage went on to produce).
 Every self-modification surfaces as a human-readable card through the evolution
 changelog (`evolution/changelog.ts`). See [EVOLUTION.md](./EVOLUTION.md) and
-[MCTS.md](./MCTS.md).
+[EXPLORATION.md](./EXPLORATION.md).
 
 ## Package structure
 
@@ -517,7 +516,6 @@ local process. Both drive the same core `ChatSession`.
 | Executor | codemode over the Worker Loader (`KinuSandboxExecutor`) | Bun subprocess sandbox, in-process fallback |
 | LLM | Workers AI binding or AI Gateway | AI Gateway via AI SDK |
 | Swarm nodes | Hosted `node` actors acquired from the one `ActorHost`, seated per run | `LocalAgentSession` node runtime with a credentialed home when the local VFS supports principals |
-| MCTS branches | Hosted `branch` actors: one model call per `explore`/`generateReflection` | `child_process.fork` (`packages/cli-backend/src/branch-process.ts`) |
 | Subordinates | Hosted `subordinate` actors (`host.acquire` + `host.run`, report lane) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
 
 The full contract and the three extension points (`ModelProvider`,

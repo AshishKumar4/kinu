@@ -14,7 +14,6 @@ export type ModelRoutePolicy =
 const MODEL_ROUTE_POLICY = {
   agent: { kind: 'invocation' },
   head: { kind: 'invocation' },
-  mcts: { kind: 'invocation' },
   swarm: { kind: 'invocation' },
   slate: { kind: 'invocation' },
   scaffold: { kind: 'fixed', tier: 'deep' },

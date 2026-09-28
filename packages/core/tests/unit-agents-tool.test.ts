@@ -902,7 +902,7 @@ describe('agents tool — peer workspace actions', () => {
 // names what it dropped. It is also the detach gate (orchestrator/background-tools.ts).
 
 describe('agents tool — resuming a stored delegation row', () => {
-  /** `diagnostics` writes JSON lines to console.error with no injection seam; see unit-mcts-resume.test.ts. */
+  /** `diagnostics` writes JSON lines to console.error with no injection seam. */
   function captureEvents<Result>(run: () => Result) {
     const original = console.error;
     const lines: string[] = [];

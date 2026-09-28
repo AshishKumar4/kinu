@@ -721,7 +721,7 @@ describe('CLI TUI layout', () => {
               turnId: 'turn-1',
               sessionId: 'session-1',
               task: 'Choose an implementation',
-              source: 'mcts',
+              source: 'branch',
               winnerNodeId: 'node-1',
               chosenNodeId: null,
               candidates: [{

@@ -103,7 +103,7 @@ import {
   // Spend governor is opt-in: no label means no cap.
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   normalizeUsage, priceCall, type Usage,
-  branchCompletion, explorePrompt, reflectionPrompt, generateReported, type GenerateRequest,
+  generateReported, type GenerateRequest,
   WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent, type CacheWarmingLane,
   recordModelOperations, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
@@ -122,7 +122,7 @@ import {
   readDeviceRequestChannel, type DeviceRequestChannel,
   cancelCurrentWork, getStoredModelSpec, setModel, getChatHistoryPage,
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest,
-  type MctsSearchStore, readSearchTree, isSteerBranchRunId, type MCTSProgressEvent,
+  type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
   resolveTurnSkills, filterToolNamesBySkills,
   type ActiveSkillSet,
@@ -177,8 +177,8 @@ import {
   type CFRuntime, type CFRuntimeHooks,
 } from "./runtime";
 import {
-  hostNodeSeat, hostBranch, abortHostedBranch, nodeCodemodeTool, hostedSubordinateRuntime,
-  type HostedActorSeams, type BranchRunnerDeps,
+  hostNodeSeat, nodeCodemodeTool, hostedSubordinateRuntime,
+  type HostedActorSeams,
 } from "./hosted-actors";
 import {
   classifyRecoveredFiber, EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
@@ -2682,11 +2682,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private readonly _mctsPushSeq = new Map<string, number>();
 
-  protected onMctsProgress(event: MCTSProgressEvent): void {
-    const phase = event.type === 'phase' ? event.phase : event.type;
-    const budget = event.type === 'branch-failed' ? undefined : event.remainingBudget;
-    this.broadcastMctsProgress(event.rootId, phase, event.iteration, budget);
-  }
   // Background-job lifecycle (detach, settle, wake, cancel, evict-recovery) over the durable fiber
   // and the programmatic-turn wake. Owns the cancel-controller map.
   private _jobRunner: BackgroundJobRunner | null = null;
@@ -2790,12 +2785,6 @@ export abstract class ActorAgent extends Agent<Env> {
       webSearch: seams.webSearch(),
       originContext: () => this._turnOriginContext,
       resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
-      // Same catalog session as the context window and mission ledger, so a search's estimate
-      // and the ledger debit read one rate.
-      costModel: () => ({
-        spec: this.effectiveModelSpec(),
-        pricing: this.modelCatalog.pricing(),
-      }),
       // Resolved per node when the wave reaches it, not captured with the deps.
       hostNode: (node) => hostNodeSeat(seams, node),
       /**
@@ -3015,27 +3004,6 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  /**
-   * Spec is already resolved by `hostBranch`; do not re-resolve. The operation frame opens before
-   * the request and fails closed; spend is not reported here (engine bills from returned `usage`).
-   */
-  private branchRunnerDeps(): BranchRunnerDeps {
-    return {
-      explorePrompt,
-      reflectionPrompt,
-      complete: async ({ spec, effort, system, user }) => {
-        // Use the route's effort, resolved with the spec; not `REASONING_EFFORT_FOR_STAGE`.
-        const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(spec, effort);
-
-        return branchCompletion(
-          providerOptions ? { model, providerOptions } : { model },
-          system === undefined ? { user } : { system, user },
-          { operations: this.modelOperations, spec },
-        );
-      },
-    };
-  }
-
   protected get rt(): CFRuntime {
     if (!this._rt) {
       const hooks: CFRuntimeHooks = {
@@ -3055,11 +3023,6 @@ export abstract class ActorAgent extends Agent<Env> {
             parent: this.actorHandle(),
             events: (child) => child.stores.eventRecorder,
           }),
-        },
-        // Both members or neither: `requireBranches` refuses when the hook is absent.
-        branches: {
-          spawn: (branchId) => hostBranch(this.hostedSeams(), branchId, this.branchRunnerDeps()),
-          abort: (branchId) => abortHostedBranch(this.hostedSeams(), branchId),
         },
       };
 
@@ -4630,9 +4593,6 @@ export abstract class ActorAgent extends Agent<Env> {
       runDueSessionEvolution: () => this.orch.runDueSessionEvolution(),
       hasAdvisorNoteForTurn: (turnId) => this.engine.hasAdvisorNoteForTurn(turnId),
       reviewAdvisorSnapshot: (snapshot) => this.runAdvisorReview(snapshot),
-      sql: this.boundSql,
-      actor: this.actorHandle(),
-      appendMemory: (path, text) => this.rt.memory.append(path, text),
       armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
       deliverSignal: (signal) => this.orch.inbox.send(signal),
       redrive: (lane, checkpoint, body) => this.redriveRecoveredLane(lane, checkpoint, body),

@@ -355,7 +355,6 @@ describe('E2E Full Lifecycle', () => {
     console.log(`  Purpose: ${info.purpose.slice(0, 60)}`);
     console.log(`  Scaffold version: ${info.scaffoldVersion}`);
     console.log(`  Search nodes: ${info.searchNodeCount}`);
-    console.log(`  Tasks: ${info.taskCount}`);
     console.log(`  Memory size: ${info.memorySize} bytes`);
     console.log(`  Messages: ${msgCount}`);
   });

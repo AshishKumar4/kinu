@@ -287,8 +287,6 @@ function searchStatus(tree: TreeHalf): ForkRunStatus {
 
   if (tree.ledgerStatus === 'converged') return 'completed';
 
-  if (tree.ledgerStatus === 'no_acceptable_candidate') return 'failed';
-
   if (tree.terminal > 0) return 'completed';
 
   if (tree.frontier > 0) return 'running';

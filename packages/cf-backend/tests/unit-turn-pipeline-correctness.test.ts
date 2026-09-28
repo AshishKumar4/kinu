@@ -19,7 +19,7 @@ import type { ScriptedAnswer } from './helpers/turn-harness';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { createHeadRuntime } from '../src/head-runtime';
 import type { HostedActorSeams } from '../src/hosted-actors';
-import type { ModelMessage, ToolSet, UIMessage } from 'ai';
+import type { ModelMessage, ToolSet } from 'ai';
 import { jsonSchema, streamText, tool } from 'ai';
 import * as v from 'valibot';
 
@@ -338,7 +338,7 @@ describe('turn-pipeline correctness wiring', () => {
     await hostedMainActor(workspace);
     const rootFiles = workspaceFiles(workspace.agent);
     await rootFiles.writeFile('/home/main/shared-proof.md', 'registered workspace bytes');
-    const head = await hostedExplorationHarness(workspace, 'full', 'head-a1');
+    const head = await hostedExplorationHarness(workspace, 'head-a1');
     expect(head.actor.record.kind).toBe('run');
     const headFiles = head.actor.runtime.storage.vfs;
     expect(await headFiles.readFile('/home/main/shared-proof.md', { encoding: 'utf8' }))
@@ -529,52 +529,6 @@ describe('turn-pipeline correctness wiring', () => {
 
   // Core's `creditedTurnId` decides; this pins that the orchestrator honours it. A completed plan
   // turn is not an answer the captures competed against, so it purges them (as the CLI does).
-  describe('mid-turn captures are credited to the turn only when it answered', () => {
-    /** Seeds one unclaimed take set inside the turn's window, under this actor (claim and purge are `actor_id`-scoped). */
-    function settleOneTurn(mode: 'plan' | 'build'): ActorHarness<HarnessOrchestratorAgent> {
-      const harness = orchestratorHarness();
-      harness.db.prepare(
-        `INSERT INTO alternate_takes
-           (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
-            candidates, created_at)
-         VALUES (?, 'take-1', NULL, NULL, 'pick a strategy', 'mcts', 'win', NULL, ?, ?)`,
-      ).run(
-        workspaceMainActor(harness.db).actorId,
-        JSON.stringify([
-          { nodeId: 'win', text: 'go with approach A', score: 0.9, visits: 3, depth: 1 },
-          { nodeId: 'alt', text: 'go with approach B', score: 0.86, visits: 2, depth: 1 },
-        ]),
-        Date.now() + 1_000,
-      );
-
-      // The roster reads the composer's mode off the driving message.
-      harness.agent.harnessDrivingUserMessage(`${mode} this`, { kinuMode: mode });
-
-      return harness;
-    }
-
-    const settled: UIMessage = {
-      id: 'a-1', role: 'assistant', parts: [{ type: 'text', text: 'the answer' }],
-    };
-
-    test('a completed build turn claims them', async () => {
-      const harness = settleOneTurn('build');
-      await chatSessionTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-build' });
-      expect(harness.db.query('SELECT turn_id, session_id FROM alternate_takes').get())
-        .toMatchObject({ turn_id: 'a-1', session_id: 'default' });
-    });
-
-    test('a completed PLAN turn purges them', async () => {
-      const harness = settleOneTurn('plan');
-      // Positive control for the absence below: the seeded row did land.
-      expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
-        .toMatchObject({ n: 1 });
-      await chatSessionTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-plan' });
-      expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
-        .toMatchObject({ n: 0 });
-    });
-  });
-
   // `onStart`'s sweep re-pends every open lease, so the settle must close a lease for every drain
   // path, and only once the answer is durable.
   describe('a settled turn closes the delivery leases it answered, and only those', () => {

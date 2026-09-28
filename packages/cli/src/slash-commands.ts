@@ -59,7 +59,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/changelog', description: 'Review what the agent changed about itself; revert one by number', usage: '/changelog [revert <n>]', run: changelogCommand },
   { name: '/refine', description: 'Review fixes staged from corrected turns; approve or reject each', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]', run: refineCommand },
   { name: '/takes', description: 'Compare the latest alternate takes; pick one by number', usage: '/takes [n]', run: takesCommand },
-  { name: '/tree', description: 'Show the MCTS search tree', aliases: ['/mcts'], run: treeCommand },
+  { name: '/tree', description: 'Show the swarm search tree', aliases: ['/mcts'], run: treeCommand },
   { name: '/jobs', description: 'List background jobs', run: jobsCommand },
   { name: '/connect', description: 'Connect this computer so the agent can run commands on it', requires: 'consents', run: connectCommand },
   { name: '/stop', description: 'Stop the running turn', run: stopCommand },
@@ -464,10 +464,10 @@ async function treeCommand({ client }: SlashContext): Promise<SlashOutcome> {
   const nodes = await client.searchNodes();
 
   if (nodes.length === 0) {
-    return { kind: 'text', text: 'No MCTS nodes yet. Ask something that needs a search, or run kinu evolve <name> from a shell.' };
+    return { kind: 'text', text: 'No search nodes yet. Ask for a swarm to build one.' };
   }
 
-  return { kind: 'text', text: `MCTS Tree (${nodes.length} nodes):\n${renderSearchTreeLines(nodes).join('\n')}` };
+  return { kind: 'text', text: `Search tree (${nodes.length} nodes):\n${renderSearchTreeLines(nodes).join('\n')}` };
 }
 
 async function jobsCommand({ client }: SlashContext): Promise<SlashOutcome> {
@@ -1156,7 +1156,6 @@ export function renderStatusLines(status: AgentClientStatus): string[] {
     row('Scaffold:', status.scaffoldVersion === undefined ? undefined : `v${status.scaffoldVersion}`),
     row('Messages:', status.messageCount),
     row('MCTS:', status.searchNodeCount === undefined ? undefined : `${status.searchNodeCount} nodes`),
-    row('Tasks:', status.taskCount),
     row('Tools:', status.toolCount),
     row('Memory:', status.memorySize === undefined ? undefined : `${status.memorySize} B`),
     row('Database:', status.dbSize === undefined ? undefined : `${(status.dbSize / 1024).toFixed(1)} KB`),

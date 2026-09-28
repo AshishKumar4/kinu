@@ -467,7 +467,6 @@ export class LocalAgentClient implements AgentClient {
       tierId: tier.id,
       scaffoldVersion: info.scaffoldVersion,
       searchNodeCount: info.searchNodeCount,
-      taskCount: info.taskCount,
       memorySize: info.memorySize,
       dbSize: statSync(this.deps.dbPath).size,
       toolCount: this.session.toolNames().length,

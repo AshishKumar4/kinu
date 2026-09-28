@@ -383,35 +383,6 @@ test('sends Authorization: Bearer', async () => {
 });
 ```
 
-### Test for a new search engine
-
-Drive the engine, not an adapter over it, and assert on what it wrote. The
-durable tree is what a later reader sees, and an in-memory return value that
-disagrees with the store is the defect worth catching.
-
-```ts
-import { describe, test, expect } from 'bun:test';
-import { runMCTS } from '../src/mcts/engine';
-import { createTestRuntime, createMockSession } from './helpers';
-
-test('budget and branches decide how much tree gets written', async () => {
-  const { rt } = createTestRuntime();
-  rt.spawnBranch = async () => ({
-    explore: async () => ({ text: 'explored' }),
-    generateReflection: async () => ({ text: 'n/a' }),
-  });
-  initTables(rt);
-
-  await runMCTS(rt, createMockSession(), 'tuned task', {
-    mode: 'build', budget: 2, branches: 1,
-  });
-
-  // 1 root + 2 iterations x 1 branch = 3 nodes.
-  const nodes = rt.storage.sql`SELECT * FROM search_nodes WHERE task = 'tuned task'`;
-  expect(nodes.length).toBe(3);
-});
-```
-
 ## What Bun cannot load
 
 The `agents` package imports `cloudflare:email`, which only Workers resolves. So `ActorAgent`, its subclasses, and the auth/routes dispatcher cannot load in `bun test`.

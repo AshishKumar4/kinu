@@ -12,7 +12,7 @@ export interface MctsRow {
   /** Which search this row belongs to. */
   root_id?: string | null;
   task?: string; observation?: string; code_used?: string | null;
-  branch_agent_key?: string | null; msg_id?: string | null; created_at?: number;
+  msg_id?: string | null; created_at?: number;
 }
 
 /** Tree for a payload linking into no root. No `action`: the band then labels the root from the run name. */

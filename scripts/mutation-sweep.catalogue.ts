@@ -171,13 +171,7 @@ export const CATALOGUE: readonly Mutation[] = [
   // `mcts-self-metered-write` and `mcts-caller-budget-wins` follow it now that
   // `strategy/{mcts,heads,single-shot}.ts` and `createStrategyRegistry` are gone
   // too: their decisions were the adapters' own, and a catalogue that keeps
-  // mutating a decision after the decision is gone reports on nothing. Nothing is
-  // re-pointed at the engines underneath — `runMCTS`'s own `judgeSamples`
-  // precedence is defended by four `integration-mcts.test.ts` cases at the engine
-  // seam and seeded as a bench defect
-  // (`bench/corpus/patches/mcts-strategy-ignores-judge-samples-override.patch`,
-  // re-authored onto `mcts/engine.ts` when the adapter it named was deleted),
-  // which is a measurement this catalogue would only duplicate.
+  // mutating a decision after the decision is gone reports on nothing.
 
   /* ── The swarm engine's undefended decisions ──────────────────────────────── */
   {

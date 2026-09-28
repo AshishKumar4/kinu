@@ -1286,7 +1286,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(store.get(opened.id)?.stage).toBe('planning');
 
     // The real recovery caller: an engine built after the nudge started.
-    const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { reportModelCall: unobservedSpend, enabled: false });
+    const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { enabled: false });
     // It recovered its empty review queue and left the live claim alone.
     expect(recovery.sessionWindow.countQueuedReviews()).toBe(0);
     expect(store.get(opened.id)?.stage).toBe('planning');

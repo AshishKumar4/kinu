@@ -147,7 +147,6 @@ export interface LocalAgentInfoSnapshot {
   purpose: string;
   scaffoldVersion: number;
   searchNodeCount: number;
-  taskCount: number;
   createdAt: number;
   conversationCount: number;
   model: string | null;
@@ -219,9 +218,6 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       purpose: status.purpose,
       scaffoldVersion: status.scaffoldVersion,
       searchNodeCount: status.searchNodeCount,
-      taskCount: actor && tableExists(db, 'task_history')
-        ? countOf(db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actor.actorId)
-        : 0,
       createdAt: status.createdAt ?? 0,
       conversationCount: actor && tableExists(db, 'conversation_entries')
         ? countOf(
@@ -405,7 +401,7 @@ export function listLocalMcts(name: string): SearchNode[] {
     return all<SearchNode>(
       db,
       `SELECT id, parent_id, root_id, task, action, observation, code_used, visits, value, depth,
-              status, msg_id, branch_agent_key, created_at
+              status, msg_id, created_at
        FROM search_nodes
        WHERE actor_id = ?
        ORDER BY depth, created_at`,
@@ -981,9 +977,6 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
         : 0,
       searchNodeCount: tableExists(db, 'search_nodes')
         ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId)
-        : 0,
-      taskCount: tableExists(db, 'task_history')
-        ? countOf(db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actorId)
         : 0,
       createdAt: row.createdAt,
       conversationCount: tableExists(db, 'conversation_entries')

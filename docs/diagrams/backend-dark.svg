@@ -131,10 +131,6 @@
   <text class="xs mono" x="371" y="466.1" text-anchor="middle" fill="var(--blue)">identity</text>
   <rect x="407" y="452" width="69" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
   <text class="xs mono" x="441.5" y="466.1" text-anchor="middle" fill="var(--blue)">craftStore</text>
-  <rect x="483" y="452" width="89" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
-  <text class="xs mono" x="527.5" y="466.1" text-anchor="middle" fill="var(--blue)">spawnBranch</text>
-  <rect x="24" y="478" width="81" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
-  <text class="xs mono" x="64.5" y="492.1" text-anchor="middle" fill="var(--blue)">abortBranch</text>
   <rect x="112" y="478" width="79" height="21" rx="10.5" stroke-dasharray="3 3" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="xs mono" x="151.5" y="492.1" text-anchor="middle" fill="var(--fg)">judgeModel</text>
   <rect x="198" y="478" width="58" height="21" rx="10.5" stroke-dasharray="3 3" fill="var(--slateFill)" stroke="var(--rule)"/>

@@ -68,7 +68,7 @@ describe('actor schema', () => {
       init((ddl) => db.exec(ddl), makeSql(db));
       const columns = columnNames(db, 'search_nodes');
 
-      for (const column of ['code_used', 'code_language', 'root_id']) {
+      for (const column of ['code_used', 'root_id']) {
         expect(columns).toContain(column);
       }
 
@@ -80,7 +80,7 @@ describe('actor schema', () => {
       initSearchTables((ddl) => db.exec(ddl));
       const columns = columnNames(db, 'search_nodes');
 
-      for (const column of ['code_used', 'code_language', 'root_id']) {
+      for (const column of ['code_used', 'root_id']) {
         expect(columns).toContain(column);
       }
 

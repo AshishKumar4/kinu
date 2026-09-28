@@ -57,7 +57,6 @@ import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-
 import { createCwdPlaneVFS } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
-import { BRANCH_CREDENTIAL_ENV, createBranchSpawner } from './branch-process';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
   createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV,
@@ -74,7 +73,7 @@ import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalAc
 import * as v from 'valibot';
 import { stampSchemaGenesis } from './schema-genesis';
 
-const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV];
+const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV];
 
 interface CLIRuntimeOptions {
   dbPath: string;
@@ -252,7 +251,7 @@ export function createCLIRuntime(
       new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
     }
 
-    actor = openLocalRootActor(db, sql);
+    actor = openLocalRootActor(sql);
   }
 
   // After the branch binds an actor: an unscoped sweep would resume a sibling's lane.
@@ -343,15 +342,6 @@ export function createCLIRuntime(
     cron: async () => {},
     fiber: createSqlFiber(sql, actor),
   };
-
-  // `:memory:` is SQLite's in-memory sentinel, not a path.
-  const rootDbPath = config.dbPath === ':memory:' ? null : config.dbPath;
-
-  const { spawn: spawnBranch, abort: abortBranch } = createBranchSpawner(rootDbPath, {
-    parent: actor, llm: config.llm,
-    providerCredentials: config.providerCredentials,
-    oauthConfigPath: config.oauthConfigPath,
-  });
 
   const storage = inlineWorkspaceStorage(db);
 
@@ -484,8 +474,6 @@ export function createCLIRuntime(
     memory,
     craftStore,
     modelLanes,
-    spawnBranch,
-    abortBranch,
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
@@ -587,7 +575,7 @@ export async function buildLocalActorRuntime(
   const binding = bindLocalActorReference(parent.actor, bound.reference);
   adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
 
-  const run = binding.kind === 'run' && binding.toolProfile === 'full';
+  const run = binding.kind === 'run';
 
   if (run && swarmSeat === true) {
     if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
@@ -630,7 +618,7 @@ async function buildCLIHeadRuntime(
   const { parentRuntime: parent } = opts;
   const sql = parent.storage.sql;
 
-  if (opts.actorBinding.kind !== 'run' || opts.actorBinding.toolProfile !== 'full') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
+  if (opts.actorBinding.kind !== 'run') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
   const physicalName = headAgentName(actor.storageKey);
 
@@ -724,7 +712,6 @@ async function buildCLIHeadRuntime(
     workspaceIsMachine: parent.workspaceIsMachine,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     memory: parent.memory, craftStore: parent.craftStore,
-    spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
     executionRouter, shell,
   };
 

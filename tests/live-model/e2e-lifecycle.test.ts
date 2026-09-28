@@ -30,16 +30,14 @@ import {
   type LLMProviderConfig,
   type CompletedTurn,
   type EvolutionEvent,
-  type SearchNode,
-  runMCTS,
   readSoul,
 } from '../../packages/core/src/index';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
-import { buildEvalAgentSurface, createStepToolCallLog, makeSessionWriter } from './harness';
+import { buildEvalAgentSurface, createStepToolCallLog } from './harness';
 import { provisionLocalTarget, type LocalTarget } from './target-local';
 import {
-  EVAL_BACKEND_ENV, liveChatModel, liveModelCallSink, liveModelTarget, recordLiveModelEpisode,
+  EVAL_BACKEND_ENV, liveChatModel, liveModelTarget,
   recordLiveModelSpend, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
 
@@ -185,13 +183,11 @@ describe('E2E Lifecycle', () => {
     // with no directory bound, the executor-surface and sandbox guards and
     // `installPreTurnProfile` were spelled out here and identically in three sibling
     // suites. Each step has a measured failure behind it — a hand-picked schema
-    // subset that omitted `initShadowTables` and killed a sibling mid-run, a birth
-    // runtime whose `spawnBranch` throws by design so `MCTS evolution` below could
-    // never pass, a default executor plane rooted at the repo this suite was
-    // launched from, and an unwired runtime whose every routed lane is dead so
-    // `reviewTurn`/`converge` throw before reaching a model. All four now live in
-    // ONE place instead of four, which is the point: a step learned once had to be
-    // remembered four times.
+    // subset that omitted `initShadowTables` and killed a sibling mid-run, a default
+    // executor plane rooted at the repo this suite was launched from, and an unwired
+    // runtime whose every routed lane is dead so `reviewTurn` throws before reaching
+    // a model. All three now live in ONE place, which is the point: a step learned
+    // once had to be remembered at every suite.
     target = await provisionLocalTarget({
       dir: TEST_DIR,
       workspace: 'e2e-test',
@@ -201,9 +197,7 @@ describe('E2E Lifecycle', () => {
     rt = target.runtime;
     db = target.db;
     events = [];
-    engine = new EvolutionEngine(rt, rt.stores.history, {
-      enabled: true, reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
-    });
+    engine = new EvolutionEngine(rt, rt.stores.history, { enabled: true });
     engine.onEvent(e => events.push(e));
     turns = [];
 
@@ -372,34 +366,6 @@ describe('E2E Lifecycle', () => {
     if (!mem) throw new Error('evolution did not write memory content');
     console.log(`  Memory: ${mem.length} chars`);
   });
-
-  liveTest('MCTS evolution', async () => {
-    const session = makeSessionWriter();
-
-    const result = await runMCTS(rt, session, 'How can I improve as a TypeScript assistant?', {
-      budget: 1, branches: 2, maxCostUSD: 5,
-      // Every other test here holds an SDK result and reports it directly. A search
-      // does not: its rollouts and judge samples are made deeper down, so with no
-      // sink they happen and go unattributed — this step ran for 456s and reported
-      // `0 model call(s)`, which is the floor-as-a-total shape the tier's own
-      // liveness verdict refuses.
-      reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
-    });
-
-    recordLiveModelEpisode(rt.storage.sql, rt.actor);
-    const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
-    console.log(`  Nodes: ${nodes.length}`);
-    expect(nodes.length).toBe(3);
-    expect(nodes.some((node) => node.id === result.winnerId)).toBe(true);
-    // The search is already at its floor — `budget: 1, branches: 2` is the
-    // smallest shape that can produce the three nodes asserted above — so the
-    // ceiling is what had to move. It was 300s against a step MEASURED at 290s
-    // one run and killed past 300s the next, which is a coin toss rather than a
-    // gate. Per-call latency on @cf/deepseek-ai/deepseek-v4-pro-0813 spans 22s to
-    // 293s inside a single run of this very suite, so a ceiling needs multiples
-    // of the measurement and not percent. 900s is what the sibling MCTS step in
-    // `exploration.eval.test.ts` uses, and these two are the same kind of step.
-  }, 900_000);
 
   liveTest('persistence', async () => {
     const msgsBefore = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM conversation_entries').get()?.c ?? 0;

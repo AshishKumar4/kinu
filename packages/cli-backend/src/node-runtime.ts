@@ -88,8 +88,6 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       get judgeModel() { return origin.judgeModel; },
       get fastLlm() { return origin.fastLlm; },
       get advisorLlm() { return origin.advisorLlm; },
-      spawnBranch: origin.spawnBranch,
-      abortBranch: origin.abortBranch,
       executionRouter: router,
       shell,
       checkpoints: origin.checkpoints,
