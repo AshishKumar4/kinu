@@ -1,5 +1,5 @@
-// Real actor handles over a test database. Actor-private stores re-run the handle's validation per
-// statement, so a literal stand-in would bypass the binding under test; `sibling` proves isolation.
+// Real actor handles over a test database. Actor-private stores re-run the handle's validation, so a literal
+// stand-in would bypass the binding under test; `sibling` proves isolation.
 import type { Database } from 'bun:sqlite';
 import {
   WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, initAgentConfigTable, initCodemodeStateTable,

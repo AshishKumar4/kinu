@@ -29,6 +29,7 @@ import { diagnostics, KinuError, toKinuError } from '../obs/index';
 import { atVfsPath, isVfsError } from './errno';
 import type { MountedVfs } from './mounts';
 import { mountedAuthority, type ShellMountTable } from './shell-mounts';
+import { mountCommands } from './mount-listing';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes';
 
@@ -61,7 +62,6 @@ export interface WorkspaceVFS extends VFS {
   readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
 }
 
-/** A vendor file view over absolute paths. */
 interface VendorFiles {
   readText(path: string): string | Promise<string>;
   readBytes(path: string): Uint8Array | Promise<Uint8Array>;
@@ -83,7 +83,6 @@ interface VendorStat {
   readonly type: string;
 }
 
-/** The VFS contract over one vendor view; a failure names its path. */
 function workspaceFiles(vendor: VendorFiles): WorkspaceVFS {
   const at = <T>(path: string, syscall: string, call: (absolute: string) => T | Promise<T>): Promise<T> => {
     const absolute = workspacePath(path);
@@ -287,6 +286,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         }
 
         const workspace = await NimbusWorkspace.create(creation);
+
+        const commands = mountCommands(tableFor, () => workspace.vfs.getStats());
+
+        for (const [name, command] of Object.entries(commands)) workspace.registry.register(name, command);
         settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
         settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL));
         resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);

@@ -33,7 +33,7 @@ import type { CountableRequest, InputTokenCount } from './providers/input-tokens
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
-import { describeProviderError, providerFailureFacts, toProviderError } from './providers/util';
+import { providerFailureFacts, providerFailureText, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
 import * as v from 'valibot';
@@ -407,7 +407,7 @@ class ProviderCall {
         // A tool threw or its schema refused: the error text is the durable outcome and the seam's result.
         const cause = this.refusedCalls.get(chunk.toolCallId) ?? chunk.error;
         this.refusedCalls.delete(chunk.toolCallId);
-        const error = describeProviderError({ cause });
+        const error = providerFailureText({ cause });
 
         return {
           type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, error,
@@ -786,7 +786,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     suppressDeferredRejections(result, () => call.interrupted || (opts.signal?.aborted ?? false));
     // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.
-    const observed = opts.observeStream?.(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) }), { index: callIndex });
+    const observed = opts.observeStream?.(result.toUIMessageStream({ onError: (error) => providerFailureText({ cause: error }) }), { index: callIndex });
 
     try {
       // Drained to the SDK's `abort` part rather than broken out of: `onAbort` has then run, and a late tool result
@@ -858,7 +858,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const next = await nextFallback(chain, servingFallback ?? opts.modelSpec, outcome.failure, opts.credentialOf);
 
     if (next === undefined) throw outcome.failure.error;
-    yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: describeProviderError({ cause: outcome.failure.cause }) };
+    yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: providerFailureText({ cause: outcome.failure.cause }) };
     await opts.persistStep?.(outcome.produced);
 
     const bound = next.bind();

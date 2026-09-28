@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-27",
-  "files": 2834,
-  "functions": 70102,
+  "files": 2838,
+  "functions": 70161,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -295,10 +295,6 @@
     },
     {
       "key": "packages/core/src/orchestrator/terminal-roster.ts#declareTerminalRoster",
-      "complexity": 30
-    },
-    {
-      "key": "packages/core/src/providers/util.ts#readProviderFailure",
       "complexity": 30
     },
     {

@@ -112,7 +112,7 @@ describe('a failed call hands the turn down its fallback chain', () => {
     expect(served.map((entry) => entry.model)).toEqual(['primary', 'backup']);
     const switched = events.find((event) => event.type === 'model-fallback');
     expect(switched).toMatchObject({ type: 'model-fallback', from: 'openrouter/primary', to: 'openrouter/backup' });
-    expect(switched?.type === 'model-fallback' ? switched.reason : '').toContain('HTTP 402');
+    expect(switched?.type === 'model-fallback' ? switched.reason : '').toBe('the provider refused the request (HTTP 402)');
     expect(events.find((event) => event.type === 'done')).toMatchObject({ text: 'from backup' });
   });
 

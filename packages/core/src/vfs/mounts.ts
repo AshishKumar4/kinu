@@ -321,6 +321,7 @@ function siblingPath(path: string, purpose: string, nonce: string): string {
 export interface VfsMountRouting {
 	mountOf(path: string): string | null;
 	mountPoints(): readonly string[];
+	liveMounts(): readonly { readonly name: string; readonly readOnly: boolean }[];
 	/** The user's writable mount roots, connected or not. */
 	userRoots(): readonly string[];
 }
@@ -435,6 +436,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 	const table: MountedVfs = {
 		mountOf: (path) => mountNamed(path)?.name ?? null,
 		mountPoints,
+		liveMounts: () => [...byName.values()].filter((m) => m.files() !== null).map((m) => ({ name: m.name, readOnly: m.readOnly === true })),
 		userRoots: () => userRoots,
 		readFile(path, opts) {
 			return delegate(path, (files, native) => files.readFile(native, opts));

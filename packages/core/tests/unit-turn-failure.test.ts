@@ -43,7 +43,7 @@ describe('classifyTurnFailure', () => {
       'Unauthorized',
       'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.',
       'Your ChatGPT login is no longer valid. Reconnect ChatGPT in User settings, or run `kinu setup` on this machine.',
-      'Codex token refresh failed: 400 {"error":"invalid_grant","error_description":"The provided authorization grant is invalid"}',
+      'Codex token refresh failed (invalid_grant).',
       'Invalid API key provided',
       'Codex credentials not configured. Connect ChatGPT in User settings, or run `kinu setup` on this machine.',
     ]) {

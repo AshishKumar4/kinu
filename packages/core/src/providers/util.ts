@@ -1,20 +1,17 @@
-// Shared provider internals: the auth-injecting fetch wrapper and catalog parse helpers.
 import type { LanguageModelV3Message } from '@ai-sdk/provider';
 import type { LanguageModelMiddleware } from 'ai';
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { withCallAccount } from './quota';
-import { evidenceWindow } from '../utils/evidence-window';
+import { describeProviderError, readProviderFailure } from './provider-prose';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { nonEmptyString } from '../utils/json';
 import {
-  KinuError, classifyErrorCode, diagnostics, settle, tolerate, type ErrorCode,
+  KinuError, classifyErrorCode, diagnostics, settle, type ErrorCode,
 } from '../obs/index';
 
 export interface AuthedFetchOptions {
-  /** Credential key passed to the AuthResolver on every request. */
   credKey: string;
   /** Named in rate-limit wait notices. */
   provider: string;
@@ -28,7 +25,7 @@ export interface AuthedFetchOptions {
   mutate?: (ctx: { url: string; headers: Headers; auth: AuthResolution }) => string | void;
 }
 
-/** Auth-injecting fetch; auth is re-resolved per request so credential changes apply live. */
+/** Auth is re-resolved per request so credential changes apply live. */
 export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions): typeof globalThis.fetch {
   const waitListener = deps.onProviderWait;
 
@@ -90,7 +87,6 @@ function withoutItemIds(message: LanguageModelV3Message): LanguageModelV3Message
   };
 }
 
-/** Credential identity for keying catalog caches. */
 export function authCacheKey(auth: AuthResolution): string {
   return JSON.stringify([auth.headers, auth.baseURL ?? null]);
 }
@@ -154,114 +150,41 @@ export function positiveInteger(input: { value: unknown }): number | undefined {
   return parsed.success ? Math.floor(parsed.output) : undefined;
 }
 
-/** Nested `{ error: … }` depth: OpenAI nests once, gateways re-wrap. */
-const PROVIDER_ERROR_MAX_DEPTH = 3;
-
-const PROVIDER_ERROR_MAX_CHARS = 800;
-
-/** Structural `APICallError` fields, so a gateway's re-thrown shape reads the same. */
-const ApiCallErrorSchema = v.looseObject({
-  statusCode: v.optional(v.number()),
-  responseBody: v.optional(v.pipe(v.string(), v.trim(), v.nonEmpty())),
-});
-
-/** Stream `error` chunks carry a status without being an `Error`. */
-const StatusFieldSchema = v.looseObject({
-  status: v.optional(v.number()),
-  statusCode: v.optional(v.number()),
-});
-
-/** Provider failure facts as fields, so consumers never re-match prose. */
 export interface ProviderFailureFacts {
-  /** Safe to show a user; never a raw response body. */
-  readonly message: string;
-  /** The provider's stable error code (`code`, else `type`), verbatim. */
+  readonly said?: string;
   readonly providerCode?: string;
   readonly status?: number;
 }
 
-/** Read a provider failure (often a plain object, not an `Error`) down to its facts.
- *  A response body is parsed, never forwarded: it may echo the request's headers. */
+/** A code field carrying prose is dropped. */
+const PROVIDER_CODE = /^[A-Za-z0-9_.:-]{1,64}$/u;
+
 export function providerFailureFacts(failure: { readonly cause: unknown }): ProviderFailureFacts {
-  return readProviderFailure({ cause: failure.cause, depth: 0 })
-    ?? { message: 'unknown provider error' };
-}
-
-/** Null when nothing readable, so a caller keeps the reason it already had. */
-function readProviderFailure(
-  input: { readonly cause: unknown; readonly depth: number },
-): ProviderFailureFacts | null {
-  const { cause: error, depth } = input;
-
-  if (error instanceof Error) {
-    const envelope = v.safeParse(ApiCallErrorSchema, error);
-    const status = envelope.success ? envelope.output.statusCode : undefined;
-    const body = envelope.success ? envelope.output.responseBody : undefined;
-
-    // The reason lives in the body; `||` because an empty message says nothing.
-    const parsed = body === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
-      ? undefined
-      : tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
-
-    const fromBody = parsed === undefined
-      ? null
-      : readProviderFailure({ cause: parsed, depth: depth + 1 });
-
-    return {
-      message: fromBody?.message ?? (error.message || error.name),
-      providerCode: fromBody?.providerCode,
-      status,
-    };
-  }
-
-  const text = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), error);
-
-  if (text.success) return { message: text.output };
-
-  if (v.is(v.string(), error)) return null;
-
-  // Shallow, not `JsonObject`: the recursive schema overflows on self-referencing errors.
-  const record = v.safeParse(v.record(v.string(), v.unknown()), error);
-
-  if (!record.success) return null;
-
-  const fields = record.output;
-  const status = v.safeParse(StatusFieldSchema, fields);
-  const reported = status.success ? status.output.status ?? status.output.statusCode : undefined;
-  const providerCode = nonEmptyString({ value: fields.code }) ?? nonEmptyString({ value: fields.type });
-
-  const stated = nonEmptyString({ value: fields.message })
-    ?? nonEmptyString({ value: fields.error_description })
-    ?? nonEmptyString({ value: fields.detail });
-
-  // Gateways stamp code and status on the outer envelope.
-  const nested = stated !== undefined || fields.error === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
-    ? null
-    : readProviderFailure({ cause: fields.error, depth: depth + 1 });
-
-  // Name the keys, never the values: the values may leak.
-  const named = Object.keys(fields).join(', ') || 'no fields';
+  const { said, providerCode, status } = readProviderFailure(failure);
 
   return {
-    message: stated ?? nested?.message ?? `unrecognised provider error (fields: ${named})`,
-    providerCode: nested?.providerCode ?? providerCode,
-    status: nested?.status ?? reported,
+    ...(said !== undefined && { said }),
+    ...(providerCode !== undefined && PROVIDER_CODE.test(providerCode) && { providerCode }),
+    ...(status !== undefined && { status }),
   };
 }
 
-/** Reason plus identifiers it does not already state, bounded by `evidenceWindow`
- *  since the useful sentence is usually last. */
-export function describeProviderError(failure: { readonly cause: unknown }): string {
-  const facts = providerFailureFacts({ cause: failure.cause });
+export function providerFailureTags(facts: ProviderFailureFacts): string[] {
   const tags: string[] = [];
 
   if (facts.status !== undefined) tags.push(`HTTP ${String(facts.status)}`);
-  const code = facts.providerCode;
 
-  if (code !== undefined && !facts.message.toLowerCase().includes(code.toLowerCase())) tags.push(code);
-  const rendered = tags.length > 0 ? `${facts.message} (${tags.join(', ')})` : facts.message;
+  if (facts.providerCode !== undefined) tags.push(facts.providerCode);
 
-  return evidenceWindow(rendered, PROVIDER_ERROR_MAX_CHARS);
+  return tags;
+}
+
+/** The one way a provider failure reaches a user as text. */
+export function providerFailureText(failure: { readonly cause: unknown }): string {
+  const facts = providerFailureFacts(failure);
+  const tags = providerFailureTags(facts);
+
+  return `${facts.said ?? 'the provider refused the request'}${tags.length > 0 ? ` (${tags.join(', ')})` : ''}`;
 }
 
 /** HTTP status to `obs/error.ts` class; null when the status says nothing. */
@@ -284,7 +207,6 @@ function codeForStatus(status: number): ErrorCode | null {
 export function toProviderError(input: {
   doing: string;
   cause: unknown;
-  /** The provider the request was sent to, when the caller resolved one. */
   provider?: string;
 }): KinuError {
   const facts = providerFailureFacts({ cause: input.cause });
@@ -293,15 +215,10 @@ export function toProviderError(input: {
     ?? (facts.status === undefined ? null : codeForStatus(facts.status))
     ?? 'unavailable';
 
-  const tags: string[] = [];
-
-  if (facts.status !== undefined) tags.push(`HTTP ${String(facts.status)}`);
-
-  if (facts.providerCode !== undefined) tags.push(facts.providerCode);
+  const tags = providerFailureTags(facts);
 
   if (input.provider !== undefined) tags.push(input.provider);
 
-  /** The fields the diagnostics record carries beside the error itself. */
   interface ProviderFailureFields {
     detail: string;
     status?: number;
@@ -309,13 +226,15 @@ export function toProviderError(input: {
     provider?: string;
   }
 
+  const read = readProviderFailure({ cause: input.cause });
+
   const fields: ProviderFailureFields = {
     detail: describeProviderError({ cause: input.cause }),
   };
 
-  if (facts.status !== undefined) fields.status = facts.status;
+  if (read.status !== undefined) fields.status = read.status;
 
-  if (facts.providerCode !== undefined) fields.providerCode = facts.providerCode;
+  if (read.providerCode !== undefined) fields.providerCode = read.providerCode;
 
   if (input.provider !== undefined) fields.provider = input.provider;
 

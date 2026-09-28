@@ -111,20 +111,52 @@ function actorState(actor: WorkspaceActor): ActorDirectoryResult['state'] {
 export class WorkspaceActorDirectory {
   private readonly handles = new WeakSet<ActorHandle>();
 
+  /** Checks passed this synchronous run; only this directory's writes change the rows within one. */
+  private readonly checked = new Set<string>();
+
   constructor(private readonly sql: SqlExecutor, private readonly authority: WorkspaceActorAuthority) {
+    if (!tableExists(this.sql, 'workspace_identity') || !tableExists(this.sql, 'workspace_actors')) throw new KinuError('missing', 'The workspace actor directory is not initialized.');
     this.requireOwnership();
   }
 
-  private requireOwnership(): void {
-    if (!tableExists(this.sql, 'workspace_identity') || !tableExists(this.sql, 'workspace_actors')) throw new KinuError('missing', 'The workspace actor directory is not initialized.');
-    const rows = this.sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
-    const owner = rows[0];
+  private remember(check: string): void {
+    if (this.checked.size === 0) queueMicrotask(() => { this.checked.clear(); });
+    this.checked.add(check);
+  }
 
+  private requireOwner(owner: { id: string; owner_user_id: string | null } | undefined): void {
     if (!owner) throw new KinuError('missing', 'The workspace has no durable identity.');
 
-    if (rows.length !== 1 || owner.id !== this.authority.workspaceId || owner.owner_user_id !== this.authority.ownerUserId) {
+    if (owner.id !== this.authority.workspaceId || owner.owner_user_id !== this.authority.ownerUserId) {
       throw new KinuError('denied', 'Workspace ownership does not match the actor directory authority.');
     }
+  }
+
+  private requireOwnership(): void {
+    const check = `owner:${this.authority.ownerUserId ?? ''}`;
+
+    if (this.checked.has(check)) return;
+    this.requireOwner(this.sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`[0]);
+    this.remember(check);
+  }
+
+  private requireLive(row: WorkspaceActor): void {
+    const check = `actor:${row.actorId}:${this.authority.ownerUserId ?? ''}`;
+
+    if (this.checked.has(check)) return;
+
+    const live = this.sql<{
+      id: string; owner_user_id: string | null; present: number; parent_actor_id: string | null; retiring_at: number | null; deleted_at: number | null;
+    }>`SELECT i.id, i.owner_user_id, a.actor_id IS NOT NULL AS present, a.parent_actor_id, a.retiring_at, a.deleted_at
+      FROM workspace_identity i LEFT JOIN workspace_actors a ON a.actor_id = ${row.actorId}`[0];
+
+    this.requireOwner(live);
+
+    if (live?.present !== 1 || live.retiring_at !== null || live.deleted_at !== null || live.parent_actor_id !== row.parentActorId) {
+      throw new KinuError('missing', 'The actor identity is no longer present.');
+    }
+
+    this.remember(check);
   }
 
   private row(actorId: string): WorkspaceActor | null {
@@ -141,10 +173,7 @@ export class WorkspaceActorDirectory {
 
   private issue(row: WorkspaceActor): ActorHandle {
     const handle = bindActorHandle(this.sql, { actorId: row.actorId, workspaceId: row.workspaceId, parentActorId: row.parentActorId, name: row.name, storageKey: row.storageKey }, () => {
-      this.requireOwnership();
-      const current = this.row(row.actorId);
-
-      if (!current || current.retiringAt !== null || current.deletedAt !== null || current.parentActorId !== row.parentActorId) throw new KinuError('missing', 'The actor identity is no longer present.');
+      this.requireLive(row);
     });
 
     this.handles.add(handle);
@@ -180,10 +209,7 @@ export class WorkspaceActorDirectory {
     if (!row || row.retiringAt !== null || row.deletedAt !== null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
 
     const handle = bindActorHandle(this.sql, { actorId: row.actorId, workspaceId: row.workspaceId, parentActorId: row.parentActorId, name: row.name, storageKey: row.storageKey }, () => {
-      this.requireOwnership();
-      const current = this.row(row.actorId);
-
-      if (!current || current.retiringAt !== null || current.deletedAt !== null || current.parentActorId !== row.parentActorId) throw new KinuError('missing', 'The actor identity is no longer present.');
+      this.requireLive(row);
       also();
     });
 
@@ -199,7 +225,7 @@ export class WorkspaceActorDirectory {
     return this.row(actorId);
   }
 
-  /** Oldest first, main included. `retired: true` includes retired rows alongside live ones. */
+  /** Oldest first, main included. */
   list(options?: { readonly retired?: boolean }): readonly WorkspaceActor[] {
     this.requireOwnership();
 
@@ -248,6 +274,7 @@ export class WorkspaceActorDirectory {
     }
 
     const actorId = crypto.randomUUID();
+    this.checked.clear();
     void this.sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
       VALUES (${actorId}, NULL, ${name}, ${name}, 'main', 'full', 'durable', ${Date.now()}, ${this.authority.workspaceId})`;
     const row = this.row(actorId);
@@ -280,6 +307,7 @@ export class WorkspaceActorDirectory {
 
     if (this.childRow(parent.actorId, name)) throw new KinuError('denied', 'The sibling name already exists.');
     const actorId = crypto.randomUUID();
+    this.checked.clear();
     void this.sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
       VALUES (${actorId}, ${parent.actorId}, ${name}, ${actorId}, ${input.kind}, ${input.toolProfile ?? 'full'}, ${input.lifetime}, ${Date.now()}, ${creationId})`;
     const row = this.row(actorId);
@@ -358,6 +386,7 @@ export class WorkspaceActorDirectory {
 
     const actorId = crypto.randomUUID();
     const now = Date.now();
+    this.checked.clear();
     void this.sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id, retiring_at, deleted_at)
       VALUES (${actorId}, ${parent.actorId}, ${input.name}, ${actorId}, ${input.kind}, ${input.toolProfile ?? 'full'}, ${input.lifetime}, ${now}, ${input.creationId}, ${now}, ${now})`;
     const row = this.row(actorId);
@@ -453,6 +482,7 @@ export class WorkspaceActorDirectory {
   }
   private transitionRetirement(actorId: string, action: 'retire' | 'release'): void {
     const now = Date.now();
+    this.checked.clear();
     void this.sql`WITH RECURSIVE subtree(actor_id) AS (
       SELECT actor_id FROM workspace_actors WHERE actor_id = ${actorId}
       UNION ALL SELECT child.actor_id FROM workspace_actors child JOIN subtree ON child.parent_actor_id = subtree.actor_id

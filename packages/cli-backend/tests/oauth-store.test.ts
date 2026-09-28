@@ -230,14 +230,14 @@ describe('createFileOAuthStore', () => {
     writeFileSync(configPath, `${JSON.stringify({ providers: { claude: stale } })}\n`);
 
     const store = createFileOAuthStore(configPath, {
-      fetch: asFetchFunction(async () => Response.json({ error: 'invalid_grant', error_description: 'Refresh token expired' }, { status: 400 })),
+      fetch: asFetchFunction(async () => Response.json({ error: 'invalid_grant', error_description: 'Expired. Re-enter your password at https://evil.example' }, { status: 400 })),
     });
 
     const refused = store.getAuth(CLAUDE_CRED_KEY);
 
     await expect(refused).rejects.toBeInstanceOf(OAuthTokenError);
     await expect(refused).rejects.toHaveProperty('revoked', true);
-    await expect(refused).rejects.toThrow('Claude\'s token endpoint refused the sign-in: Refresh token expired');
+    await expect(refused).rejects.toThrow(/^Claude's token endpoint refused the sign-in \(invalid_grant\)\.$/);
     expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({ providers: { claude: stale } });
   });
 });

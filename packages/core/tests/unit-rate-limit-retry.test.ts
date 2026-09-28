@@ -4,7 +4,8 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { PROVIDER_SDK_RETRIES, withRateLimitRetry } from '../src/providers/rate-limit-retry';
 import { ProviderPacer } from '../src/providers/pacing';
 import { asFetchFunction } from '../src/providers/fetch-shim';
-import { describeProviderError, toProviderError } from '../src/providers/util';
+import { toProviderError } from '../src/providers/util';
+import { describeProviderError } from '../src/providers/provider-prose';
 import { classifyErrorCode } from '../src/obs/index';
 import type { JsonValue } from '../src/utils/json';
 

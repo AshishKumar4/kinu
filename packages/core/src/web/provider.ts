@@ -1,7 +1,7 @@
 /** Web search/fetch provider shared by both backends; key-less by default (DuckDuckGo), Tavily when a `tavily` credential is stored. */
 
 import * as v from 'valibot';
-import { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety';
+import { refusedResolution, assertSafeUrl, isSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
 import { decodeEntities, htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images, stripTags } from './markdown';
 import type { AuthResolver } from '../providers/types';
 import { TOOL_REACH } from '../tools/registry';
@@ -50,6 +50,8 @@ export interface DefaultWebSearchProviderDeps {
   getAuth?: AuthResolver;
   /** Falls back to the local converter when absent or throwing. */
   htmlToMarkdown?: (html: string, opts?: { url?: string }) => Promise<string>;
+  /** Absent on a Worker, whose platform refuses a name resolving inward (`url-safety.ts`). */
+  resolve?: HostResolver;
   /** Per-request budget in ms; absent means no local timeout. */
   timeoutMs?: number;
   clock?: Clock;
@@ -222,6 +224,23 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     });
   }
 
+  const judged = async (url: string): Promise<URL> => {
+    let parsed: URL;
+
+    try {
+      parsed = assertSafeUrl(url);
+    } catch (error) {
+      if (error instanceof UnsafeUrlError) throw new WebFetchError(error.reason, false, { cause: error });
+      throw error;
+    }
+
+    const refusal = deps.resolve === undefined ? null : await refusedResolution(parsed, deps.resolve);
+
+    if (refusal !== null) throw new WebFetchError(refusal);
+
+    return parsed;
+  };
+
   return {
     async search(query, opts) {
       const q = (query ?? '').trim();
@@ -236,14 +255,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     },
 
     async fetch(url, opts) {
-      let parsed: URL;
-
-      try {
-        parsed = assertSafeUrl(url);
-      } catch (error) {
-        if (error instanceof UnsafeUrlError) throw new WebFetchError(error.reason, false, { cause: error });
-        throw error;
-      }
+      const parsed = await judged(url);
 
       // Redirects followed manually so every Location passes the SSRF guard.
       let finalUrl = parsed.toString();
@@ -252,6 +264,8 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         let target = finalUrl;
 
         for (let redirects = 0; ; redirects++) {
+          if (redirects > 0) await judged(target);
+
           const hop = await fetchImpl(target, {
             headers: {
               // Markdown-for-Agents: Cloudflare-proxied zones answer with markdown.
@@ -289,13 +303,6 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
             next = new URL(location, target);
           } catch (error) {
             throw new WebFetchError(`redirect from ${target} names an unparseable location`, false, { cause: error });
-          }
-
-          try {
-            assertSafeUrl(next.toString());
-          } catch (error) {
-            if (error instanceof UnsafeUrlError) throw new WebFetchError(error.reason, false, { cause: error });
-            throw error;
           }
 
           target = next.toString();

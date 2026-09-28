@@ -2205,7 +2205,7 @@ export {
 } from './http/deployed-assets';
 
 export {
-  serveReleaseArtifact, type ReleaseArtifactObject, type ReleaseArtifactStore,
+  releaseArtifact, releaseArtifactHead, type ReleaseArtifactObject, type ReleaseArtifactStore,
 } from './http/release-artifact';
 
 export {
