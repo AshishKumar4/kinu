@@ -132,6 +132,8 @@ async function main(): Promise<void> {
   const noWeb: WebSearchProvider = {
     search: async () => ({ query: '', results: [], source: 'duckduckgo' }),
     fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
+    render: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
+    screenshot: async () => ({ url: '', retrievedAt: '', bytes: new Uint8Array() }),
   };
 
   // One journal for both: the controller writes each head's spawn and report to

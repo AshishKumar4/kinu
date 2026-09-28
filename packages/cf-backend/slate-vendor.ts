@@ -5,10 +5,13 @@ import type { Plugin } from 'vite';
 
 const SpecifiersSchema = v.array(v.string());
 
-/** Vendored react/capnweb bytes for the slate runner; `src/slate-vendor.d.ts` names this type. The bun test
- *  preload reads a built copy back from disk through the schema. */
+/** Vendored bytes for dynamic workers: react/capnweb for the slate runner, puppeteer for `web.connectBrowser` in
+ *  eval; `src/slate-vendor.d.ts` names this type. The bun test preload reads a built copy back from disk through
+ *  the schema. */
 export const SlateVendorSchema = v.object({
   react: v.string(),
+  /** `@cloudflare/puppeteer`, 296 KB minified (2026-09-28); `@cloudflare/playwright` measured 1.8 MB. */
+  puppeteer: v.string(),
   reactStub: v.string(),
   capnweb: v.string(),
   capnwebWorkers: v.string(),
@@ -79,9 +82,10 @@ export function buildSlateVendor(): SlateVendor {
 
   const capnweb = bundle('export * from "capnweb";', ['browser', 'import']);
   const capnwebWorkers = bundle('export * from "capnweb";', ['workerd', 'import'], ['cloudflare:*']);
+  const puppeteer = bundle('export { default } from "@cloudflare/puppeteer";', ['workerd', 'worker', 'browser', 'import'], ['node:*', 'cloudflare:*']);
 
   return {
-    react: react.text, reactStub, capnweb: capnweb.text, capnwebWorkers: capnwebWorkers.text, reactExports,
+    react: react.text, puppeteer: puppeteer.text, reactStub, capnweb: capnweb.text, capnwebWorkers: capnwebWorkers.text, reactExports,
     imports: {
       react: importSpecifiers(react.metafile),
       capnweb: importSpecifiers(capnweb.metafile),

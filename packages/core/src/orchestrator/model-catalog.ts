@@ -120,10 +120,12 @@ export class ModelCatalogSession {
     }));
   }
 
-  acceptedMedia(): ReadonlySet<MediaModality> {
-    const info = this.info();
+  /** The turn's model, or another `spec` once warmed, as `pricing` reads it. */
+  acceptedMedia(spec?: string): ReadonlySet<MediaModality> {
+    const own = spec === undefined || spec === this.deps.effectiveSpec();
+    const info = own ? this.info() : this.others.get(spec) ?? null;
     // Only the provider segment is read (it selects the transport ceiling).
-    const [provider] = this.deps.effectiveSpec().trim().split('/');
+    const [provider] = (own ? this.deps.effectiveSpec() : spec).trim().split('/');
 
     return acceptedMediaForModel({
       provider,

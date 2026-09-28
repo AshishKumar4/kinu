@@ -1994,6 +1994,23 @@ export const PLATFORM_CATALOG = {
       + '"Execute commands", read 2026-09-28), instead of a bigger exec timeout: '
       + 'execution/sandbox.ts routes on exactly this entry.',
   },
+
+  'browser.session.keep_alive_ms': {
+    subject: 'Longest a Browser Run Chrome session may sit idle, with no connection, before it closes',
+    limit: { value: 1_200_000, unit: 'ms' },
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-probe',
+    provenance: '/mnt/scratch/kinu/kinu-logs/browser/PROBES-2026-09-28.md#keepalive',
+    date: '2026-09-28',
+    trigger: 'acquire({ keepAlive }) above 1,200,000; or a session idle longer than the keepAlive it was acquired with',
+    onBreach: 'acquire is refused with 400; an idle session closes and getSession answers null',
+    observable: [{ context: 'env.BROWSER.acquire', message: 'BrowserBindingError: Too big: expected number to be <=1200000 (status=400, code=2000)' }],
+    firstPartySignal: true,
+    notes:
+      'Kitesurf takes no keep_alive at all ("Options not supported with browser=kitesurf: keep_alive"): its session '
+      + 'is created on connect and ends with the connection, so web/browser-sessions.ts records Chrome sessions only.',
+  },
 } as const satisfies Readonly<Record<string, PlatformFact>>;
 
 export type PlatformFactId = keyof typeof PLATFORM_CATALOG;

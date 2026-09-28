@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit, Fiber, Scheduler } from 'effect';
 import type { VfsError } from '../vfs/errno';
-import { KinuError, toKinuError, type ErrorCode, type Refusal } from './error';
+import { classifyErrorCode, KinuError, renderThrownChain, toKinuError, type ErrorCode, type Refusal } from './error';
 
 const WITHIN_ONE_EVENT = new Scheduler.MixedScheduler('sync');
 
@@ -13,6 +13,14 @@ export function attempt<A>(
   run: (signal: AbortSignal) => PromiseLike<A>,
 ): Effect.Effect<A, KinuError> {
   return Effect.tryPromise({ try: run, catch: (cause) => toKinuError({ ...input, cause }) });
+}
+
+/** {@link attempt} for a callee whose refusal is already worded for its reader: its message is kept, not replaced. */
+export function attemptInItsWords<A>(otherwise: ErrorCode, run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
+  return Effect.tryPromise({
+    try: run,
+    catch: (cause) => (cause instanceof KinuError ? cause : new KinuError(classifyErrorCode({ cause }) ?? otherwise, renderThrownChain({ cause }), { cause })),
+  });
 }
 
 interface SettleOptions {

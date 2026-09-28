@@ -78,8 +78,14 @@ describe('the reach declaration', () => {
         rt.actor.config,
       ),
       web: () => createWebCodemodeProvider({
-        search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
-        fetch: async (url: string) => ({ url, retrievedAt: new Date(0).toISOString(), markdown: '' }),
+        provider: {
+          search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
+          fetch: async (url: string) => ({ url, retrievedAt: new Date(0).toISOString(), markdown: '' }),
+          render: async (url: string) => ({ url, retrievedAt: new Date(0).toISOString(), markdown: '' }),
+          screenshot: async (url: string) => ({ url, retrievedAt: new Date(0).toISOString(), bytes: new Uint8Array() }),
+        },
+        vfs: rt.storage.vfs,
+        sessions: { missing: 'this suite opens no browser' },
       }),
       report: () => createReportCodemodeProvider(() => ({ report: async () => ({ delivered: true }) })),
       agent: () => createAgentSelfProvider(agentSelfHost(rt.storage, rt.actor)),

@@ -87,7 +87,7 @@ import { TierIdSchema,
   AdvisorRecoverySnapshotSchema,
   reviewRecordedTurn,
   advisorWorkspaceGuidance,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   createAgentsCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider,
@@ -1109,7 +1109,7 @@ export class LocalAgentSession {
 
   /** Only `web.*`: a head forks its parent's resources, never its authority to delegate. */
   private headCodemodeExtras(): CodemodeProvider[] {
-    return [createWebCodemodeProvider(this.getWebSearchProvider())];
+    return [this.webNamespace()];
   }
 
   /** Skips a window outliving the session so consumed events never bind to a dead pump's turn. */
@@ -1784,6 +1784,7 @@ export class LocalAgentSession {
       liveTurn.retries = profile.retries;
       liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
         spec: normalize(spec),
+        accepts: this.modelCatalog.acceptedMedia(spec),
         bind: () => {
           const { provider } = parseModelSpec(normalize(spec));
 
@@ -2234,12 +2235,22 @@ export class LocalAgentSession {
     const options: DefaultWebSearchProviderDeps = {
       fetch: globalThis.fetch,
       resolve: async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((answer) => answer.address),
+      browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch }),
     };
 
     if (getAuth) options.getAuth = getAuth;
     this._webSearchProvider = createDefaultWebSearchProvider(options);
 
     return this._webSearchProvider;
+  }
+
+  /** `web.*` in eval. A program here runs in this process, which holds no Browser Run socket client. */
+  private webNamespace(): CodemodeProvider {
+    const missing = 'Browser sessions run on the hosted backend; the CLI has rendered fetches and screenshots only';
+
+    return createWebCodemodeProvider({
+      provider: this.getWebSearchProvider(), vfs: this.rt.storage.vfs, sessions: { missing }, prelude: { missing },
+    });
   }
 
   /** Skill bodies already in the turn's prompt, so a mid-turn steer adds only new ones. */
@@ -2793,7 +2804,7 @@ export class LocalAgentSession {
       createStateCodemodeProvider(this.rt.actor.programState),
       // Plan scoping follows the resolved table scope, read from the live invocation.
       createDbCodemodeProvider(this.stores.appData),
-      createWebCodemodeProvider(this.getWebSearchProvider()),
+      this.webNamespace(),
       // `this.taskList` is the same TaskListStore the dynamic-context snapshot reads.
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
