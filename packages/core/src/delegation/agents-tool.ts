@@ -598,7 +598,6 @@ function msgInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVaria
   return variants;
 }
 
-/** Fields one action reads under this actor's transports. */
 export function agentsActionFieldsFor(
   deps: AgentsToolDeps,
   action: AgentsToolAction,

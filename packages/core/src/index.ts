@@ -1061,7 +1061,7 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 // Execution
 export {
   DefaultExecutionRouter,
-  withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach,
+  withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach,
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
@@ -1557,6 +1557,14 @@ export {
   type SecretPattern,
   type SecretFinding,
   type SecretSighting,
+  boundWriteOf,
+  performBoundWrite,
+  ParkedWriteFiles,
+  type ParkedWriteFileOps,
+  type ApprovalContent,
+  type BoundFileWrite,
+  type WriteSubject,
+  type ParkedWrites,
 } from './safety/index';
 
 export {
@@ -1994,6 +2002,8 @@ export type {
 } from './read-models/node-transcript';
 
 export { buildPendingActions, needsTheUser } from './read-models/pending-actions';
+
+export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 
 export {
   listInstructionApprovals, readInstructionSource, openInstructionSource,

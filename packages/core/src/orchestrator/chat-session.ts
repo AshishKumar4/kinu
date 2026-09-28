@@ -258,7 +258,6 @@ export interface ChatSessionPorts {
   taskList(): TaskListStore;
   /** A reminder fired behind such work would race its wake. */
   hasPendingAsyncWake(): boolean;
-  /** `steerSkillsBlock`. */
   steerSkills(text: string): Promise<string | null>;
   /** A backend with no review surface refuses a plan turn at admission. */
   planTurnRefusal(): string | null;
@@ -332,7 +331,6 @@ export class ChatSession {
   private messageId = '';
   /** Armed only by a one-shot task turn (completion-gate.ts). */
   readonly completionGate = new CompletionGate();
-  /** core tasks/reminder.ts. */
   private readonly taskReminders = new TaskReminders();
   /** Drained by a single serialized pump so turns never interleave. */
   private readonly queue: QueueItem[] = [];

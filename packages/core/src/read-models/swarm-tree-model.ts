@@ -32,7 +32,6 @@ export function cleanNodeLabel(value: string | null | undefined, fallback: strin
 	return cleaned.length > 0 ? cleaned : fallback;
 }
 
-/** `text` clipped with an ellipsis to `room` pixels as measured by `advance`. */
 export function clipToWidth(text: string, room: number, advance: (text: string) => number): string {
 	if (room <= 0) return "";
 

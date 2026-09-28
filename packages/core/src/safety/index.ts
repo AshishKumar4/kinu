@@ -27,6 +27,10 @@ export {
   type DeferredApprovalChannel,
 } from './approval-gate';
 
+export { boundWriteOf, performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject } from './bound-write';
+
+export { ParkedWriteFiles, type ParkedWriteFileOps } from './parked-write-files';
+
 export {
   EGRESS_PLACEHOLDER_PREFIX,
   PLACEHOLDER_BODY_LENGTH,
@@ -95,6 +99,7 @@ export {
   type DeferredApprovalVerdict,
   type DeferredApprovalNotice,
   type DeferredApprovalQueueDeps,
+  type ParkedWrites,
 } from './deferred-approval';
 
 export {

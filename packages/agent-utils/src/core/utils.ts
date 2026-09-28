@@ -26,6 +26,18 @@ export function isAbortError<Failure>(err: Failure): err is Failure & Error {
 	return err instanceof Error && err.name === "AbortError";
 }
 
+/** Runs each op after the one before it has ended; an op's failure is its caller's and never stops the next. */
+export function serialQueue(): <T>(op: () => Promise<T>) => Promise<T> {
+	let tail: Promise<unknown> = Promise.resolve();
+
+	return (op) => {
+		const run = tail.then(op);
+		tail = Promise.allSettled([run]);
+
+		return run;
+	};
+}
+
 /**
  * Run `work` but stop waiting when `signal` aborts. An already-aborted signal rejects with `message`
  * without starting work; a later abort rejects with what `terminate` resolves. Without `terminate`

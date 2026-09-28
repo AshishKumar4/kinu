@@ -189,7 +189,6 @@ export interface ExecutorInfo {
   /** User-chosen machine name; user-facing surfaces render this, never the namespace. */
   label?: string;
   granted?: boolean;
-  /** Device sandbox mode; absent for non-device environments. */
   sandbox?: DeviceSandboxStatus;
 }
 

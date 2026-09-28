@@ -7,6 +7,7 @@ import type { SessionPayload } from '../session/payload';
 import { isParsedJsonObject, jsonObjectElements, projectJsonValue, type JsonObject } from '../utils/json';
 import { encodeModelMessage } from '../session/message-codec';
 import { diagnostics, renderThrownChain, KinuError } from '../obs/index';
+import { serialQueue } from '@kinu.run/agent-utils';
 
 interface StreamPart {
   readonly number: number;
@@ -119,7 +120,7 @@ export class SessionStream {
   private completedMessageCount = 0;
   private nativeProducer = false;
   /** Writers run one at a time in arrival order, so two cannot reach one container's seal together. */
-  private queue: Promise<void> = Promise.resolve();
+  private readonly exclusive = serialQueue();
   private readonly calls = new Map<string, { messageId: string; part: number }>();
   private readonly durableCalls = new Map<string, DurableCall>();
   private sourceOrder = 0;
@@ -144,14 +145,6 @@ export class SessionStream {
     this.assistant = this.container('assistant');
     this.tool = this.container('tool');
     this.ui = this.container('assistant', 2);
-  }
-
-  private exclusive<T>(op: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(op);
-    // A failure is the caller's, delivered through `run`, and never poisons the queue.
-    this.queue = Promise.allSettled([run]).then(() => undefined);
-
-    return run;
   }
 
   nativePart(part: TextStreamPart<ToolSet>): Promise<void> {

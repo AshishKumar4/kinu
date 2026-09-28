@@ -12,4 +12,4 @@ export {
 
 export { readKvJson, writeKvJson, type KvStore } from "./stores/kv";
 
-export { combineAbortSignals, isAbortError, normalizePath, raceAbort, readVfsText } from "./core/utils";
+export { combineAbortSignals, isAbortError, normalizePath, raceAbort, readVfsText, serialQueue } from "./core/utils";

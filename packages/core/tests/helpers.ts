@@ -261,6 +261,7 @@ export function createTestRuntime(opts?: {
   const rt: AgentRuntime = {
     workspaceIsMachine: false,
     actor,
+    toolFiles: vfs,
     storage: { vfs, sql, execRaw, transactionSync },
     memory,
     executor,

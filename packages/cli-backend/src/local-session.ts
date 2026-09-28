@@ -686,6 +686,8 @@ export class LocalAgentSession {
         this.eventRecorder.emit(this.chat.currentRunId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },
       announce: () => { this.host.broadcast({ type: 'pending_actions_changed' }); },
+      // The CLI asks for a write over the user's files; none parks.
+      writes: null,
     });
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channel);

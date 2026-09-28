@@ -22,7 +22,7 @@ import {
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   withMountTable, standardMounts, contextMount, skillsMount,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
-  withApprovalGatedShell, createInheritedApprovalPolicy, holdsGrant,
+  withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
@@ -202,8 +202,8 @@ export function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
 }
 
 export interface CFRuntimeHooks {
-  /** A thunk read at exec time: resolving during construction would re-enter the caller's lazy runtime
-     *  getter. Undefined (head, subordinate) means no queue, so 'strict' refuses. */
+  /** Read at exec time, as resolving during construction re-enters the runtime getter. Undefined (head,
+     *  subordinate): no queue, so 'strict' refuses. */
   deferrals?: () => DeferredApprovalChannel | undefined;
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
@@ -369,6 +369,11 @@ export function createCFRuntime(
 
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
   const unmount = mountActorFiles(workspaceBox, agentFileVfs, { rootActor: actor.rootActor, cred: hooks.workspaceExecution?.cred });
+
+  const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
+    userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
+  }, approvalPolicy);
+
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     shellSession,
@@ -376,7 +381,7 @@ export function createCFRuntime(
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
-      vfs: agentFileVfs, memory, craftStore, shell,
+      vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell,
       sql,
       ledger: () => access.acc?.().files,
       budget: () => access.acc?.().context,
@@ -513,12 +518,13 @@ export function createCFRuntime(
         });
       }
     },
-  }));
+  }, approvalPolicy));
 
   const runtime: CFRuntime = {
     actor: actor.actor,
     storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
+    toolFiles,
     workspaceIsMachine: false,
     startupWork,
     memory, executor, llm, schedule, identity, craftStore,

@@ -803,6 +803,18 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   list several times, so a turn's database reads grew with the conversation (14,432 rows at 300 turns). A turn now
   reads only what it adds.
 
+- **The agent's file tools ask before replacing your files.** Its `file` tool and its programs' `workspace.*` and
+  `device.writeFile` calls overwrote files on your connected machine (`/pc`) and your Drive (`/shared`) without
+  asking, while the shell asked before the same change. A new file there is still the agent's to create; replacing
+  one now waits for you, as does any change outside a CLI workspace's directory, which the tools can now reach by its
+  absolute path. With nobody there to answer, the hosted workspace queues the replacement with its exact bytes:
+  approving writes those bytes unless the file changed since the ask, and "always" lets the next ones through. Reads
+  stay unasked, except a file that looks like a secret (`.env`, `.npmrc`, credentials), which follows the rule `cat`
+  does. A new file the file tool writes on a connected machine no longer fails on the machine's "no such file".
+  In Needs you, "Show the change" draws a queued replacement as the Changes tab draws a diff (binary or very large
+  content as its sizes), and says when the file changed since the ask. A queued replacement's bytes are deleted once
+  it is approved and written, denied, or its denial expires.
+
 - **A workspace's card shows the owner's words, never Kinu's own.** A new workspace's card showed the prompt Kinu
   starts its first turn with as the owner's latest task, and a background event after the owner's message did the
   same. Home and the Workspaces page now show the owner's last message, or nothing until there is one.

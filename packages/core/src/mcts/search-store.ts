@@ -304,7 +304,6 @@ export class MctsSearchStore {
 
     return stored?.originContext ?? null;
   }
-  /** Every running swarm root, including searches that journalled no heads (`unit:'thought'`). */
   /** Whether any swarm row still claims a live executor; covers headless `unit:'thought'` searches. */
   hasRunningSwarms(): boolean {
     return this.hasRunning('swarm');
