@@ -32,8 +32,7 @@ import { claimOwnedWorkspace, type WorkspaceOwnerClaim, type WorkspaceRegistry }
 import type { SessionAuthority } from "./auth/store";
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { authoredRefusal, diagnostics, toKinuError } from '@kinu.run/core/obs';
-import { publicText } from '@kinu.run/core';
+import { authoredRefusal, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { beneath, routeError, type FamilyEnv } from './api/context';
 
 const corsHeaders = {
@@ -96,13 +95,13 @@ async function mcpClient(resolveAgent: McpResolver, agentName: string): Promise<
   };
 }
 
-/** A tool's failure as the MCP client reads it: logged with its chain, answered with its class's text. */
+/** A tool's failure as the owner's MCP client reads it: logged and answered with its chain. */
 function mcpToolFailure(failure: { tool: string; cause: unknown }): string {
   const { tool, cause } = failure;
   const error = authoredRefusal({ doing: `running the MCP tool ${tool}`, cause });
   diagnostics.failure('mcp.tool_failed', error, { tool });
 
-  return publicText(error);
+  return renderThrownChain({ cause: error });
 }
 
 function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
