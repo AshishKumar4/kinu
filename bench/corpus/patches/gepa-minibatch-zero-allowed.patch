@@ -2,12 +2,12 @@ diff --git a/packages/core/src/evolution/gepa/engine.ts b/packages/core/src/evol
 index 2d9ec3a7f..68c4da3f9 100644
 --- a/packages/core/src/evolution/gepa/engine.ts
 +++ b/packages/core/src/evolution/gepa/engine.ts
-@@ -35,7 +35,7 @@ export async function runGepa<I = unknown, E = unknown>(
-   // Minibatches come from the train set; scoring and Pareto always run on the full evalSet.
-   const trainSet = config.trainSet && config.trainSet.length > 0 ? config.trainSet : config.evalSet;
+@@ -37,7 +37,7 @@ export function runGepa<I = unknown, E = unknown>(
+     // Minibatches come from the train set; scoring and Pareto always run on the full evalSet.
+     const trainSet = config.trainSet && config.trainSet.length > 0 ? config.trainSet : config.evalSet;
  
--  if (budget.minibatchSize <= 0) {
-+  if (budget.minibatchSize < 0) {
-     throw new Error(`runGepa: minibatchSize must be positive; got ${budget.minibatchSize}`);
-   }
+-    if (budget.minibatchSize <= 0) {
++    if (budget.minibatchSize < 0) {
+       return yield* Effect.die(new Error(`runGepa: minibatchSize must be positive; got ${budget.minibatchSize}`));
+     }
  
