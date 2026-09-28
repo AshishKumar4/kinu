@@ -1784,6 +1784,7 @@ export class LocalAgentSession {
       liveTurn.retries = profile.retries;
       liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
         spec: normalize(spec),
+        accepts: this.modelCatalog.acceptedMedia(spec),
         bind: () => {
           const { provider } = parseModelSpec(normalize(spec));
 

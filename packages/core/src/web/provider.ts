@@ -266,13 +266,17 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     if (meta.status >= 400) return yield* Effect.fail(new KinuError('unavailable', engine === 'kitesurf'
       ? `the site answered ${meta.status} to Kitesurf at ${finalUrl}; Chrome (engine 'chrome') gets through some bot-checked and rate-limited sites`
       : `the site answered ${meta.status} to Chrome at ${finalUrl}`));
-    const markdown = (yield* attemptInItsWords('io', () => convert(result, finalUrl))).trim();
+    // The plain fetch's cap on the page it converts, with the size the page had.
+    const html = new TextEncoder().encode(result);
+    const kept = html.length > MAX_FETCH_BYTES ? new TextDecoder('utf-8', { fatal: false }).decode(html.subarray(0, MAX_FETCH_BYTES)) : result;
+    const markdown = (yield* attemptInItsWords('io', () => convert(kept, finalUrl))).trim();
+    const note = kept === result ? '' : `\n\n[fetch truncated: kept the first ${MAX_FETCH_BYTES} of ${html.length} bytes]`;
 
     return {
       url: finalUrl,
       title: meta.title || extractMarkdownTitle(markdown) || undefined,
       retrievedAt: new Date().toISOString(),
-      markdown,
+      markdown: markdown + note,
     };
   });
 
@@ -431,8 +435,8 @@ const TYPES = `export declare const web: {
   } | Refusal>;
   /** \`render\`: load the page in a browser first, for a page its scripts build. \`engine\` (with \`render\` or a screenshot): Kitesurf by default; Chrome gets through some bot-checked and rate-limited sites. */
   fetch(url: string, opts?: { render?: boolean; engine?: 'kitesurf' | 'chrome' }): Promise<{ url: string; title?: string; retrievedAt: string; markdown: string } | Refusal>;
-  /** Saved at \`path\`; a slate can show \`dataUrl\` in an <img>, and a program that returns a data:image URL shows you the image. */
-  screenshot(url: string, opts?: { fullPage?: boolean; engine?: 'kitesurf' | 'chrome' }): Promise<{ url: string; path: string; retrievedAt: string; dataUrl: string } | Refusal>;
+  /** In eval, saved at \`path\`, and a program that returns a data:image URL shows you the image; a slate gets no \`path\` (it writes nothing) and shows \`dataUrl\` in an <img>. */
+  screenshot(url: string, opts?: { fullPage?: boolean; engine?: 'kitesurf' | 'chrome' }): Promise<{ url: string; path?: string; retrievedAt: string; dataUrl: string } | Refusal>;
   /** A browser for \`connectBrowser\`. Chrome: kept across programs and turns until closed or idle 20 min; \`liveView\` lets the owner watch or take over (a login, a captcha), so give it to them; \`lab\` enables the page's WebMCP tools. Kitesurf: lighter, with WebMCP; each connect starts a browser that ends with its program, and it has no Live View. */
   openBrowser(opts?: { browser?: 'chrome' | 'kitesurf'; lab?: boolean }): Promise<{ id: string; liveView: string | null } | Refusal>;
   browsers(): Promise<Array<{ id: string; liveView: string }> | Refusal>;
@@ -461,7 +465,8 @@ export type BrowserSessionsAccess = { readonly sessions: BrowserSessions } | { r
 
 export interface WebCodemodeDeps {
   readonly provider: WebSearchProvider;
-  readonly vfs: VFS;
+  /** Where a screenshot is saved; null on a slate's route, where a share visitor writes nothing into the workspace. */
+  readonly vfs: VFS | null;
   readonly sessions: BrowserSessionsAccess;
   /** Sandbox-side `connectBrowser`, `pageTools` and `callPageTool`; without it they refuse, naming `missing`. */
   readonly prelude?: { readonly source: string } | { readonly missing: string };
@@ -483,6 +488,14 @@ const OPEN_BROWSER_DEFAULT = 'chrome';
 
 /** Kitesurf has no session to keep: `connectBrowser` starts one per program under this id. */
 export const KITESURF_SESSION_ID = 'kitesurf';
+
+/** A slate's \`web\`: the one-shot members only, writing nothing into the workspace, since a share visitor may call it. */
+export function createSlateWebCodemodeProvider(provider: WebSearchProvider): CodemodeProvider {
+  return createWebCodemodeProvider({
+    provider, vfs: null,
+    sessions: { missing: 'a slate holds no browser session; it has web.search, web.fetch and web.screenshot' },
+  });
+}
 
 export function createWebCodemodeProvider(deps: WebCodemodeDeps): CodemodeProvider {
   const { provider, vfs } = deps;
@@ -529,16 +542,18 @@ export function createWebCodemodeProvider(deps: WebCodemodeDeps): CodemodeProvid
       },
     },
     screenshot: {
-      description: 'web.screenshot(url, { fullPage?, engine? }) -> { url, path, retrievedAt, dataUrl }',
+      description: 'web.screenshot(url, { fullPage?, engine? }) -> { url, path?, retrievedAt, dataUrl }',
       execute: async (...args: unknown[]) => {
         const url = codemodeText({ value: args[0], parameter: 'web.screenshot(url)' });
         const opts = v.safeParse(ScreenshotOptionsSchema, args[1] ?? {});
 
         if (!opts.success) return settle(Effect.fail(new KinuError('bad_input', `web.screenshot takes { fullPage?: boolean, engine?: 'kitesurf' | 'chrome' }`)));
         const shot = await provider.screenshot(url, { fullPage: opts.output.fullPage === true, engine: opts.output.engine, signal: readExecSignal({ context: args[2] }) });
-        const path = await saveScreenshot(vfs, shot);
+        const dataUrl = `data:image/png;base64,${bytesToBase64(shot.bytes)}`;
 
-        return { url: shot.url, path, retrievedAt: shot.retrievedAt, dataUrl: `data:image/png;base64,${bytesToBase64(shot.bytes)}` };
+        if (vfs === null) return { url: shot.url, retrievedAt: shot.retrievedAt, dataUrl };
+
+        return { url: shot.url, path: await saveScreenshot(vfs, shot), retrievedAt: shot.retrievedAt, dataUrl };
       },
     },
     openBrowser: {

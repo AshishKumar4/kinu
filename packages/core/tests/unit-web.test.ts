@@ -8,6 +8,7 @@ import {
   buildBuiltinTools,
   createDefaultWebSearchProvider,
   createWebCodemodeProvider,
+  createSlateWebCodemodeProvider,
   assertSafeUrl,
   isSafeUrl,
   UnsafeUrlError,
@@ -23,6 +24,9 @@ import {
   type WebSearchProvider,
   type QuickActionTransport,
 } from '../src/index';
+import { callCodemodeMember } from '../src/tools/sandbox-contract';
+import { cutShareGrant, grantAdmits, slateCapabilityGraph } from '../src/slates/capability-graph';
+import { parseSlateProject } from '../src/slates/project';
 
 const NO_BROWSER_RUN = { missing: 'this suite reaches no Browser Run' };
 
@@ -756,5 +760,51 @@ describe('web through Browser Run', () => {
         { type: 'image-data', data: 'iVBORw0KGgo=', mediaType: 'image/png' },
       ],
     });
+  });
+});
+
+describe('web on a shared slate', () => {
+  /** Every path under the workspace home, as the tree a visitor must leave alone. */
+  async function tree(vfs: ReturnType<typeof createTestRuntime>['rt']['storage']['vfs'], dir = '.'): Promise<string[]> {
+    const paths: string[] = [];
+
+    for (const name of await vfs.readdir(dir)) {
+      const path = dir === '.' ? name : `${dir}/${name}`;
+      paths.push(path);
+
+      if ((await vfs.stat(path))?.isDir === true) paths.push(...await tree(vfs, path));
+    }
+
+    return paths;
+  }
+
+  test("a share visitor's screenshot and long rendered page come back to the slate and write nothing", async () => {
+    const { rt } = createTestRuntime();
+    const page = `<html><body><p>${'a'.repeat(2_100_000)}</p></body></html>`;
+    const pageBytes = new TextEncoder().encode(page).length;
+    const run = stubBrowserRun((action) => (action === 'screenshot' ? new Response(PNG) : rendered(page)));
+    const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: SHELL })).fetch, browser: run.browser });
+    const project = parseSlateProject({ main: 'server.js', slate: { bindings: { NET: { kind: 'web' } } } });
+    const catalog = { executors: [], mcp: [], tools: [], tiers: [], slates: { news: project } };
+    const grant = cutShareGrant(slateCapabilityGraph({ slate: 'news', workspace: 'w', catalog }), []);
+    const slateWeb = createSlateWebCodemodeProvider(provider);
+    const before = await tree(rt.storage.vfs);
+
+    expect(grantAdmits(grant, 'news', 'NET', 'screenshot')).toMatchObject({ effect: 'read' });
+    expect(grantAdmits(grant, 'news', 'NET', 'openBrowser')).toBeNull();
+
+    const shot = await callCodemodeMember([slateWeb], 'web', 'screenshot', ['https://example.com/']);
+    const fetched = await callCodemodeMember([slateWeb], 'web', 'fetch', ['https://example.com/', { render: true }]);
+
+    expect(shot).toEqual({ url: 'https://example.com/', retrievedAt: expect.any(String), dataUrl: 'data:image/png;base64,iVBORw0KGgo=' });
+    expect(fetched).toMatchObject({ markdown: expect.stringMatching(new RegExp(`\\[fetch truncated: kept the first 2000000 of ${pageBytes} bytes\\]$`, 'u')) });
+    expect(await tree(rt.storage.vfs)).toEqual(before);
+
+    // The same call from an agent's eval saves the picture, so the tree above is the slate route's doing.
+    const evalWeb = createWebCodemodeProvider({ provider, vfs: rt.storage.vfs, sessions: NO_BROWSER_RUN });
+    const saved = await callCodemodeMember([evalWeb], 'web', 'screenshot', ['https://example.com/']);
+
+    expect(saved).toMatchObject({ path: expect.stringMatching(/^screenshots\/example\.com-/u) });
+    expect(await tree(rt.storage.vfs)).not.toEqual(before);
   });
 });

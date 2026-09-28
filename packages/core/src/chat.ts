@@ -25,7 +25,7 @@ import { DEFAULT_CACHE_RETENTION, type CacheRetention } from './providers/types'
 import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import type { MissionGovernor } from './mission-budget';
-import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
+import type { AttachmentPolicy, MediaModality } from './prompting/attachment-sanitizer';
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import type { LostToolCall } from './tools/effect-claim';
@@ -100,6 +100,8 @@ export type ObserveStream = (chunks: ReadableStream<UIMessageChunk>, call: Obser
 
 export interface ChatFallback {
   readonly spec: string;
+  /** The media this model takes, so a tool result's image reaches it or leaves a note (`tool-result-images.ts`). */
+  readonly accepts: ReadonlySet<MediaModality>;
   readonly bind: () => {
     readonly model: LanguageModel;
     readonly provider: string;
@@ -703,9 +705,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const cache = turnCachePlan(opts, turnMessages);
   const rollTail = hasCacheMarkers(cache.strategy);
 
+  /** The model each attempt calls, with the media it takes: the turn's for the primary, its own for a fallback. */
   let current = {
     ...primary,
     model: opts.model,
+    accepts: opts.attachments?.accepts,
     providerOptions: mergeProviderOptions(cache.providerOptions, opts.providerOptions),
   };
 
@@ -777,11 +781,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     const call = new ProviderCall(servingFallback);
 
-    // The turn knows the primary model's media; a fallback keeps the registry's no-knowledge rule.
-    const accepts = servingFallback === undefined ? opts.attachments?.accepts : undefined;
-
     const result = streamText({
-      model: accepts === undefined ? current.model : withToolResultImages(current.model, accepts),
+      model: current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts),
       system: cache.system,
       maxRetries: route.callRetries,
       messages: [...request],
@@ -911,7 +912,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const takeOver = (next: ChatFallback): void => {
     const bound = next.bind();
 
-    current = { ...bound, spec: next.spec, providerOptions: mergeProviderOptions(cache.providerOptions, bound.providerOptions) };
+    current = { ...bound, spec: next.spec, accepts: next.accepts, providerOptions: mergeProviderOptions(cache.providerOptions, bound.providerOptions) };
     servingFallback = next.spec;
     route.tried.push(next.spec);
   };

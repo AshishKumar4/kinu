@@ -2,7 +2,7 @@
 // the next model at once, from what the turn kept, and says so; only the chain's last model spends the owner's retries;
 // a model that failed over sits out its cooldown, then serves again.
 import { describe, expect, test } from 'bun:test';
-import { tool, type ToolSet } from 'ai';
+import { tool, type ModelMessage, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
@@ -11,6 +11,8 @@ import {
   type AuthResolution, type ChatEvent, type ChatFallback, type ProviderDeps,
 } from '../src/index';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import type { MediaModality } from '../src/prompting/attachment-sanitizer';
+import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
@@ -58,7 +60,13 @@ const ServedSchema = v.looseObject({ model: v.string(), reasoning_effort: v.opti
 async function turn(
   answerFor: (model: string, seen: number) => Response,
   fallbacks: readonly string[],
-  opts: { readonly retries?: number; readonly cooldowns?: FallbackCooldowns } = {},
+  opts: {
+    readonly retries?: number;
+    readonly cooldowns?: FallbackCooldowns;
+    readonly history?: ModelMessage[];
+    /** Media each model takes, by id; the primary's reach the turn as its attachment policy. Unnamed: images. */
+    readonly accepts?: Readonly<Record<string, ReadonlySet<MediaModality>>>;
+  } = {},
 ) {
   const served: Served[] = [];
 
@@ -87,8 +95,11 @@ async function turn(
   };
 
   // Each model carries its own reasoning options: the turn's are 'low', a fallback's 'high'.
+  const acceptsOf = (modelId: string): ReadonlySet<MediaModality> => opts.accepts?.[modelId] ?? new Set(['image']);
+
   const chain: ChatFallback[] = fallbacks.map((modelId) => ({
     spec: `openrouter/${modelId}`,
+    accepts: acceptsOf(modelId),
     bind: () => ({ model: modelFor(modelId), provider: 'openrouter', providerOptions: { openrouter: { reasoningEffort: 'high' } } }),
   }));
 
@@ -100,7 +111,8 @@ async function turn(
       model: modelFor('primary'), modelContext: { id: 'openrouter/primary' }, modelSpec: 'openrouter/primary', fallbacks: chain,
       cooldowns: opts.cooldowns ?? createFallbackCooldowns(), ...(opts.retries !== undefined && { retries: opts.retries }),
       providerOptions: { openrouter: { reasoningEffort: 'low' } },
-      system: 'sys', history: [{ role: 'user', content: 'go' }], tools,
+      attachments: { accepts: acceptsOf('primary'), vfs: createMemoryVfs().vfs },
+      system: 'sys', history: opts.history ?? [{ role: 'user', content: 'go' }], tools,
     })) events.push(event);
   } catch (error) {
     threw = error instanceof Error ? error : new Error(String(error));
@@ -110,6 +122,45 @@ async function turn(
 
   return { events, threw, served };
 }
+
+/** A screenshot the turn already holds, as a tool result's image. */
+const SCREENSHOT = 'iVBORw0KGgoAAAANSUhEUg==';
+
+const WITH_SCREENSHOT: ModelMessage[] = [
+  { role: 'user', content: 'what does the page show?' },
+  { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'web', input: { action: 'screenshot', url: 'https://example.com/' } }] },
+  { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'web', output: { type: 'content', value: [{ type: 'text', text: 'Screenshot of https://example.com/' }, { type: 'image-data', data: SCREENSHOT, mediaType: 'image/png' }] } }] },
+];
+
+/** The roles each model was sent, and whether its request carried the image or the note in its place. */
+function whatModelSaw(served: readonly Served[], model: string) {
+  const { body } = served.find((entry) => entry.model === model) ?? { body: '' };
+  const messages = v.parse(v.array(v.looseObject({ role: v.string() })), JSON.parse(body).messages);
+
+  return { roles: messages.map((message) => message.role), image: body.includes(SCREENSHOT), note: body.includes('image omitted') };
+}
+
+describe('a tool result image follows the model each attempt calls', () => {
+  test('a text-only primary that fails over to a vision model: the note to the first, the image to the second', async () => {
+    const { threw, served } = await turn((model) => (model === 'primary' ? refused(402) : answer('it shows Example Domain')), ['seeing'], {
+      history: WITH_SCREENSHOT, accepts: { primary: new Set(), seeing: new Set(['image']) },
+    });
+
+    expect(threw).toBeNull();
+    expect(whatModelSaw(served, 'primary')).toEqual({ roles: ['system', 'user', 'assistant', 'tool'], image: false, note: true });
+    expect(whatModelSaw(served, 'seeing')).toEqual({ roles: ['system', 'user', 'assistant', 'tool', 'user'], image: true, note: false });
+  });
+
+  test('a vision primary that fails over to a text-only model: the image to the first, the note to the second', async () => {
+    const { threw, served } = await turn((model) => (model === 'primary' ? refused(402) : answer('no image here')), ['blind'], {
+      history: WITH_SCREENSHOT, accepts: { primary: new Set(['image']), blind: new Set() },
+    });
+
+    expect(threw).toBeNull();
+    expect(whatModelSaw(served, 'primary')).toMatchObject({ image: true, note: false });
+    expect(whatModelSaw(served, 'blind')).toMatchObject({ image: false, note: true });
+  });
+});
 
 describe('a failed call hands the turn down its fallback chain', () => {
   test('a refused model hands over at once, and the turn says which model answered and why', async () => {
@@ -258,6 +309,7 @@ async function accountTurn(
 
   const chain: ChatFallback[] = fallbacks.map((spec) => ({
     spec,
+    accepts: new Set(['image']),
     bind: () => ({ model: registry.resolve(spec, deps), provider: 'openai-compat' }),
   }));
 

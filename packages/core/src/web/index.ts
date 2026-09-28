@@ -1,6 +1,7 @@
 export {
   createDefaultWebSearchProvider,
   createWebCodemodeProvider,
+  createSlateWebCodemodeProvider,
   type WebSearchProvider,
   type WebSearchResult,
   type WebSearchResponse,

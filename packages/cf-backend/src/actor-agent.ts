@@ -165,7 +165,7 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
-  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
+  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
@@ -503,7 +503,7 @@ const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable'
  * A hosted actor's binding reaches only its own files, tables, tasks and facts, never the
  * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
  */
-function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider, browsers: BrowserSessions) {
+function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
   // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
   const runtime = actor.runtime;
 
@@ -513,7 +513,7 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider, br
 
   const providers: CodemodeProvider[] = [
     ...(runtime.executionRouter?.getProviders() ?? []),
-    createWebCodemodeProvider({ provider: webSearch, vfs: runtime.storage.vfs, sessions: { sessions: browsers } }),
+    createSlateWebCodemodeProvider(webSearch),
     createDbCodemodeProvider(actor.stores.appData),
     createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
     createMemoryCodemodeProvider(() => ({
@@ -3135,7 +3135,7 @@ export abstract class ActorAgent extends Agent<Env> {
         throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
       }
 
-      const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider(), this.browserSessionsFor(actor.handle.actorId));
+      const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider());
       const providers = providersInWorkMode(mode, surface.providers);
       // Narrow by the child's own durable, per-actor role.
       const reach = slateToolReach(await this.hostedSlateReach(actor, providers, Object.keys(surface.native)));
@@ -3368,11 +3368,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected slateNamespaces(): CodemodeProvider[] {
     return [
       ...(this.rt.executionRouter?.getProviders() ?? []),
-      // A slate runs no eval program, so it could open a session it has no socket to drive.
-      createWebCodemodeProvider({
-        provider: this.ownedModelServices.getWebSearchProvider(), vfs: this.rt.storage.vfs,
-        sessions: { missing: 'a slate holds no browser session; it has web.search, web.fetch and web.screenshot' },
-      }),
+      createSlateWebCodemodeProvider(this.ownedModelServices.getWebSearchProvider()),
       createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
       ...this.turnCodemodeProviders(),
     ];
@@ -4133,6 +4129,7 @@ export abstract class ActorAgent extends Agent<Env> {
     liveTurn.retries = composed.profile.retries;
     liveTurn.fallbacks = composed.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
       spec: providers.normalizeSpecSync(spec),
+      accepts: this.modelCatalog.acceptedMedia(spec),
       bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),
     }));
 
