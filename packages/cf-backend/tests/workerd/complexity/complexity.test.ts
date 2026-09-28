@@ -85,13 +85,8 @@ const SUBJECTS: readonly Subject[] = [{
   sizes: [10, 1_000, 10_000],
   run: async (probe, size) => await probe.diffRead(size),
   rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
-  tables: {
-    vfs_baseline_manifest: { rowsRead: 'O(n)' },
-    vfs_inodes: { rowsRead: 'O(n)', statements: 'O(n)', rowsScanned: 'O(n)' },
-  },
-  why: 'a read walks the tree, a page of inode rows per listing, and compares it with the baseline manifest, which it '
-    + 'reads whole; it reads the bytes of only the files whose size or mtime moved (vfs_chunks, vfs_baseline_blob) '
-    + 'and writes nothing',
+  why: 'the baseline is a Nimbus snapshot of the store, and a read pages its diff, which visits only the paths '
+    + 'written since the review; it reads the two sides of each of those and writes nothing',
 }, {
   name: 'workspace Diffs, a poll with nothing changed',
   unit: 'files in the workspace',
@@ -99,7 +94,7 @@ const SUBJECTS: readonly Subject[] = [{
   run: async (probe, size) => await probe.diffPoll(size),
   rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
   why: 'the change-set is held until a file event on a reviewed path or a review moves it, so a poll with '
-    + 'nothing changed reads neither the tree nor the manifest',
+    + 'nothing changed reads nothing of the store',
 }, {
   name: 'slate, eight new versions in a row',
   unit: 'versions already taken',

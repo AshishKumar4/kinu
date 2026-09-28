@@ -6,6 +6,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { createMemoryVfs, createScriptedLLM, testActorHandle } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -68,9 +70,9 @@ import { initEventsHubTables } from '../src/events/hub/schema';
 import { EventLog } from '../src/events/hub/log';
 import { ReplyChannelStore } from '../src/events/hub/reply-channel';
 import { TriggerRegistry } from '../src/events/hub/triggers';
-import {
-  initWorkspaceBaselineTable, resetWorkspaceBaseline, getWorkspaceDiff,
-} from '../src/read-models/workspace-diff';
+import { resetWorkspaceBaseline, getWorkspaceDiff } from '../src/read-models/workspace-diff';
+import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 interface World {
   readonly db: Database;
@@ -890,32 +892,27 @@ describe('two actors, one database: triggers', () => {
   });
 });
 
-describe('two actors, one database: vfs_baseline_manifest', () => {
-  test('one actor re-baselining does not deactivate the other\'s generation', async () => {
+describe('two actors, one store: the Diffs reviews', () => {
+  test("one actor's reviews never move or drop the other's baseline", async () => {
     const w = world();
-    initWorkspaceBaselineTable(w.execRaw);
-    // Empty plane on purpose: the generation flip is one statement over the whole table.
-    const vfs = createMemoryVfs().vfs;
-    const rtA = runtimeFor(w, w.a, vfs);
-    const rtB = runtimeFor(w, w.b, vfs);
+    const workspace = await NimbusWorkspace.create({ ...inlineWorkspaceStorage(w.db), generation: 1, cwd: WORKSPACE_ROOT });
+    const kernel = workspace.vfs.as(CRED_KERNEL);
+    kernel.mkdir(WORKSPACE_ROOT, { recursive: true });
+    kernel.chown(WORKSPACE_ROOT, CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
 
-    await resetWorkspaceBaseline(rtA);
+    const baselines = { store: workspace.vfs, cred: CRED_SESSION_USER };
 
-    const activeA = w.sql<{ generation: string }>`SELECT generation FROM vfs_baseline_manifest
-      WHERE actor_id = ${w.a.actorId} AND active = 1 LIMIT 1`[0]?.generation;
+    const listed = async (actor: ActorHandle): Promise<string[]> =>
+      (await getWorkspaceDiff({ actor }, baselines)).files.map((file) => `${file.status} ${file.path}`);
 
-    if (activeA === undefined) throw new Error('A captured a baseline generation');
+    await resetWorkspaceBaseline({ actor: w.a }, baselines);
+    workspace.vfs.as(CRED_SESSION_USER).writeFile(`${WORKSPACE_ROOT}/notes.md`, 'one\n');
 
-    // Without the owner on the flip, B would deactivate A's baseline.
-    await resetWorkspaceBaseline(rtB);
+    // Past B's own retention: each review prunes B's older ones, never A's.
+    for (let review = 0; review < 3; review++) await resetWorkspaceBaseline({ actor: w.b }, baselines);
 
-    const stillActiveA = w.sql<{ generation: string }>`SELECT generation FROM vfs_baseline_manifest
-      WHERE actor_id = ${w.a.actorId} AND active = 1 LIMIT 1`[0]?.generation;
-
-    expect(stillActiveA).toBe(activeA);
-
-    expect((await getWorkspaceDiff(rtA)).files).toHaveLength(0);
-    expect((await getWorkspaceDiff(rtB)).files).toHaveLength(0);
+    expect(await listed(w.a)).toEqual(['added notes.md']);
+    expect(await listed(w.b)).toEqual([]);
     w.close();
   });
 });

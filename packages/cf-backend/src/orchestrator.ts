@@ -56,6 +56,7 @@ import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
@@ -167,9 +168,8 @@ import {
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
   LiveReadsNotice, readsMovedByFiles, readsWrittenBy, sameDeviceStatus, type LiveRead,
-  CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
-  restoreWorkspaceBaseline,
-  type ExecutorDiffResult, type WorkspaceDiffResult,
+  CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
+  type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
@@ -2940,7 +2940,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initWorkspaceSchema({
       execRaw, sql: this.boundSql, exec: this.ctx.storage.sql, transactionSync: (write) => this.ctx.storage.transactionSync(write),
     });
-    initWorkspaceBaselineTable(execRaw);
     initChangeNotesTable(execRaw);
     initSlatePictureTable(execRaw);
     initWorkspaceActorTable(execRaw);
@@ -3950,22 +3949,27 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
+  /** The store the change-set reads, as the session user whose plane the root actor's is. */
+  private async baselines(): Promise<WorkspaceBaselines> {
+    return { store: (await this.hostedWorkspace().bundle.session()).vfs, cred: CRED_SESSION_USER };
+  }
+
   /** Cumulative workspace change-set since the baseline (reset via resetWorkspaceBaseline).
    *  A read never changes the review boundary. */
   async getWorkspaceDiff(): Promise<WorkspaceDiffResult> {
-    return this.changes.read(() => getWorkspaceDiff(this.rt));
+    return this.changes.read(async () => getWorkspaceDiff(this.rt, await this.baselines()));
   }
 
-  /** VFS snapshot baseline for the agent workspace; a real `git diff` of /workspace for shell executors. */
+  /** The workspace's snapshot baseline; a real `git diff` of /workspace for shell executors. */
   @callable()
   async getExecutorDiff(executorId: string): Promise<ExecutorDiffResult> {
-    return getExecutorDiff(this.rt, executorId, this.changes);
+    return getExecutorDiff(this.rt, executorId, () => this.getWorkspaceDiff());
   }
 
   @callable()
-  async resetWorkspaceBaseline(): Promise<{ ok: true; files: number }> {
+  async resetWorkspaceBaseline(): Promise<{ ok: true; capturedAt: number }> {
     try {
-      return await resetWorkspaceBaseline(this.rt);
+      return await resetWorkspaceBaseline(this.rt, await this.baselines());
     } finally {
       this.changes.moved();
     }
@@ -3974,7 +3978,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async restoreWorkspaceBaseline(): Promise<{ ok: true; capturedAt: number } | { ok: false; error: string }> {
     try {
-      return restoreWorkspaceBaseline(this.rt);
+      return await restoreWorkspaceBaseline(this.rt, await this.baselines());
     } finally {
       this.changes.moved();
     }

@@ -96,7 +96,7 @@ import { TierIdSchema,
   DynamicContextLedger, renderUnverifiedInstructions,
   observeSystemPromptHash,
   type DynamicContext,
-  initWorkspaceBaselineTable, initWorkspaceSchema, initPendingSendTables, PendingSendStore,
+  initWorkspaceSchema, initPendingSendTables, PendingSendStore,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
@@ -540,7 +540,6 @@ export class LocalAgentSession {
     this.engine = orchestration.engine;
     this.eventLog = orchestration.eventLog;
 
-    initWorkspaceBaselineTable(this.rt.storage.execRaw);
     initTerminalEffectTable(this.rt.storage.execRaw);
     // `turn_id` is NULL when the send queued while the actor was idle.
     initPendingSendTables(this.rt.storage.execRaw);

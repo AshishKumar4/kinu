@@ -293,8 +293,9 @@ Three properties follow:
 - Content addressing: `vfs_inodes(path, content_id)` points at a
   `vfs_contents` row, whose `vfs_content_chunks` rows name `vfs_chunks` rows,
   unique by hash, so equal chunks are stored once; `vfs_gc_queue` collects
-  what nothing names. A snapshot of the plane copies the small inode index and
-  no blobs.
+  what nothing names. A snapshot of the plane is one `vfs_snapshots` row that
+  pins the history it names, whatever the tree's size; the Diffs baseline is
+  one (`diffs:<actor>:<id>`).
 - POSIX semantics: one filesystem, addressed the same way by
   `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
   resolve at `WORKSPACE_ROOT` (`/home/main`; `/home/user` links to it). Ownership is uid/gid/mode on
@@ -463,7 +464,6 @@ These are created outside that pass, by the root that owns each:
 | Subsystem | Tables | Owner |
 |---|---|---|
 | Subordinate roster | `actor_subordinates` (every actor that can hire) | `core/src/subordinates/roster.ts` |
-| Workspace-diff baseline | `vfs_baseline` | `core/src/read-models/workspace-diff.ts`, called by each root's schema pass |
 | Orchestrator-local | `turn_feedback`, `sleep_time_updates`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
 | Webhook ingress (cf only) | `webhook_rate_windows`, `webhook_replay_claims`, `webhook_secrets` | `core/src/events/ingress/webhook.ts` (`initWebhookIngressTables`), `rate-limit.ts`, `secrets.ts` |
 
@@ -504,7 +504,7 @@ The pass runs in this order:
 3. The slate tables.
 
 Then each root adds what only it carries. The orchestrator DO also runs
-`initWorkspaceBaselineTable`, `initWebhookIngressTables`,
+`initWebhookIngressTables`,
 `subordinateRoster.ensureSchema()`, and its inline turn tables. An in-memory
 flag makes the whole call run once per activation. No persistent schema
 version is tracked, because a cold activation always re-runs it.

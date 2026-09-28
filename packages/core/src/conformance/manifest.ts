@@ -318,8 +318,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': LAZY_ON_FIRST_USE('registerDurableWebhook'),
       cli: { absent: NO_LOCAL_INGRESS },
     },
-    vfs_baseline_manifest: EVERYWHERE,
-    vfs_baseline_blob: EVERYWHERE,
     change_notes: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': WIRED,

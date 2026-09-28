@@ -25,9 +25,8 @@ import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import type { ChatHistoryEntry } from '../src/types/chat';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { StaleCursorError, type Page, type SeekCursor } from '../src/session/page';
-import {
-  getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
-} from '../src/read-models/workspace-diff';
+import { getWorkspaceDiff, resetWorkspaceBaseline } from '../src/read-models/workspace-diff';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files';
 import type { SqlExecutor, VFS } from '../src/types/primitives';
 import {
@@ -498,21 +497,23 @@ describe('agent status', () => {
 
 describe('workspace change-set', () => {
   test('work completed before the first read remains visible against the birth baseline', async () => {
-    const { rt, db } = createTestRuntime();
-    initWorkspaceBaselineTable(rt.storage.execRaw);
-    await resetWorkspaceBaseline(rt);
+    const { rt, db, workspace: bundle } = createTestRuntime();
+    // The runtime writes its scaffold on its first file call, before the birth review.
+    await rt.storage.vfs.exists('scaffold/agent.js');
+    const baselines = { store: (await bundle.session()).vfs, cred: CRED_SESSION_USER };
+    await resetWorkspaceBaseline(rt, baselines);
     await rt.storage.vfs.writeFile('notes.md', 'one\n');
 
-    const first = await getWorkspaceDiff(rt);
+    const first = await getWorkspaceDiff(rt, baselines);
     expect(first.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'added', 2]]);
 
-    expect(await resetWorkspaceBaseline(rt)).toMatchObject({ ok: true });
+    expect(await resetWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true });
     await rt.storage.vfs.writeFile('notes.md', 'one\ntwo\n');
-    const after = await getWorkspaceDiff(rt);
+    const after = await getWorkspaceDiff(rt, baselines);
     expect(after.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'changed', 1]]);
 
-    expect(await resetWorkspaceBaseline(rt)).toMatchObject({ ok: true });
-    expect((await getWorkspaceDiff(rt)).files).toEqual([]);
+    expect(await resetWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true });
+    expect((await getWorkspaceDiff(rt, baselines)).files).toEqual([]);
     db.close();
   });
 });

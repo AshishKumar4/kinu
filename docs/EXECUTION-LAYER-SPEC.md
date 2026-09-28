@@ -355,10 +355,10 @@ boundary. A Slate adds no separate approval policy.
 The Environment surface shows one native tree per provider, with raw `files`
 where supplied; it never merges them. The agent sees those same trees through
 `/pc` and `/sandbox`. The Outputs Diff reader is read-only. A Git workspace
-uses Git data without touching its index; a non-Git workspace compares against
-the re-markable snapshot baseline in `vfs_baseline`, captured at workspace
-birth (`core/src/read-models/workspace-diff.ts`). A read never advances that
-baseline.
+uses Git data without touching its index; the workspace compares against a
+Nimbus snapshot of its store taken at each review, `diffs:<actor>:<id>`, whose
+diff visits only the paths written since (`core/src/read-models/workspace-diff.ts`).
+A read never advances that baseline; the review before it is kept for Undo.
 
 Preview discovery asks `workspace`, `sandbox` and `device` for ports
 (`cf-backend/src/hooks/use-kinu.ts`). A transport failure keeps the last
