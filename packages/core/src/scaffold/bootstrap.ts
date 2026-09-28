@@ -10,7 +10,9 @@ import type { AgentRuntime } from '../types/agent-runtime';
 export { defaultLoopOrigin, type LoopOrigin } from './loop-origin';
 
 import type { LoopOrigin } from './loop-origin';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settle } from '../obs/effect';
 import { initScaffoldTables } from './schemas';
 import { getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource } from './shadow';
 import { readScaffoldFileText } from './surface';
@@ -93,67 +95,72 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
  * `inherit`/`version` copy the parent's source as the child's v1 rather than
  * pointing at the parent's row, since pointers and claim digests are per actor.
  */
-export async function seedActorLoop(
+export function seedActorLoop(
   child: AgentRuntime,
   parent: AgentRuntime | null,
   origin: LoopOrigin,
 ): Promise<{ version: number }> {
-  initScaffoldTables(child.storage.execRaw);
-  const seeded = getCurrentScaffoldVersion(child.storage.sql, child.actor);
+  return settle(Effect.gen(function* () {
+    initScaffoldTables(child.storage.execRaw);
+    const seeded = getCurrentScaffoldVersion(child.storage.sql, child.actor);
 
-  if (seeded !== null) return { version: seeded };
+    if (seeded !== null) return { version: seeded };
 
-  if (origin.kind === 'builtin') {
-    await bootstrapScaffold(child);
+    if (origin.kind === 'builtin') {
+      yield* Effect.promise(() => bootstrapScaffold(child));
 
-    return { version: getCurrentScaffoldVersion(child.storage.sql, child.actor) ?? 0 };
-  }
-
-  if (parent === null) {
-    throw new KinuError('bad_input', `a '${origin.kind}' loop origin needs the parent actor whose loop it names`);
-  }
-
-  const inherited = await inheritedSource(parent, origin);
-  const version = 1;
-  const vfs = child.agentStateVfs ?? child.storage.vfs;
-  await vfs.writeFile(`${child.identity.scaffold.path}.v${version}`, inherited.source);
-  child.actor.assertCurrent();
-  void child.storage.sql`
-    INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale, status, parent_version)
-    VALUES (${child.actor.actorId}, ${version}, ${nowMs()},
-      ${`inherited from actor ${parent.actor.actorId} v${inherited.version}`}, 'current', ${inherited.version})`;
-  await child.identity.scaffold.write(inherited.source);
-
-  return { version };
-}
-
-async function inheritedSource(
-  parent: AgentRuntime,
-  origin: Extract<LoopOrigin, { kind: 'inherit' | 'version' }>,
-): Promise<{ readonly version: number; readonly source: string }> {
-  if (origin.kind === 'version') {
-    parent.actor.assertCurrent();
-
-    const known = parent.storage.sql<{ version: number }>`
-      SELECT version FROM scaffold_versions
-      WHERE actor_id = ${parent.actor.actorId} AND version = ${origin.version}`.length > 0;
-
-    const source = known ? await readVersionedScaffoldSource(parent, origin.version) : null;
-
-    if (source === null) {
-      throw new KinuError('missing', `the parent actor retains no version ${origin.version} to inherit`);
+      return { version: getCurrentScaffoldVersion(child.storage.sql, child.actor) ?? 0 };
     }
 
-    return { version: origin.version, source };
-  }
+    if (parent === null) {
+      return yield* new KinuError('bad_input', `a '${origin.kind}' loop origin needs the parent actor whose loop it names`);
+    }
 
-  const version = getCurrentScaffoldVersion(parent.storage.sql, parent.actor) ?? 0;
-  const source = await readScaffoldVersion(parent, version);
+    const inherited = yield* inheritedSource(parent, origin);
+    const version = 1;
+    const vfs = child.agentStateVfs ?? child.storage.vfs;
+    yield* Effect.promise(() => vfs.writeFile(`${child.identity.scaffold.path}.v${version}`, inherited.source));
+    child.actor.assertCurrent();
+    void child.storage.sql`
+      INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale, status, parent_version)
+      VALUES (${child.actor.actorId}, ${version}, ${nowMs()},
+        ${`inherited from actor ${parent.actor.actorId} v${inherited.version}`}, 'current', ${inherited.version})`;
+    yield* Effect.promise(() => child.identity.scaffold.write(inherited.source));
 
-  if (source !== null) return { version, source };
+    return { version };
+  }));
+}
 
-  // v0 is INITIAL_SCAFFOLD_SOURCE even before the parent bootstraps, so inherit it.
-  // A non-zero version with missing bytes must refuse: its digest cannot be verified.
-  if (version === 0) return { version: 0, source: INITIAL_SCAFFOLD_SOURCE };
-  throw new KinuError('missing', `the parent actor retains no source for its current version ${version}`);
+function inheritedSource(
+  parent: AgentRuntime,
+  origin: Extract<LoopOrigin, { kind: 'inherit' | 'version' }>,
+): Effect.Effect<{ readonly version: number; readonly source: string }, KinuError> {
+  return Effect.gen(function* () {
+    if (origin.kind === 'version') {
+      parent.actor.assertCurrent();
+
+      const known = parent.storage.sql<{ version: number }>`
+        SELECT version FROM scaffold_versions
+        WHERE actor_id = ${parent.actor.actorId} AND version = ${origin.version}`.length > 0;
+
+      const source = known ? yield* Effect.promise(() => readVersionedScaffoldSource(parent, origin.version)) : null;
+
+      if (source === null) {
+        return yield* new KinuError('missing', `the parent actor retains no version ${origin.version} to inherit`);
+      }
+
+      return { version: origin.version, source };
+    }
+
+    const version = getCurrentScaffoldVersion(parent.storage.sql, parent.actor) ?? 0;
+    const source = yield* Effect.promise(() => readScaffoldVersion(parent, version));
+
+    if (source !== null) return { version, source };
+
+    // v0 is INITIAL_SCAFFOLD_SOURCE even before the parent bootstraps, so inherit it.
+    // A non-zero version with missing bytes must refuse: its digest cannot be verified.
+    if (version === 0) return { version: 0, source: INITIAL_SCAFFOLD_SOURCE };
+
+    return yield* new KinuError('missing', `the parent actor retains no source for its current version ${version}`);
+  });
 }

@@ -2,12 +2,12 @@ diff --git a/packages/core/src/scaffold/shadow.ts b/packages/core/src/scaffold/s
 index 7e46e7ff3..2c7f8de85 100644
 --- a/packages/core/src/scaffold/shadow.ts
 +++ b/packages/core/src/scaffold/shadow.ts
-@@ -545,7 +545,7 @@ export async function applyPromotionDecision(
-         SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
-         WHERE actor_id = ${rt.actor.actorId}
-           AND (version = ${pending.version}
--               OR (status = 'current' AND version != ${pending.version}))`;
-+               OR (status = 'current' AND version = ${pending.version}))`;
-     await rt.identity.scaffold.write(pendingCode);
-     recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
+@@ -538,7 +538,7 @@ export function applyPromotionDecision(
+           SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
+           WHERE actor_id = ${rt.actor.actorId}
+             AND (version = ${pending.version}
+-                 OR (status = 'current' AND version != ${pending.version}))`;
++                 OR (status = 'current' AND version = ${pending.version}))`;
+       yield* Effect.promise(() => rt.identity.scaffold.write(pendingCode));
+       yield* recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
  

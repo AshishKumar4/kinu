@@ -4,6 +4,8 @@
  * refuses a name resolving inward (docs/CRAFT-ARCHITECTURE.md, "Names that resolve inward").
  */
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { refusedHostname } from '../safety/egress-destination';
 
 /** Mirrors hermes-agent/agent/redact.py. */
@@ -19,32 +21,30 @@ export class UnsafeUrlError extends Error {
 
 /** Throws {@link UnsafeUrlError} for a private/internal target, non-http(s) scheme, or smuggled secret. */
 export function assertSafeUrl(url: string): URL {
-  if (SECRET_PREFIX_RE.test(url) || SECRET_PREFIX_RE.test(safeDecode(url))) {
-    throw new UnsafeUrlError(
-      'URL contains what appears to be an API key or token: secrets must not be sent in URLs',
-    );
-  }
+  return settleSync(Effect.catch(safeUrl(url), (unsafe) => Effect.die(unsafe)));
+}
 
-  let parsed: URL;
+function safeUrl(url: string): Effect.Effect<URL, UnsafeUrlError> {
+  return Effect.flatMap(safeDecode(url), (decoded) => (SECRET_PREFIX_RE.test(url) || SECRET_PREFIX_RE.test(decoded)
+    ? Effect.fail(new UnsafeUrlError('URL contains what appears to be an API key or token: secrets must not be sent in URLs'))
+    : parsedSafeUrl(url)));
+}
 
-  try {
-    parsed = new URL(url);
-  } catch (error) {
-    throw new UnsafeUrlError(`not a valid URL: ${url}`, { cause: error });
-  }
+function parsedSafeUrl(url: string): Effect.Effect<URL, UnsafeUrlError> {
+  return Effect.try({ try: () => new URL(url), catch: (cause) => new UnsafeUrlError(`not a valid URL: ${url}`, { cause }) }).pipe(
+    Effect.flatMap((parsed) => {
+      const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
 
-  const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
+      if (scheme !== 'http' && scheme !== 'https') {
+        return Effect.fail(new UnsafeUrlError(`unsupported URL scheme: ${scheme || '<empty>'}`));
+      }
 
-  if (scheme !== 'http' && scheme !== 'https') {
-    throw new UnsafeUrlError(`unsupported URL scheme: ${scheme || '<empty>'}`);
-  }
+      // `parsed.hostname` is the WHATWG-canonical form the classifier expects.
+      const refusal = refusedHostname(parsed.hostname);
 
-  // `parsed.hostname` is the WHATWG-canonical form the classifier expects.
-  const refusal = refusedHostname(parsed.hostname);
-
-  if (refusal) throw new UnsafeUrlError(refusal.error);
-
-  return parsed;
+      return refusal ? Effect.fail(new UnsafeUrlError(refusal.error)) : Effect.succeed(parsed);
+    }),
+  );
 }
 
 export type HostResolver = (hostname: string) => Promise<readonly string[]>;
@@ -73,24 +73,12 @@ export async function refusedResolution(url: URL, resolve: HostResolver): Promis
 
 /** Only an unsafe URL answers false; any other error is rethrown, never counted as a pass. */
 export function isSafeUrl(url: string): boolean {
-  try {
-    assertSafeUrl(url);
-
-    return true;
-  } catch (error) {
-    if (!(error instanceof UnsafeUrlError)) throw error;
-
-    return false;
-  }
+  return settleSync(Effect.match(safeUrl(url), { onSuccess: () => true, onFailure: () => false }));
 }
 
-function safeDecode(s: string): string {
-  try {
-    return decodeURIComponent(s);
-  } catch (error) {
+function safeDecode(s: string): Effect.Effect<string> {
+  return Effect.try({ try: () => decodeURIComponent(s), catch: (cause) => ({ cause }) }).pipe(
     // A malformed escape is expected here and outside classify's closed set.
-    if (!(error instanceof URIError)) throw error;
-
-    return s;
-  }
+    Effect.catch((failed) => (failed.cause instanceof URIError ? Effect.succeed(s) : Effect.die(failed.cause))),
+  );
 }

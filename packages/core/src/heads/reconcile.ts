@@ -8,7 +8,8 @@ import type { MctsSearchStore } from '../mcts/search-store';
 import type { AgentInbox } from '../types/signals';
 import type { AbandonedHeadRun, HeadJournal } from './journal';
 import * as v from 'valibot';
-import { diagnostics, toKinuError, tolerate } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, settle, toKinuError, tolerate } from '../obs/index';
 import { parseJsonValue } from '../utils/json';
 
 /** Structural so core's heads layer does not depend on the recorder class. */
@@ -122,7 +123,7 @@ function forkInterruptedWake(runs: readonly AbandonedHeadRun[]): string {
  * driven by the gate's answer alone, not by whether this activation marked anything; a gate that
  * could not answer protects everything. Returns the retired runs.
  */
-export async function reconcileInterruptedForks(deps: {
+export function reconcileInterruptedForks(deps: {
   readonly journal: Pick<HeadJournal, 'markInterrupted' | 'unfinishedRoots' | 'abandonRunning'>;
   readonly inbox: AgentInbox;
   /** When present, `mcts_search_runs` rows the gate did not claim are closed `failed` beside the journal sweep. */
@@ -137,61 +138,63 @@ export async function reconcileInterruptedForks(deps: {
   /** This activation's start; both sweeps' bound. */
   readonly now?: number;
 }): Promise<readonly AbandonedHeadRun[]> {
-  const startedAt = deps.now ?? Date.now();
-  // First and unconditionally: a killed turn leaves its run open whether or not it forked.
-  closeUnterminatedRuns(deps.runEvents, startedAt, new Set(deps.liveRuns?.() ?? []), deps.logActivity);
-  const interrupted = deps.journal.markInterrupted({ spawnedBefore: startedAt }, startedAt);
+  return settle(Effect.gen(function* () {
+    const startedAt = deps.now ?? Date.now();
+    // First and unconditionally: a killed turn leaves its run open whether or not it forked.
+    yield* closeUnterminatedRuns(deps.runEvents, startedAt, new Set(deps.liveRuns?.() ?? []), deps.logActivity);
+    const interrupted = deps.journal.markInterrupted({ spawnedBefore: startedAt }, startedAt);
 
-  if (interrupted.length > 0) {
-    deps.logActivity?.(
-      'fork_runs_interrupted',
-      interrupted.map((run) => `${run.rootId} (${run.abandoned}/${run.total})`).join(', '),
+    if (interrupted.length > 0) {
+      deps.logActivity?.(
+        'fork_runs_interrupted',
+        interrupted.map((run) => `${run.rootId} (${run.abandoned}/${run.total})`).join(', '),
+      );
+    }
+
+    // The gate is called once, over every unfinished root, including ones an earlier activation marked.
+    // It also sweeps orphan job rows, so it runs even with no roots; a second call would reclaim a job
+    // from the executor the first call started.
+    const offeredRoots = new Set(deps.journal.unfinishedRoots(startedAt));
+
+    for (const root of deps.search?.runningSwarmRoots(startedAt) ?? []) offeredRoots.add(root);
+    const outcome = yield* resumeOutcome(deps.resume, [...offeredRoots]);
+
+    // A gate that could not answer protects everything.
+    if (outcome.kind === 'gate-failed') return [];
+
+    // The ledger's half: close every running swarm row the gate did not claim.
+    if (deps.search) {
+      const closed = deps.search.closeUnclaimed(outcome.claimed, startedAt);
+
+      if (closed.length > 0) deps.logActivity?.('swarm_runs_closed', closed.join(', '));
+    }
+
+    // The journal's half, on the same answer; not gated on this activation having marked anything.
+    const runs = deps.journal.abandonRunning(
+      FORK_INTERRUPTED_REASON,
+      { spawnedBefore: startedAt, exceptRoots: [...outcome.claimed] },
+      startedAt,
     );
-  }
 
-  // The gate is called once, over every unfinished root, including ones an earlier activation marked.
-  // It also sweeps orphan job rows, so it runs even with no roots; a second call would reclaim a job
-  // from the executor the first call started.
-  const offeredRoots = new Set(deps.journal.unfinishedRoots(startedAt));
+    if (runs.length === 0) return runs;
+    deps.logActivity?.(
+      'fork_runs_abandoned',
+      runs.map((run) => `${run.rootId} (${run.abandoned}/${run.total})`).join(', '),
+    );
+    yield* recordAbandonedRuns(deps.runEvents, runs);
+    yield* Effect.promise(() => deps.inbox.send({
+      kind: FORK_INTERRUPTED_SIGNAL,
+      text: forkInterruptedWake(runs),
+      // Keyed on the retired run set: the carrier is at-least-once, so replays must collide.
+      idempotencyKey: `fork-interrupted:${runs.map((run) => run.rootId).sort().join(',')}`,
+      metadata: {
+        runs: runs.map((run) => run.rootId),
+        heads: runs.reduce((n, run) => n + run.abandoned, 0),
+      },
+    }));
 
-  for (const root of deps.search?.runningSwarmRoots(startedAt) ?? []) offeredRoots.add(root);
-  const outcome = await resumeOutcome(deps.resume, [...offeredRoots]);
-
-  // A gate that could not answer protects everything.
-  if (outcome.kind === 'gate-failed') return [];
-
-  // The ledger's half: close every running swarm row the gate did not claim.
-  if (deps.search) {
-    const closed = deps.search.closeUnclaimed(outcome.claimed, startedAt);
-
-    if (closed.length > 0) deps.logActivity?.('swarm_runs_closed', closed.join(', '));
-  }
-
-  // The journal's half, on the same answer; not gated on this activation having marked anything.
-  const runs = deps.journal.abandonRunning(
-    FORK_INTERRUPTED_REASON,
-    { spawnedBefore: startedAt, exceptRoots: [...outcome.claimed] },
-    startedAt,
-  );
-
-  if (runs.length === 0) return runs;
-  deps.logActivity?.(
-    'fork_runs_abandoned',
-    runs.map((run) => `${run.rootId} (${run.abandoned}/${run.total})`).join(', '),
-  );
-  recordAbandonedRuns(deps.runEvents, runs);
-  await deps.inbox.send({
-    kind: FORK_INTERRUPTED_SIGNAL,
-    text: forkInterruptedWake(runs),
-    // Keyed on the retired run set: the carrier is at-least-once, so replays must collide.
-    idempotencyKey: `fork-interrupted:${runs.map((run) => run.rootId).sort().join(',')}`,
-    metadata: {
-      runs: runs.map((run) => run.rootId),
-      heads: runs.reduce((n, run) => n + run.abandoned, 0),
-    },
-  });
-
-  return runs;
+    return runs;
+  }));
 }
 
 /** Best-effort and never fatal: a ledger failure must not lose the fork reconciliation. The failure is logged with cause. */
@@ -200,26 +203,25 @@ function closeUnterminatedRuns(
   startedBefore: number,
   liveRuns: ReadonlySet<string>,
   logActivity: ((event: string, detail?: string) => void) | undefined,
-): void {
-  if (!ledger) return;
+): Effect.Effect<void> {
+  if (!ledger) return Effect.void;
 
-  try {
-    const open = ledger.unterminatedRuns(undefined, startedBefore).filter((runId) => !liveRuns.has(runId));
+  return Effect.try({
+    try: () => {
+      const open = ledger.unterminatedRuns(undefined, startedBefore).filter((runId) => !liveRuns.has(runId));
 
-    if (open.length === 0) return;
+      if (open.length === 0) return;
 
-    for (const runId of open) {
-      ledger.emit(runId, { type: 'run_end', reason: RUN_INTERRUPTED_REASON });
-    }
+      for (const runId of open) {
+        ledger.emit(runId, { type: 'run_end', reason: RUN_INTERRUPTED_REASON });
+      }
 
-    logActivity?.('runs_closed_interrupted', open.join(', '));
-  } catch (err) {
-    diagnostics.failure('run.interrupted_close_failed', toKinuError({
-      doing: 'closing runs a dead activation left unterminated',
-      cause: err,
-      otherwise: 'io',
-    }));
-  }
+      logActivity?.('runs_closed_interrupted', open.join(', '));
+    },
+    catch: (cause) => toKinuError({ doing: 'closing runs a dead activation left unterminated', cause, otherwise: 'io' }),
+  }).pipe(Effect.catch((failure) => Effect.sync(() => {
+    diagnostics.failure('run.interrupted_close_failed', failure);
+  })));
 }
 
 /** `answered` (claimed roots), `absent` (no resume path: refuse all), or `gate-failed` (protect every root). */
@@ -227,23 +229,23 @@ type ResumeOutcome =
   | { readonly kind: 'answered' | 'absent'; readonly claimed: ReadonlySet<string> }
   | { readonly kind: 'gate-failed' };
 
-async function resumeOutcome(
+function resumeOutcome(
   resume: ((roots: readonly string[]) => Promise<readonly string[]>) | undefined,
   roots: readonly string[],
-): Promise<ResumeOutcome> {
-  if (!resume) return { kind: 'absent', claimed: new Set<string>() };
+): Effect.Effect<ResumeOutcome> {
+  if (!resume) return Effect.succeed({ kind: 'absent', claimed: new Set<string>() });
 
-  try {
-    return { kind: 'answered', claimed: new Set(await resume(roots)) };
-  } catch (err) {
-    diagnostics.failure('head.resume_gate_failed', toKinuError({
-      doing: 'offering interrupted fork runs to the resume gate',
-      cause: err,
-      otherwise: 'io',
-    }), { runs: roots.length, protected: roots.length });
+  return Effect.tryPromise({
+    try: () => resume(roots),
+    catch: (cause) => toKinuError({ doing: 'offering interrupted fork runs to the resume gate', cause, otherwise: 'io' }),
+  }).pipe(Effect.match({
+    onSuccess: (claimed): ResumeOutcome => ({ kind: 'answered', claimed: new Set(claimed) }),
+    onFailure: (failure): ResumeOutcome => {
+      diagnostics.failure('head.resume_gate_failed', failure, { runs: roots.length, protected: roots.length });
 
-    return { kind: 'gate-failed' };
-  }
+      return { kind: 'gate-failed' };
+    },
+  }));
 }
 
 
@@ -251,14 +253,14 @@ async function resumeOutcome(
 function recordAbandonedRuns(
   ledger: RunEventLedger | undefined,
   runs: readonly AbandonedHeadRun[],
-): void {
-  if (!ledger) return;
+): Effect.Effect<void> {
+  if (!ledger) return Effect.void;
 
-  for (const run of runs) {
-    try {
+  return Effect.forEach(runs, (run) => Effect.try({
+    try: () => {
       const runId = ledger.runForHeadSplit(run.rootId);
 
-      if (!runId) continue;
+      if (!runId) return;
       ledger.emit(runId, {
         type: 'head_abandoned',
         rootId: run.rootId,
@@ -267,12 +269,9 @@ function recordAbandonedRuns(
         rationale: run.rationale,
         reason: FORK_INTERRUPTED_REASON,
       });
-    } catch (err) {
-      diagnostics.failure(
-        'head.abandonment_record_failed',
-        toKinuError({ doing: 'record an abandoned fork', cause: err, otherwise: 'io' }),
-        { rootId: run.rootId },
-      );
-    }
-  }
+    },
+    catch: (cause) => toKinuError({ doing: 'record an abandoned fork', cause, otherwise: 'io' }),
+  }).pipe(Effect.catch((failure) => Effect.sync(() => {
+    diagnostics.failure('head.abandonment_record_failed', failure, { rootId: run.rootId });
+  }))), { discard: true });
 }
