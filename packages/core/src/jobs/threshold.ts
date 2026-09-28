@@ -126,7 +126,7 @@ export async function withBackgroundThreshold<T>(
     jobId: outcome.jobId,
     kind,
     message:
-      `Outran the ${Math.round(thresholdMs / 1000)}s foreground window; backgrounded — ` +
+      `Outran the ${Math.round(thresholdMs / 1000)}s foreground window; backgrounded: ` +
       `still running, not cancelled. The settled result will wake you.`,
   };
 }

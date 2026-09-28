@@ -19,6 +19,7 @@ import type { WorkspaceBundle } from './vfs/nimbus-workspace';
 import { writeWorkspaceSoul } from './vfs/workspace-planes';
 import type { ActorHandle } from './identity/actor-handle';
 import { initWorkspaceActorTable, WorkspaceActorDirectory } from './identity/workspace-actors';
+import { SCHEMA_GENESIS_STAMP } from './identity/schema-stamp';
 
 export interface WorkspaceBirthConfig {
   /** The address slug (`workspaceSlug`), held by `workspace_identity.name` for life. */
@@ -64,7 +65,7 @@ function buildComponents(components: WorkspaceComponents) {
     // so fail loudly; running surfaces use createCLIRuntime's real spawner.
     spawnBranch: () => {
       throw new Error(
-        'createWorkspace\'s birth runtime does not implement spawnBranch — it is for creating a '
+        'createWorkspace\'s birth runtime does not implement spawnBranch: it is for creating a '
         + 'workspace, not for running one. Open the workspace with openWorkspaceCLI (which builds '
         + 'createCLIRuntime) to get a real branch spawner. Returning a stub result here would be '
         + 'indistinguishable from a real exploration to every consumer.',
@@ -82,6 +83,7 @@ export async function createWorkspace(
 
   const { workspace, actor } = transactionSync(() => {
     initAllTables(execRaw, sql);
+    execRaw(`PRAGMA user_version = ${String(SCHEMA_GENESIS_STAMP)}`);
     initWorkspaceBaselineTable(execRaw);
     const bundle = createInlineWorkspace(db);
 

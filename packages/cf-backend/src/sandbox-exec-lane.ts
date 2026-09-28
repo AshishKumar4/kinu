@@ -125,7 +125,7 @@ async function execWithoutDeadline(
     // The race resolves only through `observed`, so the process is gone.
     if (cancelling) {
       throw new DOMException(
-        `sandbox exec cancelled — container process ${started.id} was killed`,
+        `sandbox exec cancelled: container process ${started.id} was killed`,
         "AbortError",
       );
     }

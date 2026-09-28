@@ -231,7 +231,6 @@ export class PeerHub {
           event_id,
           kind: 'peer_back',
           holder_addr: JSON.stringify(holder),
-          payload_policy: 'full',
         }, now);
       },
     }, msg, now);
@@ -334,7 +333,7 @@ export class PeerHub {
     if (!channel) {
       return {
         ok: false,
-        error: `no open peer reply channel for event ${input.eventId} — already answered, expired, or the sender did not ask for a reply`,
+        error: `no open peer reply channel for event ${input.eventId}: already answered, expired, or the sender did not ask for a reply`,
       };
     }
 

@@ -1428,15 +1428,15 @@ describe('LocalAgentHost', () => {
     const team = await host.team('root');
     await team.spawn({ name: 'ask-refiner-x1', role: 'researcher', mission: 'Propose refinements.', mode: 'build' });
 
-    // The request and helper rows the lane writes when it hires its refiner; its waiter is gone.
     const seed = new Database(dbPath);
     const actorId = present(seed.query<{ actor_id: string }, []>('SELECT actor_id FROM actor_subordinates LIMIT 1').get(), 'the root').actor_id;
     const now = Date.now();
     seed.prepare(`INSERT INTO refinement_requests
-      (actor_id, id, trigger, scope, stage, claim, session_id, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
-      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
-    seed.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane, lane_request_id, task_event_id, answer_status, answer, created_at)
-      VALUES (?, 'ask-refiner-x1', 'refinement', 'refine-1', NULL, NULL, NULL, ?)`).run(actorId, now);
+      (actor_id, id, trigger, scope, stage, claim, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
+      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
+    seed.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
+      VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
+    seed.run(`UPDATE actor_subordinates SET created_by = 'evolution' WHERE name = 'ask-refiner-x1'`);
     seed.close();
 
     const stage = () => {
@@ -1447,16 +1447,33 @@ describe('LocalAgentHost', () => {
       return row?.stage ?? null;
     };
 
-    const answered = Promise.withResolvers<void>();
-    host.subscribe((agent, event) => {
-      if (agent !== 'root' && event.type === 'turn-end') answered.resolve();
-    });
-    // No daemon pass runs here: only the answer's own wake can route it.
-    await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
-    await answered.promise;
+    // The answer's pass is held until close() has begun: close() must join it before ending the session.
+    const root = await host.acquire('root');
+    const runEvolutionAnswer = root.runEvolutionAnswer.bind(root);
+    const end = root.end.bind(root);
+    const held = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const order: string[] = [];
 
-    for (let lap = 0; lap < 1000 && stage() === 'requested'; lap++) await new Promise((resolve) => { setImmediate(resolve); });
-    await host.close();
+    root.runEvolutionAnswer = async (at) => {
+      held.resolve();
+      await release.promise;
+      await runEvolutionAnswer(at);
+      order.push('answer routed');
+    };
+
+    root.end = async () => {
+      order.push('session ended');
+      await end();
+    };
+
+    await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
+    await held.promise;
+    const closing = host.close();
+    release.resolve();
+    await closing;
+
+    expect(order).toEqual(['answer routed', 'session ended']);
 
     expect(stage()).not.toBe('requested');
   });
@@ -1846,7 +1863,7 @@ function evolutionRows(dbPath: string, actorId: string) {
 /** Read handle for any actor this database holds; presence is the fence, not lifecycle. */
 function readHandle(sql: SqlExecutor, actorId: string): ActorHandle {
   const row = sql<{ workspace_id: string; parent_actor_id: string | null; name: string; storage_key: string }>`
-    SELECT workspace_id, parent_actor_id, name, storage_key FROM workspace_actors WHERE actor_id = ${actorId}`[0];
+    SELECT (SELECT id FROM workspace_identity) AS workspace_id, parent_actor_id, name, storage_key FROM workspace_actors WHERE actor_id = ${actorId}`[0];
 
   if (row === undefined) throw new Error('The actor is not in this workspace.');
 

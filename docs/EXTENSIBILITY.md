@@ -71,8 +71,7 @@ export class MyAgent extends ActorAgent {
   protected actorHandle(): ActorHandle { /* this actor's handle */ }
   actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult> { /* child directory operations */ }
   protected actorDirectoryStore(): WorkspaceActorDirectory { /* who belongs to this workspace */ }
-  protected explorationSeams(): ExplorationHostSeams { /* what an exploration runner needs */ }
-  protected subordinateSeams(): SubordinateHostSeams { /* what the subordinate rung needs */ }
+  protected hostedSeams(): HostedActorSeams { /* what every hosted actor's runner needs */ }
   protected hostedChatWire(name: string): ChatWire | null { /* a hosted actor's chat wire */ }
   protected owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] { /* what a settled turn owes */ }
   protected transcriptFor(actor: ActorHandle): SessionTranscript { /* an actor's own transcript */ }
@@ -105,11 +104,11 @@ allowlist decides any of this.
 `ActorToolDeps` has `team`, `peers`, `report` and `submitPlan`. `teamProfile()` returns `{ team }` while an actor has tree below
 it and `{}` at the depth cap, so the delegation budget stops recursion, not
 the class. The root builds a hosted subordinate's delegated-turn surface through
-`SubordinateHostSeams.taskProfile`
-(`packages/cf-backend/src/subordinate-hosting.ts`), which adds `report` because
+`HostedActorSeams.taskProfile`
+(`packages/cf-backend/src/hosted-actors.ts`), which adds `report` because
 a delegated task is parent-assigned. `submitPlan` appears only on a turn that
 belongs to the owner, in Plan mode. The narrowing keys on the turn, not on a
-class. `packages/cf-backend/src/exploration-hosting.ts` builds head and node
+class. The same module builds head and node
 surfaces over that actor's own runtime. An MCTS branch has no tool surface and
 acquires no execution plane, because it is built without one.
 

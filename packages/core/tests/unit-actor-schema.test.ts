@@ -47,8 +47,7 @@ describe('actor schema', () => {
       const db = new Database(':memory:');
       init((ddl) => db.exec(ddl), makeSql(db));
       expect(columnNames(db, 'scaffold_versions')).toEqual(
-        ['actor_id', 'version', 'written_at', 'rationale', 'canary_score', 'baseline_score',
-          'status', 'parent_version', 'pathology'],
+        ['actor_id', 'version', 'written_at', 'rationale', 'status', 'parent_version', 'pathology'],
       );
       db.close();
     }
@@ -57,8 +56,7 @@ describe('actor schema', () => {
       const db = new Database(':memory:');
       initScaffoldTables((ddl) => db.exec(ddl));
       expect(columnNames(db, 'scaffold_versions')).toEqual(
-        ['actor_id', 'version', 'written_at', 'rationale', 'canary_score', 'baseline_score',
-          'status', 'parent_version', 'pathology'],
+        ['actor_id', 'version', 'written_at', 'rationale', 'status', 'parent_version', 'pathology'],
       );
       db.close();
     }

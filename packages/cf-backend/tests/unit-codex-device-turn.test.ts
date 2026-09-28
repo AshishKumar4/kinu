@@ -46,8 +46,18 @@ beforeEach(() => {
 
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-test('a machine that connects during a Codex turn waits for the next turn, and the turn\'s own side calls stay with it', async () => {
+interface CodexWorkspace {
+  readonly user: TestUserDO;
+  readonly actor: ReturnType<typeof orchestratorHarness>;
+  readonly relayed: string[];
+  readonly forwarded: string[];
+  readonly connectMachine: (label: string) => Promise<string>;
+}
+
+/** A hosted root routing every tier to Codex; `duringFirstCall` runs inside the first turn's first chatgpt.com call. */
+async function codexWorkspace(duringFirstCall: (workspace: CodexWorkspace) => Promise<void> = async () => {}): Promise<CodexWorkspace> {
   const relayed: string[] = [];
+  const forwarded: string[] = [];
   let user: TestUserDO | null = null;
 
   user = createTestUserDO({
@@ -64,13 +74,21 @@ test('a machine that connects during a Codex turn waits for the next turn, and t
     },
   });
 
+  const opened = user;
   const owner = await testOwner();
-  await user.userDO.setCredential(owner, CODEX_CRED_KEY, { kind: 'oauth', accessToken: ACCESS, refreshToken: 'refresh-never-used' });
-  const token = await provisionTestWorkspace(user, WORKSPACE, 'Codex turn');
-  const world = { userDO: user.userDO, workspace: WORKSPACE, ownerUserId: OWNER_USER_ID };
+  await opened.userDO.setCredential(owner, CODEX_CRED_KEY, { kind: 'oauth', accessToken: ACCESS, refreshToken: 'refresh-never-used' });
+  const token = await provisionTestWorkspace(opened, WORKSPACE, 'Codex turn');
+  const world = { userDO: opened.userDO, workspace: WORKSPACE, ownerUserId: OWNER_USER_ID };
   const calls = new EgressCalls();
-  const forwarded: string[] = [];
-  let sideAnswer = '';
+
+  const connectMachine = async (label: string): Promise<string> => {
+    const { deviceId } = await opened.userDO.registerDevice(owner, label);
+    opened.attachDaemon(deviceId);
+
+    return deviceId;
+  };
+
+  let workspace: CodexWorkspace | null = null;
 
   const container: CodexEgressNamespace = {
     idFromName: (name) => ({ name, toString: () => name, equals: (other: DurableObjectId) => other.toString() === name }),
@@ -80,12 +98,7 @@ test('a machine that connects during a Codex turn waits for the next turn, and t
         forwarded.push(request.url);
         const body = await request.text();
 
-        // The turn's first model call: the owner's machine connects now, and a side call runs inside the turn.
-        if (forwarded.length === 1 && user !== null) {
-          const { deviceId } = await user.userDO.registerDevice(owner, 'studio');
-          user.attachDaemon(deviceId);
-          sideAnswer = await sideLane(actor.agent).complete('judge this');
-        }
+        if (forwarded.length === 1 && workspace !== null) await duringFirstCall(workspace);
 
         return calls.run(callId, { start: async () => {}, fetch: async () => answer(body, 'from the relay') });
       },
@@ -96,6 +109,18 @@ test('a machine that connects during a Codex turn waits for the next turn, and t
   const actor = orchestratorHarness(undefined, world, Object.assign(makeEnv(undefined, undefined, world), { CodexEgress: container }));
   actor.agent.harnessHoldsCapability(token);
   actor.agent.harnessInstallCatalog({ tiers: { default: { model: CODEX_MODEL }, deep: { model: CODEX_MODEL }, fast: { model: CODEX_MODEL } }, availableModels: [CODEX_MODEL] });
+  workspace = { user: opened, actor, relayed, forwarded, connectMachine };
+
+  return workspace;
+}
+
+test('a machine that connects during a Codex turn waits for the next turn, and the turn\'s own side calls stay with it', async () => {
+  let sideAnswer = '';
+
+  const { user, actor, relayed, forwarded } = await codexWorkspace(async ({ actor: during, connectMachine }) => {
+    await connectMachine('studio');
+    sideAnswer = await sideLane(during.agent).complete('judge this');
+  });
 
   await catalogTurn(actor.agent, 'say hello');
 
@@ -106,6 +131,26 @@ test('a machine that connects during a Codex turn waits for the next turn, and t
   await catalogTurn(actor.agent, 'again');
   // The next turn goes out from the machine.
   expect(relayed.filter((url) => url.endsWith('/codex/responses'))).toHaveLength(1);
+  await user.joinFibers();
+  user.close();
+});
+
+test('the Activity tab names the route of the newest Codex step: the machine by its current name, or the container', async () => {
+  const { user, actor, connectMachine } = await codexWorkspace();
+
+  await catalogTurn(actor.agent, 'say hello');
+  expect((await actor.agent.getActivitySnapshot()).latest).toMatchObject({ modelId: 'gpt-5.5', route: { kind: 'container' } });
+
+  const deviceId = await connectMachine('studio');
+  await catalogTurn(actor.agent, 'again');
+  expect((await actor.agent.getActivitySnapshot()).latest).toMatchObject({ modelId: 'gpt-5.5', route: { kind: 'device', id: deviceId, name: 'studio' } });
+
+  // Read at snapshot time, and asking no machine: a slow one cannot hold the tab up.
+  await user.userDO.renameDevice(await testOwner(), deviceId, 'desk');
+  await connectMachine('laptop');
+  const asked = user.deviceFrames.length;
+  expect((await actor.agent.getActivitySnapshot()).latest?.route).toEqual({ kind: 'device', id: deviceId, name: 'desk' });
+  expect(user.deviceFrames.slice(asked).map((frame) => frame.method)).toEqual([]);
   await user.joinFibers();
   user.close();
 });

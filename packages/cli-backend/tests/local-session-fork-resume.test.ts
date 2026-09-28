@@ -61,7 +61,7 @@ function interruptedWorkspace() {
     journal.insertSpawn({
       id: `h${i}`, parentId: null, rootId: ROOT, depth: 1,
       task: `angle ${i}`, rationale: 'why', mode: 'build',
-      inheritedContext: [], mergeStrategy: 'synthesize', loop: defaultLoopOrigin('head'),
+      inheritedContext: [], mergeStrategy: 'synthesize', loop: defaultLoopOrigin('run'),
       budget: { maxDepth: 2, spawnedAt: now },
     });
   }

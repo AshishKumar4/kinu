@@ -89,12 +89,12 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
   /** Throws so a typo renders as a tool error instead of queueing a row that can only dead-letter. */
   const requirePeer = (name: string): void => {
     if (name === deps.self.name) {
-      throw new Error('that is this agent — pick another peer (action:"list")');
+      throw new Error('that is this agent: pick another peer (action:"list")');
     }
 
     if (!reachable().some((ref) => ref.name === name)) {
       throw new Error(`unknown peer "${name}" in workspace "${deps.self.workspaceId}"`
-        + ' — list the ones you can reach with action:"list"');
+        + '; list the ones you can reach with action:"list"');
     }
   };
 
@@ -132,7 +132,7 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
         agent: name ?? '',
         created: false,
         status: 'rejected',
-        reason: 'creating a peer agent locally is a user action — run'
+        reason: 'creating a peer agent locally is a user action: run'
           + ` \`kinu create ${name ?? '<name>'}\` in ${deps.self.cwd}, then message it by name.`,
       }),
     },

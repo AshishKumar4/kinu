@@ -423,6 +423,46 @@ describe("deploy gate", () => {
     expect([combined.status, combined.events]).toEqual([2, []]);
   });
 
+  // A production reset is confirmed inside `reset.ts wipe`, at a terminal; a run with none stops before anything.
+  test("a production reset with no terminal to confirm at runs nothing", () => {
+    const run = runDeploy({ option: "--promote", options: ["--reset"] });
+
+    expect([run.status, run.events]).toEqual([1, []]);
+  });
+
+  // The advertised `wipe production` deletes nothing unless a person types the words at a terminal: piped input is
+  // refused before any Cloudflare call, and this child has no wrangler on its PATH to make one with.
+  test("a production wipe with its words piped in deletes nothing", () => {
+    const record = join(scratchDir("reset-refused"), "record.json");
+
+    const run = Bun.spawnSync([process.execPath, join(REPO_ROOT, "scripts", "reset.ts"), "wipe", "production", record], {
+      env: childEnv({ PATH: "" }),
+      stdin: Buffer.from("reset production\n"),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect([run.exitCode, run.stderr.toString()]).toEqual([1, expect.stringContaining("not confirmed at a terminal")]);
+    expect(existsSync(record)).toBe(false);
+  });
+
+  // The wipe sits after the build: a red gate or a failed build must leave the storage as it was.
+  test("a reset deletes nothing when a gate is red or the build fails", () => {
+    const wiped = (events: readonly string[]) => events.filter((event) => event.startsWith("bun scripts/reset.ts wipe"));
+
+    const failedBuild = runDeploy({ option: "--reset" });
+
+    expect(failedBuild.events).toContain("bun scripts/reset.ts plan staging");
+    expect(failedBuild.events).toContain("MUTATE bunx vite build");
+    expect(wiped(failedBuild.events)).toEqual([]);
+
+    const redGate = runDeploy({ option: "--reset", failingGate: REQUIRED_GATES[REQUIRED_GATES.length - 1] });
+
+    expect(redGate.status).not.toBe(0);
+    expect(redGate.events.some((event) => event.startsWith("MUTATE "))).toBe(false);
+    expect(wiped(redGate.events)).toEqual([]);
+  });
+
   test("an ambient environment variable cannot point the account gate at the other deployment", () => {
     // Assigned in both arms, like the phase: `export KINU_INFRA_ENVIRONMENT=production`
     // in a shell must not make a staging deploy certify production's resources.

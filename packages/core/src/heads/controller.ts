@@ -60,7 +60,7 @@ export interface HeadJournalPort {
   recordSplit(rootId: HeadId, rationale: string, spawnedAt: number): void | Promise<void>;
   insertSpawn(input: HeadInput): void | Promise<void>;
   recordReport(report: HeadReport): void | Promise<void>;
-  cacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): void | Promise<void>;
+  cacheMerge(rootId: HeadId, narrative: string): void | Promise<void>;
 }
 
 /**
@@ -133,7 +133,7 @@ export class HeadController {
     if (!isRootJournal(journal)) {
       // A facet's port reaching this is a wiring error: minting a fresh id would split the run.
       throw new Error(
-        'A top-level split must run against the ROOT workspace journal — run reclamation reads every '
+        'A top-level split must run against the ROOT workspace journal: run reclamation reads every '
         + 'unfinished run in the store. A recursive split has to pass parentHeadId.',
       );
     }
@@ -196,7 +196,7 @@ export class HeadController {
         allowedTools: h.allowedTools,
         mergeStrategy: strategy,
         // A fork explores under the loop it forks from, via the per-kind default.
-        loop: defaultLoopOrigin('head'),
+        loop: defaultLoopOrigin('run'),
         ...forkMission(opts.missionLabels),
       };
 
@@ -296,7 +296,7 @@ export class HeadController {
       headScores,
     });
 
-    if (opts.parentHeadId === null) await this.journal.cacheMerge(rootId, mergeResult, strategy);
+    if (opts.parentHeadId === null) await this.journal.cacheMerge(rootId, mergeResult.mergedNarrative);
     opts.onPhase?.({
       kind: 'merge',
       rootId,
@@ -568,7 +568,7 @@ function emptySplitNarrative(reports: readonly HeadReport[], rationale: string):
     // "tokens unreported", not "0 tokens": this text reaches the parent's context verbatim.
     const total = usageTotal(r.usage);
     lines.push(
-      `- Head ${r.id}: ${r.status}${r.errorMessage ? ` — ${r.errorMessage}` : ''}`
+      `- Head ${r.id}: ${r.status}${r.errorMessage ? `: ${r.errorMessage}` : ''}`
       + ` (${total === undefined ? 'tokens unreported' : `${total} tokens`},`
       + ` ${Math.round(r.wallClockMs / 100) / 10}s,`
       + ` ${r.toolCalls.length} tool call(s), ${r.stepCount} step(s))`,
@@ -589,11 +589,11 @@ function emptySplitNarrative(reports: readonly HeadReport[], rationale: string):
 function headTrajectory(r: HeadReport): string {
   const parts: string[] = [r.summary];
 
-  for (const d of r.decisions) parts.push(`Decision — ${d.question}: ${d.choice} (${d.rationale})`);
+  for (const d of r.decisions) parts.push(`Decision on ${d.question}: ${d.choice} (${d.rationale})`);
 
   for (const e of r.evidence) parts.push(`Evidence [${e.kind}]: ${e.body}`);
 
-  for (const a of r.artifactRefs) parts.push(`Artifact (${a.kind}): ${a.ref}${a.description ? ` — ${a.description}` : ''}`);
+  for (const a of r.artifactRefs) parts.push(`Artifact (${a.kind}): ${a.ref}${a.description ? `: ${a.description}` : ''}`);
 
   return parts.join('\n').trim();
 }
@@ -630,7 +630,7 @@ function fallbackNarrative(reports: readonly HeadReport[], rationale: string, er
   lines.push('');
 
   for (const r of reports) {
-    lines.push(`### Head ${r.id} (${r.status}${headProducedFindings(r) ? '' : ' — produced no findings'})`);
+    lines.push(`### Head ${r.id} (${r.status}${headProducedFindings(r) ? '' : ': produced no findings'})`);
     lines.push(r.summary);
     lines.push('');
   }
@@ -654,7 +654,7 @@ function buildMergePrompt({ reports, rationale, strategy, inheritedContext, head
   } satisfies Record<MergeStrategy, string>;
 
   const recentContext = inheritedContext.slice(-6)
-    .map((m) => `${m.role}: ${m.content.slice(0, 300)}${m.content.length > 300 ? '…' : ''}`)
+    .map((m) => `${m.role}: ${m.content.slice(0, 300)}${m.content.length > 300 ? '...' : ''}`)
     .join('\n');
 
   const scoreById = new Map(headScores.map((s) => [s.id, s]));
@@ -673,11 +673,11 @@ function buildMergePrompt({ reports, rationale, strategy, inheritedContext, head
 
     const artList = r.artifactRefs.length === 0
       ? ''
-      : `\n\nArtifacts:\n${r.artifactRefs.map((a) => `  - (${a.kind}) ${a.ref}${a.description ? ` — ${a.description}` : ''}`).join('\n')}`;
+      : `\n\nArtifacts:\n${r.artifactRefs.map((a) => `  - (${a.kind}) ${a.ref}${a.description ? `: ${a.description}` : ''}`).join('\n')}`;
 
     const s = scoreById.get(r.id);
-    const scoreTag = s ? ` — grounded outcome ${s.score.toFixed(2)} (${s.grounding})` : '';
-    const emptyTag = headProducedFindings(r) ? '' : ' — PRODUCED NO FINDINGS';
+    const scoreTag = s ? `: grounded outcome ${s.score.toFixed(2)} (${s.grounding})` : '';
+    const emptyTag = headProducedFindings(r) ? '' : ': PRODUCED NO FINDINGS';
 
     return `## Head ${r.id} (${r.status}${emptyTag})${scoreTag}
 Summary:
@@ -716,7 +716,7 @@ ${headSections}
 
 JSON object shape with EXACTLY these keys and types (use [] for empty lists):
 {
-  "narrative": "<coherent unified narrative — the response the parent head writes back to the user>",
+  "narrative": "<coherent unified narrative: the response the parent head writes back to the user>",
   "selected_decisions": [{ "question": "<question>", "choice": "<final answer>", "rationale": "<why>" }],
   "unresolved_questions": ["<open question>"],
   "recommendations": ["<short imperative next step>"],
@@ -724,6 +724,6 @@ JSON object shape with EXACTLY these keys and types (use [] for empty lists):
 }
 selected_decisions, unresolved_questions, recommendations and blind_spots MUST be JSON arrays (never objects).
 The narrative should be specific and grounded in the heads' evidence; do not reference the merge process itself.
-blind_spots is the one field you cannot fill by summarizing the reports: re-read the split rationale, consider what a complete answer to it would have to cover, and name the parts NO head looked at. A question a head RAISED is an unresolved_question; a blind spot is ground none of them thought to check, so nothing in their reports points at it — heads given adjacent tasks tend to share an assumption, and that shared assumption is what to look for. Return [] if the heads covered the task between them: an empty list is the honest answer, and a generic entry is worse than none.
+blind_spots is the one field you cannot fill by summarizing the reports: re-read the split rationale, consider what a complete answer to it would have to cover, and name the parts NO head looked at. A question a head RAISED is an unresolved_question; a blind spot is ground none of them thought to check, so nothing in their reports points at it; heads given adjacent tasks tend to share an assumption, and that shared assumption is what to look for. Return [] if the heads covered the task between them: an empty list is the honest answer, and a generic entry is worse than none.
 ${jsonObjectOnlyInstruction()}`;
 }

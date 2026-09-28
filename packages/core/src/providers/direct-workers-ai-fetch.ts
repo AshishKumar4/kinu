@@ -5,7 +5,7 @@ import { asFetchFunction } from './fetch-shim';
 import { toolCallIdFor } from './tool-call-id';
 import { withRateLimitRetry, type RateLimitRetryOptions } from './rate-limit-retry';
 import { Effect } from 'effect';
-import { diagnostics, renderCauseChain, settle, toKinuError, tolerate } from '../obs/index';
+import { KinuError, diagnostics, renderCauseChain, settle, toKinuError, tolerate } from '../obs/index';
 import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
 import { createCachedUsageRepair } from './stream-usage-repair';
@@ -83,6 +83,8 @@ export function createDirectWorkersAIFetch(
     const started = v.is(v.string(), text) ? startRun(binding, text, request, init) : null;
 
     if (started === null) return errorResponse(400, 'the request body is not JSON object text');
+
+    if (started === 'unlisted') return settle(Effect.fail(new KinuError('bad_input', 'the request `messages` is not a list of objects')));
     const { route, running } = started;
     const startedAt = Date.now();
 
@@ -105,14 +107,17 @@ export function createDirectWorkersAIFetch(
   }), retry);
 }
 
-/** The parsed request stays in here: a caller's frame would hold it until the model answers. */
+/** Parsed here: the fetch's frame lives until the model answers. */
 function startRun(
   binding: DirectWorkersAIRunner, text: string, request: Request | null, init: RequestInit | undefined,
-): { readonly route: ChatCompletionRoute; readonly running: Promise<Response | ReadableStream<Uint8Array> | JsonObject> } | null {
+): { readonly route: ChatCompletionRoute; readonly running: Promise<Response | ReadableStream<Uint8Array> | JsonObject> } | 'unlisted' | null {
   const body = readJsonObjectText(text);
 
   if (body === null) return null;
   const route = v.parse(ChatCompletionRouteSchema, { model: body.model, stream: body.stream });
+  const messages = jsonObjectElements(body.messages);
+
+  if (body.messages !== undefined && messages === null) return 'unlisted';
   const signal = request?.signal ?? init?.signal;
 
   const options: DirectWorkersAIRunOptions = {
@@ -123,18 +128,16 @@ function startRun(
   const affinity = sessionAffinity(request?.headers ?? init?.headers);
 
   if (affinity) options.extraHeaders = { 'x-session-affinity': affinity };
-
-  const inputs = bindingInputs(body, route);
+  const inputs = bindingInputs(body, route, messages);
 
   return { route, running: Promise.resolve().then(() => binding.run(route.model, inputs, options)) };
 }
 
 /** Tool-call ids are forwarded as-is: the upstream pairs on equality and re-keying would split pairs.
  *  Null `content` becomes `''` because the binding's message schema rejects null (AiError on tool-only turns). */
-function bindingInputs(body: JsonObject, route: ChatCompletionRoute): JsonObject {
+function bindingInputs(body: JsonObject, route: ChatCompletionRoute, messages: readonly JsonObject[] | null): JsonObject {
   const inputs: JsonObject = { ...body, stream: route.stream };
   delete inputs.model;
-  const messages = jsonObjectElements(body.messages);
 
   if (messages !== null) inputs.messages = messages.map(withoutNullContent);
 

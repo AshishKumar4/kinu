@@ -399,7 +399,7 @@ describe('archive manifest', () => {
 
     expect(checkpoint?.content).toInclude('## Compaction Archive');
     expect(checkpoint?.content).toInclude(
-      '- turns 1-12 (6 user / 6 assistant) — "requirement 0: detail detail',
+      '- turns 1-12 (6 user / 6 assistant), "requirement 0: detail detail',
     );
     expect(checkpoint?.content).toInclude(snapshot.transcriptRelativePath);
   });

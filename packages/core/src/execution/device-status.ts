@@ -76,7 +76,7 @@ export function deviceFleetAsk(fleet: DeviceFleet | undefined): string {
   if (live.length === 0) return NO_DEVICE_CONNECTED;
   const names = live.map((device) => `${device.name}${device.os ? ` (${device.os})` : ''}`).join(', ');
 
-  return `name the machine this command runs on — connected: ${names}. Pass it as device: "<name>".`;
+  return `name the machine this command runs on: connected: ${names}. Pass it as device: "<name>".`;
 }
 
 /** A connected device by name, or null when none or several live machines match. */

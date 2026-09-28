@@ -52,7 +52,7 @@ export interface HostedSeats {
   readonly broadcasts: readonly BroadcastEvent[];
   readonly enqueued: readonly ProgrammaticTurn[];
   /** The seat one logical actor's turn runs on; idempotent per name, so a re-hosted node keeps its actor. */
-  seat(name: string, kind: Exclude<WorkspaceActor['kind'], 'main' | 'branch'>): Promise<HostedNodeSeat>;
+  seat(name: string, kind: Exclude<WorkspaceActor['kind'], 'main'>): Promise<HostedNodeSeat>;
   /** `hostNode` over these seats: one actor per node id, all over the one database. */
   readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
 }
@@ -145,7 +145,7 @@ export function hostedSeatsOver(input: {
 
   const seat = async (
     name: string,
-    kind: Exclude<WorkspaceActor['kind'], 'main' | 'branch'>,
+    kind: Exclude<WorkspaceActor['kind'], 'main'>,
   ): Promise<HostedNodeSeat> => {
     const known = seats.get(name);
 
@@ -190,7 +190,7 @@ export function hostedSeatsOver(input: {
     broadcasts,
     enqueued,
     seat,
-    hostNode: (node) => seat(node.nodeId, 'head'),
+    hostNode: (node) => seat(node.nodeId, 'run'),
   };
 }
 

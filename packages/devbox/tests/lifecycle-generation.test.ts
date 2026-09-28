@@ -216,7 +216,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect(incidents(rows)).toEqual([
       expect.objectContaining({
         stage: 'attach',
-        reason: expect.stringContaining('[transient → retry]'),
+        reason: expect.stringContaining('[transient -> retry]'),
       }),
     ]);
     expect((await box.devboxState()).restoration).toBe('unstarted');
@@ -261,7 +261,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect(incidents(rows)).toEqual([
       expect.objectContaining({
         stage: 'attach',
-        reason: expect.stringContaining('[transient → retry]'),
+        reason: expect.stringContaining('[transient -> retry]'),
       }),
     ]);
     expect(armed(container)).toBe(1);
@@ -542,7 +542,7 @@ describe('a failed restored service is never exposed and never reported ready', 
     await expect(box.exec('ls')).rejects.toMatchObject(
       { message: expect.stringContaining('no attached work directory') });
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('permanent → refuse') });
+      { message: expect.stringContaining('permanent -> refuse') });
   });
 
   test('a stop on a box whose attach was refused stops the container with nothing to commit', async () => {
@@ -556,7 +556,7 @@ describe('a failed restored service is never exposed and never reported ready', 
 
     expect(outcome.kind).toBe('skipped');
     expect(outcome.reason).toContain('nothing is attached to commit');
-    expect(outcome.reason).toContain('permanent → refuse');
+    expect(outcome.reason).toContain('permanent -> refuse');
     expect(container.stops).toBe(stopsBefore + 1);
     expect(container.running.running).toBe(false);
   });
@@ -629,7 +629,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
       expect(armed(container)).toBe(0);
       expect(ladder(rows)?.stage).toBe('replace');
       await expect(box.exec('ls')).rejects.toMatchObject(
-        { message: expect.stringContaining('transient → refuse') });
+        { message: expect.stringContaining('transient -> refuse') });
     });
 
   test('storage exhaustion refuses at once: it repeats no work and moves no ladder', async () => {
@@ -641,7 +641,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
       .toEqual({ armed: 0, destroys: 0 });
     expect(ladder(rows)?.stage).toBeUndefined();
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('exhausted → refuse') });
+      { message: expect.stringContaining('exhausted -> refuse') });
   });
 
   test('permanent configuration refuses at once, without spending the ladder', async () => {
@@ -680,7 +680,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
       expect(container.execs.filter(command => command.includes(STAMP_COMMAND))).toEqual([]);
       expect(rows.has('devbox:last-attach')).toBe(false);
       await expect(box.exec('ls')).rejects.toMatchObject(
-        { message: expect.stringContaining('unreadable → refuse') });
+        { message: expect.stringContaining('unreadable -> refuse') });
     });
 
   test('an attach that lands deletes the row, so the next failure starts fresh', async () => {
@@ -828,7 +828,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     await expect(box.exec('ls')).rejects.toMatchObject(
       { message: expect.stringContaining('A startup is armed') });
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('stale-owner → retry') });
+      { message: expect.stringContaining('stale-owner -> retry') });
     expect({ armed: armed(container), stamps: stamps(container) }).toEqual({ armed: 1, stamps: 1 });
   });
 
@@ -842,7 +842,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     expect(armed(container)).toBe(0);
 
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('exhausted → refuse') });
+      { message: expect.stringContaining('exhausted -> refuse') });
     await expect(box.exec('ls')).rejects.toMatchObject(
       { message: expect.stringContaining('terminal: call attachNow()') });
     expect(stamps(container)).toBe(1);
@@ -1055,7 +1055,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       // Assert the rejection only after the clock moves: `expect(promise).rejects` blocks until
       // settlement, and nothing can advance the test-driven clock meanwhile.
       box.clock.advance(TIGHT_POLICY.attachBudgetMs);
-      await expect(attempt).rejects.toThrow('[abandoned → replace]');
+      await expect(attempt).rejects.toThrow('[abandoned -> replace]');
       expect(container.destroys).toBe(0);
       const state = await box.devboxState();
       expect(state.ready).toBe(false);

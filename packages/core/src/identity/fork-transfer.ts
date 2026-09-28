@@ -232,9 +232,7 @@ function configPayloadBytes(row: ForkConfigRow): number {
 }
 
 function craftedToolPayloadBytes(row: ForkCraftedToolRow): number {
-  return utf8Bytes(row.name) + utf8Bytes(row.description)
-    + (row.params === null ? 0 : utf8Bytes(row.params))
-    + utf8Bytes(row.code) + utf8Bytes(row.scope);
+  return utf8Bytes(row.name) + utf8Bytes(row.description) + utf8Bytes(row.code);
 }
 
 function memoryChunkPayloadBytes(row: ForkMemoryChunkRow): number {
@@ -308,15 +306,15 @@ async function* craftedToolRows(sql: SqlExecutor): AsyncGenerator<ForkCraftedToo
 
   for (;;) {
     const row = sql<ForkCraftedToolRow & { rowid: number }>`
-      SELECT rowid, name, description, params, code, scope, created_at, updated_at
+      SELECT rowid, name, description, code, created_at, updated_at
       FROM crafted_tools WHERE rowid > ${rowid} ORDER BY rowid ASC LIMIT 1
     `[0];
 
     if (row === undefined) return;
     rowid = row.rowid;
     yield {
-      name: row.name, description: row.description, params: row.params, code: row.code,
-      scope: row.scope, created_at: row.created_at, updated_at: row.updated_at,
+      name: row.name, description: row.description, code: row.code,
+      created_at: row.created_at, updated_at: row.updated_at,
     };
   }
 }
@@ -326,7 +324,7 @@ async function* memoryChunkRows(sql: SqlExecutor): AsyncGenerator<ForkMemoryChun
 
   for (;;) {
     const row = sql<ForkMemoryChunkRow & { rowid: number }>`
-      SELECT rowid, id, path, start_line, end_line, hash, text, updated_at
+      SELECT rowid, id, path, start_line, end_line, hash, text
       FROM memory_chunks WHERE rowid > ${rowid} ORDER BY rowid ASC LIMIT 1
     `[0];
 
@@ -334,7 +332,7 @@ async function* memoryChunkRows(sql: SqlExecutor): AsyncGenerator<ForkMemoryChun
     rowid = row.rowid;
     yield {
       id: row.id, path: row.path, start_line: row.start_line, end_line: row.end_line,
-      hash: row.hash, text: row.text, updated_at: row.updated_at,
+      hash: row.hash, text: row.text,
     };
   }
 }

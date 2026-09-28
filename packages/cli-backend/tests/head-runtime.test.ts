@@ -156,7 +156,7 @@ const aHeadInput = (over?: Partial<HeadInput>): HeadInput => ({
   id: 'h1', rootId: 'r1', parentId: null, depth: 0, task: 't', rationale: 'r',
   inheritedContext: [], budget: { maxDepth: 2, spawnedAt: Date.now() },
   mergeStrategy: 'synthesize', ...over,
-  mode: over?.mode ?? 'build', loop: over?.loop ?? defaultLoopOrigin('head'),
+  mode: over?.mode ?? 'build', loop: over?.loop ?? defaultLoopOrigin('run'),
 });
 
 function fakeHeadsModel(capture?: (options: {
@@ -391,7 +391,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
   test('a head neither advertises nor invokes workspace crafts its sandbox does not bind', async () => {
     const parent = makeParent();
-    parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-only echo', code: '(input) => input', params: null, scope: 'local' });
+    parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-only echo', code: '(input) => input' });
     let calls = 0;
 
     const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {

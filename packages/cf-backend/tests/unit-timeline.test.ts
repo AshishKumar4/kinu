@@ -84,7 +84,7 @@ describe('runEventToSpan', () => {
   });
 
   test('scaffold promotion/rollback are scaffold spans with versions in label', () => {
-    expect(runEventToSpan(ev({ type: 'scaffold_promotion', fromVersion: 2, toVersion: 3 })).label).toContain('v2 → v3');
+    expect(runEventToSpan(ev({ type: 'scaffold_promotion', fromVersion: 2, toVersion: 3 })).label).toContain('v2 -> v3');
     expect(runEventToSpan(ev({ type: 'scaffold_rollback', fromVersion: 3, toVersion: 2 })).kind).toBe('scaffold');
   });
 

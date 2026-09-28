@@ -21,8 +21,7 @@ CREATE TABLE IF NOT EXISTS monitor_incidents (
   detail     TEXT    NOT NULL,
   opened_at  INTEGER NOT NULL,
   alerted_at INTEGER,
-  failures   INTEGER NOT NULL DEFAULT 1,
-  seen_at    INTEGER NOT NULL
+  failures   INTEGER NOT NULL DEFAULT 1
 )`;
 
 interface IncidentRow {
@@ -77,14 +76,14 @@ export async function recordProbeRun(deps: MonitorDeps, outcomes: ProbeOutcome[]
     if (existing) {
       // Still broken: record the latest state but never re-alert.
       deps.sql.exec(
-        `UPDATE monitor_incidents SET detail = ?, failures = failures + 1, seen_at = ? WHERE probe = ?`,
-        outcome.detail, deps.now, outcome.probe,
+        `UPDATE monitor_incidents SET detail = ?, failures = failures + 1 WHERE probe = ?`,
+        outcome.detail, outcome.probe,
       );
     } else {
       deps.sql.exec(
-        `INSERT INTO monitor_incidents (probe, detail, opened_at, alerted_at, failures, seen_at)
-         VALUES (?, ?, ?, NULL, 1, ?)`,
-        outcome.probe, outcome.detail, deps.now, deps.now,
+        `INSERT INTO monitor_incidents (probe, detail, opened_at, alerted_at, failures)
+         VALUES (?, ?, ?, NULL, 1)`,
+        outcome.probe, outcome.detail, deps.now,
       );
     }
   }
@@ -147,12 +146,12 @@ function openedNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
   const what = rows.length === 1 && single !== undefined ? `${single.probe} is failing` : `${rows.length} checks are failing`;
 
   const body = [
-    `${deps.origin} — synthetic monitoring found a problem.`,
+    `${deps.origin}: synthetic monitoring found a problem.`,
     '',
-    ...rows.map((row) => `• ${row.probe}: ${row.detail}`),
+    ...rows.map((row) => `- ${row.probe}: ${row.detail}`),
     '',
     'What this means for a user right now:',
-    ...rows.map((row) => `• ${row.probe}: ${IMPACT.get(row.probe) ?? 'this check is part of the public surface.'}`),
+    ...rows.map((row) => `- ${row.probe}: ${IMPACT.get(row.probe) ?? 'this check is part of the public surface.'}`),
     '',
     ...rows.some((row) => !row.probe.startsWith(FLEET_PROBE_PREFIX)) ? SITE_ADVICE : [],
     ...rows.some((row) => row.probe.startsWith(FLEET_PROBE_PREFIX)) ? FLEET_ADVICE : [],
@@ -175,9 +174,9 @@ function recoveredNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
     subject: `Health: ${what}`,
     key: argumentDigest({ kind: 'recovered', rows: rows.map((r) => [r.probe, r.opened_at]) }),
     text: [
-      `${deps.origin} — the checks below are passing again.`,
+      `${deps.origin}: the checks below are passing again.`,
       '',
-      ...rows.map((row) => `• ${row.probe}: was failing for ${duration(deps.now - row.opened_at)}`
+      ...rows.map((row) => `- ${row.probe}: was failing for ${duration(deps.now - row.opened_at)}`
         + ` across ${row.failures} check${row.failures === 1 ? '' : 's'}`),
     ].join('\n'),
   };

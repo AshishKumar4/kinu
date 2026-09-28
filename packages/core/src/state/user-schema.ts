@@ -47,7 +47,6 @@ export function initUserTables(sql: SqlExec): void {
       name_origin   TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user')),
       created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       last_visited  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      archived_at   INTEGER,
       -- A teardown was started and has not finished. The row survives it so the
       -- cleanup has an owner and a same-name recreate cannot reconnect to
       -- resources that were never destroyed (KINU-024). No timestamp: nothing
@@ -64,7 +63,7 @@ export function initUserTables(sql: SqlExec): void {
       -- that is still running keeps the name and one whose source DIED stops
       -- holding it: without this a mid-transfer eviction wedged a name that no
       -- roster read could see and no retry could take back. NULL once the row
-      -- is a published workspace — nothing is streaming into it any more.
+      -- is a published workspace: nothing is streaming into it any more.
       fork_lease_expires_at INTEGER
     )
   `);
@@ -87,9 +86,7 @@ export function initUserTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS user_credentials (
       key        TEXT PRIMARY KEY,
       kind       TEXT NOT NULL,
-      value      TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      value      TEXT NOT NULL
     )
   `);
 
@@ -98,8 +95,7 @@ export function initUserTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_credential_revisions (
       key        TEXT PRIMARY KEY,
-      revision   INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      revision   INTEGER NOT NULL
     )
   `);
   sql.exec(`
@@ -113,8 +109,7 @@ export function initUserTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_auth_generation (
       id         INTEGER PRIMARY KEY CHECK (id = 1),
-      generation INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      generation INTEGER NOT NULL
     )
   `);
 
@@ -136,7 +131,6 @@ export function initUserTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS user_config (
       key        TEXT PRIMARY KEY,
       value      TEXT NOT NULL,
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       version    INTEGER NOT NULL DEFAULT 0
     )
   `);
@@ -150,7 +144,6 @@ export function initUserTables(sql: SqlExec): void {
       user_code       TEXT NOT NULL,
       poll_interval   INTEGER NOT NULL,
       portal_url      TEXT NOT NULL,
-      started_at      INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       generation      INTEGER NOT NULL DEFAULT 1,
       settled_at      INTEGER
     )
@@ -165,9 +158,7 @@ export function initUserTables(sql: SqlExec): void {
       server_url    TEXT NOT NULL,
       transport     TEXT NOT NULL,
       headers       TEXT,
-      allowed_tools TEXT,
-      created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updated_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      allowed_tools TEXT
     )
   `);
 
@@ -212,15 +203,12 @@ export function initUserTables(sql: SqlExec): void {
       os              TEXT,
       hostname        TEXT,
       created_at      INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      connected_at    INTEGER,
       last_seen_at    INTEGER,
       expires_at      INTEGER,
       revoked_at      INTEGER,
-      -- Provenance of the newest accept, and the record that a second socket
-      -- took the slot. Both are rendered in Account settings, because a silent
-      -- takeover is the shape these three columns exist to expose.
-      last_ip         TEXT,
-      last_agent      TEXT,
+      -- When a second socket took this device's live slot. Rendered in Account
+      -- settings: a silent takeover by a copied device.json shows as a
+      -- replacement the owner did not cause.
       replaced_at     INTEGER,
       -- The directory the owner ran "kinu connect" in, and the machine's own
       -- home, both reported on HELLO. The consented directory is the one place
@@ -257,9 +245,7 @@ export function initUserTables(sql: SqlExec): void {
       -- written before the field existed), and whether its owner lets the hub
       -- push a newer one (updateCheck in the CLI config).
       version      TEXT,
-      update_check INTEGER NOT NULL DEFAULT 1,
-      -- When this row was last written, so "reported" is a fact with a time.
-      reported_at  INTEGER NOT NULL
+      update_check INTEGER NOT NULL DEFAULT 1
     )
   `);
 
@@ -328,8 +314,7 @@ export function initUserTables(sql: SqlExec): void {
   // Removed on successful announce; an unreachable workspace keeps its row for the next accept.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS device_notice_pending (
-      agent_name   TEXT PRIMARY KEY,
-      announced_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      agent_name TEXT PRIMARY KEY
     )
   `);
 
@@ -344,7 +329,6 @@ export function initUserTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS device_connect_tickets (
       ticket_hash       TEXT PRIMARY KEY,
       device_id         TEXT NOT NULL,
-      created_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       expires_at        INTEGER NOT NULL,
       used_at           INTEGER,
       -- Whether the token exchanged for this ticket was the device's CURRENT
@@ -366,7 +350,6 @@ export function initUserTables(sql: SqlExec): void {
       agent_name     TEXT NOT NULL,
       cli_token_hash TEXT NOT NULL,
       capabilities   TEXT NOT NULL,
-      created_at     INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       expires_at     INTEGER NOT NULL,
       used_at        INTEGER
     )
@@ -381,7 +364,6 @@ export function initUserTables(sql: SqlExec): void {
       name       TEXT PRIMARY KEY,
       activity   TEXT NOT NULL CHECK (activity IN ('working', 'unfinished', 'idle')),
       decisions  INTEGER NOT NULL,
-      changed_at INTEGER NOT NULL,
       overview   TEXT NOT NULL
     )
   `);
@@ -401,7 +383,6 @@ export function initUserTables(sql: SqlExec): void {
       owner_email   TEXT NOT NULL,
       workspace     TEXT NOT NULL,
       share_id      TEXT NOT NULL,
-      title         TEXT NOT NULL,
       created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       PRIMARY KEY (owner_user_id, workspace, share_id)
     )

@@ -16,7 +16,6 @@ export function initChangeNotesTable(execRaw: RawSqlExec): void {
     actor_id   TEXT NOT NULL,
     source     TEXT NOT NULL,
     notes_json TEXT NOT NULL,
-    updated_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, source)
   )`);
 }
@@ -64,8 +63,8 @@ export function saveChangeNotes(rt: NotesRuntime, source: string, notes: { value
   if (admission.annotations.length === 0) {
     void rt.storage.sql`DELETE FROM change_notes WHERE actor_id = ${actorId} AND source = ${source}`;
   } else {
-    void rt.storage.sql`INSERT OR REPLACE INTO change_notes (actor_id, source, notes_json, updated_at)
-      VALUES (${actorId}, ${source}, ${JSON.stringify(admission.annotations)}, ${Date.now()})`;
+    void rt.storage.sql`INSERT OR REPLACE INTO change_notes (actor_id, source, notes_json)
+      VALUES (${actorId}, ${source}, ${JSON.stringify(admission.annotations)})`;
   }
 
   return { ok: true, notes: admission.annotations };

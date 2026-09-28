@@ -194,10 +194,10 @@ describe('event briefs name only real callables', () => {
   const EVENT_BASE = {
     id: 'eid', trace_id: 'tid', caused_by: null,
     ingress: 'webhook_hmac', trust: 'authenticated', priority: 'normal',
-    received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
+    received_at: 0, reply_channel: null, dedupe_key: null,
   } satisfies Pick<KinuEvent,
     'id' | 'trace_id' | 'caused_by' | 'ingress' | 'trust' | 'priority'
-    | 'received_at' | 'schema_version' | 'reply_channel' | 'dedupe_key'>;
+    | 'received_at' | 'reply_channel' | 'dedupe_key'>;
 
   const BRIEF_SOURCES: KinuEvent[] = [
     { ...EVENT_BASE, variant: 'chat', payload_visibility: 'full', payload: { text: 'hello' } },

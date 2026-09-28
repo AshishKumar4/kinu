@@ -36,11 +36,10 @@ export function initAccessTokenTable(sql: SqlExec): void {
       name         TEXT NOT NULL,
       scopes       TEXT NOT NULL,
       created_at   INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      last_used_at INTEGER,
-      revoked_at   INTEGER
+      last_used_at INTEGER
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_access_tokens_name ON user_access_tokens (name, revoked_at)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_access_tokens_name ON user_access_tokens (name)`);
 }
 
 /** Routing hint for reaching the owning UserDO before verification. */
@@ -87,7 +86,7 @@ export async function mintAccessToken(
   if (!normalized.ok) return normalized;
 
   const duplicate = sql.exec(
-    `SELECT 1 AS x FROM user_access_tokens WHERE name = ? AND revoked_at IS NULL LIMIT 1`,
+    `SELECT 1 AS x FROM user_access_tokens WHERE name = ? LIMIT 1`,
     cleanName,
   ).toArray()[0];
 
@@ -116,12 +115,12 @@ export async function verifyAccessToken(sql: SqlExec, token: string): Promise<Ac
   if (!userId) return { ok: false, error: 'malformed token' };
   const tokenHash = sha256Hex(token);
 
-  const row = v.parse(v.optional(v.object({ scopes: v.string(), revoked_at: v.nullable(v.number()) })), sql.exec(
-    `SELECT scopes, revoked_at FROM user_access_tokens WHERE token_hash = ? LIMIT 1`,
+  const row = v.parse(v.optional(v.object({ scopes: v.string() })), sql.exec(
+    `SELECT scopes FROM user_access_tokens WHERE token_hash = ? LIMIT 1`,
     tokenHash,
   ).toArray()[0]);
 
-  if (!row || row.revoked_at !== null) return { ok: false, error: 'invalid token' };
+  if (!row) return { ok: false, error: 'invalid token' };
   const scopes = parseScopeList(row.scopes);
 
   if (scopes.length === 0) return { ok: false, error: 'invalid token' };
@@ -141,7 +140,7 @@ const ListedTokenSchema = v.object({
 export function listAccessTokens(sql: SqlExec): AccessTokenRecord[] {
   return sql.exec(
     `SELECT token_hash, name, scopes, created_at, last_used_at
-       FROM user_access_tokens WHERE revoked_at IS NULL ORDER BY created_at DESC`,
+       FROM user_access_tokens ORDER BY created_at DESC`,
   ).toArray().map((row) => {
     const stored = v.parse(ListedTokenSchema, row);
 
@@ -155,7 +154,7 @@ export function listAccessTokens(sql: SqlExec): AccessTokenRecord[] {
   });
 }
 
-/** Unknown or already-revoked refs report `revoked: false` so callers can 404. */
+/** A ref that names no token reports `revoked: false` so callers can 404. */
 export interface AccessTokenRevocation { ok: true; revoked: boolean }
 
 export function revokeAccessToken(sql: SqlExec, ref: string): AccessTokenRevocation {
@@ -163,26 +162,17 @@ export function revokeAccessToken(sql: SqlExec, ref: string): AccessTokenRevocat
 
   if (!cleanRef) return { ok: true, revoked: false };
 
-  const hit = sql.exec(
-    `SELECT 1 AS x FROM user_access_tokens
-      WHERE revoked_at IS NULL AND (name = ? OR token_hash = ?) LIMIT 1`,
-    cleanRef, cleanRef,
-  ).toArray()[0];
+  const deleted = sql.exec(
+    `DELETE FROM user_access_tokens WHERE name = ? OR token_hash = ? RETURNING token_hash`, cleanRef, cleanRef,
+  ).toArray();
 
-  if (!hit) return { ok: true, revoked: false };
-  sql.exec(
-    `UPDATE user_access_tokens SET revoked_at = ?
-      WHERE revoked_at IS NULL AND (name = ? OR token_hash = ?)`,
-    Date.now(), cleanRef, cleanRef,
-  );
-
-  return { ok: true, revoked: true };
+  return { ok: true, revoked: deleted.length > 0 };
 }
 
 /** Null when no active token matches; also pins the agent websocket to the bearer's scopes. */
 export function getActiveAccessTokenScopes(sql: SqlExec, tokenHash: string): AccessTokenScope[] | null {
   const row = v.parse(v.optional(v.object({ scopes: v.string() })), sql.exec(
-    `SELECT scopes FROM user_access_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
+    `SELECT scopes FROM user_access_tokens WHERE token_hash = ? LIMIT 1`,
     tokenHash,
   ).toArray()[0]);
 

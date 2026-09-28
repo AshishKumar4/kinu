@@ -14,13 +14,13 @@
  * `rollback` returns production to the newest build older than the one it serves, and proves it serves that build's
  * downloads byte for byte.
  *
- *   bun scripts/promote.ts digest                   the artifact digest of packages/cf-backend/dist
- *   bun scripts/promote.ts forget                   staging's deploy, before it builds: HEAD is not verified
- *   bun scripts/promote.ts record <staging version> staging's deploy, after every post-deploy tier passed
- *   bun scripts/promote.ts check                    before promotion builds: HEAD is verified and staging serves it
- *   bun scripts/promote.ts adopt                    after the production build: downloads, digest, release tarball
- *   bun scripts/promote.ts promoted <version>       production's deploy, after every post-deploy tier passed
- *   bun scripts/promote.ts rollback                 production back to the build it took before the one it serves
+ *   bun scripts/promote.ts digest                                   the artifact digest of packages/cf-backend/dist
+ *   bun scripts/promote.ts forget                                   staging's deploy, before it builds: HEAD is not verified
+ *   bun scripts/promote.ts record <staging version> [reset record]  staging's deploy, after every post-deploy tier passed
+ *   bun scripts/promote.ts check                                    before promotion builds: HEAD is verified and staging serves it
+ *   bun scripts/promote.ts adopt                                    after the production build: downloads, digest, release tarball
+ *   bun scripts/promote.ts promoted <version> [reset record]        production's deploy, after every post-deploy tier passed
+ *   bun scripts/promote.ts rollback                                 production back to the build it took before the one it serves
  */
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -30,6 +30,7 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { deployment, environmentArgs, why, wrangler } from './infra-cloudflare';
 import { type InfraEnvironment, deriveInfrastructure } from './infra-manifest';
+import { LATEST_RESET_KEY, type Reset, ResetSchema } from './reset';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -118,6 +119,7 @@ export const VerifiedSchema = v.object({
   stagingVersion: v.string(),
   recordedAt: v.string(),
   downloads: DownloadsSchema,
+  reset: v.optional(ResetSchema),
 });
 
 export type Verified = v.InferOutput<typeof VerifiedSchema>;
@@ -132,6 +134,7 @@ export const PromotionSchema = v.object({
   at: v.string(),
   downloads: DownloadsSchema,
   withdrawnAt: v.optional(v.string()),
+  reset: v.optional(ResetSchema),
 });
 
 export type Promotion = v.InferOutput<typeof PromotionSchema>;
@@ -251,6 +254,17 @@ export function planRollback(
   return { target, history: history.map((entry, index) => index === position ? { ...entry, withdrawnAt: at } : entry) };
 }
 
+/**
+ * The reset a rollback to `target` would cross: one a later promotion carries, or the environment's latest reset if it
+ * came after `target` was promoted (a promotion red after its reset is in no history). A build older than a reset
+ * would serve storage its migrations never made, so a rollback across one is refused.
+ */
+export function resetCrossed(history: readonly Promotion[], target: Promotion, latest: Reset | undefined): Reset | undefined {
+  const later = history.slice(history.indexOf(target) + 1).find((entry) => entry.reset !== undefined)?.reset;
+
+  return later ?? (latest !== undefined && latest.at > target.at ? latest : undefined);
+}
+
 const HealthSchema = v.looseObject({ build: v.looseObject({ sha: v.string() }) });
 
 /** A health answer's body, which is the SPA shell rather than JSON while a route serves nothing yet. */
@@ -361,6 +375,10 @@ function head(): string {
   return run.stdout.toString().trim();
 }
 
+function resetIn(file: string | undefined): { readonly reset?: Reset } {
+  return file === undefined ? {} : { reset: v.parse(ResetSchema, JSON.parse(readFileSync(file, 'utf8'))) };
+}
+
 /** The record staging wrote for `sha`; a commit staging never verified has none, and promotion refuses it. */
 function verified(bucket: string, sha: string): Verified {
   return v.parse(VerifiedSchema, JSON.parse(r2(['get', `${bucket}/${verifiedKey(sha)}`, '--pipe'])));
@@ -376,6 +394,17 @@ function promotions(bucket: string): Promotion[] {
   if (`${run.stderr}\n${run.stdout}`.includes('The specified key does not exist.')) return [];
 
   throw new Error(`wrangler r2 object get ${bucket}/${HISTORY_KEY} failed: ${why(run)}`);
+}
+
+/** The latest reset `scripts/reset.ts wipe` recorded in `bucket`, or none. */
+function latestReset(bucket: string): Reset | undefined {
+  const run = wrangler(['r2', 'object', 'get', `${bucket}/${LATEST_RESET_KEY}`, '--pipe', '--remote'], 600_000);
+
+  if (run.ok) return v.parse(ResetSchema, JSON.parse(run.stdout));
+
+  if (`${run.stderr}\n${run.stdout}`.includes('The specified key does not exist.')) return undefined;
+
+  throw new Error(`wrangler r2 object get ${bucket}/${LATEST_RESET_KEY} failed: ${why(run)}`);
 }
 
 /** Refused unless `origin` serves `sha` with this very signed stamp: a record or a history entry names what a
@@ -449,9 +478,10 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  if (command === 'record' && rest.length === 1) {
+  if (command === 'record' && (rest.length === 1 || rest.length === 2)) {
     const record: Verified = {
       sha, digest: artifactDigest(DIST), stagingVersion: rest[0] ?? '', recordedAt: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS),
+      ...resetIn(rest[1]),
     };
 
     await servedAs(origins.staging, sha, record.downloads);
@@ -500,11 +530,11 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  if (command === 'promoted' && rest.length === 1) {
+  if (command === 'promoted' && (rest.length === 1 || rest.length === 2)) {
     const version = rest[0] ?? '';
 
     if (!/^[0-9a-f-]{36}$/u.test(version)) throw new Error(`'${version}' is not a Worker version id, so no rollback could return to it`);
-    const promotion: Promotion = { sha, version, at: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS) };
+    const promotion: Promotion = { sha, version, at: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS), ...resetIn(rest[1]) };
     const serving = servingVersion();
 
     if (serving !== version) throw new Error(`production serves version ${serving}, not ${version}`);
@@ -522,6 +552,13 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
 
     if (plan === undefined) throw new Error(`production's history holds no build older than version ${serving} to return to`);
     const { target } = plan;
+    const crossed = resetCrossed(plan.history, target, latestReset(buckets.production));
+
+    if (crossed !== undefined) {
+      throw new Error(`${crossed.tag} (${crossed.at}) reset production after ${target.sha} was promoted; that build never ran on `
+        + 'this storage, so no rollback crosses the reset. Deploy forward instead.');
+    }
+
     const run = wrangler(['rollback', target.version, '--message', `Rollback to ${target.sha}`, '--yes', ...environmentArgs('production')], 600_000);
 
     if (!run.ok) throw new Error(`wrangler rollback ${target.version} failed: ${why(run)}`);
@@ -532,7 +569,8 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  console.error('usage: bun scripts/promote.ts digest | forget | record <staging version> | check | adopt | promoted <version> | rollback');
+  console.error('usage: bun scripts/promote.ts digest | forget | record <staging version> [reset record] | check | adopt '
+    + '| promoted <version> [reset record] | rollback');
 
   return 2;
 }

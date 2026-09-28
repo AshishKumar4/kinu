@@ -7,7 +7,7 @@
 
 ## One workspace, optional environments
 
-Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare, and over the local workspace on the CLI. The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
+Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare. On the CLI the workspace is the directory the agent was placed in, and Nimbus over `bun:sqlite` holds the agent's own state (docs/STORAGE.md, "Local and cloud construction"). The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
 
 | Namespace | Registered by | Filesystem relationship |
 |---|---|---|

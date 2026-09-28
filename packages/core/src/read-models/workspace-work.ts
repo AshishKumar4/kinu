@@ -100,18 +100,16 @@ export function readWorkspaceWork(
       const reviews = new PlanReviewStore(sql, actor).listPage('default', { limit: 50 });
 
       for (const plan of reviews.items) {
-        const linked = tableExists(sql, 'plan_task_links') ? readPlanTasks(sql, actor, plan) : [];
+        const linked = tableExists(sql, 'agent_tasks') ? readPlanTasks(sql, actor, plan) : [];
 
         plans.push({ owner, plan, tasks: linked });
       }
     }
 
     if (tableExists(sql, 'agent_tasks')) {
-      const all = new TaskListStore(sql, actor, (write) => write()).list();
-
-      const unlinked = tableExists(sql, 'plan_task_links')
-        ? all.filter((tree) => sql<{ x: number }>`SELECT 1 AS x FROM plan_task_links WHERE actor_id = ${row.actorId} AND task_id = ${tree.id} LIMIT 1`.length === 0)
-        : all;
+      const store = new TaskListStore(sql, actor, (write) => write());
+      const linkedIds = store.linkedIds();
+      const unlinked = store.list().filter((tree) => !linkedIds.has(tree.id));
 
       if (unlinked.length > 0) tasks.push({ owner, plan: null, tasks: unlinked });
     }

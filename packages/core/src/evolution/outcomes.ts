@@ -79,7 +79,7 @@ export function outcomeQuality(outcome: TurnOutcome, source: TurnOutcomeSource =
 
 const TRIVIAL_MESSAGE = new RegExp(
   '^\\s*(hi|hiya|hey|hello|yo|sup|thanks?|thank you|thx|ty|ok(ay)?|k|kk|cool|nice|great|awesome|perfect|' +
-  'good (morning|afternoon|evening|night)|gm|gn|bye|goodbye|see ya|cya|lol|haha)[\\s!.…]*$',
+  'good (morning|afternoon|evening|night)|gm|gn|bye|goodbye|see ya|cya|lol|haha)[\\s!.\\u2026]*$',
   'i',
 );
 
@@ -175,21 +175,21 @@ export function buildOutcomeClassifierPrompt(input: {
     `User's follow-up message:\n"${evidenceWindow(input.followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n\n` +
     `Outcomes:\n` +
     `- "accepted": the user moved on, built on the answer, or asked something new that presumes it ` +
-    `worked. ("great, now add the retry" — the next step only makes sense if the last one landed.)\n` +
+    `worked. ("great, now add the retry": the next step only makes sense if the last one landed.)\n` +
     `- "corrected": the user re-asked the same thing, fixed a mistake, contradicted the answer, or had to ` +
-    `re-state what they already asked for. ("no, I said STAGING" — the same ask, restated because the ` +
+    `re-state what they already asked for. ("no, I said STAGING": the same ask, restated because the ` +
     `answer missed it.)\n` +
     `- "frustrated": the user expressed explicit dissatisfaction or negative emotion about the response. ` +
-    `("why do you keep breaking the build" — a complaint about the response, not about the build.)\n\n` +
+    `("why do you keep breaking the build": a complaint about the response, not about the build.)\n\n` +
     `A terse follow-up is the one this gets wrong. Read what it is ABOUT, not how sharp it sounds:\n` +
-    `- "no" / "wrong file" / "not that one" → corrected. A flat contradiction carries no complaint.\n` +
-    `- "no, seriously?" / "again?!" → frustrated. The complaint is about the response itself.\n` +
-    `- "ok" / "thanks" → accepted. A short acknowledgement is still an acknowledgement.\n` +
-    `- "hm" / "what about the other one?" → nothing is settled. Answer with the outcome the disputed ` +
+    `- "no" / "wrong file" / "not that one" -> corrected. A flat contradiction carries no complaint.\n` +
+    `- "no, seriously?" / "again?!" -> frustrated. The complaint is about the response itself.\n` +
+    `- "ok" / "thanks" -> accepted. A short acknowledgement is still an acknowledgement.\n` +
+    `- "hm" / "what about the other one?" -> nothing is settled. Answer with the outcome the disputed ` +
     `request supports, at a LOW confidence.\n\n` +
     `Not evidence the answer worked: a follow-up that changes the subject while the ask still stands, ` +
     `or one where the user does the work themselves. Moving on and being satisfied are different things.\n` +
-    `An unsettled follow-up belongs in confidence rather than in a firmer verdict — an honest 0.4 is ` +
+    `An unsettled follow-up belongs in confidence rather than in a firmer verdict: an honest 0.4 is ` +
     `worth more than a 0.9 that is wrong, because this field is what the calibration profile measures.\n\n` +
     `JSON shape: {"outcome":"accepted"|"corrected"|"frustrated","confidence":<0..1>,"evidence":"<short reason>"}\n` +
     jsonObjectOnlyInstruction()
@@ -225,7 +225,6 @@ const TURN_OUTCOMES_DDL = `(
     actor_id TEXT NOT NULL,
     id TEXT NOT NULL,
     turn_id TEXT,
-    session_id TEXT NOT NULL DEFAULT 'default',
     outcome TEXT NOT NULL CHECK (outcome IN (${sqlCheckList(TURN_OUTCOMES)})),
     confidence REAL NOT NULL,
     source TEXT NOT NULL CHECK (source IN (${sqlCheckList(TURN_OUTCOME_SOURCES)})),
@@ -248,7 +247,6 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec): void {
     actor_id   TEXT NOT NULL,
     effect_key TEXT NOT NULL,
     answer     TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, effect_key)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS lessons ${LESSONS_DDL}`);
@@ -397,7 +395,6 @@ export function ensembleLabels(sql: SqlExecutor, actor: ActorHandle): EnsembleLa
 
 export interface RecordTurnOutcomeInput {
   turnId?: string | null;
-  sessionId?: string;
   outcome: TurnOutcome;
   confidence: number;
   source: TurnOutcomeSource;
@@ -418,10 +415,10 @@ export function recordTurnOutcome(
   actor.assertCurrent();
   const id = `outc-${nanoid()}`;
   void sql`INSERT INTO turn_outcomes
-        (actor_id, id, turn_id, session_id, outcome, confidence, source,
+        (actor_id, id, turn_id, outcome, confidence, source,
          user_message, assistant_response, followup, scaffold_version, created_at, evidence)
       VALUES
-        (${actor.actorId}, ${id}, ${input.turnId ?? null}, ${input.sessionId ?? 'default'}, ${input.outcome},
+        (${actor.actorId}, ${id}, ${input.turnId ?? null}, ${input.outcome},
          ${input.confidence}, ${input.source}, ${evidenceWindow(input.userMessage, EVIDENCE_BUDGETS.storedUserMessage)},
          ${evidenceWindow(input.assistantResponse, EVIDENCE_BUDGETS.storedAssistantResponse)},
          ${input.followup === null || input.followup === undefined ? null : evidenceWindow(input.followup, EVIDENCE_BUDGETS.storedFollowup)},
@@ -432,7 +429,7 @@ export function recordTurnOutcome(
 }
 
 interface RawOutcomeRow {
-  id: string; turn_id: string | null; session_id: string; outcome: TurnOutcome;
+  id: string; turn_id: string | null; outcome: TurnOutcome;
   confidence: number; source: TurnOutcomeSource; user_message: string;
   assistant_response: string; followup: string | null;
   scaffold_version: number | null; created_at: number; evidence: string | null;
@@ -440,7 +437,7 @@ interface RawOutcomeRow {
 
 function toOutcomeRow(r: RawOutcomeRow): TurnOutcomeRow {
   return {
-    id: r.id, turnId: r.turn_id, sessionId: r.session_id, outcome: r.outcome,
+    id: r.id, turnId: r.turn_id, outcome: r.outcome,
     confidence: r.confidence, source: r.source, userMessage: r.user_message,
     assistantResponse: r.assistant_response, followup: r.followup,
     scaffoldVersion: r.scaffold_version, createdAt: r.created_at,
@@ -657,7 +654,7 @@ export function renderOutcomeCriterion(
 
   const critic = CRITIC_PROSE[expected?.critic ?? 'user'];
 
-  return `The agent's response below FAILED — ${critic.verdict}. ${rule.failed}\n\n`
+  return `The agent's response below FAILED: ${critic.verdict}. ${rule.failed}\n\n`
     + `Failed response:\n${evidenceWindow(expected?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n`
     + `${critic.complaint}:\n${evidenceWindow(expected?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
 }
@@ -672,11 +669,11 @@ export type OutcomeSplitDegeneracy =
 export function describeSplitDegeneracy(degeneracy: OutcomeSplitDegeneracy): string {
   switch (degeneracy) {
     case 'no_labeled_turns':
-      return 'no outcome-labeled turns yet — chat with the agent first';
+      return 'no outcome-labeled turns yet: chat with the agent first';
     case 'no_negatives':
-      return 'no corrected/frustrated turns yet — there is no failure to optimize toward';
+      return 'no corrected/frustrated turns yet: there is no failure to optimize toward';
     case 'no_held_out_negatives':
-      return 'only one labeled failure exists, and the optimizer must train on it — ' +
+      return 'only one labeled failure exists, and the optimizer must train on it: ' +
         'the winner is selected without any unseen failure, so an improvement here is not evidence of one';
   }
 }

@@ -123,6 +123,10 @@ export {
   type ArchiveRestoreOptions, type ArchiveRestoreResult,
 } from './identity/archive';
 
+export { SCHEMA_GENESIS } from './identity/schema-genesis';
+
+export { requireSchemaGenesis, SCHEMA_GENESIS_STAMP } from './identity/schema-stamp';
+
 export {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
@@ -241,7 +245,7 @@ export {
 } from './evolution/session-window';
 
 export {
-  buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog,
   executeChangelogRevert, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
   type ChangelogRevertAction,
@@ -622,7 +626,6 @@ export { agentSelfHost } from './orchestrator/agent-self-host';
 export { SubordinateRosterStore, initSubordinateRosterTable, subordinateTitle } from './subordinates/roster';
 
 export {
-  SubordinateIdentityStore,
   admitSubordinateReport,
   admitSubordinateTask,
   createTeamToolDeps,
@@ -634,7 +637,6 @@ export {
   subordinateRelaysTurnEnd,
   type SubordinateDescriptor,
   type SubordinateDescriptorSource,
-  type SubordinateIdentity,
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
   type SubordinateRuntime,
@@ -664,7 +666,7 @@ export { DELEGATED_TURN_SLOTS, DelegatedTurnRunners, type DelegatedTurnRunnerDep
 export {
   DELEGATION_MAX_DEPTH,
   ROOT_DELEGATION_BUDGET,
-  delegationBudgetAtDepth, delegationBudgetOf,
+  delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,
   deriveChildDelegationBudget,
@@ -1437,17 +1439,6 @@ export {
   type PlatformObservable,
   type PlatformQuantity,
 } from './platform-catalog';
-
-// Terminal chrome vocabulary, shared so depictions of the TUI cannot drift.
-export {
-  CHANGE_KIND_GLYPH,
-  composerVisibleRows,
-  TUI_ADVERTISED_PRESET_BINDINGS,
-  TUI_ADVERTISED_HINTS,
-  TUI_COMPOSER_PLACEHOLDER,
-  TUI_COMPOSER_STEERING_PLACEHOLDER,
-  TUI_MARKS,
-} from './tui-presentation';
 
 // Safety
 export {
@@ -2276,13 +2267,6 @@ export {
   createPlanAnnotationSaveQueue, type PlanAnnotationSaveQueue,
 } from './plans/plan-annotation-save';
 
-export {
-  swarmResolutionOf, swarmAxisRows, fanInArity, fanInVertices, nodeRationales,
-  runRefusal, runLiveness, formatEvidenceValue,
-  type SwarmAxis, type SwarmAxisRow, type SwarmResolution, type RunRefusal,
-  type RunLevel, type RunLiveness,
-} from './read-models/swarm-resolution';
-
 export { terminalChatError, type ChatTurnError, type TerminalFrame } from './utils/chat-turn-error';
 
 export {
@@ -2308,28 +2292,6 @@ export {
   type WorkersAIOptions,
   createWorkersAIProvider,
 } from './providers/workers-ai-provider';
-
-export {
-  scoreBand,
-  type ExplorerSelection,
-  cleanNodeLabel,
-  clipToWidth,
-  isCompeted,
-  principalVariation,
-  ancestorIds,
-  findForkNode,
-  terminalForkNode,
-  treeStats,
-  maxVisits,
-  subtreeCount,
-  losingBranchIds,
-  NODE_R_MAX,
-  NODE_R_UNSCORED,
-  nodeRadius,
-  linkWidth,
-  LABEL_MIN_SCALE,
-  viewNoteFor,
-} from './read-models/swarm-tree-model';
 
 export {
   type AnyToolPart,
@@ -2404,7 +2366,6 @@ export {
   FEEDBACK_MAX_REQUEST_BYTES,
   FEEDBACK_MAX_NOTE_CHARS,
   FEEDBACK_MAX_ROUTE_CHARS,
-  FEEDBACK_MAX_USER_AGENT_CHARS,
   FEEDBACK_SCREENSHOT_TYPE,
   FEEDBACK_REDACT_ATTR,
   FEEDBACK_OMIT_ATTR,
@@ -2430,18 +2391,6 @@ export {
   normalizeModelMenu,
   contextWindowForSpec,
 } from './providers/model-menu';
-
-export {
-  modelDisplayName,
-  formatContextUsage,
-} from './tui/context-status';
-
-export {
-  clipText,
-  terminalText,
-  literalText,
-  agentDisplayLabel,
-} from './tui/format';
 
 export {
   ESC_ESC_BEAT_MS,

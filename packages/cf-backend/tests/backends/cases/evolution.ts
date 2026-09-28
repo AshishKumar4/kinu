@@ -140,13 +140,13 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     covers: ['requestRefinement', 'listRefinements', 'showRefinement', 'decideRefinement'],
     async run({ surface }) {
       expect(await surface.listRefinements(5)).toMatchObject({
-        requests: [], debt: { owed: false, summary: 'no unresolved corrections — nothing is owed a refinement' },
+        requests: [], debt: { owed: false, summary: 'no unresolved corrections: nothing is owed a refinement' },
       });
 
       const request = await surface.requestRefinement({ turnIds: ['turn-1'] });
       expect(request).toMatchObject({
         stage: 'refused', trigger: 'explicit', scope: 'workspace', routes: [],
-        detail: 'no outcome-labeled turns yet — chat with the agent first — none of the 1 named turns carries an outcome',
+        detail: 'no outcome-labeled turns yet: chat with the agent first; none of the 1 named turns carries an outcome',
       });
       expect((await surface.listRefinements(5)).requests.map((listed) => [listed.id, listed.stage]))
         .toEqual([[request.id, 'refused']]);

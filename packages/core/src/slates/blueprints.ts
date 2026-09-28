@@ -154,7 +154,7 @@ export class WorkspaceBlueprints {
       const publication = yield* Effect.promise(() => this.deps.slates.publish(record.id, requirements, bundle));
 
       const row: NewSlateShare = {
-        id: nanoid(), slate, kind: 'blueprint', publication: publication.id.value, included: topLevelNames(tree),
+        id: nanoid(), slate, publication: publication.id.value, included: topLevelNames(tree),
       };
 
       return { share: this.deps.shares.add(row), inspection };

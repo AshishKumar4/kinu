@@ -57,7 +57,7 @@ export class HeadCapture {
   recordEvidence(e: Evidence): void { this.evidence.push(e); }
   recordDecision(d: Decision): void { this.decisions.push(d); }
   recordArtifact(a: ArtifactRef): void { this.artifacts.push(a); }
-  /** `result` is the projected output: this row is the head's only audit trail (`head_journal.tool_calls_json`). */
+  /** `result` is the projected output. */
   recordToolCall(call: HeadToolCall): void {
     this.toolCalls.push(call);
   }
@@ -210,7 +210,7 @@ function renderHeadToolConventions(
   if (hasHeadTool(tools, 'eval')) {
     const executionDoctrine = workspaceLayout === 'shared-workspace'
       ? '- eval runs JavaScript against the SAME resources your parent agent has. Each environment is its own filesystem in its own paths: '
-        + '`workspace.*` is the canonical workspace you were forked from (start there — the code and data you were spawned to study usually live in it), '
+        + '`workspace.*` is the canonical workspace you were forked from (start there: the code and data you were spawned to study usually live in it), '
         + '`sandbox.*` is its container, and `device.*` is the user\'s machine. '
         + '`workspace.exec` runs a real shell in the workspace, so `grep -rn X .` searches it in one call. '
         + '`web.*` is also in scope.'
@@ -284,7 +284,7 @@ function renderIsolationDoctrine(input: HeadInput, workspaceLayout: HeadWorkspac
   }
 
   if (workspaceLayout === 'shared-workspace') {
-    return `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/…\` in the parent workspace). Read-only inspection of shared resources is always fine.`;
+    return `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/...\` in the parent workspace). Read-only inspection of shared resources is always fine.`;
   }
 
   return `Your workspace and file tools are private scratch. The canonical parent workspace exposed through parent.* is shared with sibling heads; isolate any mutation there (for a git repo, create a worktree such as \`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`). Read-only inspection is always fine.`;
@@ -296,7 +296,7 @@ export function buildHeadSystemPrompt(
   workspaceLayout: HeadWorkspaceLayout = 'shared-workspace',
 ): string {
   return [
-    `You are a "head" — one of several parallel reasoning threads in a self-evolving agent runtime.`,
+    `You are a "head": one of several parallel reasoning threads in a self-evolving agent runtime.`,
     ``,
     `Your task: ${input.task}`,
     `Why you were spawned: ${input.rationale}`,
@@ -305,7 +305,7 @@ export function buildHeadSystemPrompt(
     ...renderHeadToolConventions(input, workspaceLayout, availableToolNames),
     ``,
     // At depth 0 split_subheads is not on the surface (head-tools.ts), so the clause is dropped.
-    'Take the time the task needs — there is no time or token limit on this run.'
+    'Take the time the task needs: there is no time or token limit on this run.'
     + (input.budget.maxDepth > 0 ? ` You may split ${input.budget.maxDepth} more level(s) deep.` : ''),
   ].join('\n');
 }

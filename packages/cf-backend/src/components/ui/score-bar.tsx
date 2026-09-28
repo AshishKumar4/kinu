@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { scoreBand } from '@kinu.run/core';
+import { scoreBand } from '@kinu.run/core/swarm-view';
 
 interface Props {
   value: number;

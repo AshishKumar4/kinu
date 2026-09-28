@@ -35,7 +35,7 @@ export type PublishRefusal = { refused: string };
 function titleOf(text: string, maxChars = 90): string {
   const line = text.trim().split('\n', 1)[0] ?? '';
 
-  return line.length > maxChars ? `${line.slice(0, maxChars)}…` : line || 'untitled';
+  return line.length > maxChars ? `${line.slice(0, maxChars)}...` : line || 'untitled';
 }
 
 interface CraftScoreRow { name: string; score: number; uses: number; last_used_at: number }
@@ -80,7 +80,6 @@ function craftCandidate(
       kind: 'craft',
       name: tool.name,
       description: tool.description,
-      params: tool.params,
       code: tool.code,
       score: effective,
     },
@@ -95,7 +94,7 @@ function lessonCandidate(src: PublishSources, id: string): PublishableCandidate 
 
   if (lesson.status !== 'corroborated') {
     return {
-      refused: `lesson "${id}" is still provisional — it is kept out of this workspace's own `
+      refused: `lesson "${id}" is still provisional: it is kept out of this workspace's own `
         + 'MEMORY.md until a real outcome corroborates it, so it is not shareable either',
     };
   }
@@ -175,7 +174,7 @@ async function scaffoldCandidate(
   const version = Number(key);
 
   if (key.trim() === '' || !Number.isInteger(version) || version < 0) {
-    return { refused: `"${key}" is not a scaffold version — a scaffold is published by its version number` };
+    return { refused: `"${key}" is not a scaffold version: a scaffold is published by its version number` };
   }
 
   src.actor.assertCurrent();
@@ -188,7 +187,7 @@ async function scaffoldCandidate(
 
   if (row.status !== 'current') {
     return {
-      refused: `scaffold v${version} is ${row.status}, not the version this workspace runs — `
+      refused: `scaffold v${version} is ${row.status}, not the version this workspace runs: `
         + 'only a loop the local shadow gate promoted has been proven here',
     };
   }
@@ -230,7 +229,7 @@ async function scaffoldCandidate(
   if (flags > 0) {
     return {
       refused: `scaffold v${version} drew ${flags} misevolution veto${flags === 1 ? '' : 'es'} during its `
-        + `${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}-turn probation here — a loop that evolves unsafe `
+        + `${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}-turn probation here: a loop that evolves unsafe `
         + 'artifacts is not one to hand another workspace',
     };
   }
@@ -246,7 +245,7 @@ async function scaffoldCandidate(
   return {
     kind: 'scaffold',
     key: String(version),
-    title: titleOf(`Scaffold v${version} — ${row.rationale}`),
+    title: titleOf(`Scaffold v${version}: ${row.rationale}`),
     payload: { kind: 'scaffold', version, rationale: row.rationale, code },
     evidence: `promoted here on ${record.pendingWins} of ${decisive} decisive shadow trials `
       + `(win-rate ${Math.round(gate.winRate * 100)}%), then ${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS} `

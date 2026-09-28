@@ -5,7 +5,7 @@ import { Database } from 'bun:sqlite';
 import { HeadJournal } from '../src/heads/journal';
 import { HEAD_USAGE_COLUMNS, initHeadsTables } from '../src/heads/schema';
 import { USAGE_FIELDS } from '../src/usage';
-import type { HeadInput, HeadReport, MergeResult } from '../src/heads/index';
+import type { HeadInput, HeadReport } from '../src/heads/index';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
@@ -45,20 +45,13 @@ const spawn = (id: string, rootId: string): HeadInput => ({
   id, rootId, parentId: null, depth: 0, task: `task ${id}`, rationale: 'r',
   mode: 'build', inheritedContext: [], budget: { maxDepth: 3, spawnedAt: 1 },
   mergeStrategy: 'synthesize',
-  loop: defaultLoopOrigin('head'),
+  loop: defaultLoopOrigin('run'),
 });
 
 const report = (id: string, usage: HeadReport['usage']): HeadReport => ({
   id, status: 'completed', summary: 's',
   evidence: [], decisions: [], artifactRefs: [], fileChanges: [],
   childHeadIds: [], toolCalls: [], stepCount: 1, usage, wallClockMs: 7,
-});
-
-const merge = (totalTokens: number | undefined): MergeResult => ({
-  mergedNarrative: 'n', selectedDecisions: [], unresolvedQuestions: [],
-  recommendations: [], blindSpots: [], evidenceAggregate: [], headIds: [],
-  headScores: [], fileChanges: [], grounded: false,
-  costSummary: { headCount: 1, headsWithFindings: 0, totalTokens, totalWallClockMs: 3, maxDepth: 2 },
 });
 
 describe('a fresh journal cannot fabricate a cost it was never told', () => {
@@ -137,19 +130,6 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
     const heads = journal.readRun('run-1')?.heads ?? [];
     expect(heads.find((h) => h.id === 'h-silent')?.usage).toEqual({});
     expect(heads.find((h) => h.id === 'h-zero')?.usage).toEqual({ input: 0, output: 0 });
-  });
-
-  test('an unmeasured merge stores NULL and replays as undefined', () => {
-    const { sql, actor, journal } = newJournal();
-    journal.insertSpawn(spawn('h', 'run-1'));
-    journal.cacheMerge('run-1', merge(undefined), 'synthesize');
-
-    expect(sql<{ cost_total_tokens: number | null }>`
-      SELECT cost_total_tokens FROM head_merge_results
-      WHERE actor_id = ${actor.actorId} AND root_id = 'run-1'`)
-      .toEqual([{ cost_total_tokens: null }]);
-    expect(journal.readCachedMerge('run-1')?.costSummary.totalTokens).toBeUndefined();
-    expect(journal.readRun('run-1')?.merge?.totalTokens).toBeNull();
   });
 });
 

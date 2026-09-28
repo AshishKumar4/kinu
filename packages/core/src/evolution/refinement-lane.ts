@@ -35,7 +35,7 @@ import { routeSkill, settleSkillApproval } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { renderIssues } from '../utils/json';
-import { attempt, renderThrownChain, settle, tolerate, type ErrorCode, type KinuError } from '../obs/index';
+import { attempt, renderThrownChain, settle, toKinuError, tolerate, type ErrorCode, type KinuError } from '../obs/index';
 import type { TemporaryRunRequest } from '../subordinates/temporary';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -43,7 +43,6 @@ import type { ActorHandle } from '../identity/actor-handle';
 export interface RequestRefinementInput {
   readonly trigger: RefinementTrigger;
   readonly scope: RefinementScope;
-  readonly sessionId?: string;
   /** Omitted: the workspace's unresolved negative outcomes. */
   readonly turnIds?: readonly string[];
   readonly debtKey?: string;
@@ -85,10 +84,6 @@ export async function requestRefinement(
     turnIds: reviewed,
   };
 
-  if (input.sessionId !== undefined) {
-    requestInput = { ...requestInput, sessionId: input.sessionId };
-  }
-
   if (input.debtKey !== undefined) {
     requestInput = { ...requestInput, debtKey: input.debtKey };
   }
@@ -106,7 +101,7 @@ export async function requestRefinement(
   if (reviewed.length === 0) {
     return refuse(turnIds.length === 0
       ? describeSplitDegeneracy('no_labeled_turns')
-      : `${describeSplitDegeneracy('no_labeled_turns')} — none of the ${String(turnIds.length)} `
+      : `${describeSplitDegeneracy('no_labeled_turns')}; none of the ${String(turnIds.length)} `
         + 'named turns carries an outcome');
   }
 
@@ -175,6 +170,7 @@ export function advanceRefinementLane(
     return yield* plan(deps, claimed).pipe(
       // Null: the claim was lost to recovery and this pass wrote nothing.
       Effect.map((planned): RefinementLaneStep => planned === null ? IDLE : { step: 'planned', request: planned }),
+      Effect.catchDefect((defect) => Effect.fail(toKinuError({ doing: `planning refinement ${owed.id}`, cause: defect, otherwise: 'unavailable' }))),
       Effect.catch((failure) => planFailed(deps, { store, claimed, owed }, failure)),
       // A claim left registered would make recovery skip a row nothing drives.
       Effect.ensuring(Effect.sync(() => { claimed.release(); })),
@@ -206,7 +202,7 @@ function planFailed(
 
 function laneHeld(deps: RefinementDeps, store: RefinementStore, request: RefinementRequest, detail: string): RefinementLaneStep {
   store.record(request.id, request.stage, { detail });
-  holdRefinementLane(deps.control.sql, deps.control.rt.actor.actorId, detail);
+  holdRefinementLane(deps.control.sql, deps.control.rt.actor.actorId);
 
   return { step: 'idle' };
 }
@@ -275,14 +271,14 @@ function plan(
 
     if (proposal.scope !== request.scope) {
       return refuse(
-        `the refiner proposed at ${proposal.scope} scope and this request is ${request.scope} scope — `
+        `the refiner proposed at ${proposal.scope} scope and this request is ${request.scope} scope: `
         + (proposal.scope === 'account' ? ACCOUNT_SCOPE_REFUSAL : 'the scopes must match'),
         proposal,
       );
     }
 
     if (proposal.edits.length === 0) {
-      return refuse(`the refiner proposed no edits — ${proposal.summary}`, proposal);
+      return refuse(`the refiner proposed no edits: ${proposal.summary}`, proposal);
     }
 
     // Persist the plan before any owner write; also the first claim fence.
@@ -348,14 +344,14 @@ async function askRefiner(
   const refiner = deps.refiner;
 
   if (!refiner) return { ok: false, error: 'this host wires no refiner' };
-  const lane = { lane: 'refinement', requestId: request.id } as const;
+  const lane = { requestId: request.id } as const;
   const held = refiner.reclaim(lane);
 
   if (held?.state === 'running') return 'running';
   let answer: string;
 
   if (held) {
-    if (held.status !== 'completed') return { ok: false, error: `the refiner did not answer (unavailable) — ${held.answer}` };
+    if (held.status !== 'completed') return { ok: false, error: `the refiner did not answer (unavailable): ${held.answer}` };
     answer = held.answer;
   } else {
     const contextRefs = await presentContextRefs(deps);
@@ -375,13 +371,13 @@ async function askRefiner(
     const outcome = await refiner.run(brief);
 
     if (!('status' in outcome)) {
-      return { ok: false, error: `the refiner could not start — ${outcome.error}` };
+      return { ok: false, error: `the refiner could not start: ${outcome.error}` };
     }
 
     if (outcome.status !== 'completed') {
       return {
         ok: false,
-        error: `the refiner did not answer (${outcome.reason ?? 'unknown'}) — ${outcome.answer}`,
+        error: `the refiner did not answer (${outcome.reason ?? 'unknown'}): ${outcome.answer}`,
       };
     }
 
@@ -397,7 +393,7 @@ async function askRefiner(
     // `renderIssues` names each issue's path, so the refusal names keys to fix.
     return {
       ok: false,
-      error: `the refiner's answer is not a valid refinement proposal (${OFF_SCHEMA_ANSWER}) — `
+      error: `the refiner's answer is not a valid refinement proposal (${OFF_SCHEMA_ANSWER}): `
         + renderIssues(parsed.issues),
     };
   }
@@ -442,7 +438,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
   const history = createRefinementStore(sql, actor).list(5)
     .filter((prior) => prior.id !== request.id)
     .map((prior) => `  - ${prior.id} (${prior.trigger}, ${prior.stage}): ${prior.detail || '(no detail)'}`
-      + prior.routes.map((r) => `\n      ${r.kind} → ${r.owner || 'no owner'} ${r.target} [${r.disposition}]`).join(''))
+      + prior.routes.map((r) => `\n      ${r.kind} -> ${r.owner || 'no owner'} ${r.target} [${r.disposition}]`).join(''))
     .join('\n');
 
   // Printed from a schema-valid value at this request's scope, which `plan` enforces.
@@ -465,19 +461,19 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     '## The artifacts you may address, and their owners',
     '',
-    'Registered prompt sections (`prompt_section`) — replacing one costs every turn its bytes,',
+    'Registered prompt sections (`prompt_section`): replacing one costs every turn its bytes,',
     'and a longer section must earn them with a strictly better measured score:',
     sections,
     '',
-    'Recorded fact keys (`fact`) — the durable world model. Propose one ONLY for a preference the',
+    'Recorded fact keys (`fact`): the durable world model. Propose one ONLY for a preference the',
     'user stated in their own words, and quote those words verbatim from a turn above; a fact whose',
     'quote is not in the trajectory is refused:',
     factLines,
     '',
-    'Skill files (`skill`) — workspace instruction bytes. A proposed skill stays unverified and',
+    'Skill files (`skill`): workspace instruction bytes. A proposed skill stays unverified and',
     'carries no tool policy until the owner approves its exact digest.',
     '',
-    'Subordinate specs (`subagent_spec`) — a subordinate\'s role and spec belong to that agent\'s',
+    'Subordinate specs (`subagent_spec`): a subordinate\'s role and spec belong to that agent\'s',
     'own config and there is no writable proposal authority for them. Propose one only to record',
     'the finding; it will be refused rather than applied.',
     '',
@@ -489,13 +485,13 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     '## Your answer',
     '',
-    `One JSON object carrying exactly these keys — ${answerKeys} — and no others. Every level is`,
+    `One JSON object carrying exactly these keys: ${answerKeys}, and no others. Every level is`,
     'strict: a key that is not named here refuses the whole proposal rather than being dropped, so',
     'anything you want to say that is not one of these fields has no place to go. Each edit object',
     `carries exactly the keys its \`kind\` shows below, and every \`rationale\` is `
       + `${String(MIN_EDIT_RATIONALE)} characters or longer, whatever the kind.`,
     '',
-    `\`scope\` is ${JSON.stringify(answer.scope)} — the scope this request was opened at. A proposal`,
+    `\`scope\` is ${JSON.stringify(answer.scope)}: the scope this request was opened at. A proposal`,
     'at any other scope is refused without being routed.',
     '',
     `{"scope":${JSON.stringify(answer.scope)},"summary":${JSON.stringify(answer.summary)},"edits":[`,
@@ -504,7 +500,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     ']}',
     '',
     `Valid \`kind\` values: ${REFINEMENT_EDIT_KINDS.join(', ')}. The four edits above are every shape`,
-    'this accepts, one object per edit — not a checklist. Propose the fewest edits that address the',
+    'this accepts, one object per edit, not a checklist. Propose the fewest edits that address the',
     'pattern you actually found. An empty `edits` array is a legitimate answer when the trajectory',
     'shows no addressable pattern.',
     '',
@@ -514,7 +510,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
 
 function renderReviewedTurn(row: TurnOutcomeRow, index: number): string {
   return [
-    `### Turn ${String(index + 1)} — ${row.outcome} (${row.source})`,
+    `### Turn ${String(index + 1)}: ${row.outcome} (${row.source})`,
     `User asked: ${evidenceWindow(row.userMessage, EVIDENCE_BUDGETS.refinerUserMessage)}`,
     `Agent answered: ${evidenceWindow(row.assistantResponse, EVIDENCE_BUDGETS.refinerAssistantResponse)}`,
     row.followup === null
@@ -575,7 +571,7 @@ async function routeEditOnce(
         owner: '',
         target: edit.role,
         disposition: 'refused',
-        reason: 'no writable proposal authority exists for a subordinate\'s role or spec — those '
+        reason: 'no writable proposal authority exists for a subordinate\'s role or spec: those '
           + 'belong to that agent\'s own config, which this workspace reads and never writes. '
           + 'Recorded as a finding rather than mirrored into a second agent store.',
       };
@@ -603,7 +599,7 @@ function checkQuote(quote: string, reviewed: readonly TurnOutcomeRow[]): QuoteVe
   if (trimmed.length < MIN_QUOTE_CHARS || words.length < MIN_QUOTE_WORDS) {
     return {
       ok: false,
-      reason: `the quote is not substantive — ${String(trimmed.length)} characters and `
+      reason: `the quote is not substantive: ${String(trimmed.length)} characters and `
         + `${String(words.length)} words, below the ${String(MIN_QUOTE_CHARS)}-character and `
         + `${String(MIN_QUOTE_WORDS)}-word floor. A fragment that short matches almost any `
         + 'conversation, so it is evidence of nothing',
@@ -620,7 +616,7 @@ function checkQuote(quote: string, reviewed: readonly TurnOutcomeRow[]): QuoteVe
   if (!said) {
     return {
       ok: false,
-      reason: 'not quoted by the user anywhere in the reviewed trajectory — a preference reaches '
+      reason: 'not quoted by the user anywhere in the reviewed trajectory: a preference reaches '
         + "memory immediately, so the user's own words are the only evidence that can stand in "
         + 'for a trial',
     };
@@ -657,7 +653,7 @@ function routeFact(
     target: edit.key,
     disposition: 'applied',
     reason: `${outcome === 'unchanged' ? 'already recorded' : outcome} from the user's own words `
-      + `"${edit.quote.trim().replace(/\s+/gu, ' ')}" — ${edit.rationale}`,
+      + `"${edit.quote.trim().replace(/\s+/gu, ' ')}": ${edit.rationale}`,
   };
 }
 
@@ -703,7 +699,7 @@ async function routePromptSection(
 
   return pendingReason(
     measured.version,
-    `pending held-out trials — candidate ${measured.candidateScore.mean.toFixed(3)} against `
+    `pending held-out trials: candidate ${measured.candidateScore.mean.toFixed(3)} against `
       + `incumbent ${measured.incumbentScore.mean.toFixed(3)}`,
   );
 }
@@ -800,7 +796,7 @@ async function settleRoutes(
   }
 
   if (rolledBack > 0) {
-    parts.push(`${String(rolledBack)} rolled back — the incumbent won its trials`);
+    parts.push(`${String(rolledBack)} rolled back: the incumbent won its trials`);
   }
 
   if (rejected > 0) parts.push(`${String(rejected)} rejected by you`);

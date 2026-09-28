@@ -1,6 +1,6 @@
 /**
  * The one `HeadRuntime`. Merge model, effort and spend label are owned by core's `headMergeLLM`;
- * `reportModelCall` is the only record of a merge's cost (`head_merge_results` sums the heads).
+ * `reportModelCall` is the only record of a merge's cost (`summarizeCost` sums the heads).
  */
 
 import {
@@ -11,13 +11,13 @@ import {
   type ModelOperationSink,
   type ResolvedTurnProfile,
 } from "@kinu.run/core";
-import { hostHead, type ExplorationHostSeams } from "./exploration-hosting";
+import { hostHead, type HostedActorSeams } from "./hosted-actors";
 import type { OwnedModelServices } from "./owned-model-services";
 
 interface HeadRuntimeDeps {
   /** The workspace's one actor host. Children read owner, token and workspace from the seams, so an
      *  intermediate head can never become its subtree's workspace. */
-  readonly host: ExplorationHostSeams;
+  readonly host: HostedActorSeams;
   /** Never a second registry. */
   readonly models: Pick<OwnedModelServices, 'resolveModelWithEffort'>;
   /** A profile, not a spec: the merge files spend as `judge` (deep tier), which the caller's chat model

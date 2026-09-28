@@ -1455,8 +1455,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     if (!parked) throw new Error('unattended command was not queued');
 
     expect(first.exitCode).not.toBe(0);
-    expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
-    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN — queued for owner approval');
+    expect(first.stderr).toContain(`NOT RUN: queued for owner approval (${parked.id})`);
+    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN: queued for owner approval');
     expect(await session.listDeferredApprovals()).toHaveLength(2);
     const sandboxAction = (await session.listDeferredApprovals()).find((action) => action.executor === 'sandbox');
 
@@ -1502,7 +1502,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       const first = await shell.exec('rm -rf build');
       const parked = present((await session.listDeferredApprovals())[0], 'the parked delete');
 
-      expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
+      expect(first.stderr).toContain(`NOT RUN: queued for owner approval (${parked.id})`);
       expect(existsSync(join(project, 'build'))).toBe(true);
       expect(await session.decideDeferredApprovals([parked.id], 'always')).toEqual({ decided: [parked.id] });
 
@@ -2777,14 +2777,13 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     ).get()?.c === 1);
 
     const row = db.query<{
-      outcome: string; source: string; turn_id: string; session_id: string; followup: string;
+      outcome: string; source: string; turn_id: string; followup: string;
     }, []>(`SELECT * FROM turn_outcomes`).get();
 
     if (!row) throw new Error('turn outcome row is missing');
     expect(row.outcome).toBe('corrected');
     expect(row.source).toBe('classifier');
     expect(row.followup).toContain('STAGING');
-    expect(row.session_id).toBe('default');
 
     const firstAssistant = (await transcript(rt)).find((entry) => entry.role === 'assistant');
 
@@ -3968,7 +3967,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
       name: 'local_helper', description: 'a locally crafted helper',
-      code: 'async () => 1', params: null, scope: 'local',
+      code: 'async () => 1',
     });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                         VALUES (${rt.actor.actorId}, 'editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
@@ -3990,7 +3989,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
   test('revert by id forgets the fact for real; a crafted tool is informational and has no revert', async () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
-      name: 'kept_tool', description: 'stays', code: 'async () => 2', params: null, scope: 'local',
+      name: 'kept_tool', description: 'stays', code: 'async () => 2',
     });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                         VALUES (${rt.actor.actorId}, 'stale', '"value"', 1.0, NULL, ${Date.now()})`;
@@ -5194,7 +5193,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // `preset` cannot be invented, so a call without one is refused before expanding, naming the field.
     const refusal = {
       success: false, reason: 'bad_input',
-      error: 'swarm needs `preset` — the shape of the search (no role catalog is wired here to take its default from). '
+      error: 'swarm needs `preset`: the shape of the search (no role catalog is wired here to take its default from). '
         + SWARM_PRESET_DOCTRINE.join(' '),
     };
 
@@ -5555,7 +5554,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
       id: 'h-fork', rootId: 'r1', parentId: null, depth: 0, mode: 'build',
       task: 'look at the parser', rationale: 'because', inheritedContext: [],
       budget: { maxDepth: 2, spawnedAt: Date.now() },
-      loop: defaultLoopOrigin('head'), mergeStrategy: 'synthesize', model: 'local/fork',
+      loop: defaultLoopOrigin('run'), mergeStrategy: 'synthesize', model: 'local/fork',
     });
 
     await head.run();

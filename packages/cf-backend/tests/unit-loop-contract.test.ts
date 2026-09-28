@@ -80,8 +80,8 @@ async function subjects(fixture: HostedWorkspaceFixture): Promise<readonly Subje
   const main = await fixture.host.acquire(fixture.main);
   const hired = await fixture.hire(fixture.main, 'sub-hired-1', 'subordinate');
   const temporary = await fixture.hire(fixture.main, 'sub-temp-2', 'subordinate');
-  const head = await fixture.hire(fixture.main, 'exp:head-a1', 'head');
-  const node = await fixture.hire(fixture.main, 'exp:node-b2', 'head');
+  const head = await fixture.hire(fixture.main, 'exp:head-a1', 'run');
+  const node = await fixture.hire(fixture.main, 'exp:node-b2', 'run');
 
   return [
     { label: 'root', actor: main, record: main.record, expectedOrigin: 'builtin' },
@@ -147,7 +147,7 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
   test('heads in both modes inherit the parent loop; a hire starts builtin', async () => {
     // The origin is a function of the kind, so it holds at creation sites this suite never drives.
     const expected: readonly (readonly [WorkspaceActor['kind'], 'builtin' | 'inherit'])[] = [
-      ['main', 'builtin'], ['subordinate', 'builtin'], ['head', 'inherit'], ['branch', 'inherit'],
+      ['main', 'builtin'], ['subordinate', 'builtin'], ['run', 'inherit'],
     ];
 
     for (const [kind, origin] of expected) {
@@ -159,8 +159,8 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
     const main = await fixture.host.acquire(fixture.main);
     await installVersion(fixture, main, 1, 'v1:root');
     await installVersion(fixture, main, 2, 'v2:root');
-    const head = await fixture.hire(fixture.main, 'exp:head-b1', 'head');
-    const node = await fixture.hire(fixture.main, 'exp:node-b2', 'head');
+    const head = await fixture.hire(fixture.main, 'exp:head-b1', 'run');
+    const node = await fixture.hire(fixture.main, 'exp:node-b2', 'run');
     const hired = await fixture.hire(fixture.main, 'sub-hired-b3', 'subordinate');
 
     // A copy, not a pointer: a child reading its parent's row could not verify its claim after the parent promoted again.

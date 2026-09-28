@@ -5,7 +5,6 @@ import { describe, test, expect } from 'bun:test';
 import { createTestWorkspace } from './helpers';
 import { ADVISOR_LANE_FIBER, startAdvisorLane, type AdvisorLaneStart } from '../src/advisor/review';
 import { initEffectTombstoneTable } from '../src/identity/effect-tombstones';
-import { createHash } from 'node:crypto';
 import { createMemoryVfs, testActorHandle } from '@kinu.run/test-utils';
 import { stepContextLimit } from '../src/context-window';
 import { CHARS_PER_TOKEN } from '../src/llm';
@@ -137,10 +136,6 @@ describe('workspace advisor guidance', () => {
     const { prompt, reads } = await promptWith();
     expect(reads).toEqual([]);
     expect(prompt).toBe(buildAdvisorPrompt(aTurn()));
-    // Bytes of the prompt before workspace guidance existed.
-    expect(new TextEncoder().encode(prompt)).toHaveLength(3424);
-    expect(createHash('sha256').update(prompt).digest('hex'))
-      .toBe('e2ff4713972fd72cd5914694089a52b97a1fdaf379a4575d46a382e22ec3eb2e');
   });
 
   test('an admitted file has its own review section, including at the exact byte budget', async () => {

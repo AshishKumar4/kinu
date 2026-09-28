@@ -5,9 +5,9 @@ index 9e02a1b7c..89671f942 100644
 @@ -271,7 +271,7 @@ function truncateResultPart(part: ToolResultPart): ToolResultPart {
    if (serialized === null) return part;
  
-   if (serialized.includes('…[truncated:')) return part;
--  const marker = `…[truncated: full output was ${serialized.length} chars; re-run the tool if needed]`;
-+  const marker = `…[truncated: full output was ${serialized.length - PRUNED_OUTPUT_HEAD_CHARS} chars; re-run the tool if needed]`;
+   if (serialized.includes('...[truncated:')) return part;
+-  const marker = `...[truncated: full output was ${serialized.length} chars; re-run the tool if needed]`;
++  const marker = `...[truncated: full output was ${serialized.length - PRUNED_OUTPUT_HEAD_CHARS} chars; re-run the tool if needed]`;
  
    if (serialized.length <= PRUNED_OUTPUT_HEAD_CHARS + marker.length) return part;
    const value = serialized.slice(0, PRUNED_OUTPUT_HEAD_CHARS) + marker;

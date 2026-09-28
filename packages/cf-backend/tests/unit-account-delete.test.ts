@@ -30,7 +30,7 @@ async function seededAccount() {
   await provisionTestWorkspace(harness, 'ws-alpha', 'Alpha');
   await provisionTestWorkspace(harness, 'ws-beta', 'Beta');
   await harness.userDO.sharesReceived_add(owner, {
-    ownerUserId: OTHER_OWNER, ownerEmail: 'sam@example.test', workspace: 'their-ws', shareId: 'share-1', title: 'Issue triage',
+    ownerUserId: OTHER_OWNER, ownerEmail: 'sam@example.test', workspace: 'their-ws', shareId: 'share-1',
   });
   await harness.userDO.setCredential(owner, 'anthropic.bearer', { kind: 'bearer', token: 'sk-probe' });
   db.run(

@@ -22,7 +22,7 @@ export type EvidenceSession = Pick<KinuPublicSession, 'listFiles' | 'readBytes' 
 export interface WorkspaceEvidence {
   /** Every file under the home and the slates, by absolute path. */
   readonly files: ReadonlyMap<string, Uint8Array>;
-  /** The slate listing, and each slate's `history` answer: its versions, or why it has none. */
+  /** The slate listing, and each slate's `history` pages: its versions, or why it has none. */
   readonly slates: JsonValue;
   /** The task's reads of its slates' data, each as the slate answered it. */
   readonly data: readonly JsonValue[];
@@ -37,6 +37,15 @@ async function walk(session: EvidenceSession, dir: string, files: Map<string, Ui
   }
 }
 
+const HistoryPage = v.object({ ok: v.literal(true), value: v.object({ next: v.string() }) });
+
+/** The cursor a history answer names for its next page; null on the last page or a refusal. */
+function historyCursor(answer: JsonValue | undefined): string | null {
+  const page = v.safeParse(HistoryPage, answer);
+
+  return page.success ? page.output.value.next : null;
+}
+
 /** Read what the workspace holds and what its slates serve. Every read is one a person could make. */
 export async function gatherEvidence(session: EvidenceSession, reads: EvalTask['evidence']): Promise<WorkspaceEvidence> {
   const files = new Map<string, Uint8Array>();
@@ -47,7 +56,13 @@ export async function gatherEvidence(session: EvidenceSession, reads: EvalTask['
   const histories: JsonValue[] = [];
 
   for (const id of [...listing.slates.map((slate) => slate.id), ...listing.problems.map((problem) => problem.id)]) {
-    histories.push({ id, history: await session.slateOp({ op: 'history', id }) });
+    const pages = [await session.slateOp({ op: 'history', id })];
+
+    for (let after = historyCursor(pages.at(-1)); after !== null; after = historyCursor(pages.at(-1))) {
+      pages.push(await session.slateOp({ op: 'history', id, after }));
+    }
+
+    histories.push({ id, history: pages });
   }
 
   const data: JsonValue[] = [];

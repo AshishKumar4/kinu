@@ -4,7 +4,7 @@ import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import { present, scratchDir } from '@kinu.run/test-utils';
-import { TUI_ADVERTISED_HINTS, TUI_MARKS } from '@kinu.run/core';
+import { TUI_ADVERTISED_HINTS, TUI_MARKS } from '@kinu.run/core/tui';
 
 import {
   KEYMAP_PRESET_IDS,

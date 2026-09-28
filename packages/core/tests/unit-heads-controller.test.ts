@@ -184,7 +184,7 @@ describe('HeadController.run', () => {
 
     const controller = new HeadController(runtime, journal);
 
-    const result = await controller.run({
+    await controller.run({
       mode: 'build',
       parentHeadId: null,
       rootId: 'root-1',
@@ -193,10 +193,7 @@ describe('HeadController.run', () => {
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
-    const cached = present(journal.readCachedMerge('root-1'), 'the cached merge for root-1');
-
-    expect(cached.mergedNarrative).toBe('Cached narrative.');
-    expect(cached.costSummary.headCount).toBe(result.costSummary.headCount);
+    expect(journal.readRun('root-1')?.merge?.narrative).toBe('Cached narrative.');
   });
 
   test('a slow head runs to completion: the controller sets no deadline', async () => {
@@ -318,9 +315,6 @@ describe('HeadController.run', () => {
     expect(result.mergedNarrative).not.toContain('0 tokens');
     expect(result.mergedNarrative).toContain('tokens unreported');
 
-    // NULL survives the durable round-trip, so a replayed merge makes the same claim.
-    expect(journal.readRun('root-blank')?.merge?.totalTokens).toBeNull();
-    expect(journal.readCachedMerge('root-blank')?.costSummary.totalTokens).toBeUndefined();
   });
 
   test('falls back gracefully when merge LLM throws', async () => {
@@ -591,33 +585,6 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     expect(result.costSummary.headsWithFindings).toBe(1);
     expect(result.mergedNarrative).toBe('One head got partway.');
   });
-
-  test('the cached replay reports the same findings count as the live merge', async () => {
-    const { journal } = newJournal();
-
-    // Reports carry the spawned id so they land on the rows the cached read counts.
-    const runtime: HeadRuntime = {
-      async spawnHead(input: HeadInput): Promise<SpawnedHead> {
-        return {
-          id: input.id,
-          run: async () => (input.task === 'angle A'
-            ? fakeReport(input.id, { summary: 'A finding' })
-            : emptyReport(input.id)),
-          abort: async () => undefined,
-        };
-      },
-      mergeLLM: async () => fakeMergeOutput('Synthesis of what A found.'),
-    };
-
-    const live = await new HeadController(runtime, journal).run({
-      mode: 'build',
-      parentHeadId: null, rootId: 'root-1', inheritedContext: baseContext, request: baseRequest,
-      parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
-    });
-
-    const cached = journal.readCachedMerge('root-1');
-    expect(cached?.costSummary.headsWithFindings).toBe(live.costSummary.headsWithFindings);
-  });
 });
 
 describe('HeadJournal.listLive — the live fork roster', () => {
@@ -626,7 +593,7 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     mode: 'build',
     inheritedContext: [], mergeStrategy: 'consensus',
     budget: { maxDepth: 2, spawnedAt: Date.now() },
-    loop: defaultLoopOrigin('head'),
+    loop: defaultLoopOrigin('run'),
   });
 
   test('a run with heads still running is reported with its progress and its split rationale', () => {
@@ -845,7 +812,7 @@ describe('merge blind spots', () => {
     evidence: [], decisions: [], artifactRefs: [],
   });
 
-  test('reaches the MergeResult, the journal and the merge phase event', async () => {
+  test('reaches the MergeResult and the merge phase event', async () => {
     const { journal } = newJournal();
     const spots = ['no head checked whether the endpoint is rate-limited'];
     const runtime = buildRuntime({ mergeOutput: withBlindSpots(...spots) });
@@ -863,10 +830,6 @@ describe('merge blind spots', () => {
 
     expect(result.blindSpots).toEqual(spots);
     expect(events).toEqual([spots]);
-    const cached = journal.readCachedMerge('root-bs');
-
-    if (!cached) throw new Error('expected cached merge');
-    expect(cached.blindSpots).toEqual(spots);
   });
 
   test('degrades to [] when the merge model omits the key, exactly like the other list fields', async () => {

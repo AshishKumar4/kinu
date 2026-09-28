@@ -83,7 +83,6 @@ function initCompactionStateTables(execRaw: RawSqlExec): void {
       actor_id        TEXT NOT NULL,
       session_key     TEXT NOT NULL,
       range_hash      TEXT NOT NULL,
-      path            TEXT NOT NULL,
       start_turn      INTEGER NOT NULL,
       end_turn        INTEGER NOT NULL,
       user_turns      INTEGER NOT NULL,
@@ -108,34 +107,10 @@ function createWorkspaceTables(db: WorkspaceSchemaSql): void {
     PRIMARY KEY (id, revision)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS slate_versions (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
+    id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, bytes BLOB NOT NULL
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS slate_publications (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_deployments (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_resources (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_previews (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_deployment_reservations (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT UNIQUE, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_resource_reservations (
-    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, slate_id TEXT NOT NULL, parent_id TEXT, bytes BLOB NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_invocations (
-    id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, request TEXT NOT NULL, attempt INTEGER NOT NULL,
-    owner_epoch TEXT NOT NULL, state TEXT NOT NULL
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_receipts (
-    id TEXT PRIMARY KEY, invocation_id TEXT NOT NULL REFERENCES slate_invocations(id),
-    attempt INTEGER NOT NULL, outcome TEXT NOT NULL, error TEXT, finished_at INTEGER NOT NULL,
-    UNIQUE (invocation_id, attempt)
+    id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, bytes BLOB NOT NULL
   )`);
   initSlateStateTable(execRaw);
   execRaw(`CREATE TABLE IF NOT EXISTS slate_file_manifest (

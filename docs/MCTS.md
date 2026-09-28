@@ -209,7 +209,7 @@ Rewards are clamped to `[0, 1]`. The new value is `(old_value × visits + reward
 
 | Platform | Mechanism | Isolation |
 |----------|-----------|-----------|
-| CF Workers | Hosted logical actors of kind `branch`, acquired per rollout from the workspace's one `ActorHost` (`packages/cf-backend/src/exploration-hosting.ts`) | One workspace SQLite, actor-led keys. A write under one actor leaves every other actor's rows as they were (`another_actors_writes_are_invisible` in `MCTS/StorageIsolation.lean`). |
+| CF Workers | Hosted toolless `run` actors, acquired per rollout from the workspace's one `ActorHost` (`packages/cf-backend/src/hosted-actors.ts`) | One workspace SQLite, actor-led keys. A write under one actor leaves every other actor's rows as they were (`another_actors_writes_are_invisible` in `MCTS/StorageIsolation.lean`). |
 | CLI | `child_process.fork('branch-worker.ts')` over the workspace database file (`createBranchSpawner`) | Separate OS process, same database. A branch binds its own actor row and writes its rollout traces there. |
 
 A CF runtime built without the branch host has no fallback: `spawnBranch` refuses (`requireBranches`, `packages/cf-backend/src/runtime.ts`) rather than running a search with no rollouts.

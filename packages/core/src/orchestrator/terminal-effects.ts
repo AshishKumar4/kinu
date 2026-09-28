@@ -23,7 +23,7 @@ import {
   branchHeadId, branchOutcomeFromJournal, settleBranchIntoTakes, settlePendingBranch,
   type BranchStatusEvent, type PendingBranch,
 } from '../steer-branch';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/reminder';
 
@@ -364,11 +364,8 @@ export function initTerminalEffectTable(execRaw: RawSqlExec): void {
     input_json      TEXT NOT NULL,
     lane            TEXT NOT NULL DEFAULT 'inline',
     status          TEXT NOT NULL,
-    outcome         TEXT,
     attempts        INTEGER NOT NULL DEFAULT 0,
     next_attempt_at INTEGER NOT NULL DEFAULT 0,
-    claimed_at      INTEGER NOT NULL,
-    settled_at      INTEGER,
     PRIMARY KEY (actor_id, sequence_id, effect_key)
   )`);
   // One index covers the suffix read, the owing-sequence set and the earliest due instant.
@@ -483,10 +480,9 @@ export class TerminalEffectLedger {
 
       const encoded = JSON.stringify(effect.input);
       void this.deps.sql`INSERT INTO terminal_effects
-        (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, outcome,
-         attempts, next_attempt_at, claimed_at, settled_at)
+        (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts, next_attempt_at)
         VALUES (${this.actorId}, ${sequenceId}, ${key}, ${effect.name}, ${effect.scope}, ${index},
-                ${encoded}, ${effect.lane}, 'pending', ${null}, 0, ${now}, ${now}, ${null})`;
+                ${encoded}, ${effect.lane}, 'pending', 0, ${now})`;
     }
   }
 
@@ -642,7 +638,7 @@ export class TerminalEffectLedger {
         AND effect_key = ${row.key} AND status != 'completed'`;
 
     if (row.target.kind === 'blocked') {
-      this.record(sequenceId, row.key, 'blocked', row.target.reason);
+      this.record(sequenceId, row.key, 'blocked');
       diagnostics.failure('turn.terminal_effect_blocked', toKinuError({
         doing: `attempting the ${row.rawName} effect a settled turn owed`,
         cause: new Error(row.target.reason),
@@ -667,7 +663,7 @@ export class TerminalEffectLedger {
         otherwise: 'unavailable',
       }), { sequence: sequenceId, effect: row.key, attempts });
       // Owed, never abandoned.
-      this.record(sequenceId, row.key, 'pending', `failed: ${renderThrownChain({ cause: err })}`);
+      this.record(sequenceId, row.key, 'pending');
 
       return;
     }
@@ -682,24 +678,24 @@ export class TerminalEffectLedger {
             AND effect_key = ${row.key} AND status != 'completed'`;
       }
 
-      this.record(sequenceId, row.key, 'pending', `owed: ${outcome.detail}`);
+      this.record(sequenceId, row.key, 'pending');
 
       return;
     }
 
     void this.deps.sql`UPDATE terminal_effects
-      SET status = 'completed', outcome = ${outcome.detail ?? null}, settled_at = ${this.deps.now()}
+      SET status = 'completed'
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
         AND effect_key = ${row.key} AND status != 'completed'`;
   }
 
   /** `completed` is irreversible; `pending` and `blocked` may replace each other. */
   private record(
-    sequenceId: string, key: string, status: 'pending' | 'blocked', outcome: string,
+    sequenceId: string, key: string, status: 'pending' | 'blocked',
   ): void {
     this.deps.actor.assertCurrent();
     void this.deps.sql`UPDATE terminal_effects
-      SET status = ${status}, outcome = ${outcome}
+      SET status = ${status}
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
         AND effect_key = ${key} AND status != 'completed'`;
   }

@@ -178,6 +178,12 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'produce; the lock and its workspaces are read from the checkout itself.',
   ],
   [
+    'scripts/live-app-rows.ts',
+    'lists the Durable Object namespaces the live-app rows\' own dev server persisted under this run\'s scratch '
+    + 'state directory (`statePath`), to prove the harness booted on that state alone. The directory is created by the '
+    + 'run and never tracked, so no repository enumerator can produce it.',
+  ],
+  [
     'scripts/refuse-linked-install.ts',
     'enumerates the top level of the checkout\'s own `node_modules` for links that resolve '
     + 'outside it, the layout `setup-worktree.sh` makes, so an install that would write through '

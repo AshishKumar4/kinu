@@ -9,6 +9,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { contrast, over, rgba, type Rgba, unruledClasses, withGallery } from './gallery-harness';
+import { TEST_REQUIREMENTS } from './test-requirements';
 
 const MODES = ['dark', 'light'] as const;
 
@@ -30,10 +31,10 @@ const FILLS: readonly (readonly [ink: string, fill: string, what: string])[] = [
 
 const STATUSES = ['success', 'warning', 'danger', 'info'] as const;
 
-const AA = 4.5;
+const AA = TEST_REQUIREMENTS.wcagTextContrast.values.normal;
 
 /** WCAG's floor for a graphic that carries meaning: the open sidebar row's icon on its wash. */
-const NON_TEXT = 3;
+const NON_TEXT = TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum;
 
 const ASKED = [
   ...SURFACES, ...TEXT_ROLES, ...FILLS.flatMap(([ink, fill]) => [ink, fill]),

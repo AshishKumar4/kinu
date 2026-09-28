@@ -143,7 +143,7 @@ function luminance({ r, g, b }: Rgba): number {
   const channel = (value: number): number => {
     const unit = value / 255;
 
-    return unit <= 0.039_28 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+    return unit <= 0.040_45 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
   };
 
   return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
@@ -154,7 +154,7 @@ export function contrast(ink: Rgba, paper: Rgba): number {
   const light = luminance(over(ink, paper));
   const dark = luminance(paper);
 
-  return Number(((Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05)).toFixed(2));
+  return (Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05);
 }
 
 /**

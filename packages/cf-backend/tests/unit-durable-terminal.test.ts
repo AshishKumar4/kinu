@@ -56,14 +56,13 @@ const OVERFLOW_ERROR = 'prompt is too long: 210000 tokens > 200000 maximum';
 interface EffectRow {
   readonly effect_key: string;
   readonly status: string;
-  readonly outcome: string | null;
   readonly attempts: number;
 }
 
 /** Every per-effect disposition row of one sequence, in declared order, as stored. */
 function effects(harness: Harness, turnId: string, messageId = 'a-1'): EffectRow[] {
   return harness.db.query<EffectRow, [string, string]>(
-    `SELECT effect_key, status, outcome, attempts FROM terminal_effects
+    `SELECT effect_key, status, attempts FROM terminal_effects
      WHERE actor_id = ? AND sequence_id = ? ORDER BY seq, effect_key`,
   ).all(workspaceMainActor(harness.db).actorId, ledgerOver(harness.db).sequenceId({ turnId, messageId }));
 }
@@ -272,8 +271,8 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const decayOne = { upserts: [], decay: ['deploy_target'] };
     // The answer a first attempt persisted, with the lane on: the state the replay reads.
     workspaceMainActor(harness.db).config.setSleepTimeComputeEnabled(true);
-    harness.db.prepare('INSERT INTO sleep_time_updates (effect_key, update_json, created_at) VALUES (?, ?, ?)')
-      .run('a-decay', JSON.stringify(decayOne), Date.now());
+    harness.db.prepare('INSERT INTO sleep_time_updates (effect_key, update_json) VALUES (?, ?)')
+      .run('a-decay', JSON.stringify(decayOne));
     turns(harness).open('u-decay');
 
     harness.db.exec(`CREATE TRIGGER probe_block_sleep_tombstone
@@ -539,8 +538,8 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     // Seeded under this agent's actor: `terminal_effects` is keyed by `actor_id`.
     harness.db.prepare(
       `INSERT INTO terminal_effects
-         (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status, outcome, attempts, claimed_at, settled_at)
-       VALUES (?, 'u-alien/a-alien', 'v9:teleport:a-alien', 'teleport', 'a-alien', 0, '{}', 'pending', NULL, 0, 1, NULL)`,
+         (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status, attempts)
+       VALUES (?, 'u-alien/a-alien', 'v9:teleport:a-alien', 'teleport', 'a-alien', 0, '{}', 'pending', 0)`,
     ).run(workspaceMainActor(harness.db).actorId);
 
     await harness.agent.terminalRetryPass();
@@ -549,7 +548,6 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     expect(rows).toHaveLength(1);
     expect(rows[0]?.effect_key).toBe('v9:teleport:a-alien');
     expect(rows[0]?.status).toBe('blocked');
-    expect(rows[0]?.outcome).toBe('unknown effect "teleport"');
     // Blocked still gates: a human resolves the deploy-shape problem.
     expect(disposition(harness, 'u-alien', 'a-alien')).toBe('resumed');
   });
