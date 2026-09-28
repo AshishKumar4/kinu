@@ -291,7 +291,7 @@ describe('the ladder measures something', () => {
     expect(reaching.size).toBeGreaterThan(30);
     expect(corpus.has(censusFile)).toBeTrue();
 
-    for (const file of ['tests/browser/computed-style.test.ts', 'tests/browser/provider-wait-ux.test.ts', 'tests/live/live-smoke.test.ts']) {
+    for (const file of ['tests/browser/computed-style.test.ts', 'tests/browser/provider-wait-ux.test.ts', 'tests/live-model/live-smoke.test.ts']) {
       expect(reaching.has(file), `${file} drives a browser and the closure does not reach it`).toBeTrue();
     }
 
@@ -457,7 +457,7 @@ describe('the ladder measures something', () => {
       .sort();
 
     expect(bunSuitesUnderTests.length).toBeGreaterThan(0);
-    expect(claims('bun test ./tests/live/ ./tests/first-run/', tracked).sort()).toEqual(bunSuitesUnderTests);
+    expect(claims('bun test ./tests/live-model/ ./tests/first-run/', tracked).sort()).toEqual(bunSuitesUnderTests);
 
     // The other half of the partition: every runnable suite no `bun test` can
     // select is an eval task, and `bun run evals` claims exactly those.
@@ -468,7 +468,7 @@ describe('the ladder measures something', () => {
     expect(claims('bun run evals', tracked).sort()).toEqual(evalTasks);
     // The live tier's claim is the bun argv its script runs by default.
     expect(claims('bun run test:live', tracked).sort())
-      .toEqual(bunSuitesUnderTests.filter((file) => file.startsWith('tests/live/')));
+      .toEqual(bunSuitesUnderTests.filter((file) => file.startsWith('tests/live-model/')));
     // The glob and named-file forms are proved over a FIXTURE tree below
     // (`claims() resolves a glob against whatever tree it is given`), never by
     // naming the live repo's files: this held a thirteen-entry list of bench
@@ -780,7 +780,7 @@ describe('every test file is claimed by some runner', () => {
     // read from the script, so a rename moves both.
     const script = readFileSync(resolve(root, LIVE_TIER_SCRIPT), 'utf8');
 
-    expect(liveTierTargets(script)).toEqual(['./tests/live/']);
+    expect(liveTierTargets(script)).toEqual(['./tests/live-model/']);
     expect(SKIP_RATCHET_TARGETS).toContain('./tests/');
     expect(script).toContain('RATCHET_ARGS=(--junit "$JUNIT" --target "${TARGETS[0]}")');
   });

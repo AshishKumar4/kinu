@@ -511,7 +511,7 @@ describe('Live Smoke — one real turn per backend', () => {
         llm: LLM_CONFIG,
       });
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-      // No directory bound, for the reason tests/live/harness.ts states at
+      // No directory bound, for the reason tests/live-model/harness.ts states at
       // length: an episode reaches every registered executor, and a bound
       // workspace shell runs in the repo this suite was launched from.
       // Asserted rather than trusted, immediately below.

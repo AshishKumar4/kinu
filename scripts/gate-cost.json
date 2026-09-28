@@ -509,7 +509,7 @@
       "loadAtStart": 5.02,
       "exit": 0
     },
-    "bun test --timeout=0 ./tests/live/ ./tests/first-run/": {
+    "bun test --timeout=0 ./tests/live-model/ ./tests/first-run/": {
       "wallSeconds": 16.57,
       "cpuSeconds": 44.94,
       "peakRssMb": 3786.49,

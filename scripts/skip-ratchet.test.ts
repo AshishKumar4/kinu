@@ -372,8 +372,8 @@ describe('skipDebt', () => {
 describe('the target set is the executed set', () => {
   const cloudReport = (): TestReport => parseJUnit(`<?xml version="1.0"?>
 <testsuites name="bun test" tests="1" failures="0" skipped="0">
-  <testsuite name="tests/live/live-smoke.test.ts" file="tests/live/live-smoke.test.ts" tests="1">
-    <testcase name="reaches the deployment" classname="Live Smoke" file="tests/live/live-smoke.test.ts" line="4" />
+  <testsuite name="tests/live-model/live-smoke.test.ts" file="tests/live-model/live-smoke.test.ts" tests="1">
+    <testcase name="reaches the deployment" classname="Live Smoke" file="tests/live-model/live-smoke.test.ts" line="4" />
   </testsuite>
 </testsuites>`);
 
@@ -385,15 +385,15 @@ describe('the target set is the executed set', () => {
   });
 
   test('naming the target that ran clears it without weakening anything', () => {
-    expect(unmatchedTargets(cloudReport(), ['./tests/live/live-smoke.test.ts'])).toEqual([]);
+    expect(unmatchedTargets(cloudReport(), ['./tests/live-model/live-smoke.test.ts'])).toEqual([]);
   });
 
   test('a named target the run did not produce is still refused', () => {
     // The other direction, and the one that keeps `--target` from being an
     // escape hatch: a caller may narrow the CLAIM, never the proof. A target
     // named and absent from the report is a crash, not a decision.
-    expect(unmatchedTargets(cloudReport(), ['./tests/live/live-smoke.test.ts', './tests/live/exploration.test.ts']))
-      .toEqual(['./tests/live/exploration.test.ts']);
+    expect(unmatchedTargets(cloudReport(), ['./tests/live-model/live-smoke.test.ts', './tests/live-model/exploration.test.ts']))
+      .toEqual(['./tests/live-model/exploration.test.ts']);
   });
 
   test('a file bun cannot select cannot answer for a bun directory target', () => {
@@ -401,8 +401,8 @@ describe('the target set is the executed set', () => {
     // that collected nothing could otherwise look complete on its strength.
     const vitestOnly = parseJUnit(`<?xml version="1.0"?>
 <testsuites name="vitest" tests="1" failures="0" skipped="0">
-  <testsuite name="tests/live/planning.eval.ts" tests="1">
-    <testcase name="plans" classname="tests/live/planning.eval.ts" />
+  <testsuite name="tests/live-model/planning.eval.ts" tests="1">
+    <testcase name="plans" classname="tests/live-model/planning.eval.ts" />
   </testsuite>
 </testsuites>`);
 

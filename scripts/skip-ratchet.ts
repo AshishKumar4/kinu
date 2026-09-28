@@ -361,7 +361,7 @@ function junitPaths(argv: readonly string[]): readonly string[] | null {
  * {@link SKIP_RATCHET_TARGETS}, which is what a standalone run proves.
  *
  * IT EXISTS BECAUSE THE TARGET SET IS A PROPERTY OF THE RUN, not of this file.
- * The live tier runs `./tests/live/` (one file of it under `--backend cloud`),
+ * The live tier runs `./tests/live-model/` (one file of it under `--backend cloud`),
  * so the default list would demand reports from targets that run never starts.
  * The caller names what it RAN and this gate proves exactly that non-empty.
  */

@@ -1499,7 +1499,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 ./tests/live/ ./tests/first-run/',
+    run: 'bun test --timeout=0 ./tests/live-model/ ./tests/first-run/',
     label: 'Live and first-run suites, credential-free',
     tier: 'ci',
     seconds: 1.3,
@@ -2758,7 +2758,7 @@ export function browserModules(sources: ReadonlyMap<string, string>): ReadonlySe
  *  2026-09-18 on this box, 2,484 files and 35 MB read in 49 ms, so the plan
  *  reads the whole tree rather than a directory somebody expected the
  *  harnesses to stay in — narrowed to `scripts/` it missed
- *  `tests/live/live-smoke.test.ts`, which launches puppeteer itself inside the
+ *  `tests/live-model/live-smoke.test.ts`, which launches puppeteer itself inside the
  *  `Live and first-run suites, credential-free` row. */
 let corpusBrowserModules: ReadonlySet<string> | null = null;
 
