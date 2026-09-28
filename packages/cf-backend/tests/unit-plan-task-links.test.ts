@@ -83,7 +83,7 @@ test('actual owner approval admits the real Think program and attributes its nat
   await agent.onStart();
   // The program runs on the Worker Loader binding, in this process.
   const files = workspaceFiles(agent);
-  const scaffold = actorScaffoldPath({ kind: 'main', storageKey: MAIN_AGENT });
+  const scaffold = actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT });
   const source = "async function run() { await host.callTool(\"tasks\", { action: \"add\", titles: [\"host task\"] }); }";
   await files.writeFile(scaffold, source);
   await files.writeFile(`${scaffold}.v1`, source);

@@ -531,7 +531,7 @@ export async function runNodeAgent(
     // A label only; `ResolvedSwarm.settle` is the fact.
     mergeStrategy: input.settle === 'best' ? 'best_of' : 'synthesize',
     // A node states its loop pointer rather than inheriting the parent's.
-    loop: defaultLoopOrigin('run'),
+    loop: defaultLoopOrigin('swarm'),
   };
 
   // The row's copy of ledger and route (`cli-backend/head-runtime.ts` reads these). Assigned only

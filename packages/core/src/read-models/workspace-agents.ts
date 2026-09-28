@@ -1,6 +1,6 @@
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { WorkspaceActor } from '../identity/workspace-actors';
+import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
 import { tableExists } from '../identity/schema';
 import { SubordinateRosterStore, subordinateTitle } from '../subordinates/roster';
 import { ownerFacingSubordinate } from '../protocol';
@@ -38,9 +38,9 @@ export function agentActive(agent: Pick<PanelAgent, 'activity'>): boolean {
 const SWARM_RUNS = 20;
 
 function subordinateCategory(entry: SubordinateRosterEntry): AgentCategory {
-  if (entry.createdBy === 'user') return 'user';
+  if (entry.origin === 'user') return 'user';
 
-  return entry.createdBy === 'evolution' ? 'background' : 'hired';
+  return entry.origin === 'evolution' ? 'background' : 'hired';
 }
 
 /** Working: an open turn claim. */
@@ -65,7 +65,7 @@ function treeOrder(rootId: string, actors: readonly WorkspaceActor[]): Workspace
   const children = new Map<string, WorkspaceActor[]>();
 
   for (const row of actors) {
-    if (row.kind !== 'subordinate' || row.deletedAt !== null || row.parentActorId === null) continue;
+    if (!isSubordinateOrigin(row.origin) || row.deletedAt !== null || row.parentActorId === null) continue;
     children.set(row.parentActorId, [...children.get(row.parentActorId) ?? [], row]);
   }
 
@@ -138,7 +138,7 @@ function rosterAgents({ sql, exec, root, actors, labels, paths, handleOf }: Walk
 function swarmAgents({ sql, root, actors, labels, paths, handleOf }: Walk): PanelAgent[] {
   const agents: PanelAgent[] = [];
 
-  for (const owner of [root, ...actors.filter((row) => row.kind === 'subordinate' && row.deletedAt === null).map(handleOf)]) {
+  for (const owner of [root, ...actors.filter((row) => isSubordinateOrigin(row.origin) && row.deletedAt === null).map(handleOf)]) {
     const ownerLabel = labels.get(owner.actorId) ?? owner.name;
     const ownerPath = paths.get(owner.actorId) ?? null;
 

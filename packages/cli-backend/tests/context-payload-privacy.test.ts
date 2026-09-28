@@ -10,8 +10,8 @@ test('large canonical payloads use the issued child home and deny sibling reads'
 
   try {
     const { directory } = localActorDirectory(runtime.actor);
-    const left = directory.create({ parent: runtime.actor, name: 'left', kind: 'subordinate', lifetime: 'durable', creationId: 'left' });
-    const right = directory.create({ parent: runtime.actor, name: 'right', kind: 'subordinate', lifetime: 'durable', creationId: 'right' });
+    const left = directory.create({ parent: runtime.actor, name: 'left', origin: 'agent', lifetime: 'durable', creationId: 'left' });
+    const right = directory.create({ parent: runtime.actor, name: 'right', origin: 'agent', lifetime: 'durable', creationId: 'right' });
 
     if (!runtime.filesForActor) throw new Error('runtime did not install its actor file resolver');
     const filesForActor = runtime.filesForActor;

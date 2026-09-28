@@ -124,7 +124,7 @@ describe('the four store-backed planes are the reading actor\'s own', () => {
       task: 'sibling branch', rationale: 'sibling branch', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
       budget: { spawnedAt: 1, maxDepth: 2 },
-      loop: defaultLoopOrigin('run'),
+      loop: defaultLoopOrigin('swarm'),
     });
 
     const ctx = collect(o);

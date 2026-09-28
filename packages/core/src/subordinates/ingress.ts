@@ -80,7 +80,7 @@ export async function receiveSubordinateEvent(
   const settlesTask = subordinate.lifetime === TEMPORARY_LIFETIME && temporaryRunSettles(input);
 
   // A rail row would wake the parent in the helper's mode, with the lane's proposal in its context.
-  if (subordinate.createdBy === 'evolution') {
+  if (subordinate.origin === 'evolution') {
     if (subordinate.status === 'dismissed' || !temporaryRunSettles(input)) {
       return { id: '', disposition: 'not_awaited' };
     }

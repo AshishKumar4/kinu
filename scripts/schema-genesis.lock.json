@@ -53,7 +53,6 @@
   "actor_subordinates@packages/core/src/subordinates/roster.ts": [
     "actor_id TEXT NOT NULL",
     "name TEXT NOT NULL",
-    "created_by TEXT NOT NULL CHECK (created_by IN ('orchestrator','user','evolution'))",
     "status TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed'))",
     "current_task TEXT",
     "created_at INTEGER NOT NULL",
@@ -1349,15 +1348,22 @@
     "parent_actor_id TEXT REFERENCES workspace_actors(actor_id)",
     "name TEXT NOT NULL",
     "storage_key TEXT NOT NULL",
-    "kind TEXT NOT NULL CHECK (kind IN ('main','subordinate','run'))",
+    "origin TEXT NOT NULL CHECK (origin IN ('system','user','agent','swarm','evolution'))",
+    "tab INTEGER NOT NULL CHECK (tab IN (0,1))",
+    "input INTEGER NOT NULL CHECK (input IN (0,1))",
     "lifetime TEXT NOT NULL CHECK (lifetime IN ('durable','task'))",
+    "evolves INTEGER NOT NULL CHECK (evolves IN (0,1))",
     "created_at INTEGER NOT NULL",
     "creation_id TEXT NOT NULL",
     "retiring_at INTEGER",
     "deleted_at INTEGER",
     "UNIQUE (parent_actor_id, creation_id)",
     "UNIQUE (parent_actor_id, storage_key)",
-    "CHECK ((kind = 'main' AND parent_actor_id IS NULL) OR (kind != 'main' AND parent_actor_id IS NOT NULL))"
+    "CHECK ((origin = 'system') = (parent_actor_id IS NULL))",
+    "CHECK (evolves = 0 OR origin = 'system')",
+    "CHECK (tab = 0 OR origin IN ('system','user'))",
+    "CHECK (origin NOT IN ('swarm','evolution') OR (input = 0 AND lifetime = 'task'))",
+    "CHECK (origin IN ('swarm','evolution') OR input = 1)"
   ],
   "workspace_capability_reconcile@packages/core/src/safety/workspace-capability.ts": [
     "workspace_name TEXT PRIMARY KEY",

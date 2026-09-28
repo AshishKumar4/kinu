@@ -51,7 +51,7 @@ export function createTestActors(
     workspaceId,
     directory,
     sibling: (child: string) => directory.create({
-      parent: main, name: child, kind: 'subordinate', lifetime: 'durable', creationId: child,
+      parent: main, name: child, origin: 'user', lifetime: 'durable', creationId: child,
     }),
   };
 }

@@ -122,12 +122,13 @@ describe('a refiner answer stored with no waiter', () => {
       VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
 
     const refiner = await hostedSubordinateHarness(workspace, {
-      name: 'ask-refiner-x1', displayName: 'Refiner', nameOrigin: 'auto', mission: 'propose refinements',
+      name: 'ask-refiner-x1', displayName: 'Refiner', nameOrigin: 'auto', mission: 'propose refinements', origin: 'evolution',
     });
 
-    workspace.db.prepare(`INSERT INTO actor_subordinates (actor_id, name, created_by, status, current_task, created_at, dismissed_at,
+    workspace.db.prepare(`INSERT INTO actor_subordinates (actor_id, name, status, current_task, created_at, dismissed_at,
       lifetime, task_event_id, actor_reference, birth_request, delete_requested)
-      VALUES (?, 'ask-refiner-x1', 'evolution', 'working', 'review', ?, NULL, 'task', 'evt-1', NULL, NULL, 0)`).run(actorId, now);
+      VALUES (?, 'ask-refiner-x1', 'working', 'review', ?, NULL, 'task', 'evt-1', ?, NULL, 0)`)
+      .run(actorId, now, JSON.stringify(refiner.actor.reference));
     workspace.db.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
       VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
     const wakes = `SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '${KINU_TIMER_CALLBACK}'`;
@@ -695,9 +696,9 @@ describe('the workspace keeps exactly one wake row', () => {
     // Real input: `birth_request` is JSON-parsed on read mid-tick, after the arm and before the drain.
     db.prepare(
       `INSERT INTO actor_subordinates
-        (actor_id, name, created_by, status, current_task, created_at, dismissed_at,
+        (actor_id, name, status, current_task, created_at, dismissed_at,
          lifetime, task_event_id, actor_reference, birth_request, delete_requested)
-       VALUES (?, 'poisoned-birth', 'orchestrator', 'idle', NULL, ?, NULL, 'durable', NULL, NULL, '{malformed', 0)`,
+       VALUES (?, 'poisoned-birth', 'idle', NULL, ?, NULL, 'durable', NULL, NULL, '{malformed', 0)`,
     ).run(harnessActorId(db), Date.now());
 
     await expect(agent.terminalRetryPass()).rejects.toThrow('malformed');

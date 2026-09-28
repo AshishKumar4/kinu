@@ -767,7 +767,7 @@ describe('cloud agent ownership safety', () => {
 
       expect(owner).toBe('first-claim-user');
       expect(statements.filter(touchesFilesystem).length).toBeGreaterThan(0);
-      expect(await workspaceFiles(cold.agent).stat(actorScaffoldPath({ kind: 'main', storageKey: MAIN_AGENT }))).not.toBeNull();
+      expect(await workspaceFiles(cold.agent).stat(actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT }))).not.toBeNull();
     });
   });
 

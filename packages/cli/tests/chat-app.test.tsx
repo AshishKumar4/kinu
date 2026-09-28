@@ -964,11 +964,11 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       actorReference: null,
       birth: {
         creationId: 'birth-scout',
-        seed: { name: 'scout', displayName: 'Scout', nameOrigin: 'user', role: 'task', tier: 'default', mission: 'Survey the logs', lifetime: 'durable' },
+        seed: { name: 'scout', displayName: 'Scout', nameOrigin: 'user', role: 'task', tier: 'default', mission: 'Survey the logs', lifetime: 'durable', origin: 'user' },
         assignment: null,
       },
       deleteRequested: false,
-      createdBy: 'orchestrator',
+      origin: 'agent',
       status: 'working',
       currentTask: 'Survey the logs',
       createdAt: 1,
@@ -986,7 +986,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     };
 
     const helper: SubordinateChild = { ...scout, name: 'busy-mill-01', displayName: 'Busy Mill', nameOrigin: 'auto', birth: null, currentTask: null };
-    const refiner: SubordinateChild = { ...helper, name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', createdBy: 'evolution', lifetime: 'task' };
+    const refiner: SubordinateChild = { ...helper, name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', origin: 'evolution', lifetime: 'task' };
     const asked: SubordinateChild = { ...helper, name: 'ask-reviewer-a1', displayName: 'reviewing', lifetime: 'task' };
 
     const main = fakeClient({
@@ -1035,7 +1035,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     const reviewer: SubordinateChild = {
       name: 'ask-reviewer-a1', displayName: 'reviewing', nameOrigin: 'auto', role: 'task',
       actorReference: { actorId: 'actor-reviewer', workspaceId: 'ws', parentActorId: 'actor-main' }, birth: null, deleteRequested: false,
-      createdBy: 'orchestrator', status: 'dismissed', currentTask: null, createdAt: 1, dismissedAt: 2, lifetime: 'task', taskEventId: null,
+      origin: 'agent', status: 'dismissed', currentTask: null, createdAt: 1, dismissedAt: 2, lifetime: 'task', taskEventId: null,
     };
 
     const main = fakeClient({
@@ -1106,7 +1106,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const refiner: SubordinateChild = {
       name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', nameOrigin: 'auto', role: 'task',
-      actorReference: { actorId: 'actor-refiner', workspaceId: 'ws', parentActorId: null }, birth: null, deleteRequested: false, createdBy: 'evolution',
+      actorReference: { actorId: 'actor-refiner', workspaceId: 'ws', parentActorId: null }, birth: null, deleteRequested: false, origin: 'evolution',
       status: 'dismissed', currentTask: null, createdAt: 1, dismissedAt: 2, lifetime: 'task', taskEventId: null,
     };
 

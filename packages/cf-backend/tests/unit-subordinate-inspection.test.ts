@@ -70,7 +70,7 @@ function workspaceFixture(): InspectionFixture {
         parent,
         name,
         creationId: `${parent.name}/${name}`,
-        kind: 'subordinate',
+        origin: 'agent',
         lifetime: 'task',
       });
     },
@@ -103,7 +103,6 @@ function rosterChild(
     actorReference: { actorId: child.actorId, workspaceId: child.workspaceId, parentActorId: child.parentActorId },
     birth: null,
     deleteRequested: false,
-    createdBy: 'orchestrator',
     status: 'idle',
     currentTask: null,
     createdAt,

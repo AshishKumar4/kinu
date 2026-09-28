@@ -6,7 +6,7 @@ import type { Database } from 'bun:sqlite';
 import { scratchPath } from '@kinu.run/test-utils';
 import type { SqlExecutor, SqlValue } from '@kinu.run/core';
 import {
-  TerminalEffectInterrupt, ADVISOR_LANE_FIBER,
+  TerminalEffectInterrupt,
   COMPLETION_GATE_EVENT, TERMINAL_EFFECT_RETRY_CEILING_MS,
   TERMINAL_TRANSITION_CALL_ID,
   listQueuedShadowTrials,
@@ -380,7 +380,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
   const NOTE = 'the staging cluster was never named';
 
   /** The advisor switched on via the durable `actor_config` row; the reviewer's prompts are collected. */
-  function withAdvisor(rt: CLIRuntime): string[] {
+  function withAdvisor(rt: CLIRuntime, severity = 'concern'): string[] {
     const asked: string[] = [];
     rt.actor.config.setAdvisorEnabled(true);
     rt.advisorLlm = {
@@ -388,33 +388,28 @@ describe('a recovery reads the record, not the session that finds it', () => {
       complete: async (prompt: string) => {
         asked.push(prompt);
 
-        return JSON.stringify({ note: NOTE, severity: 'concern', class: 'wrong-work' });
+        return JSON.stringify({ note: NOTE, severity, class: 'wrong-work' });
       },
     };
 
     return asked;
   }
 
-  /** An interrupted advisor lane checkpoint in `createSqlFiber`'s shape; `fibers` is keyed `(actor_id, id)`, so an
-   *  ownerless row could never be claimed. */
-  function stashAdvisorLane(rt: CLIRuntime, opts: { turnId: string; gateOpen: boolean }): void {
-    const snapshot = {
-      turn: {
-        userMessage: 'rotate the keys', assistantResponse: 'rotated the staging keys',
-        toolCalls: [], steps: 1, durationMs: 5, feedback: null, hadError: false,
-        turnId: opts.turnId,
-      },
-      reachable: [], minSeverity: 'concern', recent: [], gateOpen: opts.gateOpen,
-    };
+  /** A turn cut before its owed review ran: the row, snapshot included, is all a later process has. */
+  async function cutBeforeReview(opts: { rt: CLIRuntime; db: Database; gateOpen?: boolean }): Promise<void> {
+    const { model } = scriptedModel('rotated the staging keys');
+    const cut = new ProbeSession({ rt: opts.rt, db: opts.db, model, onEvent: () => {} });
+    cut.cutAt('advisor_review', 'before');
+    await cut.send('rotate the keys', { id: crypto.randomUUID() });
+    await cut.end();
 
-    void rt.storage.sql`INSERT INTO fibers (actor_id, id, name, snapshot, created_at)
-      VALUES (${rt.actor.actorId}, ${`fiber-${opts.turnId}`}, ${ADVISOR_LANE_FIBER},
-              ${JSON.stringify(snapshot)}, 1)`;
+    if (opts.gateOpen !== undefined) {
+      void opts.rt.storage.sql`UPDATE terminal_effects SET input_json = json_set(input_json, '$.advisor.gateOpen', json(${String(opts.gateOpen)}))
+        WHERE effect_name = 'advisor_review'`;
+    }
   }
 
-  const advisorFibers = (rt: CLIRuntime) =>
-    rt.storage.sql<{ n: number }>`
-      SELECT count(*) AS n FROM fibers WHERE name = ${ADVISOR_LANE_FIBER}`[0]?.n ?? 0;
+  const owedReviews = (rt: CLIRuntime) => stillOwed(rt).filter((row) => row.effect_name === 'advisor_review').length;
 
   const notes = (rt: CLIRuntime) =>
     rt.storage.sql<{ message: string }>`
@@ -423,14 +418,15 @@ describe('a recovery reads the record, not the session that finds it', () => {
   const programmaticTurns = (events: SessionEvent[]) =>
     events.filter((e) => e.type === 'turn-start' && e.kind === 'programmatic').length;
 
-  test('an orphaned advisor review waits for the process that holds the driver lease', async () => {
+  test('an owed advisor review waits for the process that holds the driver lease', async () => {
     const { db, rt } = workspace();
     const asked = withAdvisor(rt);
-    stashAdvisorLane(rt, { turnId: 'turn-orphan', gateOpen: true });
+    await cutBeforeReview({ rt, db });
+    expect(asked).toEqual([]);
     const { model } = scriptedModel('unused');
     const events: SessionEvent[] = [];
 
-    // Not the driver: each process finding this orphan would pay for its own review and append its own advice.
+    // Not the driver: each process finding this row would pay for its own review and append its own advice.
     const rival = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
     rival.setDriverGate(() => ({ reason: 'unavailable', error: 'another process is driving' }));
     await rival.recoverBackgroundJobs();
@@ -439,39 +435,95 @@ describe('a recovery reads the record, not the session that finds it', () => {
     expect(asked).toEqual([]);
     expect(notes(rt)).toEqual([]);
     // Kept: the row is the only thing that can bring the review back.
-    expect(advisorFibers(rt)).toBe(1);
+    expect(owedReviews(rt)).toBe(1);
     await rival.end();
 
     const driver = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
+    driver.skipBackoff();
     await driver.recoverBackgroundJobs();
     await driver.settleBackgroundWork();
 
-    expect(asked).toHaveLength(1);
+    // The delivered note opens a follow-up turn, which owes its own review; the dedupe keeps one note.
+    expect(asked.length).toBeGreaterThanOrEqual(1);
     expect(notes(rt)).toEqual([NOTE]);
-    expect(advisorFibers(rt)).toBe(0);
+    expect(owedReviews(rt)).toBe(0);
+
+    // A later replay finds nothing owed and reviews nothing.
+    const reviewed = asked.length;
+    await driver.recoverTerminalTransitions();
+    expect(asked).toHaveLength(reviewed);
     await driver.end();
     db.close();
   });
 
-  test('a checkpointed review keeps the completion-gate verdict it was judged under', async () => {
+  test('a review cut after its note landed is not run again by the replay', async () => {
+    const { db, rt } = workspace();
+    // Below the floor: a Changelog row, so no follow-up turn owes a review of its own.
+    const asked = withAdvisor(rt, 'nit');
+    const { model } = scriptedModel('rotated the staging keys');
+    const cut = new ProbeSession({ rt, db, model, onEvent: () => {} });
+    cut.cutAt('advisor_review', 'after');
+    await cut.send('rotate the keys', { id: crypto.randomUUID() });
+    await cut.settleBackgroundWork();
+    await cut.end();
+    const reviewed = asked.length;
+    expect(notes(rt)).toEqual([NOTE]);
+    expect(owedReviews(rt)).toBe(1);
+
+    const driver = new ProbeSession({ rt, db, model, onEvent: () => {} });
+    driver.skipBackoff();
+    await driver.recoverBackgroundJobs();
+    await driver.settleBackgroundWork();
+
+    expect(asked).toHaveLength(reviewed);
+    expect(notes(rt)).toEqual([NOTE]);
+    expect(owedReviews(rt)).toBe(0);
+    await driver.end();
+    db.close();
+  });
+
+  test('a replayed review keeps the completion-gate verdict it was judged under', async () => {
     for (const gateOpen of [true, false]) {
       const { db, rt } = workspace();
       const asked = withAdvisor(rt);
-      stashAdvisorLane(rt, { turnId: `turn-gate-${String(gateOpen)}`, gateOpen });
+      await cutBeforeReview({ rt, db, gateOpen });
       const { model } = scriptedModel('acknowledged');
       const events: SessionEvent[] = [];
 
       const driver = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
+      driver.skipBackoff();
       await driver.recoverBackgroundJobs();
       await driver.settleBackgroundWork();
 
-      // Recorded either way (the dedupe window reads it); a fresh process reads the gate as closed unless the checkpoint carries it.
+      // Recorded either way (the dedupe window reads it); a fresh process reads the gate as closed unless the row carries it.
       expect(asked.length).toBeGreaterThanOrEqual(1);
       expect(notes(rt)).toEqual([NOTE]);
       expect(programmaticTurns(events)).toBe(gateOpen ? 0 : 1);
       await driver.end();
       db.close();
     }
+  });
+
+  test('with the advisor off, a turn owes no review and none runs', async () => {
+    const { db, rt } = workspace();
+    let asked = 0;
+    rt.advisorLlm = {
+      stream: async function* () { yield ''; },
+      complete: async () => {
+        asked += 1;
+
+        return '{}';
+      },
+    };
+    const { model } = scriptedModel('done');
+    const session = new ProbeSession({ rt, db, model, onEvent: () => {} });
+    await session.send('rotate the keys', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+
+    expect(asked).toBe(0);
+    expect(owedReviews(rt)).toBe(0);
+    await session.end();
+    db.close();
   });
 
   test('a turn produced with auto-evolution ON is recorded by a recovery that has it off', async () => {
