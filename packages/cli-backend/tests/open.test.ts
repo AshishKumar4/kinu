@@ -26,13 +26,16 @@ describe('openWorkspaceCLI', () => {
     db.close();
   });
 
-  // What the build before Nimbus 0.13 left: its genesis stamp over a 0.12 store holding the user's file. Nimbus 0.13
-  // resets such a store on its first open, so the refusal must come before it: every table stays as it was.
-  test('a database an older Kinu made is refused by name before any schema runs over it, its files untouched', async () => {
+  // A Nimbus 0.12 store holding the user's file, under the genesis stamp of a build that made one. Nimbus 0.13 resets
+  // such a store on its first open, so the refusal must come before it: every table stays as it was.
+  test.each([
+    ['the build before this batch, under an older table schema', 0xaaad420],
+    ["a build with today's tables, before the Nimbus store format joined the genesis", 0x02ad81a],
+  ])('a database made by %s is refused by name before any schema runs over it, its files untouched', async (_, stamp) => {
     const dir = scratchDir('open-older');
     const dbPath = join(dir, 'agent.db');
     const db = new Database(dbPath);
-    db.exec(`PRAGMA user_version = ${String(0xaaad420)}`);
+    db.exec(`PRAGMA user_version = ${String(stamp)}`);
     db.exec(`CREATE TABLE inodes (path TEXT PRIMARY KEY, parent_path TEXT NOT NULL DEFAULT '', kind INTEGER NOT NULL DEFAULT 0,
       size INTEGER NOT NULL DEFAULT 0, atime INTEGER NOT NULL DEFAULT 0, mtime INTEGER NOT NULL DEFAULT 0, mode INTEGER NOT NULL DEFAULT 0,
       uid INTEGER NOT NULL DEFAULT 1000, gid INTEGER NOT NULL DEFAULT 1000, chunk_count INTEGER NOT NULL DEFAULT 0, content_id TEXT NULL,
