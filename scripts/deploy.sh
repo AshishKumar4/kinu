@@ -613,7 +613,11 @@ echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
 echo "Build sha:    $KINU_SHA"
 # The tiers' scripted model answers only this bearer (Step 4a); without it every
 # post-publish tier would fail after the upload, so it is asked for before any.
-if [ "$KINU_GATES_ONLY" != "1" ] && [ -z "${KINU_SCRIPTED_MODEL_KEY:-}" ]; then
+# Trimmed here, once: the Worker's secret and the key the tiers store are both
+# this exported value, so whitespace in a key file cannot split them.
+KINU_SCRIPTED_MODEL_KEY="$(printf '%s' "${KINU_SCRIPTED_MODEL_KEY:-}" | tr -d '[:space:]')"
+export KINU_SCRIPTED_MODEL_KEY
+if [ "$KINU_GATES_ONLY" != "1" ] && [ -z "$KINU_SCRIPTED_MODEL_KEY" ]; then
   echo -e "${RED}KINU_SCRIPTED_MODEL_KEY is not set: the tiers' scripted model answers only that bearer. Nothing was deployed.${NC}"
   exit 1
 fi

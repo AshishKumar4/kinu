@@ -805,9 +805,13 @@ describe("deploy gate", () => {
 
   // Every post-publish tier reaches the scripted model through its bearer, so a deploy without it would fail after the upload.
   test("a deploy with no scripted model key runs nothing, and --gates-only needs none", () => {
-    const refused = runDeploy({ scriptedKey: "" });
+    // A key file of whitespace is no key: trimmed once, before the check and the upload alike.
+    for (const scriptedKey of ["", " \n"]) {
+      const refused = runDeploy({ scriptedKey });
 
-    expect([refused.status, refused.events]).toEqual([1, []]);
+      expect([refused.status, refused.events]).toEqual([1, []]);
+    }
+
     expect(runDeploy({ scriptedKey: "", option: "--gates-only" }).status).toBe(0);
   });
 

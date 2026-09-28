@@ -27,7 +27,7 @@ const [origin, named, ...rest] = process.argv.slice(2);
 const token = process.env.KINU_TOKEN?.trim() ?? '';
 
 /** The scripted model Worker's `SCRIPTED_MODEL_KEY`, stored as the account's API key; it answers nothing else. */
-const modelKey = process.env[SCRIPTED_MODEL_KEY_ENV]?.trim() ?? '';
+const modelKey = process.env[SCRIPTED_MODEL_KEY_ENV] ?? '';
 
 if (modelKey === '') {
   console.error(`scripted-tier: ${SCRIPTED_MODEL_KEY_ENV} is not set, so the scripted model Worker would refuse every call.`);
