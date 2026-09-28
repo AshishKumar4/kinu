@@ -657,7 +657,7 @@ export {
   type TemporaryRunRequest,
 } from './subordinates/temporary';
 
-export { DELEGATED_TURN_SLOTS, DelegatedTurnRunners, type DelegatedTurnRunnerDeps } from './subordinates/delegated-turns';
+export { DelegatedTurnRunners, type DelegatedTurnRunnerDeps } from './subordinates/delegated-turns';
 
 // The depth cap is derived per child, never stated by one.
 export {

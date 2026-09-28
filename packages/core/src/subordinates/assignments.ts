@@ -56,6 +56,9 @@ export async function drainAssignments(
     if (event.variant !== 'subordinate_task') continue;
 
     if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') continue;
+
+    // Read with the batch: a Stop since then dismissed it.
+    if (!log.pending({ variant: 'subordinate_task' }).some((row) => row.id === event.id)) continue;
     const turnId = `evt-${nanoid()}`;
     log.markConsumed(event.id, turnId, 0);
     remaining -= 1;

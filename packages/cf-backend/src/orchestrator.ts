@@ -16,7 +16,7 @@ import {
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
-  mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners, DELEGATED_TURN_SLOTS,
+  mintSubordinateName, withHeadCaptureRecording, DelegatedTurnRunners,
   type ActorHost, type ActorToolsetDeps, type AgentsSwarmDeps, type AgentsToolDeps, type ResumableActorTurn,
   type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
@@ -1161,7 +1161,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected readonly delegatedTurns = new DelegatedTurnRunners({
-    slots: DELEGATED_TURN_SLOTS,
     pass: (record) => this.drainActorAssignments(record),
     holdLane: async (body) => {
       await this.runFiber(DELEGATION_LANE_FIBER, async (ctx) => {
@@ -1200,7 +1199,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const below = subordinateDescendants(this.workspaceActors().list(), actorId).filter((actor) => !ownerMade(actor));
 
     if (below.length === 0) return;
-    this.delegatedTurns.cancelQueued(below.map((actor) => actor.actorId));
 
     this.detachOwned(async () => {
       for (const actor of below) {
@@ -1303,7 +1301,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const swept = await drainAssignments(log, {
       now: Date.now(), budget: HOSTED_DELEGATION_DRAIN_BUDGET, staleMs: STALE_EVENT_DELIVERY_MS,
-      run: (task) => this.delegatedTurns.turn(record.actorId, async () => {
+      run: async (task) => {
         const room = this.chatRooms.hostedRoom(record.actorId);
         const answerId = crypto.randomUUID();
 
@@ -1334,7 +1332,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           this.releaseIdleHosted(reference);
         }
-      }),
+      },
       onFailure: ({ cause }) => {
         diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
           doing: 'running a delegated turn this workspace admitted', cause, otherwise: 'io',
