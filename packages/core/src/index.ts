@@ -60,7 +60,6 @@ export {
   renderSoulMarkdown,
   seedSoul,
   summarizeSoul,
-  summarizeSoulBytes,
   writeSoul,
 } from './identity/soul';
 
