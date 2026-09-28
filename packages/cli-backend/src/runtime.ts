@@ -49,7 +49,7 @@ import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { MemoryStore } from '@kinu.run/agent-utils';
-import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils';
+import { CraftStore } from '@kinu.run/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
@@ -371,9 +371,8 @@ export function createCLIRuntime(
   memoryStore.ensureSchema();
   const memory = adaptMemory(memoryStore, agentStateVfs);
 
-  const craftStoreImpl = new AgentUtilsCraftStore(sql);
-  craftStoreImpl.ensureSchema();
-  const craftStore = craftStoreView(craftStoreImpl);
+  const craftStore = new CraftStore(sql);
+  craftStore.ensureSchema();
   let approvalChannel: RequestShellApproval | null = null;
   let approvalDeferrals: DeferredApprovalChannel | null = null;
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;

@@ -4,7 +4,7 @@ import { createWorkspace as createWorkspaceFilesystem, workspaceGenerationStorag
 import type { WorkspaceBundle, WorkspaceOptions } from '../vfs/nimbus-workspace';
 import { readTailWithVfsOps, type VfsNativeReads } from '../vfs/mounts';
 import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
-import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils/stores';
+import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
 import type { CraftStore } from '../types/agent-runtime';
 import type {
   Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExec, SqlExecutor, SqlValue, Storage, VFS,
@@ -128,7 +128,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
 }
 
 export function createInlineCraftStore(db: AgentDatabase): CraftStore {
-  return craftStoreView(new AgentUtilsCraftStore(wrapDatabase(db).sql));
+  return new AgentUtilsCraftStore(wrapDatabase(db).sql);
 }
 
 export function createInlineExecutor(): Executor {
