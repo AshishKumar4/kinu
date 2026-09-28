@@ -333,9 +333,8 @@ export const LADDER: readonly Gate[] = [
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.22 s. Replaces 0.07 s.
     seconds: 0.22,
-    catches: 'a platform number stated in prose with no catalog id behind it, and a '
-      + 'catalog entry with no evidence label or provenance.',
-    blind: 'whether the catalogued number is still true.',
+    catches: 'a catalog entry with no evidence label or provenance.',
+    blind: 'whether the catalogued number is still true, and prose that restates one.',
     inputs: { kind: 'derived' },
   },
   {

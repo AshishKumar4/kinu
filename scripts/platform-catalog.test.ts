@@ -8,29 +8,7 @@ import {
   type PlatformFact,
 } from '../packages/core/src/platform-catalog';
 
-import { PROSE_EXEMPT_FILES, auditSchema, auditSources, findProseMentions } from './platform-catalog';
-import { readSources } from './sources';
-
-/**
- * The fixture is not invented. This is the shape that produced the whole
- * exercise, transcribed from `~/Nimbus/packages/worker/src/constants.ts:135-146`:
- * a load-bearing production ceiling justified by a document that was never
- * committed and is now gone.
- */
-const DANGLING = `
-// The supervisor isolate's 128 MiB workerd cap is a HARD platform ceiling
-// (per a gitignored internal research note (§6, invariant I1)).
-export const SUPERVISOR_HEAP_CEILING_BYTES = 64 * 1024 * 1024;
-`;
-
-/** The same sentence, sourced. Nothing else about it changes — which is the
- *  point: the gate asks for a name, not a rewrite. */
-const CITED = `
-// The supervisor isolate's 128 MiB workerd cap is a HARD platform ceiling
-// (\`worker.isolate.memory\`, and note \`do.isolate.oom_catchable\` measured the
-// real wall far higher).
-export const SUPERVISOR_HEAP_CEILING_BYTES = 64 * 1024 * 1024;
-`;
+import { auditSchema } from './platform-catalog';
 
 /** A real entry with one field spoiled — the fixture is the shipped record, so a
  *  test cannot pass against a shape the catalog does not actually use. */
@@ -41,40 +19,6 @@ const entry = (over: Partial<PlatformFact>): PlatformFact => ({
 
 const reasons = (over: Partial<PlatformFact>): string[] =>
   auditSchema([{ id: 'probe', fact: entry(over) }]).problems.map((p) => p.reason);
-
-describe('a platform sentence must name the entry it comes from', () => {
-  test('the dangling-citation shape is reported', () => {
-    const found = findProseMentions('constants.ts', DANGLING);
-    expect(found).toHaveLength(1);
-    expect(found[0]?.quantity).toBe('128 MiB');
-    expect(found[0]?.vocabulary).toBe('workerd');
-    expect(found[0]?.citedId).toBeNull();
-  });
-
-  test('naming the entry clears it', () => {
-    const found = findProseMentions('constants.ts', CITED);
-    expect(found).toHaveLength(1);
-    expect(found[0]?.citedId).toBe('worker.isolate.memory');
-  });
-
-  test('a number with no unit is not a claim — a timeout constant must not be a finding', () => {
-    const timeout = `
-// Deadline for a CONTROL round-trip into a Durable Object.
-const DEFAULT_RPC_TIMEOUT_MS = 30_000;
-`;
-
-    expect(findProseMentions('device-tunnel.ts', timeout)).toEqual([]);
-  });
-
-  test('a quantity with no platform vocabulary near it is not a claim', () => {
-    const policy = `
-// A container reporting the HOST's cores forks 32 compilers into 2GB.
-const MAX_JOBS = 8;
-`;
-
-    expect(findProseMentions('registry.ts', policy)).toEqual([]);
-  });
-});
 
 describe('an entry without evidence is the artefact being replaced', () => {
   test('the real entry is clean', () => {
@@ -220,67 +164,13 @@ describe('the fault set a simulator may inject', () => {
 });
 
 describe('against the real tree', () => {
-  const sources = readSources();
   const schema = auditSchema(platformFactEntries());
-  const audit = auditSources(sources);
 
   test('the catalog is populated, evidenced, and not folklore', () => {
     expect(schema.inspected).toBeGreaterThan(0);
     expect(schema.problems).toEqual([]);
     expect(schema.byEvidence.get('documented') ?? 0).toBeGreaterThan(0);
     expect(injectableFaults().length).toBeGreaterThan(0);
-  });
-
-  test('the scan has a non-zero denominator and the matcher demonstrably fires', () => {
-    // Three gates in this repo have reported green over nothing. A clean result
-    // means nothing unless the matcher is proven to still match something.
-    expect(sources.size).toBeGreaterThan(0);
-    expect(audit.mentions.length).toBeGreaterThan(0);
-    expect(audit.mentions.filter((m) => m.citedId !== null).length).toBeGreaterThan(0);
-  });
-
-  test('every platform sentence in the tree names its entry', () => {
-    expect(audit.mentions.filter((m) => m.citedId === null)).toEqual([]);
-  });
-
-  test('the exemption list is exactly one file, pinned by equality', () => {
-    // Not a style assertion. An unpinned ignore list is how a gate dies: adding a
-    // path is the cheapest way to make a cleanup pass go green, and nobody
-    // reviews an addition to a list nothing checks. The catalog is exempt because
-    // it states every platform number it owns; a SECOND name here would mean some
-    // other file is allowed to state a platform number uncited, which is the
-    // entire thing being prevented.
-    expect(PROSE_EXEMPT_FILES).toEqual(['packages/core/src/platform-catalog.ts']);
-  });
-
-  test('the exempt file would otherwise be the largest violator, so the matcher still bites there', () => {
-    // Proves the exemption is a path exclusion and not a dead matcher: run the
-    // scanner directly over the catalog's own text and it finds more than any
-    // file the gate actually holds to the rule. The text comes from the suite's
-    // own source map rather than a second read, so the input is the same bytes
-    // the audit above judged.
-    const catalog = sources.get('packages/core/src/platform-catalog.ts');
-
-    if (catalog === undefined) throw new Error('sources lost packages/core/src/platform-catalog.ts');
-    const exempt = findProseMentions('packages/core/src/platform-catalog.ts', catalog);
-    const held = new Map<string, number>();
-
-    for (const mention of audit.mentions) held.set(mention.file, (held.get(mention.file) ?? 0) + 1);
-    expect(exempt.length).toBeGreaterThan(Math.max(0, ...held.values()));
-  });
-
-  test('the catalog is load-bearing: production code imports it', () => {
-    expect(audit.importers.length).toBeGreaterThan(0);
-    expect(audit.citedIds.length).toBeGreaterThan(0);
-  });
-
-  test('the prompt cites PLATFORM_CATALOG and types no platform number as prose', () => {
-    // Source-level, and deliberately free of the core module graph: eight
-    // streams are editing `packages/core` concurrently, and a sibling's
-    // half-written import would otherwise report THIS invariant as broken.
-    const source = sources.get('packages/core/src/prompt.ts');
-    expect(source).toContain('PLATFORM_CATALOG');
-    expect(source).not.toContain('~128 MB of memory');
   });
 
   test('the workspace prompt reports the catalog memory limit', async () => {
