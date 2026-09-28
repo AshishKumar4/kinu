@@ -91,6 +91,10 @@ export interface PendingAttachments {
   readonly clear: () => void;
 }
 
+interface ConversionTask {
+  promise: Promise<void> | null;
+}
+
 export function usePendingAttachments(limitBytes: number): PendingAttachments {
   const [state, dispatch] = useReducer(
     (current: State, action: Action) => reduce(current, action, limitBytes),
@@ -98,6 +102,8 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
   );
 
   const conversionGeneration = useRef(0);
+  const nextConversionTaskId = useRef(0);
+  const conversionTasks = useRef(new Map<number, ConversionTask>());
   useEffect(() => () => {
     conversionGeneration.current += 1;
   }, []);
@@ -116,8 +122,12 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
 
     // Materialize now: FileList empties when the input is cleared, dataTransfer when the handler returns.
     const generation = conversionGeneration.current;
+    const taskId = ++nextConversionTaskId.current;
+    const owner: ConversionTask = { promise: null };
+    conversionTasks.current.set(taskId, owner);
+    owner.promise = (async () => {
+      let thrown: { cause: unknown } | null = null;
 
-    const convert = async (): Promise<void> => {
       try {
         const transfer = new DataTransfer();
 
@@ -127,15 +137,17 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
         if (generation !== conversionGeneration.current) return;
         dispatch({ kind: "offer", parts, oversized });
       } catch (cause) {
-        const names = convertible.map((file) => file.name).join(", ");
-        const reason = renderThrownChain({ cause });
-        diagnostics.event('attachments.conversion_failed', { names, reason });
-
-        if (generation === conversionGeneration.current) dispatch({ kind: "conversion_failed", oversized, message: `Could not read ${names}: ${reason}` });
+        thrown = { cause };
+      } finally {
+        if (conversionTasks.current.get(taskId) === owner) conversionTasks.current.delete(taskId);
       }
-    };
 
-    void convert();
+      if (thrown === null || generation !== conversionGeneration.current) return;
+      const names = convertible.map((file) => file.name).join(", ");
+      const reason = renderThrownChain(thrown);
+      diagnostics.event('attachments.conversion_failed', { names, reason });
+      dispatch({ kind: "conversion_failed", oversized, message: `Could not read ${names}: ${reason}` });
+    })();
   }, [limitBytes]);
 
   const remove = useCallback((index: number) => { dispatch({ kind: "remove", index }); }, []);

@@ -13,12 +13,18 @@ interface State {
   error: Error | null;
 }
 
+interface ReportOperation {
+  promise: Promise<void> | null;
+}
+
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
 
   /** Already-reported error, by identity: React's retries rethrow the same object.
    *  Per instance, so two failing boundaries report two faults. */
   private reported: Error | null = null;
+
+  private readonly reportOperations = new Map<Error, ReportOperation>();
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
@@ -27,8 +33,9 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo): void {
     if (this.reported === error) return;
     this.reported = error;
-
-    const report = async (): Promise<void> => {
+    const owner: ReportOperation = { promise: null };
+    this.reportOperations.set(error, owner);
+    owner.promise = (async () => {
       try {
         await reportRenderFailure(error, info.componentStack ?? "", {
           release: await pageDeployedBuildSha(),
@@ -39,10 +46,10 @@ export class ErrorBoundary extends Component<Props, State> {
         diagnostics.event('client_error.reporter_failed', {
           reason: renderThrownChain({ cause }),
         });
+      } finally {
+        if (this.reportOperations.get(error) === owner) this.reportOperations.delete(error);
       }
-    };
-
-    void report();
+    })();
   }
 
   reset = () => this.setState({ error: null });

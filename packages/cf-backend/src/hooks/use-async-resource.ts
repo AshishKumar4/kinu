@@ -87,6 +87,8 @@ export function useAsyncResource<T>(
 
   // Only the newest run may write; a slow failing load must not overwrite its retry.
   const runId = useRef(0);
+  // Reloads overlap; every task is retained until it settles, and the run id decides which publishes.
+  const activeRuns = useRef(new Map<number, Promise<void>>());
 
   // A task that settles after unmount must not publish into a retired resource.
   useEffect(() => () => {
@@ -99,23 +101,29 @@ export function useAsyncResource<T>(
       identity,
       resource: beginLoad(previous.identity === identity ? previous.resource : { status: "loading" }),
     }));
+    let task: Promise<void> | null = null;
+    task = (async () => {
+      // Held until the newest-run check below, so a superseded load publishes nothing.
+      let thrown: { cause: unknown } | null = null;
 
-    const settle = async (): Promise<void> => {
       try {
         const value = await load();
 
         if (id === runId.current) setState({ identity, resource: loadSucceeded(value) });
-      } catch (cause) {
-        if (id === runId.current) {
-          setState((previous) => ({
-            identity,
-            resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, { cause }),
-          }));
-        }
+      } catch (error) {
+        thrown = { cause: error };
+      } finally {
+        activeRuns.current.delete(id);
       }
-    };
 
-    void settle();
+      if (thrown === null || id !== runId.current) return;
+      const failure = thrown;
+      setState((previous) => ({
+        identity,
+        resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, failure),
+      }));
+    })();
+    activeRuns.current.set(id, task);
   }, [identity, load]);
 
   useEffect(() => { run(); }, [run]);

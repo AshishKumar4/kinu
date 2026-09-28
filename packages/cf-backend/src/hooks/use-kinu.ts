@@ -1046,12 +1046,17 @@ export function useKinu(target?: string | KinuActorAddress) {
     [],
   );
 
+  const chatStreamReports = useRef(new Set<Promise<void>>());
+
   // Always live: the transport only surfaces this for a request id still in flight.
   useEffect(() => {
     if (!streamError) return;
     setChatError({ body: streamError.message || String(streamError), replayed: false });
+    const reports = chatStreamReports.current;
 
-    const report = async (): Promise<void> => {
+    let report: Promise<void> | null = null;
+
+    report = (async () => {
       try {
         await reportChatStreamFailure(streamError, subordinate === undefined ? "root" : "actor", {
           release: await pageDeployedBuildSha(),
@@ -1059,10 +1064,11 @@ export function useKinu(target?: string | KinuActorAddress) {
         });
       } catch (cause) {
         diagnostics.event("client_error.reporter_failed", { reason: renderThrownChain({ cause }) });
+      } finally {
+        if (report !== null) reports.delete(report);
       }
-    };
-
-    void report();
+    })();
+    reports.add(report);
   }, [streamError, subordinate]);
 
   // Version skew: /api/health's build sha compared on each reconnect. The baseline is per page
@@ -1096,6 +1102,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   // reconnect after the first, and `retryLoad`. Calls queue client-side while the socket is down.
   const [loadGeneration, setLoadGeneration] = useState(0);
   const failureStreak = useRef(0);
+  const snapshotLoadTaskId = useRef(0);
+  const snapshotLoadTasks = useRef(new Map<number, Promise<void>>());
 
   // `agentRef` indirection keeps the recovery callbacks stable across renders.
   const agentRef = useRef(agent);
@@ -1183,8 +1191,9 @@ export function useKinu(target?: string | KinuActorAddress) {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
-
-    const loadSnapshot = async (): Promise<void> => {
+    const taskId = ++snapshotLoadTaskId.current;
+    let task: Promise<void> | null = null;
+    task = (async () => {
       try {
         const outcome = await loadWorkspaceSnapshot(
           isSubordinate ? loadSubordinateData : loadAllData,
@@ -1210,10 +1219,11 @@ export function useKinu(target?: string | KinuActorAddress) {
           cause,
           otherwise: 'io',
         }));
+      } finally {
+        snapshotLoadTasks.current.delete(taskId);
       }
-    };
-
-    void loadSnapshot();
+    })();
+    snapshotLoadTasks.current.set(taskId, task);
 
     return () => {
       disposed = true;
@@ -1530,8 +1540,13 @@ export function useKinu(target?: string | KinuActorAddress) {
     refreshTabPresence, rpc,
   ]);
 
+  const liveRefreshTaskId = useRef(0);
+  const liveRefreshTasks = useRef(new Map<number, Promise<void>>());
+
   const rereadLive = useCallback((reads: readonly LiveRead[], also: readonly (() => Promise<void>)[] = []): void => {
-    const reread = async (): Promise<void> => {
+    const taskId = ++liveRefreshTaskId.current;
+
+    const task = (async () => {
       try {
         await Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())]);
       } catch (cause) {
@@ -1540,10 +1555,12 @@ export function useKinu(target?: string | KinuActorAddress) {
           cause,
           otherwise: 'io',
         }));
+      } finally {
+        liveRefreshTasks.current.delete(taskId);
       }
-    };
+    })();
 
-    void reread();
+    liveRefreshTasks.current.set(taskId, task);
   }, [liveReads]);
 
   const refreshLiveData = useCallback((): void => {
