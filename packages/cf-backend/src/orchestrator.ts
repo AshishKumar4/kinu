@@ -4731,10 +4731,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const pictures = this.pictures.digests();
     const shares = await this.slates.shareCards(new Map(listing.slates.map((slate) => [slate.id, slate.title])));
 
+    // A settled turn's leftovers still closing are its work, not a durable leftover.
+    const working = this._inFlight || hostedBusy || this.terminalClosing;
+
     return buildWorkspaceOverview({
-      // A settled turn's leftovers still closing are its work, not a durable leftover.
-      working: this._inFlight || hostedBusy || this.terminalClosing,
-      unfinished: this.owedUntimedWork() || this.workOwedAt() !== null,
+      working,
+      // Read only when idle: a working tile shows Working whatever is owed.
+      unfinished: !working && (this.owedUntimedWork() || this.workOwedAt() !== null),
       pendingActions: this.pendingActions(),
       pendingConsents,
       activePlan,
