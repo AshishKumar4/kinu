@@ -203,6 +203,8 @@ export interface WorkspacePrivileged {
   readonly confiner: TmpConfiner;
 }
 
+type NimbusCreation = Parameters<typeof NimbusWorkspace.create>[0];
+
 export type SupervisorOpResult = Awaited<ReturnType<NimbusWorkspace['supervisorOp']>>;
 
 /** This workspace's Nimbus primitives for a host's process/port surface; reuse them, never open a second workspace over the same database. */
@@ -260,17 +262,25 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   const tableFor: ShellMountTable = (cred) => mountTables.get(cred.uid) ?? null;
   let booting: Promise<NimbusWorkspace> | undefined;
 
+  const shellOver = async (creation: NimbusCreation): Promise<NimbusWorkspace> => {
+    const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
+    const workspace = await NimbusWorkspace.create(creation);
+
+    for (const [name, command] of Object.entries(mountCommands(tableFor, () => workspace.vfs.getStats()))) workspace.registry.register(name, command);
+
+    return workspace;
+  };
+
   const open = async (): Promise<NimbusWorkspace> => {
     booting ??= (async (): Promise<NimbusWorkspace> => {
       try {
-        const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
         // Boot revokes append writers at or below `generation * PID_GEN_STRIDE`, so the pid base must be
         // this generation.
         const generationNow = takeWorkspaceGeneration(opts);
 
         processes.setPidBase(generationNow * PID_GEN_STRIDE);
 
-        let creation: Parameters<typeof NimbusWorkspace.create>[0] = {
+        let creation: NimbusCreation = {
           sql: opts.sql,
           transactions: opts.transactions,
           generation: generationNow,
@@ -285,11 +295,8 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           creation = { ...creation, runtimeSource: opts.runtimeSource, runtimeInstall: 'on-demand' };
         }
 
-        const workspace = await NimbusWorkspace.create(creation);
+        const workspace = await shellOver(creation);
 
-        const commands = mountCommands(tableFor, () => workspace.vfs.getStats());
-
-        for (const [name, command] of Object.entries(commands)) workspace.registry.register(name, command);
         settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
         settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL));
         resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);
@@ -378,11 +385,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         try {
           const origin = await open();
           const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
+
           // Second shell over the same `SqliteVFS`, never a second filesystem (stale cache).
           // `runAs` is the origin's so `sudo`/`su` keep working.
-          const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
-
-          const asAgent = await NimbusWorkspace.create({
+          const asAgent = await shellOver({
             sql: opts.sql,
             transactions: opts.transactions,
             vfs: origin.vfs,
