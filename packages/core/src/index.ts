@@ -397,7 +397,7 @@ export {
 
 export { toolPairingGaps } from './session/tool-pairing';
 
-export { STAGED_CONTEXT_DEFERRALS, type StagedContextDeferral, type ContextProposalClosure, type ContextEditEffect, type ContextEventRecorder, type ContextEditEvent } from './types/context-plane';
+export { type StagedContextDeferral, type ContextProposalClosure, type ContextEditEffect, type ContextEventRecorder, type ContextEditEvent } from './types/context-plane';
 
 export { SessionHistory, type SessionHistoryDependencies } from './session/history';
 

@@ -256,8 +256,6 @@ const toUserSteer = (signal: DeliveredUserSignal): UserSteer => ({
 export class Inbox implements AgentInbox {
   private pending: DeliveredSignal[] = [];
   private absorbed: DeliveredSignal[] = [];
-  /** The drain crossing the durable boundary; nonempty only while onDrain is awaited. */
-  private landing: DeliveredSignal[] = [];
   /** Previous turn's absorbed events, held one turn so a continuation turn can re-absorb them. */
   private settled: DeliveredSignal[] = [];
   /** The host enqueue in flight until the turn opens; while set, a message rides that turn's first step. */
@@ -322,12 +320,8 @@ export class Inbox implements AgentInbox {
     return Promise.resolve('mid-turn');
   }
 
-  /** Bind once at session construction; rebinding after a user signal is accepted would change the drain target. */
+  /** Bound once, as the chat session is built, before any signal is accepted. */
   bindSteerDeps(steers: UserSteerDeps): void {
-    if ([...this.pending, ...this.landing, ...this.absorbed].some(isUserSignal)) {
-      throw new Error('cannot bind steer persistence once user signals have been accepted');
-    }
-
     this.steers = steers;
   }
 
@@ -346,8 +340,6 @@ export class Inbox implements AgentInbox {
     let landedMessage: ModelMessage | undefined;
 
     if (users.length > 0) {
-      this.landing = drained;
-
       try {
         const landed = await this.steers.onDrain?.(users.map(toUserSteer), ctx.stepNumber);
 
@@ -355,11 +347,8 @@ export class Inbox implements AgentInbox {
       } catch (cause) {
         // Signals may arrive during the await; the failed prefix goes back ahead of them.
         this.pending = [...drained, ...this.pending];
-        this.landing = [];
         throw cause;
       }
-
-      this.landing = [];
     }
 
     this.absorbed.push(...drained);
