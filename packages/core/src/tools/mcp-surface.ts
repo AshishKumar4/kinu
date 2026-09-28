@@ -1,12 +1,13 @@
 /** MCP tool surface both backends admit. A remote catalog is spent out of `stepContextLimit`
  *  minus the actor's own tool definitions; cf and CLI both price with {@link toolSurfaceTokens}. */
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import { estimateTokens } from '../llm';
 import { stepContextLimit } from '../context-window';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
-import { KinuError } from '../obs/index';
+import { KinuError, settle } from '../obs/index';
 import { permitInPlan } from '../execution/work-mode';
 import { withClampedToolResults, type ClampToolResultOptions } from './clamp';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
@@ -75,33 +76,38 @@ const ListedToolSchema = v.looseObject({
   inputSchema: v.optional(v.unknown()),
 });
 
-export async function listMcpToolsLeniently(
+export function listMcpToolsLeniently(
   server: { readonly name: string },
   page: (cursor: string | undefined) => Promise<object>,
 ): Promise<ListedMcpTools> {
-  const tools: RemoteMcpTool[] = [];
-  const refused: McpToolRefusal[] = [];
-  let cursor: string | undefined;
+  return settle(Effect.gen(function* () {
+    const tools: RemoteMcpTool[] = [];
+    const refused: McpToolRefusal[] = [];
+    let cursor: string | undefined;
 
-  do {
-    const answer = await page(cursor);
-    const listed = v.safeParse(ToolListPageSchema, answer);
+    do {
+      const at = cursor;
+      const answer = yield* Effect.promise(() => page(at));
+      const listed = v.safeParse(ToolListPageSchema, answer);
 
-    if (!listed.success) {
-      throw new KinuError('bad_input', `${server.name} answered tools/list without a tools array: ${JSON.stringify(answer)}`);
-    }
+      if (!listed.success) {
+        return yield* new KinuError('bad_input', `${server.name} answered tools/list without a tools array: ${JSON.stringify(answer)}`);
+      }
 
-    for (const entry of listed.output.tools) {
-      const remote = v.safeParse(ListedToolSchema, entry);
+      for (const entry of listed.output.tools) {
+        const remote = v.safeParse(ListedToolSchema, entry);
 
-      if (remote.success) tools.push({ ...remote.output, inputSchema: remote.output.inputSchema });
-      else refused.push({ server: server.name, reason: `a listed tool has no name, so it is not offered: ${JSON.stringify(entry)}` });
-    }
+        if (remote.success) tools.push({ ...remote.output, inputSchema: remote.output.inputSchema });
+        else refused.push({ server: server.name, reason: `a listed tool has no name, so it is not offered: ${JSON.stringify(entry)}` });
+      }
 
-    cursor = listed.output.nextCursor;
-  } while (cursor !== undefined);
+      cursor = listed.output.nextCursor;
+    } while (cursor !== undefined);
 
-  return { tools, refused };
+    const listing: ListedMcpTools = { tools, refused };
+
+    return listing;
+  }));
 }
 
 const RemoteInputSchemaSchema = v.pipe(JsonObjectSchema, v.check((value) => !Array.isArray(value)));

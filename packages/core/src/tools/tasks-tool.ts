@@ -13,7 +13,8 @@ import { z } from 'zod';
 import { oneOf } from './tool-schema';
 import { TASKS_TOOL_ACTIONS } from './registry';
 import { isValidRoleId, type RoleId } from '../types/profile';
-import { KinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settleSync } from '../obs/index';
 
 /** Fields `tasks.*` in eval takes positionally. */
 export const TaskTitlesSchema = z.array(z.string()).describe('For add: one title per task, in order.').optional();
@@ -78,10 +79,10 @@ interface RoleSet {
 export type TasksToolResult = TasksAdded | TaskUpdated | TasksListed | RoleSet;
 
 /** `tasks.add` — one title row per task, rejections carried alongside. */
-function addTasks(taskList: TaskListStore, args: TasksToolInput, now: number): TasksAdded {
+function addTasks(taskList: TaskListStore, args: TasksToolInput, now: number): Effect.Effect<TasksAdded, KinuError> {
   const titles = args.titles ?? [];
 
-  if (titles.length === 0) throw new KinuError('bad_input', 'tasks.add requires `titles`: one or more task titles');
+  if (titles.length === 0) return Effect.fail(new KinuError('bad_input', 'tasks.add requires `titles`: one or more task titles'));
   const { added, rejected } = taskList.add(titles, args.parent ?? null, now);
 
   const result: TasksAdded = {
@@ -90,28 +91,28 @@ function addTasks(taskList: TaskListStore, args: TasksToolInput, now: number): T
 
   if (rejected.length > 0) result.rejected = rejected;
 
-  return result;
+  return Effect.succeed(result);
 }
 
 /** `tasks.update` — a status move, a note write, or both on one task. `note` is three-valued: absent leaves it,
  *  `null` clears it, a string sets it. */
-function updateTask(taskList: TaskListStore, args: TasksToolInput, now: number): TaskUpdated {
-  if (!args.id) throw new KinuError('bad_input', 'tasks.update requires `id`');
+function updateTask(taskList: TaskListStore, args: TasksToolInput, now: number): Effect.Effect<TaskUpdated, KinuError> {
+  if (!args.id) return Effect.fail(new KinuError('bad_input', 'tasks.update requires `id`'));
 
   if (args.status === undefined && args.note === undefined) {
-    throw new KinuError('bad_input', 'tasks.update requires `status` or `note`');
+    return Effect.fail(new KinuError('bad_input', 'tasks.update requires `status` or `note`'));
   }
 
   const task = taskList.update(args.id, { status: args.status, note: args.note }, now);
 
-  if (!task) throw new KinuError('missing', 'no task ' + args.id);
+  if (!task) return Effect.fail(new KinuError('missing', 'no task ' + args.id));
   // Warn about still-open children when closing a parent.
   const openSubtasks = args.status === 'done' ? taskList.countOpenSubtasks(task.id) : 0;
   const result: TaskUpdated = { id: task.id, title: task.title, status: task.status };
 
   if (openSubtasks > 0) result.open_subtasks = openSubtasks;
 
-  return result;
+  return Effect.succeed(result);
 }
 
 export type RoleSwitchOutcome =
@@ -130,7 +131,7 @@ export function createTasksDispatcher(
   config: AgentConfigStore,
   roleSwitch?: RoleSwitch,
 ): (input: TasksToolInput) => TasksToolResult {
-  return (args: TasksToolInput) => {
+  const dispatch = (args: TasksToolInput): Effect.Effect<TasksToolResult, KinuError> => {
     const now = Date.now();
 
     switch (args.action) {
@@ -167,32 +168,34 @@ export function createTasksDispatcher(
 
         if (total > shown) result.not_shown = total - shown;
 
-        return result;
+        return Effect.succeed(result);
       }
 
       case 'mode': {
         // No argument = read the current one.
         if (args.role === undefined) {
-          return { role: config.getRoleSelection() };
+          return Effect.succeed({ role: config.getRoleSelection() });
         }
 
         if (!isValidRoleId(args.role)) {
-          throw new KinuError('bad_input', 'tasks.mode requires `role`: a kebab-case role id like task or researcher');
+          return Effect.fail(new KinuError('bad_input', 'tasks.mode requires `role`: a kebab-case role id like task or researcher'));
         }
 
         const outcome = roleSwitch?.({ config, to: args.role }) ?? { kind: 'no-authority' };
 
         switch (outcome.kind) {
           case 'no-authority':
-            throw new KinuError('unsupported', 'tasks.mode cannot switch roles: this agent has no profile authority to validate against');
+            return Effect.fail(new KinuError('unsupported', 'tasks.mode cannot switch roles: this agent has no profile authority to validate against'));
           case 'denied':
-            throw new KinuError('denied', outcome.text);
+            return Effect.fail(new KinuError('denied', outcome.text));
           case 'unknown-role':
-            throw new KinuError('bad_input', outcome.text + ' Known roles: ' + outcome.known.join(', ') + '.');
+            return Effect.fail(new KinuError('bad_input', outcome.text + ' Known roles: ' + outcome.known.join(', ') + '.'));
           case 'applied':
-            return { role: args.role };
+            return Effect.succeed({ role: args.role });
         }
       }
     }
   };
+
+  return (args: TasksToolInput): TasksToolResult => settleSync(dispatch(args));
 }
