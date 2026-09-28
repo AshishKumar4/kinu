@@ -23,7 +23,7 @@ import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema } from "@kinu.run/core";
-import type { ReasoningEffort } from "@kinu.run/core";
+import type { ParkedWriteReview, ReasoningEffort } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@kinu.run/core";
@@ -4269,6 +4269,12 @@ const PENDING_ACTIONS: PendingAction[] = [
     detail: "sudo launchctl kickstart -k system/com.docker.dockerd",
   },
   {
+    id: "defer-w7r1te0notes", kind: "deferred_action", at: NOW - 30 * 60e3,
+    title: "Replace /pc/ashish@studio/home/ashish/notes.md",
+    detail: "file write /pc/ashish@studio/home/ashish/notes.md",
+    write: { path: "/pc/ashish@studio/home/ashish/notes.md" },
+  },
+  {
     id: "plan:main:plan-gateway:3", kind: "plan_review", at: NOW - 9e5,
     title: "Approve the plan · Gateway timeout repair",
     detail: null,
@@ -4486,6 +4492,21 @@ function WorkFrame() {
   );
 }
 
+const PARKED_WRITE_REVIEW: ParkedWriteReview = {
+  path: "/pc/ashish@studio/home/ashish/notes.md", currentBytes: 58, nextBytes: 71, changedSinceAsked: false,
+  diff: {
+    path: "/pc/ashish@studio/home/ashish/notes.md", status: "changed", added: 2, removed: 1,
+    lines: [
+      { kind: "hunk", text: "@@ -1,3 +1,4 @@" },
+      { kind: "ctx", text: "# Notes" },
+      { kind: "del", text: "- ship the gateway fix" },
+      { kind: "add", text: "- ship the gateway fix (done)" },
+      { kind: "add", text: "- write the incident note" },
+      { kind: "ctx", text: "- call the vendor" },
+    ],
+  },
+};
+
 /** Both halves of a shell approval: the queue that grants, the list that revokes. Fed directly: `?frame=settings` needs a live agent socket. */
 const SHELL_GRANTS = [
   { rule: "rm-recursive", executor: "device" },
@@ -4497,6 +4518,8 @@ const approvalsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
   if (method === "getShellApprovalGrants") return rpcResult({ grants: SHELL_GRANTS }).json<T>();
 
   if (method === "revokeShellApprovalGrants") return rpcResult({ ok: true, grants: SHELL_GRANTS }).json<T>();
+
+  if (method === "reviewParkedWrite") return rpcResult(v.parse(JsonValueSchema, PARKED_WRITE_REVIEW)).json<T>();
 
   return workRpc<T>(method, args);
 };

@@ -335,7 +335,6 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
   report: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.report),
 } satisfies Record<BuiltinToolName, string>;
 
-/** Which substrate runs the program. */
 export type SandboxSubstrate = 'hosted' | 'local';
 
 const SANDBOX_RUNS = {

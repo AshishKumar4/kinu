@@ -10,7 +10,7 @@ import {
   NotePencilIcon, ArrowLeftIcon, DatabaseIcon,
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, revealMisrepresenting, timeAgo } from "@kinu.run/core";
-import type { AgentTaskTree, ChangelogEntry, MemoryEntry, OwnedPlan, PendingAction, PendingActionKind, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
+import type { AgentTaskTree, ChangelogEntry, MemoryEntry, Omitted, OwnedPlan, ParkedWriteReview, PendingAction, PendingActionKind, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
 import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -24,6 +24,7 @@ import { ChangelogEntryCard, ChangelogFailure, useChangelog, type ChangelogView 
 import type { SurfaceKind } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { WorkPlans } from "./WorkPlans";
+import { FileBody } from "./changes/ChangesPanel";
 
 const PlanReviewView = lazy(() => import("./PlanReviewView"));
 
@@ -522,6 +523,9 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
             </span>
           </label>
         ))}
+        {actions.filter((action) => action.write !== undefined).map((action) => (
+          <ParkedWriteChange key={`change-${action.id}`} id={action.id} rpc={rpc} />
+        ))}
       </div>
 
       {state.error && <div className="p-t-status p-danger">{state.error}</div>}
@@ -542,6 +546,52 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
           Deny {countLabel(chosen.size, actions.length)}
         </Button>
       </div>
+    </div>
+  );
+}
+
+const OMITTED_TEXT: Record<Omitted, string> = { binary: "Binary content", large: "Too large to show line by line" };
+
+function byteCount(bytes: number): string {
+  return `${bytes.toLocaleString()} byte${bytes === 1 ? "" : "s"}`;
+}
+
+/** The parked bytes against the file as it is now: approving writes exactly these. */
+function ParkedWriteChange({ id, rpc }: { id: string; rpc: Rpc }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="rounded-md px-2 py-1.5 p-elevated" data-parked-write={id}>
+      <button type="button" className="p-meta p-accent-fg hover:underline" onClick={() => setOpen((was) => !was)} aria-expanded={open}>
+        {open ? "Hide the change" : "Show the change"}
+      </button>
+      {open && <ParkedWriteDiff id={id} rpc={rpc} />}
+    </div>
+  );
+}
+
+function ParkedWriteDiff({ id, rpc }: { id: string; rpc: Rpc }) {
+  const load = useCallback(() => rpc<ParkedWriteReview | null>("reviewParkedWrite", [id]), [rpc, id]);
+  const { resource, reload } = useAsyncResource(load);
+  const review = lastValue(resource);
+
+  if (review === null) {
+    return resource.status === "error"
+      ? <LoadFailure what="the change" message={resource.message} onRetry={reload} />
+      : <div className="flex justify-center py-2"><Loader size="sm" /></div>;
+  }
+
+  const sizes = `${review.currentBytes === null ? "New file" : byteCount(review.currentBytes)} → ${byteCount(review.nextBytes)}`;
+
+  return (
+    <div className="mt-1.5 space-y-1.5">
+      <div className="p-meta p-text-3">{review.path} · {sizes}</div>
+      {review.changedSinceAsked && (
+        <div className="p-t-status p-warning">The file changed after the agent asked, so approving writes nothing.</div>
+      )}
+      {review.diff.omitted === undefined
+        ? <div className="overflow-hidden rounded-md border p-border"><FileBody file={review.diff} stacked={false} onOpenInFiles={null} /></div>
+        : <div className="p-meta p-text-2">{OMITTED_TEXT[review.diff.omitted]}.</div>}
     </div>
   );
 }

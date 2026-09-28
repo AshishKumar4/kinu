@@ -1,10 +1,9 @@
-/**
- * Approval gate: 'allow', 'warn', 'gate' (the owner decides) or 'deny' (never). A decision depends on the rule and
- * whose files the executor holds; binary-scoped rules fire only on invoked binaries, or on the whole line under an
- * interpreter. Against accidents, not an adversary.
- */
+/** Approval gate: 'allow', 'warn', 'gate' (the owner decides) or 'deny' (never), by the rule and whose files the
+ *  executor holds. Against accidents, not an adversary. */
 
+import { Effect } from 'effect';
 import { CODE_WORK_DID_NOT_START, diagnostics, KinuError, type ErrorCode } from '../obs/index';
+import { boundWriteCommand, type WriteSubject } from './bound-write';
 
 export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
 
@@ -64,6 +63,8 @@ export interface ShellApprovalRequest {
   /** The target executor; the same command is a different request on a different machine. */
   readonly executor: string;
   readonly review: ApprovalResult;
+  /** A file write's ask: what it replaces and with what. A parked one is bound to these bytes. */
+  readonly write?: WriteSubject;
 }
 
 /** A channel's answer. 'allow_always' grants each tripped rule on this executor ({@link ApprovalGrant}). */
@@ -89,7 +90,6 @@ export function holdsGrant(grants: readonly ApprovalGrant[], grant: ApprovalGran
   return grants.some((held) => held.rule === grant.rule && held.executor === grant.executor);
 }
 
-/** Parse a stored grant; malformed values are not grants. */
 export function parseApprovalGrant(raw: string): ApprovalGrant | null {
   const at = raw.indexOf('@');
 
@@ -115,6 +115,10 @@ const GIT_VALUE_OPTION = '(?:git-dir|work-tree|namespace|config-env|super-prefix
 
 /** `git` and its global options; each word parses one way, so a failed match stays linear. */
 const GIT = String.raw`\bgit(?:\s+(?:(?:-[Cc]|--${GIT_VALUE_OPTION})\s+\S+|-[pP]|--(?!${GIT_VALUE_OPTION}(?:\s|$))[\w-]+(?:=\S+)?))*\s+`;
+
+const SECRET_PATH = /(\.env|\.npmrc|\.pypirc|\.aws|\.ssh|credentials)/i;
+
+const SECRET_READ = { name: 'secret-file-read', why: 'Reads a file likely to contain secrets.' } as const;
 
 /** Every ecosystem's publish command. `binaries` gates whether the rule fires, so extend both together. */
 const PACKAGE_PUBLISH = new RegExp(
@@ -323,10 +327,10 @@ const RULES: Rule[] = [
     binaries: ['printenv', 'env'],
   },
   {
-    pattern: /\bcat\s+.*(\.env|\.npmrc|\.pypirc|\.aws|\.ssh|credentials)/i,
+    pattern: new RegExp(String.raw`\bcat\s+.*` + SECRET_PATH.source, 'i'),
     decision: 'warn',
-    name: 'secret-file-read',
-    why: 'Reads a file likely to contain secrets.',
+    name: SECRET_READ.name,
+    why: SECRET_READ.why,
     harm: 'reaches_out',
     binaries: ['cat'],
   },
@@ -508,6 +512,11 @@ function underRoots(path: string, roots: readonly string[]): boolean {
   return roots.some((root) => path === root || path.startsWith(`${root}/`));
 }
 
+/** On a user mount, by its first segment or once `..` resolves. */
+export function onUserRoots(path: string, roots: readonly string[]): boolean {
+  return path.startsWith('/') && (roots.includes(`/${path.split('/')[1] ?? ''}`) || underRoots(normalizedPath(path), roots));
+}
+
 /** null: unknown; `undefined`: not a `cd`. */
 function cdTarget(step: ShellStep, cwd: string, home: string): string | null | undefined {
   const [verb, ...args] = step.words;
@@ -684,6 +693,62 @@ export function reviewShellCommand(executor: GatedExecutor, command: string, ses
   return { decision: dominant(hits), hits };
 }
 
+/** Judged by the shell's rules for the same act. */
+export interface FileAccess {
+  readonly op: 'read' | 'write' | 'delete' | 'mkdir';
+  /** As written: what a `cat` rule would see. */
+  readonly path: string;
+  readonly hostPath: string;
+  readonly reaches: 'own' | 'outside-directory' | 'user-mount';
+  /** Over a file already there; on a user mount only this and a delete ask. */
+  readonly replaces?: boolean;
+}
+
+const WRITE_OUTSIDE: ApprovalRuleHit = {
+  decision: 'gate', rule: 'write-outside-directory', explanation: 'Changes a file outside the workspace directory.',
+};
+
+function reviewFileAccess(access: FileAccess): ApprovalResult {
+  const hits: ApprovalRuleHit[] = [];
+
+  if (access.op === 'read' && SECRET_PATH.test(access.path)) {
+    hits.push({ decision: 'warn', rule: SECRET_READ.name, explanation: SECRET_READ.why });
+  }
+
+  if (access.op !== 'read' && access.reaches === 'outside-directory') hits.push(WRITE_OUTSIDE);
+
+  if (access.reaches === 'user-mount' && (access.op === 'delete' || (access.op === 'write' && access.replaces === true))) hits.push(OVERWRITE);
+
+  return { decision: dominant(hits), hits };
+}
+
+/** A write's bytes, read only when someone is asked or it parks; `parks` false refuses it unanswered. */
+export interface WriteAsk {
+  readonly subject: () => Promise<WriteSubject>;
+  readonly parks: boolean;
+}
+
+/** Only a write parks, bound to its bytes: a parked approval answers any later request with the same text. */
+export function approveFileAccess(
+  access: FileAccess, executor: string, policy: ShellApprovalPolicy, write?: WriteAsk,
+): Effect.Effect<void, KinuError> {
+  const review = reviewFileAccess(access);
+
+  if (review.decision === 'allow') return Effect.void;
+
+  return Effect.gen(function* () {
+    const decision = yield* Effect.promise(() => decideApproval(
+      { command: `file ${access.op} ${access.hostPath}`, executor, write: write?.subject, parks: write?.parks ?? false }, review, policy,
+    ));
+
+    if (!decision.run) return yield* Effect.fail(decision.error);
+
+    const { spent } = decision;
+
+    if (spent !== undefined) yield* Effect.promise(async () => { await policy.deferrals?.settle(spent, 'spent'); });
+  });
+}
+
 /** `runCode` in another language: its text cannot show what it does to the user's files, so it asks there. */
 export function reviewProgram(code: string, filesOwner: FilesOwner): ApprovalResult {
   const review = reviewCommand(code, filesOwner);
@@ -747,7 +812,7 @@ export interface ShellApprovalPolicy {
   deferrals?: DeferredApprovalChannel;
   /** Remember 'allow_always' for every rule the command tripped on this executor. */
   remember?(grants: readonly ApprovalGrant[]): void;
-  /** Refresh `mode()` and `granted()` before a decision; needed by facets whose grants live in the root's storage. */
+  /** Refreshes `mode()` and `granted()` before a decision, for facets whose grants are the root's. */
   resolve?(): Promise<void>;
 }
 
@@ -769,11 +834,12 @@ export type ApprovalSpendOutcome =
 /** Parks an unanswered 'gate' on the owner (safety/deferred-approval.ts). `run: true`: the grant is spent;
  *  `settle` refunds unrun attempts. */
 export interface DeferredApprovalChannel {
-  park(req: ShellApprovalRequest):
+  park(req: ShellApprovalRequest): Promise<
     | { readonly run: true; readonly spent: ApprovalSpend }
-    | { readonly run: false; readonly reason: 'denied' | 'unavailable'; readonly message: string };
+    | { readonly run: false; readonly reason: 'denied' | 'unavailable'; readonly message: string }
+  >;
   /** Close out a spend. Called once per spend on every returning path, never when unknown. Idempotent. */
-  settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): void;
+  settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): Promise<void>;
 }
 
 /** The review minus rules the owner granted on this executor. Deny is never grantable. */
@@ -787,10 +853,7 @@ function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, execut
   return hits.length === review.hits.length ? review : { decision: dominant(hits), hits };
 }
 
-/**
- * The one gate for every boundary that reaches a shell. `denyResult` writes a refusal into the result; `refusalCode`
- * reads its classification back, and a proven not-run code refunds a spent grant.
- */
+/** The one gate for every boundary that reaches a shell; a proven not-run code refunds a spent grant. */
 export interface ExecGateTuning<R> {
   readonly policy?: ShellApprovalPolicy;
   readonly refusalCode?: (result: R) => ErrorCode | null;
@@ -823,7 +886,7 @@ export function gateExec<R>(
 
     if (decision.spent) {
       const code = refusalCode?.(result) ?? null;
-      policy.deferrals?.settle(
+      await policy.deferrals?.settle(
         decision.spent,
         code !== null && CODE_WORK_DID_NOT_START[code] ? 'did-not-run' : 'spent',
       );
@@ -833,20 +896,36 @@ export function gateExec<R>(
   };
 }
 
-/** The mode/grant/channel/deferral ladder; a `run: true` from a replayed park carries a spend the caller settles. */
+/** The mode/grant/channel/deferral ladder; a `run: true` from a replayed park carries a spend the caller settles.
+ *  A write is shown to whoever is asked and parks bound to its bytes; `parks` false refuses an unanswered ask. */
 async function decideApproval(
-  subject: { readonly command: string; readonly executor: string },
+  subject: {
+    readonly command: string; readonly executor: string;
+    readonly write?: () => Promise<WriteSubject>; readonly parks?: boolean;
+  },
   rawReview: ApprovalResult,
   policy: ShellApprovalPolicy,
 ): Promise<
   | { readonly run: true; readonly spent?: ApprovalSpend }
   | { readonly run: false; readonly error: KinuError }
 > {
-  const { command: cmd, executor } = subject;
+  const { command: cmd, executor, write, parks = true } = subject;
   await policy.resolve?.();
   const mode = policy.mode();
   const review = afterGrants(rawReview, policy, executor);
   const refuse = (reason: ErrorCode, message: string) => ({ run: false, error: new KinuError(reason, message) } satisfies { run: false; error: KinuError });
+  let shown: Promise<WriteSubject> | null = null;
+
+  // A parked write's text names its bytes; the one asked now is shown them.
+  const request = async (parking: boolean): Promise<ShellApprovalRequest> => {
+    shown ??= write?.() ?? null;
+    const bytes = await shown;
+
+    if (bytes === null) return { command: cmd, executor, review };
+
+    return { command: parking ? boundWriteCommand(bytes) : cmd, executor, review, write: bytes };
+  };
+
   let spent: ApprovalSpend | undefined;
 
   if (review.decision === 'deny') {
@@ -863,14 +942,13 @@ async function decideApproval(
     } else {
       // 'deny_all' never asks; null channel means nobody is listening.
       const outcome = mode === 'strict' && policy.requestApproval
-        ? await policy.requestApproval({ command: cmd, executor, review })
+        ? await policy.requestApproval(await request(false))
         : null;
 
       if (outcome === null) {
         // Under 'strict', an unanswered ask parks if a queue is wired, only after the channel declines.
-        const parked = mode === 'strict'
-          ? policy.deferrals?.park({ command: cmd, executor, review })
-          : undefined;
+        const deferrals = mode === 'strict' && parks ? policy.deferrals : undefined;
+        const parked = deferrals === undefined ? undefined : await deferrals.park(await request(true));
 
         if (parked && !parked.run) return refuse(parked.reason, parked.message);
 

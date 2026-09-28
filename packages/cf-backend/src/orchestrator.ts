@@ -58,6 +58,7 @@ import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
@@ -221,7 +222,8 @@ import {
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
-  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, performBoundWrite, ParkedWriteFiles,
+  reviewParkedWrite, type ParkedWriteReview,
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
   type DeferredApprovalNotice, type ApprovalGrant,
   TURN_AUTHOR_METADATA_KEY,
@@ -2882,7 +2884,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.consents.list();
   }
 
-  // Deferred approval: nothing is ever reported as having run (core safety/deferred-approval.ts).
+  // Deferred approval (core safety/deferred-approval.ts): only a parked write runs on approval.
   protected _deferrals: DeferredApprovalQueue | null = null;
   protected get deferrals(): DeferredApprovalQueue {
     this._deferrals ??= new DeferredApprovalQueue({
@@ -2900,6 +2902,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         });
       },
       announce: (notice) => this.announceDeferral(notice),
+      writes: {
+        content: new ParkedWriteFiles(async () => (await this.hostedWorkspace().bundle.session()).vfs.as(CRED_KERNEL)),
+        perform: (write, bytes) => performBoundWrite(this.rt.storage.vfs, write, bytes),
+      },
     });
 
     return this._deferrals;
@@ -2924,6 +2930,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async listDeferredApprovals(): Promise<DeferredApproval[]> {
     return this.deferrals.list();
+  }
+
+  /** A parked write's bytes against the file now, so the owner sees what an approval writes. */
+  @callable()
+  async reviewParkedWrite(id: string): Promise<ParkedWriteReview | null> {
+    return reviewParkedWrite(this.deferrals, this.rt.storage.vfs, id);
   }
 
   /** Decides one or many parked actions: one durable write per row, one wake for the batch. */

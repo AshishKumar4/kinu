@@ -319,7 +319,6 @@ export function oneOf<const Values extends readonly string[]>(values: Values) {
   });
 }
 
-/** Every entry of `tools` behind {@link withCheckedInput}. */
 export function withCheckedInputs(tools: ToolSet): ToolSet {
   const checked: ToolSet = {};
 

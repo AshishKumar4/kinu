@@ -36,7 +36,6 @@ export function permitInPlan<Operation extends ToolSet[string]>(operation: Opera
   return Object.assign(operation, permission);
 }
 
-/** The refusal a Plan invocation receives, or null when the operation may proceed. */
 export function workModeRefusal(mode: WorkMode, planAllowed: boolean, operation: string): Refusal | null {
   if ((mode === 'plan' || currentWorkMode() === 'plan') && !planAllowed) {
     return refusalOf(new KinuError('denied', operation + ' has no Plan-safe execution capability'));
