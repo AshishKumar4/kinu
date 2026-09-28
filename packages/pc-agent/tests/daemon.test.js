@@ -988,7 +988,9 @@ describe('daemon checkpoint protocol', () => {
       id: 'rpc-kinuckpt00-1', method: 'exec', sandbox: RAW, params: ['true'],
       checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: DEVICE_HOME },
     }, ws, ctx);
-    expect((await ws.response('rpc-kinuckpt00-1')).result.exitCode).toBe(0);
+    const { result } = await ws.response('rpc-kinuckpt00-1');
+    expect(result.exitCode).toBe(0);
+    expect(result.uncheckpointed).toEqual({ dir: fs.realpathSync(DEVICE_HOME), why: expect.stringContaining('Kinu\'s own directory') });
     handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
     expect((await ws.response('l')).result).toEqual([]);
   });
@@ -1006,7 +1008,11 @@ describe('daemon checkpoint protocol', () => {
         id: 'w-outside', method: 'writeFile', sandbox: scoped, params: [path.join(work, 'a.txt'), 'x'],
         checkpoint: { agent: 'a', turnId: 't1', sessionId: 's', dir: outside },
       }, ws, ctx);
-      expect((await ws.response('w-outside')).result).toEqual({ success: true });
+      // The write lands, and says that no checkpoint covers it.
+      expect((await ws.response('w-outside')).result).toEqual({
+        success: true,
+        uncheckpointed: { dir: outside, why: expect.stringContaining('outside what this device\'s sandbox exposes') },
+      });
       handle({ id: 'l1', method: 'checkpointList', params: ['a'] }, ws, ctx);
       expect((await ws.response('l1')).result.map((entry) => entry.dir)).not.toContain(outside);
 
@@ -1349,9 +1355,8 @@ describe('daemon process under Bun against a local hub', () => {
    * each hardening case below is its own named failure rather than another
    * phase inside the sequence test.
    */
-  async function withDaemon(extraEnv, body) {
-    const root = scratchDir('daemon-case');
-
+  /** `root` is the daemon's KINU_HOME. */
+  async function withDaemon(extraEnv, body, root = scratchDir('daemon-case')) {
     const hub = startFakeHub();
 
     try {
@@ -1537,6 +1542,85 @@ describe('daemon process under Bun against a local hub', () => {
       hub.socket().send(JSON.stringify({ id: 'rpc-sandboxack-1', method: 'execAck', params: ['rpc-sandboxrun-1', 1] }));
       await reply('rpc-sandboxack-1');
     });
+  });
+
+  /** A machine whose owner ran `kinu connect` from ~, consenting the home that holds Kinu's own directory. */
+  function homeRootedMachine() {
+    const machine = fs.realpathSync(scratchDir('daemon-machine'));
+    const root = path.join(machine, '.kinu');
+    const agentHome = path.join(root, 'agents', 'ws-1', 'home');
+    fs.mkdirSync(agentHome, { recursive: true, mode: 0o700 });
+
+    return { machine, root, agentHome, block: { tier: 'sandboxed', agentHome, roots: [machine] } };
+  }
+
+  test('a consented home never shadows the agent home, and undo restores what a command wrote there', async () => {
+    if (process.platform !== 'linux') return;
+    const sandbox = require('../src/sandbox.js');
+
+    if ((await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const { machine, root, agentHome, block } = homeRootedMachine();
+    fs.writeFileSync(path.join(agentHome, 'x'), 'before');
+
+    await withDaemon({ HOME: machine }, async ({ hub, reply }) => {
+      hub.socket().send(JSON.stringify({
+        id: 'rpc-homeroot00-1', method: 'exec', sandbox: block, params: ['printf changed > "$HOME/x"'],
+        checkpoint: { agent: 'ws-1', turnId: 't1', sessionId: 's', dir: null },
+      }));
+      const ran = await reply('rpc-homeroot00-1');
+      expect(ran.error).toBeUndefined();
+      expect(fs.existsSync(path.join(machine, 'x'))).toBe(false);
+      expect(fs.readFileSync(path.join(agentHome, 'x'), 'utf8')).toBe('changed');
+      expect(ran.result.uncheckpointed).toBeUndefined();
+      hub.socket().send(JSON.stringify({ id: 'rpc-homeack000-1', method: 'execAck', params: ['rpc-homeroot00-1', 1] }));
+      await reply('rpc-homeack000-1');
+
+      hub.socket().send(JSON.stringify({ id: 'home-list', method: 'checkpointList', params: ['ws-1', 50, 't1'] }));
+      const [taken] = (await reply('home-list')).result;
+      expect(taken.dir).toBe(agentHome);
+      hub.socket().send(JSON.stringify({ id: 'home-plan', method: 'checkpointPlan', sandbox: block, params: ['ws-1', agentHome, taken.id] }));
+      expect((await reply('home-plan')).result.files).toEqual([{ path: 'x', kind: 'modify' }]);
+      hub.socket().send(JSON.stringify({ id: 'home-restore', method: 'checkpointRestore', sandbox: block, params: ['ws-1', agentHome, taken.id] }));
+      expect((await reply('home-restore')).error).toBeUndefined();
+      expect(fs.readFileSync(path.join(agentHome, 'x'), 'utf8')).toBe('before');
+    }, root);
+  });
+
+  test('a command\'s checkpoint covers its working tree, and one run from the home itself says undo cannot', async () => {
+    if (process.platform !== 'linux') return;
+    const sandbox = require('../src/sandbox.js');
+
+    if ((await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const { machine, root, block } = homeRootedMachine();
+    const project = path.join(machine, 'shop');
+    fs.mkdirSync(path.join(project, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(project, 'src'));
+    fs.writeFileSync(path.join(project, 'README.md'), 'shop');
+
+    await withDaemon({ HOME: machine }, async ({ hub, reply }) => {
+      hub.socket().send(JSON.stringify({
+        id: 'rpc-worktree00-1', method: 'exec', sandbox: block, cwd: path.join(project, 'src'), params: ['printf a > a.txt'],
+        checkpoint: { agent: 'ws-1', turnId: 't1', sessionId: 's', dir: null },
+      }));
+      expect((await reply('rpc-worktree00-1')).result.uncheckpointed).toBeUndefined();
+      hub.socket().send(JSON.stringify({ id: 'tree-list', method: 'checkpointList', params: ['ws-1', 50, 't1'] }));
+      expect((await reply('tree-list')).result.map((entry) => entry.dir)).toEqual([project]);
+
+      hub.socket().send(JSON.stringify({
+        id: 'rpc-homecwd000-1', method: 'exec', sandbox: block, cwd: machine, params: ['printf direct > notes.txt'],
+        checkpoint: { agent: 'ws-1', turnId: 't2', sessionId: 's', dir: null },
+      }));
+      const direct = await reply('rpc-homecwd000-1');
+      expect(fs.readFileSync(path.join(machine, 'notes.txt'), 'utf8')).toBe('direct');
+      expect(direct.result.uncheckpointed).toEqual({ dir: machine, why: expect.stringContaining('home folder itself') });
+      hub.socket().send(JSON.stringify({ id: 'home-cwd-list', method: 'checkpointList', params: ['ws-1', 50, 't2'] }));
+      expect((await reply('home-cwd-list')).result).toEqual([]);
+
+      for (const [ack, id] of [['rpc-treeack000-1', 'rpc-worktree00-1'], ['rpc-homeack001-1', 'rpc-homecwd000-1']]) {
+        hub.socket().send(JSON.stringify({ id: ack, method: 'execAck', params: [id, 1] }));
+        await reply(ack);
+      }
+    }, root);
   });
 
   test('a sandboxed command spills into its own tmp, named as its shell and the file methods name it', async () => {

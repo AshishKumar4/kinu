@@ -255,36 +255,74 @@ describe('the device sandbox, as the kernel enforces it', () => {
       .toThrow('inside Kinu\'s own directory');
   });
 
-  test('a home under /tmp is the agent home inside, exactly as a home under /home is', async () => {
+  test('a home under /tmp does not hide the agent home, as a home under /home does not', async () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     // The first-run tier gives each daemon a HOME of its own under the
     // runner's tmpdir, and the daemon's probe answered it with `probe_failed:
     // sandbox probe failed: bwrap: Can't chdir to /tmp/kinu-first-run-…: No
-    // such file or directory` (measured 2026-09-04). The agent-tmp bind over
-    // `/tmp` came AFTER the agent-home bind and shadowed it, so the home
-    // existed on the machine and not in the namespace. Order is the policy,
-    // and this is the order the policy needs.
+    // such file or directory` (measured 2026-09-04): the agent-tmp bind over
+    // `/tmp` shadowed the agent home. Order is the policy.
     const home = scratchDir('sandbox-tmp-home');
     const run = runSandboxed('pwd; touch "$HOME/marker"; echo reached', { home });
 
     expect(run.stderr).toBe('');
     expect(run.status).toBe(0);
-    expect(run.stdout).toContain(`${home}\nreached`);
-    // `~/marker` is the AGENT's marker: the home path inside the namespace
-    // is the agent home, and the real directory under /tmp is untouched.
+    expect(run.stdout).toContain(`${run.agentHome}\nreached`);
+    // `~/marker` is the AGENT's marker, and the owner's home is untouched.
     expect(fs.existsSync(path.join(run.agentHome, 'marker'))).toBe(true);
     expect(fs.existsSync(path.join(home, 'marker'))).toBe(false);
   });
 
-  test('a shim in ~/.local/bin answers sandboxed, because that is the PATH the plan builds', async () => {
+  test('a consented home never shadows the agent home, and Kinu\'s own directory stays hidden in it', async () => {
+    if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    // `kinu connect` run from ~ consents the home, which holds Kinu's own
+    // directory and, inside it, every workspace's agent home.
+    const home = scratchDir('sandbox-home-root');
+    const deviceHome = path.join(home, '.kinu');
+    const agentHome = path.join(deviceHome, 'agents', 'ws', 'home');
+    const agentTmp = path.join(deviceHome, 'agents', 'ws', 'tmp');
+    const neighbour = path.join(deviceHome, 'agents', 'other', 'home');
+
+    for (const dir of [agentHome, agentTmp, neighbour]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(deviceHome, 'device.json'), '{"token":"pdt_machine_secret"}', { mode: 0o600 });
+    fs.writeFileSync(path.join(neighbour, 'notes.txt'), 'another-workspace-private');
+    fs.writeFileSync(path.join(home, 'shared.txt'), 'shared-with-the-agent\n');
+
+    const plan = sandbox.plan({
+      tier: 'sandboxed', home, agentHome, agentTmp, deviceHome, roots: [home], cwd: agentHome, source: {},
+      command: [
+        'printf agent > "$HOME/x"',
+        'echo "HOME=$HOME"',
+        `cat ${JSON.stringify(path.join(deviceHome, 'device.json'))} ${JSON.stringify(path.join(neighbour, 'notes.txt'))} 2>&1`,
+        `cat ${JSON.stringify(path.join(home, 'shared.txt'))}`,
+        `ls ${JSON.stringify(path.join(deviceHome, 'agents'))}`,
+      ].join('; '),
+    });
+
+    const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
+
+    // The write lands in the agent's own home, which HOME names at its own path.
+    expect(fs.existsSync(path.join(home, 'x'))).toBe(false);
+    expect(fs.readFileSync(path.join(agentHome, 'x'), 'utf8')).toBe('agent');
+    expect(run.stdout).toContain(`HOME=${agentHome}\n`);
+    // The home's own files are what the owner shared; Kinu's directory is not.
+    expect(run.stdout).toContain('shared-with-the-agent');
+    expect(run.stdout).not.toContain('pdt_machine_secret');
+    expect(run.stdout).not.toContain('another-workspace-private');
+    expect(run.stdout.trim().split('\n').at(-1)).toBe('ws');
+    expect(run.stderr).toBe('');
+  });
+
+  test('a shim in a consented home\'s ~/.local/bin answers sandboxed, after the agent\'s own tools', async () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     // The first-run tier tells its machines apart with a `hostname` shim, and
     // the shim has to sit where a sandboxed command looks: the plan rebuilds
-    // PATH from `LINUX_PATH_HEAD` (`~/.local/bin` first) and drops the
-    // daemon's own PATH, so a shim in `~/bin` never runs and `hostname`
-    // answers the real host (measured 2026-09-05). This pins the directory
-    // the tier may use, in the layout the tier runs: a scratch HOME the
-    // machine consented, like each first-run daemon's own.
+    // PATH from `LINUX_PATH_HEAD` (`~/.local/bin` first), the agent home's and
+    // then a consented home's, and drops the daemon's own PATH, so a shim in
+    // `~/bin` never runs and `hostname` answers the real host (measured
+    // 2026-09-05). This pins the directory the tier may use, in the layout the
+    // tier runs: a scratch HOME the machine consented, like each first-run
+    // daemon's own.
     const home = scratchDir('sandbox-shim-home');
     const agentHome = path.join(home, '.kinu', 'agents', 'ws', 'home');
     const agentTmp = path.join(home, '.kinu', 'agents', 'ws', 'tmp');
@@ -309,7 +347,10 @@ describe('the device sandbox, as the kernel enforces it', () => {
 
     expect(pathValue).not.toBeNull();
     const entries = String(pathValue).split(':');
-    expect(entries[0]).toBe(path.join(home, '.local', 'bin'));
+    expect(entries.slice(0, 4)).toEqual([
+      path.join(agentHome, '.local', 'bin'), path.join(agentHome, '.cargo', 'bin'), path.join(agentHome, '.bun', 'bin'),
+      path.join(home, '.local', 'bin'),
+    ]);
     expect(entries).not.toContain(path.join(home, 'bin'));
     const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
     expect(run.status).toBe(0);
@@ -469,7 +510,7 @@ describe('one policy, two enforcers', () => {
   test('a path the sandbox cannot see is a path the file methods refuse', () => {
     const policy = view();
 
-    for (const invisible of ['/home/other/notes', '/root/.ssh/id_rsa', '/run/user/1000/keyring', '/mnt/c/Users/me/x']) {
+    for (const invisible of ['/home/other/notes', '/home/dev/notes.md', '/root/.ssh/id_rsa', '/run/user/1000/keyring', '/mnt/c/Users/me/x']) {
       expect(policy.classify(invisible).access).toBe(sandbox.VIEW_INVISIBLE);
       expect(() => policy.resolvePath(invisible, 'read')).toThrow('does not expose');
     }
@@ -477,15 +518,12 @@ describe('one policy, two enforcers', () => {
 
   const writablePaths = [
     {
-      // The file methods run OUTSIDE the namespace, so `~/x` has to be
-      // translated; inside, the two are the same path.
-      name: 'the agent home answers for the real home, because that is where it is mounted',
-      asked: '/home/dev/notes.md',
+      // The owner's home outside the consented roots is not the agent's.
+      name: 'the agent home is its own path, to the file methods as to the command',
+      asked: '/home/dev/.kinu/agents/ws-1/home/notes.md',
       outside: '/home/dev/.kinu/agents/ws-1/home/notes.md',
     },
     {
-      // Decided BEFORE the home swap: a root inside the real home is re-bound
-      // over the swapped home and is reachable at its own path.
       name: 'a consented root under the home is itself, not the agent home',
       asked: '/home/dev/work/client/main.py',
       outside: '/home/dev/work/client/main.py',
@@ -500,7 +538,7 @@ describe('one policy, two enforcers', () => {
     });
   }
 
-  test('Kinu\'s own directory is refused by its own path, and ~/.kinu is the agent\'s own', () => {
+  test('Kinu\'s own directory is refused by its own path, the agent home inside it excepted', () => {
     const elsewhere = sandbox.viewFor({
       platform: 'linux',
       home: '/home/dev',
@@ -514,9 +552,8 @@ describe('one policy, two enforcers', () => {
     // The agent home under it is still reachable: the fence is the store, not
     // the prefix.
     expect(elsewhere.resolvePath('/var/lib/kinu/agents/ws-1/home/x', 'write')).toBe('/var/lib/kinu/agents/ws-1/home/x');
-    // Under the home, `~/.kinu` inside the namespace is the agent home's own
-    // `.kinu`, because the agent home is mounted over the home.
-    expect(view().resolvePath('/home/dev/.kinu/config.json', 'read')).toBe('/home/dev/.kinu/agents/ws-1/home/.kinu/config.json');
+    expect(() => view().resolvePath('/home/dev/.kinu/config.json', 'read')).toThrow('inside Kinu\'s own directory');
+    expect(() => view().resolvePath('/home/dev/.kinu/agents/ws-2/home/notes.md', 'read')).toThrow('inside Kinu\'s own directory');
   });
 
   test('the system trees are readable and refuse a write, like the kernel', () => {
@@ -557,9 +594,9 @@ describe('the file methods read what the command reads', () => {
     fs.writeFileSync(secret, 'owner-private-material', { mode: 0o600 });
     fs.symlinkSync(secret, path.join(agentHome, 'escape'));
 
-    // `~/escape` is the agent's own entry, and the entry points at the owner's
-    // real file: serving it would read what the shell never sees.
-    expect(() => view().resolvePath(path.join(home, 'escape'), 'read')).toThrow('does not expose');
+    // The entry is the agent's own and points at the owner's real file:
+    // serving it would read what the shell never sees.
+    expect(() => view().resolvePath(path.join(agentHome, 'escape'), 'read')).toThrow('does not expose');
   });
 
   test('the system trees stay readable and the agent\'s temp answers for /var/tmp', () => {

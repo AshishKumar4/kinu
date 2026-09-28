@@ -131,6 +131,7 @@ const DeviceExecResultSchema = v.object({
   stdout: v.string(),
   stderr: v.string(),
   exitCode: v.number(),
+  uncheckpointed: v.optional(v.object({ dir: v.string(), why: v.string() })),
 });
 
 const DeviceListResultSchema = v.array(JsonValueSchema);

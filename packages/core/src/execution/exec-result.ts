@@ -16,12 +16,18 @@ const RefusalSchema = v.object({
 /** A file-plane verdict (`tools/file-tool.ts` `failure()`): unmet precondition, not an error class. */
 const FileVerdictSchema = v.object({ reason: v.picklist(FILE_REFUSAL_REASONS), error: v.string() });
 
+interface Uncheckpointed {
+  readonly dir: string;
+  readonly why: string;
+}
+
 /** The shape every transport settles a command into. */
 export interface ExecOutcome {
   readonly stdout?: string;
   readonly stderr?: string;
   readonly exitCode?: number;
   readonly refusal?: Refusal;
+  readonly uncheckpointed?: Uncheckpointed;
 }
 
 const STDOUT_LABEL = '--- stdout ---';
@@ -65,6 +71,15 @@ export function exposedPortText(url: string, port: number, route: PreviewRouteCh
 }
 
 export function formatExecResult(result: ExecOutcome): string {
+  const output = formatOutput(result);
+
+  return result.uncheckpointed === undefined || result.refusal !== undefined
+    ? output
+    : `${output}\nNo checkpoint covers ${result.uncheckpointed.dir}: ${result.uncheckpointed.why}, `
+      + 'so undo cannot restore what this command changed there.';
+}
+
+function formatOutput(result: ExecOutcome): string {
   if (result.refusal !== undefined) return JSON.stringify(result.refusal);
   const stdout = result.stdout ?? '';
   const stderr = result.stderr ?? '';
