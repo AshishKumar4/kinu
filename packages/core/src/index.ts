@@ -2025,7 +2025,6 @@ export {
   DEFAULT_ADVISOR_MIN_SEVERITY,
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
-  ADVISOR_LANE_FIBER,
   reviewRecordedTurn,
   AdvisorRecoverySnapshotSchema,
   buildAdvisorPrompt,

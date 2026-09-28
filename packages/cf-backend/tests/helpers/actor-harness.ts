@@ -754,18 +754,20 @@ export function storedChat(
   return historyOver(harness, actor).transcript(CHAT_SESSION_ID).history();
 }
 
-/** A settled response's improvement-lanes effect ran: its row completed, or the whole terminal
- *  sequence closed and pruned it. Other effects of the sequence may still be owed. */
+/** A settled response's improvement lanes and advisor review ran: their rows completed, or the whole
+ *  terminal sequence closed and pruned them. Other effects of the sequence may still be owed. */
 export function improvementLanesRan(db: Database, messageId: string): boolean {
-  const effect = db.query<{ n: number }, [string]>(
-    "SELECT COUNT(*) AS n FROM terminal_effects WHERE effect_name = 'improvement_lanes' AND sequence_id LIKE ? AND status = 'completed'",
-  ).get(`%/${messageId}`)?.n === 1;
+  // The review is its own detached row: the lanes have run once neither row is still owed.
+  const effect = db.query<{ n: number; owed: number }, [string]>(
+    `SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE status != 'completed') AS owed FROM terminal_effects
+     WHERE effect_name IN ('improvement_lanes', 'advisor_review') AND sequence_id LIKE ?`,
+  ).get(`%/${messageId}`);
 
   const closed = db.query<{ n: number }, [string]>(
     'SELECT COUNT(*) AS n FROM tool_effect_claims WHERE normalized_call_id = ? AND result_json IS NOT NULL',
   ).get(`terminal:response:${messageId}`)?.n === 1;
 
-  return effect || closed;
+  return (effect !== null && effect.n > 0 && effect.owed === 0) || closed;
 }
 
 /** Loggers suites record with. A settle swaps in its own sink to catch close failures, and forwards to these. */

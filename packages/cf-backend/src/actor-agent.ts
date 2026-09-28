@@ -197,7 +197,7 @@ import {
   terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
   turnRecordTerminalEffect, eventDrainTerminalEffect, shadowTrialTerminalEffect,
   RunEndReasonSchema, WorkModeSchema,
-  CompletedTurnSchema, AdvisorRecoverySnapshotSchema,
+  AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
 import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
@@ -1281,13 +1281,10 @@ export abstract class ActorAgent extends Agent<Env> {
       event_drain: eventDrainTerminalEffect(this.orch),
 
       improvement_lanes: terminalEffect({
-        input: v.object({
-          status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema,
-          advisor: JsonValueSchema,
-        }),
+        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
         // Lanes read durable queues on re-entry (per-turn snapshots do not survive), and the verdict
         // uses the recorded mode so a fresh activation's default cannot open an unearned lane.
-        run: async ({ status, turn, workMode, advisor }) => {
+        run: async ({ status, workMode }) => {
           this.warmUserMcpInBackground();
 
           if (!this.orch.improvementLanesOpen(status, workMode)) {
@@ -1295,15 +1292,24 @@ export abstract class ActorAgent extends Agent<Env> {
           }
 
           this.settleEvolutionInBackground();
-          const snapshot = v.parse(AdvisorRecoverySnapshotSchema, advisor);
-          // Awaited to the lane's checkpoint, not its finish: `runFiber` awaits `keepAlive()` before its
-          // body, and a later turn's tool set must not bleed into this review.
-          await this.actorSession.startAdvisorLane({
-            turn: v.parse(CompletedTurnSchema, turn),
-            snapshot: advisor,
-            carry: (name, body) => this.runFiber(name, body),
-            review: async () => { await this.runAdvisorReview(snapshot); },
-          });
+
+          return { status: 'completed' };
+        },
+      }),
+
+      // The snapshot is the row's input, so a replay reviews the tool surface the turn had, and a note
+      // already recorded for the turn is never reviewed again.
+      advisor_review: terminalEffect({
+        input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
+        run: async ({ status, workMode, advisor }) => {
+          const turnId = advisor.turn.turnId;
+
+          if (!this.actorSession.reviewsTurns || !this.orch.improvementLanesOpen(status, workMode)
+            || (turnId !== undefined && this.engine.hasAdvisorNoteForTurn(turnId))) {
+            return { status: 'completed' };
+          }
+
+          await this.runAdvisorReview(advisor);
 
           return { status: 'completed' };
         },
@@ -4592,8 +4598,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return {
       jobs: this.jobRunner,
       runDueSessionEvolution: () => this.orch.runDueSessionEvolution(),
-      hasAdvisorNoteForTurn: (turnId) => this.engine.hasAdvisorNoteForTurn(turnId),
-      reviewAdvisorSnapshot: (snapshot) => this.runAdvisorReview(snapshot),
       armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
       deliverSignal: (signal) => this.orch.inbox.send(signal),
       redrive: (lane, checkpoint, body) => this.redriveRecoveredLane(lane, checkpoint, body),

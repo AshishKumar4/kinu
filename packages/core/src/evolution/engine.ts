@@ -358,7 +358,7 @@ export class EvolutionEngine {
   }
 
   /**
-     * Idempotency guard for a re-entered advisor lane: the note row is the only
+     * Idempotency guard for a replayed `advisor_review` effect: the note row is the only
      * durable evidence that the review completed.
      */
   hasAdvisorNoteForTurn(turnId: string): boolean {

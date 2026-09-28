@@ -29,8 +29,8 @@ import type { VFS } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
 import type { CompletedTurn } from '../evolution/types';
 import {
-  reviewRecordedTurn, startAdvisorLane,
-  type AdvisorLaneStart, type AdvisorRecoverySnapshot, type AdvisorDisposition,
+  reviewRecordedTurn,
+  type AdvisorRecoverySnapshot, type AdvisorDisposition,
 } from '../advisor/review';
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { resolveModelRoute } from '../profiles/model-route';
@@ -259,10 +259,9 @@ export class ActorSession {
     };
   }
 
-  startAdvisorLane(lane: AdvisorLaneStart): Promise<void> {
-    if (this.runtime.advisorLlm === undefined || !this.advisorEnabled) return Promise.resolve();
-
-    return startAdvisorLane({ sql: this.runtime.storage.sql, actor: this.runtime.actor }, lane);
+  /** Off by default: the owner's switch and a wired reviewer model both decide. */
+  get reviewsTurns(): boolean {
+    return this.runtime.advisorLlm !== undefined && this.advisorEnabled;
   }
 
   /** Per-turn feedback never calls recordTurn or changes the learning window. */

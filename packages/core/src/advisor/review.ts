@@ -2,9 +2,8 @@
 // Stateless: notes, LLM, delivery and recording arrive as arguments, so both backends share runAdvisorLane.
 
 import * as v from 'valibot';
-import type { FiberCtx, LLM, SqlExecutor } from '../types/primitives';
+import type { LLM } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import type { CompletedTurn, ToolCallRecord } from '../evolution/types';
 import { CompletedTurnSchema } from '../evolution/session-window';
@@ -436,79 +435,7 @@ async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition
   return 'deliver';
 }
 
-/** One fiber name both backends dispatch recovery on. */
-export const ADVISOR_LANE_FIBER = 'advisor:review';
-
-/** Marks the lane recoverable, not finished: from the checkpoint on, a second lane would be a duplicate review. */
-const ADVISOR_LANE_SCOPE = 'advisor_lane';
-
-/** Null without a durable id: a fabricated key would be shared by every such turn. */
-function advisorLaneKey(turn: Pick<CompletedTurn, 'turnId'>): string | null {
-  return turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
-}
-
-/** Started means checkpointed; a terminal replay after that must not open a second lane. */
-function advisorLaneStarted(
-  sql: SqlExecutor, actor: ActorHandle, turn: Pick<CompletedTurn, 'turnId'>,
-): boolean {
-  const key = advisorLaneKey(turn);
-
-  return key !== null && effectAlreadyDone(sql, actor, ADVISOR_LANE_SCOPE, key);
-}
-
-/** Written adjacent to the stash, the instant a second lane becomes a duplicate. */
-function markAdvisorLaneStarted(
-  sql: SqlExecutor, actor: ActorHandle, turn: Pick<CompletedTurn, 'turnId'>,
-): void {
-  const key = advisorLaneKey(turn);
-
-  if (key !== null) recordEffectDone(sql, actor, { scope: ADVISOR_LANE_SCOPE, key: key });
-}
-
-export interface AdvisorLaneStart {
-  readonly turn: Pick<CompletedTurn, 'turnId'>;
-  readonly snapshot: JsonValue;
-  /** An Agents SDK durable fiber on a Durable Object, a process-tracked fiber on the CLI. */
-  readonly carry: (name: string, body: (ctx: Pick<FiberCtx, 'stash'>) => Promise<void>) => Promise<void>;
-  readonly review: () => Promise<void>;
-}
-
-/** Resolves at the checkpoint, from which the lane recovers on its own; a lane that dies before it rejects,
- *  keeping the row owed. */
-export function startAdvisorLane(
-  store: { readonly sql: SqlExecutor; readonly actor: ActorHandle }, lane: AdvisorLaneStart,
-): Promise<void> {
-  if (advisorLaneStarted(store.sql, store.actor, lane.turn)) return Promise.resolve();
-  const checkpointed = Promise.withResolvers<void>();
-
-  lane.carry(ADVISOR_LANE_FIBER, async (ctx) => {
-    try {
-      ctx.stash(lane.snapshot);
-    } catch (cause) {
-      const failure = toKinuError({
-        doing: 'checkpointing the advisor review so an interruption can resume it', cause, otherwise: 'io',
-      });
-
-      diagnostics.failure('advisor.snapshot_failed', failure, { turnId: lane.turn.turnId ?? '(none)' });
-      checkpointed.reject(failure);
-      throw failure;
-    }
-
-    markAdvisorLaneStarted(store.sql, store.actor, lane.turn);
-    checkpointed.resolve();
-    await lane.review();
-  }).catch((...rejection: [unknown]) => {
-    // A carrier that never ran the body leaves the row owed.
-    const failure = toKinuError({ doing: 'running the advisor review lane', cause: rejection[0], otherwise: 'unavailable' });
-
-    diagnostics.failure('advisor.lane_failed', failure);
-    checkpointed.reject(failure);
-  });
-
-  return checkpointed.promise;
-}
-
-/** The one review body live lanes and recovery run. Governed off the turn's labels, not the mission active later.
+/** The one review body the `advisor_review` terminal effect runs, first time and on replay. Governed off the turn's labels, not the mission active later.
  *  Transient failures retry up to {@link ADVISOR_REVIEW_MAX_ATTEMPTS}; exhausted or unclassified answers null. */
 export async function reviewRecordedTurn(deps: {
   readonly snapshot: AdvisorRecoverySnapshot;

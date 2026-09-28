@@ -80,6 +80,8 @@ const TERMINAL_EFFECT_NAMES = [
   // `output_continuation` are mutually exclusive.
   'turn_end_extensions', 'overflow_retry', 'output_continuation', 'task_reminder',
   'turn_record', 'event_drain', 'improvement_lanes',
+  // Detached: the review is a model call the next turn must not wait on; a replay finds its note already recorded.
+  'advisor_review',
   // Its own row: a full queue is a legitimate refusal, and the lanes' model calls must not wait on it.
   'shadow_trial',
   'sleep_time', 'auto_title', 'auto_gepa',
