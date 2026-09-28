@@ -25,7 +25,7 @@ import {
   type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
-import { isWorkspaceTerminal, publicText, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
+import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
 import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
@@ -126,6 +126,7 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
+  readWorkspaceAgents, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
@@ -380,12 +381,12 @@ function clampLimit(requested: number | undefined, max: number): number {
 /** agents 0.22 reads this key back at start when `ctx.id` has no name. */
 const PERSISTED_NAME_KEY = '__ps_name';
 
-/** A terminal that cannot open: the chain goes to diagnostics, the pane reads the refusal. */
+/** A terminal that cannot open: the owner's pane reads the whole chain. */
 function terminalRefusal(failure: { doing: string; cause: unknown }): string {
   const error = authoredRefusal({ ...failure });
   diagnostics.failure('terminal.prepare_failed', error);
 
-  return publicText(error);
+  return renderThrownChain({ cause: error });
 }
 
 interface HostedTarget {
@@ -703,7 +704,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       exec: this.boundExec(),
       directory: this.workspaceActors(),
       transaction: (body) => this.ctx.storage.transactionSync(body),
-      roster: (actor) => new SubordinateRosterStore(this.ctx.storage.sql, actor.handle),
+      roster: (actor) => new SubordinateRosterStore(this.watchedExec, actor.handle),
       vfs: () => this.rt.storage.vfs,
       // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
       // surface are framed from it.
@@ -953,7 +954,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => subordinateDelegatesOf(
-        new SubordinateRosterStore(this.ctx.storage.sql, actor.handle).list(),
+        new SubordinateRosterStore(this.watchedExec, actor.handle).list(),
       ),
     });
   }
@@ -1842,7 +1843,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private rosterOf(parent: ActorHandle): SubordinateRosterStore {
-    return parent.actorId === this.actorHandle().actorId ? this.subordinateRoster : new SubordinateRosterStore(this.ctx.storage.sql, parent);
+    return parent.actorId === this.actorHandle().actorId ? this.subordinateRoster : new SubordinateRosterStore(this.watchedExec, parent);
   }
 
   protected override hostedWindowName(actorId: string): string | null {
@@ -2681,6 +2682,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async clearBackgroundJobs(): Promise<{ ok: boolean }> {
     return this.countJobOperation('clear', await clearBackgroundJobs(this.jobs));
+  }
+
+  @callable()
+  async listWorkspaceAgents(): Promise<PanelAgent[]> {
+    return readWorkspaceAgents({
+      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main',
+      actors: this.workspaceActors().list({ retired: true }),
+    });
   }
 
   /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */
@@ -3899,8 +3908,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** One branch's transcript across both fork mechanisms; core picks the store, not the client.
    *  See read-models/node-transcript.ts for what each store can report. */
   @callable()
-  async getNodeTranscript(runId: string, nodeId: string, request?: PageRequest): Promise<NodeTranscriptView | null> {
-    return readNodeTranscript(this.boundSql, this.actorHandle(), { runId, nodeId }, request ?? {});
+  /** `owner`: the path of the agent whose swarm it is. */
+  async getNodeTranscript(runId: string, nodeId: string, request?: PageRequest, owner?: string): Promise<NodeTranscriptView | null> {
+    const actor = owner === undefined ? this.actorHandle() : this.hostedTarget(owner)?.handle;
+
+    return actor === undefined ? null : readNodeTranscript(this.boundSql, actor, { runId, nodeId }, request ?? {});
   }
 
   /**

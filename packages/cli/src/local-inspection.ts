@@ -81,7 +81,6 @@ import {
   setReasoningEffort,
   decodeJsonValue,
   parseJsonValue,
-  type SqlExec,
   listRecordObjectives,
   listRecordCells,
   readRecordCell,
@@ -146,12 +145,9 @@ export interface LocalExecResult {
 export interface LocalAgentInfoSnapshot {
   name: string;
   purpose: string;
-  soul: string;
   scaffoldVersion: number;
-  craftedToolCount: number;
   searchNodeCount: number;
   taskCount: number;
-  memorySize: number;
   createdAt: number;
   conversationCount: number;
   model: string | null;
@@ -161,11 +157,9 @@ export interface LocalAgentInfoSnapshot {
 interface LocalStatus {
   name: string | null;
   purpose: string;
-  soul: string;
   createdAt: number | null;
   scaffoldVersion: number;
   searchNodeCount: number;
-  craftedToolCount: number;
   messageCount: number;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
@@ -223,15 +217,11 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
     return {
       name: status.name ?? name,
       purpose: status.purpose,
-      soul: status.soul,
       scaffoldVersion: status.scaffoldVersion,
-      craftedToolCount: status.craftedToolCount,
       searchNodeCount: status.searchNodeCount,
       taskCount: actor && tableExists(db, 'task_history')
         ? countOf(db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actor.actorId)
         : 0,
-      // Needs a filesystem walk this path may not open (see getLocalStatus).
-      memorySize: 0,
       createdAt: status.createdAt ?? 0,
       conversationCount: actor && tableExists(db, 'conversation_entries')
         ? countOf(
@@ -304,7 +294,7 @@ export function listLocalEvents(name: string, opts: { variant?: string; since?: 
 
     if (opts.since) filter.since = opts.since;
 
-    return new EventLog(hubSql(db), actor).query(filter);
+    return new EventLog(makeSqlExec(db), actor).query(filter);
   });
 }
 
@@ -711,7 +701,7 @@ export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
 
     if (!actor || !tableExists(db, 'triggers')) return { triggers: [] };
 
-    return { triggers: new TriggerRegistry(hubSql(db), actor, NOOP_ALARM).list() };
+    return { triggers: new TriggerRegistry(makeSqlExec(db), actor, NOOP_ALARM).list() };
   });
 }
 
@@ -721,16 +711,16 @@ export async function cancelLocalTrigger(name: string, id: string): Promise<{ ch
 
     if (!actor || !tableExists(db, 'triggers')) return { changed: false };
 
-    return { changed: new TriggerRegistry(hubSql(db), actor, NOOP_ALARM).revoke(id, Date.now()) };
+    return { changed: new TriggerRegistry(makeSqlExec(db), actor, NOOP_ALARM).revoke(id, Date.now()) };
   });
 }
 
 export async function createLocalTimerTrigger(name: string, input: { cron?: string; atMs?: number; label?: string }): Promise<TimerTrigger> {
   return withLocalWritableDb(name, (db) => {
-    initEventsHubTables(hubSql(db));
+    initEventsHubTables(makeSqlExec(db));
     const actor = openWorkspaceMainActor(makeSql(db));
 
-    return createTimerTrigger(new TriggerRegistry(hubSql(db), actor, NOOP_ALARM), { ...input, trust: 'owner' }, Date.now());
+    return createTimerTrigger(new TriggerRegistry(makeSqlExec(db), actor, NOOP_ALARM), { ...input, trust: 'owner' }, Date.now());
   });
 }
 
@@ -986,13 +976,8 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
     return {
       name: row.name,
       purpose: '',
-      soul: '',
       scaffoldVersion: tableExists(db, 'scaffold_versions')
         ? currentScaffoldVersion(db, actorId)
-        : 0,
-      // `crafted_tools` is one catalog per workspace (identity/schema.ts); `search_nodes` is actor-scoped.
-      craftedToolCount: tableExists(db, 'crafted_tools')
-        ? countOf(db, `SELECT COUNT(*) AS c FROM crafted_tools`)
         : 0,
       searchNodeCount: tableExists(db, 'search_nodes')
         ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId)
@@ -1000,8 +985,6 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       taskCount: tableExists(db, 'task_history')
         ? countOf(db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actorId)
         : 0,
-      // Needs a filesystem walk; this path opens the database read-only.
-      memorySize: 0,
       createdAt: row.createdAt,
       conversationCount: tableExists(db, 'conversation_entries')
         ? countOf(db,
@@ -1031,7 +1014,6 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
   return {
     name: identity?.name ?? null,
     purpose: mission ?? '',
-    soul: '',
     createdAt: identity?.created_at ?? null,
     // The live version, not MAX(version), which would include a pending proposal.
     scaffoldVersion: actor && tableExists(db, 'scaffold_versions')
@@ -1039,9 +1021,6 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
       : 0,
     searchNodeCount: actor && tableExists(db, 'search_nodes')
       ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actor.actorId)
-      : 0,
-    craftedToolCount: tableExists(db, 'crafted_tools')
-      ? countOf(db, `SELECT COUNT(*) AS c FROM crafted_tools`)
       : 0,
     messageCount: actor && tableExists(db, 'conversation_entries')
       ? countOf(db, `SELECT COUNT(*) AS c FROM conversation_entries WHERE actor_id = ?`, actor.actorId)
@@ -1070,10 +1049,6 @@ function getLocalToolSummary(db: SqliteDb): LocalToolSummary {
 const NOOP_ALARM: AlarmScheduler = {
   async scheduleAt() {},
 };
-
-function hubSql(db: SqliteDb): SqlExec {
-  return makeSqlExec(db);
-}
 
 function parseJson(value: string | null): JsonValue {
   if (value == null) return null;

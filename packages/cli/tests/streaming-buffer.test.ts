@@ -10,7 +10,6 @@ describe('TUI streaming buffer', () => {
 
     const buffer = createStreamingBufferController(
       (value) => updates.push(value),
-      50,
       {
         setTimeout(callback) {
           scheduled.push(callback);
@@ -33,7 +32,7 @@ describe('TUI streaming buffer', () => {
     expect(updates).toEqual([null, 'hello']);
 
     buffer.append(' world');
-    buffer.finish('hello world');
+    buffer.finish();
     expect(updates).toEqual([null, 'hello', 'hello world']);
 
     buffer.clear();

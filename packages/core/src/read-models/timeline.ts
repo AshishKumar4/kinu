@@ -14,7 +14,7 @@ import { boundedInt } from '../utils/bounds';
 
 export type TimelineKind =
   | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'mcts' | 'scaffold' | 'shadow-eval'
-  | 'craft' | 'reflection' | 'head-split' | 'head-merge' | 'gepa' | 'skills'
+  | 'craft' | 'reflection' | 'head-split' | 'head-merge' | 'gepa'
   | 'curriculum' | 'trigger' | 'event-ingress' | 'background' | 'error' | 'abort' | 'recovery' | 'other';
 
 export interface TimelineSpan {
@@ -32,16 +32,9 @@ export interface TimelineSpan {
   rawType?: string;
 }
 
-/** `think` is the pre-unification exploration tool; stored run events keep its kind. `agents`
- *  stays a plain tool-call: run events carry no arguments to tell a fork from a hire. */
+/** `agents` stays a plain tool-call: run events carry no arguments to tell a swarm from a hire. */
 export function toolKindFor(name: string): TimelineKind {
-  if (name === 'shell') return 'runtime-exec';
-
-  if (name === 'think') return 'mcts';
-
-  if (name === 'skills') return 'skills';
-
-  return 'tool-call';
+  return name === 'shell' ? 'runtime-exec' : 'tool-call';
 }
 
 export function classifyEvolutionType(type: string): TimelineKind {

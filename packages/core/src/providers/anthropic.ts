@@ -9,6 +9,7 @@ import { countAnthropicInputTokens } from './anthropic-count';
 import { warmAnthropicCache } from './anthropic-warm';
 import type { JsonObject } from '../utils/json';
 import type { ReasoningEffort } from './reasoning-effort';
+import { ANTHROPIC_EFFORTS } from './effort';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
 
@@ -22,12 +23,10 @@ export const ANTHROPIC_FAST_MODEL = 'claude-haiku-4-5';
 /** Anthropic rejects more than 4 `cache_control` blocks: tools, system, and two on the tail. */
 export const ANTHROPIC_MAX_BREAKPOINTS = 4;
 
-const FIVE: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-
 const FOUR: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'max'];
 
 const FALLBACK_MODELS: ModelInfo[] = [
-  { id: ANTHROPIC_DEFAULT_MODEL, label: 'Claude Opus 4.7',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: FIVE },
+  { id: ANTHROPIC_DEFAULT_MODEL, label: 'Claude Opus 4.7',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: ANTHROPIC_EFFORTS },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6',   capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: FOUR },
   { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5',    capabilities: ['tools', 'streaming', 'vision'], contextWindow: 200_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: [] },
 ];

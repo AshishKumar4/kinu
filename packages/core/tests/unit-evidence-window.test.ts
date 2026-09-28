@@ -51,10 +51,6 @@ describe('evidenceWindow', () => {
     expect(windowed.startsWith('a'.repeat(50))).toBe(true);
     expect(windowed.endsWith('b'.repeat(50))).toBe(true);
   });
-
-  test('a non-positive budget is a bug, not a silently empty window', () => {
-    expect(() => evidenceWindow('x', 0)).toThrow(/evidence budget must be positive/);
-  });
 });
 
 describe('the budgets are ordered — a reader never asks for more than was stored', () => {

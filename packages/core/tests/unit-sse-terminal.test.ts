@@ -1,12 +1,7 @@
-/**
- * `withSseTerminal`: end an SSE stream at `data: [DONE]` with the upstream reader cancelled, and give up on a
- * producer that holds the socket open while sending no content.
- */
+/** `withSseTerminal`: end an SSE stream at `data: [DONE]` with the upstream reader cancelled. */
 import { describe, test, expect } from 'bun:test';
-import { handClock } from '@kinu.run/test-utils';
 import { withSseTerminal } from '../src/providers/sse-terminal';
 import { asFetchFunction } from '../src/providers/fetch-shim';
-import type { Clock } from '../src/types/clock';
 
 const encoder = new TextEncoder();
 
@@ -76,29 +71,6 @@ async function through(upstream: Scripted): Promise<Response> {
   const fetchImpl = asFetchFunction(async () => eventStream(upstream));
 
   return withSseTerminal(fetchImpl)('http://fake.invalid/v1/chat/completions');
-}
-
-/** The wrapper over a scripted upstream on a clock the test advances. */
-function throughClock(upstream: Scripted, clock: Clock): Promise<Response> {
-  const fetchImpl = asFetchFunction(async () => eventStream(upstream));
-
-  return withSseTerminal(fetchImpl, clock)('http://fake.invalid/v1/chat/completions');
-}
-
-/** One whole SSE message off the wrapper, which forwards a line at a time. */
-async function readMessage(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
-  const decoder = new TextDecoder();
-  let text = '';
-
-  for (;;) {
-    const next = await reader.read();
-
-    if (next.done || text.endsWith('\n\n')) return text;
-
-    text += decoder.decode(next.value, { stream: true });
-
-    if (text.endsWith('\n\n')) return text;
-  }
 }
 
 describe('withSseTerminal', () => {
@@ -276,93 +248,5 @@ describe('withSseTerminal', () => {
     const json = await wrapped('http://fake.invalid/v1/models');
 
     expect(await json.json()).toEqual({ data: [{ id: 'probe' }] });
-  });
-});
-
-/**
- * A producer that sends nothing, run to its stall. The window is measured, not imported, so this reads what the
- * terminal actually armed.
- */
-async function silentProducerStall(): Promise<{ window: number; calls: readonly string[] }> {
-  const clock = handClock();
-  const upstream = scripted();
-  const response = await throughClock(upstream, clock);
-  const reader = (response.body ?? new ReadableStream<Uint8Array>()).getReader();
-  const stalled = readMessage(reader);
-
-  await clock.whenArmed(1);
-  clock.tick();
-  await expect(stalled).rejects.toMatchObject({ code: 'timeout' });
-
-  return { window: clock.now(), calls: upstream.calls };
-}
-
-describe('a producer that holds the socket open without sending content', () => {
-  test('a producer that sends nothing at all is given up on, and the upstream cancelled', async () => {
-    expect((await silentProducerStall()).calls).toEqual(['cancelled']);
-  });
-
-  test('a keepalive comment does not reset the content deadline, and the stall is named', async () => {
-    const { window } = await silentProducerStall();
-    const clock = handClock();
-    const upstream = scripted();
-    const response = await throughClock(upstream, clock);
-    const reader = (response.body ?? new ReadableStream<Uint8Array>()).getReader();
-    const content = readMessage(reader);
-
-    await clock.whenArmed(1);
-    upstream.enqueue(sseData('{"content":"hello"}'));
-    expect(await content).toBe(sseData('{"content":"hello"}'));
-
-    // A keepalive comment line reaches the consumer but buys the producer no time.
-    const keepalive = readMessage(reader);
-
-    await clock.whenArmed(2);
-    clock.advance(60_000);
-    upstream.enqueue(': keepalive\n\n');
-    expect(await keepalive).toBe(': keepalive\n\n');
-
-    const stalled = readMessage(reader);
-
-    await clock.whenArmed(3);
-    clock.tick();
-
-    // Fired one window after the content frame at 0, not after the keepalive.
-    expect(clock.now()).toBe(window);
-    await expect(stalled).rejects.toMatchObject({
-      code: 'timeout',
-      message: expect.stringContaining(new Date(0).toISOString()),
-    });
-    expect(upstream.calls).toEqual(['cancelled']);
-  });
-
-  test('content keeps the stream alive however long it runs', async () => {
-    const { window } = await silentProducerStall();
-    const clock = handClock();
-    const upstream = scripted();
-    const response = await throughClock(upstream, clock);
-    const reader = (response.body ?? new ReadableStream<Uint8Array>()).getReader();
-    let armed = 0;
-
-    // A slow reasoning model is not a stalled one: content inside each window keeps it alive.
-    for (let frame = 0; frame < 4; frame += 1) {
-      const next = readMessage(reader);
-
-      armed += 1;
-      await clock.whenArmed(armed);
-      clock.advance(window - 1);
-      upstream.enqueue(sseData(`{"content":"${String(frame)}"}`));
-      expect(await next).toBe(sseData(`{"content":"${String(frame)}"}`));
-    }
-
-    expect(upstream.calls).toHaveLength(0);
-
-    const done = readMessage(reader);
-
-    await clock.whenArmed(armed + 1);
-    upstream.enqueue(sseData('[DONE]'));
-    expect(await done).toBe(sseData('[DONE]'));
-    expect((await reader.read()).done).toBe(true);
-    expect(upstream.calls).toEqual(['cancelled']);
   });
 });

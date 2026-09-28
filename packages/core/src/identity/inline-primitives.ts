@@ -4,13 +4,11 @@ import { createWorkspace as createWorkspaceFilesystem, workspaceGenerationStorag
 import type { WorkspaceBundle, WorkspaceOptions } from '../vfs/nimbus-workspace';
 import { readTailWithVfsOps, type VfsNativeReads } from '../vfs/mounts';
 import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
-import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils/stores';
+import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
 import type { CraftStore } from '../types/agent-runtime';
 import type {
-  Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExec, SqlExecutor, SqlValue, Storage, VFS,
+  Executor, Memory, RawSqlExec, SqlExec, SqlExecutor, SqlValue, Storage, VFS,
 } from '../types/primitives';
-import type { ActorHandle } from './actor-handle';
-import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
 import * as v from 'valibot';
@@ -128,7 +126,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
 }
 
 export function createInlineCraftStore(db: AgentDatabase): CraftStore {
-  return craftStoreView(new AgentUtilsCraftStore(wrapDatabase(db).sql));
+  return new AgentUtilsCraftStore(wrapDatabase(db).sql);
 }
 
 export function createInlineExecutor(): Executor {
@@ -148,30 +146,6 @@ export function createInlineExecutor(): Executor {
           error: renderThrownChain({ cause: error }),
         };
       }
-    },
-  };
-}
-
-export function createInlineSchedule(sql: SqlExecutor, actor: ActorHandle): Schedule {
-  // Fiber names repeat across actors, so rows are keyed by actor.
-  const actorId = actor.actorId;
-
-  return {
-    after: async (_ms, fn) => { await fn(); },
-    cron: async () => {},
-    fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
-      actor.assertCurrent();
-      const id = nanoid();
-      void sql`INSERT INTO fibers (actor_id, id, name, snapshot, created_at)
-        VALUES (${actorId}, ${id}, ${name}, ${null}, ${Date.now()})`;
-
-      const stash: FiberCtx['stash'] = (data) => {
-        void sql`UPDATE fibers SET snapshot = ${JSON.stringify(data)}
-          WHERE actor_id = ${actorId} AND id = ${id}`;
-      };
-
-      try { return await fn({ stash, snapshot: null }); }
-      finally { void sql`DELETE FROM fibers WHERE actor_id = ${actorId} AND id = ${id}`; }
     },
   };
 }

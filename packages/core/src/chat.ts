@@ -39,15 +39,17 @@ import { renderToolResult, synthesizeToolFallback } from './utils/evidence-windo
 import * as v from 'valibot';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
-import { PROVIDER_SDK_RETRIES, RATE_LIMIT_HANDOVER_HEADER } from './providers/rate-limit-retry';
+import { PROVIDER_RETRIES_HEADER } from './providers/rate-limit-retry';
+import { createFallbackCooldowns, statedRetryAfterMs, type FallbackCooldowns } from './providers/fallback-cooldown';
+import { DEFAULT_PROVIDER_RETRIES } from './types/profile';
 import { callAccountOf, type CallAccount } from './providers/quota';
 import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
-import { classifyErrorCode, diagnostics, renderThrownChain, toKinuError, type TracedInvocation } from './obs/index';
+import { classifyErrorCode, KinuError, diagnostics, renderThrownChain, toKinuError, type TurnTrace } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 import { invalidToolCallRefusal, toolSchemaDialect, withToolSchemaDialect } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
-import { ModelCallSpan, traceTools } from './turn-trace';
+import { StepSpans, traceTools } from './turn-trace';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -127,6 +129,8 @@ export interface ChatOptions {
   modelSpec?: string;
   /** A spec's stored credential; a 401 skips entries holding the refused one. */
   credentialOf?: (spec: string) => Promise<string | null>;
+  retries?: number;
+  cooldowns?: FallbackCooldowns;
   /** Provider-reported prompt tokens of the previous turn's final request, the measured compaction trigger. */
   providerReportedTokens?: number;
   transformTrigger?: CompactionTrigger;
@@ -153,7 +157,7 @@ export interface ChatOptions {
   /** Where each call opens and closes its `model_operation` rows, so one in flight at process death shows in
    *  `RunEventRecorder.unterminatedModelOperations`. */
   operations?: ModelOperationSink;
-  trace?: TracedInvocation;
+  trace?: TurnTrace;
 }
 
 /**
@@ -268,20 +272,62 @@ async function credentialOrUnknown(credentialOf: (spec: string) => Promise<strin
   return null;
 }
 
-/** A 401 refuses the credential, so entries holding it are passed over; a 403 may be model-scoped. */
-async function nextFallback(
-  chain: ChatFallback[], failed: string | undefined, failure: CallFailure, credentialOf: ChatOptions['credentialOf'],
-): Promise<ChatFallback | undefined> {
-  if (!handsOver(failure)) return undefined;
-  const { status } = providerFailureFacts({ cause: failure.cause });
-  const lookup = status === 401 && failed !== undefined ? credentialOf : undefined;
-  const refused = lookup !== undefined && failed !== undefined ? await credentialOrUnknown(lookup, failed) : null;
+const isolateCooldowns = createFallbackCooldowns();
 
-  for (let next = chain.shift(); next !== undefined; next = chain.shift()) {
-    if (refused === null || lookup === undefined || await credentialOrUnknown(lookup, next.spec) !== refused) return next;
+/** OMP's chain (coding-agent session/turn-recovery.ts 2448-2490): hand over at once, park, retry only the last. */
+class FallbackRoute {
+  readonly tried: string[];
+  private readonly chain: ChatFallback[];
+  private readonly cooldowns: FallbackCooldowns;
+  private readonly retries: number;
+
+  constructor(private readonly opts: ChatOptions) {
+    this.chain = [...(opts.fallbacks ?? [])];
+    this.cooldowns = opts.cooldowns ?? isolateCooldowns;
+    this.retries = opts.retries ?? DEFAULT_PROVIDER_RETRIES;
+    this.tried = [opts.modelSpec ?? 'the turn model'];
   }
 
-  return undefined;
+  get callRetries(): number {
+    return this.chain.length > 0 ? 0 : this.retries;
+  }
+
+  cooledStart(): ChatFallback | undefined {
+    const spec = this.opts.modelSpec;
+
+    if (spec === undefined || !this.cooldowns.parked(spec)) return undefined;
+    const at = this.chain.findIndex((entry) => !this.cooldowns.parked(entry.spec));
+
+    return at < 0 ? undefined : this.chain.splice(0, at + 1).at(-1);
+  }
+
+  /** A 401 refuses the credential, so entries holding it are passed over; a 403 may be model-scoped. */
+  async next(failed: string | undefined, failure: CallFailure): Promise<ChatFallback | undefined> {
+    if (!handsOver(failure)) return undefined;
+
+    if (failed !== undefined) this.cooldowns.park(failed, statedRetryAfterMs({ cause: failure.cause }));
+    const { status } = providerFailureFacts({ cause: failure.cause });
+    const lookup = status === 401 && failed !== undefined ? this.opts.credentialOf : undefined;
+    const refused = lookup !== undefined && failed !== undefined ? await credentialOrUnknown(lookup, failed) : null;
+
+    for (let next = this.chain.shift(); next !== undefined; next = this.chain.shift()) {
+      if (this.cooldowns.parked(next.spec) && this.chain.length > 0) continue;
+
+      if (refused === null || lookup === undefined || await credentialOrUnknown(lookup, next.spec) !== refused) return next;
+    }
+
+    return undefined;
+  }
+
+  exhausted(failure: CallFailure): Error {
+    if (this.tried.length < 2) return failure.error;
+
+    return new KinuError(
+      classifyErrorCode({ cause: failure.error }) ?? 'unavailable',
+      `Tried ${this.tried.join(', ')}: ${describeProviderError({ cause: failure.cause })}`,
+      { cause: failure.error },
+    );
+  }
 }
 
 const DEAD_STREAM = 'Model stream ended without output: the provider stream terminated prematurely '
@@ -343,7 +389,7 @@ class ProviderCall {
     const egress = step.response.headers?.[EGRESS_ROUTE_HEADER];
     const { modelId } = step.response;
     const { body } = step.request;
-    // The SDK keeps each step record.
+    // The SDK keeps each step record until the call ends; left there, each body is a copy of the transcript.
     Reflect.deleteProperty(step.request, 'body');
 
     this.pendingStepEvents.push({
@@ -662,7 +708,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     providerOptions: mergeProviderOptions(cache.providerOptions, opts.providerOptions),
   };
 
-  const chain = [...(opts.fallbacks ?? [])];
+  const route = new FallbackRoute(opts);
   /** The fallback serving the turn, once one took over. */
   let servingFallback: string | undefined;
   let calls = 0;
@@ -700,29 +746,25 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     request: readonly ModelMessage[],
     stepOffset: number,
   ): AsyncGenerator<ChatEvent, CallOutcome> {
-    const span = new ModelCallSpan(opts.trace, {
+    const stepSpans = new StepSpans(opts.trace, {
       spec: current.spec, provider: current.provider, index: calls, fallback: servingFallback !== undefined,
     });
 
     try {
-      const outcome = yield* callModelOnce(request, stepOffset, span);
-      span.finish({ steps: outcome.steps.length, interrupted: outcome.interrupted });
-
-      if (outcome.failure !== null) span.fail(outcome.failure.error);
+      const outcome = yield* callModelOnce(request, stepOffset, stepSpans);
+      stepSpans.close(outcome.failure?.error ?? null, outcome.interrupted);
 
       return outcome;
     } catch (error) {
-      span.fail(error instanceof Error ? error : new Error(renderThrownChain({ cause: error })));
+      stepSpans.close(error instanceof Error ? error : new Error(renderThrownChain({ cause: error })), false);
       throw error;
-    } finally {
-      await span.close();
     }
   };
 
   const callModelOnce = async function* (
     request: readonly ModelMessage[],
     stepOffset: number,
-    span: ModelCallSpan,
+    stepSpans: StepSpans,
   ): AsyncGenerator<ChatEvent, CallOutcome> {
     const callIndex = calls++;
 
@@ -734,11 +776,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     const call = new ProviderCall(servingFallback);
 
-    const result = span.launch(() => streamText({
+    const result = streamText({
       model: current.model,
       system: cache.system,
-      // Ours, not the vendor's default: see PROVIDER_SDK_RETRIES.
-      maxRetries: PROVIDER_SDK_RETRIES,
+      maxRetries: route.callRetries,
       messages: [...request],
       tools: withToolSchemaDialect(tools, toolSchemaDialect(dialectSpec(current))),
       ...offeredTools,
@@ -746,7 +787,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // Settled rewrites only (name case, fenced or double-encoded args); otherwise the model retries.
       experimental_repairToolCall: repairToolCall(),
       abortSignal: opts.signal,
-      ...(chain.length > 0 && { headers: { [RATE_LIMIT_HANDOVER_HEADER]: '1' } }),
+      headers: { [PROVIDER_RETRIES_HEADER]: String(route.callRetries) },
       // The SDK default console.error dumped raw provider payloads; the rethrow below is the one place failures read.
       onError: ({ error }) => { call.streamError = error; },
       experimental_onToolCallStart: ({ toolCall }) => { call.dispatched(toolCall); },
@@ -757,6 +798,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // (`ProviderCall.requestStarting`).
       prepareStep: ({ stepNumber, messages, steps }) => {
         call.requestStarting();
+        stepSpans.start(stepOffset + stepNumber);
 
         return composePrepareStep({
           extensions,
@@ -778,6 +820,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         },
       }),
       onStepFinish: async (step) => {
+        stepSpans.finish(step);
+
         try {
           stepCount++;
           await opts.persistStep?.(step.response.messages);
@@ -794,7 +838,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           call.stepFailure ??= { doing: 'run the step hook', cause };
         }
       },
-    }));
+    });
 
     suppressDeferredRejections(result, () => call.interrupted || (opts.signal?.aborted ?? false));
     // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.
@@ -860,6 +904,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     };
   };
 
+  const takeOver = (next: ChatFallback): void => {
+    const bound = next.bind();
+
+    current = { ...bound, spec: next.spec, providerOptions: mergeProviderOptions(cache.providerOptions, bound.providerOptions) };
+    servingFallback = next.spec;
+    route.tried.push(next.spec);
+  };
+
   const callChain = async function* (
     request: readonly ModelMessage[],
     stepOffset: number,
@@ -867,20 +919,24 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const outcome = yield* callModel(request, stepOffset);
 
     if (outcome.failure === null) return outcome;
-    const next = await nextFallback(chain, servingFallback ?? opts.modelSpec, outcome.failure, opts.credentialOf);
+    const next = await route.next(servingFallback ?? opts.modelSpec, outcome.failure);
 
-    if (next === undefined) throw outcome.failure.error;
+    if (next === undefined) throw route.exhausted(outcome.failure);
     yield { type: 'model-fallback', from: current.spec, to: next.spec, reason: describeProviderError({ cause: outcome.failure.cause }) };
     await opts.persistStep?.(outcome.produced);
-
-    const bound = next.bind();
-    current = { ...bound, spec: next.spec, providerOptions: mergeProviderOptions(cache.providerOptions, bound.providerOptions) };
-    servingFallback = next.spec;
+    takeOver(next);
 
     const rest = yield* callChain([...request, ...outcome.produced], stepOffset + outcome.steps.length);
 
     return { ...rest, steps: [...outcome.steps, ...rest.steps], produced: [...outcome.produced, ...rest.produced] };
   };
+
+  const cooled = route.cooledStart();
+
+  if (cooled !== undefined) {
+    yield { type: 'model-fallback', from: current.spec, to: cooled.spec, reason: `${current.spec} is cooling down after failing over` };
+    takeOver(cooled);
+  }
 
   const first = yield* callChain(cache.messages, 0);
   let steps: readonly StepResult<ToolSet>[] = first.steps;

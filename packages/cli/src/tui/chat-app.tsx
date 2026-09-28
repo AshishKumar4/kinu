@@ -43,11 +43,10 @@ import {
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
 import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
-import { contextWindowForSpec, EMPTY_MODEL_MENU, specWithoutAccount, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
+import { contextWindowForSpec, describeProviderError, EMPTY_MODEL_MENU, specWithoutAccount, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { loadActiveProfile } from '../default-model';
 import { canonicalProjectRoot } from '../config';
-import { guideFailure } from '../provider-guidance';
 import { openBrowser } from '../commands/auth';
 import { StatusBar } from './status-bar';
 import { MessageList, type DisplayMessage } from './messages';
@@ -2179,9 +2178,7 @@ function phaseLineLabel(isProcessing: boolean, turnPhase: string | null, nextTie
 
 /** Plain text: the TUI styles system messages itself. */
 function errorLine(message: string): string {
-  const guided = guideFailure({ cause: message });
-
-  return guided.hint ? `Error: ${guided.message}\n${guided.hint}` : `Error: ${guided.message}`;
+  return `Error: ${describeProviderError({ cause: message })}`;
 }
 
 function lastUrlFromMessages(messages: DisplayMessage[]): string | null {

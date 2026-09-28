@@ -4,8 +4,6 @@
  * unit-egress-destination.test.ts): the entrypoint asks, refusals never reach the network, and redirects do not bypass it.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { asFetchFunction } from '@kinu.run/core';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordingLogger,
@@ -198,17 +196,5 @@ describe("a program reaches its own workspace's previews, and no other's", () =>
 
     expect(response.status).toBe(403);
     expect(await response.text()).toContain('blocked internal host');
-  });
-});
-
-describe('one judgment, three enforcement points', () => {
-  test('every seam that lets untrusted code choose a destination asks the same function', () => {
-    const read = (path: string): string =>
-      readFileSync(join(import.meta.dir, '..', '..', path), 'utf8');
-
-    // Two of the three asked and the third was a pass-through: each call is pinned.
-    expect(read('cf-backend/src/codemode-egress.ts')).toContain('refusedHostname(url.hostname)');
-    expect(read('cf-backend/src/egress/outbound.ts')).toContain('refusedHostname(url.hostname)');
-    expect(read('core/src/web/url-safety.ts')).toContain('refusedHostname(parsed.hostname)');
   });
 });

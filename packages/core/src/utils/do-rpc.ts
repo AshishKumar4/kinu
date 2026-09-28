@@ -60,7 +60,6 @@ export function classifyTransientDO(input: { cause: unknown }): DOTransientClass
   return null;
 }
 
-/** Total attempts. */
 const MAX_ATTEMPTS = 3;
 
 /** Full-jitter exponential backoff, in the SDK's shape; short because callers are on the request path. */

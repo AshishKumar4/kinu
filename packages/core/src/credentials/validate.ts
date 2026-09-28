@@ -13,6 +13,7 @@ const CredentialKindSchema = v.object({
 const BearerCredentialSchema = v.object({
   kind: v.literal('bearer'),
   token: v.pipe(v.string(), v.minLength(1)),
+  baseURL: v.optional(v.pipe(v.string(), v.url())),
 });
 
 const OAuthCredentialSchema = v.object({
@@ -49,7 +50,11 @@ function credentialOf(input: { value: unknown }): Effect.Effect<Credential, Kinu
   return Effect.gen(function* () {
     const kind = (yield* part(CredentialKindSchema, input)).kind;
 
-    if (kind === 'bearer') return yield* part(BearerCredentialSchema, input);
+    if (kind === 'bearer') {
+      const parsed = yield* part(BearerCredentialSchema, input);
+
+      return parsed.baseURL === undefined ? { kind: 'bearer', token: parsed.token } : parsed;
+    }
 
     if (kind === 'oauth') {
       const parsed = yield* part(OAuthCredentialSchema, input);

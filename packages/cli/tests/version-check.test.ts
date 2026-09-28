@@ -157,7 +157,7 @@ describe('fetchServedVersion is fail-soft', () => {
 
   test('parses a well-formed payload', async () => {
     const served = await fetchServedVersion('https://x.test', ok({ version: '0.1.0+abc', sha: 'abc' }));
-    expect(served).toEqual({ version: '0.1.0+abc', sha: 'abc' });
+    expect(served).toEqual({ version: '0.1.0+abc' });
   });
 
   test('returns null on 404 (server without the endpoint)', async () => {

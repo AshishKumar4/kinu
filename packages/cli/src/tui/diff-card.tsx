@@ -186,11 +186,10 @@ function diffTrailer(omitted: number, truncated: boolean): string | null {
   return truncated ? `… diff ends at ${String(MAX_LINES_PER_FILE)} lines. The totals cover the full file.` : null;
 }
 
-export function FileDiffCard({ view, expanded, previewWidth, lineCap = EXPANDED_RESULT_LINES }: {
+export function FileDiffCard({ view, expanded, previewWidth }: {
   readonly view: FileEditDiffView;
   readonly expanded: boolean;
   readonly previewWidth: number;
-  readonly lineCap?: number;
 }) {
   const { well } = useTuiTheme().colors;
   const inkFor = { add: well.success, del: well.danger, ctx: well.muted, hunk: well.muted } as const;
@@ -201,7 +200,7 @@ export function FileDiffCard({ view, expanded, previewWidth, lineCap = EXPANDED_
   let drawn = 0;
 
   for (const hunk of shown) {
-    const room = Math.min(hunk.length, lineCap - drawn);
+    const room = Math.min(hunk.length, EXPANDED_RESULT_LINES - drawn);
 
     if (hunk.length === 0) continue;
 

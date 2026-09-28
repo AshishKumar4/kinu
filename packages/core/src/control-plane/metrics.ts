@@ -1,5 +1,5 @@
 import {
-  analyticsMissingSettings, clearAnalyticsCache, runAnalyticsBatch,
+  analyticsMissingSettings, runAnalyticsBatch,
   type AnalyticsPanels, type AnalyticsSqlEnv,
 } from './analytics-sql';
 import { analyticsDigest } from '../obs/analytics/privacy';
@@ -18,7 +18,6 @@ export interface MetricsRequest {
   hours: number;
   /** A name; digested here because analytics never holds user text. */
   workspace?: string;
-  forceRefresh?: boolean;
 }
 
 export interface ControlMetrics {
@@ -47,7 +46,6 @@ export async function controlPlaneMetrics(
   if (workspace) ask.workspaceDigest = analyticsDigest(workspace);
   const queries = new Map(Object.entries(controlPlaneMetricsQueries(ask)));
 
-  if (request.forceRefresh === true) clearAnalyticsCache();
 
   return { windowHours, missing, panels: await runAnalyticsBatch(env, queries) };
 }

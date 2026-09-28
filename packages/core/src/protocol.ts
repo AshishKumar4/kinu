@@ -40,22 +40,6 @@ export interface TabPresence {
 	explorations: boolean;
 }
 
-export interface ToolInfo {
-	name: string;
-	/** One-line headline for a list row; never derived by splitting `description`. */
-	summary: string;
-	/** Full docstring the model sees; shown on demand. */
-	description: string;
-	/** Crafted by the agent rather than shipped. */
-	learned: boolean;
-	/** Reach as declared by `TOOL_REACH`; a crafted tool is `codemode`. */
-	exposure: "native" | "codemode" | "both";
-	/** Whether this agent actually wires it (e.g. `report` only on a subordinate). */
-	wired: boolean;
-	qualityScore: number;
-	usageCount: number;
-}
-
 /** A memory-pane row: a note or a hybrid-search hit; plain notes score 1. */
 export interface MemoryEntry extends MemoryNote {
 	matchScore: number;

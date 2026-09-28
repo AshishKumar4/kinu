@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-28",
-  "files": 2836,
-  "functions": 70301,
+  "files": 2833,
+  "functions": 70048,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -20,10 +20,6 @@
     {
       "key": "packages/devbox/bench/worker.ts#fetch",
       "complexity": 48
-    },
-    {
-      "key": "scripts/literature-citations.ts#auditProse",
-      "complexity": 46
     },
     {
       "key": "scripts/silent-drop.ts#auditFile>walk",
@@ -287,10 +283,6 @@
     },
     {
       "key": "packages/core/src/orchestrator/terminal-roster.ts#declareTerminalRoster",
-      "complexity": 30
-    },
-    {
-      "key": "packages/core/src/providers/util.ts#readProviderFailure",
       "complexity": 30
     },
     {

@@ -7,12 +7,11 @@ import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import {
   createCloudWorkspaceForUser,
   type CloudWorkspaceBirth, type CloudWorkspaceRegistry, type CreateCloudWorkspaceEnv,
-  type CreateCloudWorkspaceInput,
+  CreateCloudWorkspaceInputSchema,
 } from './workspace-create';
 import { err, json, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
-import { authoredRefusal, diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
-import * as v from 'valibot';
+import { authoredRefusal, diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { AccountLedgerTarget } from './account-usage';
 
 export interface CreateWorkspaceEnv<Id> extends CreateCloudWorkspaceEnv<Id>, CredentialFanoutEnv<Id> {
@@ -30,29 +29,11 @@ export interface CreateWorkspaceRequest<Id> {
 export async function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequest<Id>): Promise<Response> {
   const { request, env, userId, userDO } = call;
 
-  const body = await safeJson(request, v.object({
-    name: v.optional(v.string()),
-    displayName: v.optional(v.string()),
-    purpose: v.optional(v.string()),
-    model: v.optional(v.string()),
-    reasoningEffort: v.optional(v.picklist(['low', 'medium', 'high'])),
-    role: v.optional(v.string()),
-  }));
+  const input = await safeJson(request, CreateCloudWorkspaceInputSchema);
 
-  if (!body) return err(400, 'Body must be JSON');
+  if (!input) return err(400, 'Body must be JSON');
 
-  if (!body.name?.trim() && !body.purpose?.trim()) return err(400, 'purpose required');
-
-  // Wire shape and create input are distinct types; a field reaches `createCloudWorkspaceForUser`
-  // only if this mapping names it.
-  const input: CreateCloudWorkspaceInput = {
-    name: body.name,
-    displayName: body.displayName,
-    purpose: body.purpose,
-    model: body.model,
-    reasoningEffort: body.reasoningEffort,
-    role: body.role,
-  };
+  if (!input.name?.trim() && !input.purpose?.trim()) return err(400, 'purpose required');
 
   try {
     const entry = await createCloudWorkspaceForUser({
@@ -84,12 +65,8 @@ export interface CredentialFanoutEnv<Id> extends OwnerCapabilityEnv {
 export function notifyWorkspacesCredentialsChanged<Id>(
   env: CredentialFanoutEnv<Id>,
   userDO: Pick<UserDO, 'listActiveWorkspaces'>,
-  ctx?: Pick<ExecutionContext, 'waitUntil'>,
+  ctx: Pick<ExecutionContext, 'waitUntil'>,
 ): void {
-  if (ctx === undefined) {
-    throw new KinuError('io', 'Credential fanout requires the request ExecutionContext owner');
-  }
-
   ctx.waitUntil((async (): Promise<void> => {
     let workspaces: Array<{ name: string }> | null;
 

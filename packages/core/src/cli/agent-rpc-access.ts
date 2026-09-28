@@ -37,6 +37,7 @@ export const AGENT_RPC_ACCESS = {
   getWorkspaceSnapshot: 'workspace.read',
   getWorkspaceTabPresence: 'workspace.read',
   listWorkspaceWork: 'workspace.read',
+  listWorkspaceAgents: 'workspace.read',
   listSlates: 'workspace.read',
   listBackgroundJobs: 'workspace.read',
   listForkRuns: 'workspace.read',

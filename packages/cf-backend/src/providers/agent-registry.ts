@@ -94,7 +94,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
 
   let developmentBinding: DirectAiBinding | undefined;
 
-  if (opts.env.DEV_USER_EMAIL && opts.env.AI && isDirectAiBinding(opts.env.AI)) {
+  if (opts.env.WORKERS_AI_VIA_BINDING === 'on' && opts.env.AI && isDirectAiBinding(opts.env.AI)) {
     developmentBinding = opts.env.AI;
   }
 

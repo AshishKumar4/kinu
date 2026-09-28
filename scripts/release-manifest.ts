@@ -60,6 +60,8 @@ export const VAR_POLICY = {
   CLOUDFLARE_ACCOUNT_ID: 'derived',
   CONTROL_PLANE_ADMINS: 'derived',
   DEV_USER_EMAIL: 'ours',
+  // kinu.run's inference on its own account; a self-host routes each user's Workers AI through that user's credential.
+  WORKERS_AI_VIA_BINDING: 'ours',
   OPS_ALERT_EMAIL: 'ours',
   EMAIL_DOMAIN: 'ours',
   CONTROL_PLANE_ACCESS_TEAM_DOMAIN: 'ours',

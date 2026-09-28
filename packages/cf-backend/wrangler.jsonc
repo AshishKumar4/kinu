@@ -302,6 +302,9 @@
     // test debris out of the workspace list. Pinned as EVAL_SERVICE_EMAIL in
     // packages/test-utils/src/eval-identity.ts.
     "DEV_USER_EMAIL": "eval-service@kinu.run",
+    // Workers AI through this Worker's own AI binding, for every user; the eval
+    // identity's email above decides nothing about it.
+    "WORKERS_AI_VIA_BINDING": "on",
     "CLOUDFLARE_OAUTH_CLIENT_ID": "edb106782fc08e60480306cf39411d90",
     // The sign-in providers this deployment must offer. The monitor's login probe
     // fails when one is not configured or not on /login, and infra-verify refuses
@@ -514,12 +517,14 @@
         ]
       },
       // The images production runs, by the same digests: a staging measured on
-      // other bytes measures another product. Fewer instances.
+      // other bytes measures another product. The sandbox takes production's
+      // instance count: at 3, the first-run tier's sandbox cases refused each
+      // other's cold starts (docs/DEVBOX-DECISIONS.md P7).
       "containers": [
         {
           "class_name": "KinuSandbox",
           "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:43bb41963d6539b33388d9cc5559d2392dd0bef06bfeaf033ab1fbae12518eb7",
-          "max_instances": 3,
+          "max_instances": 10,
           "instance_type": {
             "vcpu": 2,
             "memory_mib": 6144,
@@ -577,6 +582,7 @@
         "CLI_PUBLIC_ORIGIN": "https://staging.kinu.run",
         "CLI_APPROVAL_ORIGIN": "https://staging.kinu.run",
         "DEV_USER_EMAIL": "eval-service@kinu.run",
+        "WORKERS_AI_VIA_BINDING": "on",
         "CLOUDFLARE_OAUTH_CLIENT_ID": "",
         "SIGN_IN_PROVIDERS": "",
         "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",

@@ -1,19 +1,10 @@
 import { asFetchFunction } from './fetch-shim';
-import { REAL_CLOCK, type Clock } from '../types/clock';
-import { KinuError } from '../obs/index';
 
-/** Content-idle bound on an outstanding read, not a deadline on work: every content
- *  frame restarts it, keepalives do not. The longest legitimate silence is unmeasured. */
-const SSE_CONTENT_IDLE_MS = 10 * 60_000;
-
-/** A symbol so no producer value can be mistaken for the stall. */
-const STALLED: unique symbol = Symbol('sse-terminal: no content');
-
-/** End an SSE stream at its `data: [DONE]` message (producers may never close after it), forwarding original bytes;
- *  a silent producer is bounded by {@link SSE_CONTENT_IDLE_MS}. `read` is bytes already taken from `body`. The
- *  watcher must be the body's only reader: it cancels between its own reads, and a workerd body rejects a read that is
- *  pending at cancel ("Stream was cancelled.") where a spec stream resolves it as done. */
-export function watchSseTerminal(body: ReadableStream<Uint8Array>, clock: Clock, read?: Uint8Array): ReadableStream<Uint8Array> {
+/** End an SSE stream at its `data: [DONE]` message (producers may never close after it), forwarding original bytes.
+ *  `read` is bytes already taken from `body`. The watcher must be the body's only reader: it cancels between its own
+ *  reads, and a workerd body rejects a read that is pending at cancel ("Stream was cancelled.") where a spec stream
+ *  resolves it as done. */
+export function watchSseTerminal(body: ReadableStream<Uint8Array>, read?: Uint8Array): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const chunks: Uint8Array[] = read === undefined ? [] : [read];
@@ -22,22 +13,11 @@ export function watchSseTerminal(body: ReadableStream<Uint8Array>, clock: Clock,
   // Separate flags: the lock must be released on every terminal path, even after settling.
   let settled = false;
   let released = false;
-  // The stream's start counts as content, so a body that never sends is the same silence.
-  let lastContentAt = clock.now();
-  let disarm: () => void = () => {};
-
-  const stall = Promise.withResolvers<typeof STALLED>();
-
-  const armStall = (): void => {
-    disarm();
-    disarm = clock.after(lastContentAt + SSE_CONTENT_IDLE_MS - clock.now(), () => { stall.resolve(STALLED); });
-  };
 
   const release = (): void => {
     if (released) return;
 
     released = true;
-    disarm();
     reader.releaseLock();
   };
 
@@ -107,11 +87,8 @@ export function watchSseTerminal(body: ReadableStream<Uint8Array>, clock: Clock,
 
     if (text.startsWith('data:')) {
       const payload = text.slice('data:'.length);
-      const value = payload.startsWith(' ') ? payload.slice(1) : payload;
 
-      if (value.length > 0) lastContentAt = clock.now();
-
-      data.push(value);
+      data.push(payload.startsWith(' ') ? payload.slice(1) : payload);
     }
 
     return false;
@@ -124,12 +101,10 @@ export function watchSseTerminal(body: ReadableStream<Uint8Array>, clock: Clock,
       let newline = indexOfNewline();
 
       while (newline < 0) {
-        armStall();
-
-        let next: Awaited<ReturnType<typeof reader.read>> | typeof STALLED;
+        let next: Awaited<ReturnType<typeof reader.read>>;
 
         try {
-          next = await Promise.race([reader.read(), stall.promise]);
+          next = await reader.read();
         } catch (cause) {
           // Release the lock before propagating the read failure.
           settled = true;
@@ -138,18 +113,7 @@ export function watchSseTerminal(body: ReadableStream<Uint8Array>, clock: Clock,
           throw cause;
         }
 
-        disarm();
-
         if (settled) return;
-
-        if (next === STALLED) {
-          // Cancel upstream before throwing; the idle duration is otherwise unrecoverable.
-          await cancelUpstream();
-
-          throw new KinuError('timeout', 'the model stream sent no content for '
-            + `${clock.now() - lastContentAt} ms; the last content frame arrived at `
-            + `${new Date(lastContentAt).toISOString()}`);
-        }
 
         if (next.done) {
           if (buffered > 0) controller.enqueue(takeBytes(buffered));
@@ -191,16 +155,15 @@ export function watchSseTerminal(body: ReadableStream<Uint8Array>, clock: Clock,
   });
 }
 
-/** Apply the SSE terminal rule to event-stream responses only; JSON passes through.
- *  The clock is injectable for tests. */
-export function withSseTerminal(fetchImpl: typeof fetch, clock: Clock = REAL_CLOCK): typeof fetch {
+/** Apply the SSE terminal rule to event-stream responses only; JSON passes through. */
+export function withSseTerminal(fetchImpl: typeof fetch): typeof fetch {
   return asFetchFunction(async (input, init) => {
     const response = await fetchImpl(input, init);
     const contentType = response.headers.get('content-type') ?? '';
 
     if (!contentType.includes('text/event-stream') || !response.body) return response;
 
-    return new Response(watchSseTerminal(response.body, clock), {
+    return new Response(watchSseTerminal(response.body), {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,

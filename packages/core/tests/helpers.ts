@@ -29,7 +29,7 @@ import type { ForkFileSource } from '../src/identity/fork-transfer';
 import type { VfsNativeReads } from '../src/vfs/mounts';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
-import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils/stores';
+import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { WORKSPACE_IDENTITY_DDL, tableExists } from '../src/identity/schema';
 import { initActorTables } from '../src/state/workspace-schema';
@@ -191,7 +191,7 @@ export function createMemoryCraftStore(db: Database): CraftStore {
   const store = new AgentUtilsCraftStore(makeSql(db));
   store.ensureSchema();
 
-  return craftStoreView(store);
+  return store;
 }
 
 /**

@@ -80,7 +80,12 @@ export interface ProfileCatalog {
   tiers: TierAssignments;
   /** Per provider: the default account. */
   accounts?: Readonly<Record<string, string>> | undefined;
+  modelFallbacks?: Readonly<Record<string, readonly string[]>> | undefined;
+  retries?: number | undefined;
 }
+
+/** The owner's retry count when the catalog names none. */
+export const DEFAULT_PROVIDER_RETRIES = 3;
 
 export type ProfileAuthority =
   | { readonly kind: 'account'; readonly accountId: string }

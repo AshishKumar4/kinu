@@ -627,7 +627,6 @@ export class CloudAgentClient implements AgentClient {
       scaffoldVersion: status.scaffoldVersion,
       messageCount: status.messageCount,
       searchNodeCount: status.searchNodeCount,
-      craftedToolCount: status.craftedToolCount,
       context: status.context ?? null,
     };
   }
@@ -645,9 +644,9 @@ export class CloudAgentClient implements AgentClient {
     return await this.callHttp('getMemoryContent', v.string());
   }
 
-  async changelog(limit?: number): Promise<AgentChangelogView> {
+  async changelog(): Promise<AgentChangelogView> {
     const result = v.parse(
-      ChangelogViewSchema, await this.callRpc('getEvolutionChangelog', [{ limit: limit ?? 50 }]),
+      ChangelogViewSchema, await this.callRpc('getEvolutionChangelog', [{ limit: 50 }]),
     );
 
     const view: AgentChangelogView = {
@@ -672,8 +671,8 @@ export class CloudAgentClient implements AgentClient {
     return v.parse(ChangelogRevertResultSchema, await this.callRpc('revertChangelogEntry', [id]));
   }
 
-  async refinements(limit?: number): Promise<AgentRefinementView> {
-    return v.parse(RefinementViewSchema, await this.callRpc('listRefinements', [limit ?? 20]));
+  async refinements(): Promise<AgentRefinementView> {
+    return v.parse(RefinementViewSchema, await this.callRpc('listRefinements', [20]));
   }
 
   async requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView> {

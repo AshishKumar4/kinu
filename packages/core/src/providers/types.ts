@@ -111,7 +111,7 @@ export interface WorkersAIBinding {
 export interface ProviderEnv {
   AI?: WorkersAIBinding;
   AI_GATEWAY_URL?: string;
-  DEV_USER_EMAIL?: string;
+  WORKERS_AI_VIA_BINDING?: string;
 }
 
 /** A provider-imposed wait, emitted as a request is told to sleep. `source`: `header`
