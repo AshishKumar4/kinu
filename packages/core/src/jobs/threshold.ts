@@ -30,13 +30,6 @@ export interface BackgroundHandle {
   readonly message: string;
 }
 
-/** Historical serialized shape; live refusals now stay foreground-owned. */
-export interface BackgroundRefusal {
-  readonly background: false;
-  readonly kind: string;
-  readonly message: string;
-}
-
 const BackgroundHandleSchema: v.GenericSchema<BackgroundHandle> = v.object({
   background: v.literal(true),
   jobId: v.string(),

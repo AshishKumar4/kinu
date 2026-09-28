@@ -226,6 +226,7 @@ const TUI_ACTION_IDS = (() => {
   return Object.freeze(ids);
 })();
 
+/** Widens a preset's literal table to the full action set. */
 function configuredBindings(config: KeymapOverrides, actionId: TuiActionId): readonly string[] | undefined {
   return config[actionId];
 }
@@ -235,13 +236,6 @@ export function createKeybindingRegistry(input: {
   readonly overrides?: KeymapOverrides;
 } = {}): KeybindingRegistry {
   const presetId = input.presetId ?? 'pi-omp';
-
-  if (!KEYMAP_PRESET_IDS.includes(presetId)) throw new Error(`Unknown keymap preset: ${presetId}`);
-
-  for (const actionId of Object.keys(input.overrides ?? {})) {
-    if (!isTuiActionId(actionId)) throw new Error(`Unknown TUI action override: ${actionId}`);
-  }
-
   const bindings: ActionBinding[] = [];
   const presetBindings = PRESET_BINDINGS[presetId];
 

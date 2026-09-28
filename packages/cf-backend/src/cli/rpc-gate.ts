@@ -161,17 +161,13 @@ const RpcFrameSchema = v.object({
   args: v.array(v.unknown()),
 });
 
-export interface RpcFrame {
-  readonly id: string;
-  readonly method: string;
-  readonly args: readonly unknown[];
-}
+export type RpcFrame = v.InferOutput<typeof RpcFrameSchema>;
 
 export function rpcFrameOf(message: WSMessage): RpcFrame | null {
   if (!v.is(v.string(), message)) return null;
   const frame = v.safeParse(RpcFrameSchema, tolerate(() => JSON.parse(message), 'malformed-input'));
 
-  return frame.success ? { id: frame.output.id, method: frame.output.method, args: frame.output.args } : null;
+  return frame.success ? frame.output : null;
 }
 
 interface RpcDenial {

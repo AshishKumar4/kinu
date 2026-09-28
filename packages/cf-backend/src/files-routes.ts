@@ -19,8 +19,7 @@ export interface FilesRouteAgent {
   abortExecutorFileWrite(transferId: string): Promise<void>;
 }
 
-/** Null reads as "no object to talk to" and answers 503. */
-export type FilesAgentResolver<Bindings> = (env: Bindings, agentName: string) => Promise<FilesRouteAgent | null>;
+export type FilesAgentResolver<Bindings> = (env: Bindings, agentName: string) => Promise<FilesRouteAgent>;
 
 /** Method, then query, then object, as before. */
 export function filesRoutes<Bindings extends object>(
@@ -41,8 +40,6 @@ export function filesRoutes<Bindings extends object>(
     if (!path) return err(400, 'path query parameter required');
 
     const agent = await resolveAgent(c.env, name);
-
-    if (!agent) return err(503, 'workspace agent unavailable');
 
     if (request.method === 'PUT') {
       const expectedRevision = expectedRevisionFrom(request);

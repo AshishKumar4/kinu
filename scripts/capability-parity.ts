@@ -17,12 +17,6 @@
  * are one question asked at two stages of the same mistake, and because the
  * remedy is the same sentence: share it, or say where it says why not.
  *
- * Constant DRIFT is a separate gate (`gate:policy-drift`) and deliberately so.
- * Its denominator is numeric literals; this one's is contracts, construction
- * sites and modules. `assertMeasured` dies on any zero, and a merged lock would
- * let one scan's healthy count mask the other's collapse — which is exactly the
- * vacuous-gate shape both of them exist to refuse.
- *
  * ## What makes the absence mechanically visible
  *
  * Core's capability contracts are presence-typed on purpose. `AgentsToolDeps`

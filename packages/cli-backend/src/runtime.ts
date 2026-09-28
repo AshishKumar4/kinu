@@ -24,7 +24,7 @@ import {
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite,
   DefaultExecutionRouter, createInlineExecutor,
-  withMountTable, standardMounts, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
+  withMountTable, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
   withApprovalGatedShell, createShellSession, shellCwd, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
@@ -49,7 +49,7 @@ import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { MemoryStore } from '@kinu.run/agent-utils';
-import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils';
+import { CraftStore } from '@kinu.run/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
@@ -371,9 +371,8 @@ export function createCLIRuntime(
   memoryStore.ensureSchema();
   const memory = adaptMemory(memoryStore, agentStateVfs);
 
-  const craftStoreImpl = new AgentUtilsCraftStore(sql);
-  craftStoreImpl.ensureSchema();
-  const craftStore = craftStoreView(craftStoreImpl);
+  const craftStore = new CraftStore(sql);
+  craftStore.ensureSchema();
   let approvalChannel: RequestShellApproval | null = null;
   let approvalDeferrals: DeferredApprovalChannel | null = null;
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
@@ -439,7 +438,6 @@ export function createCLIRuntime(
   let childContext: ChildContextResolver | null = null;
 
   const agentVfs = withMountTable(fileVfs, [
-    ...standardMounts((name) => executionRouter.getProvider(name)),
     sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
     // `/context`: this actor's own working history, keyed on its own id.
@@ -708,7 +706,6 @@ async function buildCLIHeadRuntime(
 
   // `/context` is this head's own history, not the parent's.
   const agentVfs = withMountTable(vfs, [
-    ...standardMounts((name) => executionRouter.getProvider(name)),
     sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
     contextMount({
@@ -756,22 +753,17 @@ async function buildCLIHeadRuntime(
  *  for the command, short enough that an orphaned grandchild's pipe is ignored. */
 const EXITED_COMMAND_DRAIN_MS = 250;
 
-const shellOptionsSchema = v.object({
-  stdin: v.optional(v.string()),
-  signal: v.optional(v.instance(AbortSignal)),
-});
-
 export function createHostShell(cwd: string, source: NodeJS.ProcessEnv = process.env): Shell {
   const env = unsandboxedCommandEnvironment(source, new Set([...HARNESS_CREDENTIAL_ENV, ...dotenvLoadedNames(process.cwd(), source)]));
 
   return {
     exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
       const { promise, resolve } = Promise.withResolvers<ShellExecResult>();
-      const stdinText = v.safeParse(v.string(), stdinOrOptions);
-      const options = v.safeParse(shellOptionsSchema, stdinOrOptions);
-      const optionsStdin = options.success ? options.output.stdin : undefined;
-      const stdin = stdinText.success ? stdinText.output : optionsStdin;
-      const signal = options.success ? options.output.signal : undefined;
+
+      const { stdin, signal }: { stdin?: string; signal?: AbortSignal } = v.is(v.string(), stdinOrOptions)
+        ? { stdin: stdinOrOptions }
+        : stdinOrOptions ?? {};
+
       const outputId = nanoid(10);
       let settled = false;
 

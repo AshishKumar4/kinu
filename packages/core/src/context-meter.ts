@@ -41,9 +41,10 @@ function systemText(system: SystemText): string {
   return text.success ? text.output : v.parse(v.object({ content: v.string() }), system).content;
 }
 
-/** Structured content is measured as the JSON the provider tokenizes; unguarded so it never reads as zero. */
+/** Frozen messages and a turn's schemas are measured once. */
 const MEASURED = new WeakMap<object, number>();
 
+/** Structured content is measured as the JSON the provider tokenizes; unguarded so it never reads as zero. */
 function messageChars(message: ModelMessage): number {
   const held = MEASURED.get(message);
 

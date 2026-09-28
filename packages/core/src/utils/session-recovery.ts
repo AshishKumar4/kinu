@@ -36,7 +36,6 @@ export interface SessionRecoveryCallbacks {
 export interface SessionRecoveryOptions {
   now?: () => number;
   timeoutsToRedial?: number;
-  redialWindowMs?: number;
   minRedialIntervalMs?: number;
   maxRedialIntervalMs?: number;
 }
@@ -55,7 +54,6 @@ export function createSessionRecovery(
 ): SessionRecovery {
   const now = options.now ?? Date.now;
   const timeoutsToRedial = options.timeoutsToRedial ?? TIMEOUTS_TO_REDIAL;
-  const redialWindowMs = options.redialWindowMs ?? REDIAL_WINDOW_MS;
   const baseMinIntervalMs = options.minRedialIntervalMs ?? REDIAL_MIN_INTERVAL_MS;
   const maxRedialIntervalMs = options.maxRedialIntervalMs ?? REDIAL_MAX_INTERVAL_MS;
 
@@ -88,7 +86,7 @@ export function createSessionRecovery(
 
       const at = now();
 
-      if (timeoutStreak === 0 || at - streakStartMs > redialWindowMs) {
+      if (timeoutStreak === 0 || at - streakStartMs > REDIAL_WINDOW_MS) {
         streakStartMs = at;
         timeoutStreak = 1;
       } else {

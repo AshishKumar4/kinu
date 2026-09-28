@@ -20,7 +20,6 @@ export {
 export {
   MAX_BLOB_BYTES,
   MAX_WRITES_PER_INVOCATION,
-  assertQuantileLevel,
   assertWithinPlatformLimits,
   type SlotCensus,
 } from './limits';

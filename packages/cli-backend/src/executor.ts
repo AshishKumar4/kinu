@@ -1,7 +1,6 @@
 /**
  * Local code executor via Bun subprocess. Not a security sandbox: code runs with
- * the user's OS permissions. No default deadline: one equal to the foreground
- * detach window would kill a program at the moment it would have detached.
+ * the user's OS permissions.
  */
 
 import { normalizeCode } from '@cloudflare/codemode/normalize';
@@ -45,7 +44,6 @@ export function createSandboxedExecutor(): Executor {
     get languages() { return detectedLanguages ??= detectLanguages(); },
     async execute(code, providers, opts): Promise<ExecuteResult> {
       requireBuild('Native program execution without a constrained runtime');
-      const timeoutMs = opts?.timeoutMs;
       const language = opts?.language ?? 'javascript';
 
       if (language !== 'javascript') {
@@ -58,17 +56,17 @@ export function createSandboxedExecutor(): Executor {
           return { result: undefined, error: `Executor does not support language "${language}"` };
         }
 
-        return executeWithInterpreter(code, interpreter, timeoutMs);
+        return executeWithInterpreter(code, interpreter);
       }
 
       // Provider functions cannot cross process boundaries; run in-process.
       const providerList: ResolvedProvider[] = normalizeProviders(providers);
 
       if (providerList.some(p => Object.keys(p.fns).length > 0)) {
-        return executeInProcess(code, providerList, timeoutMs);
+        return executeInProcess(code, providerList);
       }
 
-      return executeInSubprocess(code, timeoutMs);
+      return executeInSubprocess(code);
     },
   };
 }
@@ -76,11 +74,8 @@ export function createSandboxedExecutor(): Executor {
 async function executeWithInterpreter(
   code: string,
   interpreter: { readonly command: string; readonly extension: string },
-  timeoutMs?: number,
 ): Promise<ExecuteResult> {
-  const run = await runToCompletion([interpreter.command], code, interpreter.extension, { timeoutMs });
-
-  if (run.error) return { result: undefined, error: run.error };
+  const run = await runToCompletion([interpreter.command], code, interpreter.extension);
 
   return run.exitCode === 0
     ? { result: run.stdout.trim() || null }
@@ -95,8 +90,8 @@ async function runToCompletion(
   argv: string[],
   code: string,
   extension: string,
-  { timeoutMs, cwd }: { readonly timeoutMs?: number; readonly cwd?: string },
-): Promise<{ exitCode: number; stdout: string; stderr: string; error?: string }> {
+  cwd?: string,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const stem = join(tmpdir(), `kinu-exec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const tmpFile = `${stem}${extension}`;
   const outFile = `${stem}.out`;
@@ -113,21 +108,7 @@ async function runToCompletion(
       env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
     });
 
-    let killedByTimeout = false;
-
-    const timeout = timeoutMs === undefined
-      ? undefined
-      : setTimeout(() => { killedByTimeout = true; proc.kill(); }, timeoutMs);
-
     const exitCode = await proc.exited;
-    clearTimeout(timeout);
-
-    if (killedByTimeout) {
-      return {
-        exitCode, stdout: '', stderr: '',
-        error: `Execution timeout (${Math.round((timeoutMs ?? 0) / 1000)}s)`,
-      };
-    }
 
     return {
       exitCode,
@@ -141,11 +122,11 @@ async function runToCompletion(
   }
 }
 
-async function executeInSubprocess(code: string, timeoutMs?: number): Promise<ExecuteResult> {
+async function executeInSubprocess(code: string): Promise<ExecuteResult> {
   // A compiled binary may have no bun CLI beside it.
   const bunBin = Bun.which('bun');
 
-  if (!bunBin) return executeInProcess(code, [], timeoutMs);
+  if (!bunBin) return executeInProcess(code, []);
 
   const wrapper = `
     try {
@@ -159,9 +140,7 @@ async function executeInSubprocess(code: string, timeoutMs?: number): Promise<Ex
   `;
 
   // Beside its temp script, not in the project, and reading no bunfig or .env.
-  const run = await runToCompletion([bunBin, ...ISOLATED_BUN_FLAGS, 'run'], wrapper, '.mjs', { timeoutMs, cwd: tmpdir() });
-
-  if (run.error) return { result: undefined, error: run.error };
+  const run = await runToCompletion([bunBin, ...ISOLATED_BUN_FLAGS, 'run'], wrapper, '.mjs', tmpdir());
 
   if (run.exitCode !== 0) {
     return { result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` };
@@ -194,7 +173,7 @@ function normalizeProviders(
 
 /** In-process execution: tool-backed code, or JS when no subprocess runtime is on PATH. */
 async function executeInProcess(
-  code: string, providers: ResolvedProvider[], timeoutMs?: number,
+  code: string, providers: ResolvedProvider[],
 ): Promise<ExecuteResult> {
   const context: Record<string, ExecutorNamespace> = {};
 
@@ -216,30 +195,16 @@ async function executeInProcess(
   const argNames = Object.keys(context);
   const argValues = argNames.map(k => context[k]);
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
   try {
     const fn = new Function(...argNames, `return (\n${normalizeCode(code)}\n)()`);
 
-    const settled = Promise.resolve(fn(...argValues)).then((value) =>
-      value === undefined ? undefined : decodeJsonValue({ value }));
+    const value: unknown = await fn(...argValues);
 
-    if (timeoutMs === undefined) return { result: await settled };
-    // Cleared in the finally: a live timer would hold the process open after the code settled.
-    const deadline = Promise.withResolvers<JsonValue>();
-    timer = setTimeout(
-      () => deadline.reject(new Error(`Execution timeout (${Math.round(timeoutMs / 1000)}s)`)),
-      timeoutMs,
-    );
-    const result = await Promise.race([settled, deadline.promise]);
-
-    return { result };
+    return { result: value === undefined ? undefined : decodeJsonValue({ value }) };
   } catch (error) {
     return {
       result: undefined,
       error: renderThrownChain({ cause: error }),
     };
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 }

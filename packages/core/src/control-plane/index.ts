@@ -51,7 +51,6 @@ export {
 
 export {
   analyticsMissingSettings,
-  clearAnalyticsCache,
   runAnalyticsBatch,
   type AnalyticsPanels,
   type AnalyticsQuerySet,

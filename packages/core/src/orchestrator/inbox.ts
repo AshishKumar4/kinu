@@ -194,39 +194,12 @@ export class PendingSendStore {
 
   /** Every owed send in acceptance order; attachments via {@link files}. */
   restore(): PendingSendRow[] {
-    return this.sql<{ id: string; turn_id: string | null; mode: WorkMode; text: string }>`
-      SELECT id, turn_id, mode, text FROM pending_steers
+    return this.sql<PendingSendRow>`
+      SELECT id, turn_id AS turnId, mode, text FROM pending_steers
       WHERE actor_id = ${this.actorId}
-      ORDER BY seq ASC`
-      .map(toPendingSendRow);
-  }
-
-  /** Reservations bound to one turn; a reset restores them into its first step. */
-  forTurn(turnId: string): PendingSendRow[] {
-    return this.sql<{ id: string; turn_id: string | null; mode: WorkMode; text: string }>`
-      SELECT id, turn_id, mode, text FROM pending_steers
-      WHERE actor_id = ${this.actorId} AND turn_id = ${turnId}
-      ORDER BY seq ASC`
-      .map(toPendingSendRow);
-  }
-
-  /**
-   * Reservations bound to a turn nobody holds. NULL rows are excluded because `turn_id <> live` is
-   * NULL, not TRUE; this keeps idle-queued rows from being swept as orphans.
-   */
-  sweepDead(liveTurnId: string): PendingSendRow[] {
-    return this.sql<{ id: string; turn_id: string | null; mode: WorkMode; text: string }>`
-      SELECT id, turn_id, mode, text FROM pending_steers
-      WHERE actor_id = ${this.actorId} AND turn_id <> ${liveTurnId}
-      ORDER BY seq ASC`
-      .map(toPendingSendRow);
+      ORDER BY seq ASC`;
   }
 }
-
-/** Single column mapping so the reads cannot drift on a column name. */
-const toPendingSendRow = (row: {
-  id: string; turn_id: string | null; mode: WorkMode; text: string;
-}): PendingSendRow => ({ id: row.id, turnId: row.turn_id, mode: row.mode, text: row.text });
 
 /** One acknowledged send; `turnId` is null while idle-queued. */
 export interface PendingSendRow {

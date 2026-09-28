@@ -59,15 +59,10 @@ export function updateCraftScores(
 ): void {
   const now = nowMs();
 
+  // `emaUpdate` in SQL, so an absent row is simply not matched.
   for (const name of usedToolNames) {
-    const existing = sql<{ score: number }>`
-      SELECT score FROM crafted_tools WHERE name = ${name}
-    `[0];
-
-    if (!existing) continue;
-    const newScore = emaUpdate(existing.score, outcome, alpha);
     void sql`UPDATE crafted_tools
-        SET score = ${newScore}, uses = uses + 1, last_used_at = ${now}
+        SET score = (1 - ${alpha}) * score + ${alpha} * ${outcome}, uses = uses + 1, last_used_at = ${now}
         WHERE name = ${name}`;
   }
 }

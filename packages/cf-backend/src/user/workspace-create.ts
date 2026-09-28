@@ -3,12 +3,12 @@ import {
   defaultSpecFor,
   fallbackWorkspaceIdentity, workspaceAddressRefusal,
   renderSoulMarkdown,
-  isReasoningEffort,
   type NameOrigin,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import * as v from 'valibot';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
@@ -34,14 +34,16 @@ export interface CloudWorkspaceRegistry extends UserCredentialClient {
   ensureWorkspaceCapability(name: string, presentedHash: string | null): Promise<void>;
 }
 
-export interface CreateCloudWorkspaceInput {
-  name?: string;
-  displayName?: string;
-  purpose?: string;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
-  role?: string;
-}
+export const CreateCloudWorkspaceInputSchema = v.object({
+  name: v.optional(v.string()),
+  displayName: v.optional(v.string()),
+  purpose: v.optional(v.string()),
+  model: v.optional(v.string()),
+  reasoningEffort: v.optional(v.picklist(['low', 'medium', 'high'])),
+  role: v.optional(v.string()),
+});
+
+export type CreateCloudWorkspaceInput = v.InferOutput<typeof CreateCloudWorkspaceInputSchema>;
 
 export type CloudWorkspaceBirth = Pick<
   OrchestratorAgent,
@@ -67,10 +69,6 @@ export async function createCloudWorkspaceForUser<Id>(
   const { env, userId, userDO, caller, input } = request;
   const trimmedPurpose = input.purpose?.trim() ?? '';
   const purpose = trimmedPurpose === '' ? undefined : trimmedPurpose;
-
-  if (input.reasoningEffort !== undefined && !isReasoningEffort(input.reasoningEffort)) {
-    throw new KinuError('bad_input', `Invalid reasoning effort: ${String(input.reasoningEffort)}`);
-  }
 
   const menu = await listAvailableModels(env, userId, caller);
 

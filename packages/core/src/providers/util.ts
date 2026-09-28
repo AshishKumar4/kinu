@@ -1,4 +1,3 @@
-// Shared provider internals: the auth-injecting fetch wrapper and catalog parse helpers.
 import type { LanguageModelV3Message } from '@ai-sdk/provider';
 import type { LanguageModelMiddleware } from 'ai';
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
@@ -14,7 +13,6 @@ import {
 } from '../obs/index';
 
 export interface AuthedFetchOptions {
-  /** Credential key passed to the AuthResolver on every request. */
   credKey: string;
   /** Named in rate-limit wait notices. */
   provider: string;
@@ -28,7 +26,7 @@ export interface AuthedFetchOptions {
   mutate?: (ctx: { url: string; headers: Headers; auth: AuthResolution }) => string | void;
 }
 
-/** Auth-injecting fetch; auth is re-resolved per request so credential changes apply live. */
+/** Auth is re-resolved per request so credential changes apply live. */
 export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions): typeof globalThis.fetch {
   const waitListener = deps.onProviderWait;
 
@@ -90,7 +88,6 @@ function withoutItemIds(message: LanguageModelV3Message): LanguageModelV3Message
   };
 }
 
-/** Credential identity for keying catalog caches. */
 export function authCacheKey(auth: AuthResolution): string {
   return JSON.stringify([auth.headers, auth.baseURL ?? null]);
 }
@@ -187,32 +184,35 @@ export function providerFailureFacts(failure: { readonly cause: unknown }): Prov
     ?? { message: 'unknown provider error' };
 }
 
+function readErrorFailure(input: { readonly error: Error; readonly depth: number }): ProviderFailureFacts {
+  const { error, depth } = input;
+  const envelope = v.safeParse(ApiCallErrorSchema, error);
+  const status = envelope.success ? envelope.output.statusCode : undefined;
+  const body = envelope.success ? envelope.output.responseBody : undefined;
+
+  // The reason lives in the body; `||` because an empty message says nothing.
+  const parsed = body === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
+    ? undefined
+    : tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
+
+  const fromBody = parsed === undefined
+    ? null
+    : readProviderFailure({ cause: parsed, depth: depth + 1 });
+
+  return {
+    message: fromBody?.message ?? (error.message || error.name),
+    providerCode: fromBody?.providerCode,
+    status,
+  };
+}
+
 /** Null when nothing readable, so a caller keeps the reason it already had. */
 function readProviderFailure(
   input: { readonly cause: unknown; readonly depth: number },
 ): ProviderFailureFacts | null {
   const { cause: error, depth } = input;
 
-  if (error instanceof Error) {
-    const envelope = v.safeParse(ApiCallErrorSchema, error);
-    const status = envelope.success ? envelope.output.statusCode : undefined;
-    const body = envelope.success ? envelope.output.responseBody : undefined;
-
-    // The reason lives in the body; `||` because an empty message says nothing.
-    const parsed = body === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
-      ? undefined
-      : tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
-
-    const fromBody = parsed === undefined
-      ? null
-      : readProviderFailure({ cause: parsed, depth: depth + 1 });
-
-    return {
-      message: fromBody?.message ?? (error.message || error.name),
-      providerCode: fromBody?.providerCode,
-      status,
-    };
-  }
+  if (error instanceof Error) return readErrorFailure({ error, depth });
 
   const text = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), error);
 
@@ -284,7 +284,6 @@ function codeForStatus(status: number): ErrorCode | null {
 export function toProviderError(input: {
   doing: string;
   cause: unknown;
-  /** The provider the request was sent to, when the caller resolved one. */
   provider?: string;
 }): KinuError {
   const facts = providerFailureFacts({ cause: input.cause });
@@ -301,7 +300,6 @@ export function toProviderError(input: {
 
   if (input.provider !== undefined) tags.push(input.provider);
 
-  /** The fields the diagnostics record carries beside the error itself. */
   interface ProviderFailureFields {
     detail: string;
     status?: number;

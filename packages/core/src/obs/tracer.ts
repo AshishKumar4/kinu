@@ -61,6 +61,7 @@ export interface RecordedSpan {
   readonly parent: number | null;
   /** All attributes, including `kinu.error` on failure, mirroring the real tracer. */
   readonly attributes: ReadonlyMap<string, SpanAttributeValue>;
+  readonly openAcrossAwait: boolean;
 }
 
 export interface RecordingTracer extends Tracer {
@@ -83,13 +84,17 @@ export function createRecordingTracer(): RecordingTracer {
       ]);
 
       const index = opened.length;
-      opened.push({
+
+      const entry = {
         name,
         isolateGen: attributes.isolateGen,
         selfPath: attributes.selfPath,
         parent: stack.at(-1) ?? null,
         attributes: captured,
-      });
+        openAcrossAwait: false,
+      };
+
+      opened.push(entry);
 
       const span: ScopedSpan = {
         isTraced: true,
@@ -119,6 +124,7 @@ export function createRecordingTracer(): RecordingTracer {
         // A foreign thenable closes early and mis-parents what follows.
         if (result instanceof Promise) {
           closesLater = true;
+          entry.openAcrossAwait = true;
           // `then(ok, err)`, not `finally`: `finally` would derive an unhandled rejection.
           void result.then(close, () => { failed(); close(); });
         }

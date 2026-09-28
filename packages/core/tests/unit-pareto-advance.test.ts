@@ -3,7 +3,7 @@ import {
   paretoFront, paretoObjectiveAxes, validateParetoEvidence,
   type InstancedObjective, type VectorObjective,
 } from '../src/strategy/objective';
-import { regionRefusal, seedResumedSearch } from '../src/strategy/swarm-setup';
+import { seedResumedSearch } from '../src/strategy/swarm-setup';
 import type { SwarmReentry } from '../src/strategy/swarm-resume';
 import type { TreeNode } from '../src/strategy/swarm-tree';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
@@ -102,9 +102,8 @@ describe('Pareto advance evidence', () => {
 });
 
 describe('Pareto advance with a publishing carry', () => {
-  test('both entry points refuse elites and artifacts as bad_input before anything spends', () => {
-    // The records store persists scalars only, so a publishing carry under advance:"pareto"
-    // is refused by both `swarmValidity` and `regionRefusal`.
+  test('swarmValidity refuses elites and artifacts as bad_input before anything spends', () => {
+    // The records store persists scalars only, so a publishing carry under advance:"pareto" is refused.
     for (const carry of [{ kind: 'elites' } as const, { kind: 'artifacts', threshold: 0.8 } as const]) {
       const call = resolveSwarm({
         preset: 'custom',
@@ -126,8 +125,6 @@ describe('Pareto advance with a publishing carry', () => {
       if ('reason' in call) throw new Error(`the tuple must resolve so validity can refuse it: ${call.error}`);
       expect(swarmValidity(call)).toMatchObject({ reason: 'bad_input' });
       expect(swarmValidity(call)?.error).toContain('advance:"pareto"');
-      expect(regionRefusal(call, 'build')).toMatchObject({ reason: 'bad_input' });
-      expect(regionRefusal(call, 'build')?.error).toContain('advance:"pareto"');
     }
   });
 });

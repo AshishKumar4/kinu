@@ -5,11 +5,10 @@
 import { useCallback, useState } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
-  FingerprintIcon, PackageIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon,
-  CaretRightIcon, GitBranchIcon,
+  FingerprintIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon, GitBranchIcon,
 } from "@phosphor-icons/react";
 import type { AgentStatus } from "@/hooks/use-kinu";
-import type { ToolInfo, MemoryEntry, Rpc } from "@kinu.run/core";
+import type { MemoryEntry, Rpc } from "@kinu.run/core";
 import { MarkdownContent, EmptyState, Section } from "./shared";
 import { timeAgo, workspaceDisplayTitle } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
@@ -23,7 +22,6 @@ interface Fact { key: string; value: unknown; confidence: number; source: string
 export interface AgentSurfaceProps {
   /** Tri-state: "still coming" and "came back broken" differ, and neither is "none". */
   snapshot: AsyncResource<AgentStatus>;
-  tools: ToolInfo[];
   memory: MemoryEntry[];
   memoryContent: string;
   onSearchMemory: (q: string) => void;
@@ -31,89 +29,8 @@ export interface AgentSurfaceProps {
   rpc: Rpc;
 }
 
-const EXPOSURE: Record<ToolInfo["exposure"], { label: string; reach: string; tone: string }> = {
-  native: {
-    label: "native",
-    reach: "The model can call this tool.",
-    tone: "p-badge-neutral",
-  },
-  codemode: {
-    label: "code mode",
-    reach: "Only an eval program can call this tool.",
-    tone: "p-accent-subtle p-accent",
-  },
-  both: {
-    label: "native · code mode",
-    reach: "The model can call this tool, and so can an eval program.",
-    tone: "p-accent-subtle p-accent",
-  },
-};
-
-/**
- * `exposure` is the registry's declared reach (`TOOL_REACH`); `wired` carries absence
- * separately, since a deps-gated builtin like `report` exists on neither surface on an orchestrator.
- */
-function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wired: boolean }) {
-  const { label, reach, tone } = EXPOSURE[exposure];
-
-  return (
-    <>
-      <span
-        className={`inline-flex items-center rounded-full px-1.5 py-0.5 p-t-status ${
-          wired ? tone : "p-badge-neutral p-text-3"
-        }`}
-        title={reach}
-      >
-        {label}
-      </span>
-      {!wired && (
-        <span
-          className="p-meta p-text-3"
-          title="This agent does not use this capability on any surface this turn."
-        >
-          not on this agent
-        </span>
-      )}
-    </>
-  );
-}
-
-/** The registry's one-line summary, opening to the newline-structured docstring. */
-function ToolCard({ tool }: { tool: ToolInfo }) {
-  const [open, setOpen] = useState(false);
-  const hasDetail = tool.description.trim() !== tool.summary.trim();
-
-  return (
-    <div className="p-card">
-      <button
-        type="button"
-        onClick={() => hasDetail && setOpen(!open)}
-        aria-expanded={hasDetail ? open : undefined}
-        className={`flex w-full flex-col gap-1 px-3 py-2.5 text-left ${hasDetail ? "cursor-pointer" : "cursor-default"}`}
-      >
-        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <PackageIcon size={13} className="p-accent shrink-0" />
-          <span className="p-title font-mono p-text">{tool.name}</span>
-          <ExposureBadge exposure={tool.exposure} wired={tool.wired} />
-          {tool.usageCount > 0 && <span className="p-meta p-text-3 ml-auto">{tool.usageCount} uses</span>}
-          {hasDetail && (
-            <CaretRightIcon
-              size={11}
-              className={`shrink-0 p-text-3 transition-transform duration-150 ${tool.usageCount > 0 ? "" : "ml-auto"} ${open ? "rotate-90" : ""}`}
-            />
-          )}
-        </span>
-        {/* Open replaces the headline: the docstring's first line is the summary. */}
-        {open
-          ? <span className="p-meta p-text-2 whitespace-pre-line">{tool.description}</span>
-          : <span className="p-row-text p-text-2">{tool.summary}</span>}
-      </button>
-    </div>
-  );
-}
-
 export function AgentSurface(
-  { snapshot, tools, memory, memoryContent, onSearchMemory, onRetryLoad, rpc }: AgentSurfaceProps,
+  { snapshot, memory, memoryContent, onSearchMemory, onRetryLoad, rpc }: AgentSurfaceProps,
 ) {
   const [memorySearch, setMemorySearch] = useState("");
   // "No world model" may only be claimed about a listing that came back.
@@ -128,7 +45,6 @@ export function AgentSurface(
     : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>;
 
   const noMemories = as === null ? unloaded("memory") : <EmptyState icon={<FolderOpenIcon size={28} />} title="No memories yet" />;
-  const noTools = as === null ? unloaded("tools") : <EmptyState icon={<PackageIcon size={28} />} title="No tools yet" />;
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -216,16 +132,6 @@ export function AgentSurface(
           </div>
         </Section>
       )}
-
-      {/* Tools (CraftStore + builtins) */}
-      <Section id="tools" title="Tools" icon={<PackageIcon size={14} className="p-text-2" />}
-        badge={tools.length > 0 ? <Badge variant="secondary">{tools.length}</Badge> : undefined}>
-        <div className="space-y-2">
-          {tools.length > 0
-            ? tools.map((tool) => <ToolCard key={tool.name} tool={tool} />)
-            : noTools}
-        </div>
-      </Section>
 
       <Section id="evolution" title="Evolution" defaultOpen={false}
         icon={<GitBranchIcon size={14} className="p-text-2" />}
