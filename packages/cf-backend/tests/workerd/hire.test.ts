@@ -87,7 +87,7 @@ describe('hire', () => {
     await probe(workspace).callerObserved();
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
-    const hired = observed.actors.filter((row) => row.kind === 'subordinate');
+    const hired = observed.actors.filter((row) => row.hired);
 
     expect(hired).toHaveLength(DELEGATION_MAX_DEPTH);
     expect(observed.reports.join(' ')).toContain(NEST_RELAY);
@@ -264,7 +264,7 @@ describe('hire', () => {
     expect(observed.roster.filter((row) => row.lifetime === 'task')).toHaveLength(1);
 
     // The child retires after the turn that answers, so counts read rows a retired actor left behind.
-    const child = observed.actors.filter((row) => row.kind === 'subordinate');
+    const child = observed.actors.filter((row) => row.hired);
 
     expect(child).toHaveLength(1);
     expect(child[0]?.retiringAt).not.toBeNull();
