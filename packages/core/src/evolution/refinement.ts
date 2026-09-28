@@ -17,7 +17,8 @@ import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
 import { fnv1a64 } from '../utils/fnv1a';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
-import { diagnostics, toKinuError, tolerate } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, settleSync, toKinuError, tolerate } from '../obs/index';
 import { NEGATIVE_TURN_OUTCOMES, listTurnOutcomes } from './outcomes';
 import { workspaceSkillPath } from '../skills/discover';
 
@@ -500,11 +501,11 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       const opened = one(id);
 
       if (!opened) {
-        throw toKinuError({
+        return settleSync(Effect.fail(toKinuError({
           doing: 'open a refinement request',
           cause: `the row inserted as ${id} did not read back`,
           otherwise: 'io',
-        });
+        })));
       }
 
       return { request: opened, created: true };

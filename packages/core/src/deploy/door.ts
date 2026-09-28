@@ -3,7 +3,7 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { settle } from '../obs/index';
-import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { jsonText } from '../utils/json';
 import {
   DeployOptionsSchema, DeploySnapshotSchema, DeployTicketSchema,
   type DeployOptions, type DeploySnapshot,
@@ -118,21 +118,15 @@ function read<Schema extends v.GenericSchema>(
     const text = yield* Effect.promise(() => response.text());
 
     if (!response.ok) {
-      const said = v.safeParse(ErrorBody, yield* jsonOf(url, text));
+      const said = v.safeParse(ErrorBody, yield* jsonText(text, `${url} did not answer JSON`));
 
       return yield* Effect.die(new Error(said.success && said.output.error !== undefined
         ? said.output.error
         : `${url} answered HTTP ${String(response.status)}`));
     }
 
-    const body = yield* jsonOf(url, text);
+    const body = yield* jsonText(text, `${url} did not answer JSON`);
 
     return v.parse(schema, body);
   });
-}
-
-function jsonOf(url: string, text: string): Effect.Effect<JsonValue> {
-  return Effect.try({ try: () => v.parse(JsonValueSchema, JSON.parse(text)), catch: (cause) => ({ cause }) }).pipe(
-    Effect.catch((failed) => Effect.die(new Error(`${url} did not answer JSON`, { cause: failed.cause }))),
-  );
 }

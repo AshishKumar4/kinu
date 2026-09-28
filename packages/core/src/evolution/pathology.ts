@@ -8,7 +8,8 @@ import * as v from 'valibot';
 import type { LLM } from '../types/primitives';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import type { JsonObject } from '../utils/json';
-import { diagnostics, renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, renderThrownChain, settle } from '../obs/index';
 
 /** Ordered, first match wins: lexical evidence outranks the inferred `repeat`. */
 export const COMPLAINT_CLASSES = [
@@ -232,21 +233,26 @@ const TITLE_CHARS = 70;
 const PathologyTitleSchema = v.pipe(v.string(), v.trim(), v.minLength(1));
 
 /** Refine titles with one LLM call; any failure leaves the deterministic titles. */
-export async function labelPathologyClusters(
+export function labelPathologyClusters(
   llm: LLM,
   clusters: ReadonlyArray<PathologyCluster>,
 ): Promise<PathologyCluster[]> {
-  if (clusters.length === 0) return [];
-  let titles: JsonObject;
+  if (clusters.length === 0) return Promise.resolve([]);
 
-  try {
-    titles = extractJsonObject(await llm.complete(buildPathologyLabelPrompt(clusters)));
-  } catch (error) {
-    diagnostics.event('pathology.label_degraded', { error: renderThrownChain({ cause: error }) });
+  return settle(Effect.tryPromise({
+    try: async (): Promise<JsonObject> => extractJsonObject(await llm.complete(buildPathologyLabelPrompt(clusters))),
+    catch: (cause) => ({ cause }),
+  }).pipe(Effect.match({
+    onFailure: (failed) => {
+      diagnostics.event('pathology.label_degraded', { error: renderThrownChain(failed) });
 
-    return [...clusters];
-  }
+      return [...clusters];
+    },
+    onSuccess: (titles) => titledClusters(clusters, titles),
+  })));
+}
 
+function titledClusters(clusters: ReadonlyArray<PathologyCluster>, titles: JsonObject): PathologyCluster[] {
   return clusters.map((cluster) => {
     const title = v.safeParse(PathologyTitleSchema, titles[cluster.id]);
 

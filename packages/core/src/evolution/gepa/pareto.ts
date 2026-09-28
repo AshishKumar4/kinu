@@ -1,5 +1,7 @@
 /** Per-instance Pareto front and parent weighting: preserves specialists that alone solve rare hard instances. */
 
+import { Effect } from 'effect';
+import { settleSync } from '../../obs/effect';
 import type { GepaCandidate } from './types';
 
 export interface ParetoComputation {
@@ -106,7 +108,7 @@ export function sampleParentByWeight(
   instanceIds: ReadonlyArray<string>,
   random: () => number,
 ): GepaCandidate {
-  if (pool.length === 0) throw new Error('sampleParentByWeight: empty pool');
+  if (pool.length === 0) return settleSync(Effect.die(new Error('sampleParentByWeight: empty pool')));
 
   if (pool.length === 1) return pool[0];
   const weights = parentSelectionWeights(pool, instanceIds);
@@ -131,7 +133,7 @@ export function sampleParentByWeight(
 
 /** Ties broken by createdAt (older wins). */
 export function bestAggregate(pool: ReadonlyArray<GepaCandidate>): GepaCandidate {
-  if (pool.length === 0) throw new Error('bestAggregate: empty pool');
+  if (pool.length === 0) return settleSync(Effect.die(new Error('bestAggregate: empty pool')));
   let best = pool[0];
 
   for (const c of pool) {

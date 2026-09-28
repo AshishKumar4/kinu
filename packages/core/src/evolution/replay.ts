@@ -5,6 +5,7 @@
  * persisted to `replay_evals`.
  */
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -19,7 +20,7 @@ import {
   type ReplayEvalSummary, type ReplayInstanceResult, type TurnOutcomeRow,
 } from '../types/evolution';
 
-import { renderThrownChain, tolerate } from '../obs/index';
+import { renderThrownChain, settle, tolerate } from '../obs/index';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { nanoid } from '../utils/nanoid';
@@ -97,13 +98,11 @@ function buildReplayJudgePrompt(row: TurnOutcomeRow, fresh: string): string {
   );
 }
 
-async function judgeReplay(judge: LLM, row: TurnOutcomeRow, fresh: string): Promise<{ score: number; note: string }> {
+async function judgeReplay(judge: LLM, row: TurnOutcomeRow, fresh: string): Promise<{ score: number; note: string } | null> {
   const raw = await judge.complete(buildReplayJudgePrompt(row, fresh));
   const parsed = v.safeParse(ReplayJudgeSchema, extractJsonObject(raw));
 
-  if (!parsed.success || !Number.isFinite(parsed.output.score)) {
-    throw new Error('replay judge returned no numeric score');
-  }
+  if (!parsed.success || !Number.isFinite(parsed.output.score)) return null;
 
   return {
     score: Math.min(1, Math.max(0, parsed.output.score)),
@@ -111,8 +110,22 @@ async function judgeReplay(judge: LLM, row: TurnOutcomeRow, fresh: string): Prom
   };
 }
 
+function replayedInstance(opts: RunReplayEvalOpts, row: TurnOutcomeRow): Effect.Effect<ReplayInstanceResult> {
+  const scored = (score: number, note: string): ReplayInstanceResult => ({ outcomeId: row.id, outcome: row.outcome, score, note });
+
+  return Effect.tryPromise({ try: () => opts.runTask(row.userMessage), catch: (cause) => ({ cause }) }).pipe(Effect.matchEffect({
+    onFailure: (failed) => Effect.succeed(scored(0, `re-run failed: ${renderThrownChain(failed)}`)),
+    onSuccess: (fresh) => Effect.tryPromise({ try: () => judgeReplay(opts.judge, row, fresh), catch: (cause) => ({ cause }) }).pipe(Effect.match({
+      onFailure: (failed) => scored(0, `judge failed: ${renderThrownChain(failed)}`),
+      onSuccess: (verdict) => (verdict === null
+        ? scored(0, 'judge failed: replay judge returned no numeric score')
+        : { outcomeId: row.id, outcome: row.outcome, ...verdict }),
+    })),
+  }));
+}
+
 /** Null when no outcome-labeled turns exist. A failed re-run or unusable verdict scores 0. */
-export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEvalSummary | null> {
+export function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEvalSummary | null> {
   const size = Math.max(1, Math.floor(opts.sampleSize ?? DEFAULT_REPLAY_SAMPLE_SIZE));
 
   const negatives = listTurnOutcomes(opts.sql, opts.actor, {
@@ -125,28 +138,12 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
 
   const sample = [...negatives, ...accepted];
 
-  if (sample.length === 0) return null;
+  if (sample.length === 0) return Promise.resolve(null);
 
-  const results: ReplayInstanceResult[] = [];
+  return settle(Effect.map(Effect.forEach(sample, (row) => replayedInstance(opts, row)), (results) => recordedReplay(opts, results)));
+}
 
-  for (const row of sample) {
-    let fresh: string;
-
-    try {
-      fresh = await opts.runTask(row.userMessage);
-    } catch (err) {
-      results.push({ outcomeId: row.id, outcome: row.outcome, score: 0, note: `re-run failed: ${renderThrownChain({ cause: err })}` });
-      continue;
-    }
-
-    try {
-      const verdict = await judgeReplay(opts.judge, row, fresh);
-      results.push({ outcomeId: row.id, outcome: row.outcome, ...verdict });
-    } catch (err) {
-      results.push({ outcomeId: row.id, outcome: row.outcome, score: 0, note: `judge failed: ${renderThrownChain({ cause: err })}` });
-    }
-  }
-
+function recordedReplay(opts: RunReplayEvalOpts, results: ReplayInstanceResult[]): ReplayEvalSummary {
   const interval = scoreInterval(results.map((r) => r.score));
 
   const summary: ReplayEvalSummary = {
