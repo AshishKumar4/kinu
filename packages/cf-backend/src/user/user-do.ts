@@ -82,7 +82,6 @@ import {
   tolerate,
   toKinuError,
 } from '@kinu.run/core/obs';
-import { publicText } from '@kinu.run/core';
 import * as v from 'valibot';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
@@ -1918,7 +1917,7 @@ export class UserDO extends Agent<Env> {
       attached = this._terminals.attach(session, server);
     } catch (cause) {
       // Unknown or taken session is expected (shell ended or object evicted); the pane opens a new one.
-      return new Response(publicText(authoredRefusal({ doing: 'attaching a terminal pane', cause })), { status: 409 });
+      return new Response(renderThrownChain({ cause: authoredRefusal({ doing: 'attaching a terminal pane', cause }) }), { status: 409 });
     }
 
     server.send(JSON.stringify({ type: 'ready' }));
@@ -3803,7 +3802,7 @@ export class UserDO extends Agent<Env> {
       const error = authoredRefusal({ doing: 'listing your Cloudflare AI Gateways', cause });
       diagnostics.failure('user.ai_gateways_unread', error);
 
-      return { connected: true, selectedId, gateways: [], error: publicText(error) };
+      return { connected: true, selectedId, gateways: [], error: renderThrownChain({ cause: error }) };
     }
   }
 
@@ -3993,7 +3992,7 @@ export class UserDO extends Agent<Env> {
       const error = authoredRefusal({ doing: 'checking the Codex sign-in', cause });
       diagnostics.failure('user.codex_poll_failed', error);
 
-      return { connected: false, error: publicText(error) };
+      return { connected: false, error: renderThrownChain({ cause: error }) };
     }
   }
 
@@ -4193,7 +4192,7 @@ export class UserDO extends Agent<Env> {
       parsed = validateProfileCatalog({ value: catalog });
     } catch (cause) {
       // The refusal names the offending path; it is all the owner is shown.
-      return { ok: false, kind: 'malformed', reason: publicText(authoredRefusal({ doing: 'reading the profile catalog', cause })) };
+      return { ok: false, kind: 'malformed', reason: renderThrownChain({ cause: authoredRefusal({ doing: 'reading the profile catalog', cause }) }) };
     }
 
     // No await from here to the write: DO input gates make the CAS atomic.
@@ -5109,7 +5108,7 @@ export class UserDO extends Agent<Env> {
       const error = toKinuError({ doing: 'completing an MCP sign-in', cause, otherwise: 'unavailable' });
       diagnostics.failure('mcp.oauth_callback_failed', error);
 
-      return { ok: false, serverId: null, error: publicText(error) };
+      return { ok: false, serverId: null, error: renderThrownChain({ cause: error }) };
     }
   }
 
