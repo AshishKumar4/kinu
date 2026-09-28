@@ -11,6 +11,7 @@ import {
   type ModelCallReport,
   type ModelOperationEvent,
   type ReasoningEffort,
+  LiveWorkers,
 } from '@kinu.run/core';
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_SPEND_SOURCE, mergePolicyProfile,
@@ -93,6 +94,7 @@ function runtimeWith(text: string) {
 
   const runtime = createHeadRuntime({
     host: neverHost,
+    workers: new LiveWorkers(),
     models: {
       resolveModelWithEffort: (spec, effort) => {
         resolved.push({ spec, effort });

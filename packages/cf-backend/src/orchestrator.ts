@@ -893,6 +893,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       hostNode: (node) => hostNodeSeat(seams, node),
       provisionNodeHome: () => async (node) => seams.nodeHome((await hostNodeSeat(seams, node)).actor),
       runtimeForNodeWorkspace: null,
+      workers: this.liveWorkers,
       reportNodeDelta: () => (frame) => { this.publishHeadStreamFrame(frame); },
       announceHeadActivity: () => (headId) => { this.announceHeadActivity(headId); },
     };
@@ -2653,6 +2654,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
 
     return outcome;
+  }
+
+  /** Stops one swarm worker or branch head; its siblings and the search run on. */
+  @callable()
+  async stopSwarmWorker(headId: string): Promise<{ stopped: boolean }> {
+    return { stopped: await this.liveWorkers.stop(headId, 'stopped by the owner') };
   }
 
   @callable()

@@ -274,6 +274,8 @@ export interface AgentsSwarmDeps {
   /** The *Inherited context* compaction ladder (`SwarmRunDeps.compactShared`); absent, an over-window
    *  parent inherits verbatim and the provider refuses. */
   compactShared?: SwarmRunDeps['compactShared'];
+  /** The workspace's running workers, so the owner can stop one. */
+  workers?: SwarmRunDeps['workers'];
 }
 
 /** Inputs for role/tier/preset precedence, wired under {@link AgentsToolDeps.profile}. */
@@ -1088,6 +1090,7 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
     runtimeForWorkspace,
     // The *Inherited context* barrier; absent stays absent (the seam's loud failure).
     compactShared: swarm.compactShared,
+    workers: swarm.workers,
     redrive,
   };
 

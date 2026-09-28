@@ -8,6 +8,7 @@
  * `Exploration/Isolation.lean`'s `agent_node_is_not_a_branch_explore` shows it does not reach
  * agent nodes, so nodes are graded on what they report, never on a tree diff.
  */
+import type { LiveWorkers } from './live-workers';
 import type { Clock } from '../types/clock';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { DEFAULT_CONFIG } from '../config';
@@ -68,6 +69,8 @@ export interface SwarmRunDeps {
   readonly model: LanguageModel;
   readonly mode: WorkMode;
   readonly signal?: AbortSignal;
+  /** Each running worker's own stop, by head id; absent where nothing can stop one worker. */
+  readonly workers?: LiveWorkers;
   /** See HeadInferenceDeps.clock. */
   readonly clock?: Clock;
   readonly reportModelCall: ModelCallSink;
@@ -334,6 +337,7 @@ export async function runSwarm(
     // Empty for the unrouted default; `expandChild` then falls back to `nodeModel`.
     nodeModels,
     signal: deps.signal,
+    workers: deps.workers,
     nodeDeps,
     budget,
     rootId,

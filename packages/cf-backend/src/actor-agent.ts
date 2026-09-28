@@ -12,7 +12,7 @@ import {
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle, readSessionTranscript,
-  resetGuardedExec, StoragePredatesResetError, ERROR_STATUS,
+  resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, type SessionTranscriptReader,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
@@ -2804,6 +2804,7 @@ export abstract class ActorAgent extends Agent<Env> {
        */
       provisionNodeHome: () => async (node) => seams.nodeHome((await hostNodeSeat(seams, node)).actor),
       runtimeForNodeWorkspace: null,
+      workers: this.liveWorkers,
       // In-isolate nodes publish directly; hosted nodes publish over their own RPC and leave this unread.
       reportNodeDelta: () => (frame) => { this.publishHeadStreamFrame(frame); },
       // Durable half of liveness, on the same listener `headJournal` announces through, so every
@@ -3863,6 +3864,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Built lazily once per DO lifetime; heads need the owner for UserDO auth, so undefined without one. */
   private _cfHeadRuntime: HeadRuntime | null = null;
+  /** This workspace's running swarm workers and branch heads, each stoppable alone. */
+  protected readonly liveWorkers = new LiveWorkers();
   protected getCFHeadRuntime(): HeadRuntime | undefined {
     if (this._cfHeadRuntime) return this._cfHeadRuntime;
     const ownerUserId = this.getOwnerUserId();
@@ -3875,6 +3878,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     this._cfHeadRuntime = createHeadRuntime({
       host: this.hostedSeams(),
+      workers: this.liveWorkers,
       models: this.ownedModelServices,
       // The merge is a judge call: its model and effort come from the route table via this profile,
       // not from the actor's stored chat spec.

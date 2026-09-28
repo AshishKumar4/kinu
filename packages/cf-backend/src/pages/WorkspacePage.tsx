@@ -333,16 +333,8 @@ function NestedAgentColumn({ workspace, path, rpc, ids, input }: { workspace: st
   );
 }
 
-/** Opened for Stop alone: a hired agent's swarm stops with its turn. */
-function OwnerStopBar({ workspace, ownerPath, running }: { workspace: string; ownerPath: string; running: boolean }) {
-  const owner = useKinu({ workspace, subordinate: ownerPath });
-
-  return <ViewOnlyBar running={running} onStop={() => settleLogged("agents.stop_failed", { doing: "stop a swarm", otherwise: "io" }, owner.abortChat)} />;
-}
-
-function SwarmNodeColumn({ main, workspace, ownerPath, runId, nodeId, agent }: {
+function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
   main: ReturnType<typeof useKinu>;
-  workspace: string;
   ownerPath: string | null;
   runId: string;
   nodeId: string;
@@ -367,9 +359,9 @@ function SwarmNodeColumn({ main, workspace, ownerPath, runId, nodeId, agent }: {
         <NodeTranscript selection={{ runId, nodeId }} trees={trees} rpc={rpc} headActivity={main.headActivity}
           headDeltas={main.headDeltas} onSelect={() => undefined} />
       </div>
-      {ownerPath === null
-        ? <ViewOnlyBar running={working} onStop={() => settleLogged("agents.stop_failed", { doing: "stop a swarm", otherwise: "io" }, main.abortChat)} />
-        : <OwnerStopBar workspace={workspace} ownerPath={ownerPath} running={working} />}
+      {/* The workspace holds every running worker, whoever started the swarm; its siblings run on. */}
+      <ViewOnlyBar running={working} onStop={() => settleLogged("agents.stop_failed", { doing: "stop a swarm worker", otherwise: "io" },
+        () => main.rpc("stopSwarmWorker", [nodeId]))} />
     </div>
   );
 }
@@ -418,9 +410,8 @@ function agentPagePath(workspace: string, { open }: PanelAgent): string {
 }
 
 /** `node` is `<run>/<node>`. */
-function SwarmNodePane({ main, workspace, node, ownerPath, agent, rosterLoaded }: {
+function SwarmNodePane({ main, node, ownerPath, agent, rosterLoaded }: {
   main: ReturnType<typeof useKinu>;
-  workspace: string;
   node: string;
   ownerPath: string | null;
   agent: PanelAgent | undefined;
@@ -437,7 +428,7 @@ function SwarmNodePane({ main, workspace, node, ownerPath, agent, rosterLoaded }
     );
   }
 
-  return <SwarmNodeColumn main={main} workspace={workspace} ownerPath={ownerPath} runId={runId} nodeId={nodeId} agent={agent} />;
+  return <SwarmNodeColumn main={main} ownerPath={ownerPath} runId={runId} nodeId={nodeId} agent={agent} />;
 }
 
 function helperBase(workspace: string, subName: string): string {
@@ -1071,7 +1062,7 @@ export default function WorkspacePage() {
               </>}
             />
             {shownNode !== null && (
-              <SwarmNodePane key={shownNode} main={state} workspace={agentId} node={shownNode} ownerPath={nodeOwner} agent={shownAgent} rosterLoaded={rosterLoaded} />
+              <SwarmNodePane key={shownNode} main={state} node={shownNode} ownerPath={nodeOwner} agent={shownAgent} rosterLoaded={rosterLoaded} />
             )}
             {shownNode === null && (subName ? (
               <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}

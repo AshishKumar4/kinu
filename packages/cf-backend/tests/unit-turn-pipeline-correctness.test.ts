@@ -6,6 +6,7 @@ import {
 import {
   MergeOutputSchema, listQueuedShadowTrials, DEFAULT_WORKERS_AI_MODEL_SPEC, DYNAMIC_CONTEXT_OPEN_TAG,
   type ReasoningEffort, type ResolvedTurnProfile,
+  LiveWorkers,
 } from '@kinu.run/core';
 import {
   declareShadowCandidate, hostedExplorationHarness, hostedMainActor, improvementLanesRan,
@@ -441,6 +442,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     const runtime = createHeadRuntime({
       host: noExplorationHost,
+      workers: new LiveWorkers(),
       models: {
         resolveModelWithEffort: (spec, effort) => {
           asked.push({ spec, effort });
