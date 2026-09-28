@@ -425,13 +425,9 @@ export class Inbox implements AgentInbox {
     return returned.map(toUserSteer);
   }
 
-  /** Replace the user queue from its durable authority on reset, ahead of pending events.
-   *  Invalid once a drain or injection has happened this turn: two authorities would duplicate delivery. */
+  /** Replace the user queue from its durable authority, ahead of pending events. Called once, as the session
+   *  is built and before any turn drains, so it is the only authority. */
   restorePending(steers: readonly (UserSteer & { readonly mode?: WorkMode })[]): void {
-    if (this.landing.length > 0 || this.injections.recorded.length > 0) {
-      throw new Error('cannot restore pending steers after this turn started draining');
-    }
-
     const restored: DeliveredUserSignal[] = steers.map((steer) => ({
       kind: USER_MESSAGE_SIGNAL_KIND,
       text: steer.text,
