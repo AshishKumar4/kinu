@@ -46,7 +46,7 @@
  * candidate sources were tested and both were rejected on evidence.
  * `~/.omp/agent/sessions/` holds four project directory names and no roster, is
  * machine-local, and is absent in CI — depending on it would narrow the corpus
- * silently. The
+ * silently, which is the one thing `gate:set-equality` exists to forbid. The
  * repository's own text does not discriminate either: `git grep` finds
  * `SealSideDoor`, `SpecAudit`, `FixtureZero`, `ObjectiveSpec`, `LiteratureGate`,
  * `AxisErgonomics`, `EvalsInfra`, `LeanModel` and `JudgeCeiling` in tracked

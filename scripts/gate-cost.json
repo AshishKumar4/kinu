@@ -113,6 +113,17 @@
       "loadAtStart": 4.13,
       "exit": 0
     },
+    "bun run gate:set-equality": {
+      "wallSeconds": 0.85,
+      "cpuSeconds": 1.16,
+      "peakRssMb": 359.74,
+      "peakRunnable": 8,
+      "peakCpuThreads": 1.84,
+      "meanThreads": 1.36,
+      "samples": 14,
+      "loadAtStart": 4.42,
+      "exit": 0
+    },
     "bun run gate:commit-message": {
       "wallSeconds": 1.55,
       "cpuSeconds": 5.22,
@@ -320,6 +331,17 @@
       "meanThreads": 1.08,
       "samples": 149,
       "loadAtStart": 1.48,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/gate-set-equality.test.ts": {
+      "wallSeconds": 1.44,
+      "cpuSeconds": 2.16,
+      "peakRssMb": 769.91,
+      "peakRunnable": 8,
+      "peakCpuThreads": 1.84,
+      "meanThreads": 1.5,
+      "samples": 24,
+      "loadAtStart": 1.54,
       "exit": 0
     },
     "bun test --timeout=0 scripts/wired.test.ts": {

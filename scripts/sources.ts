@@ -24,7 +24,9 @@
  *
  * So: `trackedFiles` is the only enumeration, the predicates below are the only
  * narrowings, and a gate needing a smaller set imports one of them instead of
- * writing a pattern.
+ * writing a pattern. `scripts/gate-set-equality.ts` asserts that over the gate
+ * programs `ladder.ts` and `deploy.sh` actually invoke — because a rule that
+ * lives only in a docstring is the rule that failed fifteen times.
  *
  * `git ls-files` rather than a directory crawl, because a gate should see what
  * git sees: a build artefact, a scratch file or an ignored vendor tree is not

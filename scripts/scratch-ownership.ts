@@ -51,7 +51,9 @@ import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu.run/test-utils';
 /**
  * The corpus: every enumerated `.ts` this repo owns. `trackedFiles()` via
  * `readMatching` rather than a private glob, because a gate that selects its own
- * population reports green over whatever it happened to look at.
+ * population reports green over whatever it happened to look at — which is the
+ * defect `gate-set-equality` exists to refuse, and it refused this gate's first
+ * version for exactly that.
  */
 const isScannable = (file: string): boolean =>
   isParseable(file) && !file.startsWith('external/') && !file.includes('/dist/');

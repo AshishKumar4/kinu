@@ -83,7 +83,10 @@ export const HOOKS_DIR = '.githooks';
  * deploy that ran the evals took over an hour and spent real tokens to ship a
  * build, so the evals run deliberately — `bun run test:live` and `bun run evals` —
  * and a full evals run still runs every cheaper tier first, which is what the containment
- * order buys.
+ * order buys. gate-set-equality exempts exactly this tier from the "every
+ * LADDER entry is a deploy gate" rule and prints the exemption with the tier's
+ * members, so an entry cannot hide from the deploy by wearing the tier
+ * silently.
  */
 export const TIERS = ['commit', 'push', 'ci', 'deploy', 'evals'] as const;
 
@@ -395,6 +398,29 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the tests in a covered directory assert anything. It proves they '
       + 'compile, which is exactly the signal that was missing.',
     inputs: { kind: 'derived' },
+  },
+  {
+    run: 'bun run gate:set-equality',
+    label: 'Measured set equals governed set',
+    tier: 'commit',
+    // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.63 s. Replaces 0.2 s.
+    seconds: 0.63,
+    catches: 'a gate that measures a narrower set than the one it governs — the defect that '
+      + 'appeared fifteen times across six subsystems on 2026-08-17, four of them committed BY '
+      + 'the change written to close the previous one. Every gate program\'s corpus must come '
+      + 'from `scripts/sources.ts` and be narrowed only by a named predicate exported there, so '
+      + 'measurement cannot drift narrower than enforcement. It also refuses a `writeLock` or a '
+      + '`report` that no `assertMeasured` precedes: a ratchet published before the corpus was '
+      + 'proved non-empty states the HEALTHIEST possible number about a population nobody '
+      + 'looked at. Its own denominator is the union of LADDER and deploy.sh, because those two '
+      + 'disagree by one (`bun run verify:lean`) and reading either alone would certify 34 '
+      + 'while governing 35.',
+    blind: 'sets that are not repository files — temp-directory prefixes, sandbox copy '
+      + 'exclusions, statistical denominators — and grounding failures, where a claim was '
+      + 'relayed rather than read. Three of the fifteen were each of those and no set-equality '
+      + 'assertion reaches them. Also blind to the 2 shell gate programs, which it counts and '
+      + 'never parses.',
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run gate:commit-message',
@@ -1105,6 +1131,24 @@ export const LADDER: readonly Gate[] = [
     blind: 'a browser started without puppeteer, or through a module the case reads as not importing it '
       + '(a re-export, a dynamic import). An orphan a subreaper adopts instead of PID 1 is not seen.',
     inputs: { ...AMBIENT_BY_NAME, corpus: true, reads: ['scripts/fixtures/test-chrome/'] },
+  },
+  {
+    run: 'bun test --timeout=0 scripts/gate-set-equality.test.ts',
+    label: 'Set-equality gate self-tests',
+    tier: 'push',
+    // Measured 2026-09-05 on the 24-thread box: 1.2/1.0s. Replaces 0.4s.
+    seconds: 1.1,
+    catches: 'the set-equality gate not being able to fail, and — the half that is harder — '
+      + 'it firing on shapes that are legitimate. 24 cases: RED on each of the five defect '
+      + 'shapes actually shipped (a private pattern, a private `git ls-files`, a private walk, '
+      + 'a glob scan, a lock published before its measurement), GREEN on their corrected form, '
+      + 'and SILENT on the four a naive reading mistakes for violations — a URL route, a model '
+      + 'id prefix, a `.replace()` specifier rewrite, and `matchAll` over prose. Without those '
+      + 'four the gate reports 40 findings of which 38 are `context.report` in an oxlint rule; a '
+      + 'gate whose output is mostly noise trains people to ignore it.',
+    blind: 'whether the predicates in sources.ts describe the right sets. It proves nothing '
+      + 'else re-spells them.',
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test --timeout=0 scripts/wired.test.ts',
@@ -2430,7 +2474,8 @@ export function deployOrder(): Gate[] {
  * tables `deploy.test.ts` held equal to this file. Now deploy.sh consumes
  * `--plan` and there is one copy: this one.
  *
- * Reads no cost, because its caller — the test census — asks which gates exist and not what they take. A commit-tier gate
+ * Reads no cost, because its callers — `gate:set-equality` and the test
+ * census — ask which gates exist and not what they take. A commit-tier gate
  * that needed the cost table would make an unmeasured row block a commit
  * rather than a deploy.
  */

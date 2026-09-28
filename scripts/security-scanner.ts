@@ -64,7 +64,8 @@ const FEED_TIMEOUT_MS = 20_000;
  *  stdout behind {@link REPORT_SENTINEL}. Bun consumes the scanner's return
  *  value itself and offers a caller no structured channel, so the gate reads the
  *  scan the scanner actually performed instead of re-deriving one — a second
- *  derivation is a second enumeration. */
+ *  derivation is a second enumeration, which is what `gate:set-equality` exists
+ *  to prevent. */
 export const REPORT_ENV = 'KINU_ADVISORY_REPORT';
 
 /** Prefix of the one machine-readable stdout line. */
