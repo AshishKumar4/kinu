@@ -429,7 +429,7 @@ describe('paging', () => {
       feedbackStore.recordFeedback(sql, {
         id: `f${String(i)}`, createdAt: 1_000 + i, userId: 'u1', email: 'a@x',
         note: `note ${String(i)}`, route: '/workspace/x', workspace: 'x',
-        objectKey: null, contentType: null, bytes: null, userAgent: null,
+        objectKey: null, bytes: null,
       });
       auditIds.push(store.appendAudit(sql, {
         actorEmail: 'ops@kinu.run', actorUserId: 'u1',
@@ -455,7 +455,7 @@ describe('feedback rows', () => {
     feedbackStore.recordFeedback(sql, {
       id: 'f1', createdAt: 1_000, userId: 'u1', email: 'a@x',
       note: 'the sidebar overlaps at 640px', route: '/workspace/alpha', workspace: 'alpha',
-      objectKey: null, contentType: null, bytes: null, userAgent: 'Mozilla/5.0',
+      objectKey: null, bytes: null,
     });
     const row = feedbackStore.listFeedback(sql).items[0];
     expect(row?.objectKey).toBe(null);
@@ -469,13 +469,11 @@ describe('feedback rows', () => {
     feedbackStore.recordFeedback(sql, {
       id: 'f2', createdAt: 1_000, userId: 'u1', email: 'a@x',
       note: 'x'.repeat(9_000), route: 'y'.repeat(2_000), workspace: null,
-      objectKey: 'feedback/u1/f2.png', contentType: 'image/png', bytes: 12_345,
-      userAgent: 'z'.repeat(2_000),
+      objectKey: 'feedback/u1/f2.png', bytes: 12_345,
     });
     const row = feedbackStore.listFeedback(sql).items[0];
     expect(row?.note.length).toBe(4_000);
     expect(row?.route.length).toBe(512);
-    expect(row?.userAgent?.length).toBe(512);
     close();
   });
 
@@ -484,7 +482,7 @@ describe('feedback rows', () => {
 
     const row = {
       id: 'f3', createdAt: 1_000, userId: 'u1', email: 'a@x', note: 'once',
-      route: '/', workspace: null, objectKey: null, contentType: null, bytes: null, userAgent: null,
+      route: '/', workspace: null, objectKey: null, bytes: null,
     };
 
     feedbackStore.recordFeedback(sql, row);

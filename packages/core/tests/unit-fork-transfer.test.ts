@@ -295,9 +295,13 @@ describe('fork transfer receiver', () => {
 
     if (begin?.kind !== 'begin') throw new Error('expected a begin frame');
     const writer = new ForkTargetWriter(tgt.sql, OWNER);
-    await drain(new ForkTransferReceiver(writer, sinkFor(tgt)), frames);
+    const receiver = new ForkTransferReceiver(writer, sinkFor(tgt));
+    await drain(receiver, frames.slice(0, -1));
 
+    expect(frames.at(-1)?.kind).toBe('commit');
     expect(writer.staged).toEqual(begin.counts);
+    await drain(receiver, frames.slice(-1));
+    expect(writer.published).not.toBeNull();
   });
 
   test('a target mid-transfer holds staged rows and is still not a fork', async () => {

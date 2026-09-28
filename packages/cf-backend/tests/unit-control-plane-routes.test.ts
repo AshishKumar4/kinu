@@ -74,7 +74,7 @@ interface World {
 
 function roster(...names: string[]): WorkspaceEntry[] {
   return names.map((name, index) => ({
-    name, displayName: name, createdAt: 100 + index, lastVisited: 900 - index, archivedAt: null,
+    name, displayName: name, createdAt: 100 + index, lastVisited: 900 - index,
   }));
 }
 

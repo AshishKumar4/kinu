@@ -357,19 +357,25 @@ export function namespaceBinding(
  * 2026-09-05 attempt, and the deploy that named `kinu-kinusandbox-staging` uploaded the Worker and was then refused.
  */
 export function containerNamespace(namespace: string | undefined, application: string): Observation {
+  const applications = containerApplications();
+
+  return 'failure' in applications ? unknown(applications.failure) : namespaceBinding(namespace, application, applications);
+}
+
+export function containerApplications(): readonly ContainerApplication[] | { readonly failure: string } {
   const loaded = containerCatalog.load();
 
-  if ('failure' in loaded) return unknown(loaded.failure);
+  if ('failure' in loaded) return loaded;
   const applications: ContainerApplication[] = [];
 
   for (const row of loaded.rows) {
     const info = containerInfo(row.id);
 
-    if ('failure' in info) return unknown(info.failure);
+    if ('failure' in info) return info;
     applications.push({ id: info.id, name: info.name, namespace: info.durable_objects?.namespace_id });
   }
 
-  return namespaceBinding(namespace, application, applications);
+  return applications;
 }
 
 /**

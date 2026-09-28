@@ -43,7 +43,6 @@ import type { ActorHandle } from '../identity/actor-handle';
 export interface RequestRefinementInput {
   readonly trigger: RefinementTrigger;
   readonly scope: RefinementScope;
-  readonly sessionId?: string;
   /** Omitted: the workspace's unresolved negative outcomes. */
   readonly turnIds?: readonly string[];
   readonly debtKey?: string;
@@ -84,10 +83,6 @@ export async function requestRefinement(
     scope: input.scope,
     turnIds: reviewed,
   };
-
-  if (input.sessionId !== undefined) {
-    requestInput = { ...requestInput, sessionId: input.sessionId };
-  }
 
   if (input.debtKey !== undefined) {
     requestInput = { ...requestInput, debtKey: input.debtKey };
@@ -207,7 +202,7 @@ function planFailed(
 
 function laneHeld(deps: RefinementDeps, store: RefinementStore, request: RefinementRequest, detail: string): RefinementLaneStep {
   store.record(request.id, request.stage, { detail });
-  holdRefinementLane(deps.control.sql, deps.control.rt.actor.actorId, detail);
+  holdRefinementLane(deps.control.sql, deps.control.rt.actor.actorId);
 
   return { step: 'idle' };
 }
@@ -349,7 +344,7 @@ async function askRefiner(
   const refiner = deps.refiner;
 
   if (!refiner) return { ok: false, error: 'this host wires no refiner' };
-  const lane = { lane: 'refinement', requestId: request.id } as const;
+  const lane = { requestId: request.id } as const;
   const held = refiner.reclaim(lane);
 
   if (held?.state === 'running') return 'running';

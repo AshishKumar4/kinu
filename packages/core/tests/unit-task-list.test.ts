@@ -148,16 +148,12 @@ describe('TaskListStore', () => {
       parent_id TEXT,
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open',
-      created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
+      note TEXT,
       PRIMARY KEY (actor_id, id)
     )`);
-    db.exec(`CREATE TABLE agent_task_notes (
-      actor_id TEXT NOT NULL, task_id TEXT NOT NULL, note TEXT NOT NULL,
-      PRIMARY KEY (actor_id, task_id)
-    )`);
-    void sql`INSERT INTO agent_tasks (actor_id, id, seq, parent_id, title, status, created_at, updated_at)
-      VALUES (${actor.actorId}, 't9', 999, NULL, 'x', 'bogus', 1, 1)`;
+    void sql`INSERT INTO agent_tasks (actor_id, id, seq, parent_id, title, status, updated_at)
+      VALUES (${actor.actorId}, 't9', 999, NULL, 'x', 'bogus', 1)`;
     const s = new TaskListStore(sql, actor, write => db.transaction(write)());
     expect(() => s.get('t9')).toThrow('bogus');
   });

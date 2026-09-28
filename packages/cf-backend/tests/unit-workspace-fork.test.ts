@@ -31,7 +31,7 @@ function harness(options: {
       calls.push(`reserve:${name}`);
 
       return {
-        entry: { name, displayName: name, createdAt: 1, lastVisited: 1, archivedAt: null },
+        entry: { name, displayName: name, createdAt: 1, lastVisited: 1 },
         reserved: !options.conflict,
       };
     },

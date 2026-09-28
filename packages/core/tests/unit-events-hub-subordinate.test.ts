@@ -74,10 +74,10 @@ describe('subordinate event derivation', () => {
     const base = {
       id: 'e', trace_id: 'e', caused_by: null, ingress: 'subordinate',
       trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
-      received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
+      received_at: 0, reply_channel: null, dedupe_key: null,
     } satisfies Pick<KinuEvent,
       'id' | 'trace_id' | 'caused_by' | 'ingress' | 'trust' | 'priority'
-      | 'payload_visibility' | 'received_at' | 'schema_version' | 'reply_channel' | 'dedupe_key'>;
+      | 'payload_visibility' | 'received_at' | 'reply_channel' | 'dedupe_key'>;
 
     const taskEvent: KinuEvent = { ...base, variant: 'subordinate_task', payload: taskPayload };
     const reportEvent: KinuEvent = { ...base, variant: 'subordinate_report', payload: reportPayload };

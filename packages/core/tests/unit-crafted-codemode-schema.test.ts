@@ -61,9 +61,7 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
     rt.craftStore.create({
       name: 'double',
       description: 'Doubles its numeric argument',
-      params: null,
       code: 'async (n) => n * 2',
-      scope: 'local',
     });
 
     let factoryCallCount = 0;
@@ -111,8 +109,8 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
 
     // The in-episode move: the agent crafts a tool mid-turn.
     rt.craftStore.create({
-      name: 'quadruple', description: 'x4', params: null,
-      code: 'async (n) => n * 4', scope: 'local',
+      name: 'quadruple', description: 'x4',
+      code: 'async (n) => n * 4',
     });
 
     const after = resolve();
@@ -125,9 +123,7 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
     rt.craftStore.create({
       name: 'triple',
       description: 'Triples',
-      params: null,
       code: 'async (n) => n * 3',
-      scope: 'local',
     });
 
     let execCalls = 0;
@@ -153,9 +149,7 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
     rt.craftStore.create({
       name: 'forgotten',
       description: 'old tool',
-      params: null,
       code: 'async () => null',
-      scope: 'local',
     });
     void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'forgotten'`;
 

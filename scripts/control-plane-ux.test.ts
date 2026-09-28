@@ -806,13 +806,12 @@ describe('the control plane in a browser', () => {
             {
               id: 'f1', createdAt: 1_700_000_000_000, userId: USER_ID, email: 'reporter@example.com',
               note: 'the sidebar overlaps at 640px', route: '/workspace/alpha', workspace: 'alpha',
-              objectKey: null, contentType: null, bytes: null, userAgent: 'Mozilla/5.0',
+              objectKey: null, bytes: null,
             },
             {
               id: 'f2', createdAt: 1_699_999_000_000, userId: OTHER_ID, email: 'other@example.com',
               note: '', route: '/', workspace: null,
-              objectKey: 'feedback/x/f2.png', contentType: 'image/png', bytes: 512_000,
-              userAgent: null,
+              objectKey: 'feedback/x/f2.png', bytes: 512_000,
             },
           ],
         }),

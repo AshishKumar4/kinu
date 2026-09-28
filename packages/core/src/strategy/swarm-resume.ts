@@ -168,7 +168,6 @@ export function initSwarmNodeRecords(execRaw: RawSqlExec): void {
     root_id     TEXT NOT NULL,
     record_json TEXT NOT NULL,
     merged_at   INTEGER,
-    created_at  INTEGER NOT NULL,
     PRIMARY KEY (actor_id, node_id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_swarm_node_records_root
@@ -180,17 +179,15 @@ export function recordSwarmNode(sql: SqlExecutor, actor: ActorHandle, input: {
   readonly rootId: string;
   readonly nodeId: string;
   readonly record: SwarmNodeRecord;
-  readonly now: number;
 }): void {
   actor.assertCurrent();
   const actorId = actor.actorId;
   void sql`INSERT OR REPLACE INTO swarm_node_records
-    (actor_id, node_id, root_id, record_json, merged_at, created_at)
+    (actor_id, node_id, root_id, record_json, merged_at)
     VALUES (${actorId}, ${input.nodeId}, ${input.rootId},
             ${JSON.stringify({ v: RECORD_SCHEMA_VERSION, ...input.record })},
             (SELECT merged_at FROM swarm_node_records
-               WHERE actor_id = ${actorId} AND node_id = ${input.nodeId}),
-            ${input.now})`;
+               WHERE actor_id = ${actorId} AND node_id = ${input.nodeId}))`;
 }
 
 /** Record that this member's work reached the origin, so a re-entry does not re-apply it in a fan-in. */

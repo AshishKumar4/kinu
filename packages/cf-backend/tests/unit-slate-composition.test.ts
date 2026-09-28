@@ -62,8 +62,8 @@ test('native MCP protocol failures reject while namespace responses retain their
     const owner = await testOwner();
     await user.userDO.userMcp_list(owner);
     user.sql.exec(`INSERT INTO user_mcp_servers
-      (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL, 0, 0)`);
+      (id, name, server_url, transport, headers, allowed_tools)
+      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL)`);
     await user.userDO.userMcp_list(owner);
     seedMcpTools('connection-id', [{ name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }]);
     actor.agent.harnessDrivingUserMessage('Read the issue.', { kinuMode: 'build' });
@@ -106,8 +106,8 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     const owner = await testOwner();
     await user.userDO.userMcp_list(owner);
     user.sql.exec(`INSERT INTO user_mcp_servers
-      (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, '["read_issue"]', 0, 0)`);
+      (id, name, server_url, transport, headers, allowed_tools)
+      VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, '["read_issue"]')`);
     await user.userDO.userMcp_list(owner);
     seedMcpTools('connection-id', [
       { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
@@ -196,6 +196,47 @@ test('the initial snapshot discovers authored Slate projects', async () => {
   expect(await actor.agent.getWorkspaceSnapshot()).toHaveProperty('slates', [
     { id: 'overview', title: 'Overview', bindings: ['JOBS'] },
   ]);
+});
+
+test('slate history answers one bounded page and its cursor continues where it stopped', async () => {
+  const actor = orchestratorHarness();
+  const files = workspaceFiles(actor.agent);
+  const root = '/slates/notes';
+  await files.mkdir(root, { recursive: true });
+  await files.writeFile(root + '/package.json', JSON.stringify({ main: 'server.ts' }));
+  const committed: string[] = [];
+
+  for (let n = 0; n < 20; n += 1) {
+    await files.writeFile(root + '/server.ts', `export default { fetch() { return new Response("${String(n)}"); } };`);
+    const result = await actor.agent.slate({ op: 'commit', id: 'notes' });
+
+    if (!result.ok) throw new Error(result.reason + ': ' + result.error);
+    committed.push(v.parse(v.object({ id: v.string() }), result.value).id);
+  }
+
+  const Page = v.object({ versions: v.array(v.object({ id: v.string() })), next: v.nullable(v.string()) });
+
+  const page = async (after?: string) => {
+    const result = await actor.agent.slate(after === undefined ? { op: 'history', id: 'notes' } : { op: 'history', id: 'notes', after });
+
+    if (!result.ok) throw new Error(result.reason + ': ' + result.error);
+
+    return v.parse(Page, result.value);
+  };
+
+  const first = await page();
+  expect(first.versions.length).toBeLessThan(committed.length);
+  expect(first.next).not.toBeNull();
+  const seen = first.versions.map((version) => version.id);
+
+  for (let cursor = first.next; cursor !== null;) {
+    const next = await page(cursor);
+    seen.push(...next.versions.map((version) => version.id));
+    cursor = next.next;
+  }
+
+  expect(seen).toEqual(committed);
+  expect(await actor.agent.slate({ op: 'history', id: 'notes', after: 'no-such-version' })).toMatchObject({ ok: false, reason: 'missing' });
 });
 
 test('the agent slate operation commits, forks and restores its authored source', async () => {

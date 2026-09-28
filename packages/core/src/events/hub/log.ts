@@ -1,11 +1,11 @@
 /** Append-only ledger over `agent_log`; `publish()` is the only admission path. Identity columns
- *  are immutable after insert; `turn_id`/`step_idx` may rebind, each transition writing a phase row. */
+ *  are immutable after insert; `turn_id`/`step_idx` may rebind. */
 
 import * as v from 'valibot';
 import { WorkModeSchema } from '../../types/turn';
 import {
   SUBORDINATE_REPORT_STATUSES,
-  type AgentLogRow, type EventId, type EventVariant, type IngressDescriptor,
+  type EventId, type EventVariant, type IngressDescriptor,
   type SubordinateReportHandoffField,
   type Priority, type KinuEvent, type RevisitCondition,
   type TraceId, type TurnId,
@@ -28,8 +28,6 @@ import { boundedInt, boundPageQuery } from '../../utils/bounds';
 import { SubordinateInheritedContextSchema } from '../../types/subordinates';
 import { Effect } from 'effect';
 import { diagnostics, settleSync, toKinuError, type KinuError } from '../../obs/index';
-
-const EVENT_SCHEMA_VERSION = 1;
 
 export interface PublishResult {
   /** The existing id when deduped. */
@@ -95,10 +93,6 @@ const PrioritySchema = v.picklist(['urgent', 'normal', 'background']);
 
 const PayloadPolicySchema = v.picklist(['full', 'redact', 'hash', 'hmac', 'opaque_handle']);
 
-const AgentLogKindSchema = v.picklist([
-  'event', 'phase', 'step', 'tool_call', 'tool_result', 'reactor_decision', 'reply_attempt',
-]);
-
 const NullableString = v.nullable(v.string());
 
 const NullableNumber = v.nullable(v.number());
@@ -113,8 +107,6 @@ const TraceRowSchema = v.object({ trace_id: v.string() });
 
 const CountRowSchema = v.object({ n: v.number() });
 
-const PhaseRowSchema = v.object({ payload: v.string(), received_at: v.number() });
-
 const EventRowSchema = v.object({
   id: v.string(),
   parent_id: NullableString,
@@ -126,27 +118,8 @@ const EventRowSchema = v.object({
   payload_visibility: PayloadPolicySchema,
   payload: v.string(),
   received_at: v.number(),
-  schema_version: v.number(),
   dedupe_key: NullableString,
   step_idx: NullableNumber,
-});
-
-const AgentLogRowSchema = v.object({
-  id: v.string(),
-  kind: AgentLogKindSchema,
-  turn_id: NullableString,
-  step_idx: NullableNumber,
-  parent_id: NullableString,
-  trace_id: v.string(),
-  ingress: v.nullable(IngressSchema),
-  variant: v.nullable(VariantSchema),
-  trust: v.nullable(TrustSchema),
-  priority: v.nullable(PrioritySchema),
-  payload_visibility: v.nullable(PayloadPolicySchema),
-  payload: v.string(),
-  received_at: v.number(),
-  schema_version: v.number(),
-  dedupe_key: NullableString,
 });
 
 const ChatPayloadSchema = v.object({ text: v.string() });
@@ -339,9 +312,8 @@ export class EventLog {
     this.sql.exec(
       `INSERT INTO agent_log
          (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
-          trust, priority, payload_visibility, payload, received_at,
-          schema_version, dedupe_key)
-       VALUES (?, ?, 'event', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          trust, priority, payload_visibility, payload, received_at, dedupe_key)
+       VALUES (?, ?, 'event', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       this.actorId,
       placeholderId,
       caused_by ?? null,
@@ -353,7 +325,6 @@ export class EventLog {
       derived.payload_visibility,
       JSON.stringify(storedPayload),
       now,
-      EVENT_SCHEMA_VERSION,
       dedupe_key,
     );
 
@@ -384,7 +355,7 @@ export class EventLog {
     // Deferred (step_idx=-1) and dismissed (step_idx=-2) are excluded.
     let sql = `
       SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
-             payload_visibility, payload, received_at, schema_version,
+             payload_visibility, payload, received_at,
              dedupe_key, step_idx
       FROM agent_log
       WHERE actor_id = ?
@@ -444,7 +415,7 @@ export class EventLog {
 
     const rows = this.sql.exec(
       `SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
-              payload_visibility, payload, received_at, schema_version,
+              payload_visibility, payload, received_at,
               dedupe_key, step_idx
        FROM agent_log
        WHERE actor_id = ? AND kind = 'event' AND turn_id IS NULL AND step_idx = -1`,
@@ -637,7 +608,7 @@ export class EventLog {
 
     let sql = `
       SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
-             payload_visibility, payload, received_at, schema_version,
+             payload_visibility, payload, received_at,
              dedupe_key, step_idx
       FROM agent_log
       WHERE actor_id = ? AND kind = 'event'
@@ -667,7 +638,7 @@ export class EventLog {
 
     const rows = this.sql.exec(
       `SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
-              payload_visibility, payload, received_at, schema_version,
+              payload_visibility, payload, received_at,
               dedupe_key, step_idx
        FROM agent_log
        WHERE actor_id = ? AND kind = 'event' AND id = ?`, this.actorId, eventId,
@@ -701,7 +672,7 @@ export class EventLog {
 
   /** Never for `kind='event'` rows; only `publish()` inserts those. */
   appendNonEventRow(opts: {
-    kind: 'phase' | 'step' | 'tool_call' | 'tool_result' | 'reactor_decision' | 'reply_attempt';
+    kind: 'reply_attempt';
     turn_id: TurnId | null;
     step_idx: number | null;
     parent_id: string | null;
@@ -714,50 +685,13 @@ export class EventLog {
     this.sql.exec(
       `INSERT INTO agent_log
          (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
-          trust, priority, payload_visibility, payload, received_at,
-          schema_version, dedupe_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, 1, NULL)`,
+          trust, priority, payload_visibility, payload, received_at, dedupe_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, NULL)`,
       this.actorId, id, opts.kind, opts.turn_id, opts.step_idx, opts.parent_id, opts.trace_id,
       JSON.stringify(opts.payload), opts.now,
     );
 
     return id;
-  }
-
-  currentPhase(turn_id: TurnId): { phase: string; at: number } | null {
-    this.actor.assertCurrent();
-
-    const rows = this.sql.exec(
-      `SELECT payload, received_at FROM agent_log
-       WHERE actor_id = ? AND kind = 'phase' AND turn_id = ?
-       ORDER BY received_at DESC, id DESC LIMIT 1`,
-      this.actorId, turn_id,
-    ).toArray().map((row) => v.parse(PhaseRowSchema, row));
-
-    if (rows.length === 0) return null;
-    const payload = parseJsonObject(rows[0].payload);
-    const phase = v.safeParse(v.string(), payload.phase);
-
-    return { phase: phase.success ? phase.output : 'unknown', at: rows[0].received_at };
-  }
-
-  turnSteps(turn_id: TurnId): AgentLogRow[] {
-    this.actor.assertCurrent();
-
-    const rows = this.sql.exec(
-      `SELECT id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
-              trust, priority, payload_visibility, payload, received_at, schema_version, dedupe_key
-       FROM agent_log
-       WHERE actor_id = ? AND turn_id = ?
-         AND kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision')
-       ORDER BY step_idx, id`,
-      this.actorId, turn_id,
-    ).toArray().map((row) => v.parse(AgentLogRowSchema, row));
-
-    return rows.map((row): AgentLogRow => ({
-      ...row,
-      payload: parseJsonValue(row.payload),
-    }));
   }
 }
 
@@ -806,7 +740,6 @@ function rowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent {
     trust: row.trust,
     priority: row.priority,
     received_at: row.received_at,
-    schema_version: row.schema_version,
     reply_channel: null,
     dedupe_key: row.dedupe_key,
   };

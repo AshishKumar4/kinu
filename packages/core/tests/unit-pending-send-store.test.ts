@@ -3,6 +3,8 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initPendingSendTables, PendingSendStore } from '../src/orchestrator/inbox';
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from '../src/cloud-wire';
+import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { makeSql, makeExecRaw } from './helpers';
 
 function setup() {
@@ -11,7 +13,7 @@ function setup() {
   const sql = makeSql(db);
   const store = (actorId: string) => new PendingSendStore(sql, actorId);
 
-  return { sql, store };
+  return { db, sql, store };
 }
 
 const FILE = { filename: 'a.png', mediaType: 'image/png', url: 'data:image/png;base64,x' };
@@ -31,6 +33,31 @@ describe('PendingSendStore — the reservation', () => {
     ]);
     expect(sends.files('s-1')).toEqual([FILE, FILE_B]);
     expect(sends.files('s-2')).toEqual([]);
+  });
+
+  test('a send carrying two of the largest attachments the composer admits fits the platform row cap', () => {
+    const { db, store } = setup();
+
+    const largest = (name: string) => ({
+      filename: name, mediaType: 'application/octet-stream',
+      url: `data:application/octet-stream;base64,${Buffer.alloc(CLOUD_MAX_INLINE_ATTACHMENT_BYTES, 7).toString('base64')}`,
+    });
+
+    const files = [largest('one.bin'), largest('two.bin')];
+
+    store('actor-a').reserve({ id: 's-big', turnId: 'turn-1', mode: 'build', text: 'both attached', files });
+
+    const tables = db.query<{ name: string }, []>(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'pending_steer%'`).all();
+
+    const widest = Math.max(...tables.map(({ name }) => {
+      const columns = db.query<{ name: string }, []>(`SELECT name FROM pragma_table_info('${name}')`).all()
+        .map((column) => `COALESCE(length(CAST(${column.name} AS BLOB)), 0)`).join(' + ');
+
+      return db.query<{ bytes: number }, []>(`SELECT MAX(${columns}) AS bytes FROM ${name}`).get()?.bytes ?? 0;
+    }));
+
+    expect(widest).toBeLessThan(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
+    expect(store('actor-a').files('s-big')).toEqual(files);
   });
 
   test('retire spends the row AND its attachments, and no other actor\'s', () => {

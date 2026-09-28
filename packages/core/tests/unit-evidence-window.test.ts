@@ -108,13 +108,12 @@ describe('the readers can see the end of a long turn', () => {
       expect(prompt).toContain(`CURRENT-${ending}`);
     }
 
-    // The row is the evidence the verdict was formed on.
-    const row = rt.storage.sql<{ task: string; current_output: string }>`
-      SELECT task, current_output FROM scaffold_evaluations
+    // The recorded task is the one the verdict was formed on.
+    const row = rt.storage.sql<{ task: string }>`
+      SELECT task FROM scaffold_evaluations
       WHERE actor_id = ${rt.actor.actorId} LIMIT 1`[0];
 
     expect(row.task).toBe(evidenceWindow(trajectory(20_000, `ASK-${ending}`), EVIDENCE_BUDGETS.shadowTask));
-    expect(row.current_output).toContain(`CURRENT-${ending}`);
   });
 
   // Windowing twice would report the second pass's omission count.

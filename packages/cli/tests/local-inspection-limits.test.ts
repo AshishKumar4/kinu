@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { RUN_TIMELINE_MAX, initWorkspaceSchema } from '@kinu.run/core';
-import { makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { makeWorkspaceSchemaSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import { agentDir } from '../src/config';
 import { listLocalTimeline, searchLocalMemory } from '../src/local-inspection';
@@ -25,14 +25,15 @@ function seed(rows: number): void {
   const db = new Database(DB_PATH);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const { actorId } = createTestActorsOver(db, { name: AGENT }).main;
+  stampSchemaGenesis(db);
 
   for (let i = 0; i < rows; i++) {
     db.run('INSERT INTO agent_log (actor_id, id, kind, trace_id, payload, received_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [actorId, `log-${i}`, 'step', `trace-${i}`, '{}', 1000 + i]);
+      [actorId, `log-${i}`, 'reply_attempt', `trace-${i}`, '{}', 1000 + i]);
     db.run('INSERT INTO evolution_events (actor_id, id, type, message, created_at) VALUES (?, ?, ?, ?, ?)',
       [actorId, `ev-${i}`, 'note', `m${i}`, 1000 + i]);
-    db.run('INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [`c-${i}`, `memory/n${i}.md`, 1, 2, `h${i}`, `wrangler staging note ${i}`, 1000 + i]);
+    db.run('INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text) VALUES (?, ?, ?, ?, ?, ?)',
+      [`c-${i}`, `memory/n${i}.md`, 1, 2, `h${i}`, `wrangler staging note ${i}`]);
   }
 
   db.close();

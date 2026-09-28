@@ -19,6 +19,7 @@ import {
   SEARCH_QUERY, SETTLE_ASK, SETTLE_MARKER, STANDBY_MISSION, SWARM_ASK, SWARM_TASK, TOOLS_CODEMODE_MARK, TOOLS_FACT,
   TOOLS_HEALTH_URL, TOOLS_LIST_ASK, TOOLS_PROBE_BYTES, TOOLS_PROBE_PATH, TOOLS_RUN_MARK, TOOLS_TASK_TITLE,
   TOOLS_USE_ASK, TREE_ASK, TREE_DEEP_WORD, TREE_SHALLOW_WORD, UNNAMED_MACHINE_ASK, WAKE_ASK, WAKE_STEPS,
+  NESTED_HIRE_ASK, NESTED_MISSION, NESTED_TASK_TITLE, NESTED_WORD,
   sayWordMission,
 } from './asks';
 import { LISTING_TURN, STEER, STEER_MARKER, STEER_TURN } from './steer-observation';
@@ -264,6 +265,18 @@ const helloSlate: Script = (request) => latest(request) !== HELLO_SLATE_ASK ? nu
   call('eval', { code: `// Start the ${HELLO_SLATE_ID} slate's preview\nreturn await workspace.slates.${HELLO_SLATE_ID}.$preview();` }),
 ], (turn) => `pong\n${turn.at(-1)?.result.match(/https?:\/\/[^\s"'\\]+/)?.[0] ?? 'no preview URL'}`);
 
+/**
+ * agent-nested-chat, the helper the case created: it hires a durable grandchild and ends its turn; the grandchild's
+ * report arrives later and opens a turn of its own, which answers with the word the report carries.
+ */
+const nestedChat: Script = (request) => {
+  if (request.userTexts[0] !== NESTED_HIRE_ASK) return null;
+
+  if (request.userTexts.slice(1).some((text) => text.includes(NESTED_WORD))) return { text: NESTED_WORD };
+
+  return steps(request, [call('agents', { action: 'hire', role: 'task', mission: NESTED_MISSION })], () => 'HIRED');
+};
+
 /** The words every case sends its root agent: a conversation holding one is a case's, never a helper's. */
 const CASE_ASKS: readonly string[] = [
   STEER_TURN, SETTLE_ASK, WAKE_ASK, ISOLATION_ASK, DELEGATION_TASK_ASK, DELEGATION_ROSTER_ASK, TREE_ASK, SWARM_ASK,
@@ -277,6 +290,7 @@ const MISSIONS: readonly (readonly [string, Script])[] = [
   [INTERNAL_FETCH_MISSION, (request) => steps(request, [call('web', { action: 'fetch', url: INTERNAL_URL })], ([fetched]) => oneLine(fetched?.result))],
   ...[DELEGATION_WORD, TREE_DEEP_WORD, TREE_SHALLOW_WORD].map((word): readonly [string, Script] => [sayWordMission(word), () => ({ text: word })]),
   [SWARM_TASK, () => ({ text: 'Banana' })],
+  [NESTED_MISSION, (request) => steps(request, [call('tasks', { action: 'add', titles: [NESTED_TASK_TITLE] })], () => NESTED_WORD)],
 ];
 
 /**
@@ -299,7 +313,7 @@ const helper: Script = (request) => {
 const SCRIPTS: readonly Script[] = [
   steerCorrection, backgroundSettle, backgroundWake, capabilityIsolation, delegation, delegationTree, exploration,
   machineConsent, sandboxMountWrite, twoMachines, webSearch, workspacePanes, everyTool, codemodeCraft, helloSlate, jobWake,
-  helper,
+  nestedChat, helper,
 ];
 
 /** The first answer a case script gives, or null for a request no case owns. */

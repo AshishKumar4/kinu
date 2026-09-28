@@ -108,7 +108,7 @@ describe('CLI cloud agent registry sync', () => {
           throw new Error('missing auth');
         }
         return Response.json([
-          { name: 'web-agent', displayName: 'Web Agent', createdAt: 1790000000000, lastVisited: 1790000000000, archivedAt: null }
+          { name: 'web-agent', displayName: 'Web Agent', createdAt: 1790000000000, lastVisited: 1790000000000 }
         ]);
       };
       const { syncCloudAgentRefs } = await import('./packages/cli/src/agent-list.ts');
@@ -170,7 +170,7 @@ describe('CLI cloud agent registry sync', () => {
 
     const script = `
       globalThis.fetch = async () => Response.json([
-        { name: 'shopbot', displayName: 'Cloud Shop', createdAt: 1790000000000, lastVisited: 1790000000000, archivedAt: null }
+        { name: 'shopbot', displayName: 'Cloud Shop', createdAt: 1790000000000, lastVisited: 1790000000000 }
       ]);
       const { syncCloudAgentRefs } = await import('./packages/cli/src/agent-list.ts');
       const { listLocalRefsAllProjects } = await import('./packages/cli/src/config.ts');

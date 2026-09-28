@@ -74,7 +74,7 @@ describe('recordExploration refines Concurrent.runC', () => {
 
       if (step.action === 'breach') {
         seals[step.run] = { kind: 'sealed', breach: BREACH };
-        sealRecords(sql, actor, { identity, breach: BREACH, at });
+        sealRecords(sql, actor, { identity, breach: BREACH });
         continue;
       }
 
@@ -83,7 +83,7 @@ describe('recordExploration refines Concurrent.runC', () => {
         write: {
           identity, descriptor: null, artifact: step.artifact, value: step.value, detail: 'fixture',
           measured: null, preset: 'fixture', label: null, rootId: `run-${step.run}`,
-          configDigest: 'fixture', depth: 1, branches: 1, floor: FLOOR, costUsd: null, costTokens: null, at,
+          configDigest: 'fixture', depth: 1, branches: 1, floor: FLOOR, costTokens: null, at,
         },
       });
 

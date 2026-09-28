@@ -49,7 +49,7 @@ export const PlanReviewSchema = v.object({
     return admitted.annotations;
   })),
   feedback: v.nullable(v.string()), handoffAccepted: v.boolean(),
-  createdAt: v.number(), updatedAt: v.number(), decidedAt: v.nullable(v.number()),
+  createdAt: v.number(), updatedAt: v.number(),
 });
 
 export function planReviewAwaitingDecision(
@@ -78,12 +78,11 @@ export function planTitle(content: string): string {
 /** Pending plan reviews workspace-wide with owner name. Retired actors stay included: their undecided plan is still undecided. */
 export function listPendingPlanReviews(
   sql: SqlExecutor,
-  workspaceId: string,
 ): ReadonlyArray<{ owner: string; id: string; revision: number; content: string; updatedAt: number }> {
   return sql<{ owner: string; id: string; revision: number; content: string; updated_at: number }>`
     SELECT a.name AS owner, r.id, r.revision, r.content, r.updated_at
     FROM plan_reviews r JOIN workspace_actors a ON a.actor_id = r.actor_id
-    WHERE a.workspace_id = ${workspaceId} AND r.status = 'pending'
+    WHERE r.status = 'pending'
     ORDER BY r.updated_at DESC`.map((row) => ({ ...row, updatedAt: row.updated_at }));
 }
 
@@ -99,7 +98,6 @@ interface PlanReviewRow {
   handoff_attempt: number;
   created_at: number;
   updated_at: number;
-  decided_at: number | null;
 }
 
 const PLAN_ANNOTATION_FIELDS = new Set([
@@ -312,7 +310,6 @@ function toPlanReview(row: PlanReviewRow): PlanReview {
     handoffAccepted: row.handoff_accepted === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    decidedAt: row.decided_at,
   };
 }
 
@@ -330,7 +327,6 @@ export function initPlanReviewTable(execRaw: RawSqlExec): void {
     handoff_attempt  INTEGER NOT NULL DEFAULT 0 CHECK (handoff_attempt >= 0),
     created_at       INTEGER NOT NULL,
     updated_at       INTEGER NOT NULL,
-    decided_at       INTEGER,
     PRIMARY KEY (actor_id, id, revision)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_plan_reviews_session_current
@@ -575,10 +571,10 @@ export class PlanReviewStore {
     const now = this.now();
     void this.sql`INSERT INTO plan_reviews (
       actor_id, id, session_id, revision, content, status, annotations_json, feedback,
-      handoff_accepted, handoff_attempt, created_at, updated_at, decided_at
+      handoff_accepted, handoff_attempt, created_at, updated_at
     ) VALUES (
       ${this.actorId}, ${id}, ${sessionId}, ${revision}, ${content}, 'pending', '[]', NULL,
-      0, 0, ${now}, ${now}, NULL
+      0, 0, ${now}, ${now}
     )`;
 
     if (revising) {
@@ -663,7 +659,7 @@ export class PlanReviewStore {
     const status: PlanReviewStatus = decision === 'approve' ? 'approved' : 'changes_requested';
     const now = this.now();
     void this.sql`UPDATE plan_reviews
-      SET status=${status}, feedback=${normalizedFeedback}, updated_at=${now}, decided_at=${now}
+      SET status=${status}, feedback=${normalizedFeedback}, updated_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status='pending'`;
 
     return this.written(id, revision);
@@ -683,7 +679,7 @@ export class PlanReviewStore {
 
     if (!planReviewAwaitingDecision(current)) return { ok: false, error: `plan revision is already ${current.status}`, plan: current };
     const now = this.now();
-    void this.sql`UPDATE plan_reviews SET status='dismissed', updated_at=${now}, decided_at=${now}
+    void this.sql`UPDATE plan_reviews SET status='dismissed', updated_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status=${current.status}`;
 
     return this.written(id, revision);

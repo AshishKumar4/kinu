@@ -14,7 +14,6 @@ import { renderThrownChain } from '../obs/error';
 import { DEFAULT_CONFIG } from '../config';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import type { ScoreInterval } from '../utils/stats';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
@@ -41,6 +40,10 @@ export interface PromptSectionVersion {
   /** The size rule's comparand, kept so the changelog can show the accepted trade. */
   readonly incumbentBytes: number;
   readonly writtenAt: number;
+  /** Shadow trials run while this version was the pending candidate, scored against the incumbent. */
+  readonly wins: number;
+  readonly losses: number;
+  readonly ties: number;
 }
 
 export interface PendingPromptSection {
@@ -65,25 +68,13 @@ export function initPromptSectionTables(execRaw: RawSqlExec): void {
     status          TEXT NOT NULL CHECK (status IN ('current','pending','rolled_back','historical')),
     incumbent_bytes INTEGER NOT NULL,
     written_at      INTEGER NOT NULL,
+    wins            INTEGER NOT NULL DEFAULT 0,
+    losses          INTEGER NOT NULL DEFAULT 0,
+    ties            INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (actor_id, section_id, version)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_prompt_section_status
            ON prompt_section_versions(actor_id, status, section_id)`);
-  execRaw(`CREATE TABLE IF NOT EXISTS prompt_section_evaluations (
-    actor_id        TEXT NOT NULL,
-    id              TEXT NOT NULL,
-    section_id      TEXT NOT NULL,
-    pending_version INTEGER NOT NULL,
-    instance_id     TEXT NOT NULL,
-    current_score   REAL NOT NULL,
-    pending_score   REAL NOT NULL,
-    winner          TEXT NOT NULL CHECK (winner IN ('current','pending','tie')),
-    feedback        TEXT NOT NULL,
-    evaluated_at    INTEGER NOT NULL,
-    PRIMARY KEY (actor_id, id)
-  )`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_prompt_section_eval_pending
-           ON prompt_section_evaluations(actor_id, section_id, pending_version)`);
 }
 
 /** The promoted source per section, passed as `sectionOverrides`. Read once per
@@ -295,8 +286,11 @@ export function getPendingPromptSection(
 ): PendingPromptSection | null {
   actor.assertCurrent();
 
-  const rows = sql<{ version: number; source: string; rationale: string; written_at: number }>`
-    SELECT version, source, rationale, written_at FROM prompt_section_versions
+  const rows = sql<{
+    version: number; source: string; rationale: string; written_at: number;
+    wins: number; losses: number; ties: number;
+  }>`
+    SELECT version, source, rationale, written_at, wins, losses, ties FROM prompt_section_versions
     WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND status = 'pending'
     ORDER BY version DESC LIMIT 1`;
 
@@ -304,24 +298,10 @@ export function getPendingPromptSection(
 
   if (!row) return null;
 
-  const counts = sql<{ winner: string; n: number }>`
-    SELECT winner, COUNT(*) AS n FROM prompt_section_evaluations
-    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
-      AND pending_version = ${row.version} GROUP BY winner`;
-
-  let trialsSoFar = 0, pendingWins = 0, currentWins = 0, ties = 0;
-
-  for (const count of counts) {
-    trialsSoFar += count.n;
-
-    if (count.winner === 'pending') pendingWins = count.n;
-    else if (count.winner === 'current') currentWins = count.n;
-    else if (count.winner === 'tie') ties = count.n;
-  }
-
   return {
     sectionId, version: row.version, source: row.source, rationale: row.rationale,
-    writtenAt: row.written_at, trialsSoFar, pendingWins, currentWins, ties,
+    writtenAt: row.written_at, trialsSoFar: row.wins + row.losses + row.ties,
+    pendingWins: row.wins, currentWins: row.losses, ties: row.ties,
   };
 }
 
@@ -332,22 +312,17 @@ export function recordPromptSectionTrial(
   args: {
     sectionId: string;
     pendingVersion: number;
-    instanceId: string;
-    currentScore: number;
-    pendingScore: number;
     winner: 'current' | 'pending' | 'tie';
-    feedback: string;
-    now?: number;
   },
 ): void {
   actor.assertCurrent();
+  const winner = v.parse(TrialWinnerSchema, args.winner);
   void sql`
-    INSERT INTO prompt_section_evaluations
-      (actor_id, id, section_id, pending_version, instance_id, current_score, pending_score,
-       winner, feedback, evaluated_at)
-    VALUES (${actor.actorId}, ${`psec-${nanoid()}`}, ${args.sectionId}, ${args.pendingVersion},
-            ${args.instanceId}, ${args.currentScore}, ${args.pendingScore},
-            ${v.parse(TrialWinnerSchema, args.winner)}, ${args.feedback}, ${args.now ?? nowMs()})`;
+    UPDATE prompt_section_versions SET
+      wins = wins + ${winner === 'pending' ? 1 : 0},
+      losses = losses + ${winner === 'current' ? 1 : 0},
+      ties = ties + ${winner === 'tie' ? 1 : 0}
+    WHERE actor_id = ${actor.actorId} AND section_id = ${args.sectionId} AND version = ${args.pendingVersion}`;
 }
 
 /** The scaffold's calibrated rule, unchanged: one policy for one question. */
@@ -412,8 +387,9 @@ export function listPromptSectionVersions(
   const rows = sql<{
     section_id: string; version: number; source: string; rationale: string;
     status: string; incumbent_bytes: number; written_at: number;
+    wins: number; losses: number; ties: number;
   }>`
-    SELECT section_id, version, source, rationale, status, incumbent_bytes, written_at
+    SELECT section_id, version, source, rationale, status, incumbent_bytes, written_at, wins, losses, ties
     FROM prompt_section_versions WHERE actor_id = ${actor.actorId}
     ORDER BY written_at DESC LIMIT ${limit}`;
 
@@ -425,32 +401,8 @@ export function listPromptSectionVersions(
     status: v.parse(PromptSectionStatusSchema, row.status),
     incumbentBytes: row.incumbent_bytes,
     writtenAt: row.written_at,
+    wins: row.wins,
+    losses: row.losses,
+    ties: row.ties,
   }));
-}
-
-/** Keyed `sectionId:version`. */
-export function promptSectionTrialRecord(
-  sql: SqlExecutor,
-  actor: ActorHandle,
-): ReadonlyMap<string, { wins: number; losses: number; ties: number }> {
-  actor.assertCurrent();
-
-  const rows = sql<{ section_id: string; pending_version: number; winner: string; n: number }>`
-    SELECT section_id, pending_version, winner, COUNT(*) AS n
-    FROM prompt_section_evaluations WHERE actor_id = ${actor.actorId}
-    GROUP BY section_id, pending_version, winner`;
-
-  const record = new Map<string, { wins: number; losses: number; ties: number }>();
-
-  for (const row of rows) {
-    const key = `${row.section_id}:${String(row.pending_version)}`;
-    const entry = record.get(key) ?? { wins: 0, losses: 0, ties: 0 };
-
-    if (row.winner === 'pending') entry.wins = row.n;
-    else if (row.winner === 'current') entry.losses = row.n;
-    else entry.ties = row.n;
-    record.set(key, entry);
-  }
-
-  return record;
 }
