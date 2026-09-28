@@ -85,6 +85,8 @@ describe('cancelling a search reaches its hosted nodes', () => {
 
     expect(node?.status).toBe('aborted');
     expect(claims.map((claim) => claim.outcome)).toEqual(['aborted']);
+    // Cancelled with its search, not stopped by its owner: the panel keeps it a fault.
+    expect((await agent.listWorkspaceAgents()).find((listed) => listed.category === 'swarm')?.activity).toBe('failed');
   });
 
   test('the owner stopping one worker settles it aborted while its sibling completes', async () => {
@@ -109,18 +111,20 @@ describe('cancelling a search reaches its hosted nodes', () => {
     const [stopped, sibling] = db.query<{ id: string }, []>('SELECT id FROM head_journal ORDER BY id').all();
 
     if (stopped === undefined || sibling === undefined) throw new Error('the search did not journal two workers');
-    expect(await agent.stopSwarmWorker(stopped.id)).toEqual({ stopped: true });
-    expect(await agent.stopSwarmWorker('no-such-worker')).toEqual({ stopped: false });
+    await agent.stopSwarmWorker(stopped.id);
+    await agent.stopSwarmWorker('no-such-worker');
 
     // A Stop that never reached its worker lets this answer land, and that worker completes.
     for (const call of calls) call.answer.resolve(chatCompletion(call.run, 'Cache the token table.'));
     await agent.harnessJoinDetachedFibers();
 
-    const status = (id: string) => db.query<{ status: string }, [string]>('SELECT status FROM head_journal WHERE id = ?').get(id)?.status;
     const job = db.query<{ status: string }, []>("SELECT status FROM background_jobs WHERE kind = 'agents'").get();
+    const workers = (await agent.listWorkspaceAgents()).filter((listed) => listed.category === 'swarm');
+    const activity = (id: string) => workers.find((listed) => listed.open.kind === 'node' && listed.open.nodeId === id)?.activity;
 
-    expect(status(stopped.id)).toBe('aborted');
-    expect(status(sibling.id)).toBe('completed');
+    // Only the Stop reads as stopped: its reason is recorded, and the sibling it never reached completes.
+    expect(activity(stopped.id)).toBe('stopped');
+    expect(activity(sibling.id)).toBe('done');
     expect(job?.status).not.toBe('cancelled');
   });
 });

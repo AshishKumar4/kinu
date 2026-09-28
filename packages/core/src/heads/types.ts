@@ -98,6 +98,14 @@ const HEAD_UNSETTLED_STATUSES = ['running', 'interrupted'] as const;
 
 export type HeadUnsettledStatus = (typeof HEAD_UNSETTLED_STATUSES)[number];
 
+/** The abort reason a head records when its owner stopped it alone; every other abort is a fault. */
+export const OWNER_STOPPED = 'stopped by the owner';
+
+/** A head's status as shown: `stopped` only when its owner stopped it. */
+export function shownHeadStatus(status: string, errorMessage: string | null): string {
+  return status === 'aborted' && errorMessage === OWNER_STOPPED ? 'stopped' : status;
+}
+
 export function headStatusUnsettled(status: string): status is HeadUnsettledStatus {
   return HEAD_UNSETTLED_STATUSES.some((unsettled) => unsettled === status);
 }
