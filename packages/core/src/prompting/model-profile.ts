@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { ModelCapability } from '../providers/types';
 
 export type PromptModelFamily = 'kimi' | 'gpt' | 'claude' | 'gemini' | 'generic';
@@ -124,5 +126,6 @@ export function modelSupportsTools(model?: PromptModelContext): boolean {
 export function assertToolsSupportedByModel(model: PromptModelContext | undefined, toolNames: readonly string[]): void {
   if (toolNames.length === 0 || modelSupportsTools(model)) return;
   const id = model?.id ? `${model.provider ? `${model.provider}/` : ''}${model.id}` : 'selected model';
-  throw new Error(`${id} does not support tool calling; choose a tool-capable model for agent mode.`);
+
+  return settleSync(Effect.die(new Error(`${id} does not support tool calling; choose a tool-capable model for agent mode.`)));
 }
