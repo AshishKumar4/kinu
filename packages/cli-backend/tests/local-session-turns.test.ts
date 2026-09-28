@@ -21,11 +21,10 @@ import {
 
 test('parallel native calls retain their SDK identities after reverse completion', async () => {
   const { db, rt } = workspaceRuntime();
-  const files = rt.storage.vfs;
-  await files.writeFile('identical.txt', 'same result');
+  await rt.storage.vfs.writeFile('identical.txt', 'same result');
   rt.actor.config.setDisplayNameOrigin('Identity pin', 'user');
   const first = Promise.withResolvers<void>();
-  const plane: VFS & Partial<VfsNativeReads> = files;
+  const plane: VFS & Partial<VfsNativeReads> = rt.toolFiles;
   const readRange = plane.readRange;
 
   if (readRange === undefined) throw new Error('the workspace file plane reads by range');
@@ -33,7 +32,7 @@ test('parallel native calls retain their SDK identities after reverse completion
   plane.readRange = async (...args) => {
     if (args[0] === 'identical.txt' && reads++ === 0) await first.promise;
 
-    return await readRange.apply(files, args);
+    return await readRange.apply(plane, args);
   };
 
   let step = 0;

@@ -21,6 +21,9 @@ export { DbCapabilityProbeDO } from './db-capability-probe';
 
 export { FilesEioProbeDO } from './files-eio-probe';
 
+// A large parked write through Nimbus's staged writeFile: only the platform resets an object over one turn's bytes.
+export { ParkedWritesProbeDO } from './parked-writes-probe';
+
 export { ComplexityProbeDO } from './complexity/complexity-probe';
 
 export { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';

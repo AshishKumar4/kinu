@@ -220,15 +220,18 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   /** Parks a turn-end extension over `/wake/wait`, holding the settle window open
-   *  (between the answer's commit and the pump's next item). */
+   *  (between the answer's commit and the pump's next item), and a turn's start; a measure has no history. */
   private _settleHoldInstalled = false;
   private installSettleHold(): void {
     if (this._settleHoldInstalled) return;
     this._settleHoldInstalled = true;
     this.extensions.register({
       name: 'probe.settle-hold',
+      onTurnStart: async ({ history }) => {
+        if (history.length > 0) await fetch('http://probe-control.invalid/wake/wait?at=start');
+      },
       onTurnEnd: async () => {
-        await fetch('http://probe-control.invalid/wake/wait');
+        await fetch('http://probe-control.invalid/wake/wait?at=settle');
       },
     });
   }
@@ -1133,8 +1136,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   private async sendChatFrame(
     target: QueueTarget, workspace: string, text: string,
-    file?: { filename: string; mediaType: string; url: string },
+    opts: { file?: { filename: string; mediaType: string; url: string }; afterTrace?: () => Promise<void> } = {},
   ): Promise<{ wire: string; landed: string | null }> {
+    const { file, afterTrace } = opts;
+
     const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
       headers: { Upgrade: 'websocket' },
     }));
@@ -1187,6 +1192,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
       }
 
+      await afterTrace?.();
+
       // A busy-routed frame can close before the socket echoes it, so bound the wait.
       const landedValue = await Promise.race([
         landed.promise,
@@ -1219,7 +1226,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     // Sent after the fake reports the held call: sent earlier, B can land inside it and the
     // reset has no reservation to keep.
     await fetch('http://probe-control.invalid/queue/arrived');
-    const bWire = (await this.sendChatFrame(target, workspace, 'QUEUE-B', attach)).wire;
+    const bWire = (await this.sendChatFrame(target, workspace, 'QUEUE-B', { file: attach })).wire;
     const cWire = (await this.sendChatFrame(target, workspace, 'QUEUE-C')).wire;
 
     const steers = await target.pendingSteers();
@@ -1752,11 +1759,16 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const recording = createRecordingLogger();
     setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+    // Genesis parks before its first step, so the prompt steers into it without a race.
+    await fetch('http://probe-control.invalid/wake/hold', { method: 'POST', body: JSON.stringify({ where: 'start' }) });
     const genesis = await target.beginGenesisTurn();
 
     if (!genesis.started) throw new Error('first-gen probe genesis did not start');
+    await fetch('http://probe-control.invalid/wake/arrived');
 
-    const { landed } = await this.sendChatFrame(target, workspace, 'FIRST-PROMPT');
+    const { landed } = await this.sendChatFrame(target, workspace, 'FIRST-PROMPT', {
+      afterTrace: async () => { await fetch('http://probe-control.invalid/wake/release', { method: 'POST' }); },
+    });
 
     // Wait on the call and the turn's close so the landed row and retired steer are both observable.
     const began = Date.now();

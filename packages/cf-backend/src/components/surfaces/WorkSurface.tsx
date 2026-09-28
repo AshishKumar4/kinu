@@ -293,6 +293,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               memory={props.memory}
               rpc={props.rpc}
               readMoves={props.readMoves}
+              agents={props.agents}
             />
           </ErrorBoundary>
         </div>

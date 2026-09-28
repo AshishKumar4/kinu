@@ -943,6 +943,13 @@ gate 256 ms and 297 ms). A cut turn keeps all but its last window.
 Pins: `packages/cli-backend/tests/local-session-turns.test.ts` "a streamed answer
 mints a revision per step" and `packages/core/tests/unit-session-context-store.test.ts`
 "a sealed message is projected once", both red on the old code.
+(5) 2026-09-28 (lane/turn-sql): text windows are cut where a tab's replay store
+cuts its chunks (`flush-cadence.ts`: the first content event, then every ten, and
+each settled tool result), and the `step_partial` run events that re-wrote the
+whole cumulative step at that cadence are gone: a turn cut mid-step resumes from
+its open output in `stream_parts`. Reasoning keeps the 64-delta or 4 KB window.
+Pins: `packages/cli-backend/tests/turn-continuation.test.ts` "A STEP CUT
+MID-STREAM" and `packages/core/tests/unit-partial-flush-cadence.test.ts`.
 
 D23-N. Every instance of the host namespace answers `supervisorOp` with the
 hosted runtime (2026-09-21, this commit; the Nimbus upgrade to core 0.12.0,
@@ -1541,6 +1548,45 @@ Tests, red before and green after:
 Deployed re-proof owed: `sandbox-mount-write` passes on a staging cold start,
 and no staging box logs `devbox.alarm.enter` with `running: true` after its
 workspace's `sandbox.destroy`.
+
+D37. An untimed command runs on the runtime's own exec, not the SDK's
+process lane (2026-09-28). Staging's first-run `background-settle` on
+690e3a6040 ran `sleep 45 && echo KINU_SETTLED_AFTER_DETACH`; it exited 0
+and the product answered `(no output)`.
+
+The SDK's background mode (`sandbox-container/src/session.ts`, the
+`buildFIFOScript` background branch) makes two FIFOs, starts a labeler on
+each and then the command, and a monitor deletes the FIFOs once the labelers
+are gone. The monitor waits with `wait "$r1" "$r2"`, but the labelers are its
+parent's children, so `wait` returns at once (rc 127). The FIFOs can be
+deleted before the command opens them. The command then creates a plain file
+at the FIFO's path and writes into it, and nothing reads it; the process
+record keeps `stdout: ""` for good. Caught in the act on a probe box: a lost
+run's `<id>.stdout.pipe` was a regular 18-byte file, the length of its
+`MARK_…\n`. The stream's polling read also moves past a half-written last
+line, a second, smaller loss.
+
+Probe (`~/kinu-logs/deploy-lane/sandbox-exec-probe/`: both Workers and every
+result file; 200 `sleep 1 && echo MARK` at 16 at once per round, six rounds
+on one box):
+
+- startProcess, SDK as shipped: 143 of 1,175 final lines lost, 7 to 44 a
+  round, rising as the box aged.
+- startProcess with the monitor's wait and the read patched in the image:
+  13 of 1,195, still rising with age.
+- `ctx.container.exec` on the unpatched image: 0 of 1,200, and two
+  100,000-line outputs byte-exact.
+
+`Devbox.execUntimed` runs the command under `bash -c` through
+`ctx.container.exec` and returns its output whole; `killUntimed` ends its
+tree as the SDK's kill did (SIGTERM leaves first, five seconds, then
+SIGKILL). The cf-backend untimed lane (`sandbox-exec-lane.ts`) uses them.
+The image patch is not carried. Timed `exec`, supervised processes and the
+restoration's `#rawExec` still use the SDK.
+
+The first-run case `sandbox-exec-output` runs 600 commands, 32 at once,
+through `sandbox.exec` with no deadline. Red on staging 690e3a6040 (595 of
+600); the upstream report is `kinu-logs/deploy-lane/sandbox-sdk-issue.md`.
 
 ## Measurement contract for a strategy comparison
 

@@ -1,8 +1,7 @@
-import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
-import { STAGED_CONTEXT_DEFERRALS, type ContextProposalClosure, type StagedContextDeferral } from '../types/context-plane';
+import type { ContextProposalClosure, StagedContextDeferral } from '../types/context-plane';
 import { SessionContext, type ContextEntry, type ContextSelection } from './context';
 import type { MessageReference } from './messages';
 
@@ -27,8 +26,6 @@ export interface ContextProposalMetadata extends PendingContextProposal { readon
 
 export interface PendingContextProposal { readonly proposal_id: string; readonly base_revision: number; readonly author: string; readonly via: string; readonly cause: string; readonly turn_id: string | null; readonly deferred_reason: StagedContextDeferral | null; readonly recorded_at: number }
 
-const DeferralSchema = v.picklist(STAGED_CONTEXT_DEFERRALS);
-
 /** Sparse authored intent; committed intervals are the only selection history. */
 export class SessionProposals {
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly context: SessionContext,
@@ -37,8 +34,7 @@ export class SessionProposals {
   pending(contextId: string): readonly PendingContextProposal[] {
     this.actor.assertCurrent();
 
-    return this.sql<Omit<PendingContextProposal, 'deferred_reason'> & { readonly deferred_reason: string | null }>`SELECT proposal_id,base_revision,author,via,cause,turn_id,deferred_reason,recorded_at FROM context_proposals WHERE actor_id=${this.actor.actorId} AND context_id=${contextId} AND status='pending' ORDER BY rowid`
-      .map(row => ({ ...row, deferred_reason: row.deferred_reason === null ? null : v.parse(DeferralSchema, row.deferred_reason) }));;
+    return this.sql<PendingContextProposal>`SELECT proposal_id,base_revision,author,via,cause,turn_id,deferred_reason,recorded_at FROM context_proposals WHERE actor_id=${this.actor.actorId} AND context_id=${contextId} AND status='pending' ORDER BY rowid`;
   }
 
   list(contextId: string): readonly ContextProposalMetadata[] {

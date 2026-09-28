@@ -64,8 +64,6 @@ export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 export interface BuiltinToolDeps {
   workMode?: WorkMode;
   rt: AgentRuntime;
-  /** Filter cutoff override (default: DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection). */
-  minEffectiveScore?: number;
   /**
    * null: sandbox-side compilation (CF Worker Loader prelude). Omitted: no crafted executor.
    */
@@ -77,12 +75,6 @@ export interface BuiltinToolDeps {
   /** Enables remember/recall/forget and joins facts into the search RRF merge. */
   facts?: import('../memory/facts').FactsStore;
   history: SessionHistory;
-  /** Crafted-tool surfacing; 'relevant' injects FTS5 top-K plus frequently used recent tools. */
-  toolSurfacing?: {
-    mode: 'all' | 'relevant';
-    query?: string;
-    maxRelevant?: number;
-  };
   /** Wired only on subordinate actors. */
   report?: ReportToolDeps;
   webSearch?: WebSearchProvider;
@@ -112,37 +104,12 @@ export interface ReportToolDeps {
 }
 
 /** Crafted-tool map, read fresh each call; codegen only via `craftedToolExecute`. */
-function buildCraftedToolSetFromExecute(
-  rt: AgentRuntime,
-  factory: CraftedToolExecute,
-  minScore: number,
-  surfacing?: { mode: 'all' | 'relevant'; query?: string; maxRelevant?: number },
-) {
+function buildCraftedToolSetFromExecute(rt: AgentRuntime, factory: CraftedToolExecute) {
   const out: CraftedToolSet = {};
 
-  const list = selectInjectableCraftedTools(rt.craftStore, rt.storage.sql, minScore);
-
-  let relevantNames: Set<string> | null = null;
-
-  if (surfacing?.mode === 'relevant') {
-    const maxRelevant = surfacing.maxRelevant ?? 20;
-    const half = Math.max(5, Math.floor(maxRelevant / 2));
-    relevantNames = new Set();
-
-    // Unguarded on purpose: the schema guarantees these, and swallowing a failure would silently narrow the callable set.
-    if (surfacing.query && surfacing.query.length > 0) {
-      for (const hit of rt.craftStore.search(surfacing.query, half)) relevantNames.add(hit.name);
-    }
-
-    const top = rt.storage.sql<{ name: string }>`
-      SELECT name FROM crafted_tools
-      ORDER BY uses DESC, last_used_at DESC LIMIT ${maxRelevant}`;
-
-    for (const r of top) relevantNames.add(r.name);
-  }
+  const list = selectInjectableCraftedTools(rt.craftStore, rt.storage.sql, DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection);
 
   for (const t of list) {
-    if (relevantNames && !relevantNames.has(t.name)) continue;
     const description = t.description;
 
     try {
@@ -355,7 +322,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   tools.file = createFileTool({
-    vfs: rt.storage.vfs,
+    vfs: rt.toolFiles,
     ledger: deps.fileLedger ?? new TurnFileLedger(),
     budget,
     memory,
@@ -514,12 +481,7 @@ export function installCodemode(
     : undefined;
 
   const craftedTools = (): CraftedToolSet => craftedToolExecute
-    ? buildCraftedToolSetFromExecute(
-        rt,
-        craftedToolExecute,
-        deps.minEffectiveScore ?? DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection,
-        deps.toolSurfacing,
-      )
+    ? buildCraftedToolSetFromExecute(rt, craftedToolExecute)
     : {};
 
   const built = build({ native: toolsInWorkMode(deps.workMode ?? 'build', surface), craftedTools, providers: rt.executionRouter?.getProviders() ?? [] });

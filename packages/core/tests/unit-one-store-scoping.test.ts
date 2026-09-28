@@ -111,6 +111,7 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
   return {
     workspaceIsMachine: false,
     actor,
+    toolFiles: vfs,
     storage: {
       vfs,
       sql: w.sql,
@@ -505,8 +506,8 @@ describe('two actors, one database: deferred_approvals', () => {
       reason: 'destructive', requestedAt: 1,
     };
 
-    a.create(action);
-    b.create(action);
+    a.create(action, []);
+    b.create(action, []);
     expect(w.count('deferred_approvals')).toBe(2);
 
     expect(a.decide('appr-1', 'approved', 5)?.status).toBe('approved');
@@ -994,7 +995,7 @@ describe('a handle whose validation throws is refused before the statement runs'
       })],
       ['deferred_approvals', () => approvals.create({
         id: 'appr-1', command: 'c', executor: 'e', reason: 'r', requestedAt: 1,
-      })],
+      }, [])],
       ['instruction_approvals', () => new InstructionApprovalStore(
         w.sql, w.revocable, 'scope',
       ).approve('SKILL.md', 'digest')],

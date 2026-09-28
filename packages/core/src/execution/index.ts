@@ -31,7 +31,7 @@ export {
 
 export { DefaultExecutionRouter } from './router';
 
-export { withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach } from './approval';
+export { withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach } from './approval';
 
 export {
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,

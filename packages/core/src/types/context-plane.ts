@@ -16,9 +16,7 @@ export interface ActorClaimReader {
   latestTurn(): ContextTurnClaim | null;
 }
 
-export const STAGED_CONTEXT_DEFERRALS = ['unpaired_tool_call', 'history_rewritten'] as const;
-
-export type StagedContextDeferral = (typeof STAGED_CONTEXT_DEFERRALS)[number];
+export type StagedContextDeferral = 'unpaired_tool_call' | 'history_rewritten';
 
 export type ContextProposalClosure = 'superseded_by_edit' | 'history_rewritten';
 

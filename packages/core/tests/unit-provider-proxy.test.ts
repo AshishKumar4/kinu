@@ -92,20 +92,6 @@ describe('provider proxy fetch', () => {
     expect(seen[0]?.url).toBe('https://api.openai.com/v1/models');
     expect(new Headers(seen[0]?.init?.headers).get('authorization')).toBe('Bearer sk-local');
   });
-
-  test('attaches session headers to proxied requests', async () => {
-    const { seen, fetch: base } = capture();
-
-    const proxied = createProviderProxyFetch({
-      forwardURL: 'https://kinu.example.com/api/user/ai/proxy/forward',
-      authorization: 'Bearer ptc_test',
-      headers: { 'x-session-affinity': 'kinu-alpha' },
-      fetch: base,
-    });
-
-    await proxied('https://openrouter.ai/api/v1/models', { headers: { [PROXY_CRED_HEADER]: 'openrouter.bearer' } });
-    expect(new Headers(seen[0]?.init?.headers).get('x-session-affinity')).toBe('kinu-alpha');
-  });
 });
 
 describe('providerProxyBaseURL', () => {

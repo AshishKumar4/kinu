@@ -10,4 +10,4 @@ export {
 
 export { readKvJson, writeKvJson, type KvStore } from "./stores/kv";
 
-export { isAbortError, normalizePath, raceAbort } from "./core/utils";
+export { isAbortError, normalizePath, raceAbort, serialQueue } from "./core/utils";

@@ -7,7 +7,7 @@ import { tierIdsOf,
   type SubordinateChild,
   type WorkspaceWork,
   type AgentTaskTree,
-  ownerFacingSubordinate,
+  evolutionHelper, ownerFacingSubordinate,
 } from '@kinu.run/core';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { agentWorkspaceKey } from '../agent-list';
@@ -66,6 +66,21 @@ export function workFromWorkspace(work: WorkspaceWork): TuiWorkEntry[] {
   }));
 
   return [...entries.filter((entry) => entry.status !== 'settled'), ...entries.filter((entry) => entry.status === 'settled')];
+}
+
+const HELPER_WORK_STATUS = {
+  idle: 'settled',
+  working: 'running',
+  awaiting_input: 'needs-you',
+  dismissed: 'settled',
+} as const satisfies Record<SubordinateChild['status'], TuiWorkEntry['status']>;
+
+export function evolutionWork(entries: readonly SubordinateChild[]): TuiWorkEntry[] {
+  return entries.flatMap((entry): TuiWorkEntry[] => (evolutionHelper(entry) && entry.actorReference !== null ? [{
+    id: `helper:${entry.actorReference.actorId}`, title: entry.currentTask ?? 'refining from recent turns',
+    label: agentDisplayLabel({ name: entry.name, label: entry.displayName }), path: [entry.name], actorId: entry.actorReference.actorId,
+    status: HELPER_WORK_STATUS[entry.status],
+  }] : []));
 }
 
 export interface TuiHelperRef {

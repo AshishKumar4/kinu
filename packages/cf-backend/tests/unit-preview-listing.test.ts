@@ -46,9 +46,8 @@ setSandboxSdk({
 
       return { restoring: false, refused: undefined };
     },
-    // The Env terminal's command takes the process lane: no deadline asked for.
-    startProcess: async () => ({ id: 'p1', exitCode: 0, waitForExit: async () => ({ exitCode: 0 }), getStatus: async () => 'exited' }),
-    getProcessLogs: async () => ({ stdout: '', stderr: '' }),
+    // The Env terminal's command takes the untimed lane: no deadline asked for.
+    execUntimed: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
     getExposedPorts: async (hostname: string) => [{
       url: `https://${String(PORT)}-${id}-p8788_ab12cd34.${hostname}/`, port: PORT, status: 'active',
     }],

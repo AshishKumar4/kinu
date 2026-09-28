@@ -183,7 +183,6 @@ export function partitionCorpus(tasks: readonly BenchTask[], opts: PartitionOpti
   return { dev, sealed: new SealedSplit(sealed), salt, sealedFraction, manifestHash: manifestHash(tasks) };
 }
 
-/** Returns the prompt line that quotes the fix, or null. */
 export function promptLeaksFix(prompt: string, patch: string): string | null {
   const normalized = prompt.replace(/\s+/g, ' ');
 

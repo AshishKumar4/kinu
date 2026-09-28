@@ -1,4 +1,6 @@
 import type { LanguageModel, ToolSet } from 'ai';
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { ModelCallSpend } from '../events/model-call';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
@@ -40,7 +42,7 @@ export function createScaffoldCandidateSurface(
   const callTool = createScaffoldCallTool(() => {
     const operation = currentOperationProfile(binding.rt.actor);
 
-    if (!operation) throw new Error('the scaffold tool call has no operation profile');
+    if (!operation) return settleSync(Effect.die(new Error('the scaffold tool call has no operation profile')));
 
     return candidateTools(binding, operation);
   }, binding.callScope, binding.signal, binding.assertActive);

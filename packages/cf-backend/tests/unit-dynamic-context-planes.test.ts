@@ -43,7 +43,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
       executor: 'workspace',
       reason: formatApproval({ decision: 'gate', hits: [] }),
       requestedAt: Date.now(),
-    });
+    }, []);
 
     expect(parked.status).toBe('queued');
 

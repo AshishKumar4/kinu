@@ -110,26 +110,22 @@ export class HireOrchestrator extends ProductionOrchestrator {
     return rows.map((row) => ({ actorId: row.actor_id, runs: row.runs }));
   }
 
-  /** A delegated turn's durable record is its own `run_events` (`run_start` brief, `step_partial` stream,
-   *  `step_finish` messages); the transcript store is never written by a delegated turn. */
+  /** A delegated turn's durable record is its own `run_events` (`run_start` brief, `step_finish` messages) and the
+   *  stream buffer its open step writes; the transcript store is never written by a delegated turn. */
   async childTranscript(name: string): Promise<string[]> {
     const rows = this.probeState.storage.sql.exec<{ run_id: string; type: string; payload: string }>(
       `SELECT e.run_id AS run_id, e.type AS type, e.payload AS payload
        FROM run_events e
        JOIN workspace_actors a ON a.actor_id = e.actor_id
-       WHERE a.name = ? AND e.type IN ('run_start', 'step_partial', 'step_finish')
+       WHERE a.name = ? AND e.type IN ('run_start', 'step_finish')
        ORDER BY e.rowid`, name).toArray();
 
     const lines: string[] = [];
-    // Partial flushes are cumulative, so only the last row per (run, step) counts.
-    const partials = new Map<string, string>();
 
     for (const row of rows) {
       const payload = v.parse(
         v.fallback(v.looseObject({
           userMessage: v.optional(v.unknown()),
-          text: v.optional(v.unknown()),
-          stepIndex: v.optional(v.number()),
           messages: v.optional(v.array(v.unknown())),
         }), {}),
         JSON.parse(row.payload),
@@ -137,10 +133,6 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
       if (row.type === 'run_start' && v.is(v.string(), payload.userMessage)) {
         lines.push(`user: ${payload.userMessage}`);
-      }
-
-      if (row.type === 'step_partial' && v.is(v.string(), payload.text)) {
-        partials.set(`${row.run_id}:${String(payload.stepIndex ?? 0)}`, payload.text);
       }
 
       if (row.type !== 'step_finish') continue;
@@ -166,7 +158,16 @@ export class HireOrchestrator extends ProductionOrchestrator {
       }
     }
 
-    for (const text of partials.values()) lines.push(`assistant: ${text}`);
+    const open = this.probeState.storage.sql.exec<{ text: string }>(
+      `SELECT group_concat(p.text, '') AS text FROM (
+         SELECT p.text, m.rowid AS message_row FROM stream_parts p
+         JOIN session_messages m ON m.actor_id = p.actor_id AND m.message_id = p.message_id
+         JOIN workspace_actors a ON a.actor_id = p.actor_id
+         WHERE a.name = ? AND p.kind = 'text' AND m.sealed_at IS NULL
+         ORDER BY m.rowid, p.part_no, p.segment) p
+       GROUP BY p.message_row`, name).toArray();
+
+    for (const row of open) lines.push(`assistant: ${row.text}`);
 
     return lines;
   }
