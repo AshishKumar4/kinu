@@ -2289,7 +2289,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       overflowRetry: input.overflowRetry,
       outputContinuation: input.outputContinuation,
       taskReminder: input.taskReminder ?? undefined,
-      advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn), input.reachableTools) }),
+      // Owed only when the actor reviews turns, as the lane it replaced was started only then.
+      advisor: this.actorSession.reviewsTurns
+        ? projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn), input.reachableTools) })
+        : undefined,
       sleepTime: true,
       // The genesis turn owes the naming: the create stored a stand-in title, and no
       // other turn replaces one.
