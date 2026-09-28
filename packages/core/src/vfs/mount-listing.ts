@@ -3,7 +3,7 @@
 import type { Command, CommandContext } from '@nimbus-sh/core/substrate/lifo/commands/types.js';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { VFS } from '../types/primitives';
-import { withMountTable, type MountedVfs, type VfsMountRouting } from './mounts';
+import { EXECUTOR_MOUNTS, withMountTable, type MountedVfs, type VfsMountRouting } from './mounts';
 
 interface MountListingEntry {
   readonly source: string;
@@ -19,15 +19,17 @@ interface RootUsage {
   readonly capacityBytes: number;
 }
 
-function sized(bytes: number, human: boolean): string {
-  if (!human) return String(Math.ceil(bytes / 1024));
+type Units = 'blocks' | 1024 | 1000;
 
-  const [value, unit] = [[2 ** 30, 'G'], [2 ** 20, 'M'], [2 ** 10, 'K']].find(([scale]) => bytes >= Number(scale)) ?? [1, ''];
+function sized(bytes: number, human: Units): string {
+  if (human === 'blocks') return String(Math.ceil(bytes / 1024));
 
-  return `${(bytes / Number(value)).toFixed(Number(value) === 1 ? 0 : 1)}${String(unit)}`;
+  const [value, unit] = ([[human ** 3, 'G'], [human ** 2, 'M'], [human, 'K']] as const).find(([scale]) => bytes >= scale) ?? [1, ''];
+
+  return `${(bytes / value).toFixed(value === 1 ? 0 : 1)}${unit}`;
 }
 
-function figures(usage: RootUsage | null, human: boolean): string[] {
+function figures(usage: RootUsage | null, human: Units): string[] {
   if (usage === null) return ['-', '-', '-', '-'];
   const available = Math.max(0, usage.capacityBytes - usage.usedBytes);
   const percent = usage.capacityBytes === 0 ? 0 : Math.ceil((usage.usedBytes / usage.capacityBytes) * 100);
@@ -35,14 +37,20 @@ function figures(usage: RootUsage | null, human: boolean): string[] {
   return [sized(usage.capacityBytes, human), sized(usage.usedBytes, human), sized(available, human), `${String(percent)}%`];
 }
 
-function mountListing(table: VfsMountRouting | null): MountListingEntry[] {
+const DEVICE_MOUNT = EXECUTOR_MOUNTS.device.slice(1);
+
+async function mountListing(table: VfsMountRouting | null): Promise<MountListingEntry[]> {
   const root: MountListingEntry = { source: 'nimbus', point: '/', type: 'nimbus-sqlite', options: 'rw' };
 
-  const mounts = (table?.liveMounts() ?? []).map((live): MountListingEntry => ({
-    source: live.name, point: `/${live.name}`, type: 'kinu', options: live.readOnly ? 'ro' : 'rw',
+  const mounts = await Promise.all((table?.liveMounts() ?? []).map(async (live): Promise<MountListingEntry[]> => {
+    const options = live.readOnly ? 'ro' : 'rw';
+
+    if (live.name !== DEVICE_MOUNT) return [{ source: live.name, point: `/${live.name}`, type: 'kinu', options }];
+
+    return (await live.files.readdir('/')).map((machine) => ({ source: machine, point: `/${live.name}/${machine}`, type: 'kinu-device', options }));
   }));
 
-  return [root, ...mounts.sort((a, b) => a.point.localeCompare(b.point))];
+  return [root, ...mounts.flat().sort((a, b) => a.point.localeCompare(b.point))];
 }
 
 function procMounts(entries: readonly MountListingEntry[]): string {
@@ -73,9 +81,13 @@ async function df(ctx: CommandContext, table: MountListingTable, root: () => Roo
     return 1;
   }
 
-  const human = letters.includes('h') || letters.includes('H');
+  let units: Units = 'blocks';
+
+  if (letters.includes('h')) units = 1024;
+
+  if (letters.includes('H')) units = 1000;
   const typed = letters.includes('T');
-  const entries = mountListing(table(ctx.cred));
+  const entries = await mountListing(table(ctx.cred));
   const shown: MountListingEntry[] = [];
 
   for (const operand of operands) {
@@ -85,10 +97,11 @@ async function df(ctx: CommandContext, table: MountListingTable, root: () => Roo
     if (entry !== undefined && !shown.includes(entry)) shown.push(entry);
   }
 
+  const human = units !== 'blocks';
   const header = ['Filesystem', ...(typed ? ['Type'] : []), human ? 'Size' : '1K-blocks', 'Used', human ? 'Avail' : 'Available', 'Use%', 'Mounted on'];
 
   const rows = (operands.length > 0 ? shown : entries).map((entry) => [
-    entry.source, ...(typed ? [entry.type] : []), ...figures(entry.point === '/' ? root() : null, human), entry.point,
+    entry.source, ...(typed ? [entry.type] : []), ...figures(entry.point === '/' ? root() : null, units), entry.point,
   ]);
 
   await ctx.stdout.write(`${columns([header, ...rows])}\n`);
@@ -103,7 +116,7 @@ async function mount(ctx: CommandContext, table: MountListingTable): Promise<num
     return 1;
   }
 
-  const entries = mountListing(table(ctx.cred));
+  const entries = await mountListing(table(ctx.cred));
 
   await ctx.stdout.write(entries.map((entry) => `${entry.source} on ${entry.point} type ${entry.type} (${entry.options})\n`).join(''));
 
@@ -120,13 +133,14 @@ export function mountCommands(table: MountListingTable, root: () => RootUsage): 
 export type ProcMutations = Pick<VFS, 'writeFile' | 'unlink' | 'mkdir'>;
 
 export function procMountsPlane(table: VfsMountRouting | null, kernel: ProcMutations): MountedVfs {
-  const bytes = new TextEncoder().encode(procMounts(mountListing(table)));
+  let listed: Promise<Uint8Array> | undefined;
+  const bytes = (): Promise<Uint8Array> => (listed ??= mountListing(table).then((entries) => new TextEncoder().encode(procMounts(entries))));
 
   const files: VFS & { readRange(path: string, offset: number, length: number): Promise<Uint8Array> } = {
     ...kernel,
-    readFile: async (_path, opts) => (opts?.encoding === undefined ? bytes : new TextDecoder().decode(bytes)),
-    readRange: async (_path, offset, length) => bytes.slice(offset, offset + length),
-    stat: async () => ({ size: bytes.length, mtimeMs: 0, isDir: false }),
+    readFile: async (_path, opts) => (opts?.encoding === undefined ? await bytes() : new TextDecoder().decode(await bytes())),
+    readRange: async (_path, offset, length) => (await bytes()).slice(offset, offset + length),
+    stat: async () => ({ size: (await bytes()).length, mtimeMs: 0, isDir: false }),
     exists: async () => true,
     readdir: async () => [],
   };

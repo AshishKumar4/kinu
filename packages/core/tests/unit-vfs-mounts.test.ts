@@ -17,6 +17,7 @@ import { mountedAuthority } from '../src/vfs/shell-mounts';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { observeWrites } from '../src/vfs/observe';
 import { createWorkspaceBundle } from './helpers';
+import { agentCred, agentHome, agentTmpRoot, confineAgentTmp, provisionAgentHome } from '../src/vfs/agent-home';
 
 /** readdir returns entry names and stat distinguishes dirs; a miss throws the VfsError the real backends throw. */
 function fakeTree(entries: Record<string, string>): VFS {
@@ -645,6 +646,33 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 
 		expect((await shell.exec('echo x > /proc/mounts')).exitCode).not.toBe(0);
 		expect((await shell.exec('cat /proc/mounts')).stdout).toContain('/shared');
+	});
+
+	test('an agent shell lists each connected machine under /pc, and df -H counts in powers of 1000', async () => {
+		const bundle = createWorkspaceBundle(new Database(':memory:'));
+		const { root, confiner } = await bundle.privileged();
+		const cred = { uid: 2_001, gid: 2_001 };
+		provisionAgentHome(root, 'agent-a', cred);
+		confineAgentTmp(confiner, 'agent-a', cred);
+		const fleet = fakeTree({ '/laptop/notes.md': 'a', '/studio/notes.md': 'b' });
+		const table = withMountTable(bundle.vfs, [mountOf('pc', fleet)]);
+		bundle.mountTable(table);
+		bundle.mountTable(table, agentCred(cred));
+		const agent = await bundle.asAgent({ cred: agentCred(cred), home: agentHome('agent-a'), tmp: agentTmpRoot('agent-a') });
+
+		for (const command of ['mount', 'df', 'cat /proc/mounts']) {
+			const listed = await agent.shell.exec(command);
+			const points = listed.stdout.split(/\s+/).filter((field) => field.startsWith('/pc'));
+
+			expect({ command, exitCode: listed.exitCode, points }).toEqual({ command, exitCode: 0, points: ['/pc/laptop', '/pc/studio'] });
+		}
+
+		const blocks = Number((await bundle.shell.exec('df /')).stdout.split('\n')[1]?.split(/\s+/)[1]);
+		const size = (await bundle.shell.exec('df -H /')).stdout.split('\n')[1]?.split(/\s+/)[1] ?? '';
+		const match = /^([\d.]+)([KMG]?)$/u.exec(size);
+		const scale = { '': 1, K: 1e3, M: 1e6, G: 1e9 }[match?.[2] ?? ''] ?? Number.NaN;
+
+		expect(Number(match?.[1]) * scale / (blocks * 1024)).toBeCloseTo(1, 1);
 	});
 
 	test('mv between two mounts copies across, since each mount is its own device', async () => {

@@ -317,9 +317,8 @@ mount(landingRoutes);
 mount(cliPageRoutes);
 
 // Public: release artifacts, and the deploy door's OAuth return, which its state cookie authorizes.
-worker.on('HEAD', RELEASE_ARTIFACT_PATH, async (c) => await releaseArtifactHead(c.env.RELEASES_BUCKET, rawParam(c, 'artifact')));
-
-worker.get(RELEASE_ARTIFACT_PATH, async (c) => await releaseArtifact(c.env.RELEASES_BUCKET, rawParam(c, 'artifact')));
+// Hono runs HEAD through the GET route.
+worker.get(RELEASE_ARTIFACT_PATH, async (c) => await (c.req.method === 'HEAD' ? releaseArtifactHead : releaseArtifact)(c.env.RELEASES_BUCKET, rawParam(c, 'artifact')));
 
 worker.all(RELEASE_ARTIFACT_PATH, async () => err(405, 'Method not allowed.'));
 
