@@ -143,14 +143,16 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   async project(id: string): Promise<ConversationProjection | null> {
     const entry = this.read(id);
 
-    if (entry === null) return null;
+    return entry === null ? null : this.projectEntry(entry);
+  }
 
+  private async projectEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>): Promise<ConversationProjection> {
     if (!this.payloads.readsFiles && ((entry.metadata !== null && entry.metadata.path !== null)
       || [...new Set(entry.parts.map((part) => part.messageId))].some((messageId) => this.messages.spilled(messageId)))) {
       return { id: entry.id, position: entry.position, role: entry.role, content: '', recordedAt: entry.recordedAt, toolCalls: [], unavailable: true };
     }
 
-    const parts = await this.parts(entry.parts);
+    const parts = await this.parts(entry.parts, cache);
     const toolCalls = parts.flatMap((part) => part.type === 'tool-call' ? [v.parse(v.string(), part.toolName)] : []);
     const projection: ConversationProjection = { id: entry.id, position: entry.position, role: entry.role, content: rowText({ role: entry.role, parts }), recordedAt: entry.recordedAt, toolCalls };
 
@@ -308,15 +310,13 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return messages;
   }
 
+  /** Entries and their messages in one statement each, however many entries. */
   async newestFirst(limit = 10_000): Promise<readonly ConversationProjection[]> {
+    const entries = [...this.entries(limit)].reverse().filter((entry) => entry.role === 'user' || entry.role === 'assistant');
+    const parts = await this.messages.materializePartsOf([...new Set(entries.flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
     const rows: ConversationProjection[] = [];
 
-    for (const entry of [...this.entries(limit)].reverse()) {
-      if (entry.role !== 'user' && entry.role !== 'assistant') continue;
-      const projected = await this.project(entry.id);
-
-      if (projected !== null) rows.push(projected);
-    }
+    for (const entry of entries) rows.push(await this.projectEntry(entry, parts));
 
     return rows;
   }
