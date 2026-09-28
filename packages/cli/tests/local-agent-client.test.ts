@@ -580,14 +580,31 @@ describe('LocalAgentClient', () => {
     expect(await turnsSentAsMessages(true)).toEqual(['turn 4']);
   });
 
-  test('each turn reports the size the admission gate measured its request at, and /compact shrinks the next one', async () => {
+  test('a reconnect shows the prompt size the last step reported, and asks no model for it', async () => {
+    const { client, home } = setup(fakeModel('noted'));
+    await client.connect();
+    await client.send('remember the word heron', { cwd: '/work' });
+    await client.close();
+
+    let calls = 0;
+    const reopened = openPersistentClient(home, fakeModel('noted', () => { calls += 1; }), { noTranscript: true });
+    await reopened.connect();
+    const status = await reopened.status();
+    await reopened.close();
+
+    // The fake provider reports 5 prompt tokens for every step.
+    expect(status.context).toMatchObject({ tokens: 5, source: 'provider' });
+    expect(calls).toBe(0);
+  });
+
+  test('each turn records the size the admission gate measured its request at, and /compact shrinks the next one', async () => {
     // Short asks and long answers, as a working session reads: the fold keeps each ask and summarizes the answers.
     const admittedSizes = async (compact: boolean): Promise<number[]> => {
       const { client } = setup(fakeModel('findings '.repeat(600)));
       const sizes: number[] = [];
 
       client.subscribe((event) => {
-        if (event.type === 'broadcast' && event.event.type === 'context_admitted') sizes.push(event.event.requestTokens ?? -1);
+        if (event.type === 'run-event' && event.event.type === 'context_admitted') sizes.push(event.event.tokens);
       });
 
       await client.connect();

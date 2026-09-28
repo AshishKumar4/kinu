@@ -110,60 +110,51 @@ function Warning({ children }: { children: React.ReactNode }) {
 
 
 function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
-  const { latest, contextWindow } = snap;
+  const { latest, fill } = snap;
 
-  if (latest === null) {
+  if (fill === null) {
     return (
       <section>
         <BlockHeader icon={GaugeIcon} title="Context" />
-        <Empty>No model step has reported usage yet. The next turn fills this in.</Empty>
+        <Empty>Nothing has measured this conversation yet. The next turn fills this in.</Empty>
       </section>
     );
   }
 
-  // Absent, not zero: the provider may have reported usage without a prompt-token count.
-  const { input, cacheRead } = latest.usage;
-
-  const windowShare = input !== undefined && contextWindow !== null && contextWindow > 0
-    ? input / contextWindow
-    : null;
-
-  const measure = contextWindow !== null ? `of ${fmtTokens(contextWindow)} tokens` : "tokens";
+  const step = fill.source === "provider" ? latest : null;
+  const cacheRead = step?.usage.cacheRead;
+  const windowShare = fill.window !== null && fill.window > 0 ? fill.tokens / fill.window : null;
+  const measure = fill.window !== null ? `of ${fmtTokens(fill.window)} tokens` : "tokens";
+  const at = new Date(fill.at).toLocaleTimeString();
 
   return (
     <section>
       <BlockHeader
         icon={GaugeIcon}
         title="Context"
-        note={`step ${latest.stepIndex} · ${new Date(latest.at).toLocaleTimeString()}`}
+        note={step === null ? `next request · ${at}` : `step ${step.stepIndex} · ${at}`}
       />
 
       <div className="flex items-end gap-2 mb-1">
-        <Num className="text-[22px] leading-none p-text">{input === undefined ? "—" : input.toLocaleString()}</Num>
-        <span className="p-meta p-text-2 pb-px">
-          {input === undefined ? "input tokens not reported" : measure}
-        </span>
-        <span className="ml-auto pb-px"><Source kind="API" /></span>
+        <Num className="text-[22px] leading-none p-text">{fill.tokens.toLocaleString()}</Num>
+        <span className="p-meta p-text-2 pb-px">{measure}</span>
+        <span className="ml-auto pb-px"><Source kind={step === null ? "local" : "API"} /></span>
       </div>
 
       {windowShare !== null ? (
         <>
           <Meter value={windowShare} />
           <p className="p-meta p-text-3 mt-1">
-            {fmtPct(windowShare, 1)} of the window · {cacheRead === undefined
+            {fmtPct(windowShare, 1)} of the window{step === null ? "" : ` · ${cacheRead === undefined
               ? "the provider reported no cache-read count for this step"
-              : `${cacheRead.toLocaleString()} of those input tokens were a cache read`}
+              : `${cacheRead.toLocaleString()} of those input tokens were a cache read`}`}
           </p>
         </>
       ) : (
-        <p className="p-meta p-text-3 mt-1">
-          {input === undefined
-            ? "This provider reported no input count."
-            : "Context window unknown."}
-        </p>
+        <p className="p-meta p-text-3 mt-1">Context window unknown.</p>
       )}
 
-      <Breakdown context={latest.context} />
+      {step !== null && <Breakdown context={step.context} />}
     </section>
   );
 }

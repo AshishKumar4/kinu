@@ -71,6 +71,20 @@ function canonicalFromWire(message: v.InferOutput<typeof WireMessageSchema>): Ca
   };
 }
 
+describe('the context number a page reads back', () => {
+  test('the web snapshot and the status read show the prompt size the last step reported', async () => {
+    const harness = gatewayWorkspace(answeringGateway('Noted.'));
+    expect((await harness.agent.getActivitySnapshot()).fill).toBeNull();
+
+    await catalogTurn(harness.agent, 'Remember the word heron.');
+
+    const { fill } = await harness.agent.getActivitySnapshot();
+    // The stub provider reports one prompt token per request.
+    expect(fill).toMatchObject({ tokens: 1, source: 'provider' });
+    expect((await harness.agent.getAgentStatus()).context).toEqual(fill);
+  });
+});
+
 describe('a turn read back request by request', () => {
   test('each step reads as the list the provider received, paired with what came back', async () => {
     const gateway = scriptedGateway([{ tool: 'file', args: { action: 'write', path: '/workspace/notes.txt', content: 'hello' } }], 'All written.');

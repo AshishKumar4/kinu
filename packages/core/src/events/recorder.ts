@@ -97,6 +97,7 @@ export const RunEventSchema = v.variant('type', [
     status: v.optional(v.number()),
     source: v.picklist(['header', 'backoff', 'cooldown']) }),
   v.object({ ...BaseFields, type: v.literal('model_fallback'), from: v.string(), to: v.string(), reason: v.string() }),
+  v.object({ ...BaseFields, type: v.literal('context_admitted'), tokens: v.number(), contextWindow: v.number() }),
   v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),
     headIds: v.array(v.string()), rationale: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),
@@ -192,6 +193,18 @@ export interface BoundedRunEventQuery extends RunEventQuery {
 
 const RUN_EVENT_LIMIT_DEFAULT = 200;
 
+/** `seq` orders two rows written in one millisecond. */
+export interface ContextMeasureRow {
+  readonly tokens: number;
+  readonly at: string;
+  readonly seq: number;
+}
+
+export interface ContextMeasures {
+  readonly provider: ContextMeasureRow | null;
+  readonly gate: (ContextMeasureRow & { readonly contextWindow: number }) | null;
+}
+
 /** Ceiling for untrusted callers only; in-object folds (e.g. `getRunSummaries`) state their own
  *  window, since a narrowed window would be a truncated denominator. */
 export const RUN_EVENT_LIMIT_MAX = 500;
@@ -218,7 +231,6 @@ export interface RunListEntry {
 
 export type RunEventListener = (event: RunEvent) => void;
 
-/** See {@link RunEventRecorder.emitDeferred}. */
 export interface DeferredRunEvent {
   readonly event: RunEvent;
   /** Call once, after the caller's transaction commits. */
@@ -671,6 +683,25 @@ export class RunEventRecorder {
       LIMIT ${capped}`;
 
     return rows.map((r) => parseStoredRunEvent(r.payload)).reverse();
+  }
+
+  readContextMeasures(): ContextMeasures {
+    this.actor.assertCurrent();
+
+    const provider = this.sql<{ tokens: number; ts: string; seq: number }>`
+      SELECT json_extract(payload, '$.usage.input') AS tokens, ts, rowid AS seq FROM run_events
+      WHERE actor_id = ${this.actorId} AND type = 'step_finish' AND json_extract(payload, '$.usage.input') IS NOT NULL
+      ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
+
+    const gate = this.sql<{ tokens: number; contextWindow: number; ts: string; seq: number }>`
+      SELECT json_extract(payload, '$.tokens') AS tokens, json_extract(payload, '$.contextWindow') AS contextWindow, ts, rowid AS seq
+      FROM run_events WHERE actor_id = ${this.actorId} AND type = 'context_admitted'
+      ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
+
+    return {
+      provider: provider === undefined ? null : { tokens: provider.tokens, at: provider.ts, seq: provider.seq },
+      gate: gate === undefined ? null : { tokens: gate.tokens, contextWindow: gate.contextWindow, at: gate.ts, seq: gate.seq },
+    };
   }
 
   /**

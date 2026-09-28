@@ -745,11 +745,25 @@ test('the header shows the size the gate measured the last request at, not the s
   await screen.waitFor('an unmeasured context', () => screen.frame().includes('ctx —/'));
 
   agent.emit({ type: 'turn-start', kind: 'user', text: 'long' });
-  agent.emit({ type: 'broadcast', event: { type: 'context_admitted', requestTokens: 1_500, contextWindow: 200_000 } });
+  agent.emit({ type: 'broadcast', event: { type: 'context_fill', contextTokens: 1_500, contextWindow: 200_000 } });
   agent.emit({ type: 'text-delta', delta: 'word '.repeat(40_000) });
   agent.emit({ type: 'turn-end', turn: TURN });
 
   await screen.waitFor('the measured size', () => screen.frame().includes('ctx ~1.5k/200k'));
+});
+
+test('a reopened chat shows the recorded context number before any turn runs', async () => {
+  const agent = fakeClient({
+    name: 'recorded',
+    status: async () => ({
+      name: 'recorded', purpose: 'p', model: 'openai/gpt-5.5', reasoningEffort: 'medium',
+      context: { tokens: 42_000, window: 200_000, source: 'provider', at: '2026-09-27T00:00:00.000Z' },
+    }),
+  });
+
+  const screen = await mountChat(agent.client);
+
+  await screen.waitFor('the recorded number', () => screen.frame().includes('ctx ~42k/200k'));
 });
 
 test('a turn waiting on a rate limit names the provider, not thinking', async () => {

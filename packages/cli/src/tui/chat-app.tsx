@@ -235,7 +235,7 @@ function ChatScene({
   const [status, setStatus] = useState<AgentClientStatus | null>(null);
   const [modelSpec, setModelSpec] = useState<string>('');
   const [nextTier, setNextTier] = useState<TierId | null>(null);
-  const [admittedContext, setAdmittedContext] = useState<AdmittedContext | null>(null);
+  const [liveContext, setLiveContext] = useState<ContextNumber | null>(null);
   const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>(null);
   const [pendingConsent, setPendingConsent] = useState<PendingDeviceConsent | null>(null);
@@ -520,7 +520,7 @@ function ChatScene({
 
   const forgetSessionTurn = useCallback(() => {
     localOutputsRef.current = [];
-    setAdmittedContext(null);
+    setLiveContext(null);
     turnMeterRef.current = null;
     activeThinkingRef.current = null;
     thinkingStream.clear();
@@ -1009,8 +1009,6 @@ function ChatScene({
       case 'text':
         if (outcome.cleared) setMessages([]);
 
-        if (outcome.contextChanged) setAdmittedContext(null);
-
         if (outcome.workspaces) {
           openWorkspaces();
 
@@ -1342,10 +1340,10 @@ function ChatScene({
   }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, sealThinking, setTurnPhase, stream]);
 
   const handleBroadcast = useCallback((event: Extract<AgentClientEvent, { type: 'broadcast' }>) => {
-    const admitted = admittedContextOf(event.event);
+    const measured = contextNumberOf(event.event);
 
-    if (admitted !== null) {
-      setAdmittedContext(admitted);
+    if (measured !== null) {
+      setLiveContext(measured);
 
       return;
     }
@@ -1844,7 +1842,7 @@ function ChatScene({
   const commandHints = !overlayOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
 
   const inputFocused = composerTakesKeys(ready, connectFailed, overlayOpen);
-  const meter = headerMeter(admittedContext, contextWindowForSpec(modelCatalog, modelSpec));
+  const meter = headerMeter(liveContext, status, contextWindowForSpec(modelCatalog, modelSpec));
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
 
   const surfaceTitle = surfaceTitleFor(activeSurface, inputState.walkbackOpen);
@@ -2120,21 +2118,29 @@ function copyRefused(outcome: Extract<SlashOutcome, { kind: 'text' }>, renderer:
   return 'This terminal does not accept clipboard writes (OSC 52), so nothing was copied.';
 }
 
-interface AdmittedContext {
+interface ContextNumber {
   readonly tokens: number;
-  readonly window: number;
+  readonly window: number | undefined;
 }
 
-function admittedContextOf(event: BroadcastEvent): AdmittedContext | null {
-  const { type, requestTokens, contextWindow } = event;
+function contextNumberOf(event: BroadcastEvent): ContextNumber | null {
+  const { type, contextTokens, contextWindow } = event;
 
-  return type === 'context_admitted' && requestTokens !== undefined && contextWindow !== undefined
-    ? { tokens: requestTokens, window: contextWindow }
-    : null;
+  return type === 'context_fill' && contextTokens !== undefined ? { tokens: contextTokens, window: contextWindow } : null;
 }
 
-function headerMeter(admitted: AdmittedContext | null, catalogWindow: number | undefined): { tokens: number | null; window: number | undefined } {
-  return admitted ?? { tokens: null, window: catalogWindow };
+function recordedContext(status: AgentClientStatus | null): ContextNumber | null {
+  const fill = status?.context ?? null;
+
+  return fill === null ? null : { tokens: fill.tokens, window: fill.window ?? undefined };
+}
+
+function headerMeter(
+  live: ContextNumber | null, status: AgentClientStatus | null, catalogWindow: number | undefined,
+): { tokens: number | null; window: number | undefined } {
+  const context = live ?? recordedContext(status);
+
+  return context === null ? { tokens: null, window: catalogWindow } : { tokens: context.tokens, window: context.window ?? catalogWindow };
 }
 
 function composerTakesKeys(ready: boolean, connectFailed: boolean, overlayOpen: boolean): boolean {

@@ -1311,7 +1311,10 @@ export {
   type RunEventQuery,
   type BoundedRunEventQuery,
   type StoredRunEvent,
+  type ContextMeasures,
 } from './events/index';
+
+export { contextFill, type ContextFill } from './read-models/context-fill';
 
 // Durable retry outbox; spec: `events/outbox.ts`.
 export {

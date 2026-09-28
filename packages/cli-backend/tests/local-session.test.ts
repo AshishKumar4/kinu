@@ -4794,7 +4794,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     // The `model_operation` pair brackets its step, so a call that never returned names itself. The first delta writes
     // the partial an interrupted turn continues from; the finish row supersedes it.
     expect(events.map((e) => e.type)).toEqual([
-      'run_start', 'turn_start', 'profile_resolution', 'model_operation',
+      'run_start', 'turn_start', 'profile_resolution', 'context_admitted', 'model_operation',
       'step_partial', 'step_finish', 'model_operation',
       'turn_end', 'run_end',
     ]);
@@ -4812,8 +4812,8 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(end.reason).toBe('completed');
     expect(end.error).toBeUndefined();
 
-    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(session.getRunEvents(runs[0].runId, { since: 7 }).map((e) => e.type))
+    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(session.getRunEvents(runs[0].runId, { since: 8 }).map((e) => e.type))
       .toEqual(['turn_end', 'run_end']);
 
     await session.end();

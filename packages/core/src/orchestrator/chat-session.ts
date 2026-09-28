@@ -16,6 +16,7 @@ import type { RunEventRecorder } from '../events/recorder';
 import type { PartialToolCall, RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
 import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
 import type { CacheWarmingLane } from '../providers/cache-warming';
@@ -225,7 +226,6 @@ export interface OwedTerminalEffectsInput {
   readonly answeredDeliveries: ReadonlySet<string>;
   /** At most one continuation is owed. */
   readonly outputContinuation: boolean;
-  /** Null when the decision said none. */
   readonly taskReminder: { readonly text: string } | null;
 }
 
@@ -258,7 +258,6 @@ export interface ChatSessionPorts {
   taskList(): TaskListStore;
   /** A reminder fired behind such work would race its wake. */
   hasPendingAsyncWake(): boolean;
-  /** `steerSkillsBlock`. */
   steerSkills(text: string): Promise<string | null>;
   /** A backend with no review surface refuses a plan turn at admission. */
   planTurnRefusal(): string | null;
@@ -316,6 +315,7 @@ export class ChatSession {
   /** Settled where the fate is decided, never at admission. A send admitted via `admit` has no entry: its fate goes out as steer_status. */
   private readonly landings = new Map<string, SendLandingWaiter>();
   private readonly eventLog: EventLog;
+  private readonly unobserveMeasures: () => void;
   private readonly eventRecorder: RunEventRecorder;
   private readonly compactionState: CompactionTriggerState;
   private readonly transaction: <T>(body: () => T) => T;
@@ -332,7 +332,6 @@ export class ChatSession {
   private messageId = '';
   /** Armed only by a one-shot task turn (completion-gate.ts). */
   readonly completionGate = new CompletionGate();
-  /** core tasks/reminder.ts. */
   private readonly taskReminders = new TaskReminders();
   /** Drained by a single serialized pump so turns never interleave. */
   private readonly queue: QueueItem[] = [];
@@ -365,6 +364,23 @@ export class ChatSession {
     });
     this.restoreOpenTurn();
     this.restorePendingSends();
+    this.unobserveMeasures = this.eventRecorder.observe((event) => {
+      if (event.type === 'context_admitted' || (event.type === 'step_finish' && event.usage?.input !== undefined)) this.broadcastContextFill();
+    });
+  }
+
+  contextFill(catalogWindow: number | null): ContextFill | null {
+    return contextFill(this.eventRecorder.readContextMeasures(), catalogWindow);
+  }
+
+  private broadcastContextFill(): void {
+    const fill = contextFill(this.eventRecorder.readContextMeasures(), null);
+
+    if (fill === null) return;
+    this.emit({
+      type: 'broadcast',
+      event: { type: 'context_fill', contextTokens: fill.tokens, ...(fill.window !== null && { contextWindow: fill.window }) },
+    });
   }
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
@@ -376,7 +392,10 @@ export class ChatSession {
   }
   get currentTurnId(): string | null { return this.turnId; }
   /** The owner's teardown calls this first. */
-  close(): void { this.ended = true; }
+  close(): void {
+    this.ended = true;
+    this.unobserveMeasures();
+  }
   get closed(): boolean { return this.ended; }
 
   /**
@@ -979,8 +998,9 @@ export class ChatSession {
 
       if (event.type === 'model-fallback') this.recordModelFallback(event);
 
-      if (event.type === 'context-admitted') {
-        this.emit({ type: 'broadcast', event: { type: 'context_admitted', requestTokens: event.tokens, contextWindow: event.contextWindow } });
+      // Durable beside the turn's steps: a reload reads it and never measures.
+      if (event.type === 'context-admitted' && this.runId !== null) {
+        this.eventRecorder.emit(this.runId, { type: 'context_admitted', tokens: event.tokens, contextWindow: event.contextWindow });
       }
 
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;

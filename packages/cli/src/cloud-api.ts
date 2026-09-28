@@ -10,6 +10,7 @@ import {
   SPEND_SOURCES,
   UsageSchema,
   type AgentModelMenu,
+  type ContextFill,
   type DeviceSandboxStatus,
   type JsonValue,
   type MissionBudgetSnapshot,
@@ -93,6 +94,7 @@ export interface CloudAgentStatus {
   reasoningEffort?: ReasoningEffort | null;
   roleId?: string;
   tierId?: string;
+  context?: ContextFill | null;
 }
 
 export interface CloudToolDescriptions {
@@ -191,6 +193,9 @@ export const CloudAgentStatusSchema: v.GenericSchema<CloudAgentStatus> = v.objec
   createdAt: v.number(), scaffoldVersion: v.number(), searchNodeCount: v.number(), craftedToolCount: v.number(),
   messageCount: v.number(), model: v.optional(v.nullable(v.string())), reasoningEffort: v.optional(v.nullable(ReasoningEffortSchema)),
   roleId: v.optional(v.string()), tierId: v.optional(v.string()),
+  context: v.optional(v.nullable(v.object({
+    tokens: v.number(), window: v.nullable(v.number()), source: v.picklist(['provider', 'gate']), at: v.string(),
+  }))),
 });
 
 const ToolDescriptionSchema = v.object({ name: v.string(), description: v.string() });

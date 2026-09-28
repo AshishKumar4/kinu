@@ -2,6 +2,7 @@
 
 import type { ActivityLogEntry } from './identity/activity-log';
 import type { ContextComposition } from './context-meter';
+import type { ContextFill } from './read-models/context-fill';
 import type { HeadReportStatus, HeadUnsettledStatus } from './heads/types';
 import type { StepTelemetry } from './events/step-stats';
 import type { Usage } from './usage';
@@ -151,6 +152,7 @@ export interface ActivitySnapshot {
 	} | null;
 	/** Resolved model's context window; null when the catalog has not answered. */
 	contextWindow: number | null;
+	fill: ContextFill | null;
 	/** The orchestrator's own `step_finish` turns only; workspace-wide totals are `spend`. */
 	telemetry: StepTelemetry;
 	/** All accounted model calls, by producer and by mission; `spend.missions` comes from `mission_budget`, the enforced ledger. */

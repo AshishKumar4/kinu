@@ -152,7 +152,7 @@ import { TierIdSchema,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
-  type ArmedCompaction, type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
+  type ArmedCompaction, type ChatTurnInput, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
@@ -380,7 +380,6 @@ export class LocalAgentSession {
   private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
   private readonly engine: EvolutionEngine;
   private readonly actorSession: ActorSession;
-  /** The core turn loop; this session is its adapter. */
   private readonly chat: ChatSession;
   private readonly deferrals: DeferredApprovalQueue;
   /** Host for every logical actor this session creates; built here when no {@link LocalAgentHost} owns the tree. */
@@ -856,6 +855,10 @@ export class LocalAgentSession {
 
   nextTurnTier(): Promise<ResolvedTurnProfile['tier']> {
     return this.profiles().nextTurnTier({ workMode: this.actorSession.workMode, ancestors: this.ancestors?.() });
+  }
+
+  contextFill(): ContextFill | null {
+    return this.chat.contextFill(this.modelCatalog.contextWindow());
   }
 
   getActiveRoleId(): string {
@@ -2502,7 +2505,6 @@ export class LocalAgentSession {
     const { directory } = localActorDirectory(this.rt.actor);
 
     return createActorHost({
-      // The CLI has no tracer.
       tracing: undefined,
       storage: {
         sql: this.rt.storage.sql,

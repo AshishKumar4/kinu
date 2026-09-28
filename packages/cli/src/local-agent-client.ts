@@ -473,6 +473,7 @@ export class LocalAgentClient implements AgentClient {
       dbSize: statSync(this.deps.dbPath).size,
       toolCount: this.session.toolNames().length,
       autoEvolve: !this.deps.noAutoEvolve,
+      context: this.session.contextFill(),
     };
   }
 

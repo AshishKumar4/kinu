@@ -167,7 +167,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 4,
+          "eventIndex": 5,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -188,7 +188,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 6,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       },
@@ -225,7 +225,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 4,
+          "eventIndex": 5,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -246,7 +246,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 6,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       },
@@ -286,7 +286,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 4,
+          "eventIndex": 5,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -307,7 +307,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 6,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       }
@@ -532,7 +532,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 4,
+          "eventIndex": 5,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -553,7 +553,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 6,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       },
@@ -590,7 +590,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 4,
+          "eventIndex": 5,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -611,7 +611,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 6,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       },
@@ -651,7 +651,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 4,
+          "eventIndex": 5,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -672,7 +672,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 6,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       },
@@ -704,7 +704,7 @@
         "payload": {
           "type": "run_end",
           "reason": "aborted",
-          "eventIndex": 5,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -750,7 +750,7 @@
           },
           "error": "ENOENT: no such file or directory, open 'probe-fixture.txt': the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, slates, tmp, usr, var, skills, context. To reach files that live on a real machine or container, run a shell command there with the `shell` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
           "durationMs": "<clock>",
-          "eventIndex": 5,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -765,7 +765,7 @@
             "name": "main"
           },
           "reason": "tool-calls",
-          "eventIndex": 7,
+          "eventIndex": 8,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -1098,7 +1098,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 4,
+          "eventIndex": 5,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -1119,7 +1119,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 6,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       },
@@ -1156,7 +1156,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 4,
+          "eventIndex": 5,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -1177,7 +1177,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 6,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       },
@@ -1217,7 +1217,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 4,
+          "eventIndex": 5,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -1238,7 +1238,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 6,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       },
@@ -1270,7 +1270,7 @@
         "payload": {
           "type": "run_end",
           "reason": "aborted",
-          "eventIndex": 5,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -1316,7 +1316,7 @@
           },
           "error": "ENOENT: no such file or directory, open 'probe-fixture.txt': the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, slates, tmp, usr, var, skills, context. To reach files that live on a real machine or container, run a shell command there with the `shell` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
           "durationMs": "<clock>",
-          "eventIndex": 5,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -1331,7 +1331,7 @@
             "name": "main"
           },
           "reason": "tool-calls",
-          "eventIndex": 7,
+          "eventIndex": 8,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -1376,7 +1376,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 11,
+          "eventIndex": 13,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -1397,7 +1397,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 13,
+          "eventIndex": 15,
           "timestamp": "<clock>"
         }
       },
@@ -1434,7 +1434,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 5,
+          "eventIndex": 6,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -1455,7 +1455,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 7,
+          "eventIndex": 8,
           "timestamp": "<clock>"
         }
       }
@@ -1473,7 +1473,7 @@
       },
       {
         "socket": "A",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "A",
@@ -1560,7 +1560,7 @@
       },
       {
         "socket": "A",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "A",
@@ -1659,7 +1659,7 @@
       },
       {
         "socket": "A",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "A",
@@ -1746,7 +1746,7 @@
       },
       {
         "socket": "A",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "A",
@@ -1784,7 +1784,7 @@
       },
       {
         "socket": "A",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "A",
@@ -1933,7 +1933,7 @@
       },
       {
         "socket": "B",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "B",
@@ -2026,7 +2026,7 @@
       },
       {
         "socket": "B",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "B",
