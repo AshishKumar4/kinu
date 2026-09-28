@@ -2869,10 +2869,10 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
 }
 
 /* Shared so the wide and narrow frames photograph the same affordance. */
-const MCTS_NOTICE: readonly ComposerNotice[] = [{
-  id: "mcts",
+const REFRESH_NOTICE: readonly ComposerNotice[] = [{
+  id: "jobs",
   tone: "danger",
-  text: "Could not refresh MCTS.",
+  text: "Could not refresh background jobs.",
   action: { label: "Retry", onClick: () => {} },
 }];
 
@@ -3042,7 +3042,7 @@ function ChatFrame() {
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
         <GalleryChatTabs />
         <ChatMessages />
-        <GalleryComposer notices={MCTS_NOTICE} />
+        <GalleryComposer notices={REFRESH_NOTICE} />
       </div>
     </div>
   );
@@ -3237,7 +3237,7 @@ function ComposerFrame() {
         </div>
         <div className="space-y-1">
           <div className="p-eyebrow px-4">With a status row</div>
-          <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={MCTS_NOTICE} />
+          <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={REFRESH_NOTICE} />
         </div>
         <ModelPickerStates />
       </div>
@@ -4885,7 +4885,7 @@ const SUPERVISE_JOBS: BackgroundJob[] = [
     workMode: "build", result: null, error: null, createdAt: NOW - 4 * 60e3, settledAt: null,
   },
   {
-    id: "bgjob-70bd19f7", kind: "mcts", label: "Pick a migration-backfill approach",
+    id: "bgjob-70bd19f7", kind: "agents", label: "Pick a migration-backfill approach",
     workMode: "build", status: "completed", result: "Settled on the backfill-on-read approach", error: null,
     createdAt: NOW - 50 * 60e3, settledAt: NOW - 41 * 60e3,
   },
@@ -5844,7 +5844,7 @@ function fixtureFailure(): Error {
   return new URLSearchParams(location.search).get("failure") === "app"
     ? new TypeError("Cannot read properties of undefined (reading 'kind')")
     : new TypeError(
-      `Failed to fetch dynamically imported module: ${location.origin}/assets/MCTSExplorer-a1b2c3.js`,
+      `Failed to fetch dynamically imported module: ${location.origin}/assets/SwarmExplorer-a1b2c3.js`,
     );
 }
 
@@ -5873,7 +5873,7 @@ function LazyRouteScene() {
           and reloading is the whole fix — once, and only when the origin really has moved.
         </p>
         <div className="p-group max-w-2xl" style={{ height: 260 }}>
-          <ErrorBoundary label="mcts-explorer">
+          <ErrorBoundary label="swarm-explorer">
             <Suspense fallback={<p data-lazy-pending className="p-6 text-sm p-text-3">Loading…</p>}>
               <StaleChunkRoute />
             </Suspense>
@@ -6074,10 +6074,10 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
 
 /** The only dynamic import in this dispatch: the page pulls d3 and the tree renderer. It reads through `useKinu`, resolved to `gallery-agent-stub` here. */
 async function mctsExplorerFrame(run: string): Promise<MountedFrame> {
-  const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
+  const { default: SwarmExplorer } = await import("@/pages/SwarmExplorer");
   serveGalleryRpc(focusRun(run));
 
-  return routedPage(`/mcts/checkout-fixes?run=${run}`, "/mcts/:agentId", <MCTSExplorer />);
+  return routedPage(`/swarm/checkout-fixes?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
 }
 
 function routedPage(entry: string, path: string, page: React.ReactNode, height = "h-screen"): MountedFrame {

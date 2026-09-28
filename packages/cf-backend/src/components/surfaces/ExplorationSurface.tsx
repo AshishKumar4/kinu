@@ -106,7 +106,7 @@ export function ExplorationSurface({
             activity={headActivity}
             onFocus={(runId) => { setFocusedRunId(runId); setInspect({ runId, nodeId: null }); }}
             onSelectNode={(next) => { setFocusedRunId(next.runId); setInspect(next); }}
-            expandTo={agentId ? `/mcts/${agentId}?run=${encodeURIComponent(focused.id)}` : null}
+            expandTo={agentId ? `/swarm/${agentId}?run=${encodeURIComponent(focused.id)}` : null}
           />
         </div>
         <div className={`min-h-0 ${inspect === null ? "hidden @6xl:block" : ""}`}>

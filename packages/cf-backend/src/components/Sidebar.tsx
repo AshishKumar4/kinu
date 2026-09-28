@@ -39,7 +39,7 @@ function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
 
 
 // Deleting an agent must first leave all of these: a mounted socket auto-reconnects and resurrects the DO.
-const WORKSPACE_SCOPED_SECTIONS = ["workspace", "mcts", "settings", "triggers"];
+const WORKSPACE_SCOPED_SECTIONS = ["workspace", "swarm", "settings", "triggers"];
 
 const SidebarAgentSchema = v.object({
   name: v.string(),

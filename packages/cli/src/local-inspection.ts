@@ -379,7 +379,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
         actor.actorId, window,
       ).map((row) => ({
         id: row.id,
-        kind: 'mcts',
+        kind: 'swarm',
         label: row.action,
         value: row.value,
         status: row.status,

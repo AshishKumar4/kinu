@@ -154,7 +154,7 @@
       "complexity": 32
     },
     {
-      "key": "packages/cf-backend/src/pages/MCTSExplorer.tsx#ExplorerBody",
+      "key": "packages/cf-backend/src/pages/SwarmExplorer.tsx#ExplorerBody",
       "complexity": 32
     },
     {

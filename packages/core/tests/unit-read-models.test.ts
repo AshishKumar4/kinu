@@ -226,7 +226,7 @@ describe('run timeline', () => {
 
     const spans = getRunTimeline({ sql, actor, events, jobs, currentRunId: 'r1' });
 
-    expect(spans.map((s) => s.source)).toEqual(['shell', 'evolution', 'mcts', 'background']);
+    expect(spans.map((s) => s.source)).toEqual(['shell', 'evolution', 'swarm', 'background']);
     expect(spans.map((s) => s.ts)).toEqual([...spans].sort((a, b) => a.ts - b.ts).map((s) => s.ts));
     // text_delta is the stream's own noise — never a span.
     expect(spans.some((s) => s.rawType === 'text_delta')).toBe(false);

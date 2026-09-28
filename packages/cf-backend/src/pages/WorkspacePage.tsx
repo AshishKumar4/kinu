@@ -287,7 +287,7 @@ function ForkModal({
           <li>Conversation: the {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"} up to this one</li>
           <li>Files: the project, SOUL.md and memory as they are now, not as they were at this message</li>
           <li>Also copied: learned tools and settings</li>
-          <li>Starts fresh: MCTS tree, evolution events, scaffold, installed runtimes</li>
+          <li>Starts fresh: swarm trees, evolution events, scaffold, installed runtimes</li>
           <li>Source workspace is unaffected</li>
         </ul>
       </div>
