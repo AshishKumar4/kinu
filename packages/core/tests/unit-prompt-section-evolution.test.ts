@@ -16,7 +16,7 @@ import {
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import type { PromptSection } from '../src/prompting/template';
 import { buildSystemPromptSync } from '../src/prompt';
-import { buildChangelog, executeChangelogRevert } from '../src/evolution/changelog';
+import { buildChangelog, countUnseenChangelog, executeChangelogRevert } from '../src/evolution/changelog';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initShadowTables } from '../src/scaffold/shadow';
 import { initTurnOutcomeTables } from '../src/evolution/outcomes';
@@ -444,6 +444,27 @@ describe('the changelog reports it, and the operator can take it back', () => {
     expect(entry?.evidence).toContain(`+${String(LONGER.length - INCUMBENT.length)} bytes`);
     expect(entry?.evidence).toContain('shadow 1W-0L-0T');
     expect(entry?.revert).toEqual({ type: 'prompt_section_rollback', target: `${TARGET_ID}:1` });
+  });
+
+  test('a promotion after the owner read the proposal is a new change, dated by the promotion', () => {
+    const { rt } = setup();
+    const { sql } = rt.storage;
+    proposePromptSection(sql, rt.actor, {
+      section: target, source: SAME_SIZE, rationale: RATIONALE,
+      incumbentScore: scoreInterval([0.2]), candidateScore: scoreInterval([0.9]),
+    });
+    // Proposed an hour ago, read half an hour ago.
+    void sql`UPDATE prompt_section_versions SET written_at = written_at - 3600000`;
+    const seenAt = (sql<{ at: number }>`SELECT written_at AS at FROM prompt_section_versions`[0]?.at ?? 0) + 1_800_000;
+    expect(countUnseenChangelog(sql, rt.actor, seenAt)).toBe(0);
+
+    const pending = getPendingPromptSection(sql, rt.actor, TARGET_ID);
+
+    if (!pending) throw new Error('expected a pending section');
+    applyPromptSectionDecision(sql, rt.actor, pending, 'promote');
+
+    expect(countUnseenChangelog(sql, rt.actor, seenAt)).toBe(1);
+    expect(buildChangelog(sql, rt.actor, { since: seenAt }).map((entry) => entry.summary)).toEqual([`I reworded my own ${TARGET_ID} guidance`]);
   });
 
   test('reverting a promoted section puts the built-in wording back in the prompt', async () => {

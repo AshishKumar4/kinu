@@ -6,10 +6,10 @@ import './helpers/ui-module-globals';
 import { describe, test, expect } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { AgentTaskTree, ChangelogEntry, MemoryEntry, PendingAction, Rpc, WorkspaceWorkOwner } from '@kinu.run/core';
+import type { AgentTaskTree, ChangelogEntry, MemoryEntry, PanelAgent, PendingAction, Rpc, WorkspaceWorkOwner } from '@kinu.run/core';
 import type { BackgroundJob } from '@kinu.run/core/protocol';
 import { buildJournal, WorkTab } from '../src/components/surfaces/WorkTab';
-import { TaskTree } from '../src/components/surfaces/work-tasks';
+import { HelperRow, TaskTree } from '../src/components/surfaces/work-tasks';
 
 function job(over: Partial<BackgroundJob> & { id: string }): BackgroundJob {
   return {
@@ -96,10 +96,10 @@ describe('the work journal', () => {
 const UNREAD: Rpc = () => Promise.withResolvers<never>().promise;
 
 /** `renderToStaticMarkup` discards effects, so both ledger reads are still out: the opening state. */
-function workTabMarkup(jobs: BackgroundJob[], queue: PendingAction[] = [], memory: MemoryEntry[] = []): string {
+function workTabMarkup(jobs: BackgroundJob[], queue: PendingAction[] = [], memory: MemoryEntry[] = [], agents: PanelAgent[] = []): string {
   return renderToStaticMarkup(createElement(WorkTab, {
     plan: null, planRpc: UNREAD, rpc: UNREAD, pendingActions: queue, backgroundJobs: jobs,
-    onRefreshJobs: () => {}, onOpenSurface: () => {}, memory,
+    onRefreshJobs: () => {}, onOpenSurface: () => {}, memory, agents: { list: agents, open: () => {} },
   }));
 }
 
@@ -123,6 +123,31 @@ describe('Now owes the work in hand whatever the plan read is doing', () => {
     };
 
     expect(sectionTitles(workTabMarkup([], [decision]))).toEqual(['Needs you', 'Now']);
+  });
+});
+
+describe('an evolution helper is a Now row that opens its chat', () => {
+  const agent = (label: string, category: PanelAgent['category']): PanelAgent => ({
+    key: `actor-${label}`, label, category, activity: 'working', parent: null,
+    open: { kind: 'chat', path: `ask-${label}` }, tab: false, input: category !== 'background',
+  });
+
+  test('a background helper is listed in Now and a hired agent is not', () => {
+    const markup = workTabMarkup([], [], [], [agent('Refiner', 'background'), agent('Builder', 'hired')]);
+
+    expect(sectionTitles(markup)).toEqual(['Now']);
+    expect(markup).toContain('Refiner');
+    expect(markup).not.toContain('Builder');
+  });
+
+  test('its row opens that helper through the opener the Agents panel uses', () => {
+    const refiner = agent('Refiner', 'background');
+    const opened: PanelAgent[] = [];
+    const row = HelperRow({ agent: refiner, onOpen: (open) => { opened.push(open); } });
+
+    row.props.onClick();
+
+    expect(opened).toEqual([refiner]);
   });
 });
 
