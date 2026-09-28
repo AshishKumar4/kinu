@@ -239,30 +239,33 @@ export async function adoptTarball(
  * Where a rollback takes production, and the history after it: the newest build older than the one serving that no
  * rollback left, with the serving one withdrawn so no later rollback returns to it. A serving version the history
  * never took, a promotion that went red after its upload, returns to the newest build.
+ *
+ * Refused across a reset: one a later promotion carries, or `latest` if it came after the target was promoted (a
+ * promotion red after its reset is in no history). The platform does not refuse it: a version binds its Durable Object
+ * namespaces by id, so the old build serves every call as "Durable Object Namespace was deleted" (measured 2026-09-28).
  */
 export function planRollback(
   history: readonly Promotion[],
   serving: string,
   at: string,
-): { readonly target: Promotion; readonly history: readonly Promotion[] } | undefined {
+  latest: Reset | undefined,
+): { readonly refused: string } | { readonly target: Promotion; readonly history: readonly Promotion[] } {
   const position = history.map((entry) => entry.version).lastIndexOf(serving);
   const older = position === -1 ? history : history.slice(0, position);
   const target = [...older].reverse().find((entry) => entry.withdrawnAt === undefined);
 
-  if (target === undefined) return undefined;
+  if (target === undefined) return { refused: `production's history holds no build older than version ${serving} to return to` };
+  const later = history.slice(history.indexOf(target) + 1).find((entry) => entry.reset !== undefined)?.reset;
+  const crossed = later ?? (latest !== undefined && latest.at > target.at ? latest : undefined);
+
+  if (crossed !== undefined) {
+    return {
+      refused: `${crossed.tag} (${crossed.at}) reset production after ${target.sha} was promoted; that build never ran on `
+        + 'this storage, so no rollback crosses the reset. Deploy forward instead.',
+    };
+  }
 
   return { target, history: history.map((entry, index) => index === position ? { ...entry, withdrawnAt: at } : entry) };
-}
-
-/**
- * The reset a rollback to `target` would cross: one a later promotion carries, or the environment's latest reset if it
- * came after `target` was promoted (a promotion red after its reset is in no history). A build older than a reset
- * would serve storage its migrations never made, so a rollback across one is refused.
- */
-export function resetCrossed(history: readonly Promotion[], target: Promotion, latest: Reset | undefined): Reset | undefined {
-  const later = history.slice(history.indexOf(target) + 1).find((entry) => entry.reset !== undefined)?.reset;
-
-  return later ?? (latest !== undefined && latest.at > target.at ? latest : undefined);
 }
 
 const HealthSchema = v.looseObject({ build: v.looseObject({ sha: v.string() }) });
@@ -548,16 +551,10 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
 
   if (command === 'rollback' && rest.length === 0) {
     const serving = servingVersion();
-    const plan = planRollback(promotions(buckets.production), serving, new Date().toISOString());
+    const plan = planRollback(promotions(buckets.production), serving, new Date().toISOString(), latestReset(buckets.production));
 
-    if (plan === undefined) throw new Error(`production's history holds no build older than version ${serving} to return to`);
+    if ('refused' in plan) throw new Error(plan.refused);
     const { target } = plan;
-    const crossed = resetCrossed(plan.history, target, latestReset(buckets.production));
-
-    if (crossed !== undefined) {
-      throw new Error(`${crossed.tag} (${crossed.at}) reset production after ${target.sha} was promoted; that build never ran on `
-        + 'this storage, so no rollback crosses the reset. Deploy forward instead.');
-    }
 
     const run = wrangler(['rollback', target.version, '--message', `Rollback to ${target.sha}`, '--yes', ...environmentArgs('production')], 600_000);
 

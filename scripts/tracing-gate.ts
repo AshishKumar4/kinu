@@ -181,7 +181,6 @@ export async function observeSpans(): Promise<SpanObservations> {
     const options: WorkerOptions = {
       config: {
         name,
-        type: 'worker',
         compatibilityDate: '2025-12-01',
         compatibilityFlags: ['nodejs_compat'],
         manifest: {

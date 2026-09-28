@@ -21,7 +21,6 @@ const ResultSchema = v.object({
     compatibilityDate: v.pipe(v.string(), v.nonEmpty()),
     compatibilityFlags: v.array(v.string()),
     storage: v.literal('sqlite'),
-    migrationTag: v.pipe(v.string(), v.nonEmpty()),
     bindingName: v.literal('ControlPlaneDO'),
     className: v.literal('ControlPlaneDO'),
     doGraphModules: v.number(),
@@ -103,7 +102,7 @@ describe('ControlPlaneDO in workerd', () => {
 
     for (const refusal of result.refusals) {
       expect(refusal.settled, refusal.label).toBe('rejected');
-      expect(refusal.message, refusal.label).toContain('ControlDeniedError');
+      expect(refusal.name, refusal.label).toBe('ControlDeniedError');
       expect(refusal.message, refusal.label)
         .toContain("requires the control plane's admin capability");
     }
@@ -112,17 +111,17 @@ describe('ControlPlaneDO in workerd', () => {
     const undergraded = result.refusals.filter((entry) => entry.message.includes('holds only'));
     expect(undergraded).toHaveLength(2);
     expect(undergraded.map((entry) => entry.message.split(' requires ')[0]).sort())
-      .toEqual(['ControlDeniedError: audit.write', 'ControlDeniedError: overview.read']);
+      .toEqual(['audit.write', 'overview.read']);
   });
 
-  test('the error class does not survive RPC, so the message is the contract', async () => {
+  test('the error name survives RPC and the class does not', async () => {
     const { platform } = await reported;
 
-    // Pinned for `capability.ts`: RPC serialization drops the Error subclass; only workerd's message prefix survives.
+    // Pinned for `capability.ts`: `enhanced_error_serialization` keeps `name`, not the subclass or a message prefix.
     expect(platform.classSurvivesRpc).toBe(false);
-    expect(platform.rejectionName).toBe('Error');
+    expect(platform.rejectionName).toBe('ControlDeniedError');
     expect(platform.rejectionConstructor).toBe('Error');
-    expect(platform.nameCarriedInMessage).toBe(true);
+    expect(platform.nameCarriedInMessage).toBe(false);
   });
 
   test('the index and the audit log outlive the object', async () => {
@@ -169,7 +168,7 @@ describe('ControlPlaneDO in workerd', () => {
   test('the object exercises the binding shape production declares', async () => {
     const { platform } = await reported;
 
-    // Read from `wrangler.jsonc`: losing `nodejs_compat` or leaving `new_sqlite_classes` fails here.
+    // Read from `wrangler.jsonc`: losing `nodejs_compat` or a SQLite `exports` entry fails here.
     expect(platform.className).toBe('ControlPlaneDO');
     expect(platform.bindingName).toBe('ControlPlaneDO');
     expect(platform.storage).toBe('sqlite');

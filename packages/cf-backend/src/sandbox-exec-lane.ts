@@ -169,7 +169,7 @@ export function adaptCloudflareSandbox(
 
   const onContainer = async <T>(run: () => Promise<T>): Promise<T> => {
     await configured();
-    // Readiness arrives as data: a thrown refusal's name does not survive the DO RPC.
+    // Readiness arrives as data: a thrown refusal's class does not survive the DO RPC.
     const readiness = await handle.resolveReadiness();
 
     if (readiness.kind === 'pending') throw new SandboxPending(readiness.reason);

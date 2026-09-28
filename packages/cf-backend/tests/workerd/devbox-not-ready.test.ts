@@ -27,7 +27,7 @@ describe('readiness over Workers RPC', () => {
     expect(await stub().restoredReadiness()).toEqual({ kind: 'restored' });
   });
 
-  test('the thrown form loses its class name — the control', async () => {
+  test('the thrown form loses its class — the control', async () => {
     const s = stub();
 
     expect(await s.localRefusalName()).toBe('StillRestoring');
@@ -35,8 +35,9 @@ describe('readiness over Workers RPC', () => {
     // Through a thunk: a second consumer of a Durable Object RPC promise rejects unhandled and vitest exits non-zero
     // with every assertion green. Measured on this pool; see `do-transaction.test.ts`.
     await expect(() => s.namedRefusal()).rejects.toMatchObject({
-      name: 'Error',
+      name: 'StillRestoring',
       message: expect.stringContaining('a startup is armed'),
     });
+    await expect(() => s.namedRefusal()).rejects.toSatisfy((error) => error instanceof Error && error.constructor === Error);
   });
 });

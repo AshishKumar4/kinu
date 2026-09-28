@@ -98,10 +98,7 @@ const BindingBlocksSchema = v.object({
   version_metadata: v.optional(v.object({ binding: v.string() })),
   ai: v.optional(v.object({ binding: v.string() })),
   browser: v.optional(v.object({ binding: v.string() })),
-  migrations: v.optional(v.array(v.object({
-    tag: v.string(),
-    new_sqlite_classes: v.optional(v.array(v.string())),
-  }))),
+  exports: v.optional(v.record(v.string(), v.object({ state: v.optional(v.string()) }))),
   triggers: v.optional(v.object({ crons: v.optional(v.array(v.string())) })),
 });
 
@@ -235,10 +232,11 @@ export function buildReleaseManifest(build: ReleaseBuild, configPath = WRANGLER_
     metric: geometry.metric,
   }));
 
-  const migrations: ReleaseMigration[] = (config.migrations ?? []).map((migration) => ({
-    tag: migration.tag,
-    newSqliteClasses: migration.new_sqlite_classes ?? [],
-  }));
+  // A self-hosted Worker is created whole on its first upload, so every class it carries is new at its `v1`.
+  const migrations: ReleaseMigration[] = [{
+    tag: 'v1',
+    newSqliteClasses: Object.entries(config.exports ?? {}).flatMap(([name, entry]) => (entry.state === 'deleted' ? [] : [name])),
+  }];
 
   const vars = releaseVars(config);
 

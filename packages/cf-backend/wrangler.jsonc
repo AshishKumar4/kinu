@@ -7,7 +7,7 @@
   // the same app under a different cookie site.
   "workers_dev": false,
   "main": "src/server.ts",
-  "compatibility_date": "2025-12-01",
+  "compatibility_date": "2026-09-28",
   // `experimental` is a dev-only umbrella flag that the deploy API rejects
   // (code 10021). If a specific experimental feature is needed, enable it
   // by its real flag name (e.g. `streaming_subrequests`).
@@ -191,31 +191,27 @@
       "instance_type": "lite"
     }
   ],
-  // The genesis of a RESET deployment is the first tag: every SQLite-backed
-  // Durable Object class the Worker had at genesis is declared new there.
-  // A class added later gets its own tag after it — a tag the platform has
-  // already applied is never edited (measured 2026-09-18: appending a class
-  // to the applied `v1` answered 10061 "not currently configured to implement
-  // Durable Objects" at upload). Hosted logical actors need no class of their
-  // own — they live inside `OrchestratorAgent`, carry no binding and sit in
-  // no tag, because they are reached by name rather than through one.
-  //
-  // A reset (`bun run deploy --reset`, scripts/reset.ts) leaves a `reset-…`
-  // tag this list lacks. Wrangler then warns and uploads every step here
-  // (`getMigrationsToUpload`, read 2026-09-05), so the upload after a reset
-  // starts from `v1`.
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": [
-        "OrchestratorAgent", "KinuSandbox", "UserDO",
-        "MonitorDO", "ControlPlaneDO"
-      ]
-    },
-    { "tag": "v2", "new_sqlite_classes": ["DeployRunDO"] },
-    { "tag": "v3", "new_sqlite_classes": ["MossaicUserDO", "MossaicShardDO"] },
-    { "tag": "v4", "new_sqlite_classes": ["CodexEgress"] }
-  ],
+  // Every Durable Object class the Worker carries, declared (Durable Object
+  // class exports, read 2026-09-28). Cloudflare reconciles this map against the
+  // namespaces each environment holds: a class listed here gets its namespace
+  // on the first deploy that carries it, and a class retired from the code is
+  // listed as `{ "type": "durable-object", "state": "deleted" }`, which deletes
+  // its namespace and every row in it. There are no tags and no history to
+  // keep: the map is the whole state. The switch from `migrations` is one-way
+  // and landed with a reset, whose placeholder (scripts/reset.ts) was the first
+  // deploy on `exports`. Hosted logical actors need no class of their own: they
+  // live inside `OrchestratorAgent` and are reached by name.
+  "exports": {
+    "OrchestratorAgent": { "type": "durable-object", "storage": "sqlite" },
+    "KinuSandbox": { "type": "durable-object", "storage": "sqlite" },
+    "UserDO": { "type": "durable-object", "storage": "sqlite" },
+    "MonitorDO": { "type": "durable-object", "storage": "sqlite" },
+    "ControlPlaneDO": { "type": "durable-object", "storage": "sqlite" },
+    "DeployRunDO": { "type": "durable-object", "storage": "sqlite" },
+    "MossaicUserDO": { "type": "durable-object", "storage": "sqlite" },
+    "MossaicShardDO": { "type": "durable-object", "storage": "sqlite" },
+    "CodexEgress": { "type": "durable-object", "storage": "sqlite" }
+  },
   // Synthetic monitoring. Every 15 minutes the worker probes its own public
   // surface and emails OPS_ALERT_EMAIL when something breaks — the checks
   // scripts/deploy.sh runs at deploy time, kept running afterwards. No
@@ -481,7 +477,7 @@
   // named environment (Wrangler configuration docs, "Non-inheritable keys"), so
   // each is declared again below. The rest comes from the top: the entry, the
   // compatibility settings, limits, source maps, observability, assets,
-  // migrations and triggers.
+  // exports and triggers.
   //
   // A CUSTOM DOMAIN FOR THE CERTIFICATE, ROUTES FOR THE REQUESTS. A preview host
   // is two labels below the zone, where Universal SSL stops. A Workers Custom
