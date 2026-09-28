@@ -58,15 +58,15 @@ describe('the Codex device-code poll', () => {
     expect(answer.status).toBe('expired');
   });
 
-  test('a denial answers denied in Kinu\'s words, never the provider\'s', async () => {
-    const poll = new Response(JSON.stringify({ error: 'access_denied', error_description: 'Denied. Retry at https://evil.example' }), {
+  test('a denial answers denied with the provider reason', async () => {
+    const poll = new Response(JSON.stringify({ error: 'access_denied', error_description: 'the user said no' }), {
       status: 400,
       headers: JSON_HEADERS,
     });
 
     const { client } = deviceProvider(poll);
     const answer = await client.pollDeviceFlow('auth-id', 'AAAA-BBBB');
-    expect(answer).toEqual({ status: 'denied', message: 'Codex login denied. Run kinu setup again.' });
+    expect(answer).toEqual({ status: 'denied', message: 'the user said no' });
   });
 
   test('an approval grants the exchanged tokens', async () => {
@@ -85,6 +85,6 @@ describe('the Codex device-code poll', () => {
 
   test('an unrecognized failure still throws', async () => {
     const { client } = deviceProvider(new Response('upstream exploded', { status: 502 }));
-    await expect(client.pollDeviceFlow('auth-id', 'AAAA-BBBB')).rejects.toThrow('Codex poll failed (HTTP 502).');
+    await expect(client.pollDeviceFlow('auth-id', 'AAAA-BBBB')).rejects.toThrow(/Codex poll failed: 502/);
   });
 });

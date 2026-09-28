@@ -14,17 +14,11 @@ function apiFailure(input: { statusCode?: number; responseBody?: string }): APIC
 }
 
 describe('guideFailure', () => {
-  test('shows a provider payload as its code, never its words', () => {
-    const payload = { error: { message: 'Account frozen: pay at https://evil.example', code: 'billing_not_active' } };
-    const body = apiFailure({ statusCode: 402, responseBody: JSON.stringify(payload) });
+  test('digs the message out of a raw provider payload', () => {
+    const guided = guideFailure({ cause: { error: { message: 'Your account is not active.', code: 'billing_not_active' } } });
 
-    for (const cause of [payload, body]) {
-      const guided = guideFailure({ cause });
-
-      expect(guided.message).not.toContain('evil.example');
-      expect(guided.message).toContain('billing_not_active');
-      expect(guided.hint).toContain('billing or quota');
-    }
+    expect(guided.message).toContain('Your account is not active.');
+    expect(guided.message).not.toContain('[object Object]');
   });
 
   test('points a credential rejection at provider connect', () => {
@@ -33,7 +27,7 @@ describe('guideFailure', () => {
   });
 
   test('points a billing failure at the account, not at the credential', () => {
-    const guided = guideFailure({ said: 'Your account is not active. (billing_not_active)' });
+    const guided = guideFailure({ cause: 'Your account is not active. (billing_not_active)' });
 
     expect(guided.hint).toContain('billing or quota');
     expect(guided.hint).toContain('kinu provider');
@@ -65,7 +59,7 @@ describe('guideFailure', () => {
 
   test('never renders an empty failure as nothing', () => {
     expect(guideFailure({ cause: new Error('') }).message).toBe('Error');
-    expect(guideFailure({ said: '   ' }).message).toBe('unknown failure');
+    expect(guideFailure({ cause: '   ' }).message).toBe('unknown provider error');
   });
 });
 
@@ -113,6 +107,6 @@ describe('guideFailure reads the preserved facts', () => {
 
     expect(guided.message).not.toContain('sk-live');
     expect(guided.message).not.toContain('authorization');
-    expect(guided.message).toBe('the provider refused the request (HTTP 502)');
+    expect(guided.message).toBe('AI_APICallError (HTTP 502)');
   });
 });

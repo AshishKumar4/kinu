@@ -2,7 +2,6 @@
 // Refresh ownership stays with the credential store that calls createCodexOAuthClient().
 import * as v from 'valibot';
 import { OAuthTokenError } from './oauth-token-error';
-import { oauthRefusalText } from './oauth-refusal';
 import type { OAuthCredential } from '../credentials/store';
 import { isJsonObject, parseJsonObject, type JsonObject } from '../utils/json';
 import { Effect } from 'effect';
@@ -42,23 +41,33 @@ const TokenExchangeResponseSchema = v.object({
   expires_in: v.optional(v.number()),
 });
 
-function oauthErrorCode(body: string): string | undefined {
+function sanitizeErrorBody(body: string): string {
+  return body
+    .replace(/("(access|refresh|id|code|user)_token"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$3')
+    .replace(/("authorization_code"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$2')
+    .replace(/("code_verifier"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$2')
+    .slice(0, 512);
+}
+
+/** A body without an `error` code yields `unknown`, never a terminal code. */
+async function codexTokenEndpointError(res: Response): Promise<OAuthTokenError> {
+  const body = await res.text();
+
   const rejection = v.safeParse(
     v.object({ error: v.optional(v.string()) }),
     tolerate<unknown>(() => JSON.parse(body), 'malformed-input'),
   );
 
-  return rejection.success ? rejection.output.error : undefined;
+  return new OAuthTokenError('codex',
+    rejection.success && rejection.output.error ? rejection.output.error : 'unknown',
+    `Codex token refresh failed: ${res.status} ${sanitizeErrorBody(body)}`,
+  );
 }
 
-/** A body without an `error` code yields `unknown`, never a terminal code. */
-async function codexTokenEndpointError(res: Response): Promise<OAuthTokenError> {
-  const code = oauthErrorCode(await res.text());
-
-  return new OAuthTokenError('codex', code === undefined || code === '' ? 'unknown' : code,
-    oauthRefusalText('Codex token refresh failed', { ...(code !== undefined && { code }), status: res.status }));
-}
-
+const DevicePollErrorSchema = v.object({
+  error: v.optional(v.string()),
+  error_description: v.optional(v.string()),
+});
 
 /** Read a rejected device-code poll: an explicit terminal code wins; else 403 is pending and 404 expired. */
 function devicePollRejection(res: Response): Effect.Effect<DeviceCodePoll> {
@@ -67,17 +76,25 @@ function devicePollRejection(res: Response): Effect.Effect<DeviceCodePoll> {
 
 function pollAnswer(res: Response, body: string): Effect.Effect<DeviceCodePoll> {
 
-  const code = oauthErrorCode(body);
+  const rejection = v.safeParse(
+    DevicePollErrorSchema,
+    tolerate<unknown>(() => JSON.parse(body), 'malformed-input'),
+  );
 
-  if (code === 'access_denied') return Effect.succeed({ status: 'denied', message: 'Codex login denied. Run kinu setup again.' });
+  const code = rejection.success ? rejection.output.error : undefined;
+  const reason = rejection.success ? rejection.output.error_description : undefined;
+
+  if (code === 'access_denied') {
+    return Effect.succeed({ status: 'denied', message: reason ?? 'Codex login denied. Run kinu setup again.' });
+  }
 
   if (code === 'expired_token' || res.status === 404) {
-    return Effect.succeed({ status: 'expired', message: 'Codex login expired. Run kinu setup again.' });
+    return Effect.succeed({ status: 'expired', message: reason ?? 'Codex login expired. Run kinu setup again.' });
   }
 
   if (res.status === 403) return Effect.succeed({ status: 'pending' });
 
-  return Effect.die(new Error(oauthRefusalText('Codex poll failed', { ...(code !== undefined && { code }), status: res.status })));
+  return Effect.die(new Error(`Codex poll failed: ${res.status} ${sanitizeErrorBody(body)}`));
 }
 
 export interface DeviceCodeStart {
@@ -118,9 +135,7 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
         }));
 
         if (!res.ok) {
-          const code = oauthErrorCode(yield* Effect.promise(() => res.text()));
-
-          return yield* Effect.die(new Error(oauthRefusalText('Codex device-code request failed', { ...(code !== undefined && { code }), status: res.status })));
+          return yield* Effect.die(new Error(`Codex device-code request failed: ${res.status} ${sanitizeErrorBody(yield* Effect.promise(() => res.text()))}`));
         }
 
         const body = v.safeParse(DeviceCodeStartResponseSchema, yield* Effect.promise(() => res.json()));
@@ -166,9 +181,7 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
         }));
 
         if (!exchange.ok) {
-          const code = oauthErrorCode(yield* Effect.promise(() => exchange.text()));
-
-          return yield* Effect.die(new Error(oauthRefusalText('Codex token exchange failed', { ...(code !== undefined && { code }), status: exchange.status })));
+          return yield* Effect.die(new Error(`Codex token exchange failed: ${exchange.status} ${sanitizeErrorBody(yield* Effect.promise(() => exchange.text()))}`));
         }
 
         const tokens = v.safeParse(TokenExchangeResponseSchema, yield* Effect.promise(() => exchange.json()));

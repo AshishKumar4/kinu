@@ -311,8 +311,8 @@ function waitTooLong(input: {
   const resetsAt = `${new Date(input.untilMs).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
   return new APICallError({
-    message: `${input.provider} is rate-limited until ${resetsAt} (in ${fmtSpan(input.untilMs - input.nowMs)})`,
-    ...(input.reason !== undefined && { data: { reason: input.reason } }),
+    message: `${input.provider} is rate-limited until ${resetsAt} (in ${fmtSpan(input.untilMs - input.nowMs)})`
+      + `${input.reason === undefined ? '' : `: ${input.reason}`}`,
     url: input.input instanceof Request ? input.input.url : input.input.toString(),
     requestBodyValues: undefined,
     ...(input.status !== undefined && { statusCode: input.status }),

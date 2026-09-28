@@ -603,7 +603,7 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
     case 'step-finish':
       return [];
     case 'error':
-      return [{ type: 'error', ...guideFailure({ said: event.message }) }];
+      return [{ type: 'error', ...guideFailure({ cause: event.message }) }];
     case 'evolution':
       return [{ type: 'evolution', event: event.event, message: event.message }];
     case 'background':
