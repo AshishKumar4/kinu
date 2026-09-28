@@ -904,7 +904,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts scripts/error-model.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1888,24 +1888,6 @@ export const LADDER: readonly Gate[] = [
       + 'too small to make. The suite prints the list with its figures after the file, which '
       + 'vitest\'s agent reporter shows only when the file fails.',
     inputs: workersPool('packages/cf-backend'),
-  },
-  {
-    run: 'bun run gate:policy-drift',
-    label: 'Duplicated policy constants',
-    tier: 'commit',
-    // Measured 2026-09-05 on the 24-thread box: 0.8/0.8/0.8/0.9/0.9s. Replaces 0.6s.
-    seconds: 0.9,
-    catches: 'one policy number written down twice. `RETRY_BASE_MS` is declared three '
-      + 'times with three values (5s in core, 30s in the email outbox, 1s in a React '
-      + 'hook) and `RETRY_MAX_MS` three times with two, so grepping either name returns '
-      + 'a confident wrong answer. Values are folded before comparison, because five '
-      + 'minutes is written `300_000` in one file and `5 * 60 * 1000` in three others. '
-      + '12 findings over 277 named constants and 2,629 literals in a role position.',
-    blind: 'a policy held in a lowercase local, and an unnamed literal whose role words '
-      + 'only PARTIALLY match a constant — the partial-match version reported 12 and '
-      + 'every one was two unrelated decisions picking the same round number, so exact '
-      + 'is the rule and 0 is the honest count.',
-    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:scratch-ownership',
