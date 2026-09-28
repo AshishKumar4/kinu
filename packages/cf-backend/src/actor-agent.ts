@@ -3368,9 +3368,10 @@ export abstract class ActorAgent extends Agent<Env> {
   protected slateNamespaces(): CodemodeProvider[] {
     return [
       ...(this.rt.executionRouter?.getProviders() ?? []),
+      // A slate runs no eval program, so it could open a session it has no socket to drive.
       createWebCodemodeProvider({
         provider: this.ownedModelServices.getWebSearchProvider(), vfs: this.rt.storage.vfs,
-        sessions: { sessions: this.browserSessionsFor(this.rt.actor.actorId) },
+        sessions: { missing: 'a slate holds no browser session; it has web.search, web.fetch and web.screenshot' },
       }),
       createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
       ...this.turnCodemodeProviders(),
