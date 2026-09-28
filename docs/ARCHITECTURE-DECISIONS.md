@@ -486,15 +486,26 @@ Heap was read as headroom: the largest held allocation that survived.
   1.0 MB gzip): cold start 360 ms p50 (273-460, n=6) one at a time; ten started
   at once took 4.1-6.5 s together. Idle about 13-18 MB: 110 MB lived, 115 MB
   reset. `stat` round trip 7 ms p50, 10 ms p90.
-- The platform caps one incoming request at 10 concurrent dynamic-worker
-  invocations ("Dynamic worker concurrency limit exceeded: each request may
-  have up to 10"). The eleventh is refused at once, not queued: 15 of 25
-  parallel calls failed. Three concurrent requests to one object ran 10 each.
-  A call that returns while its facet keeps working (`ctx.waitUntil`) frees its
-  slot: after 10 such calls, 10 concurrent calls and 25 new isolates one after
-  another in the same request all succeeded, and the 10 background tasks
-  finished (20 s and 60 s waits, 10 of 10 each). Starting 25 of them at once
-  still hit the cap, since a slot is held through the cold start.
+- The platform lets one object hold in-flight calls into at most 10 distinct
+  dynamic workers; the error text says "per request" ("Dynamic worker
+  concurrency limit exceeded: each request may have up to 10"), but the count
+  is the object's. The eleventh is refused at once, not queued: 15 of 25
+  parallel calls failed. Three concurrent requests to one object ran 10 calls
+  each only because they reused the same 10 loader ids. A call that returns
+  while its facet keeps working (`ctx.waitUntil`) frees its slot: after 10 such
+  calls, 10 concurrent calls and 25 new isolates one after another in the same
+  request all succeeded, and the 10 background tasks finished (20 s and 60 s
+  waits, 10 of 10 each). Starting 25 of them at once still hit the cap, since a
+  slot is held through the cold start.
+- An open WebSocket routed through the parent into a loader facet holds a slot
+  for its whole life, with `accept()` and with the hibernation API alike
+  (2026-09-28): 10 of 12 sockets opened, and while they stayed open another
+  request could start no new facet (2 of 2 and 10 of 10 refused) though the
+  socket-holding facets still answered; after they closed, 10 new facets
+  answered. So a browser's socket stays in the workspace object.
+- A facet's calls into the parent take no slot (2026-09-28): with the parent
+  holding 10 facet calls in flight, those facets made 50 calls back into it,
+  all answered in 8-58 ms; 20 facets' background loops made 400 of 400.
 - Background work does not keep the parent alive. Three 150 s background waits
   in loader facets, with no request reaching the parent meanwhile: 0 of 3
   finished, and the parent's next call was a cold start (952 ms). The same
