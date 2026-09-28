@@ -64,10 +64,8 @@ function seedJournalledRun(
 
   if (run.merged) {
     db.prepare(
-      `INSERT INTO head_merge_results
-         (actor_id, root_id, merged_narrative, cost_head_count, cost_total_tokens, cost_total_wall_ms, cost_max_depth, merged_at, merge_strategy)
-       VALUES (?, ?, 'synthesis', ?, 0, 0, 1, ?, 'synthesize')`,
-    ).run(actorId, run.rootId, run.heads.length, run.at + 100);
+      `INSERT INTO head_merge_results (actor_id, root_id, merged_narrative) VALUES (?, ?, 'synthesis')`,
+    ).run(actorId, run.rootId);
   }
 }
 

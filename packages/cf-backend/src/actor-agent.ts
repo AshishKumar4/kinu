@@ -11,7 +11,7 @@ import {
 } from "agents";
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
-  actorConnectionTag, actorFromConnectionTags, hostedActorRoute, actorReadHandle, readSessionTranscript,
+  actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle, readSessionTranscript,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS,
   type RunEventInput, type SubordinateInspectionAuthority, type SessionTranscriptReader,
 } from '@kinu.run/core';
@@ -52,7 +52,7 @@ import {
 } from "./user/mcp";
 
 import {
-  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, createDbCodemodeProvider,
+  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, sameActorReference, createDbCodemodeProvider,
   type EvolutionConfig, type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
@@ -96,8 +96,8 @@ import {
   nanoid,
   type HeadJournal, LiveHeadJournal,
   type HeadStreamFrame,
-  type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
-  type SerializedMessage, type HeadRuntime, type HeadGrounding, type MergeResult,
+  type HeadId, type HeadInput, type HeadReport,
+  type SerializedMessage, type HeadRuntime, type HeadGrounding,
   readMemoryTail,
   type RunEventRecorder,
   // Spend governor is opt-in: no label means no cap.
@@ -121,7 +121,7 @@ import {
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   readDeviceRequestChannel, type DeviceRequestChannel,
   cancelCurrentWork, getStoredModelSpec, setModel, getChatHistoryPage,
-  type CancelWorkOutcome, type ChatHistoryEntry, type Page, type PageRequest,
+  type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId, type MCTSProgressEvent,
   EventLog,
   resolveTurnSkills, filterToolNamesBySkills,
@@ -130,12 +130,12 @@ import {
   PlanReviewActions, planHandoffStillOwed, type PlanDecisionOutcome,
   type PlanEdit, type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
-  isVfsError,
+  answerParentRpc,
   type ParentRpcResult, type ParentExecResult,
   type ParentRpcWrite,
   type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
   type SubordinateRuntime, type TemporaryAgentPort,
-  SubordinateRosterStore,
+  SubordinateRosterStore, subordinateTitle,
   createTeamToolDeps, createTemporaryAgentPort, receiveSubordinateEvent,
   type SubordinatesChangedEvent, type SubordinateReportStatus, type SubordinateReportOrigin,
   type SubordinateEventResult,
@@ -177,10 +177,9 @@ import {
   type CFRuntime, type CFRuntimeHooks,
 } from "./runtime";
 import {
-  hostNodeSeat, hostBranch, abortHostedBranch, nodeCodemodeTool,
-  type ExplorationHostSeams, type BranchRunnerDeps,
-} from "./exploration-hosting";
-import { hostedSubordinateRuntime, type SubordinateHostSeams } from "./subordinate-hosting";
+  hostNodeSeat, hostBranch, abortHostedBranch, nodeCodemodeTool, hostedSubordinateRuntime,
+  type HostedActorSeams, type BranchRunnerDeps,
+} from "./hosted-actors";
 import {
   classifyRecoveredFiber, EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
   TERMINAL_LANE_FIBER,
@@ -226,6 +225,7 @@ import {
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
 import { Hono, type Context } from 'hono';
+import { WakeArms } from '@kinu.run/core';
 import { rawPath, rethrow } from './api/context';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
@@ -667,16 +667,18 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private clientRpcRefusal(connection: Connection, rpc: RpcFrame): string | null {
     if (this.isClientRpcMethodDenied(rpc.method)) return `${rpc.method} is not available from client connections.`;
-    const name = actorFromConnectionTags(connection.tags);
+    const id = actorFromConnectionTags(connection.tags);
 
-    if (name === null) return null;
+    if (id === null) return null;
+    const name = this.hostedWindowName(id);
     // The SDK runs any array of arguments; a window's must be JSON values.
     const args = v.safeParse(v.array(JsonValueSchema), rpc.args);
 
-    if (!args.success) return `${rpc.method} from ${name}'s window carries arguments that are not JSON values.`;
-    const id = this.hostedActorId(name);
+    if (name === null) return `${rpc.method} from a window whose agent this workspace no longer holds.`;
 
-    return id !== null && hostedWindowMay(rpc.method, args.output, { name, id }) ? null : `${rpc.method} from ${name}'s window may act only on ${name}.`;
+    if (!args.success) return `${rpc.method} from ${name}'s window carries arguments that are not JSON values.`;
+
+    return hostedWindowMay(rpc.method, args.output, { name, id }) ? null : `${rpc.method} from ${name}'s window may act only on ${name}.`;
   }
 
   private addressedActor(): string | null {
@@ -720,7 +722,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult | Promise<PlanReviewResult> {
-    return this.planActions.submit(edits);
+    return this.planActions.submit(edits, this.turnDrivingMetadata());
   }
 
   @callable()
@@ -739,7 +741,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   @callable()
   async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
-    return this.planActions.dismiss(id, revision);
+    return this.planActions.dismiss(id, revision, (prefix) => { this.chatLoop.stopIfRunning(prefix); });
   }
 
   @callable()
@@ -763,13 +765,11 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Read directly by the inspection path and slate descent, which resolve actors by name. */
   protected abstract actorDirectoryStore(): WorkspaceActorDirectory;
 
-  protected abstract explorationSeams(): ExplorationHostSeams;
-
-  protected abstract subordinateSeams(): SubordinateHostSeams;
+  protected abstract hostedSeams(): HostedActorSeams;
 
   /**
    * Each actor's home is provisioned in this isolate by the host (`actor-hosting.ts` →
-   * `hostedActorAgentName`); its identity is its `workspace_actors` row, so there is no facet port.
+   * `hostedHomeName`); its identity is its `workspace_actors` row, so there is no facet port.
    */
 
   /**
@@ -805,21 +805,13 @@ export abstract class ActorAgent extends Agent<Env> {
     if (entry === null) throw new KinuError('missing', `Subordinate "${name}" is not in the roster`);
     const reference = entry.actorReference;
 
-    if (reference === null) {
-      // Admitted and not yet born: its seed is the only descriptor it has.
-      const seed = entry.birth?.seed;
-
-      if (seed === undefined) throw new KinuError('io', `Subordinate "${name}" has neither an actor nor a birth.`);
-
-      return { ...entry, actorId: null, displayName: seed.displayName, role: seed.role };
-    }
+    if (reference === null) return { ...entry, actorId: null, ...subordinateTitle(entry, null) };
 
     const record = this.actorDirectoryStore().retained(reference.actorId);
 
     if (record === null) throw new KinuError('missing', `Subordinate "${name}" names an actor this workspace does not hold.`);
-    const config = actorReadHandle(this.boundSql, record).config;
 
-    return { ...entry, actorId: reference.actorId, displayName: config.getDisplayName() ?? entry.name, role: config.getRoleSelection() };
+    return { ...entry, actorId: reference.actorId, ...subordinateTitle(entry, actorReadHandle(this.boundSql, record).config) };
   }
 
   protected async subordinateViews(): Promise<SubordinateView[]> {
@@ -884,26 +876,30 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Memoized so the durable roster and the temporary register address the same actors. */
   protected subordinateRuntime(): SubordinateRuntime {
     this._subordinateRuntime ??= hostedSubordinateRuntime(
-      this.subordinateSeams(),
+      this.hostedSeams(),
       () => this.actorHost().bindStores(actorReferenceOf(this.actorHandle())),
     );
 
     return this._subordinateRuntime;
   }
 
-  private _temporaryAgentPort: TemporaryAgentPort | null = null;
+  /** The host's one port for this actor: a waiter is found only through the port that parked it. */
+  /** A turn waiting on a delegate it hired; the workspace root frees the waiting turn's slot. */
+  protected whileWaitingOnDelegate<T>(_actorId: string, waited: Promise<T>): Promise<T> {
+    return waited;
+  }
 
-  /** Built once per actor: `shell` parks a waiter that the report ingress later resolves on this
-   * isolate; a per-call port would leave every ask hanging. */
-  protected temporaryAgentPort(): TemporaryAgentPort {
-    this._temporaryAgentPort ??= createTemporaryAgentPort({
-      roster: this.subordinateRoster,
-      runtime: this.subordinateRuntime(),
-      now: () => Date.now(),
-      createName: mintSubordinateName,
+  protected temporaryAgentPort(reference: ActorReference = actorReferenceOf(this.actorHandle())): TemporaryAgentPort {
+    return this.actorHost().temporary(reference, (bound) => {
+      const seams = this.hostedSeams();
+      const roster = seams.roster(bound);
+      roster.ensureSchema();
+
+      return createTemporaryAgentPort({
+        roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
+        whileWaiting: (waited) => this.whileWaitingOnDelegate(bound.record.actorId, waited),
+      });
     });
-
-    return this._temporaryAgentPort;
   }
 
   protected getTeamToolDeps(): TeamToolDeps {
@@ -1001,6 +997,7 @@ export abstract class ActorAgent extends Agent<Env> {
         this.broadcastSubordinateEvent({ ...report, kind: 'report' });
       },
       onAdmitted: () => { this.orch.scheduleDrain(); },
+      onEvolutionAnswer: () => { this.durableWakeOwner()?.(); },
       // A temporary child's answer belongs to the waiting `agents.ask` call, so the register gets
       // first refusal on the name through the port that parked the waiter.
       temporary: this.temporaryAgentPort(),
@@ -1026,6 +1023,7 @@ export abstract class ActorAgent extends Agent<Env> {
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider],
     reportModelCall: (report) => { this.reportModelCall(report); },
+    currentTurn: (reference) => this.currentTurnOf(reference),
   });
 
   // The bare prototype must read as sound.
@@ -1176,8 +1174,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
     // The seed is fetched on the same path the pane's socket opens, so each pane gets its own actor's rows.
     const seed = async (c: Context): Promise<Response> => {
-      const hosted = hostedActorRoute(c.req.path);
-      const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted.name)?.history());
+      const hosted = hostedActorRoute(c.req.path) === null ? null : c.req.header(HOSTED_ACTOR_ID_HEADER) ?? '';
+      const history = await (hosted === null ? this.chatTranscript.history() : this.hostedChatWire(hosted)?.history());
 
       if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
 
@@ -1326,6 +1324,7 @@ export abstract class ActorAgent extends Agent<Env> {
       // has its own terminal claim; see {@link turnMayStillRun}.
       turnIsLive: (turnId) => this.turnMayStillRun(turnId),
       scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
+      settled: () => this.restWhenIdle(),
     });
 
     return this._terminalTransitions;
@@ -1345,11 +1344,20 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private readonly runningWakeRows = new Set<string>();
 
+  private readonly wakeArms = new WakeArms();
+
+  /** Set by the last maintenance pass. */
+  protected maintenanceUnfinished = false;
+
   /**
    * Soonest-wins arm of one wake row per `callback`. A due row counts (it fires now) unless its tick is
    * running, since the SDK deletes that one. Re-reads after its write so racers converge.
    */
   protected async armWakeRow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
+    return await this.wakeArms.arm(() => this.armWakeRowNow(callback, atMs, pace));
+  }
+
+  private async armWakeRowNow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
     const nowSec = Math.floor(Date.now() / 1000);
     // Round up: the SDK stores whole seconds, and waking early would re-arm and busy-spin the alarm.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
@@ -1398,7 +1406,19 @@ export abstract class ActorAgent extends Agent<Env> {
     }
   }
 
-  /** One soonest-wins row per actor; returns the surviving row's id so a caller can release it. */
+  /** Nothing owed: a turn's arms go. */
+  private async restWhenIdle(): Promise<void> {
+    await this.wakeArms.release({
+      rows: async () => (await this.listSchedules())
+        .filter((row) => row.callback === TERMINAL_RETRY_CALLBACK && !this.runningWakeRows.has(row.id))
+        .map((row) => row.id),
+      idle: () => this._chatLoop?.pumping !== true && !this.owedWorkExists(),
+      cancel: async (id) => { await this.cancelSchedule(id); },
+      rearm: async () => { await this.scheduleTerminalRetry(Date.now()); },
+    });
+  }
+
+  /** One soonest-wins row per actor; returns its id. */
   protected scheduleTerminalRetry(atMs: number, pace?: WakePace): Promise<string> {
     return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs, pace);
   }
@@ -1431,6 +1451,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // so a pass that keeps answering unfinished settles at the ceiling, not a one-second loop.
     const sweepsUnfinished = this.maintenanceSweeps();
     const recoveryUnfinished = await this.maintenanceWork();
+    this.maintenanceUnfinished = sweepsUnfinished || recoveryUnfinished;
     await this.owedDeliveryWork();
     // Re-entered here because `maintenanceWork` is activation-scoped: later ticks in a warm
     // isolate never reach the job sweep, and a deferred job's wake would find nothing to recover.
@@ -1468,7 +1489,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected owedWorkExists(): boolean {
-    return this.owedUntimedWork() || this.nextOwedAt() !== null;
+    return this.maintenanceUnfinished || this.owedUntimedWork() || this.nextOwedAt() !== null;
   }
 
   /** While true, the tick keeps its lap-paced row. Base owns no rosters; subclasses override. */
@@ -1488,6 +1509,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Test-only deterministic cut point in the terminal sequence. Null in production. */
   protected terminalEffectFault: TerminalEffectFault | null = null;
+
+  protected currentTurnOf(reference: ActorReference): string | null {
+    return sameActorReference(reference, actorReferenceOf(this.actorHandle()))
+      ? this.actorSession.currentTurnId
+      : this.actorHost().hosted(reference)?.session.currentTurnId ?? null;
+  }
 
   /** Read at the start of a terminal sequence and carried through: the loop's live turn becomes
    *  the next one as soon as it opens, so a detached re-read could close the wrong claim. */
@@ -1611,8 +1638,6 @@ export abstract class ActorAgent extends Agent<Env> {
     this.logActivity(activity, compactionLogDetail(message, detail));
   }
 
-  /** Registered from the root's schema init: its plan port resolves this actor's handle, which needs the
-   *  directory row that init creates. */
   /** Handed to every turn; core adds the inbox's own turn extension itself. */
   private _compactionExtension: KinuExtension | null = null;
 
@@ -1646,9 +1671,8 @@ export abstract class ActorAgent extends Agent<Env> {
     const scopeTag = cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER));
     const bearerTag = cliBearerConnectionTag(ctx.request.headers.get(CLI_BEARER_HEADER));
     const sessionTag = sessionBearerConnectionTag(ctx.request.headers.get(SESSION_BEARER_HEADER));
-    // server.ts routes a hosted actor's chat without rewriting the path, so the addressed actor
-    // is readable only here.
-    const actorTag = actorConnectionTag(new URL(ctx.request.url).pathname);
+    const actorId = ctx.request.headers.get(HOSTED_ACTOR_ID_HEADER);
+    const actorTag = actorId === null || hostedActorRoute(new URL(ctx.request.url).pathname) === null ? null : actorConnectionTag(actorId);
 
     return [
       ...tags,
@@ -1860,7 +1884,10 @@ export abstract class ActorAgent extends Agent<Env> {
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
-          quiet: () => { this.overviewChanged(); },
+          quiet: () => {
+            this.overviewChanged();
+            this.detachOwned(() => this.restWhenIdle());
+          },
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
             config: this.config,
@@ -1942,7 +1969,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private _chatRooms: ActorChatRooms | null = null;
   protected get chatRooms(): ActorChatRooms {
-    return this._chatRooms ??= new ActorChatRooms(() => this.chatTransport, (name) => this.hostedChatWire(name));
+    return this._chatRooms ??= new ActorChatRooms(() => this.chatTransport, (actorId) => this.hostedChatWire(actorId));
   }
 
   /** Null when the addressed actor is no longer hosted here. */
@@ -1951,9 +1978,9 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Null when this workspace hosts no such actor; only the workspace root knows its directory. */
-  protected abstract hostedChatWire(name: string): ChatWire | null;
+  protected abstract hostedChatWire(actorId: string): ChatWire | null;
 
-  protected abstract hostedActorId(name: string): string | null;
+  protected abstract hostedWindowName(actorId: string): string | null;
 
   /** Fires for any actor's connection; the root's sleep-time closed-tab trigger overrides both hooks. */
   protected connectionOpened(): void {}
@@ -2097,8 +2124,8 @@ export abstract class ActorAgent extends Agent<Env> {
     this.headJournal.recordReport(report);
   }
 
-  async headJournalCacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): Promise<void> {
-    this.headJournal.cacheMerge(rootId, result, strategy);
+  async headJournalCacheMerge(rootId: HeadId, narrative: string): Promise<void> {
+    this.headJournal.cacheMerge(rootId, narrative);
   }
 
   private _evolutionSettling: AsyncTaskOwner | null = null;
@@ -2376,6 +2403,7 @@ export abstract class ActorAgent extends Agent<Env> {
           actor: this.actorHandle(),
           sql: this.rt.storage.sql,
           turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID,
+          durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
         clamp: {
           vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
@@ -2736,7 +2764,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const actorDeps = this.actorToolDeps();
     // Seat factory is asked per node: node deps are shallow-copied per child, so one shared actor
     // would give a whole wave one claim ledger and loop pointer.
-    const seams = this.explorationSeams();
+    const seams = this.hostedSeams();
 
     // The one production construction site of `AgentsSwarmDeps` on this backend; the CLI's
     // `buildAgentsSwarmDeps` is its twin.
@@ -3002,6 +3030,7 @@ export abstract class ActorAgent extends Agent<Env> {
         reportModelCall: (report) => this.reportModelCall(report),
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         resolveProfile: () => this.routingProfile(),
+        currentTurn: (reference) => this.currentTurnOf(reference),
         contextPlane: {
           actorId: this.actorHandle().actorId,
           claims: () => this.claims,
@@ -3015,8 +3044,8 @@ export abstract class ActorAgent extends Agent<Env> {
         },
         // Both members or neither: `requireBranches` refuses when the hook is absent.
         branches: {
-          spawn: (branchId) => hostBranch(this.explorationSeams(), branchId, this.branchRunnerDeps()),
-          abort: (branchId) => abortHostedBranch(this.explorationSeams(), branchId),
+          spawn: (branchId) => hostBranch(this.hostedSeams(), branchId, this.branchRunnerDeps()),
+          abort: (branchId) => abortHostedBranch(this.hostedSeams(), branchId),
         },
       };
 
@@ -3435,20 +3464,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** A fork reaches these through its `parent` executor. No `@callable`: only a worker-held
    * parent stub can reach them. */
-  /** Answers one file operation for a fork: the value, or the VFS error code and its path. */
-  private async workspaceFileAnswer<T>(path: string, operate: () => Promise<T>): Promise<ParentRpcResult<T>> {
-    try {
-      return { ok: true, value: await operate() };
-    } catch (cause) {
-      return {
-        ok: false,
-        error: { code: isVfsError(cause) ? cause.code : 'EIO', message: renderThrownChain({ cause }), path },
-      };
-    }
-  }
-
   async readWorkspaceFile(path: string): Promise<ParentRpcResult<Uint8Array>> {
-    return this.workspaceFileAnswer(path, async () => {
+    return answerParentRpc(path, async () => {
       const content = await this.rt.localVfs.readFile(path);
 
       return v.is(v.string(), content) ? new TextEncoder().encode(content) : content;
@@ -3456,7 +3473,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   async writeWorkspaceFile(input: ParentRpcWrite): Promise<ParentRpcResult<null>> {
-    return this.workspaceFileAnswer(input.path, async () => {
+    return answerParentRpc(input.path, async () => {
       if (input.kind === 'file') await this.rt.localVfs.writeFile(input.path, input.data);
       else await this.rt.localVfs.mkdir(input.path, { recursive: input.recursive });
 
@@ -3465,15 +3482,15 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   async listWorkspaceFiles(path: string): Promise<ParentRpcResult<string[]>> {
-    return this.workspaceFileAnswer(path, () => this.rt.localVfs.readdir(path));
+    return answerParentRpc(path, () => this.rt.localVfs.readdir(path));
   }
 
   async statWorkspaceFile(path: string): Promise<ParentRpcResult<{ size: number; mtimeMs: number; isDir: boolean } | null>> {
-    return this.workspaceFileAnswer(path, () => this.rt.localVfs.stat(path));
+    return answerParentRpc(path, () => this.rt.localVfs.stat(path));
   }
 
   async deleteWorkspaceFile(path: string): Promise<ParentRpcResult<null>> {
-    return this.workspaceFileAnswer(path, async () => {
+    return answerParentRpc(path, async () => {
       await this.rt.localVfs.unlink(path);
 
       return null;
@@ -3483,7 +3500,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Run a command in this workspace's shell for a fork: one round trip instead of one RPC per
    * file through an emulated shell. */
   async execWorkspaceCommand(command: string): Promise<ParentRpcResult<ParentExecResult>> {
-    return this.workspaceFileAnswer('', async () => {
+    return answerParentRpc('', async () => {
       const shell = this.rt.shell;
 
       if (!shell) throw new KinuError('unsupported', 'this workspace has no shell');
@@ -3514,14 +3531,14 @@ export abstract class ActorAgent extends Agent<Env> {
    * The root's pane names none and reads this actor's conversation.
    */
   @callable()
-  async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<Page<ChatHistoryEntry>> {
+  async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<ChatHistoryPage> {
     const { actor, ...page } = request ?? {};
 
     return getChatHistoryPage(actor === undefined ? this.chatTranscript : this.subordinateChat(actor), page);
   }
 
   /**
-   * The chat behind a pane's actor id; the directory refuses ids it never issued or non-children.
+   * The chat behind a pane's actor id; the directory refuses ids it never issued or outside this actor's subordinates.
    * A retired actor is unbound, so it reads via the presence-fenced handle with no file plane.
    */
   private subordinateChat(actorId: string): SessionTranscriptReader {
@@ -3530,8 +3547,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (record === null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
 
-    if (record.parentActorId !== this.actorHandle().actorId || record.kind !== 'subordinate') {
-      throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
+    for (let step: typeof record | null = record; step?.actorId !== this.actorHandle().actorId; step = directory.retained(step.parentActorId ?? '')) {
+      if (step === null || step.kind !== 'subordinate') throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
     }
 
     if (record.retiringAt === null && record.deletedAt === null) return this.transcriptFor(directory.open(actorId));
@@ -3764,7 +3781,7 @@ export abstract class ActorAgent extends Agent<Env> {
       return this._cachedTools;
     }
 
-    this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} → ${cacheKey}`);
+    this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} -> ${cacheKey}`);
 
     try {
       // No registry sync: the eval sandbox reads craftStore.list() fresh at every execute.
@@ -3783,6 +3800,7 @@ export abstract class ActorAgent extends Agent<Env> {
           turnId: claimScope === undefined
             ? () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID
             : () => claimScope,
+          durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         },
         // The sandbox declares the finished native surface, so core builds it last over all other tools.
         codemode: ({ native }) => this.getCodemodeToolFactory(mode, profileKey).toolFor(native),
@@ -3816,7 +3834,7 @@ export abstract class ActorAgent extends Agent<Env> {
         this._cachedToolsKey = cacheKey;
       }
 
-      this.logActivity("gettools_end", `rebuilt — ${Object.keys(tools).length} tools`);
+      this.logActivity("gettools_end", `rebuilt: ${Object.keys(tools).length} tools`);
 
       return tools;
     } catch (err) {
@@ -3842,7 +3860,7 @@ export abstract class ActorAgent extends Agent<Env> {
       : { executor: this.rt.executor, explorer: this.rt.llm };
 
     this._cfHeadRuntime = createHeadRuntime({
-      host: this.explorationSeams(),
+      host: this.hostedSeams(),
       models: this.ownedModelServices,
       // The merge is a judge call: its model and effort come from the route table via this profile,
       // not from the actor's stored chat spec.
@@ -3856,7 +3874,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * `hostNodeSeat` (`exploration-hosting.ts`) is requested per node: search deps are shallow-copied
+   * `hostNodeSeat` (`hosted-actors.ts`) is requested per node: search deps are shallow-copied
    * per child, so a shared seat would give a whole wave one claim ledger and one loop pointer.
    */
 
@@ -4685,7 +4703,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     throw new KinuError('io', 
       `settleBackgroundTasks: ${String(this._backgroundTasks.size)} task(s) still detached after 32 `
-      + 'laps — something keeps enqueuing work; join a narrower seam instead',
+      + 'laps: something keeps enqueuing work; join a narrower seam instead',
     );
   }
 

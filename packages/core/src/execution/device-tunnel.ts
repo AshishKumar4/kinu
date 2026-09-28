@@ -7,13 +7,11 @@ import { renderThrownChain, tolerate } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { every, REAL_CLOCK, type Clock } from '../types/clock';
 
-/** Minimal socket surface — platform WebSocket or any send()/readyState impl. */
 export interface TunnelSocket {
   send(data: string): void;
   readyState: number;
 }
 
-/** WebSocket.OPEN is 1 across every implementation. */
 const WS_OPEN = 1;
 
 /** Deadline for control round-trips only; deadline-free work rides {@link LIVENESS_PROBE_MS}. */
@@ -54,7 +52,6 @@ const RpcResponseSchema = v.object({
 
 export const TUNNEL_DISCONNECTED = 'device tunnel not connected';
 
-/** Matchers in other packages key on this exact string. */
 export const NO_DEVICE_CONNECTED = 'no device connected';
 
 /** Unclaimed workspace: no hub to ask. Classified as not-connected, but reworded
@@ -175,9 +172,7 @@ export class DeviceTunnel {
   private readonly pending = new Map<string, Pending>();
   private readonly openEnded = new Set<string>();
   private heartbeat: (() => void) | null = null;
-  /** Any frame counts. */
   private lastFrameAt = 0;
-  /** 0 when no probe is outstanding. */
   private probeSentAt = 0;
 
   constructor(
@@ -224,7 +219,7 @@ export class DeviceTunnel {
 
       if (deadline > 0) {
         stop = this.clock.after(deadline, () => settle(new Error(
-          `device RPC timeout after ${deadline}ms: ${method} — the call may still be running on the device`,
+          `device RPC timeout after ${deadline}ms: ${method}: the call may still be running on the device`,
         )));
       } else {
         this.openEnded.add(id);
@@ -244,13 +239,11 @@ export class DeviceTunnel {
     });
   }
 
-  /** Send an uncorrelated frame; throws when the socket is gone. */
   notify(frame: JsonObject): void {
     if (!this.isConnected()) throw new Error(TUNNEL_DISCONNECTED);
     this.socket.send(JSON.stringify(frame));
   }
 
-  /** Non-JSON frames are tolerated; any well-formed frame counts as liveness. */
   handleMessage(raw: string): void {
     const decoded = tolerate(() => parseJsonValue(raw), 'malformed-input');
 

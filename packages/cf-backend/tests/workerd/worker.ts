@@ -31,6 +31,9 @@ export { CodemodeEgress } from '../../src/codemode-egress';
 // Readiness refusal as data: it cannot ride an error class over RPC.
 export { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 
+// A long effect must not let other events in mid-run: the scheduler rule `settle` enforces.
+export { EffectAtomicityProbeDO } from './effect-atomicity-probe';
+
 import * as v from 'valibot';
 import {
   bindActorHandle, CacheWarmStore, CacheWarmingLane, initCacheWarmTable,

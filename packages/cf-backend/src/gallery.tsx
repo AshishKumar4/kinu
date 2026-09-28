@@ -103,7 +103,7 @@ import type {
 import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import * as v from "valibot";
-import { galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -127,12 +127,12 @@ const STOCK_ROSTER = {
   entries: [
     { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
       ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
-      : "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
-    { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
-    { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
-    { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
+      : "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
+    { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
+    { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
+    { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5 },
     // First-run row: titled by its first prompt, so it has no title yet, only its slug.
-    { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3, archivedAt: null },
+    { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3 },
   ],
   total: 5,
 };
@@ -156,7 +156,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
     {
       id: "dev_1", label: "ashish-mbp", os: "darwin", hostname: "ashish-mbp.local",
       connected: true, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 90e3,
-      expiresAt: NOW + 50 * 864e5, lastIp: "192.0.2.2", lastAgent: "kinu-device",
+      expiresAt: NOW + 50 * 864e5,
       replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     },
@@ -202,19 +202,18 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   {
     id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
     transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
-    authUrl: null, error: null, presetId: null, createdAt: NOW - 3 * 864e5, updatedAt: NOW,
+    authUrl: null, error: null, presetId: null,
   },
   {
     id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
     transport: "sse", status: "authenticating", toolsCount: 0,
     allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
-    error: null, presetId: null, createdAt: NOW - 864e5, updatedAt: NOW,
+    error: null, presetId: null,
   },
   {
     id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.example/sse",
     transport: "sse", status: "failed", toolsCount: 0, allowedTools: null,
     authUrl: null, error: "The server refused the connection.", presetId: null,
-    createdAt: NOW - 2 * 864e5, updatedAt: NOW,
   },
 ];
 
@@ -231,13 +230,13 @@ if (mcpPresetVariant === "connected") {
     {
       id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
       transport: "streamable-http", status: "ready", toolsCount: 21, allowedTools: null,
-      authUrl: null, error: null, presetId: "github", createdAt: NOW - 864e5, updatedAt: NOW,
+      authUrl: null, error: null, presetId: "github",
     },
     {
       id: "srv-preset-cloudflare", name: "Cloudflare", serverUrl: "https://mcp.cloudflare.com/mcp",
       transport: "streamable-http", status: "authenticating", toolsCount: 0, allowedTools: null,
       authUrl: "https://mcp.cloudflare.com/authorize?srv-preset-cloudflare", error: null,
-      presetId: "cloudflare", createdAt: NOW - 3600e3, updatedAt: NOW,
+      presetId: "cloudflare",
     },
     ...GALLERY_UNCLAIMED_MCP,
   ];
@@ -313,8 +312,8 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
 async function settingsSectionsFixture(path: string): Promise<Response | null> {
   if (path === "/api/user/credentials") {
     return fixtureJson([
-      { key: "anthropic.bearer", kind: "bearer", createdAt: NOW - 864e5, updatedAt: NOW },
-      { key: "anthropic.bearer@work", kind: "bearer", createdAt: NOW - 36e5, updatedAt: NOW },
+      { key: "anthropic.bearer", kind: "bearer" },
+      { key: "anthropic.bearer@work", kind: "bearer" },
     ]);
   }
 
@@ -451,7 +450,6 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
       allowedTools: addBody.output.allowedTools ?? null,
       authUrl, error: null,
       presetId: preset?.id ?? null,
-      createdAt: NOW, updatedAt: NOW,
     }];
 
     return fixtureJson({ id, authUrl }, 201);
@@ -500,7 +498,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
       {
         id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
         connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
-        lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
+        replacedAt: null,
         revokedAt: revoked ? NOW : null, unstoppedAt: incident === "revoked" ? NOW : null,
         reuseDetectedAt: incident === "reused" ? NOW : null, wholeMachine: false,
         sandbox: {
@@ -511,7 +509,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
       ...(frame === "devices" ? [{
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
-        lastIp: "192.0.2.2", lastAgent: "kinu-device", replacedAt: null,
+        replacedAt: null,
         revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
       }] : []),
@@ -595,7 +593,7 @@ function deviceConnectFixture(path: string, method: string): Response | null {
       id: "dev-arrived", label: "Owner PC", os: "darwin", hostname: "owner-mac",
       connected: connectFixtureMode !== "stall",
       createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
-      lastIp: "192.0.2.7", lastAgent: "kinu-device", replacedAt: null,
+      replacedAt: null,
       revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     }]);
@@ -640,7 +638,7 @@ const EXTRA_WORKSPACE = new URLSearchParams(location.search).get("extraWorkspace
 const galleryRoster: RosterEntry[] = [
   ...GALLERY_ROSTER.entries,
   ...(EXTRA_WORKSPACE ? [{
-    name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5, archivedAt: null,
+    name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5,
   }] : []),
 ].map((entry) => {
   const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
@@ -1422,7 +1420,6 @@ let galleryAgentPlan: PlanReview = {
   handoffAccepted: false,
   createdAt: NOW,
   updatedAt: NOW,
-  decidedAt: null,
 };
 
 /* The walk-back: two user turns, so there is a second message to revert to. `?transcript=revert` seeds it;
@@ -1520,7 +1517,12 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   getWorkspaceSnapshot: () => {
     const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get("getWorkspaceSnapshot"));
 
-    return { ...snapshot, activePlan: galleryAgentPlan, slates: gallerySlates().slates };
+    const status = v.parse(JsonObjectSchema, snapshot.status);
+
+    return {
+      ...snapshot, activePlan: galleryAgentPlan, slates: gallerySlates().slates,
+      status: HISTORY_ROWS > 0 ? { ...status, messageCount: seededGalleryChatRows() + HISTORY_ROWS } : status,
+    };
   },
   listSlates: gallerySlates,
   getActivePlanReview: () => galleryAgentPlan,
@@ -1528,12 +1530,12 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   // `dataset.workMoved`: a task written during an outage.
   listWorkspaceWork: () => ({
     plans: [{
-      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false },
+      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false, path: [] },
       plan: galleryAgentPlan, tasks: [],
     }],
     tasks: document.documentElement.dataset.workMoved === "1" ? [{
       owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
-      tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", createdAt: 1, updatedAt: 1, note: null, subtasks: [] }],
+      tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
     }] : [],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
@@ -1580,7 +1582,6 @@ function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
     feedback: feedback ?? null,
     handoffAccepted: true,
     updatedAt: Date.now(),
-    decidedAt: Date.now(),
   };
 
   return { value: { ok: true, plan: galleryAgentPlan, queued: true } };
@@ -1605,7 +1606,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     const name = `agent-${++gallerySubSeq}`;
 
     const entry = {
-      name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", createdBy: "user",
+      name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     };
 
@@ -1617,7 +1618,6 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       feedback: null,
       handoffAccepted: false,
       updatedAt: NOW,
-      decidedAt: null,
     };
 
     return { value: { name, displayName: "", subordinate: entry } };
@@ -1671,7 +1671,58 @@ new MutationObserver(() => {
   galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getExposedPorts"] }));
 }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-preview-arrived", "data-sandbox-starting"] });
 
+/* `&history=N&historyLatency=ms`: N older rows, paged; `&historyHold=1` waits for `gallery:release-page`. */
+const HISTORY_ROWS = Number(new URLSearchParams(location.search).get("history") ?? 0);
+
+const HISTORY_LATENCY_MS = Number(new URLSearchParams(location.search).get("historyLatency") ?? 250);
+
+const HISTORY_HELD = new URLSearchParams(location.search).get("historyHold") === "1";
+
+/** `&historyUneven=1`: pages alternate row heights. */
+const HISTORY_UNEVEN = new URLSearchParams(location.search).get("historyUneven") === "1";
+
+const HISTORY_PICTURE = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220"><rect width="480" height="220" fill="#3a3530"/><text x="24" y="120" fill="#e8dcc4" font-size="28">chart</text></svg>')}`;
+
+function historyRow(index: number): ChatHistoryEntry {
+  const id = `hist-${String(index).padStart(5, "0")}`;
+  const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
+
+  if (index % 2 === 0) return { id, role: "user", content: `Question ${index}: what changed in the pricing guard this time?`, createdAt };
+
+  const kind = index % 10;
+  let content = `Answer ${index}. The guard now reads the campaign before it writes the cart.`;
+
+  if (kind === 1 || (HISTORY_UNEVEN && Math.floor(index / 40) % 2 === 0)) content += "\n\n" + "A longer explanation that wraps across several lines of the column. ".repeat(6);
+  else if (kind === 3) content += "\n\n```ts\nexport function guard(cart: Cart) {\n  if (cart.coupon?.archived) throw new Error('archived');\n  return apply(cart);\n}\n```";
+  else if (kind === 5) content += `\n\n![chart ${index}](${HISTORY_PICTURE})`;
+  else if (kind === 7) content += "\n\nslate://board";
+
+  return { id, role: "assistant", content, createdAt };
+}
+
+async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
+  const request = v.parse(v.tuple([v.object({ cursor: v.optional(v.object({ after: v.string() })), limit: v.number() })]), args);
+  const { cursor, limit } = request[0];
+  const held = cursor?.after.startsWith("hist-") ? Number(cursor.after.slice(5)) : HISTORY_ROWS;
+  const from = Math.max(0, held - limit);
+  const items = Array.from({ length: held - from }, (_, offset) => historyRow(from + offset));
+  const settled = Promise.withResolvers<void>();
+
+  if (HISTORY_HELD) window.addEventListener("gallery:release-page", () => { settled.resolve(); }, { once: true });
+  else setTimeout(settled.resolve, HISTORY_LATENCY_MS);
+  await settled.promise;
+  const first = items[0];
+
+  const walked = items.length;
+
+  return from === 0 || first === undefined
+    ? { status: "end", items, walked }
+    : { status: "more", items, next: { after: first.id }, walked };
+}
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getChatHistoryPage" && HISTORY_ROWS > 0) return rpcResult(await galleryHistoryPage(args)).json<T>();
+
   const plan = galleryPlanRpc(method, args);
 
   if (plan) return rpcResult(v.parse(JsonValueSchema, plan.value)).json<T>();
@@ -2150,7 +2201,6 @@ const MERGED_RUN: HeadRunView = {
   ],
   merge: {
     narrative: "Three real call sites left — apply-coupon.ts and both reads in pricing.ts — and the same ?? inferKind guard covers all of them. The cart serializer is already null-safe. The admin report could not be checked; that package is not in this sandbox. The API routes were still being walked when this merged, so they are unread.",
-    headCount: 5, totalTokens: 24_820,
   },
 };
 
@@ -3367,7 +3417,6 @@ function RosterAuthorityFrame() {
     displayName: "Checkout coupon bug",
     createdAt: NOW - 7 * 864e5,
     lastVisited: NOW - 60e3,
-    archivedAt: null,
   };
 
   return (
@@ -3508,11 +3557,11 @@ function All() {
 }
 
 const SUBORDINATES: Parameters<typeof SubordinateTabs>[0]["subordinates"] = [
-  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", createdBy: "orchestrator", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
-  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", createdBy: "orchestrator", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
-  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
+  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
+  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", nameOrigin: "user", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
   // A one-click agent the titler has not reached: blank name, shown as "New agent".
-  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
+  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
 ];
 
 /* The open tab is the strip's hook, so a gate can compare strips. */
@@ -3559,9 +3608,9 @@ type GalleryRosterEntry = Parameters<typeof SubordinateTabs>[0]["subordinates"][
 
 const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
   // Distinctive: the gate asserts it never renders; subordination shows as hierarchy, not a badge.
-  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", nameOrigin: "user", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
   // Agent-created: keeps the confirmation path, unlike the user-created seed.
-  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", createdBy: "orchestrator", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
+  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
 ];
 
 const AGENTCHATS_ROWS = 40;
@@ -3645,7 +3694,7 @@ function AgentChatsScene() {
     const name = `agent-${++counter.current}`;
     missions.current[name] = AGENTCHATS_MISSION;
     setRoster((current) => [...current, {
-      name, actorId: galleryActorId(name), displayName: "", role: "agent", createdBy: "user",
+      name, actorId: galleryActorId(name), displayName: "", role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     }]);
     await navigate(`/workspace/checkout-fixes/agents/${name}`);
@@ -4083,24 +4132,24 @@ function ChatSlateFrame() {
 const AGENT_TASKS = [
   {
     id: "t1", parentId: null, title: "Reproduce the SAVE20 coupon 500", status: "done",
-    createdAt: NOW - 52e5, updatedAt: NOW - 44e5, note: null, subtasks: [],
+    updatedAt: NOW - 44e5, note: null, subtasks: [],
   },
   {
     id: "t2", parentId: null, title: "Patch the gateway timeout that swallows the coupon lookup",
-    status: "active", createdAt: NOW - 52e5, updatedAt: NOW - 8e5, note: null,
+    status: "active", updatedAt: NOW - 8e5, note: null,
     subtasks: [
-      { id: "t5", parentId: "t2", title: "Raise the upstream deadline to 60s", status: "done", createdAt: NOW - 30e5, updatedAt: NOW - 21e5, note: null },
-      { id: "t6", parentId: "t2", title: "Stop retrying a request the client already abandoned", status: "active", createdAt: NOW - 30e5, updatedAt: NOW - 6e5, note: "Client already bails at 8s — retrying past that is burn, not robustness." },
-      { id: "t7", parentId: "t2", title: "Check the same path in the checkout worker", status: "open", createdAt: NOW - 30e5, updatedAt: NOW - 30e5, note: null },
+      { id: "t5", parentId: "t2", title: "Raise the upstream deadline to 60s", status: "done", updatedAt: NOW - 21e5, note: null },
+      { id: "t6", parentId: "t2", title: "Stop retrying a request the client already abandoned", status: "active", updatedAt: NOW - 6e5, note: "Client already bails at 8s — retrying past that is burn, not robustness." },
+      { id: "t7", parentId: "t2", title: "Check the same path in the checkout worker", status: "open", updatedAt: NOW - 30e5, note: null },
     ],
   },
   {
     id: "t3", parentId: null, title: "Add a regression test for the expired-coupon branch",
-    status: "open", createdAt: NOW - 52e5, updatedAt: NOW - 52e5, note: null, subtasks: [],
+    status: "open", updatedAt: NOW - 52e5, note: null, subtasks: [],
   },
   {
     id: "t4", parentId: null, title: "Rewrite the coupon docs page", status: "dropped",
-    createdAt: NOW - 52e5, updatedAt: NOW - 40e5, note: null, subtasks: [],
+    updatedAt: NOW - 40e5, note: null, subtasks: [],
   },
 ];
 
@@ -4108,31 +4157,31 @@ const AGENT_TASKS = [
 const WORKSPACE_WORK = {
   plans: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false },
+      owner: { actorId: "actor-main", name: "main", retired: false, path: [] },
       plan: {
         id: "plan-gateway", sessionId: "default", revision: 3,
         content: "# Gateway timeout repair\n\nPatch the gateway timeout, then prove the expired-coupon branch.",
         status: "pending", annotations: [], feedback: null, handoffAccepted: false,
-        createdAt: NOW - 53e5, updatedAt: NOW - 9e5, decidedAt: null,
+        createdAt: NOW - 53e5, updatedAt: NOW - 9e5,
       },
       tasks: AGENT_TASKS.filter((task) => task.id === "t2"),
     },
     {
-      owner: { actorId: "actor-courier", name: "courier", retired: false },
+      owner: { actorId: "actor-courier", name: "courier", retired: false, path: ["courier"] },
       plan: {
         id: "plan-courier", sessionId: "default", revision: 1,
         content: "# Courier rollout\n\nStage the rollout and verify the receipt.",
         status: "approved", annotations: [], feedback: null, handoffAccepted: true,
-        createdAt: NOW - 60e5, updatedAt: NOW - 50e5, decidedAt: NOW - 50e5,
+        createdAt: NOW - 60e5, updatedAt: NOW - 50e5,
       },
       tasks: [
-        { id: "t8", parentId: null, title: "Stage the rollout", status: "done", createdAt: NOW - 60e5, updatedAt: NOW - 55e5, note: null, subtasks: [] },
+        { id: "t8", parentId: null, title: "Stage the rollout", status: "done", updatedAt: NOW - 55e5, note: null, subtasks: [] },
       ],
     },
   ],
   tasks: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false }, plan: null,
+      owner: { actorId: "actor-main", name: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id !== "t2"),
     },
   ],
@@ -4306,7 +4355,7 @@ function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
           mode,
           live: { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE] },
           blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
-            { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", kind: "blueprint", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
+            { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
           ] },
         }} />
     </div>
@@ -4355,7 +4404,7 @@ const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promis
   if (method === "listWorkspaceWork") return rpcResult({
     plans: [],
     tasks: [{
-      owner: { actorId: "actor-main", name: "main", retired: false }, plan: null,
+      owner: { actorId: "actor-main", name: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id === "t1"),
     }],
   }).json<T>();
@@ -5013,6 +5062,8 @@ const ACTIVITY_LATEST = {
   stepIndex: 7,
   usage: { input: 148_204, output: 1_842, cacheRead: 131_072, reasoning: 604, neurons: 18_005 },
   context: ACTIVITY_CONTEXT,
+  modelId: "gpt-5.5",
+  route: { kind: "device", id: "dev-studio", name: "studio" },
 } satisfies NonNullable<ActivitySnapshot["latest"]>;
 
 const ACTIVITY_CACHE_HIT = {
@@ -5817,7 +5868,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
   return {
     id, label, os: "linux", hostname: label, connected: true,
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
-    lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+    replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox,
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current",
   };

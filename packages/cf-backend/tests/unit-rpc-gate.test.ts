@@ -8,7 +8,7 @@ import {
   SESSION_BEARER_HEADER,
 } from '../src/cli/rpc-gate';
 import {
-  AGENT_RPC_ACCESS, extractTicketOrchestratorAgentName, requiredRpcAccess, rpcAccessScope,
+  AGENT_RPC_ACCESS, extractTicketOrchestratorAgentName, HOSTED_ACTOR_ID_HEADER, requiredRpcAccess, rpcAccessScope,
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
@@ -187,6 +187,8 @@ describe('the edge rewrites identity headers from the verified identity', () => 
       [CLI_SCOPES_HEADER]: 'workspace.exec',
       [CLI_BEARER_HEADER]: 'forged:9',
       [SESSION_BEARER_HEADER]: 'forged',
+      // A forged id would bind the socket to any actor in the workspace; only the edge's resolution may set it.
+      [HOSTED_ACTOR_ID_HEADER]: 'actor-of-someone-else',
     });
 
     const browser = appendIdentityHeaders(forged, {
@@ -196,6 +198,7 @@ describe('the edge rewrites identity headers from the verified identity', () => 
     expect(browser.get(SESSION_BEARER_HEADER)).toBe('session-1');
     expect(browser.has(CLI_SCOPES_HEADER)).toBe(false);
     expect(browser.has(CLI_BEARER_HEADER)).toBe(false);
+    expect(browser.has(HOSTED_ACTOR_ID_HEADER)).toBe(false);
 
     const ticket = appendIdentityHeaders(forged, {
       userId: 'user-1', email: 'owner@example.com', sub: 'cli', authTime: 5,

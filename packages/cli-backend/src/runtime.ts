@@ -21,8 +21,8 @@ import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL, WORKSPACE_ROOT, WORKSPACE_SOUL_DDL,
-  createParentExecutor, createParentWorkspaceVfs,
-  type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
+  answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
+  type ParentWorkspaceHandle, type ParentRpcWrite,
   DefaultExecutionRouter, createInlineExecutor,
   withMountTable, standardMounts, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
   withApprovalGatedShell, createShellSession, shellCwd, holdsGrant,
@@ -72,6 +72,7 @@ import type { FileCheckpoints } from '@kinu.run/core';
 import { diagnostics, KinuError, renderCauseChain, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 import * as v from 'valibot';
+import { stampSchemaGenesis } from './schema-genesis';
 
 const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV];
 
@@ -246,6 +247,7 @@ export function createCLIRuntime(
       agentId = crypto.randomUUID();
       agentName = config.agentName ?? 'agent';
       void sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
+      stampSchemaGenesis(db);
       initWorkspaceActorTable(execRaw);
       new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
     }
@@ -382,7 +384,6 @@ export function createCLIRuntime(
     get deferrals() { return approvalDeferrals ?? undefined; },
   };
 
-  // Past the directory, the file tool answers to the same policy as the shell.
   const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints, approvalPolicy) : agentStateVfs;
 
   // A directory-bound shell runs on the user's machine and may mutate the tree, so it
@@ -570,7 +571,6 @@ function facetShellEnv(cwd: string, facet: string): NodeJS.ProcessEnv {
   return { ...process.env, HOME: home, TMPDIR: tmp };
 }
 
-/** Remove one facet's scratch root, and only that root. */
 export function cleanupFacetCwdScratch(cwd: string, facet: string): void {
   rmSync(facetScratchRoot(cwd, facet), { recursive: true, force: true });
 }
@@ -591,7 +591,9 @@ export async function buildLocalActorRuntime(
   const binding = bindLocalActorReference(parent.actor, bound.reference);
   adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
 
-  if (binding.kind === 'head' && swarmSeat === true) {
+  const run = binding.kind === 'run' && binding.toolProfile === 'full';
+
+  if (run && swarmSeat === true) {
     if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
 
     return await parent.nodeRuntime(
@@ -600,7 +602,7 @@ export async function buildLocalActorRuntime(
     );
   }
 
-  if (binding.kind === 'head') {
+  if (run) {
     const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {
       parentRuntime: parent, actorBinding: binding, actor: bound.handle,
     };
@@ -632,7 +634,7 @@ async function buildCLIHeadRuntime(
   const { parentRuntime: parent } = opts;
   const sql = parent.storage.sql;
 
-  if (opts.actorBinding.kind !== 'head') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
+  if (opts.actorBinding.kind !== 'run' || opts.actorBinding.toolProfile !== 'full') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
   const physicalName = headAgentName(actor.storageKey);
 
@@ -672,45 +674,27 @@ async function buildCLIHeadRuntime(
   executionRouter.register(createInlineExecutor(inlineOptions));
 
   const parentVfs = parent.storage.vfs;
-  const ok = <T>(value: T): ParentRpcResult<T> => ({ ok: true, value });
-
-  const fail = <T>(input: { path: string; error: unknown }): ParentRpcResult<T> => {
-    const parsed = v.safeParse(v.object({ code: v.optional(v.string()) }), input.error);
-
-    return {
-      ok: false,
-      error: {
-        code: parsed.success && parsed.output.code === 'ENOENT' ? 'ENOENT' : 'EIO',
-        message: input.error instanceof Error ? input.error.message : String(input.error),
-        path: input.path,
-      },
-    };
-  };
-
-  const attempt = async <T>(path: string, fn: () => Promise<T>): Promise<ParentRpcResult<T>> => {
-    try { return ok(await fn()); } catch (error) { return fail<T>({ path, error }); }
-  };
 
   const parentHandle: ParentWorkspaceHandle = {
-    read: (path) => attempt(path, async () => {
+    read: (path) => answerParentRpc(path, async () => {
       const content = await parentVfs.readFile(path);
 
       return content instanceof Uint8Array ? content : new TextEncoder().encode(content);
     }),
-    write: (input: ParentRpcWrite) => attempt(input.path, async () => {
+    write: (input: ParentRpcWrite) => answerParentRpc(input.path, async () => {
       if (input.kind === 'file') await parentVfs.writeFile(input.path, input.data);
       else await parentVfs.mkdir(input.path, { recursive: input.recursive });
 
       return null;
     }),
-    list: (path) => attempt(path, () => parentVfs.readdir(path)),
-    stat: (path) => attempt(path, () => parentVfs.stat(path)),
-    delete: (path) => attempt(path, async () => {
+    list: (path) => answerParentRpc(path, () => parentVfs.readdir(path)),
+    stat: (path) => answerParentRpc(path, () => parentVfs.stat(path)),
+    delete: (path) => answerParentRpc(path, async () => {
       await parentVfs.unlink(path);
 
       return null;
     }),
-    exec: (command) => attempt('', async () => {
+    exec: (command) => answerParentRpc('', async () => {
       if (!parent.shell) throw new Error('the parent workspace has no shell');
 
       return parent.shell.exec(command);

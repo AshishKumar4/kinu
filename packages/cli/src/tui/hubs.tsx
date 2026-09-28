@@ -4,13 +4,17 @@ import { tierIdsOf,
   type ProfileCatalogEnvelope,
   type ResolvedTurnProfile,
   type RoleId,
-  type SubordinateRosterEntry,
+  type SubordinateChild,
+  type WorkspaceWork,
+  type AgentTaskTree,
+  ownerFacingSubordinate,
 } from '@kinu.run/core';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { agentWorkspaceKey } from '../agent-list';
 import type { TuiAgentStatus, TuiAgentSummary, TuiSubordinate } from './tui-shell';
-import { agentDisplayLabel } from '@kinu.run/core';
+import { agentDisplayLabel } from '@kinu.run/core/tui';
 import { MessageList, type DisplayMessage } from './messages';
+import * as v from 'valibot';
 import { useTuiTheme, type TuiThemeColors } from './theme';
 
 export type TuiHubView = 'agents' | 'roles' | 'tiers';
@@ -32,6 +36,61 @@ export interface TuiAgentHubEntry {
 }
 
 type HubEntryDraft = { -readonly [Key in keyof TuiAgentHubEntry]: TuiAgentHubEntry[Key] };
+
+export interface TuiHubRow extends Pick<TuiAgentHubEntry, 'id' | 'label' | 'path'> {
+  readonly actorId?: string;
+}
+
+export interface TuiWorkEntry extends TuiHubRow {
+  readonly title: string;
+  readonly status: TuiAgentHubEntry['status'];
+}
+
+type WorkEntryDraft = { -readonly [Key in keyof TuiWorkEntry]: TuiWorkEntry[Key] };
+
+function workStatus(task: AgentTaskTree): TuiWorkEntry['status'] {
+  if (task.status === 'active') return 'running';
+
+  return [task, ...task.subtasks].some((item) => item.status === 'open' || item.status === 'active') ? 'idle' : 'settled';
+}
+
+export function workFromWorkspace(work: WorkspaceWork): TuiWorkEntry[] {
+  const entries = [...work.tasks, ...work.plans].flatMap(({ owner, tasks }) => tasks.map((task): TuiWorkEntry => {
+    const entry: WorkEntryDraft = {
+      id: `task:${owner.actorId}:${task.id}`, title: task.title, label: owner.name, actorId: owner.actorId, status: workStatus(task),
+    };
+
+    if (owner.path !== null && owner.path.length > 0) entry.path = owner.path;
+
+    return entry;
+  }));
+
+  return [...entries.filter((entry) => entry.status !== 'settled'), ...entries.filter((entry) => entry.status === 'settled')];
+}
+
+export interface TuiHelperRef {
+  readonly name: string;
+  readonly actorId: string;
+}
+
+const AnsweredHelperSchema = v.looseObject({ agent: v.string(), lifetime: v.literal('task') });
+
+/** Newest first. */
+export function answeredHelpers(messages: readonly DisplayMessage[], helpers: readonly TuiHelperRef[]): TuiHubRow[] {
+  const rows: TuiHubRow[] = [];
+
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'tool_result' || message.toolName !== 'agents') continue;
+    const answered = v.safeParse(v.pipe(v.string(), v.parseJson(), AnsweredHelperSchema), message.content);
+    const helper = answered.success ? helpers.find((entry) => entry.name === answered.output.agent) : undefined;
+
+    if (helper !== undefined && !rows.some((row) => row.actorId === helper.actorId)) {
+      rows.push({ id: `helper:${helper.actorId}`, label: helper.name, path: [helper.name], actorId: helper.actorId });
+    }
+  }
+
+  return rows;
+}
 
 type SubordinateDraft = { -readonly [Key in keyof TuiSubordinate]: TuiSubordinate[Key] };
 
@@ -118,6 +177,10 @@ export interface TuiHubData {
   readonly agents: readonly TuiAgentHubEntry[];
   readonly subordinates: readonly TuiSubordinate[];
   readonly subordinatesError?: string;
+  readonly work: readonly TuiWorkEntry[];
+  readonly workError?: string;
+  readonly helpers: readonly TuiHelperRef[];
+  readonly answered?: readonly TuiHubRow[];
   readonly profile: TuiProfileHubData;
 }
 
@@ -125,17 +188,16 @@ const ROSTER_STATUS = {
   idle: 'idle',
   working: 'running',
   awaiting_input: 'needs-you',
-} as const satisfies Record<Exclude<SubordinateRosterEntry['status'], 'dismissed'>, TuiAgentStatus>;
+} as const satisfies Record<Exclude<SubordinateChild['status'], 'dismissed'>, TuiAgentStatus>;
 
-export function subordinatesFromRoster(entries: readonly SubordinateRosterEntry[]): TuiSubordinate[] {
+export function subordinatesFromRoster(entries: readonly SubordinateChild[]): TuiSubordinate[] {
   return entries.flatMap((entry): TuiSubordinate[] => {
-    if (entry.status === 'dismissed' || entry.deleteRequested) return [];
+    if (entry.status === 'dismissed' || entry.deleteRequested || !ownerFacingSubordinate(entry)) return [];
     const seed = entry.birth?.seed;
 
-    // A finished birth drops its seed.
     const subordinate: SubordinateDraft = {
       id: entry.name,
-      label: seed?.displayName.trim() ? seed.displayName : entry.name,
+      label: agentDisplayLabel({ name: entry.name, label: entry.displayName }),
       status: ROSTER_STATUS[entry.status],
     };
 
@@ -149,6 +211,8 @@ export function subordinatesFromRoster(entries: readonly SubordinateRosterEntry[
     return [subordinate];
   });
 }
+
+const WORK_MARK = { running: '● ', idle: '○ ', 'needs-you': '○ ', failed: '○ ', settled: '✓ ' } as const satisfies Record<TuiWorkEntry['status'], string>;
 
 const HUB_TITLES = { agents: 'Agent Hub', roles: 'Role Hub', tiers: 'Tier Hub' } as const;
 
@@ -265,10 +329,37 @@ function AgentHubRows({ data, newAgentHint, selectedAgentId }: {
           ))}
         </box>
       ))}
+      {data.work.length > 0 && (
+        <box flexDirection="column" style={{ marginBottom: 1 }}>
+          <text><span fg={colors.text.muted}>Work</span></text>
+          {data.work.map((item) => (
+            <box key={item.id} style={{ backgroundColor: item.id === selectedAgentId ? colors.background.selection : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
+              <text>
+                <span fg={statusColor(item.status, colors)}>{WORK_MARK[item.status]}</span>
+                <strong fg={colors.text.strong}>{item.title}</strong>
+                <span fg={colors.text.muted}> · {item.label}</span>
+              </text>
+            </box>
+          ))}
+        </box>
+      )}
+      {(data.answered?.length ?? 0) > 0 && (
+        <box flexDirection="column" style={{ marginBottom: 1 }}>
+          <text><span fg={colors.text.muted}>Answered</span></text>
+          {data.answered?.map((row) => (
+            <box key={row.id} style={{ backgroundColor: row.id === selectedAgentId ? colors.background.selection : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
+              <text><span fg={colors.text.muted}>{WORK_MARK.settled}</span><strong fg={colors.text.strong}>{row.label}</strong></text>
+            </box>
+          ))}
+        </box>
+      )}
       {data.subordinatesError !== undefined && (
         <text><span fg={colors.intent.danger}>{data.subordinatesError}</span></text>
       )}
-      {data.agents.some((agent) => agent.kind === 'subordinate') && (
+      {data.workError !== undefined && (
+        <text><span fg={colors.intent.danger}>{data.workError}</span></text>
+      )}
+      {[...data.agents, ...data.work, ...(data.answered ?? [])].some((row) => row.path !== undefined) && (
         <text><span fg={colors.text.muted}>↑↓ choose · Enter opens a subagent's conversation</span></text>
       )}
       {hint}

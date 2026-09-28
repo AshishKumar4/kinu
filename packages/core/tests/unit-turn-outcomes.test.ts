@@ -105,10 +105,10 @@ describe('the classifier prompt', () => {
     // Terse follow-ups ("no" vs "again?!") are the boundary the classifier gets wrong,
     // so the prompt teaches it explicitly.
     expect(prompt).toContain('A terse follow-up is the one this gets wrong.');
-    expect(prompt).toContain('"no" / "wrong file" / "not that one" → corrected');
-    expect(prompt).toContain('"no, seriously?" / "again?!" → frustrated');
-    expect(prompt).toContain('"ok" / "thanks" → accepted');
-    expect(prompt).toContain('"hm" / "what about the other one?" → nothing is settled');
+    expect(prompt).toContain('"no" / "wrong file" / "not that one" -> corrected');
+    expect(prompt).toContain('"no, seriously?" / "again?!" -> frustrated');
+    expect(prompt).toContain('"ok" / "thanks" -> accepted');
+    expect(prompt).toContain('"hm" / "what about the other one?" -> nothing is settled');
   });
 
   const promptClaims = [

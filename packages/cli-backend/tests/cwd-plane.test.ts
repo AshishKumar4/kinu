@@ -375,7 +375,6 @@ describe('the shell over the bound directory', () => {
   test('what a command may have changed is snapshotted, and the snapshot names that directory', async () => {
     const { state, project } = roots('cwd-plane-checkpoints');
     writeFileSync(join(project, 'before.txt'), 'the state to restore\n');
-    // Checkpoint storage is global per agent name; a stable name would read stores from prior runs.
     const rt = agentRuntime(state, `checkpointer-${basename(dirname(state))}`, project);
     rt.actor.config.setShellApprovalMode('allow_all');
     const checkpoints = rt.checkpoints;

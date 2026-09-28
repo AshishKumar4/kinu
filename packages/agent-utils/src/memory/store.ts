@@ -42,8 +42,7 @@ export function initMemoryChunkTables(sql: SqlExecutor): void {
 			start_line INTEGER NOT NULL,
 			end_line   INTEGER NOT NULL,
 			hash       TEXT    NOT NULL,
-			text       TEXT    NOT NULL,
-			updated_at INTEGER NOT NULL
+			text       TEXT    NOT NULL
 		)
 	`;
 	void sql`CREATE INDEX IF NOT EXISTS idx_mc_path ON memory_chunks(path)`;
@@ -129,7 +128,6 @@ export class MemoryStore {
 	/** (Re)index a file into FTS5 (source of truth) and return the delta for the vector index. */
 	async indexFile(path: string, content: string): Promise<MemoryIndexDelta> {
 		const chunks = await chunkMarkdown(content);
-		const now = Date.now();
 
 		const existing = this.sql<{ id: string; hash: string }>`
 			SELECT id, hash FROM memory_chunks WHERE path = ${path}
@@ -147,8 +145,8 @@ export class MemoryStore {
 
 			void this.sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE id = ${id})`;
 			void this.sql`
-				INSERT OR REPLACE INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
-				VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash}, ${chunk.text}, ${now})
+				INSERT OR REPLACE INTO memory_chunks (id, path, start_line, end_line, hash, text)
+				VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash}, ${chunk.text})
 			`;
 			void this.sql`INSERT INTO memory_chunks_fts (rowid, text) SELECT rowid, text FROM memory_chunks WHERE id = ${id}`;
 			upserted.push({ id, path, startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });

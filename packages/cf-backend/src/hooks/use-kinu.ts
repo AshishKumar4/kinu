@@ -252,8 +252,6 @@ const MctsProgressHeadSchema = v.object({
   })),
   merge: v.nullable(v.object({
     narrative: v.string(),
-    headCount: v.number(),
-    totalTokens: v.nullable(v.number()),
   })),
 });
 
@@ -273,8 +271,9 @@ const SubordinateRosterEntrySchema = v.object({
   actorId: v.nullable(v.string()),
   displayName: v.string(),
   role: v.string(),
-  nameOrigin: v.optional(v.picklist(["user", "auto"])),
-  createdBy: v.picklist(["orchestrator", "user"]),
+  nameOrigin: v.picklist(["user", "auto"]),
+  createdBy: v.picklist(["orchestrator", "user", "evolution"]),
+  lifetime: v.picklist(["durable", "task"]),
   status: v.picklist(["idle", "working", "awaiting_input", "dismissed"]),
   currentTask: v.nullable(v.string()),
   createdAt: v.number(),

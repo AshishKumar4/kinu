@@ -5,9 +5,7 @@ import { Button, Loader } from "@cloudflare/kumo";
 import { ArrowLeftIcon, GitForkIcon, TreeStructureIcon } from "@phosphor-icons/react";
 import { SwarmTree } from "@/components/swarm-tree";
 import { NodeTranscript } from "@/components/NodeTranscript";
-import {
-  findForkNode, terminalForkNode, treeStats, type ExplorerSelection,
-} from "@kinu.run/core";
+import { findForkNode, terminalForkNode, treeStats, type ExplorerSelection } from "@kinu.run/core/swarm-view";
 import { EmptyState, formatScore } from "@/components/surfaces/shared";
 import {
   runStateLine, FrontierPanel, RunLivenessPanel, RunRefusalNote, SwarmConfigDisclosure, useForkRunTree,
@@ -19,7 +17,7 @@ import {
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useKinu } from "@/hooks/use-kinu";
 import { useElementSize } from "@/hooks/use-element-size";
-import { runLiveness } from "@kinu.run/core";
+import { runLiveness } from "@kinu.run/core/swarm-view";
 import type { ForkRunParams, ForkRunSummary } from "@kinu.run/core";
 
 function CanvasNotice({ failure, loading, what, waiting, empty, onRetry }: {

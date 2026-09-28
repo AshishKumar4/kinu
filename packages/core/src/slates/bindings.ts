@@ -1,6 +1,8 @@
 import * as v from 'valibot';
 import { isJsonObject, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import { canonicalWorkspacePath } from '../vfs/workspace-path';
 import { isSlateMethodName } from './rpc';
 import type { SlateReadModel } from './read-models';
@@ -39,24 +41,27 @@ export function issuedSlateInvocation(input: {
   readonly id: string;
   readonly invocation: string | null;
 }): SlateInvocation | null {
-  const { invocations, id, invocation } = input;
-
-  if (invocation === null) return null;
-  const issued = invocations.get(invocation);
-
-  if (issued === undefined) {
-    throw new KinuError('denied',
-      `Slate ${id} named app invocation ${invocation}, which this host is not running; a finished invocation cannot lend its call chain`);
-  }
-
-  if (issued.id !== id) {
-    throw new KinuError('denied',
-      `Slate ${id} named app invocation ${invocation}, which was issued to slate ${issued.id}`);
-  }
-
-  return issued;
+  return settleSync(issued(input));
 }
 
+function issued(input: Parameters<typeof issuedSlateInvocation>[0]): Effect.Effect<SlateInvocation | null, KinuError> {
+  const { invocations, id, invocation } = input;
+
+  if (invocation === null) return Effect.succeed(null);
+  const found = invocations.get(invocation);
+
+  if (found === undefined) {
+    return Effect.fail(new KinuError('denied',
+      `Slate ${id} named app invocation ${invocation}, which this host is not running; a finished invocation cannot lend its call chain`));
+  }
+
+  if (found.id !== id) {
+    return Effect.fail(new KinuError('denied',
+      `Slate ${id} named app invocation ${invocation}, which was issued to slate ${found.id}`));
+  }
+
+  return Effect.succeed(found);
+}
 
 export type SlateBindingRoute =
   | { readonly kind: 'namespace'; readonly namespace: string; readonly member: string; readonly args: readonly JsonValue[] }
@@ -80,39 +85,39 @@ interface BindingCallContext {
   readonly chain: readonly string[];
 }
 
-function routeToolCall(binding: Extract<SlateBinding, { kind: 'tool' }>, request: SlateBindingRequest, ctx: BindingCallContext): SlateBindingRoute {
+function routeToolCall(binding: Extract<SlateBinding, { kind: 'tool' }>, request: SlateBindingRequest, ctx: BindingCallContext): Effect.Effect<SlateBindingRoute, KinuError> {
   const { name } = ctx;
   const { member, args } = request;
 
-  if (member !== 'call') throw new KinuError('denied', `${name} offers call(input) for tools.${binding.name}`);
+  if (member !== 'call') return Effect.fail(new KinuError('denied', `${name} offers call(input) for tools.${binding.name}`));
   const argumentsObject = args.length === 0 ? {} : args[0];
 
-  if (args.length > 1 || !isJsonObject(argumentsObject)) throw new KinuError('bad_input', `${name}.call takes one JSON object of arguments`);
+  if (args.length > 1 || !isJsonObject(argumentsObject)) return Effect.fail(new KinuError('bad_input', `${name}.call takes one JSON object of arguments`));
 
-  return { kind: 'tool', name: binding.name, input: argumentsObject };
+  return Effect.succeed({ kind: 'tool', name: binding.name, input: argumentsObject });
 }
 
-function routeCodemodeCall(binding: Extract<SlateBinding, { kind: 'memory' | 'tasks' | 'web' }>, request: SlateBindingRequest, ctx: BindingCallContext): SlateBindingRoute {
+function routeCodemodeCall(binding: Extract<SlateBinding, { kind: 'memory' | 'tasks' | 'web' }>, request: SlateBindingRequest, ctx: BindingCallContext): Effect.Effect<SlateBindingRoute, KinuError> {
   const { name } = ctx;
   const { member, args } = request;
 
   if (binding.members !== undefined && !binding.members.includes(member)) {
-    throw new KinuError('denied', `${name} does not offer ${binding.kind}.${member}`);
+    return Effect.fail(new KinuError('denied', `${name} does not offer ${binding.kind}.${member}`));
   }
 
-  return { kind: 'codemode', namespace: binding.kind, member, args };
+  return Effect.succeed({ kind: 'codemode', namespace: binding.kind, member, args });
 }
 
-function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }>, request: SlateBindingRequest, ctx: BindingCallContext): SlateBindingRoute {
+function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }>, request: SlateBindingRequest, ctx: BindingCallContext): Effect.Effect<SlateBindingRoute, KinuError> {
   const { name } = ctx;
   const { member, args } = request;
 
   if (binding.namespace === 'agents' || binding.namespace === 'agent') {
-    throw new KinuError('denied', 'A slate cannot delegate or control its calling agent');
+    return Effect.fail(new KinuError('denied', 'A slate cannot delegate or control its calling agent'));
   }
 
   if (binding.members !== undefined && !binding.members.includes(member)) {
-    throw new KinuError('denied', `${name} does not offer ${binding.namespace}.${member}`);
+    return Effect.fail(new KinuError('denied', `${name} does not offer ${binding.namespace}.${member}`));
   }
 
   // Each call's first argument must resolve inside a declared prefix.
@@ -121,7 +126,7 @@ function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }
     const FILE_MEMBERS = ['readFile', 'writeFile', 'editFile', 'readdir', 'exists'];
 
     if (!FILE_MEMBERS.includes(member)) {
-      throw new KinuError('denied', 'a path-scoped workspace binding offers only file members');
+      return Effect.fail(new KinuError('denied', 'a path-scoped workspace binding offers only file members'));
     }
 
     const named = v.safeParse(v.string(), args[0]);
@@ -129,42 +134,42 @@ function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }
 
     if (!target.startsWith('/') || target.split('/').includes('..')
       || !prefixes.some((prefix) => target === prefix || target.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))) {
-      throw new KinuError('denied',
-        `${name}.${member} names a path outside its prefixes: ${prefixes.join(', ')}`);
+      return Effect.fail(new KinuError('denied',
+        `${name}.${member} names a path outside its prefixes: ${prefixes.join(', ')}`));
     }
   }
 
-  return { kind: 'namespace', namespace: binding.namespace, member, args };
+  return Effect.succeed({ kind: 'namespace', namespace: binding.namespace, member, args });
 }
 
-function routeAgentCall(request: SlateBindingRequest, ctx: BindingCallContext): SlateBindingRoute {
+function routeAgentCall(request: SlateBindingRequest, ctx: BindingCallContext): Effect.Effect<SlateBindingRoute, KinuError> {
   const { id, name } = ctx;
   const { member, args } = request;
   const payload = args[0];
 
-  if (member !== 'send') throw new KinuError('denied', `${name} offers send({ text, data? }) for the calling agent's inbox`);
+  if (member !== 'send') return Effect.fail(new KinuError('denied', `${name} offers send({ text, data? }) for the calling agent's inbox`));
 
-  if (args.length !== 1 || !isJsonObject(payload)) throw new KinuError('bad_input', `${name}.send takes one { text, data? } object`);
+  if (args.length !== 1 || !isJsonObject(payload)) return Effect.fail(new KinuError('bad_input', `${name}.send takes one { text, data? } object`));
 
   const parsed = v.safeParse(v.strictObject({ text: v.pipe(v.string(), v.minLength(1)), data: v.optional(JsonValueSchema) }), payload);
 
-  if (!parsed.success) throw new KinuError('bad_input', `${name}.send takes one { text, data? } object`);
+  if (!parsed.success) return Effect.fail(new KinuError('bad_input', `${name}.send takes one { text, data? } object`));
 
   const data = parsed.output.data;
 
-  return data === undefined
+  return Effect.succeed(data === undefined
     ? { kind: 'agent', slate: id, text: parsed.output.text }
-    : { kind: 'agent', slate: id, text: parsed.output.text, data };
+    : { kind: 'agent', slate: id, text: parsed.output.text, data });
 }
 
-function routeAiCall(binding: Extract<SlateBinding, { kind: 'ai' }>, request: SlateBindingRequest, ctx: BindingCallContext): SlateBindingRoute {
+function routeAiCall(binding: Extract<SlateBinding, { kind: 'ai' }>, request: SlateBindingRequest, ctx: BindingCallContext): Effect.Effect<SlateBindingRoute, KinuError> {
   const { name } = ctx;
   const { member, args } = request;
   const payload = args[0];
 
-  if (member !== 'shell') throw new KinuError('denied', `${name} offers run({ prompt, system?, tier? }) for one model call`);
+  if (member !== 'shell') return Effect.fail(new KinuError('denied', `${name} offers run({ prompt, system?, tier? }) for one model call`));
 
-  if (args.length !== 1 || !isJsonObject(payload)) throw new KinuError('bad_input', `${name}.run takes one { prompt, system?, tier? } object`);
+  if (args.length !== 1 || !isJsonObject(payload)) return Effect.fail(new KinuError('bad_input', `${name}.run takes one { prompt, system?, tier? } object`));
 
   const parsed = v.safeParse(v.strictObject({
     prompt: v.pipe(v.string(), v.minLength(1)),
@@ -172,84 +177,90 @@ function routeAiCall(binding: Extract<SlateBinding, { kind: 'ai' }>, request: Sl
     tier: v.optional(v.string()),
   }), payload);
 
-  if (!parsed.success) throw new KinuError('bad_input', `${name}.run takes one { prompt, system?, tier? } object`);
+  if (!parsed.success) return Effect.fail(new KinuError('bad_input', `${name}.run takes one { prompt, system?, tier? } object`));
 
   if (binding.tier !== undefined && parsed.output.tier !== undefined && parsed.output.tier !== binding.tier) {
-    throw new KinuError('bad_input', `${name} pins tier ${binding.tier}; the call's tier cannot change it`);
+    return Effect.fail(new KinuError('bad_input', `${name} pins tier ${binding.tier}; the call's tier cannot change it`));
   }
 
   const tier = binding.tier ?? parsed.output.tier;
   const prompt = parsed.output.prompt;
   const system = parsed.output.system;
 
-  if (system !== undefined && tier !== undefined) return { kind: 'ai', prompt, system, tier };
+  if (system !== undefined && tier !== undefined) return Effect.succeed({ kind: 'ai', prompt, system, tier });
 
-  if (system !== undefined) return { kind: 'ai', prompt, system };
+  if (system !== undefined) return Effect.succeed({ kind: 'ai', prompt, system });
 
-  if (tier !== undefined) return { kind: 'ai', prompt, tier };
+  if (tier !== undefined) return Effect.succeed({ kind: 'ai', prompt, tier });
 
-  return { kind: 'ai', prompt };
+  return Effect.succeed({ kind: 'ai', prompt });
 }
 
-function routeRpcCall(binding: Extract<SlateBinding, { kind: 'rpc' }>, request: SlateBindingRequest, ctx: BindingCallContext): SlateBindingRoute {
+function routeRpcCall(binding: Extract<SlateBinding, { kind: 'rpc' }>, request: SlateBindingRequest, ctx: BindingCallContext): Effect.Effect<SlateBindingRoute, KinuError> {
   const { name } = ctx;
   const { member, args } = request;
 
   const method = binding.methods.find((declared) => declared === member);
 
-  if (method === undefined) throw new KinuError('denied', `${name} does not offer ${member}`);
+  if (method === undefined) return Effect.fail(new KinuError('denied', `${name} does not offer ${member}`));
 
-  if (args.length !== 0) throw new KinuError('bad_input', `${name}.${member} is a read model and takes no arguments`);
+  if (args.length !== 0) return Effect.fail(new KinuError('bad_input', `${name}.${member} is a read model and takes no arguments`));
 
-  return { kind: 'rpc', method };
+  return Effect.succeed({ kind: 'rpc', method });
 }
 
-function routeMcpCall(binding: Extract<SlateBinding, { kind: 'mcp' }>, request: SlateBindingRequest, ctx: BindingCallContext): SlateBindingRoute {
+function routeMcpCall(binding: Extract<SlateBinding, { kind: 'mcp' }>, request: SlateBindingRequest, ctx: BindingCallContext): Effect.Effect<SlateBindingRoute, KinuError> {
   const { name } = ctx;
   const { member, args } = request;
 
   if (binding.tools !== undefined && !binding.tools.includes(member)) {
-    throw new KinuError('denied', `${name} does not offer ${member} on ${binding.server}`);
+    return Effect.fail(new KinuError('denied', `${name} does not offer ${member} on ${binding.server}`));
   }
 
   const argumentsObject = args.length === 0 ? {} : args[0];
 
-  if (args.length > 1 || !isJsonObject(argumentsObject)) throw new KinuError('bad_input', `${name}.${member} takes one JSON object of arguments`);
+  if (args.length > 1 || !isJsonObject(argumentsObject)) return Effect.fail(new KinuError('bad_input', `${name}.${member} takes one JSON object of arguments`));
 
-  return { kind: 'mcp', server: binding.server, tool: member, args: argumentsObject };
+  return Effect.succeed({ kind: 'mcp', server: binding.server, tool: member, args: argumentsObject });
 }
 
-function routeAppCall(binding: Extract<SlateBinding, { kind: 'app' }>, request: SlateBindingRequest, ctx: BindingCallContext): SlateBindingRoute {
+function routeAppCall(binding: Extract<SlateBinding, { kind: 'app' }>, request: SlateBindingRequest, ctx: BindingCallContext): Effect.Effect<SlateBindingRoute, KinuError> {
   const { id, name } = ctx;
   const { member, args } = request;
 
   if (!isSlateMethodName(member)) {
-    throw new KinuError('bad_input', `"${member}" is not a method name the bridge forwards`);
+    return Effect.fail(new KinuError('bad_input', `"${member}" is not a method name the bridge forwards`));
   }
 
   // A repeated slate is a cycle; distinct slates are finite, so no hop bound is needed.
   const chain = [...ctx.chain, id];
 
   if (chain.includes(binding.id)) {
-    throw new KinuError('denied',
-      `${name}.${member} re-enters slate ${binding.id}, which is already running in this call chain: ${[...chain, binding.id].join(' -> ')}`);
+    return Effect.fail(new KinuError('denied',
+      `${name}.${member} re-enters slate ${binding.id}, which is already running in this call chain: ${[...chain, binding.id].join(' -> ')}`));
   }
 
-  return { kind: 'app', id: binding.id, method: member, args, chain };
+  return Effect.succeed({ kind: 'app', id: binding.id, method: member, args, chain });
 }
 
-export function routeSlateBindingCall(input: {
+interface SlateBindingCallInput {
   readonly id: string;
   readonly project: SlateProject;
   readonly name: string;
   readonly request: SlateBindingRequest;
   readonly chain: readonly string[];
-}): SlateBindingRoute {
+}
+
+export function routeSlateBindingCall(input: SlateBindingCallInput): SlateBindingRoute {
+  return settleSync(slateBindingRoute(input));
+}
+
+function slateBindingRoute(input: SlateBindingCallInput): Effect.Effect<SlateBindingRoute, KinuError> {
   const { id, name, request } = input;
   const bindings = input.project.slate.bindings;
   const binding = Object.hasOwn(bindings, name) ? bindings[name] : undefined;
 
-  if (binding === undefined) throw new KinuError('denied', `Slate ${id} no longer declares binding ${name}`);
+  if (binding === undefined) return Effect.fail(new KinuError('denied', `Slate ${id} no longer declares binding ${name}`));
   const ctx = { id, name, chain: input.chain };
 
   switch (binding.kind) {
@@ -272,26 +283,24 @@ export interface ViewerBindingCall {
   readonly effect: 'read' | 'mutate';
 }
 
-/** Ordinary route first (undeclared bindings refuse as for owners), then the grant check. */
-export function routeViewerBindingCall(input: {
-  readonly id: string;
-  readonly project: SlateProject;
-  readonly name: string;
-  readonly request: SlateBindingRequest;
-  readonly chain: readonly string[];
+interface ViewerBindingCallInput extends SlateBindingCallInput {
   readonly viewer: SlateViewer;
   readonly grant: ShareGrant;
-}): ViewerBindingCall {
+}
+
+/** Ordinary route first (undeclared bindings refuse as for owners), then the grant check. */
+export function routeViewerBindingCall(input: ViewerBindingCallInput): ViewerBindingCall {
+  return settleSync(Effect.flatMap(slateBindingRoute(input), (route) => admitViewer(route, input)));
+}
+
+function admitViewer(route: SlateBindingRoute, input: ViewerBindingCallInput): Effect.Effect<ViewerBindingCall, KinuError> {
   const { id, name, grant } = input;
-  const route = routeSlateBindingCall(input);
 
-  const admitted = (member: string, effect: 'read' | 'mutate'): ViewerBindingCall => {
-    if (grantAdmits(grant, id, name, member) === null) {
-      throw new KinuError('denied', `Slate ${id} does not grant ${name}.${member} to viewers`);
-    }
-
-    return { route, member, effect };
-  };
+  const admitted = (member: string, effect: 'read' | 'mutate'): Effect.Effect<ViewerBindingCall, KinuError> => (
+    grantAdmits(grant, id, name, member) === null
+      ? Effect.fail(new KinuError('denied', `Slate ${id} does not grant ${name}.${member} to viewers`))
+      : Effect.succeed({ route, member, effect })
+  );
 
   switch (route.kind) {
     case 'namespace': return admitted(route.member, memberEffect('namespace', route.member));
@@ -306,29 +315,27 @@ export function routeViewerBindingCall(input: {
     case 'mcp': {
       const entry = grantAdmits(grant, id, name, route.tool);
 
-      if (entry === null) {
-        throw new KinuError('denied', `Slate ${id} does not grant ${name}.${route.tool} to viewers`);
-      }
+      if (entry === null) return Effect.fail(new KinuError('denied', `Slate ${id} does not grant ${name}.${route.tool} to viewers`));
 
-      return {
+      return Effect.succeed({
         route: entry.effect === 'read' ? { ...route, readOnly: true } : route,
         member: route.tool,
         effect: entry.effect,
-      };
+      });
     }
 
-    case 'agent': return { ...admitted('send', 'mutate'), route: { ...route, viewer: input.viewer.subject } };
+    case 'agent': return Effect.map(admitted('send', 'mutate'), (call) => ({ ...call, route: { ...route, viewer: input.viewer.subject } }));
     case 'ai': return admitted('shell', 'mutate');
     case 'app': {
       if (!grant.slates.includes(route.id)) {
-        throw new KinuError('denied', `Slate ${id} does not grant ${name}.${route.method} to viewers`);
+        return Effect.fail(new KinuError('denied', `Slate ${id} does not grant ${name}.${route.method} to viewers`));
       }
 
-      return {
+      return Effect.succeed({
         route,
         member: route.method,
         effect: grant.members.some((member) => member.slate === route.id && member.effect === 'mutate') ? 'mutate' : 'read',
-      };
+      });
     }
   }
 }

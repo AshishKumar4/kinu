@@ -79,7 +79,7 @@ test('a hosted child advertises only its callable crafted surface and loses it w
   });
 
   child.actor.runtime.craftStore.create({
-    name: 'workspace_echo', description: 'Return the argument', code: '(input) => input', params: null, scope: 'local',
+    name: 'workspace_echo', description: 'Return the argument', code: '(input) => input',
   });
 
   await runDelegatedTask(workspace, child.actor.handle.actorId, 'Inspect your available capabilities.');

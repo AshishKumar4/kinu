@@ -148,7 +148,7 @@ ${i.currentFacts.map(f => `  ${f.key}`).join('\n') || '  (none)'}
 Decide:
 1. What durable facts did these turns establish? (user preferences, project
    state, dates, URLs, current configuration). Upsert with high confidence
-   (0.8–1.0). DON'T duplicate existing facts.
+   (0.8-1.0). DON'T duplicate existing facts.
 2. Which existing facts should DECAY (lower confidence) because they weren't
    re-observed in these turns and may be stale? List their keys.
 

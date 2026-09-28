@@ -5,7 +5,7 @@
 
 import { realpathSync } from 'node:fs';
 import { sameActorReference, testModel, type ModelTestResult } from '@kinu.run/core';
-import type { ActorHandle } from '@kinu.run/core';
+import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
   stepCountIs,
@@ -64,7 +64,7 @@ import { TierIdSchema,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
-  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial,
+  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial, readMission,
   takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
@@ -104,7 +104,8 @@ import { TierIdSchema,
   type GepaOptimizationResult, type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
   type ShadowStatus,
-  decideRefinementRoute, listRefinements, refinementPass, requestOwnerRefinement, showRefinementRoute,
+  decideRefinementRoute, evolutionAnswerWake, listRefinements, refinementPass, requestOwnerRefinement,
+  showRefinementRoute, type RefinementLaneStep,
   type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
@@ -157,7 +158,7 @@ import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from './runtime';
-import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, localActorMission } from './actor-identity';
+import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from './actor-identity';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
@@ -458,6 +459,9 @@ export class LocalAgentSession {
     (path, content) => this.instructionApprovals.trustOf(path, content);
   /** Whether this turn came from the parent; gates the `report` surface. */
   private turnIsParentAssigned = false;
+
+  /** The running turn's author-stamped metadata: plan submission is refused to a harness turn. */
+  private turnDriving: JsonObject | undefined;
 
   private readonly headJournal: HeadJournal;
   private readonly headActivity: AnnounceHeadActivity = (headId) => {
@@ -1008,7 +1012,7 @@ export class LocalAgentSession {
   }
 
   private submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult {
-    return this.planActions.submit(edits);
+    return this.planActions.submit(edits, this.turnDriving);
   }
 
   async getActivePlanReview(): Promise<PlanReview | null> {
@@ -1045,7 +1049,7 @@ export class LocalAgentSession {
   }
 
   async dismissPlanReview(id: string, revision: number): Promise<PlanReviewResult> {
-    return this.planActions.dismiss(id, revision);
+    return this.planActions.dismiss(id, revision, (prefix) => { this.chat.stopIfRunning(prefix); });
   }
 
   logActivity(event: string, detail?: string): void {
@@ -1183,6 +1187,7 @@ export class LocalAgentSession {
         sql: this.rt.storage.sql,
         actor: this.rt.actor,
         turnId: () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
+        durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
       },
       clamp: {
         vfs: this.rt.storage.vfs,
@@ -1612,6 +1617,7 @@ export class LocalAgentSession {
     this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: this.sessionId });
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnIsParentAssigned = item.kind === 'programmatic';
+    this.turnDriving = authoredTurnMetadata(item);
     const profileInputs = await this.profiles().inputs();
     const activeRoleId = this.getActiveRoleId();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
@@ -1809,7 +1815,8 @@ export class LocalAgentSession {
   /** What this turn owes, via core's `declareTerminalRoster`; this session supplies values, never
    *  decisions, so the CLI cannot drift from the Durable Object. */
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
-    const mission = localActorMission(this.rt, makeSqlExec(this.db));
+    // A child titles from its brief, as a hosted actor does; the workspace mission names only the root.
+    const mission = this.rt.actor.parentActorId === null ? readMission(this.rt.storage.sql) : null;
 
     // Decided on the live turn: `shouldGate` reads RAM a restart lacks, so the row's existence carries it.
     const gated = this.rt.shell !== undefined
@@ -2032,6 +2039,12 @@ export class LocalAgentSession {
         // deleted the live claim.
         turnIsLive: (turnId) => this.chat.pumping && this.chat.currentTurnId === turnId,
       scheduleRetry: (atMs) => this.scheduleTerminalRetry(atMs),
+      // The timer also wakes a deferred job; it goes only when neither ledger owes it.
+      settled: () => {
+        if (this.jobRunner.nextResumeAt() === null) this.clearTerminalRetry();
+
+        return Promise.resolve();
+      },
     });
 
     return this.terminalTransitions;
@@ -2292,8 +2305,18 @@ export class LocalAgentSession {
   }
 
   async runRefinementLane(): Promise<void> {
-    const step = await refinementPass(this.refinementDeps);
+    this.announceRefinement(await refinementPass(this.refinementDeps));
+  }
 
+  async runEvolutionAnswer(now: number): Promise<void> {
+    const step = await evolutionAnswerWake(this.refinementDeps, now, (failure) => {
+      diagnostics.failure('refinement.answer_wake_failed', failure);
+    });
+
+    if (step) this.announceRefinement(step);
+  }
+
+  private announceRefinement(step: RefinementLaneStep): void {
     if (step.step === 'idle') return;
     // A refinement can move the live prompt and facts block.
     this.invalidateModelState();
@@ -2525,7 +2548,7 @@ export class LocalAgentSession {
     const { hash, status } = observeSystemPromptHash(this.lastSystemPromptHash, system);
 
     if (status === 'changed') {
-      this.emit({ type: 'evolution', event: 'system_prompt_hash', message: `changed → ${hash}` });
+      this.emit({ type: 'evolution', event: 'system_prompt_hash', message: `changed -> ${hash}` });
     }
 
     this.lastSystemPromptHash = hash;
@@ -2836,29 +2859,47 @@ export class LocalAgentSession {
    * release, retirement. Public so callers without a session (bench panel, eval arm) can seat heads.
    */
   async hostHead(input: HeadInput, writes: WriteObserver): Promise<HostedHeadSeat> {
-    const binding = registerLocalActor(this.rt.actor, {
-      name: explorationActorKey(input.id), creationId: input.id, kind: 'head', lifetime: 'task',
+    // Both named before acquire: the host seeds the loop and builds the runtime while building the actor.
+    const { binding, seat } = await this.seatRunActor(input.id, (actorId) => {
+      this.loopOrigins.set(actorId, input.loop);
+      this.actorWrites.set(actorId, writes);
     });
 
-    const agentName = headAgentName(binding.storageKey);
-    // Both named before acquire: the host seeds the loop and builds the runtime while building the actor.
-    this.loopOrigins.set(binding.reference.actorId, input.loop);
-    this.actorWrites.set(binding.reference.actorId, writes);
-    const actor = await this.actorHost.acquire(binding.reference);
-
     return {
-      actor,
-      runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
-      profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
-      dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
+      ...seat,
       release: async () => {
         this.actorHost.release(binding.reference);
         this.loopOrigins.delete(binding.reference.actorId);
         this.actorWrites.delete(binding.reference.actorId);
         await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
+          const agentName = headAgentName(binding.storageKey);
+
           if (this.rt.cwd) cleanupFacetCwdScratch(this.rt.cwd, agentName);
           else if (this.rt.nodeHome) await facetHomeReleaser(this.rt.nodeHome())(agentName);
         });
+      },
+    };
+  }
+
+  /** One run actor's seat, for a head or a swarm node; `declare` runs before the host builds it. */
+  private async seatRunActor(creationId: string, declare: (actorId: string) => void): Promise<{
+    readonly binding: LocalActorBinding;
+    readonly seat: HostedNodeSeat;
+  }> {
+    const binding = registerLocalActor(this.rt.actor, {
+      name: explorationActorKey(creationId), creationId, kind: 'run', lifetime: 'task',
+    });
+
+    declare(binding.reference.actorId);
+    const actor = await this.actorHost.acquire(binding.reference);
+
+    return {
+      binding,
+      seat: {
+        actor,
+        runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
+        profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
+        dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
       },
     };
   }
@@ -2874,20 +2915,8 @@ export class LocalAgentSession {
    * retirement belongs to the owning search. Public so an eval can seat nodes through this session.
    */
   async hostNode(node: NodeIdentity): Promise<HostedNodeSeat> {
-    const binding = registerLocalActor(this.rt.actor, {
-      name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'head', lifetime: 'task',
-    });
-
-    // Declared before the host builds it: only this slot marks a head row as a node.
-    this.nodeSeats.add(binding.reference.actorId);
-    const actor = await this.actorHost.acquire(binding.reference);
-
-    return {
-      actor,
-      runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
-      profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
-      dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
-    };
+    // Declared before the host builds it: only this slot marks a run actor as a node.
+    return (await this.seatRunActor(node.nodeId, (actorId) => { this.nodeSeats.add(actorId); })).seat;
   }
 
   /** Profile for one claimed hosted-actor turn, via the same authority as chat turns. */
@@ -2947,7 +2976,10 @@ export class LocalAgentSession {
       rt: this.rt,
       workMode: mode,
       history: this.stores.history,
-      effectClaims: { sql: this.rt.storage.sql, actor: this.rt.actor, turnId },
+      effectClaims: {
+        sql: this.rt.storage.sql, actor: this.rt.actor, turnId,
+        durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
+      },
       // Shell approval lives at the execution seam (execution/approval.ts), not per toolset.
       // Budget state lives on the accumulator so this model-lifetime toolset reads the live turn.
       contextBudget: this.actorSession.orchestrator.acc.context,

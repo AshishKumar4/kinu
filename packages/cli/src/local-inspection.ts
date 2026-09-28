@@ -18,6 +18,8 @@ import {
   type ActorHandle,
   type SqlExecutor,
   type WorkspaceActor,
+  readWorkspaceWork,
+  type WorkspaceWork,
   createFactsStore,
   initEventsHubTables,
   initAgentConfigTable,
@@ -86,6 +88,8 @@ import {
   type ExplorationRecord,
   boundedInt,
   RUN_TIMELINE_MAX,
+  SCHEMA_GENESIS,
+  requireSchemaGenesis as requireGenesis,
   type Page,
   type RecordCellHandle,
   type RecordCellSummary,
@@ -97,7 +101,7 @@ import {
 } from '@kinu.run/core';
 import { classify } from '@kinu.run/core/obs';
 import {
-  makeSql, makeSqlExec, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
+  makeSql, makeSqlExec, schemaGenesisOf, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
   resolverModelPlane, type LocalModelResolver,
 } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
@@ -282,7 +286,7 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Arra
 
     return all<{ path: string; text: string; start_line: number; end_line: number }>(
       db,
-      `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY updated_at DESC LIMIT ?`,
+      `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY rowid DESC LIMIT ?`,
       `%${q}%`,
       window,
     ).map((row) => ({ path: row.path, text: row.text, startLine: row.start_line, endLine: row.end_line }));
@@ -810,7 +814,13 @@ function openLocalDb(name: string): SqliteDb {
 
   if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
 
-  return new Database(dbPath, { readonly: true });
+  const db = new Database(dbPath, { readonly: true });
+  const genesis = schemaGenesisOf(db);
+
+  if (genesis !== SCHEMA_GENESIS.slice(0, 7)) db.close();
+  requireGenesis(`Workspace "${name}"`, genesis);
+
+  return db;
 }
 
 function readMainActorTable<T>(name: string, table: string, absent: T, read: (sql: SqlExecutor, actor: ActorHandle) => T): T {
@@ -944,6 +954,16 @@ export function listLocalActors(name: string, opts: { readonly retired?: boolean
       createdAt: row.createdAt,
       retired: row.retiringAt !== null || row.deletedAt !== null,
     }));
+  });
+}
+
+export function readLocalWorkspaceWork(name: string): WorkspaceWork {
+  return withLocalDb(name, (db) => {
+    const directory = actorDirectory(db);
+
+    return directory === null
+      ? { plans: [], tasks: [] }
+      : readWorkspaceWork(makeSql(db), directory.main(), directory.list({ retired: true }));
   });
 }
 

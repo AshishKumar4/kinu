@@ -156,7 +156,7 @@ const aHeadInput = (over?: Partial<HeadInput>): HeadInput => ({
   id: 'h1', rootId: 'r1', parentId: null, depth: 0, task: 't', rationale: 'r',
   inheritedContext: [], budget: { maxDepth: 2, spawnedAt: Date.now() },
   mergeStrategy: 'synthesize', ...over,
-  mode: over?.mode ?? 'build', loop: over?.loop ?? defaultLoopOrigin('head'),
+  mode: over?.mode ?? 'build', loop: over?.loop ?? defaultLoopOrigin('run'),
 });
 
 function fakeHeadsModel(capture?: (options: {
@@ -391,7 +391,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
   test('a head neither advertises nor invokes workspace crafts its sandbox does not bind', async () => {
     const parent = makeParent();
-    parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-only echo', code: '(input) => input', params: null, scope: 'local' });
+    parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-only echo', code: '(input) => input' });
     let calls = 0;
 
     const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
@@ -553,6 +553,16 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     expect(await parent.storage.vfs.exists('scratch.txt')).toBe(false);
     expect(rt.storage.sql).toBe(parent.storage.sql);
     expect(rt.actor.actorId).not.toBe(parent.actor.actorId);
+  });
+
+  test("a parent file error reaches the head with the errno the parent's VFS threw", async () => {
+    const parent = makeParent();
+    await parent.storage.vfs.mkdir('notes', { recursive: true });
+    const rt = await createHeadRuntime(parent, 'errno');
+    const parentExec = present(routerOf(rt).getProvider('parent'), 'the parent executor');
+
+    // The DO producer and this in-process one answer the same wire through `answerParentRpc`.
+    await expect(parentExec.tools.readFile.execute('notes')).rejects.toMatchObject({ code: 'EISDIR' });
   });
 
   test('a head of a parent bound to a directory runs its shell there: the machine is the workspace', async () => {

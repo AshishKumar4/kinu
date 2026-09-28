@@ -1,5 +1,7 @@
 // Provider abstraction: providers get ready-to-attach headers from a resolver, never raw
 // secrets; createModel is sync, with auth resolved inside customFetch.
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { LanguageModel } from 'ai';
 import { isAccountName, splitAccount } from '../credentials/accounts';
 import type { CountableRequest, InputTokenCount } from './input-tokens';
@@ -183,20 +185,24 @@ function splitSpec(spec: string): { provider: string; account: string | null; mo
 }
 
 export function parseModelSpec(spec: string): ModelSpec {
+  return settleSync(modelSpec(spec));
+}
+
+function modelSpec(spec: string): Effect.Effect<ModelSpec> {
   const s = (spec ?? '').trim();
 
-  if (!s) throw new Error('Empty model spec');
+  if (!s) return Effect.die(new Error('Empty model spec'));
   const parts = splitSpec(s);
 
-  if (parts === null) throw new Error(`Invalid model spec ${JSON.stringify(spec)} — expected "<provider>/<modelId>".`);
+  if (parts === null) return Effect.die(new Error(`Invalid model spec ${JSON.stringify(spec)}: expected "<provider>/<modelId>".`));
 
-  if (parts.account === null) return { provider: parts.provider, modelId: parts.modelId };
+  if (parts.account === null) return Effect.succeed({ provider: parts.provider, modelId: parts.modelId });
 
   if (!isAccountName(parts.account)) {
-    throw new Error(`Invalid model spec ${JSON.stringify(spec)} — "${parts.account}" is not an account name.`);
+    return Effect.die(new Error(`Invalid model spec ${JSON.stringify(spec)}: "${parts.account}" is not an account name.`));
   }
 
-  return { provider: parts.provider, modelId: parts.modelId, account: parts.account };
+  return Effect.succeed({ provider: parts.provider, modelId: parts.modelId, account: parts.account });
 }
 
 export function modelSpecHead(spec: Pick<ModelSpec, 'provider' | 'account'>): string {

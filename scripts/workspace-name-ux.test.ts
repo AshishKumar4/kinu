@@ -24,6 +24,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from './gallery-harness';
+import { TEST_REQUIREMENTS } from './test-requirements';
 
 /** The owner's own workspace slug, spelled here so a failure quotes the string
  *  he was shown rather than a placeholder. */
@@ -33,7 +34,7 @@ const SLUG = 'handwrought-walnut-4166c321';
  *  words from the page and the placeholder, so it is the one user-facing
  *  check and not a mirrored file-scope constant. `Untitled`, not `New`: a
  *  workspace nobody has named is still unnamed a month later. */
-const UNTITLED = 'Untitled workspace';
+const UNTITLED = TEST_REQUIREMENTS.untitledWorkspace.value;
 
 /** Everything the sidebar renders about one workspace row. */
 interface SidebarRow {

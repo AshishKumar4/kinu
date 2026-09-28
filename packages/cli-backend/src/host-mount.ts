@@ -31,13 +31,11 @@ function nodeError(input: { error: unknown }): v.InferOutput<typeof nodeErrorSch
 
 function throwVfsError(input: { error: unknown; syscall: string; path: string }): never {
   const error = nodeError(input);
+  const code = error?.code !== undefined && isVfsErrorCode(error.code) ? error.code : null;
 
-  if (error?.code && isVfsErrorCode(error.code)) {
-    const message = error.message ?? String(input.error);
-    throw makeVfsError(error.code, `${message}, ${input.syscall} '${input.path}'`, input.path);
-  }
-
-  throw input.error;
+  throw code === null
+    ? input.error
+    : makeVfsError(code, `${error?.message ?? String(input.error)}, ${input.syscall} '${input.path}'`, input.path);
 }
 
 function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefined): VFS {
@@ -94,16 +92,13 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
  * The working directory as the workspace file plane; agent state stays in
  * `agentStateVfs`. Accepts relative paths, plane-root aliases (`/workspace`,
  * `/home/main`, `/`, and `/slates` for its `slates/`) and real absolute paths inside
- * the tree. With `outside`, any other absolute path is the user's machine: each operation is reviewed as the shell
- * command it amounts to and runs as that policy decides. A relative or aliased path that climbs out, a path with a
- * `..` segment, or any outside path without `outside`, is EACCES.
+ * the tree; with `outside`, any other absolute path without `..`, gated as its shell command. Else EACCES.
+ * A lexical guard against path confusion, not a sandbox.
  */
 export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined, outside?: ShellApprovalPolicy): VFS {
   const root = resolve(cwd);
   const host = createHostMountVFS(root, checkpoints);
-  const escapes = (path: string) => makeVfsError('EACCES', `path escapes the workspace directory ${root}: ${path}`, path);
 
-  /** The host path, and whether it lies outside the directory. */
   const hostPath = (path: string) => {
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
 
@@ -111,20 +106,18 @@ export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | un
     if (withinRoot(root, direct)) return { at: direct, outside: false };
     const inner = isAbsolute(path) ? planeRootRelative(path) : null;
 
-    if (inner !== null) {
-      const mapped = resolve(root, inner || '.');
+    const mapped = inner === null ? null : resolve(root, inner || '.');
 
-      if (withinRoot(root, mapped)) return { at: mapped, outside: false };
+    if (mapped !== null && withinRoot(root, mapped)) return { at: mapped, outside: false };
 
-      throw escapes(path);
+    if (mapped !== null || outside === undefined || !isAbsolute(path) || path.split('/').includes('..')) {
+      throw makeVfsError('EACCES', `path escapes the workspace directory ${root}: ${path}`, path);
     }
-
-    if (outside === undefined || !isAbsolute(path) || path.split('/').includes('..')) throw escapes(path);
 
     return { at: direct, outside: true };
   };
 
-  /** `command` is what the operation would be in the shell, so the shell's rules and grants decide it. */
+  /** `command`: the operation as a shell command, so the shell's rules and grants decide it. */
   const gated = async <T>(path: string, command: (at: string) => string, op: (at: string) => Promise<T>): Promise<T> => {
     const target = hostPath(path);
 

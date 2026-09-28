@@ -265,8 +265,8 @@ export function admitMcpDescriptors(
     server,
     reason: `${String(count)} of its tools did not fit this turn's remaining tool budget of `
       + `${String(total)} tokens (a ${String(budget.contextWindow)}-token window less ${reserve}, and `
-      + `${String(budget.nativeToolTokens)} already spent by this agent's own tools) `
-      + '— those tools are absent',
+      + `${String(budget.nativeToolTokens)} already spent by this agent's own tools), `
+      + 'so those tools are absent',
   }));
 
   return { admitted, deferred };
@@ -306,7 +306,7 @@ function clampProse(text: string | undefined, tokens: number): string | undefine
 
   if (cost <= tokens) return text;
 
-  return `${text.slice(0, Math.floor(text.length * (tokens / cost)))}…`;
+  return `${text.slice(0, Math.floor(text.length * (tokens / cost)))}...`;
 }
 
 /** Admitted MCP catalog as a callable surface; `call` is backend-owned. Only `readOnly: true` exempts a tool

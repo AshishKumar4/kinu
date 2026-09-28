@@ -111,9 +111,9 @@ describe('add, rotate, revoke', () => {
   test('a host with no scheme, port or space is required', async () => {
     const deps = await vault();
     await expect(putEgressSecret(deps, { ...STRIPE, host: 'https://api.stripe.com' }))
-      .rejects.toThrow('Invalid egress host "https://api.stripe.com" — a hostname or a * glob, with no scheme, port, path or space.');
+      .rejects.toThrow('Invalid egress host "https://api.stripe.com": a hostname or a * glob, with no scheme, port, path or space.');
     await expect(putEgressSecret(deps, { ...STRIPE, host: 'api.stripe.com:443' }))
-      .rejects.toThrow('Invalid egress host "api.stripe.com:443" — a hostname or a * glob, with no scheme, port, path or space.');
+      .rejects.toThrow('Invalid egress host "api.stripe.com:443": a hostname or a * glob, with no scheme, port, path or space.');
   });
 
   test('a placeholder cannot be stored AS a secret', async () => {

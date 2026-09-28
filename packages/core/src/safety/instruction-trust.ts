@@ -15,10 +15,10 @@ export type {
 
 import type { VerifiedInstructionTrust } from '../types/instruction-trust';
 
-/** `grandfathered` is read like `approved` but no code writes it. `revoked` is kept so nothing re-grants it. */
-export type InstructionDecision = 'approved' | 'grandfathered' | 'revoked';
+/** `revoked` is kept so nothing re-grants it. */
+export type InstructionDecision = 'approved' | 'revoked';
 
-const DECISION = v.picklist(['approved', 'grandfathered', 'revoked']);
+const DECISION = v.picklist(['approved', 'revoked']);
 
 export interface InstructionApproval {
   readonly path: string;
@@ -37,7 +37,7 @@ export function initInstructionApprovalsTable(execRaw: RawSqlExec): void {
     scope    TEXT NOT NULL,
     path     TEXT NOT NULL,
     digest   TEXT NOT NULL,
-    decision TEXT NOT NULL CHECK (decision IN ('approved', 'grandfathered', 'revoked')),
+    decision TEXT NOT NULL CHECK (decision IN ('approved', 'revoked')),
     PRIMARY KEY (actor_id, scope, path)
   )`);
 }

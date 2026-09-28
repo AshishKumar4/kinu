@@ -51,7 +51,7 @@ export function buildEnsembleJudgePrompt(item: LabelingItem): string {
   return (
     'You are auditing how one turn of a conversation landed. A user made a ' +
     'request, an assistant answered, and the user replied. Judge ONLY what the ' +
-    "user's reply shows about how that answer was received — not whether you " +
+    "user's reply shows about how that answer was received, not whether you " +
     'think the answer was good.\n\n' +
     `${renderLabelingEvidence(item)}\n\n` +
     'Verdicts:\n' +
@@ -88,19 +88,19 @@ export interface EnsembleGap {
 export function describeEnsembleGap(gap: EnsembleGap): string {
   switch (gap.kind) {
     case 'no_population':
-      return 'no classifier-graded turns yet — the classifier grades a turn once the user follows up';
+      return 'no classifier-graded turns yet: the classifier grades a turn once the user follows up';
     case 'no_gold_labels':
-      return 'no hand labels yet, so there is nothing to check the panel against — draw a set with ' +
+      return 'no hand labels yet, so there is nothing to check the panel against: draw a set with ' +
         '`kinu label export <agent>`, fill it in, then `kinu label ingest <agent> <file>`';
     case 'no_usable_labels':
-      return 'every turn the panel covered was hand-labeled `unclear`, so none of them settles anything — ' +
+      return 'every turn the panel covered was hand-labeled `unclear`, so none of them settles anything: ' +
         'label more turns with `kinu label export <agent>`';
     case 'too_few_judges':
       return 'an ensemble needs two models from different vendors and this deployment has ' +
         (gap.judges.length === 0 ? 'none connected' : `only ${gap.judges.join(', ')}`) +
-        ' — connect a second vendor, or name both judges explicitly';
+        ': connect a second vendor, or name both judges explicitly';
     case 'not_run':
-      return 'the panel has not judged these turns yet — run `kinu label ensemble <agent>`';
+      return 'the panel has not judged these turns yet: run `kinu label ensemble <agent>`';
   }
 }
 
@@ -401,7 +401,7 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
 
 /** An unrun or uncalibrated panel prints its missing step in one line. */
 export function renderEnsembleReport(report: EnsembleReport): string {
-  const lines = ['Judge panel — two cross-family models over the turns you labeled, blind'];
+  const lines = ['Judge panel: two cross-family models over the turns you labeled, blind'];
 
   if (report.gap !== null || report.standIn === null) {
     lines.push(`  ${report.gap === null ? 'not measurable from these labels' : describeEnsembleGap(report.gap)}`);
@@ -415,16 +415,16 @@ export function renderEnsembleReport(report: EnsembleReport): string {
 
   const kappa = (estimate: KappaEstimate | null): string => estimate === null
     ? 'undefined at these marginals'
-    : `${estimate.value.toFixed(2)} (95% CI ${estimate.lo.toFixed(2)}–${estimate.hi.toFixed(2)})`;
+    : `${estimate.value.toFixed(2)} (95% CI ${estimate.lo.toFixed(2)} to ${estimate.hi.toFixed(2)})`;
 
   lines.push(
-    `  Judges: ${report.members.map((m) => `${m.model} — κ vs you ${kappa(m.kappa)}`).join('\n          ')}`,
+    `  Judges: ${report.members.map((m) => `${m.model}: kappa vs you ${kappa(m.kappa)}`).join('\n          ')}`,
     `  Coverage: ${report.compared} of ${report.gold} hand-labeled turns scored` +
-      ` (${report.covered} judged by every model, ${report.split} of those a split → unclear)`,
-    `  κ  ${'you ↔ panel:'.padEnd(20)}${kappa(report.kappa.humanEnsemble)}`,
-    `  κ  ${'you ↔ classifier:'.padEnd(20)}${kappa(report.kappa.humanClassifier)}` +
+      ` (${report.covered} judged by every model, ${report.split} of those a split -> unclear)`,
+    `  kappa  ${'you <-> panel:'.padEnd(20)}${kappa(report.kappa.humanEnsemble)}`,
+    `  kappa  ${'you <-> classifier:'.padEnd(20)}${kappa(report.kappa.humanClassifier)}` +
       '   (same turns, so the two compare)',
-    `  κ  ${'panel ↔ classifier:'.padEnd(20)}${kappa(report.kappa.ensembleClassifier)}`,
+    `  kappa  ${'panel <-> classifier:'.padEnd(20)}${kappa(report.kappa.ensembleClassifier)}`,
   );
 
   if (report.confusion.length > 0) {
@@ -448,7 +448,7 @@ export function renderEnsembleReport(report: EnsembleReport): string {
     : '  Stand-in: the panel CANNOT stand in for you yet. Keep labeling by hand.');
 
   for (const condition of report.standIn.conditions) {
-    lines.push(`    ${condition.met ? 'ok  ' : 'no  '}${condition.name} — ${condition.detail}`);
+    lines.push(`    ${condition.met ? 'ok  ' : 'no  '}${condition.name}: ${condition.detail}`);
   }
 
   return lines.join('\n');
@@ -464,28 +464,28 @@ function standInVerdict(
 
   const conditions: StandInCondition[] = [
     {
-      name: `κ(you ↔ panel) lower bound ≥ ${STAND_IN_THRESHOLDS.kappa.toFixed(2)}`,
+      name: `kappa(you <-> panel) lower bound >= ${STAND_IN_THRESHOLDS.kappa.toFixed(2)}`,
       met: pair !== null && pair.lo >= STAND_IN_THRESHOLDS.kappa,
       detail: pair === null
-        ? 'κ is undefined at these marginals'
-        : `${pair.value.toFixed(2)} (95% CI ${pair.lo.toFixed(2)}–${pair.hi.toFixed(2)})`,
+        ? 'kappa is undefined at these marginals'
+        : `${pair.value.toFixed(2)} (95% CI ${pair.lo.toFixed(2)} to ${pair.hi.toFixed(2)})`,
     },
     {
       name: 'the panel tracks you at least as well as the classifier does',
       met: pair !== null && against !== null && pair.value >= against.value,
       detail: pair === null || against === null
-        ? 'one of the two κ is undefined at these marginals'
+        ? 'one of the two kappa is undefined at these marginals'
         : `panel ${pair.value.toFixed(2)} vs classifier ${against.value.toFixed(2)}`,
     },
     {
-      name: `negative-class recall ≥ ${STAND_IN_THRESHOLDS.sensitivity.toFixed(2)} and ` +
-        `specificity ≥ ${STAND_IN_THRESHOLDS.specificity.toFixed(2)}, both as lower bounds`,
+      name: `negative-class recall >= ${STAND_IN_THRESHOLDS.sensitivity.toFixed(2)} and ` +
+        `specificity >= ${STAND_IN_THRESHOLDS.specificity.toFixed(2)}, both as lower bounds`,
       met: accuracy !== null &&
         accuracy.sensitivity.lo >= STAND_IN_THRESHOLDS.sensitivity &&
         accuracy.specificity.lo >= STAND_IN_THRESHOLDS.specificity,
       detail: accuracy === null
         ? 'not measurable from these labels'
-        : `recall ≥ ${accuracy.sensitivity.lo.toFixed(2)}, specificity ≥ ${accuracy.specificity.lo.toFixed(2)}`,
+        : `recall >= ${accuracy.sensitivity.lo.toFixed(2)}, specificity >= ${accuracy.specificity.lo.toFixed(2)}`,
     },
   ];
 

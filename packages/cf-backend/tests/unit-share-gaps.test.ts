@@ -3,7 +3,7 @@
  * Same harness as `unit-slate-live-shares.test.ts`; the per-share daily spend bound pauses a running slate's
  * calls, so it is driven in workerd (`tests/workerd/slate-share.test.ts`).
  */
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   LiveShareRecordSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
@@ -71,8 +71,8 @@ async function userWorld(userId: string, workspace: string, kv: ReturnType<typeo
   const caller = await testOwner();
 
   await user.userDO.userMcp_list(caller);
-  user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-    VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL, 0, 0)`);
+  user.sql.exec(`INSERT INTO user_mcp_servers (id, name, server_url, transport, headers, allowed_tools)
+    VALUES ('connection-id', 'github', 'https://github.example/sse', 'auto', NULL, NULL)`);
 
   return { user, agent };
 }
@@ -138,7 +138,11 @@ const jsonBody = async <Schema extends v.GenericSchema>(res: Response, schema: S
 
 const cleanups: (() => void)[] = [];
 
-afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
+afterEach(() => {
+  setSystemTime();
+
+  for (const cleanup of cleanups.splice(0)) cleanup();
+});
 
 const sharePublic = (world: World, visibility: 'users' | 'public', fork?: boolean) => world.owner.agent.slate({
   op: 'share', id: 'issues', visibility, approved: [], fork,
@@ -161,6 +165,10 @@ test('S2: the per-viewer request bound refuses past its limit, per viewer and on
 
   const created = await sharePublic(world, 'public');
   const url = present(created.url, 'the share URL');
+
+  // The ingress count resets on the wall-clock minute; this burst belongs to one window.
+  const now = Date.now();
+  setSystemTime(now - (now % 60_000) + 60_000);
 
   // The bound precedes the consent page, so a viewer who has not consented spends it too.
   for (let n = 0; n < SHARE_VIEWER_REQUESTS_PER_MINUTE; n += 1) {

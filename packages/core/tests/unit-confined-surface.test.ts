@@ -63,7 +63,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     inheritedContext: [],
     budget: { maxDepth: 0, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('head'),
+    loop: defaultLoopOrigin('run'),
     ...overrides,
   };
 }

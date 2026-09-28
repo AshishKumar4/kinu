@@ -14,7 +14,7 @@ import {
   type AgentProviderRegistry, type UserCredentialClient,
 } from './providers/agent-registry';
 import { resolveReviewingModelSelection } from './providers/judge-model';
-import type { ModelCallSink, UserCaller } from '@kinu.run/core';
+import type { ActorReference, ModelCallSink, UserCaller } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { CodexEgressNamespace } from './egress/codex-egress-route';
 
@@ -45,6 +45,7 @@ export interface OwnedModelServicesOptions<Id> {
   /** Invoked at wait time, so the callback may read live turn state. */
   readonly onProviderWait?: (info: ProviderWaitInfo) => void;
   readonly accountFor?: (providerId: string) => string | undefined;
+  readonly currentTurn?: (actor: ActorReference) => string | null;
   /** Where the web provider's Workers AI conversions are counted, as `platform` spend. */
   readonly reportModelCall: ModelCallSink;
 }
@@ -74,7 +75,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     const userId = this.options.getOwnerUserId();
 
     if (!userId && this.options.ownerRequired) {
-      throw new Error('Agent has no owner_user_id yet — Worker must call claimOwner before any model use.');
+      throw new Error('Agent has no owner_user_id yet: Worker must call claimOwner before any model use.');
     }
 
     const userDOStub = userId
@@ -89,6 +90,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
       sessionAffinity: this.affinityKey,
       onProviderWait: this.options.onProviderWait,
       accountFor: this.options.accountFor,
+      ...(this.options.currentTurn !== undefined && { currentTurn: this.options.currentTurn }),
     });
 
     return this.providerRegistryCache;

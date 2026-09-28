@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-26",
-  "files": 2764,
-  "functions": 68344,
+  "measuredAt": "2026-09-27",
+  "files": 2834,
+  "functions": 70102,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -38,10 +38,6 @@
       "complexity": 43
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
-      "complexity": 42
-    },
-    {
       "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
       "complexity": 42
     },
@@ -54,16 +50,16 @@
       "complexity": 42
     },
     {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "complexity": 41
+    },
+    {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
       "complexity": 41
     },
     {
       "key": "scripts/bench-pilot.ts#validatePilotReport",
       "complexity": 41
-    },
-    {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
-      "complexity": 40
     },
     {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
@@ -86,15 +82,15 @@
       "complexity": 38
     },
     {
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
+      "complexity": 37
+    },
+    {
       "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
       "complexity": 37
     },
     {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison",
-      "complexity": 37
-    },
-    {
-      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive",
       "complexity": 37
     },
     {
@@ -123,6 +119,10 @@
     },
     {
       "key": "packages/cli/src/cc-transcript.ts#mineSession",
+      "complexity": 35
+    },
+    {
+      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive",
       "complexity": 35
     },
     {
@@ -179,10 +179,6 @@
     },
     {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
-      "complexity": 32
-    },
-    {
-      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 32
     },
     {
@@ -274,10 +270,6 @@
       "complexity": 30
     },
     {
-      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
-      "complexity": 30
-    },
-    {
       "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
       "complexity": 30
     },
@@ -291,6 +283,10 @@
     },
     {
       "key": "packages/core/src/chat.ts#ProviderCall.consume",
+      "complexity": 30
+    },
+    {
+      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 30
     },
     {

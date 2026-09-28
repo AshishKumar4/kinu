@@ -16,7 +16,7 @@ import {
   MERGE_POLICY_BINDING, MERGE_POLICY_SPEND_SOURCE, mergePolicyProfile,
 } from '@kinu.run/test-utils';
 import { createHeadRuntime } from '../src/head-runtime';
-import type { ExplorationHostSeams } from '../src/exploration-hosting';
+import type { HostedActorSeams } from '../src/hosted-actors';
 
 /** Calls' options are handed back so a suite can read the request this backend built. */
 function mergeModel(text: string, calls?: LanguageModelV3CallOptions[]): MockLanguageModelV3 {
@@ -41,7 +41,7 @@ const GOOD_MERGE =
   '{"narrative":"Unified: both heads agree the parser is sound.","selected_decisions":[],"unresolved_questions":[],"recommendations":["ship it"]}';
 
 /** Fail-loud: `mergeLLM` must never reach the substrate; an answering member could acquire an actor. */
-const neverHost: ExplorationHostSeams = {
+const neverHost: HostedActorSeams = {
   host: {
     acquire() { throw new Error('mergeLLM acquired a hosted actor'); },
     hosted() { throw new Error('mergeLLM read the hosted actor set'); },
@@ -53,6 +53,7 @@ const neverHost: ExplorationHostSeams = {
     releaseAll() { throw new Error('mergeLLM released every hosted actor'); },
     retire() { throw new Error('mergeLLM retired a hosted actor'); },
     resumable() { throw new Error('mergeLLM read the resumable claims'); },
+    temporary() { throw new Error("mergeLLM reached a task-hire port"); },
     get installedBuild(): never { throw new Error("mergeLLM read the host's build"); },
   },
   register() { throw new Error('mergeLLM reached actor registration'); },
@@ -67,6 +68,21 @@ const neverHost: ExplorationHostSeams = {
   publishDelta() { throw new Error('mergeLLM published a head stream frame'); },
   mission() { throw new Error('mergeLLM read the mission ledger'); },
   split() { throw new Error('mergeLLM reached the recursive split'); },
+  get sql(): never { throw new Error('mergeLLM read the workspace SQL'); },
+  get exec(): never { throw new Error('mergeLLM read the workspace executor'); },
+  get directory(): never { throw new Error('mergeLLM read the actor directory'); },
+  transaction() { throw new Error('mergeLLM opened a transaction'); },
+  roster() { throw new Error('mergeLLM read a roster'); },
+  vfs() { throw new Error('mergeLLM read the file plane'); },
+  suggestTitle() { throw new Error('mergeLLM asked for a title'); },
+  taskProfile() { throw new Error('mergeLLM built a hire profile'); },
+  dynamic() { throw new Error('mergeLLM read the dynamic context'); },
+  announce() { throw new Error('mergeLLM announced a roster change'); },
+  scheduleDrain() { throw new Error('mergeLLM scheduled a drain'); },
+  armWake() { throw new Error('mergeLLM armed a wake'); },
+  temporary() { throw new Error('mergeLLM reached the task-hire port'); },
+  rederiveWake() { throw new Error('mergeLLM re-derived the wake'); },
+  whileWaiting() { throw new Error('mergeLLM freed a turn slot'); },
 };
 
 function runtimeWith(text: string) {

@@ -776,6 +776,24 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
+    run: 'bun run gate:model-text',
+    label: 'Model text',
+    // COMMIT. One character above U+00FF in a request makes V8 hold the whole
+    // request two bytes per character (worker-heap, 2026-09-26: 7.3 MB live in
+    // a parked step with one, 4.8 MB without). A literal written in any lane
+    // widens every request that carries it. 2.13/2.24/2.45s measured on this
+    // tree under a test run's load, 3s declared, the larger rounded up.
+    tier: 'commit',
+    seconds: 3,
+    catches: 'a string or template literal above U+00FF in product source, or a '
+      + 'line of a Markdown prompt asset, outside the two renderers: modules a '
+      + 'client entry loads and the Worker does not, and the terminal client.',
+    blind: 'text built from code points at runtime, text read by path, and a '
+      + 'Worker module whose text never reaches a model (held to the rule anyway). '
+      + 'It prints them on the GREEN path.',
+    inputs: { kind: 'derived' },
+  },
+  {
     run: 'bun run gate:core-layering',
     label: 'Core layering',
     // COMMIT. 40 of core's 42 directories are one import cycle, so no package
@@ -822,7 +840,8 @@ export const LADDER: readonly Gate[] = [
     catches: 'a coupled test, by the axes a test review judges on. BANNED, whatever the lock holds: '
       + "an assertion over the implementation's TEXT, a test function or constant restating the "
       + "product's own, a reach into a member production declares non-public, and a mock of an "
-      + 'internal module. RATCHETED, the lock only shrinking: a matcher that cannot fail on the '
+      + 'internal module, or exact rendered wording or CSS values without a cited requirement. Unused '
+      + 'and uncited requirements fail too. RATCHETED, the lock only shrinking: a matcher that cannot fail on the '
       + 'defect its title names, keyed by category, file, TEST TITLE and finding shape, each locked '
       + 'key naming the plants that turn it red. It also refuses a STALE key, so a repaired '
       + 'coupling is recorded as repaired rather than left in the lock as budget for the next one.',
@@ -992,7 +1011,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1029,6 +1048,8 @@ export const LADDER: readonly Gate[] = [
     // self-tests: it proves the condition REVIEWED_ADVISORIES accepts extract-zip on,
     // and shipped with e20573386 claimed by no tier. Measured solo: 0.8s for 3 tests.
     // The row stays 24s.
+    // `error-model.test.ts` joins 2026-09-23: the red and green proofs of the
+    // error-model ratchet. Measured solo: 0.2s for 5 tests. The row stays 24s.
     seconds: 24,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
@@ -1375,6 +1396,24 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['scripts/security-scanner.ts', 'scripts/security-scanner.bundle.js'] },
   },
   {
+    run: 'bun run gate:worker-heap',
+    label: 'Built Worker heap after setup',
+    tier: 'ci',
+    seconds: 15.3,
+    catches: 'a Worker bundle that spends the Durable Object isolate before it serves. Measured 2026-09-26 on '
+      + 'main abbd2c74b5: the deployed build held 76.4 MB of V8 heap after one workspace\'s setup, of the '
+      + 'isolate\'s 128 MB, because it shipped unminified and one module carried 5,231 characters above '
+      + 'U+00FF, so V8 kept its 10.7 M retained source characters two bytes each (21.4 MB); and a static import '
+      + 'instantiated esbuild\'s 11.9 MB wasm in every isolate at load. The row builds the bundle the deploy '
+      + 'builds, loads it in workerd beside a driver that claims and sets up a workspace through the product\'s '
+      + 'RPC, and fails on used heap over 56 MB (48.9 MB measured after the fix), on a wasm module in the static '
+      + 'import graph of index.js, and on any module of that graph carrying a character outside ASCII.',
+    blind: 'what a turn, a long transcript or many followers add on top of setup; memory outside V8\'s count '
+      + '(compiled wasm, SQLite page cache); and modules reached only by a dynamic import. Miniflare\'s workerd '
+      + 'is not the production runtime, so the bound is a relative guard, not the platform\'s number.',
+    inputs: CLIENT_BUILD,
+  },
+  {
     run: 'bun run gate:dependency-advisories',
     label: 'Dependency advisory policy',
     tier: 'ci',
@@ -1509,9 +1548,8 @@ export const LADDER: readonly Gate[] = [
       + 'drive core and the CLI\'s local session in-process, so a defect that only '
       + 'appears in workerd — a rejected cross-DO RPC inside background work that only '
       + 'console.warns — is invisible to them by construction. That is the workerd '
-      + 'layer\'s job. It is also blind to whether an assertion is STRONG: '
-      + '`E2E Full Lifecycle` steps 4 and 5 assert only that the reply is non-empty, so '
-      + 'they pass on any prose the model returns. And it cannot tell contention from a '
+      + 'layer\'s job. Reply grading is task-specific: lifecycle checks a numeric answer '
+      + 'and executed output, not general prose quality. And it cannot tell contention from a '
       + 'deployment fault: two live tiers on one account produce the same '
       + '`detached_work_failed / Request Timeout` signature as an outage.',
     inputs: { kind: 'live', why: 'spends live model turns as the eval identity; its evidence is behavioural and dated, never a function of the tree alone.' },
@@ -1641,32 +1679,28 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts scripts/*-ux.test.ts scripts/computed-style.test.ts',
+    run: 'bun test --timeout=0 scripts/account-ux.test.ts scripts/drive-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts',
+    label: 'UI gate self-tests: account, drive and slates',
+    tier: 'ci',
+    // Measured alone 2026-09-27: 144.69 s wall, 51.17 s CPU, 2525 MiB peak Pss, start load 1.98.
+    seconds: 144.69,
+    catches: 'account setup, provider settings, onboarding and deletion; Drive uploads, folders and files; '
+      + 'slate isolation and inline previews; shared libraries, blueprints and share dialogs. '
+      + 'The browser drives gallery fixtures at the suites\' declared widths and themes.',
+    blind: 'gallery fixtures, not deployed accounts, R2 uploads or public viewers; no pixel comparison.',
+    inputs: CLIENT_BUILD,
+  },
+  {
+    run: 'bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts '
+      + '--path-ignore-patterns=scripts/account-ux.test.ts --path-ignore-patterns=scripts/drive-ux.test.ts '
+      + '--path-ignore-patterns=scripts/slate-preview-ux.test.ts --path-ignore-patterns=scripts/slate-sharing-ux.test.ts '
+      + 'scripts/*-ux.test.ts scripts/computed-style.test.ts',
     label: 'UI gate self-tests',
     tier: 'ci',
-    // Measured 2026-09-18 alone on the 24-thread workstation under the wave's
-    // own wrapper, load 1.9 at start: 270.9s wall, 62.4s CPU, 2534 MiB peak
-    // over the sixteen files this row runs — fifteen `*-ux` suites and
-    // `computed-style`.
-    //
-    // The row is the `*-ux` FAMILY since 2026-09-15 rather than a list: a
-    // fifteenth suite joined on 2026-09-14 by a hand edit in three files, and
-    // a suite outside every family is what the orphan test below catches. The
-    // client-failure trio (45 s, measured 13.84 s on 2026-09-06) and
-    // `workspace-name-ux` fold in; their declared seconds are added here.
-    //
-    // Since 2026-09-18 it carves ONE suite back out of that family —
-    // `chat-and-files-ux`, the row above — with bun's own
-    // `--path-ignore-patterns`, so the family still claims every new `*-ux`
-    // suite and a file is in exactly one of the two rows. The two together
-    // are ~500s serial against the 480s shared deadline, which is a row that
-    // reports a hang wherever the defect is: this row died at 124 in the
-    // 2026-09-16 wave and again at 480.42s measured alone on 2026-09-18,
-    // while its declared 420 was never a measurement of the set it had grown
-    // into. Earlier figures for the unsplit row: 347.00s on 2026-09-14
-    // (293.62s with app-background alone, 324.74s with account-ux alone,
-    // 265.76s before either joined).
-    seconds: 300,
+    // Measured alone 2026-09-27: 131.47 s wall, 47.64 s CPU, 2836 MiB peak Pss, start load 1.88.
+    // The glob admits new suites; the exclusions keep the other two UI rows disjoint.
+    // The unsplit family ran 487 s under load on 2026-09-26 against its 480 s deadline.
+    seconds: 131.47,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1696,31 +1730,18 @@ export const LADDER: readonly Gate[] = [
       + 'narrow-container scrim actually CLOSING the rail rather than dimming a '
       + 'document with no way back, and the action strip collapsing on a settled plan '
       + 'instead of spending a margin on buttons nobody can press. The models '
-      + 'section\'s accessible names and the '
-      + 'Phase 1 sharing surfaces are read the same way: every tier row and '
-      + 'role field stays reachable by the name assistive technology announces, '
-      + 'and the shared library, the blueprint page, the share dialog and the '
-      + 'unmapped-bindings panel render at both widths in both themes with the '
-      + 'warning and fork copy they owe and no rate or spend anywhere. The '
+      + 'section\'s accessible names are read the same way: every tier row and '
+      + 'role field stays reachable by the name assistive technology announces. The '
       + 'living background is measured on the shipped shell itself: it sits '
       + 'behind the rail and the page with pointer-events none and a negative '
       + 'z-index, stops its clock when the document is hidden, draws one still '
       + 'under reduced motion and on a phone width, never mounts under a '
       + 'workspace route, and follows the overview read model through idle, '
-      + 'working and attention. The account surfaces '
-      + 'join here: the setup modal over the home chrome, the settings providers '
-      + 'section, the onboarding wizard at each of its four steps with only the '
-      + 'active panel reachable, the account section whose delete button wakes '
-      + 'only on the typed email, and the primary nav with the workspaces (list '
-      + 'and tiled, searched), plugins and four-list shared pages behind it — all '
-      + 'read through the shared account fixture at both widths in both themes.',
+      + 'working and attention.',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
       + '21 frames × 4 themes and stays a standalone run — a gate that fails because '
       + 'Chrome is missing fails for a reason unrelated to the change under test. Also '
-      + 'MOST OF THE GALLERY: only `shell`, `streaming` and `environment` carry any '
-      + 'assertion across the two UI rows, and the last two are the chat-and-files '
-      + 'row\'s, while gallery.tsx dispatches ~29 frames — so the rest are proven '
-      + 'to mount and nothing more. The three non-default themes are audited on `shell` '
+      + 'gallery frames these suites never open. The three non-default themes are audited on `shell` '
       + 'alone. The control-plane and feedback frames use authenticated gallery fixtures, not '
       + 'a deployed OAuth flow. Browser capture fidelity outside those fixed frames remains '
       + 'unmeasured rather than green. For the plan document: one gallery plan and '
@@ -2109,6 +2130,41 @@ export const LADDER: readonly Gate[] = [
     },
   },
   {
+    run: 'bun run gate:error-model',
+    label: 'Error-model ratchet',
+    // Measured 2026-09-23 on the 24-thread box under load 29: 1.30/1.32/1.35s
+    // wall, 690 MB peak, over 1,087 files. One AST walk per product file.
+    tier: 'commit',
+    seconds: 1.4,
+    catches: 'a legacy failure mechanism growing while the Effect migration removes them: a '
+      + '`throw`, a `catch`, a promise rejection handler, an `{ ok }` or `{ success }` literal '
+      + 'or type, or an `Error` subclass, counted per product file and mechanism. A key above '
+      + 'its number is red, a file the lock never held starts at zero, and `--lock` only '
+      + 'lowers a number, so each migration slice shows its sites falling.',
+    blind: 'a failure spelled as a string status, a returned `{ error }` with no `ok` field, '
+      + 'tests, scripts and tools, and a mechanism moved into a declared boundary file. All are '
+      + 'printed on the gate\'s green path.',
+    inputs: { kind: 'derived' },
+  },
+  {
+    run: 'bun run gate:effect-diagnostics',
+    label: 'Effect diagnostics',
+    // Measured 2026-09-23 on the 24-thread box under load 34: 21.3s wall, 38
+    // CPU-s, over 1,104 files in the two projects that import `effect`. The
+    // Effect language service reads every node's type, which is why it costs
+    // about 17 times a plain `tsc` of the same project, and why it runs at push.
+    tier: 'push',
+    seconds: 21.3,
+    catches: 'a floating effect: `Effect.succeed(x);` or any effect built and dropped without '
+      + '`yield*` compiles and runs nothing. The pinned @effect/tsgo reports it in every '
+      + 'typechecked project that imports `effect`, and the gate is red unless it also reports '
+      + 'the one planted in scripts/fixtures/effect-diagnostics, so a bump or a lost `plugins` '
+      + 'entry cannot turn the check off in silence.',
+    blind: 'warning- and suggestion-severity diagnostics; a project outside `bun run typecheck`; '
+      + 'a project that imports no `effect`. All are printed on the gate\'s green path.',
+    inputs: { kind: 'derived' },
+  },
+  {
     run: 'bun test --timeout=0 scripts/hammer.test.ts scripts/mutation-fences.test.ts',
     label: 'Hammer and fence gate self-tests',
     tier: 'push',
@@ -2239,41 +2295,95 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'runs the elan/lake toolchain over the Lean tree, a compiler the key does not version and a shell entry the resolver does not read.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/live-app-tier.test.ts',
-    label: 'Live app in a browser',
+    run: 'bun test --timeout=0 scripts/live-app-turns.test.ts',
+    label: 'Live app in a browser: a running turn',
     tier: 'deploy',
-    // Measured 2026-09-17 alone on the 24-thread workstation. Its solo wall is
-    // 53.0s (twice, at load 1.4 and 1.9; 54.7s at load 2.15) for 12 rows driven
-    // end to end — two of them red on the pane transcript leak they exist to
-    // measure, which costs the wall nothing. No deadline of its own: 53s is an
-    // eighth of the shared 480s wall.
-    //
-    // The figures in gate-cost.json are the pid-tree ones: 5112 MiB and 114.8
-    // CPU seconds over a 59.1s wall, three threads. The session-basis sampler
-    // read 203 MiB and 75.4s for the same row, because both of this row's heavy
-    // children leave its session — live-app-harness spawns `vite dev` detached
-    // (setsid, so the teardown signals workerd through the group) and puppeteer
-    // spawns Chrome detached by default. The 6s of extra wall is the sampler's
-    // own cost: it now walks Chrome's ~110 processes for their runnable tasks.
-    // The tree basis is L7 in docs/ARCHITECTURE-DECISIONS.md.
-    seconds: 53,
-    catches: 'a defect in the SHIPPED workspace surfaces that every source-reading gate and '
-      + 'every gallery gate here is structurally unable to see. The gallery serves a FROZEN '
-      + 'pre-built bundle with fixtures answering `/api/*`, so a fault in the real Worker\'s '
-      + 'data or socket path cannot appear in it; this row boots the product itself — `vite '
-      + 'dev` in cf-backend, which is workerd with real Durable Objects behind the real client '
-      + '— and drives it in Chrome at 1440x900, where the inspector column, its separator and '
-      + 'the rail lane exist. Twelve rows, each a geometry, node-identity or count assertion '
-      + 'off a real interaction: the Work surface keeps its DOM node AND its scroll offset '
-      + 'across a chat-tab switch with zero workspace-scoped reads re-sent in either direction '
-      + 'and the new tab\'s own actor socket answering its pane; at most one plan-bearing tab '
-      + 'or filter in the column, so plans have one owner; the tab strip\'s rule continuous to '
-      + 'the column\'s right edge with the active underline on it and the chat rule on the '
-      + 'same line, in dark and in light; a column the reader collapsed reopening through the '
-      + 'product\'s own control, found by role and accessible name, and the rail collapsing; '
-      + 'and a marker sent in each pane staying out of the other, which is the transcript leak '
-      + 'a shared store shows as green. Five of those were found by hand on a running build '
-      + 'while the whole ladder was green.',
+    // Measured 2026-09-26 alone in a quiet window: 133.0 s at load 2.9, its five scenarios 11-34 s each beside the dev server's boot.
+    // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
+    seconds: 133,
+    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+      + 'Its rows: a running turn draws exactly one live state through the paced turn\'s four silences, and '
+      + 'Stop never stands over a pane drawing nothing; a page opened mid-turn offers Stop while it runs and stops '
+      + 'showing it once it ends, its header never disagreeing with its composer; a page whose socket drops mid-turn '
+      + 'replays the answer as it stood; an answer keeps each step\'s text where it streamed after the turn ends and '
+      + 'after a reload, the model\'s next request carrying it; and a marker sent in each pane stays out of the '
+      + 'other, the transcript leak a shared store shows as green.',
+    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
+      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
+      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
+      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
+      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
+      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
+      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
+      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
+      + 'the right one. The deployed build\'s browser rows are the product flows\' '
+      + '(`scripts/product-flows.ts`), which run against this dev server and against the '
+      + 'deployment alike.',
+    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+  },
+  {
+    run: 'bun test --timeout=0 scripts/live-app-sleep.test.ts',
+    label: 'Live app in a browser: a page that loses the turn',
+    tier: 'deploy',
+    // Measured 2026-09-26 alone in a quiet window: 133.1 s at load 3.7, its four scenarios 20-33 s each beside the dev server's boot.
+    // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
+    seconds: 133,
+    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+      + 'Its rows: a page that only watched a turn another tab sent replays it as it stood after its socket drops; '
+      + 'a page asleep while its turn ends wakes to the finished answer with nothing left running, a page that only '
+      + 'watched included; and a page joining a reasoning turn part-way, on a dropped socket or a slow link, reads '
+      + 'it whole.',
+    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
+      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
+      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
+      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
+      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
+      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
+      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
+      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
+      + 'the right one. The deployed build\'s browser rows are the product flows\' '
+      + '(`scripts/product-flows.ts`), which run against this dev server and against the '
+      + 'deployment alike.',
+    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+  },
+  {
+    run: 'bun test --timeout=0 scripts/live-app-plans.test.ts',
+    label: 'Live app in a browser: a long chat and its plans',
+    tier: 'deploy',
+    // Measured 2026-09-26 alone in a quiet window: 167.9 s at load 2.7, its four scenarios 10-104 s each, chat-scroll the long one beside the dev server's boot.
+    // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
+    seconds: 168,
+    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+      + 'Its rows: a long chat opens at its newest message and pages older history only when the reader scrolls '
+      + 'for it, one page per scroll; the plan review flow runs from submission to the turn that implements it; at '
+      + 'most one plan-bearing tab or filter stands in the inspector, so plans have one owner; and the inspector '
+      + 'never moves its selection on its own.',
+    blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
+      + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
+      + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
+      + 'live-rendered and says nothing about a real model\'s turn. And it is a LOCAL dev '
+      + 'server: `vite dev`\'s workerd is not the production isolate, its Durable Objects are '
+      + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
+      + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
+      + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
+      + 'the right one. The deployed build\'s browser rows are the product flows\' '
+      + '(`scripts/product-flows.ts`), which run against this dev server and against the '
+      + 'deployment alike.',
+    inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+  },
+  {
+    run: 'bun test --timeout=0 scripts/live-app-layout.test.ts',
+    label: 'Live app in a browser: the inspector column\'s layout',
+    tier: 'deploy',
+    // Measured 2026-09-26 alone in a quiet window: 120.3 s at load 3.1, its three scenarios 14-38 s each beside the dev server's boot.
+    // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
+    seconds: 120,
+    catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
+      + 'Its rows: the Work surface keeps its DOM node AND its scroll offset across a chat-tab switch with zero '
+      + 'workspace-scoped reads re-sent in either direction and the new tab\'s own actor socket answering its pane; '
+      + 'the tab strip\'s rule continuous to the column\'s right edge with the active underline on it and the chat '
+      + 'rule on the same line, in dark and in light; and a column the reader collapsed reopening through the '
+      + 'product\'s own control, found by role and accessible name, and the rail collapsing.',
     blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
       + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
       + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
@@ -2504,7 +2614,9 @@ export interface PlanRow {
  *
  * REFUSES rather than defaults. A `source` row is admitted CONCURRENTLY, so a
  * row there with no measurement is a row the wave would schedule against a
- * number nobody took: exactly the 2026-09-16 failure. Outside `source` every
+ * number nobody took: exactly the 2026-09-16 failure. A figure taken from a
+ * run that failed is no measurement either: the row stopped early, so its
+ * cost is short by whatever it never ran. Outside `source` every
  * phase's rows are declared to run alone or are the two post-publish live
  * probes whose cost is a network wait, so the cap is not what decides them and
  * an unmeasured row there carries one thread and one MiB.
@@ -2515,12 +2627,14 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
 
   const rows = deployOrder().map((gate): PlanRow => {
     const phase = gate.phase ?? 'source';
-    const cost = costs.rows[gate.run];
+    const recorded = costs.rows[gate.run];
+    const cost = recorded?.exit === 0 ? recorded : undefined;
 
     if (cost === undefined && phase === 'source') {
       throw new Error(
         `${gate.run} is scheduled in the concurrent source wave and has no measured cost in `
-        + `${COST_TABLE}. Measure it alone — bun scripts/gate-cost-measure.ts --only="${gate.run}" `
+        + `${COST_TABLE}${recorded === undefined ? '' : `: its figure is of a run that exited ${String(recorded.exit)}`}. `
+        + `Measure it alone from a green run — bun scripts/gate-cost-measure.ts --only="${gate.run}" `
         + '— and commit the figures. A row admitted against a number nobody took is how five rows '
         + 'died on their deadline on 2026-09-16.',
       );
@@ -2715,6 +2829,15 @@ export function liveTierTargets(source = readFileSync(resolve(root, LIVE_TIER_SC
  * Each entry is a reason. On 2026-08-17 the undeclared delta was five
  * packages, 41 of 42 CLI files, the root suites and both Layergate runs.
  */
+/** Why no live-app row can run on a pull request: each boots the product's own dev server. */
+const LIVE_APP_AT_CI = 'needs the account\'s own dev credentials in PROCESS env for the product\'s dev server to '
+  + 'boot at all — measured 2026-09-17, `vite dev` exits "error when starting dev server" '
+  + 'with no CLOUDFLARE_API_TOKEN, and the credential path 503s without the cf-backend '
+  + 'secrets. They live in `.dev.vars` on this box, and a write-scoped account token on '
+  + 'every pull request is the objection `gate:infra` already carries. It also holds '
+  + 'workerd, Chrome and a scripted model server at once, so it runs at deploy on a machine '
+  + 'whose load is known.';
+
 export const CI_EXEMPT = {
   'bun run gate:infra':
     'needs a Cloudflare session. CI has none, and giving it one would put an account credential '
@@ -2749,14 +2872,10 @@ export const CI_EXEMPT = {
   'bash scripts/product-flows-tier.sh':
     'has nothing to run against at CI: its subject is the deployment that just went up, as the '
     + 'eval identity, whose secret no pull request holds.',
-  'bun test --timeout=0 scripts/live-app-tier.test.ts':
-    'needs the account\'s own dev credentials in PROCESS env for the product\'s dev server to '
-    + 'boot at all — measured 2026-09-17, `vite dev` exits "error when starting dev server" '
-    + 'with no CLOUDFLARE_API_TOKEN, and the credential path 503s without the cf-backend '
-    + 'secrets. They live in `.dev.vars` on this box, and a write-scoped account token on '
-    + 'every pull request is the objection `gate:infra` already carries. It also holds '
-    + 'workerd, Chrome and a scripted model server at once, so it runs at deploy on a machine '
-    + 'whose load is known.',
+  'bun test --timeout=0 scripts/live-app-turns.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 scripts/live-app-sleep.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 scripts/live-app-plans.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 scripts/live-app-layout.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 scripts/deadline-capability.test.ts':
     'needs a user systemd manager that grants a unit an ambient capability. The GitHub runner\'s starts the unit '
     + 'and loses it at once (run 36216870343, 2026-09-26: ActiveState inactive), so there the suite fails for '

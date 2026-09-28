@@ -7,11 +7,11 @@ import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import type { VFS } from '../types/primitives';
-import { makeVfsError, type VfsErrorCode } from '../vfs/errno';
+import { isVfsError, makeVfsError, type VfsErrorCode } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
 import { commandResult, existsTool } from './exec-result';
-import { KinuError, refusalOf } from '../obs/index';
+import { attempt, KinuError, refusalOf, renderThrownChain, settle, toWire, type Wire } from '../obs/index';
 
 type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
 
@@ -23,9 +23,7 @@ export interface ParentRpcError {
   path: string;
 }
 
-export type ParentRpcResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: ParentRpcError };
+export type ParentRpcResult<T> = Wire<T, ParentRpcError>;
 
 /** `write` is a closed command union covering file write and mkdir. */
 export type ParentRpcWrite =
@@ -47,6 +45,13 @@ export interface ParentWorkspaceHandle {
   delete(path: string): Promise<ParentRpcResult<null>>;
   /** The parent's real workspace shell. */
   exec(command: string): Promise<ParentRpcResult<ParentExecResult>>;
+}
+
+export function answerParentRpc<T>(path: string, operate: () => Promise<T>): Promise<ParentRpcResult<T>> {
+  return settle(toWire(
+    attempt({ doing: `answering a fork's call on ${path}`, otherwise: 'io' }, operate),
+    ({ cause }) => ({ code: isVfsError(cause) ? cause.code : 'EIO', message: renderThrownChain({ cause }), path }),
+  ));
 }
 
 /** The failure a refused RPC becomes; the errno `code` is preserved, not reclassified. */
@@ -98,7 +103,7 @@ const TYPES = `declare namespace parent {
   function readdir(path: string): Promise<string[] | Refusal>;
   function exists(path: string): Promise<boolean | Refusal>;
   /**
-   * Run a command in the parent workspace's REAL shell — the same ~95
+   * Run a command in the parent workspace's REAL shell: the same ~95
    * coreutils, pipes, redirects and loops its own agent has. This is the fast
    * way to search it: \`grep -rn TODO .\`, \`find . -name '*.ts'\`.
    */
@@ -185,7 +190,7 @@ export function createParentExecutor(deps: {
 
       exec: {
         description:
-          "Run one command in the parent workspace's real shell — the full coreutils set, pipes, "
+          "Run one command in the parent workspace's real shell: the full coreutils set, pipes, "
           + 'redirects and loops. The fast way to search it (grep -rn, find).',
         execute: async (...args: unknown[]) => {
           // DO RPC exposes no kill: the parent's command runs on, but the caller stops waiting.
@@ -201,7 +206,7 @@ export function createParentExecutor(deps: {
           return commandResult(value(await raceAbort(
             () => deps.handle.exec(command),
             signal,
-            'parent exec aborted — the command may still finish in the parent workspace',
+            'parent exec aborted: the command may still finish in the parent workspace',
           )));
         },
       },

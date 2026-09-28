@@ -290,8 +290,8 @@ describe('what the live tool surface does with entry zero', () => {
       action: 'swarm', preset: PARSED.preset, task: CALL.task, budgetUsd: 5, budgetLabel: 'zero',
     } });
 
-    expect(camelCase).toThrow(/unknown field "budgetUsd" — did you mean "budget_usd"\?/);
-    expect(camelCase).toThrow(/unknown field "budgetLabel" — did you mean "budget_label"\?/);
+    expect(camelCase).toThrow(/unknown field "budgetUsd": did you mean "budget_usd"\?/);
+    expect(camelCase).toThrow(/unknown field "budgetLabel": did you mean "budget_label"\?/);
 
     expect(parseAgentsToolInput({ input: {
       action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5,

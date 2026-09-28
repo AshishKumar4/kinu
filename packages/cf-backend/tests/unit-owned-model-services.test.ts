@@ -7,6 +7,8 @@ import { createMockFetch, createTestActors, createTestSql, unobservedSpend } fro
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-services';
+import type { CodexRelayHub } from '../src/egress/codex-egress-route';
+import { NO_RELAY_MACHINE } from './helpers/user-credentials';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
   resolveTurnProfile, RunEventRecorder, initRunEventTables, unpricedLedgerSink,
@@ -26,7 +28,7 @@ function resolved(model: LanguageModel): v.InferOutput<typeof ResolvedModelSchem
   return v.parse(ResolvedModelSchema, model);
 }
 
-interface FakeUserDO {
+interface FakeUserDO extends CodexRelayHub {
   getAuthHeaders(caller: UserCaller, key: string): Promise<CredentialHeaders | null>;
   getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null>;
   listCredentials(caller: UserCaller): Promise<Array<{ key: string; kind: 'bearer'; createdAt: number; updatedAt: number }>>;
@@ -34,6 +36,7 @@ interface FakeUserDO {
 
 function fakeUserDO(credentials: Readonly<Record<string, CredentialHeaders>> = {}): FakeUserDO {
   return {
+    ...NO_RELAY_MACHINE,
     async getAuthHeaders(_caller, key) { return credentials[key] ?? null; },
     async getCredentialBaseURL() { return null; },
     async listCredentials() {
@@ -61,7 +64,7 @@ describe('OwnedModelServices', () => {
     const source = (file: string) => readFileSync(join(import.meta.dir, '..', 'src', file), 'utf8');
     const actor = source('actor-agent.ts');
     const orchestrator = source('orchestrator.ts');
-    const hosting = source('exploration-hosting.ts');
+    const hosting = source('hosted-actors.ts');
 
     expect(actor).toContain("appTitle: 'Kinu',\n    ownerRequired: true,");
     expect(actor).toContain('return this.ownedModelServices.providerRegistry();');
@@ -86,7 +89,7 @@ describe('OwnedModelServices', () => {
     });
 
     expect(() => services.providerRegistry()).toThrow(
-      'Agent has no owner_user_id yet — Worker must call claimOwner before any model use.',
+      'Agent has no owner_user_id yet: Worker must call claimOwner before any model use.',
     );
   });
 

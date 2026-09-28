@@ -149,8 +149,7 @@ export function initWorkspaceCapabilityTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS workspace_capability_tokens (
       workspace_name TEXT PRIMARY KEY,
-      token_hash     TEXT NOT NULL UNIQUE,
-      created_at     INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      token_hash     TEXT NOT NULL UNIQUE
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_workspace_capability_token_hash
@@ -216,12 +215,10 @@ export async function freshWorkspaceCapability(): Promise<{ token: string; token
 /** Registers a freshly minted hash. Must stay synchronous: admission check and write form one turn,
  *  so a revoked workspace cannot be re-minted by an in-flight reconcile. */
 export function commitWorkspaceCapability(sql: SqlExec, workspaceName: string, tokenHash: string): void {
-  const now = Date.now();
   sql.exec(
-    `INSERT INTO workspace_capability_tokens (workspace_name, token_hash, created_at)
-     VALUES (?, ?, ?)
-     ON CONFLICT(workspace_name) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at`,
-    workspaceName, tokenHash, now,
+    `INSERT INTO workspace_capability_tokens (workspace_name, token_hash) VALUES (?, ?)
+     ON CONFLICT(workspace_name) DO UPDATE SET token_hash = excluded.token_hash`,
+    workspaceName, tokenHash,
   );
 }
 

@@ -1469,8 +1469,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     if (!parked) throw new Error('unattended command was not queued');
 
     expect(first.exitCode).not.toBe(0);
-    expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
-    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN — queued for owner approval');
+    expect(first.stderr).toContain(`NOT RUN: queued for owner approval (${parked.id})`);
+    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN: queued for owner approval');
     expect(await session.listDeferredApprovals()).toHaveLength(2);
     const sandboxAction = (await session.listDeferredApprovals()).find((action) => action.executor === 'sandbox');
 
@@ -1516,7 +1516,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       const first = await shell.exec('rm -rf build');
       const parked = present((await session.listDeferredApprovals())[0], 'the parked delete');
 
-      expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
+      expect(first.stderr).toContain(`NOT RUN: queued for owner approval (${parked.id})`);
       expect(existsSync(join(project, 'build'))).toBe(true);
       expect(await session.decideDeferredApprovals([parked.id], 'always')).toEqual({ decided: [parked.id] });
 
@@ -2384,43 +2384,22 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job'));
   });
 
-  test('recoverBackgroundJobs re-drives an orphaned agents job whose row names the fork action', async () => {
-    const { db, rt, session } = setup('resumed fork answer');
+  test('recoverBackgroundJobs fails an orphaned agents job whose row names an action the tool no longer has', async () => {
+    const { db, rt, session } = setup();
 
-    // A legacy `'fork'` row is history, so it is translated onto the ephemeral-node action rather than refused.
-    const input = JSON.stringify({
-      action: 'fork', task: 'finish the interrupted exploration',
-      forks: [
-        { task: 'read it', rationale: 'ground it' },
-        { task: 'test it', rationale: 'check it' },
-      ],
-    });
-
-    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-a', 'agents', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f4', 'bg:agents', '{"phase":"running","jobId":"bgjob-a","kind":"agents"}', 1)`);
-
-    const stderrLines: string[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => { stderrLines.push(args.map(String).join(' ')); };
-
-    try {
-      await session.recoverBackgroundJobs();
-      await waitFor(() => jobStatus(db, 'bgjob-a') === 'completed');
-    } finally {
-      console.error = originalError;
+    for (const [id, fiber, action] of [['bgjob-fork', 'f4', 'fork'], ['bgjob-probe', 'f5', 'probe']] as const) {
+      const input = JSON.stringify({ action, task: 'finish the interrupted exploration' });
+      db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', '${id}', 'agents', 'build', 'running', '${input}', 1)`);
+      db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', '${fiber}', 'bg:agents', '{"phase":"running","jobId":"${id}","kind":"agents"}', 1)`);
     }
 
-    const settled = v.parse(
-      v.object({ preset: v.literal('ideate'), report: v.object({ expansions: v.number() }) }),
-      JSON.parse(jobResult(db, 'bgjob-a')),
-    );
+    await session.recoverBackgroundJobs();
+    // Recovered in row order, so the fork row is settled by the time the probe row is.
+    await waitFor(() => jobStatus(db, 'bgjob-probe') === 'failed');
 
-    expect(settled.report.expansions).toBeGreaterThan(0);
-    expect(jobResult(db, 'bgjob-a')).toContain('resumed fork answer');
-
-    const dropped = stderrLines.filter((line) => line.includes('agents.resume.fields_dropped'));
-    expect(dropped).toHaveLength(1);
-    expect(dropped[0]).toContain('forks');
+    // `fork` is refused exactly as an action the tool never had.
+    expect({ status: jobStatus(db, 'bgjob-fork'), error: jobError(db, 'bgjob-fork') })
+      .toEqual({ status: 'failed', error: jobError(db, 'bgjob-probe') });
   });
 
   test('end() waits for a detached job to settle instead of closing the database under it', async () => {
@@ -2812,14 +2791,13 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     ).get()?.c === 1);
 
     const row = db.query<{
-      outcome: string; source: string; turn_id: string; session_id: string; followup: string;
+      outcome: string; source: string; turn_id: string; followup: string;
     }, []>(`SELECT * FROM turn_outcomes`).get();
 
     if (!row) throw new Error('turn outcome row is missing');
     expect(row.outcome).toBe('corrected');
     expect(row.source).toBe('classifier');
     expect(row.followup).toContain('STAGING');
-    expect(row.session_id).toBe('default');
 
     const firstAssistant = (await transcript(rt)).find((entry) => entry.role === 'assistant');
 
@@ -4003,7 +3981,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
       name: 'local_helper', description: 'a locally crafted helper',
-      code: 'async () => 1', params: null, scope: 'local',
+      code: 'async () => 1',
     });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                         VALUES (${rt.actor.actorId}, 'editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
@@ -4025,7 +4003,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
   test('revert by id forgets the fact for real; a crafted tool is informational and has no revert', async () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
-      name: 'kept_tool', description: 'stays', code: 'async () => 2', params: null, scope: 'local',
+      name: 'kept_tool', description: 'stays', code: 'async () => 2',
     });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                         VALUES (${rt.actor.actorId}, 'stale', '"value"', 1.0, NULL, ${Date.now()})`;
@@ -5229,7 +5207,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // `preset` cannot be invented, so a call without one is refused before expanding, naming the field.
     const refusal = {
       success: false, reason: 'bad_input',
-      error: 'swarm needs `preset` — the shape of the search (no role catalog is wired here to take its default from). '
+      error: 'swarm needs `preset`: the shape of the search (no role catalog is wired here to take its default from). '
         + SWARM_PRESET_DOCTRINE.join(' '),
     };
 
@@ -5590,7 +5568,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
       id: 'h-fork', rootId: 'r1', parentId: null, depth: 0, mode: 'build',
       task: 'look at the parser', rationale: 'because', inheritedContext: [],
       budget: { maxDepth: 2, spawnedAt: Date.now() },
-      loop: defaultLoopOrigin('head'), mergeStrategy: 'synthesize', model: 'local/fork',
+      loop: defaultLoopOrigin('run'), mergeStrategy: 'synthesize', model: 'local/fork',
     });
 
     await head.run();

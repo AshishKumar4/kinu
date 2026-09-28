@@ -57,7 +57,7 @@ async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8
   if (!result.success || result.exitCode !== 0) {
     throw makeVfsError(
       'EIO',
-      `this file's bytes could not be read right now — try opening it again, or download it instead`,
+      `this file's bytes could not be read right now: try opening it again, or download it instead`,
       path,
     );
   }
@@ -162,7 +162,7 @@ export interface NimbusSandboxHandle {
     url?(port: number): string | undefined;
   };
   /** See `WorkspaceBundle.mountTable`; absent on a remote box. */
-  mountTable?(plane: MountedVfs, cred?: VfsCred): void;
+  mountTable?(plane: MountedVfs, cred?: VfsCred): () => void;
 }
 
 export interface NimbusSessionOpts {
@@ -290,12 +290,12 @@ function formatStartResult(result: NimbusStartResult): CommandResult {
   const lines = [
     running
       ? `started (long-running) pid=${result.pid}: ${result.command}`
-      : `started pid=${result.pid}: ${result.command} — already ${result.process.state}` +
+      : `started pid=${result.pid}: ${result.command}: already ${result.process.state}` +
         (result.process.exitCode != null ? ` (exit ${result.process.exitCode})` : ''),
   ];
 
   if (result.ports.length > 0) {
-    lines.push(`listening on port${result.ports.length > 1 ? 's' : ''} ${result.ports.map((p) => p.port).join(', ')} — workspace.exposePort(<port>) returns the preview URL and whether a request to it reaches the server`);
+    lines.push(`listening on port${result.ports.length > 1 ? 's' : ''} ${result.ports.map((p) => p.port).join(', ')}: workspace.exposePort(<port>) returns the preview URL and whether a request to it reaches the server`);
   }
 
   lines.push(`output: workspace.logs(${result.pid}) · stop: workspace.killProcess(${result.pid})`);
@@ -309,7 +309,7 @@ const SESSION_TYPES = `
   function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<string | Refusal>;
   function killProcess(pid: number | { pid: number }): Promise<string | Refusal>;
   function logs(pid: number | { pid: number; lines?: number; bytes?: number }): Promise<string | Refusal>;
-  function exposePort(port: number | { port: number }): Promise<string | Refusal>; // the URL, then 'verified: …' or 'not reached: …'
+  function exposePort(port: number | { port: number }): Promise<string | Refusal>; // the URL, then 'verified: ...' or 'not reached: ...'
   function unexposePort(port: number | { port: number }): Promise<string | Refusal>;
   function listPorts(): Promise<string | Refusal>;
   function installRuntime(spec: string): Promise<string | Refusal>;
@@ -632,7 +632,7 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
       const result = await raceAbort(
         () => box.exec(command, execOptions),
         options?.signal,
-        'workspace exec aborted — the command may still finish in the session',
+        'workspace exec aborted: the command may still finish in the session',
       );
 
       const outcome = { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };

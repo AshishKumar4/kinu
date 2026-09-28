@@ -10,7 +10,9 @@ import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { WorkspaceActorDirectory } from '../identity/workspace-actors';
-import type { SessionTranscriptReader } from '../session/transcript';
+import { readSessionTranscript, type SessionTranscriptReader } from '../session/transcript';
+import { actorReadHandle } from '../read-models/workspace-work';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
 
 export interface SubordinateInspectionAuthority {
   /** The owner the transport authenticated. */
@@ -59,5 +61,32 @@ export async function inspectSubordinateStorage(
     target = child;
   }
 
+  if ('actor' in input && input.actor !== undefined) {
+    const kept = retainedDescendant(access, target, input.actor);
+
+    return kept === null ? missing() : readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: kept.actor, transcriptFor: () => kept.transcript }, input);
+  }
+
   return readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: target, transcriptFor: access.transcriptFor }, input);
+}
+
+/** A subordinate at any depth below `ancestor`, live or released. */
+function retainedDescendant(access: SubordinateInspectionAccess, ancestor: ActorHandle, actorId: string): { actor: ActorHandle; transcript: SessionTranscriptReader } | null {
+  const record = access.directory.retained(actorId);
+
+  for (let step = record; step?.actorId !== ancestor.actorId; step = access.directory.retained(step.parentActorId ?? '')) {
+    if (step === null || step.kind !== 'subordinate') return null;
+  }
+
+  if (record === null) return null;
+
+  if (record.retiringAt === null && record.deletedAt === null) {
+    const actor = access.directory.open(actorId);
+
+    return { actor, transcript: access.transcriptFor(actor) };
+  }
+
+  const actor = actorReadHandle(access.sql, record);
+
+  return { actor, transcript: readSessionTranscript(access.sql, actor, CHAT_SESSION_ID, null) };
 }

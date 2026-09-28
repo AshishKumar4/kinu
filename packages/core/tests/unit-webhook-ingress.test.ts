@@ -3,7 +3,7 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import {
-  EventLog, ReplyChannelStore, TriggerRegistry,
+  EventLog, TriggerRegistry,
   acceptWebhookDelivery, createWebhookSecretStore, hmacSha256Hex,
   initEventsHubTables, initWebhookIngressTables, registerDurableWebhook, cancelTrigger,
   type SqlExec, type WebhookDelivery,
@@ -38,7 +38,6 @@ function hub() {
 
   const deps = {
     triggers, log, secrets, sql, vfs,
-    replies: new ReplyChannelStore(sql, actor),
     onAdmitted: () => { drains += 1; },
   };
 

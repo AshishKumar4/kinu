@@ -592,6 +592,11 @@ export class ChatSession {
     this.actorSession.stop();
   }
 
+  /** Only a running turn keyed under `prefix`. */
+  stopIfRunning(prefix: string): void {
+    if (this.runningAnnouncement?.startsWith(prefix) === true) this.stop();
+  }
+
   /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */
   async revertTo(entryId: string): Promise<void> {
     await this.actorSession.revertConversation(this.sessionId, entryId, () => {
@@ -631,7 +636,7 @@ export class ChatSession {
     this.emit({
       type: 'background',
       event: 'events_reclaimed',
-      message: `${reclaimed.length} event delivery/ies were bound to a turn a previous process did not finish — re-queued`,
+      message: `${reclaimed.length} event delivery/ies were bound to a turn a previous process did not finish: re-queued`,
     });
   }
 

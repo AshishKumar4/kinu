@@ -449,7 +449,6 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
 
 
 const DECISION_WORD: Record<InstructionSourceRow["decision"], string> = {
-  grandfathered: "carried over",
   approved: "approved",
   revoked: "refused",
   none: "not decided",
@@ -542,7 +541,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
           {rows.map((row) => {
             const opened = open?.path === row.path ? open : null;
             const state = row.reason === undefined ? DECISION_WORD[row.decision] : `not readable: ${row.reason}`;
-            const followed = row.decision === "approved" || row.decision === "grandfathered";
+            const followed = row.decision === "approved";
             const readWord = opened === null ? "Read" : "Hide";
 
             return (

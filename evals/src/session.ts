@@ -1615,23 +1615,8 @@ export class KinuPublicSession {
    */
   async runEvents(): Promise<readonly RunEvent[]> {
     const events: RunEvent[] = [];
-    let after: string | null = null;
 
-    for (;;) {
-      // Annotated because the loop reads its own result: `page.next.after` feeds
-      // the next iteration, so inference would be circular.
-      const page: v.InferOutput<typeof RunPageSchema> = await this.getJson(
-        `/api/workspaces/${encodeURIComponent(this.workspace)}/runs`
-        + `?limit=${String(RUN_PAGE)}${after === null ? '' : `&after=${encodeURIComponent(after)}`}`,
-        RunPageSchema,
-        'list the workspace runs',
-      );
-
-      for (const run of page.items) events.push(...await this.runEventsOf(run.runId));
-
-      if (page.status === 'end') break;
-      after = page.next.after;
-    }
+    for (const runId of await this.runIds()) events.push(...await this.runEventsOf(runId));
 
     events.sort(compareRunEventOrder);
 
@@ -1747,9 +1732,30 @@ export class KinuPublicSession {
     }
   }
 
-  private async runEventsOf(runId: string): Promise<readonly RunEvent[]> {
+  /** Every run id the workspace has recorded, newest activity first, over the paged `/runs` route. */
+  async runIds(): Promise<readonly string[]> {
+    const ids: string[] = [];
+    let after: string | null = null;
+
+    for (;;) {
+      const page: v.InferOutput<typeof RunPageSchema> = await this.getJson(
+        `/api/workspaces/${encodeURIComponent(this.workspace)}/runs`
+        + `?limit=${String(RUN_PAGE)}${after === null ? '' : `&after=${encodeURIComponent(after)}`}`,
+        RunPageSchema,
+        'list the workspace runs',
+      );
+
+      ids.push(...page.items.map((run) => run.runId));
+
+      if (page.status === 'end') return ids;
+      after = page.next.after;
+    }
+  }
+
+  /** One run's events from `since` (inclusive): a poll that reads only what the run added. */
+  async runEventsOf(runId: string, from = 0): Promise<readonly RunEvent[]> {
     const events: RunEvent[] = [];
-    let since = 0;
+    let since = from;
 
     for (;;) {
       const page = await this.getJson(

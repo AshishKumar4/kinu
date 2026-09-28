@@ -48,7 +48,6 @@ export function initReplayTables(execRaw: RawSqlExec): void {
     accepted_n INTEGER NOT NULL,
     negative_n INTEGER NOT NULL,
     mean_score REAL NOT NULL,
-    loss REAL NOT NULL,
     scaffold_version INTEGER,
     details TEXT NOT NULL,
     score_lo REAL,
@@ -165,11 +164,11 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
 
   opts.actor.assertCurrent();
   void opts.sql`INSERT INTO replay_evals
-      (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version,
+      (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version,
        details, score_lo, score_hi)
     VALUES
       (${opts.actor.actorId}, ${summary.id}, ${summary.ranAt}, ${summary.sampleSize}, ${summary.acceptedCount},
-       ${summary.negativeCount}, ${summary.meanScore}, ${summary.loss},
+       ${summary.negativeCount}, ${summary.meanScore},
        ${summary.scaffoldVersion}, ${JSON.stringify(summary.results)},
        ${interval.lo}, ${interval.hi})`;
 
@@ -182,7 +181,7 @@ export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50
 
   const rows = sql<{
     id: string; ran_at: number; sample_size: number; accepted_n: number;
-    negative_n: number; mean_score: number; loss: number;
+    negative_n: number; mean_score: number;
     scaffold_version: number | null; details: string;
     score_lo: number | null; score_hi: number | null;
   }>`SELECT * FROM replay_evals WHERE actor_id = ${actor.actorId}
@@ -201,7 +200,7 @@ export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50
     return {
       id: r.id, ranAt: r.ran_at, sampleSize: r.sample_size,
       acceptedCount: r.accepted_n, negativeCount: r.negative_n,
-      meanScore: r.mean_score, loss: r.loss, interval,
+      meanScore: r.mean_score, loss: 1 - r.mean_score, interval,
       scaffoldVersion: r.scaffold_version, results: parsed.success ? parsed.output : [],
     };
   });

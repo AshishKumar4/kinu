@@ -274,7 +274,6 @@ function write(over?: Partial<ExplorationWrite>): ExplorationWrite {
     depth: 5,
     branches: 3,
     floor: FLOOR,
-    costUsd: null,
     costTokens: 4_096,
     at: 1_700_000_000_000,
     ...over,

@@ -732,7 +732,6 @@ describe('CLI TUI layout', () => {
                 depth: 1,
               }],
               createdAt: 1,
-              pickedAt: null,
             }}
             terminal={{ width: 40, height: 8 }}
             onSelect={() => {}}
@@ -1309,7 +1308,7 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
         },
       },
       fetchStub: `async (input) => String(input).endsWith('/api/cli/workspaces')
-        ? Response.json([{ name: 'shopbot', displayName: 'Cloud Shop', createdAt: 1790000000000, lastVisited: 1790000000000, archivedAt: null }])
+        ? Response.json([{ name: 'shopbot', displayName: 'Cloud Shop', createdAt: 1790000000000, lastVisited: 1790000000000 }])
         : new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })`,
       driver: `
         // Either wording, so a sync that FAILED reports as itself rather than

@@ -10,11 +10,12 @@ import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@op
 import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from 'react';
 
 import { tierIdsOf,
-  DEFAULT_ROLE_ID, TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, nextReasoningEffort, offeredReasoningEfforts,
-  composerVisibleRows, effectiveRoleCatalog,
+  DEFAULT_ROLE_ID, nextReasoningEffort, offeredReasoningEfforts,
+  effectiveRoleCatalog,
   type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ReasoningEffort, type SeekCursor,
-  type SubordinateRosterEntry, type TierId,
+  type SubordinateChild, type TierId,
 } from '@kinu.run/core';
+import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, composerVisibleRows } from '@kinu.run/core/tui';
 import {
   findForkPivot,
   forkCandidates,
@@ -83,11 +84,11 @@ import type { ComposerKeyDeps } from './draft-keys';
 import type { SurfaceKeyDeps } from './surface-keys';
 import { useStreamingBuffer } from './streaming-buffer';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from '@kinu.run/core';
-import { agentDisplayLabel, clipText } from '@kinu.run/core';
+import { agentDisplayLabel, clipText } from '@kinu.run/core/tui';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import {
-  buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster,
-  type TuiAgentHubEntry, type TuiHubData, type TuiHubView, type TuiSubagentChat,
+  buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace, answeredHelpers,
+  type TuiHubData, type TuiHubRow, type TuiHubView, type TuiSubagentChat,
 } from './hubs';
 import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
 import {
@@ -102,9 +103,9 @@ import {
   type TuiRuntimeOptions,
   type TuiAgentSource,
   type TuiAgentSummary,
-  type TuiSubordinate,
 } from './tui-shell';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { readParkedNotice } from '../parked-actions';
 
 /** `local-peer` opens in place; `cloud-additional` runs server-side and is announced. */
 interface TuiCreatedAgent {
@@ -139,7 +140,7 @@ export type ActiveSurface =
   | { kind: 'model'; menu: AgentModelMenu; loading: boolean; error: string | null }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
-  | { kind: 'subagent'; name: string; label: string }
+  | { kind: 'subagent'; path: readonly string[]; label: string; actorId: string | null }
   | null;
 
 function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string | null {
@@ -400,6 +401,30 @@ function ChatScene({
   const addError = useCallback((failure: CaughtFailure) => {
     addMessage({ role: 'system', content: errorLine(renderThrownChain(failure)) });
   }, [addMessage]);
+
+  const parkedSeenRef = useRef(new Set<string>());
+  const parkedReadRef = useRef<Promise<void> | null>(null);
+
+  const noteParked = useCallback(() => {
+    const controls = client.localControls;
+
+    if (!controls) return;
+
+    const previous = parkedReadRef.current;
+
+    parkedReadRef.current = (async () => {
+      await previous;
+      const read = await readParkedNotice(controls, parkedSeenRef.current);
+
+      if (!read.ok) addError({ cause: read.error });
+      else if (read.value !== null) addMessage({ role: 'system', content: read.value });
+    })();
+  }, [addError, addMessage, client]);
+
+  useEffect(() => {
+    parkedSeenRef.current = new Set();
+    noteParked();
+  }, [noteParked]);
 
   const pasteNote = useCallback((content: string) => addMessage({ role: 'system', content }), [addMessage]);
 
@@ -821,6 +846,8 @@ function ChatScene({
     }),
   }, [hub, roster.page.items, client, status?.name, isProcessing, projectRoot]);
 
+  const answered = useMemo(() => answeredHelpers(messages, hub?.data.helpers ?? []), [messages, hub]);
+
   useEffect(() => {
     if (hubView !== 'agents') return;
     const identity = `${client.mode}:${client.agentName}`;
@@ -839,23 +866,23 @@ function ChatScene({
     return () => { live = false; };
   }, [client, hubView]);
 
-  const openSubagent = useCallback((entry: TuiAgentHubEntry) => {
-    const name = entry.path?.at(-1);
-
-    if (name !== undefined) setActiveSurface({ kind: 'subagent', name, label: entry.label });
+  const openSubagent = useCallback((entry: TuiHubRow) => {
+    if (entry.path === undefined) return;
+    setActiveSurface({ kind: 'subagent', path: entry.path, label: entry.label, actorId: entry.actorId ?? null });
   }, []);
 
   const subagentSurface = activeSurface?.kind === 'subagent' ? activeSurface : null;
 
   useEffect(() => {
     if (subagentSurface === null) return;
-    const { name, label } = subagentSurface;
+    const { path, label, actorId } = subagentSurface;
+    const name = path.join('/');
     let live = true;
     setSubagentChat({ name, label, messages: null, error: null });
 
     subagentTaskRef.current = (async () => {
       try {
-        const conversation = await readSubagentConversation(client, name);
+        const conversation = await readSubagentConversation(client, actorId === null ? { path: [...path] } : { path: [], actor: actorId });
 
         if (live) setSubagentChat({ name, label, messages: conversation, error: null });
       } catch (cause) {
@@ -1323,6 +1350,12 @@ function ChatScene({
       return;
     }
 
+    if (event.event.type === 'pending_actions_changed') {
+      noteParked();
+
+      return;
+    }
+
     if (event.event.type === 'plan_updated' && event.event.plan) {
       addMessage({ role: 'system', content: renderPlanReview(event.event.plan) });
 
@@ -1349,7 +1382,7 @@ function ChatScene({
 
     // The settle/error line is the takes affordance; running state lives in the status bar.
     if (branchStatus.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(branchStatus) });
-  }, [addMessage, sealSegment, setBranchTasks]);
+  }, [addMessage, noteParked, sealSegment, setBranchTasks]);
 
   const handleClientEvent = useCallback(async (event: AgentClientEvent) => {
     switch (event.type) {
@@ -1708,7 +1741,7 @@ function ChatScene({
     rememberScroll: scrollAnchor.remember,
     createNewAgent: onNewAgent === undefined ? undefined : createNewAgent,
     bumpModelRequest: () => { modelRequestRef.current += 1; },
-    hubAgents: hubLive?.agents ?? [],
+    hubAgents: hubLive === undefined ? [] : [...hubLive.agents, ...hubLive.work, ...answered],
     hubSelectedId: () => hubSelectedRef.current,
     setHubSelectedId,
     openSubagent,
@@ -1875,9 +1908,9 @@ function ChatScene({
     }
 
     if (subagentSurface !== null) {
-      const shown = subagentChat?.name === subagentSurface.name
+      const shown = subagentChat?.name === subagentSurface.path.join('/')
         ? subagentChat
-        : { name: subagentSurface.name, label: subagentSurface.label, messages: null, error: null };
+        : { name: subagentSurface.path.join('/'), label: subagentSurface.label, messages: null, error: null };
 
       return (
         <SubagentChatOverlay
@@ -1893,7 +1926,7 @@ function ChatScene({
       return (
         <HubOverlay
           view={hubView}
-          data={hubLive}
+          data={{ ...hubLive, answered }}
           width={sceneWidth}
           height={height}
           selectedAgentId={hubSelectedId}
@@ -2190,21 +2223,26 @@ async function loadHubData(client: AgentClient): Promise<TuiHubData> {
   };
 }
 
-async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError'>> {
-  try {
-    return { subordinates: await readSubordinates(client) };
-  } catch (cause) {
-    return { subordinates: [], subordinatesError: `Subagents could not be read: ${renderThrownChain({ cause })}` };
-  }
+async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError' | 'work' | 'workError' | 'helpers'>> {
+  const [subordinates, work] = await Promise.allSettled([readSubordinates(client), client.workspaceWork()]);
+
+  return {
+    ...(subordinates.status === 'fulfilled'
+      ? subordinates.value
+      : { subordinates: [], helpers: [], subordinatesError: `Subagents could not be read: ${renderThrownChain({ cause: subordinates.reason })}` }),
+    ...(work.status === 'fulfilled'
+      ? { work: workFromWorkspace(work.value) }
+      : { work: [], workError: `Work could not be read: ${renderThrownChain({ cause: work.reason })}` }),
+  };
 }
 
 /** Pages arrive newest first. */
-async function readSubagentConversation(client: AgentClient, name: string): Promise<DisplayMessage[]> {
+async function readSubagentConversation(client: AgentClient, target: { path: string[]; actor?: string }): Promise<DisplayMessage[]> {
   const pages: DisplayMessage[][] = [];
   let cursor: SeekCursor | undefined;
 
   do {
-    const result = await client.inspectSubordinate({ path: [name], view: 'history', page: cursor === undefined ? {} : { cursor } });
+    const result = await client.inspectSubordinate({ ...target, view: 'history', page: cursor === undefined ? {} : { cursor } });
 
     if (result.view === 'missing') throw new Error(result.error);
 
@@ -2216,8 +2254,8 @@ async function readSubagentConversation(client: AgentClient, name: string): Prom
   return pages.flat();
 }
 
-async function readSubordinates(client: AgentClient): Promise<TuiSubordinate[]> {
-  const entries: SubordinateRosterEntry[] = [];
+async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'helpers'>> {
+  const entries: SubordinateChild[] = [];
   let cursor: SeekCursor | undefined;
 
   do {
@@ -2228,7 +2266,11 @@ async function readSubordinates(client: AgentClient): Promise<TuiSubordinate[]> 
     cursor = result.page.status === 'more' ? result.page.next : undefined;
   } while (cursor !== undefined);
 
-  return subordinatesFromRoster(entries);
+  const helpers = entries.flatMap((entry) => entry.lifetime === 'task' && entry.actorReference !== null
+    ? [{ name: entry.name, actorId: entry.actorReference.actorId }]
+    : []);
+
+  return { subordinates: subordinatesFromRoster(entries), helpers };
 }
 
 

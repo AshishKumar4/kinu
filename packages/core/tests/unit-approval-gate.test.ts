@@ -330,7 +330,7 @@ function harness(executor: GatedExecutor, policy: ShellApprovalPolicy) {
 
       return `ran:${cmd}`;
     },
-    (message) => `blocked:${message}`,
+    (message) => `blocked:${message.message}`,
     executor,
     { policy },
   );

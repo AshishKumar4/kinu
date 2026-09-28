@@ -60,7 +60,7 @@ export {
 
 export {
   DeviceTunnel, type TunnelSocket,
-  TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
+  TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError, DEVICE_UNRESPONSIVE,
   WORKSPACE_HAS_NO_OWNER, isWorkspaceUnattachedError,
   SEVERAL_DEVICES_CONNECTED, isDeviceAmbiguityError,
   SANDBOX_UNAVAILABLE, isSandboxUnavailableError,
@@ -78,6 +78,10 @@ export {
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   type DeviceSocket, type DeviceSocketCtx,
 } from './device-hub';
+
+export {
+  DEVICE_RELAY, EGRESS_ROUTE_HEADER, type DeviceRelayRequest,
+} from './device-relay';
 
 export {
   DeviceRequestLedger, initDeviceInflightTable,
@@ -101,7 +105,7 @@ export {
 } from './nimbus';
 
 export {
-  createParentExecutor, createParentWorkspaceVfs,
+  answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentExecResult,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './parent';

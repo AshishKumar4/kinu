@@ -1,8 +1,11 @@
 /** `/agent`: the agent's memory, SOUL.md and scaffold, read-only, where the file plane is a directory. */
 
+import { Effect } from 'effect';
 import type { VFS } from '../types/primitives';
 import type { VfsMount } from './mounts';
-import { makeVfsError } from './errno';
+import { isVfsError, makeVfsError, type VfsError } from './errno';
+import { settle } from '../obs/effect';
+import { toKinuError, type KinuError } from '../obs/error';
 import { MEMORY_PATH } from '../memory/note';
 import { SOUL_PATH } from '../identity/soul';
 
@@ -23,20 +26,28 @@ export function agentViewMount(state: VFS, scaffoldDir: string): VfsMount {
     return root === undefined || rest.length === 0 ? root : `${root}/${rest.join('/')}`;
   };
 
-  const shown = (path: string): string | null => {
+  const shown = (path: string): Effect.Effect<string | null, VfsError> => {
     const source = sourceOf(path);
 
-    if (source === undefined) throw makeVfsError('ENOENT', `no such file or directory, '${AGENT_VIEW}${path}'`, `${AGENT_VIEW}${path}`);
-
-    return source;
+    return source === undefined
+      ? Effect.fail(makeVfsError('ENOENT', `no such file or directory, '${AGENT_VIEW}${path}'`, `${AGENT_VIEW}${path}`))
+      : Effect.succeed(source);
   };
 
-  const readOnly = (path: string) => makeVfsError(
+  /** The state plane's own failure, its VFS code kept. */
+  const fromState = <A>(doing: string, run: () => Promise<A>): Effect.Effect<A, KinuError | VfsError> => Effect.tryPromise({
+    try: run,
+    catch: (cause) => (isVfsError(cause)
+      ? makeVfsError(cause.code, cause.message.replace(`${cause.code}: `, ''), cause.path ?? '')
+      : toKinuError({ doing, cause, otherwise: 'io' })),
+  });
+
+  const readOnly = (path: string): Effect.Effect<never, VfsError> => Effect.fail(makeVfsError(
     'EROFS',
     `${AGENT_VIEW} is a read-only view: memory changes through the memory tool, SOUL.md through the owner, `
       + 'the scaffold through self-modification',
     `${AGENT_VIEW}${path}`,
-  );
+  ));
 
   const present = async (): Promise<string[]> => {
     const names: string[] = [];
@@ -47,18 +58,11 @@ export function agentViewMount(state: VFS, scaffoldDir: string): VfsMount {
   };
 
   const files: VFS = {
-    async readFile(path, opts) {
-      const source = shown(path);
-
-      if (source === null) throw makeVfsError('EISDIR', `illegal operation on a directory, read '${AGENT_VIEW}'`, AGENT_VIEW);
-
-      return state.readFile(source, opts);
-    },
-    async readdir(path) {
-      const source = shown(path);
-
-      return source === null ? present() : state.readdir(source);
-    },
+    readFile: (path, opts) => settle(Effect.flatMap(shown(path), (source) => (source === null
+      ? Effect.fail(makeVfsError('EISDIR', `illegal operation on a directory, read '${AGENT_VIEW}'`, AGENT_VIEW))
+      : fromState(`reading ${AGENT_VIEW}${path}`, () => state.readFile(source, opts))))),
+    readdir: (path) => settle(Effect.flatMap(shown(path), (source) =>
+      fromState(`listing ${AGENT_VIEW}${path}`, () => (source === null ? present() : state.readdir(source))))),
     async stat(path) {
       const source = sourceOf(path);
 
@@ -71,9 +75,9 @@ export function agentViewMount(state: VFS, scaffoldDir: string): VfsMount {
 
       return source !== undefined && (source === null || state.exists(source));
     },
-    async writeFile(path) { throw readOnly(path); },
-    async unlink(path) { throw readOnly(path); },
-    async mkdir(path) { throw readOnly(path); },
+    writeFile: (path) => settle(readOnly(path)),
+    unlink: (path) => settle(readOnly(path)),
+    mkdir: (path) => settle(readOnly(path)),
   };
 
   return { name: AGENT_VIEW.slice(1), files: () => files, absentReason: () => 'the agent view is always mounted', filesOwner: 'agent', readOnly: true };

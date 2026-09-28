@@ -16,7 +16,6 @@ export type ExperiencePayload =
       kind: 'craft';
       name: string;
       description: string;
-      params: Record<string, string> | null;
       code: string;
       score: number;
     }
@@ -70,7 +69,7 @@ function payloadText(payload: ExperiencePayload, factSeparator: string): string 
 export function describePayload(payload: ExperiencePayload, maxChars = 400): string {
   const text = payloadText(payload, ' = ');
 
-  return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+  return text.length > maxChars ? `${text.slice(0, maxChars)}...` : text;
 }
 
 /** Materialized into `search_text` so FTS5 ranks over the payload, not just the title. */
@@ -84,7 +83,6 @@ const ExperiencePayloadSchema: v.GenericSchema<ExperiencePayload> = v.variant('k
     kind: v.literal('craft'),
     name: v.string(),
     description: v.string(),
-    params: v.nullable(v.record(v.string(), v.string())),
     code: v.string(),
     score: v.number(),
   }),

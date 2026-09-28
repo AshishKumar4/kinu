@@ -631,7 +631,7 @@ describe('the pre-registered bar', () => {
     const accuracy = present(report.accuracy, 'the panel accuracy');
 
     expect(recall.met).toBe(false);
-    expect(recall.detail).toMatch(/recall ≥ 0\.\d\d, specificity ≥ 0\.\d\d/);
+    expect(recall.detail).toMatch(/recall >= 0\.\d\d, specificity >= 0\.\d\d/);
     // The bar reads the bound, not the point estimate.
     expect(accuracy.sensitivity.lo).toBeLessThan(accuracy.sensitivity.mean);
     expect(accuracy.sensitivity.mean).toBeGreaterThan(0.4);

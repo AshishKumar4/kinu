@@ -11,7 +11,7 @@ import { tolerate } from '../obs/index';
 function truncateSource(code: string): string {
   return code.length <= EVIDENCE_BUDGETS.assertionCode
     ? code
-    : `${code.slice(0, EVIDENCE_BUDGETS.assertionCode)}\n// [... ${code.length - EVIDENCE_BUDGETS.assertionCode} chars omitted — generalize what is shown]`;
+    : `${code.slice(0, EVIDENCE_BUDGETS.assertionCode)}\n// [... ${code.length - EVIDENCE_BUDGETS.assertionCode} chars omitted: generalize what is shown]`;
 }
 
 const CRAFTABLE_LANGUAGES: ReadonlySet<string> = new Set(['javascript', 'typescript']);

@@ -31,7 +31,8 @@ import { afterAll, describe, test } from 'vitest';
 import { resolve } from 'node:path';
 
 import { workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
-import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, type RunEvent } from '../../packages/core/src/index';
+import { type RunEvent } from '../../packages/core/src/index';
+import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER } from '../../packages/core/src/tui/index';
 import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';
 import { firstRunSpliceStep, firstRunTurnSettlement } from './turn-settlement';
 import {

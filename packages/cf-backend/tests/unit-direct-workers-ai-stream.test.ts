@@ -991,4 +991,14 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
     });
     expect(sent[2]).toEqual({ role: 'tool', tool_call_id: 'call-kinu-i-0', content: '999' });
   });
+
+  test('messages that are not a list of objects are refused before the binding is called', async () => {
+    const { fetch: direct, runs } = directFetch(() => ({ response: 'unreachable' }));
+
+    for (const messages of ['hello', [1], [{ role: 'user', content: PROMPT }, 'stray']]) {
+      await expect(direct(ENDPOINT, { method: 'POST', body: JSON.stringify({ model: MODEL, messages }) })).rejects.toMatchObject({ code: 'bad_input' });
+    }
+
+    expect(runs).toEqual([]);
+  });
 });

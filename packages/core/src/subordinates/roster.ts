@@ -16,6 +16,9 @@ import { ActorReferenceSchema, sameActorReference, type ActorReference } from '.
 import { SubordinateBirthSchema } from './birth';
 import { parseJsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
+import { EvolutionHelperStore, initEvolutionHelperTable } from '../identity/evolution-helpers';
+import type { AgentConfigStore } from '../config/store';
+import type { NameOrigin } from '../identity/naming';
 
 const ROSTER_COLUMNS =
   'actor_id, name, created_by, status, current_task, created_at, dismissed_at, lifetime, task_event_id, actor_reference, birth_request, delete_requested';
@@ -37,16 +40,12 @@ const ROSTER_RESTORE_CONFLICT = `
          task_event_id = excluded.task_event_id,
          actor_reference = excluded.actor_reference, birth_request = excluded.birth_request, delete_requested = excluded.delete_requested`;
 
-/** Roster columns nothing else can derive: `lifetime` (whether an answer releases the row)
- *  and `task_event_id` (the EventLog id the report cites, as in `SubordinateHandoff.eventId`). */
-
-/** Lifecycle and task facts only; title and role live in the child's actor_config. */
 export const SubordinateRosterEntrySchema = v.object({
   name: v.string(),
   actorReference: v.nullable(ActorReferenceSchema),
   birth: v.nullable(SubordinateBirthSchema),
   deleteRequested: v.boolean(),
-  createdBy: v.picklist(['orchestrator', 'user']),
+  createdBy: v.picklist(['orchestrator', 'user', 'evolution']),
   status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
   currentTask: v.nullable(v.string()),
   createdAt: v.number(),
@@ -73,12 +72,29 @@ function parseStoredRosterRow(row: SqlExecRow): SubordinateRosterEntry {
   }
 }
 
-/** Where a row lands on its child's own word: an answer idles it, a block waits
- *  on the operator, and anything else keeps the open assignment it still has. */
-function reportedRosterStatus(status: SubordinateReportStatus, currentTask: string | null): SubordinateStatus {
-  if (status === 'completed') return 'idle';
+export interface SubordinateTitle {
+  readonly displayName: string;
+  readonly nameOrigin: NameOrigin;
+  readonly role: string;
+}
 
+export function subordinateTitle(entry: SubordinateRosterEntry, config: AgentConfigStore | null): SubordinateTitle {
+  if (config !== null) {
+    return { displayName: config.getDisplayName() ?? entry.name, nameOrigin: config.getNameOrigin() ?? 'auto', role: config.getRoleSelection() };
+  }
+
+  const seed = entry.birth?.seed;
+
+  if (seed === undefined) throw new KinuError('io', `Subordinate "${entry.name}" has neither an actor nor a birth.`);
+
+  return { displayName: seed.displayName, nameOrigin: seed.nameOrigin, role: seed.role };
+}
+
+/** Only a mid-turn note on an open assignment keeps a row working; a turn's end idles it. */
+function reportedRosterStatus(status: SubordinateReportStatus, origin: SubordinateReportOrigin, currentTask: string | null): SubordinateStatus {
   if (status === 'blocked') return 'awaiting_input';
+
+  if (temporaryRunSettles({ status, origin })) return 'idle';
 
   return currentTask === null || currentTask === '' ? 'idle' : 'working';
 }
@@ -87,7 +103,7 @@ export function initSubordinateRosterTable(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS actor_subordinates (
     actor_id      TEXT NOT NULL,
     name          TEXT NOT NULL,
-    created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user')),
+    created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user','evolution')),
     status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
     current_task  TEXT,
     created_at    INTEGER NOT NULL,
@@ -100,15 +116,19 @@ export function initSubordinateRosterTable(sql: SqlExec): void {
   )`);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_actor_subordinates_order
     ON actor_subordinates(actor_id, created_at, name)`);
+  initEvolutionHelperTable(sql);
 }
 
 /** Parent-actor roster; owns all subordinate status policy. */
 export class SubordinateRosterStore {
   private readonly actorId: string;
 
+  readonly helpers: EvolutionHelperStore;
+
   /** Scoped to one parent actor: subordinate names are unique only per parent. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
+    this.helpers = new EvolutionHelperStore(sql, actor);
   }
 
   ensureSchema(): void {
@@ -207,6 +227,7 @@ export class SubordinateRosterStore {
     this.sql.exec(`DELETE FROM actor_subordinates WHERE actor_id = ? AND name = ?
       AND json_extract(actor_reference, '$.actorId') = ? AND json_extract(actor_reference, '$.workspaceId') = ?
       AND json_extract(actor_reference, '$.parentActorId') IS ?`, this.actorId, name, reference.actorId, reference.workspaceId, reference.parentActorId);
+    this.helpers.remove(name);
   }
 
   cancelBirth(name: string, creationId: string): void {
@@ -226,6 +247,7 @@ export class SubordinateRosterStore {
   remove(name: string): void {
     this.actor.assertCurrent();
     this.sql.exec(`DELETE FROM actor_subordinates WHERE actor_id = ? AND name = ?`, this.actorId, name);
+    this.helpers.remove(name);
   }
 
   get(name: string): SubordinateRosterEntry | null {
@@ -341,7 +363,7 @@ export class SubordinateRosterStore {
            current_task = CASE WHEN ? = 'completed' THEN NULL ELSE current_task END,
            task_event_id = CASE WHEN ? = 'completed' THEN NULL ELSE task_event_id END
        WHERE actor_id = ? AND name = ?`,
-      reportedRosterStatus(status, entry.currentTask),
+      reportedRosterStatus(status, origin, entry.currentTask),
       status,
       status,
       this.actorId,

@@ -9,7 +9,6 @@ import { BUILTIN_TOOLS } from '../tools/registry';
 import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
 import type { CraftStore } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
-import type { CraftedTool } from '../types/craft';
 import type { ReasoningEffort } from '../providers/effort';
 import { transcriptRole } from '../utils/ui-message';
 import type { ChatHistoryEntry } from '../types/chat';
@@ -37,7 +36,6 @@ export interface AgentStatus {
 export interface ToolListEntry {
   name: string;
   description: string;
-  scope: CraftedTool['scope'];
   qualityScore: number;
   usageCount: number;
 }
@@ -100,8 +98,10 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
 export async function getChatHistoryPage(
   transcript: SessionTranscriptReader,
   request: PageRequest = {},
-): Promise<Page<ChatHistoryEntry>> {
-  return mapPage(await transcript.page(request), rows => rows.flatMap(row => {
+): Promise<ChatHistoryPage> {
+  const page = await transcript.page(request);
+
+  return { ...mapPage(page, rows => rows.flatMap(row => {
     const role = normalizeUiRole(row.role);
 
     if (!role) return [];
@@ -116,8 +116,10 @@ export async function getChatHistoryPage(
     if (row.unavailable === true) entry.unavailable = true;
 
     return [entry];
-  }).reverse());
+  }).reverse()), walked: page.walked };
 }
+
+export type ChatHistoryPage = Page<ChatHistoryEntry> & { readonly walked: number };
 
 export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
   const crafted = craftStore.list().map((t) => {
@@ -125,7 +127,7 @@ export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
       SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
 
     return {
-      name: t.name, description: t.description, scope: t.scope,
+      name: t.name, description: t.description,
       qualityScore: scoreRow[0]?.score ?? CRAFT_NEUTRAL_PRIOR,
       usageCount: scoreRow[0]?.uses ?? 0,
     };

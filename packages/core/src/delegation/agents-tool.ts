@@ -101,7 +101,8 @@ export interface SubordinateRosterEntry {
   actorReference: ActorReference | null;
   birth: SubordinateBirth | null;
   deleteRequested: boolean;
-  createdBy: 'orchestrator' | 'user';
+  /** `evolution`: an evolution lane's helper. */
+  createdBy: 'orchestrator' | 'user' | 'evolution';
   status: SubordinateStatus;
   currentTask: string | null;
   createdAt: number;
@@ -719,7 +720,7 @@ function fieldNames(value: JsonValue): readonly string[] {
   return parsed.success ? Object.keys(parsed.output) : [];
 }
 
-const FIELD_RULE = 'A field the called action cannot act on is refused rather than dropped — a cap'
+const FIELD_RULE = 'A field the called action cannot act on is refused rather than dropped: a cap'
   + ' that never reached the run is a cap that was never applied.';
 
 function takesSentence(action: AgentsToolAction): string {
@@ -752,7 +753,7 @@ function agentsFieldRefusal(call: { input: unknown }): string | undefined {
     if (Object.hasOwn(AgentsInputEntries, field)) {
       if (action && !actionReads(action, field)) {
         const readers = AGENTS_TOOL_ACTIONS.filter((other) => actionReads(other, field));
-        problems.push(`field "${field}" does not apply to action "${action}" — it is read by`
+        problems.push(`field "${field}" does not apply to action "${action}": it is read by`
           + ` ${readers.join('/')}, and ${action} would ignore it.`);
         listFields = true;
       }
@@ -763,13 +764,13 @@ function agentsFieldRefusal(call: { input: unknown }): string | undefined {
     const meant = nearestField(field, action ? fieldsOf(action) : AGENTS_INPUT_FIELDS);
 
     if (meant) {
-      problems.push(`unknown field "${field}" — did you mean "${meant}"?`);
+      problems.push(`unknown field "${field}": did you mean "${meant}"?`);
       continue;
     }
 
     const elsewhere = action ? nearestField(field, AGENTS_INPUT_FIELDS) : undefined;
     problems.push(elsewhere
-      ? `unknown field "${field}" — "${elsewhere}" is read by`
+      ? `unknown field "${field}": "${elsewhere}" is read by`
         + ` ${AGENTS_TOOL_ACTIONS.filter((other) => actionReads(other, elsewhere)).join('/')},`
         + ` not ${action ?? 'this action'}.`
       : `unknown field "${field}".`);
@@ -793,14 +794,10 @@ export function parseAgentsToolInput(call: { input: unknown }): AgentsToolInput 
 
 type StoredAgentsRow = v.InferOutput<typeof StoredAgentsInputSchema>;
 
-/** Fields a translated row must not carry: `preset` is fixed to `ideate`, and there is no `objective`. */
-const TRANSLATION_DECIDES = { preset: true, objective: true } satisfies Record<string, true>;
-
-function swarmFieldsOf(row: StoredAgentsRow, skip: Record<string, true>): Partial<AgentsToolInput> {
+function swarmFieldsOf(row: StoredAgentsRow): Partial<AgentsToolInput> {
   const carried: Partial<AgentsToolInput> = {};
 
   for (const field of AGENTS_ACTION_FIELDS.swarm) {
-    if (Object.hasOwn(skip, field)) continue;
     const value = row[field];
 
     if (value !== undefined) Object.assign(carried, { [field]: value });
@@ -809,30 +806,19 @@ function swarmFieldsOf(row: StoredAgentsRow, skip: Record<string, true>): Partia
   return carried;
 }
 
-/** What the re-drive lost, named per field; `extra` covers the row's settlement, which a swarm cannot carry. */
-function recordDroppedFields(
-  kind: string,
-  input: JsonValue,
-  resumed: AgentsToolInput,
-  extra: readonly string[],
-): void {
+/** What the re-drive lost, named per field. */
+function recordDroppedFields(kind: string, input: JsonValue, resumed: AgentsToolInput): void {
   const carried = new Set(Object.keys(resumed));
   const dropped = fieldNames(input).filter((field) => !carried.has(field));
 
-  if (dropped.length === 0 && extra.length === 0) return;
+  if (dropped.length === 0) return;
   diagnostics.event('agents.resume.fields_dropped', {
     kind,
-    fields: [...dropped, ...extra].join(','),
-    count: dropped.length + extra.length,
+    fields: dropped.join(','),
+    count: dropped.length,
   });
 }
 
-/**
- * Background-job resume filter and detach gate (orchestrator/background-tools.ts): a call that cannot be
- * re-driven must never be detached. Returns the input to re-execute, or null.
- * Stored rows are translated, not validated: `action:'fork'` re-drives as `preset:'ideate'`, `settle` is
- * reported as unsupported, and `config.context:'fork'` becomes `inherit`; each loss is logged.
- */
 /** Rewrite a stored row's retired `config.context` value; runs before the replay parse. */
 const StoredSwarmContextSchema = v.looseObject({
   config: v.optional(v.looseObject({ context: v.optional(v.string()) })),
@@ -846,6 +832,11 @@ function translateStoredSwarmContext(row: StoredSwarmContext): StoredSwarmContex
   return { ...row, config: { ...row.config, context: 'inherit' } };
 }
 
+/**
+ * Background-job resume filter and detach gate (orchestrator/background-tools.ts): a call that cannot be
+ * re-driven must never be detached. Returns the input to re-execute, or null.
+ * Only a swarm row resumes; `config.context:'fork'` becomes `inherit`, and each dropped field is logged.
+ */
 export function resumableAgentsInput(kind: string, input: JsonValue): AgentsToolInput | null {
   if (kind !== 'agents') return null;
   const rewritten = v.safeParse(StoredSwarmContextSchema, input);
@@ -854,17 +845,9 @@ export function resumableAgentsInput(kind: string, input: JsonValue): AgentsTool
   if (!parsed.success) return null;
   const row = parsed.output;
 
-  if (row.action === 'fork') {
-    if (row.task === undefined) return null;
-    const resumed: AgentsToolInput = { ...swarmFieldsOf(row, TRANSLATION_DECIDES), action: 'swarm', preset: 'ideate', task: row.task };
-    recordDroppedFields(kind, input, resumed, ['settlement']);
-
-    return resumed;
-  }
-
   if (row.action !== 'swarm') return null;
-  const resumed: AgentsToolInput = { action: 'swarm', ...swarmFieldsOf(row, {}) };
-  recordDroppedFields(kind, input, resumed, []);
+  const resumed: AgentsToolInput = { action: 'swarm', ...swarmFieldsOf(row) };
+  recordDroppedFields(kind, input, resumed);
 
   return resumed;
 }
@@ -921,7 +904,7 @@ function resolveDelegatedProfile(
   const callerRole = roles[ctx.roleId];
 
   if (!callerRole) {
-    return { error: `unknown active role ${JSON.stringify(ctx.roleId)} — it is not in this `
+    return { error: `unknown active role ${JSON.stringify(ctx.roleId)}: it is not in this `
       + 'account\'s catalog; ask the owner to fix the catalog or pick an explicit role.' };
   }
 
@@ -931,7 +914,7 @@ function resolveDelegatedProfile(
   if (role !== undefined && role !== ctx.roleId
     && spawns !== undefined && spawns !== '*'
     && !spawns.includes(role)) {
-    return { error: `role ${JSON.stringify(role)} is not one your role may delegate to — `
+    return { error: `role ${JSON.stringify(role)} is not one your role may delegate to: `
       + `allowed: ${spawns.length > 0 ? spawns.join(', ') : '(none)'}.` };
   }
 
@@ -987,11 +970,11 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
   const redrive = readResumeRedrive({ toolOptions });
 
   if (!redrive && !input.preset && !deps.profile) {
-    return badInput(`swarm needs \`preset\` — the shape of the search${deps.profile ? '' : ' (no role catalog is wired here to take its default from)'}. ${SWARM_PRESET_DOCTRINE.join(' ')}`);
+    return badInput(`swarm needs \`preset\`: the shape of the search${deps.profile ? '' : ' (no role catalog is wired here to take its default from)'}. ${SWARM_PRESET_DOCTRINE.join(' ')}`);
   }
 
   if (!input.task) {
-    return badInput('swarm needs `task` — what the search is for, in prose. The measured '
+    return badInput('swarm needs `task`: what the search is for, in prose. The measured '
       + 'quantity goes in `objective`, never here.');
   }
 
@@ -1012,7 +995,7 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
       if ('error' in resolution) return badInput(resolution.error);
       delegated = resolution;
     } else if (input.role !== undefined || input.tier !== undefined) {
-      return badInput('role and tier need a profile catalog, which this actor does not have — '
+      return badInput('role and tier need a profile catalog, which this actor does not have: '
         + 'call again without them.');
     }
   }
@@ -1031,7 +1014,7 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
   // `tier` and `models` are exclusive routing inputs.
   if (input.models !== undefined && input.tier !== undefined) {
     return badInput('`models` routes each node to the model its slot is assigned, and `tier` '
-      + `resolves one model for the whole run — you named both (tier "${String(input.tier)}" and `
+      + `resolves one model for the whole run: you named both (tier "${String(input.tier)}" and `
       + `${String(input.models.length)} model spec(s)), and one of the two routing decisions would `
       + 'be ignored. Route through `tier` for one model across the search, or through `models` '
       + 'for per-node routing.');
@@ -1312,38 +1295,38 @@ function actionAdmission(actions: readonly AgentsToolInput['action'][], mode: Wo
 function assertHireVariant(input: AgentsToolInput): void {
   if (!input.role) {
     if (input.context !== undefined) {
-      return badInput('field "context" belongs to a hire that creates with `role` — an existing agent already has its conversation');
+      return badInput('field "context" belongs to a hire that creates with `role`: an existing agent already has its conversation');
     }
 
     if (input.mission !== undefined) {
-      return badInput('field "mission" is not available on a hire that names an existing agent — its brief is `message`');
+      return badInput('field "mission" is not available on a hire that names an existing agent: its brief is `message`');
     }
 
     if (input.tier !== undefined) {
-      return badInput('field "tier" is not available on a hire that names an existing agent — it already runs at its own tier');
+      return badInput('field "tier" is not available on a hire that names an existing agent: it already runs at its own tier');
     }
 
     if (input.lifetime !== undefined) {
-      return badInput('field "lifetime" is not available on a hire that names an existing agent — it already has one; `lifetime` belongs to a hire that creates with `role`');
+      return badInput('field "lifetime" is not available on a hire that names an existing agent: it already has one; `lifetime` belongs to a hire that creates with `role`');
     }
 
     return;
   }
 
   if (input.message !== undefined) {
-    return badInput('field "message" is not available for a hire that creates an agent — its brief is `mission`');
+    return badInput('field "message" is not available for a hire that creates an agent: its brief is `mission`');
   }
 
   if (input.deliverable !== undefined) {
-    return badInput('field "deliverable" is not available on a hire that creates an agent — say what the result should be in `mission`');
+    return badInput('field "deliverable" is not available on a hire that creates an agent: say what the result should be in `mission`');
   }
 
   if (input.topic !== undefined) {
-    return badInput('field "topic" is not available on a hire that creates an agent — it labels a message to an agent that already exists');
+    return badInput('field "topic" is not available on a hire that creates an agent: it labels a message to an agent that already exists');
   }
 
   if (input.lifetime === 'task' && input.tier !== undefined) {
-    return badInput('field "tier" is not available on a lifetime:"task" hire — it runs at its role\'s tier; omit it, or hire `durable` for an override');
+    return badInput('field "tier" is not available on a lifetime:"task" hire: it runs at its role\'s tier; omit it, or hire `durable` for an override');
   }
 }
 
@@ -1367,7 +1350,7 @@ async function hireWorkspace({ deps, input, mode, toolOptions, spawnDepthRefusal
 
   // Classified: a fresh workspace escapes the depth cap, so this refusal must land in `refused`.
   if (!peers) {
-    throw new KinuError('denied', 'hire scope=workspace creates a whole workspace, which only the workspace orchestrator may do — '
+    throw new KinuError('denied', 'hire scope=workspace creates a whole workspace, which only the workspace orchestrator may do: '
       + 'hire a subordinate here instead (omit scope), or run a search.');
   }
 
@@ -1414,14 +1397,14 @@ async function hireCreate({ deps, team, input, mode, lifetime, toolOptions }: Cr
 
   if (lifetime === 'task') {
     if (input.agent !== undefined) {
-      return badInput('field "agent" is not available on a lifetime:"task" hire — it is archived the '
+      return badInput('field "agent" is not available on a lifetime:"task" hire: it is archived the '
         + 'moment it answers, so a name you chose is never addressable. Omit it, or hire `durable`.');
     }
 
     const temporary = team.temporary;
 
     if (!temporary) {
-      throw new KinuError('denied', 'lifetime:"task" runs the agent to its single answer inside this call, which this actor has no substrate for — '
+      throw new KinuError('denied', 'lifetime:"task" runs the agent to its single answer inside this call, which this actor has no substrate for: '
         + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (action:"list" shows the roster).');
     }
 
@@ -1546,7 +1529,7 @@ async function runHireAction(
       );
     }
 
-    return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
+    return badInput(`unknown agent "${input.agent}": check the roster with action:"list"`);
   }
 
   // From here the hire creates, which spends a tree level.
@@ -1619,7 +1602,7 @@ export async function dispatchAgentsAction(
         if (input.agent && input.event_id) {
           return badInput(
             'msg takes ONE target: `agent` to name an agent, or `event_id` to answer the agent '
-            + 'message event you were given. Naming both leaves it undecided who this is for — '
+            + 'message event you were given. Naming both leaves it undecided who this is for: '
             + 'drop `event_id` to message the named agent, or drop `agent` to answer that event.',
           );
         }
@@ -1676,7 +1659,7 @@ export async function dispatchAgentsAction(
           );
         }
 
-        return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
+        return badInput(`unknown agent "${input.agent}": check the roster with action:"list"`);
       }
 
       case 'list': {
@@ -1694,7 +1677,7 @@ export async function dispatchAgentsAction(
 
         if (peerRoster) Object.assign(roster, { peers: peerRoster });
 
-        if (empty) Object.assign(roster, { note: 'No helper agents yet — create one with action:"hire".' });
+        if (empty) Object.assign(roster, { note: 'No helper agents yet: create one with action:"hire".' });
 
         return roster;
       }

@@ -521,7 +521,7 @@ let __result;
 try {
   const __isGen = run && run.constructor && run.constructor.name === 'AsyncGeneratorFunction';
   if (__isGen) {
-    // Generator form: async function* run(rt, task) — uses host.* + task.
+    // Generator form: async function* run(rt, task); uses host.* + task.
     const __gen = run(__task, __task);
     let __step = 0;
     for await (const __ev of __gen) {

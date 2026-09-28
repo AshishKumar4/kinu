@@ -305,7 +305,7 @@
       "file": "packages/core/src/evolution/calibration.ts",
       "kind": "hand-parser",
       "owner": "parseLabelingFile",
-      "sourceSha256": "212b87c7ef2fda72542c03cbbee5ab2759c4f8a760ab6f689365d1f4cb7f667d",
+      "sourceSha256": "93faff86b9210f06b65f4863242f8f71b0c256cf12455dbf1d4db0cfaed8e937",
       "decision": "framing"
     },
     {
@@ -719,6 +719,13 @@
       "kind": "hand-parser",
       "owner": "parseUpdateFrame",
       "sourceSha256": "6b399f6c554ffece81688b060cd2dbe7614bed81d84ca7b083482b1b46b29250",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/test-utils/src/git.ts",
+      "kind": "hand-parser",
+      "owner": "stripGitContext",
+      "sourceSha256": "d6851f7dfc16565fc73f328d7e663184ba9ccb5804d19b862cdc5db6b86c6376",
       "decision": "lexical"
     },
     {

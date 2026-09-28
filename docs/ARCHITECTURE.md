@@ -90,8 +90,8 @@ shared `AgentOrchestrator`, `ExtensionHost` plus compaction, prompt, model, and
 tool caches, and the ports `ChatSession` calls. A subclass supplies the abstract
 members (`getOwnerUserId`, `actorHandle`, `actorDirectory`, `actorKind`,
 `workspaceBox`, `actorToolDeps`, `engine`, `notifyOwner`,
-`delegationBudget`, `actorHost`, `actorDirectoryStore`, `explorationSeams`,
-`subordinateSeams`, `hostedChatWire`, `owedTerminalEffects`, `ownMission`,
+`delegationBudget`, `actorHost`, `actorDirectoryStore`, `hostedSeams`,
+`hostedChatWire`, `owedTerminalEffects`, `ownMission`,
 `persistAutoTitle`, `promptIdentity`, `transcriptFor`) and may override three
 hooks (`workspaceName`, `extraCodemodeProviders`, `isClientRpcMethodDenied`).
 One subclass exists: the orchestrator. Every other actor is a logical row the

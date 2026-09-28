@@ -20,7 +20,7 @@ import {
   MODEL_OPERATION_KINDS, MODEL_OPERATION_PHASES, MODEL_OPERATION_OUTCOMES,
   type AccountSpend, type ModelOperationSink, type SpendSource, type SpendTally,
 } from './model-call';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, toKinuError } from '../obs/index';
 import { ToolOutcomeSchema } from '../types/tool-outcome';
 import { turnAuthor } from '../utils/ui-message';
 import { CallAccountSchema, QuotaSnapshotSchema } from '../providers/quota';
@@ -76,7 +76,7 @@ export const RunEventSchema = v.variant('type', [
     reason: v.optional(v.string()), messages: v.optional(v.array(JsonValueSchema)),
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
     modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema),
-    account: v.optional(CallAccountSchema) }),
+    account: v.optional(CallAccountSchema), egress: v.optional(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('step_partial'), stepIndex: v.number(), text: v.string(),
     toolCalls: v.array(v.object({ toolCallId: v.string(), toolName: v.string(), args: JsonValueSchema,
       result: v.optional(v.string()), error: v.optional(v.string()) })) }),
@@ -239,6 +239,14 @@ export function initRunEventTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_run_ts ON run_events(actor_id, run_id, ts)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(actor_id, type, ts DESC)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_actor ON run_events(actor_id)`);
+  // One read per activation, however many turns finished.
+  execRaw(`CREATE TABLE IF NOT EXISTS open_turns (
+    actor_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    opened_at TEXT NOT NULL,
+    PRIMARY KEY (actor_id, run_id)
+  )`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_open_turns_opened ON open_turns(actor_id, opened_at DESC)`);
   // One row per actor: a person's newest words stay one read however much automation follows.
   execRaw(`CREATE TABLE IF NOT EXISTS operator_requests (
     actor_id TEXT PRIMARY KEY,
@@ -313,6 +321,12 @@ export class RunEventRecorder {
     this.persist(event);
 
     if (event.type === 'run_start') this.noteOperatorRequest(event);
+
+    if (event.type === 'run_start' && event.turn !== undefined) {
+      void this.sql`INSERT INTO open_turns (actor_id, run_id, opened_at) VALUES (${this.actorId}, ${runId}, ${event.timestamp})`;
+    }
+
+    if (event.type === 'run_end') void this.sql`DELETE FROM open_turns WHERE actor_id = ${this.actorId} AND run_id = ${runId}`;
 
     return {
       event,
@@ -604,8 +618,7 @@ export class RunEventRecorder {
     });
   }
 
-  /** The open turn (no `run_end`) with its completed steps and newest unfinished partial. Runs
-   *  without a turn identity are not turns and are not answered. */
+  /** The newest open turn with its completed steps and newest partial, found through `open_turns`. */
   openTurn(): {
     readonly runId: string;
     readonly turn: OpenTurnIdentity;
@@ -615,26 +628,22 @@ export class RunEventRecorder {
   } | null {
     this.actor.assertCurrent();
 
-    const rows = this.sql<{ run_id: string; payload: string }>`
+    const pointer = this.sql<{ run_id: string }>`
+      SELECT run_id FROM open_turns WHERE actor_id = ${this.actorId}
+      ORDER BY opened_at DESC, rowid DESC LIMIT 1`[0];
+
+    if (pointer === undefined) return null;
+
+    const row = this.sql<{ run_id: string; payload: string }>`
       SELECT run_id, payload FROM run_events
-      WHERE actor_id = ${this.actorId} AND type = ${'run_start' satisfies RunEventType}
-        AND run_id NOT IN (
-          SELECT run_id FROM run_events
-          WHERE actor_id = ${this.actorId} AND type = ${'run_end' satisfies RunEventType})
-      ORDER BY ts DESC, rowid DESC LIMIT 1`;
+      WHERE actor_id = ${this.actorId} AND run_id = ${pointer.run_id} AND type = ${'run_start' satisfies RunEventType}
+      ORDER BY event_index LIMIT 1`[0];
 
-    const row = rows[0];
-
-    if (row === undefined) return null;
-    // An unparseable start row propagates; a start row without a turn identity is a side lane,
-    // passed over (the wake reconcile seals it).
+    if (row === undefined) throw new KinuError('io', `run ${pointer.run_id} is recorded open with no start`);
+    // An unparseable start row propagates.
     const start = parseStoredRunEvent(row.payload);
 
-    if (start.type !== 'run_start' || start.turn === undefined) {
-      diagnostics.event('run.open_without_turn', { run: row.run_id });
-
-      return null;
-    }
+    if (start.type !== 'run_start' || start.turn === undefined) throw new KinuError('io', `run ${row.run_id} is recorded open without a turn`);
 
     const steps = this.transcript(row.run_id);
 

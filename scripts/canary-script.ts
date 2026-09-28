@@ -74,7 +74,9 @@ export function canaryScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   if (found === null) return null;
   const { who, load } = found;
-  const made = request.turn.length;
+  // Every call of the conversation, not the turn's: a background result that wakes the root arrives as a new
+  // ask, and counting only the turn restarts the script at its first call on every wake.
+  const made = request.calls.length;
 
   if (who !== 'root') {
     return made < load.helperSteps ? sleepStep(who, made, load.sleepSeconds) : { text: `${CANARY_PREFIX}_${who.toUpperCase()}_DONE` };

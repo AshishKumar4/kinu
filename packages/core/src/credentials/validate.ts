@@ -1,8 +1,9 @@
 // Rejects unknown shapes so a bad request can't write garbage into the credential store.
 import * as v from 'valibot';
-import { KinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settleSync } from '../obs/index';
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
-import { accountCredentialKey, MAIN_ACCOUNT, splitAccount } from './accounts';
+import { accountKey, MAIN_ACCOUNT, splitAccount } from './accounts';
 import type { Credential } from './store';
 
 const CredentialKindSchema = v.object({
@@ -30,57 +31,71 @@ const OpenAICompatCredentialSchema = v.object({
 });
 
 export function validateCredential(input: { value: unknown }): Credential {
-  // Not `v.parse`: its message quotes the received value, which is the secret.
-  const part = <const TSchema extends v.GenericSchema>(schema: TSchema): v.InferOutput<TSchema> => {
-    const parsed = v.safeParse(schema, input.value);
+  return settleSync(credentialOf(input));
+}
 
-    if (parsed.success) return parsed.output;
+/** Not `v.parse`: its message quotes the received value, which is the secret. */
+function part<const TSchema extends v.GenericSchema>(schema: TSchema, input: { value: unknown }): Effect.Effect<v.InferOutput<TSchema>, KinuError> {
+  const parsed = v.safeParse(schema, input.value);
 
-    throw new KinuError('bad_input', `not a credential: ${parsed.issues
-      .map((issue) => `${v.getDotPath(issue) ?? 'the value'} must be ${issue.expected ?? 'valid'}`)
-      .join('; ')}`);
-  };
+  if (parsed.success) return Effect.succeed(parsed.output);
 
-  const kind = part(CredentialKindSchema).kind;
+  return Effect.fail(new KinuError('bad_input', `not a credential: ${parsed.issues
+    .map((issue) => `${v.getDotPath(issue) ?? 'the value'} must be ${issue.expected ?? 'valid'}`)
+    .join('; ')}`));
+}
 
-  if (kind === 'bearer') return part(BearerCredentialSchema);
+function credentialOf(input: { value: unknown }): Effect.Effect<Credential, KinuError> {
+  return Effect.gen(function* () {
+    const kind = (yield* part(CredentialKindSchema, input)).kind;
 
-  if (kind === 'oauth') {
-    const parsed = part(OAuthCredentialSchema);
-    const credential: Credential = { kind: 'oauth', accessToken: parsed.accessToken };
+    if (kind === 'bearer') return yield* part(BearerCredentialSchema, input);
 
-    if (parsed.refreshToken) credential.refreshToken = parsed.refreshToken;
+    if (kind === 'oauth') {
+      const parsed = yield* part(OAuthCredentialSchema, input);
+      const credential: Credential = { kind: 'oauth', accessToken: parsed.accessToken };
 
-    if (parsed.expiresAt !== undefined) credential.expiresAt = parsed.expiresAt;
+      if (parsed.refreshToken) credential.refreshToken = parsed.refreshToken;
 
-    if (parsed.metadata !== undefined) credential.metadata = parsed.metadata;
+      if (parsed.expiresAt !== undefined) credential.expiresAt = parsed.expiresAt;
 
-    return credential;
-  }
+      if (parsed.metadata !== undefined) credential.metadata = parsed.metadata;
 
-  const parsed = part(OpenAICompatCredentialSchema);
+      return credential;
+    }
 
-  const extraHeaders = parsed.extraHeaders === undefined
-    ? undefined
-    : Object.fromEntries(Object.entries(parsed.extraHeaders).filter((entry): entry is [string, string] =>
-      v.is(v.string(), entry[1])));
+    const parsed = yield* part(OpenAICompatCredentialSchema, input);
 
-  return {
-    kind: 'openai-compat',
-    baseURL: parsed.baseURL,
-    apiKey: parsed.apiKey,
-    extraHeaders,
-  };
+    const extraHeaders = parsed.extraHeaders === undefined
+      ? undefined
+      : Object.fromEntries(Object.entries(parsed.extraHeaders).filter((entry): entry is [string, string] =>
+        v.is(v.string(), entry[1])));
+
+    return {
+      kind: 'openai-compat',
+      baseURL: parsed.baseURL,
+      apiKey: parsed.apiKey,
+      extraHeaders,
+    };
+  });
 }
 
 export function validateCredentialKey(key: string): void {
+  return settleSync(validKey(key));
+}
+
+function validKey(key: string): Effect.Effect<void, KinuError> {
   const { base, account } = splitAccount(key);
 
   if (!/^[a-zA-Z0-9._-]{1,128}$/.test(base)) {
-    throw new KinuError('bad_input', 'Invalid credential key. Use alphanumerics, dot, underscore and dash only (max 128 chars).');
+    return Effect.fail(new KinuError('bad_input', 'Invalid credential key. Use alphanumerics, dot, underscore and dash only (max 128 chars).'));
   }
 
-  if (account !== null && accountCredentialKey(base, account) !== key) {
-    throw new KinuError('bad_input', `Invalid credential key: the account named ${MAIN_ACCOUNT} is the bare key ${base}.`);
-  }
+  if (account === null) return Effect.void;
+
+  return Effect.flatMap(accountKey(base, account), (named) => (
+    named === key
+      ? Effect.void
+      : Effect.fail(new KinuError('bad_input', `Invalid credential key: the account named ${MAIN_ACCOUNT} is the bare key ${base}.`))
+  ));
 }

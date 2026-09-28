@@ -91,14 +91,14 @@ export function renderMergePrompt<I, E>(opts: {
     return out;
   };
 
-  return `You are merging two ${desc}s that complement each other — each one
+  return `You are merging two ${desc}s that complement each other: each one
 solves different inputs better. Synthesise a hybrid that keeps the specialties
 of both. Do not naively concatenate; produce a single coherent ${desc} that
 behaves like A on A's strengths and like B on B's strengths.
 
 Naive concatenation, and what to do instead:
   Bad: both sources pasted one after the other, or all of A wrapped in a branch on a condition neither parent has. Two artifacts in one file, the entry point defined twice, and neither parent's behaviour intact.
-  Good: ONE artifact carrying the specific mechanism behind each parent's wins — A's handling of the inputs A wins on, B's of B's — and a single definition of everything they both have.
+  Good: ONE artifact carrying the specific mechanism behind each parent's wins (A's handling of the inputs A wins on, B's of B's) and a single definition of everything they both have.
 
 Everything the two parents share structurally must survive intact: the entry point they export, the
 host API they call through, and the shape of what they return. A child that drops one of those is
@@ -119,7 +119,7 @@ ${lines('A', opts.pair.aDominates).join('\n')}
 
 ${lines('B', opts.pair.bDominates).join('\n')}
 
-Return ONLY the merged ${desc} source — no commentary, no markdown fences.`;
+Return ONLY the merged ${desc} source: no commentary, no markdown fences.`;
 }
 
 export async function proposeMerge<I, E>(opts: {

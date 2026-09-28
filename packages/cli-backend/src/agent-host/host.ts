@@ -11,7 +11,6 @@ import {
   EventLog,
   ReplyChannelStore,
   SubordinateRosterStore,
-  SubordinateIdentityStore,
   admitSubordinateTask,
   dismissOrphanedAssignments,
   drainAssignments,
@@ -39,6 +38,7 @@ import {
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
   facetHomeReleaser,
+  readMission,
   readSoul,
   recoverSubordinateLifecycles,
   SOUL_PATH,
@@ -82,7 +82,7 @@ import {
 } from '../runtime';
 import type { CLIOpenConfig } from '../open';
 import {
-  bindLocalActor, bindLocalActorReference, localActorDirectory, localActorMission, localActorOwner,
+  bindLocalActor, bindLocalActorReference, localActorDirectory,
   adoptLocalActorHandle, cancelLocalCreation, openLocalActor, recoverLocalActorRetirements, registerLocalActor,
   requireLocalActorWorkspace, type LocalActorBinding,
 } from '../actor-identity';
@@ -227,6 +227,8 @@ export class LocalAgentHost {
   private readonly opening = new Map<string, Promise<HostEntry>>();
   private readonly trees = new Map<string, HostTree>();
   private closed = false;
+  /** Passes a stored refiner answer started; close() joins them before ending the sessions they use. */
+  private readonly answerPasses = new Set<Promise<void>>();
 
   constructor(private readonly opts: LocalAgentHostOptions) {}
 
@@ -325,6 +327,7 @@ export class LocalAgentHost {
     if (this.closed) return;
     this.closed = true;
     const openings = await Promise.allSettled(this.opening.values());
+    await Promise.all(this.answerPasses);
 
     for (const opening of openings) {
       if (opening.status === 'rejected') {
@@ -572,7 +575,10 @@ export class LocalAgentHost {
     ws: LocalHostedAgent,
     record: WorkspaceActor,
   ): Promise<void> {
-    const agentName = record.kind === 'head'
+    // A toolless run actor has no home to release.
+    if (record.toolProfile === 'toolless') return;
+
+    const agentName = record.kind === 'run'
       ? headAgentName(record.storageKey)
       : subordinateAgentName(record.storageKey);
 
@@ -1049,6 +1055,7 @@ export class LocalAgentHost {
         ));
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
+      onEvolutionAnswer: () => this.answerWake(parent),
       // A temporary child's answer goes to the waiting `agents.ask` port, never as an event waking this parent.
       temporary: parent.temporary,
     }, {
@@ -1098,7 +1105,7 @@ export class LocalAgentHost {
       now: () => Date.now(),
       inheritedContext: (): Promise<SerializedMessage[]> => inheritedContextFromTranscript(parent.actor.session.canonical.transcript(parent.sessionId)),
       originContext: async () => parent.actor.session.history,
-      ownMission: () => localActorMission(parent.ws.rt, makeSqlExec(parent.tree.db)) ?? '',
+      ownMission: () => readMission(makeSql(parent.tree.db)) ?? '',
       createName: mintSubordinateName,
       broadcast: (event) => parent.session.host.broadcast(event),
       broadcastTask: (event) => parent.session.host.broadcast(metadataBroadcastEvent(
@@ -1246,22 +1253,12 @@ export class LocalAgentHost {
     }
 
     const tree = parent.tree;
-    const exec = makeSqlExec(tree.db);
     const sql = makeSql(tree.db);
-    const owner = localActorOwner(parent.ws.rt.actor);
-    const depth = delegationBudgetOf((actorId) => tree.host.describe(actorId), parent.actor.record).depth + 1;
 
     try {
       tree.db.transaction(() => {
         // The child's own handle; stores below are scoped to it, so one database holds N descriptors.
         const actor = bindLocalActor(sql, binding);
-        const subordinateIdentity = new SubordinateIdentityStore(exec, actor);
-        subordinateIdentity.ensureSchema();
-        subordinateIdentity.seed({
-          name: input.name, mission: input.mission,
-          ownerUserId: owner.ownerUserId, parentWorkspace: owner.workspaceName,
-          depth, lifetime: input.lifetime,
-        });
         actor.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
         actor.config.setRoleSelection(input.role);
         actor.config.setAssignedTier(input.tier ?? null);
@@ -1461,20 +1458,32 @@ export class LocalAgentHost {
     if (this.closed) return;
     queueMicrotask(async () => {
       if (this.closed) return;
-
-      try {
-        await this.drive(entry, async () => {
-          await entry.session.flushPendingDrains();
-          await this.drainAssignedWork(entry);
-        });
-      } catch (cause) {
-        diagnostics.failure(
-          'host.event_drain_failed',
-          toKinuError({ doing: 'draining hosted local events', cause, otherwise: 'io' }),
-          { agent: entry.key, source },
-        );
-      }
+      await this.drain(entry, source);
     });
+  }
+
+  private answerWake(entry: HostEntry): void {
+    if (this.closed) return;
+    const pass = this.drain(entry, 'refiner answer').then(() => { this.answerPasses.delete(pass); });
+
+    this.answerPasses.add(pass);
+  }
+
+  private async drain(entry: HostEntry, source: string): Promise<void> {
+    try {
+      // A pass another process holds is reported by `drive`; its own pass drains and routes the same work.
+      await this.drive(entry, async () => {
+        await entry.session.flushPendingDrains();
+        await this.drainAssignedWork(entry);
+        await entry.session.runEvolutionAnswer(Date.now());
+      });
+    } catch (cause) {
+      diagnostics.failure(
+        'host.event_drain_failed',
+        toKinuError({ doing: 'draining hosted local events', cause, otherwise: 'io' }),
+        { agent: entry.key, source },
+      );
+    }
   }
 }
 

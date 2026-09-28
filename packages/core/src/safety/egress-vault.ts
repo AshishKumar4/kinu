@@ -112,12 +112,12 @@ export async function putEgressSecret(
   input: PutEgressSecretInput,
 ): Promise<EgressSecretBinding> {
   if (!BINDING_ID_RE.test(input.id)) {
-    throw new Error(`Invalid egress secret id "${input.id}" — letters, digits, dot, dash, underscore, up to 128.`);
+    throw new Error(`Invalid egress secret id "${input.id}": letters, digits, dot, dash, underscore, up to 128.`);
   }
 
   if (!HOST_PATTERN_RE.test(input.host)) {
     throw new Error(
-      `Invalid egress host "${input.host}" — a hostname or a * glob, with no scheme, port, path or space.`,
+      `Invalid egress host "${input.host}": a hostname or a * glob, with no scheme, port, path or space.`,
     );
   }
 
@@ -128,7 +128,7 @@ export async function putEgressSecret(
   }
 
   if (input.label.length === 0 || input.label.length > 200) {
-    throw new Error('An egress secret needs a label of 1–200 characters.');
+    throw new Error('An egress secret needs a label of 1-200 characters.');
   }
 
   const existing = readOne(PlaceholderRow, deps.sql, `SELECT placeholder FROM user_egress_secrets WHERE id = ?`, input.id);

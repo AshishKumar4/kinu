@@ -277,7 +277,6 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
       branches,
       floor: measured?.floor ?? null,
       // Null, not zero: no cost model reaches this runner.
-      costUsd: null,
       costTokens: spentBy.get(candidate.id) ?? null,
       at: Date.now(),
     };

@@ -13,15 +13,15 @@ import { createWorkersAIProvider } from '@kinu.run/core';
 import { createMyGatewayProvider } from '@kinu.run/core';
 import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from '@kinu.run/core';
 import type { CredentialSummary } from '../user/user-do';
-import type { UserCaller } from '@kinu.run/core';
+import type { ActorReference, UserCaller } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
-import { codexEgressFetch, type CodexEgressNamespace } from '../egress/codex-egress-route';
+import { codexEgressFetch, codexRouteFetch, type CodexEgressNamespace, type CodexRelayHub } from '../egress/codex-egress-route';
 
 /**
  * Credential DO stub paired with the capability this context presents (owner, or workspace token resolved per call),
  * so no context holds the stub without saying who it is.
  */
-export interface UserCredentialClient {
+export interface UserCredentialClient extends CodexRelayHub {
   getAuthHeaders(
     caller: UserCaller,
     key: string,
@@ -55,6 +55,7 @@ export interface AgentProviderDeps {
   appTitle?: string;
   sessionAffinity?: string;
   accountFor?: (providerId: string) => string | undefined;
+  currentTurn?: (actor: ActorReference) => string | null;
 }
 
 export interface AgentProviderRegistry {
@@ -75,8 +76,7 @@ export function createUserDOAuthResolver(source: UserCredentialSource | null): A
     if (!source) return null;
     const caller = await resolveCaller(source);
 
-    // Auth resolves before every provider request, so these cross-DO reads are on every step's critical path; both are
-    // retry-safe reads (the conditional OAuth refresh persists before returning).
+    // Both reads are retry-safe: the conditional OAuth refresh persists before returning.
     const headers = await retryTransientDO('credential auth',
       () => source.stub.getAuthHeaders(caller, key, opts));
 
@@ -102,9 +102,18 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
 
-  const codexEgress = opts.env.CodexEgress !== undefined && opts.ownerUserId
+  const source = opts.userDO ?? null;
+
+  const container = opts.env.CodexEgress !== undefined && opts.ownerUserId
     ? codexEgressFetch(opts.env.CodexEgress, opts.ownerUserId)
     : undefined;
+
+  const codexEgress = source === null
+    ? container
+    : codexRouteFetch({
+      container: container ?? opts.fetch ?? fetch, hub: source.stub, caller: () => resolveCaller(source),
+      ...(opts.currentTurn !== undefined && { currentTurn: opts.currentTurn }),
+    });
 
   registry.register(createCodexProvider(codexEgress === undefined ? {} : { egress: codexEgress }));
   registry.register(createClaudeProvider());
@@ -116,8 +125,6 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   registry.register(createOpenAICompatProvider());
   // `cloudflare-workers-ai` aliases the bespoke workers-ai provider; excluded so it has one resolution path.
   registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
-
-  const source = opts.userDO ?? null;
   const getAuth = createUserDOAuthResolver(source);
 
   const credentialKeys = async (): Promise<string[]> => {
@@ -150,7 +157,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     if (!('reason' in platform)) return AI_GATEWAY_PROVIDER_ID;
     throw new Error(
       'No default provider available (need a UserDO credential stub for workers-ai, '
-      + `or a usable platform gateway — ${platform.reason})`,
+      + `or a usable platform gateway: ${platform.reason})`,
     );
   }
 

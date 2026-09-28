@@ -27,6 +27,7 @@ import type { MissionGovernor } from './mission-budget';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
+import type { LostToolCall } from './tools/effect-claim';
 import { contextWindowForModel, type ResolvedModelWindow } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
@@ -40,6 +41,7 @@ import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } f
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES, RATE_LIMIT_HANDOVER_HEADER } from './providers/rate-limit-retry';
 import { callAccountOf, type CallAccount } from './providers/quota';
+import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
 import { classifyErrorCode, diagnostics, renderThrownChain, toKinuError, type TracedInvocation } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
@@ -69,6 +71,7 @@ export type ChatEvent =
      *  (providers/cache-warming.ts). */
     request?: { body?: unknown; sentAt?: number };
     account?: CallAccount;
+    egress?: string;
     /** The request this step sent, taken when the SDK finished it and before the next, so a lagging reader still
      *  records each step's own request. */
     context?: ContextComposition;
@@ -108,6 +111,7 @@ export interface ChatOptions {
   fallbacks?: readonly ChatFallback[];
   system: string;
   history: ModelMessage[];
+  lostToolCall?: (call: { readonly toolCallId: string; readonly toolName: string }) => LostToolCall | null;
   /** Re-read and re-woven at every step, never at turn assembly, so a compaction plugin never sees or persists it. */
   dynamicContext?: StepDynamicContext;
   /** Measure each request, delivered as its `step-finish` event's `context`. */
@@ -338,15 +342,20 @@ class ProviderCall {
     for (const part of step.content) if (part.type === 'tool-call') this.dispatchedCalls.delete(part.toolCallId);
     const usage = normalizeUsage(step.usage);
     const account = callAccountOf(step.response);
+    const egress = step.response.headers?.[EGRESS_ROUTE_HEADER];
     const { modelId } = step.response;
+    const { body } = step.request;
+    // The SDK keeps each step record.
+    Reflect.deleteProperty(step.request, 'body');
 
     this.pendingStepEvents.push({
       stepIndex, responseMessages: this.responseSoFar,
       finishReason: step.finishReason, text: step.text,
       toolCalls: step.toolCalls.map((call) => ({ toolName: call.toolName })), toolResults: step.toolResults,
-      request: { body: step.request.body, sentAt: this.stepSentAt },
+      request: { body, sentAt: this.stepSentAt },
       ...(usageReported(usage) && { usage }),
       ...(account !== undefined && { account }),
+      ...(egress !== undefined && { egress }),
       ...(context && { context }),
       ...(this.fallback !== undefined && { fallback: this.fallback }),
       ...(modelId !== '' && { modelId }),
@@ -578,6 +587,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     providerReportedTokens: opts.providerReportedTokens,
     trigger: opts.transformTrigger ?? 'auto',
     abortSignal: opts.signal,
+    lostToolCall: opts.lostToolCall,
   };
 
   const primary = {
@@ -813,7 +823,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     const failure = call.failure(current.provider);
     const produced = call.produced();
-    const paired = settleUnpairedToolCalls(produced) ?? produced;
+    const paired = settleUnpairedToolCalls(produced, opts.lostToolCall) ?? produced;
 
     if (failure !== null) {
       operation.failed({ cause: failure.cause });

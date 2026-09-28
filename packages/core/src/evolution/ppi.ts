@@ -50,15 +50,15 @@ export interface CalibrationGap {
 export function describeCalibrationGap(gap: CalibrationGap): string {
   switch (gap.kind) {
     case 'no_population':
-      return 'no classifier-graded turns in this slice — there is no rate to correct';
+      return 'no classifier-graded turns in this slice: there is no rate to correct';
     case 'no_labels':
-      return 'uncalibrated — no hand-labeled turns yet';
+      return 'uncalibrated: no hand-labeled turns yet';
     case 'unlabeled_strata':
-      return 'uncalibrated — no hand-labeled turn the classifier called ' +
+      return 'uncalibrated: no hand-labeled turn the classifier called ' +
         `${gap.strata.map((s) => `"${s}"`).join(' or ')}, so those rows cannot be corrected`;
     case 'uninformative_classifier':
       return 'the labels do not establish the classifier beats chance (sensitivity + specificity is not ' +
-        'measurably above 1) — nothing it reports can be corrected into a rate';
+        'measurably above 1): nothing it reports can be corrected into a rate';
   }
 }
 
