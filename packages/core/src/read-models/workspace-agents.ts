@@ -8,7 +8,7 @@ import { ownerFacingSubordinate } from '../protocol';
 import { codenameFor } from '../identity/naming';
 import type { SubordinateRosterEntry } from '../delegation/agents-tool';
 import { headStatusUnsettled } from '../heads/types';
-import { readExplorationCanvas } from './exploration-canvas';
+import { HeadJournal } from '../heads/journal';
 import { actorReadHandle } from './workspace-work';
 
 export type AgentCategory = 'main' | 'user' | 'hired' | 'swarm' | 'background';
@@ -58,13 +58,7 @@ function headActivity(status: string, runRunning: boolean): AgentActivity {
   return status === 'completed' ? 'done' : 'failed';
 }
 
-function searchNodeActivity(status: string, runRunning: boolean): AgentActivity {
-  if (status === 'failed') return 'failed';
-
-  return status === 'open' && runRunning ? 'working' : 'done';
-}
-
-/** Breadth-first from `rootId`: creation times tie, so creation order can put a child first. */
+/** Parents first: creation times tie. */
 function treeOrder(rootId: string, actors: readonly WorkspaceActor[]): WorkspaceActor[] {
   const children = new Map<string, WorkspaceActor[]>();
 
@@ -131,22 +125,19 @@ function swarmAgents({ sql, root, actors, labels, paths, handleOf }: Walk): Pane
     const ownerLabel = labels.get(owner.actorId) ?? owner.name;
     const ownerPath = paths.get(owner.actorId) ?? null;
 
-    for (const { run, tree, head } of readExplorationCanvas(sql, owner, null, SWARM_RUNS).items) {
+    // Search-tree branches are model calls, not agents.
+    for (const run of new HeadJournal(sql, owner).listRuns(SWARM_RUNS)) {
       const running = run.status === 'running';
       const nodeLabels = new Map<string, string>();
 
-      const nodes = head === null
-        ? tree.filter((node) => node.parent_id !== null).map((node) => ({ id: node.id, parentId: node.parent_id, task: node.action || node.task, activity: searchNodeActivity(node.status, running) }))
-        : head.heads.map((node) => ({ id: node.id, parentId: node.parentId, task: node.task, activity: headActivity(node.status, running) }));
-
-      for (const node of nodes) {
+      for (const node of run.heads) {
         const label = node.task.trim().split('\n')[0]?.slice(0, 80) || node.id;
         nodeLabels.set(node.id, label);
 
         agents.push({
-          key: `${run.id}/${node.id}`, label, category: 'swarm', activity: node.activity,
+          key: `${run.rootId}/${node.id}`, label, category: 'swarm', activity: headActivity(node.status, running),
           parent: (node.parentId === null ? undefined : nodeLabels.get(node.parentId)) ?? ownerLabel,
-          open: { kind: 'node', runId: run.id, nodeId: node.id, owner: ownerPath }, tab: false, input: false,
+          open: { kind: 'node', runId: run.rootId, nodeId: node.id, owner: ownerPath }, tab: false, input: false,
         });
       }
     }
@@ -160,7 +151,6 @@ export function readWorkspaceAgents(input: {
   readonly exec: SqlExec;
   readonly root: ActorHandle;
   readonly rootLabel: string;
-  readonly rootWorking: boolean;
   readonly actors: readonly WorkspaceActor[];
 }): PanelAgent[] {
   const { sql, root } = input;
@@ -172,13 +162,8 @@ export function readWorkspaceAgents(input: {
     handleOf: (row) => handles.get(row.actorId) ?? handles.set(row.actorId, actorReadHandle(sql, row)).get(row.actorId) ?? root,
   };
 
-  const main: PanelAgent = {
-    key: root.actorId, label: input.rootLabel, category: 'main', activity: input.rootWorking ? 'working' : 'idle',
-    parent: null, open: { kind: 'chat', path: null }, tab: true, input: true,
-  };
-
   const hired = tableExists(sql, 'actor_subordinates') ? rosterAgents(walk) : [];
-  const swarms = tableExists(sql, 'head_journal') || tableExists(sql, 'search_nodes') ? swarmAgents(walk) : [];
+  const swarms = tableExists(sql, 'head_journal') ? swarmAgents(walk) : [];
 
-  return [main, ...hired, ...swarms];
+  return [...hired, ...swarms];
 }

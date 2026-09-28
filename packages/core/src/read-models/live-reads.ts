@@ -46,8 +46,6 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['actor_config', AGENTS],
   ['head_journal', AGENTS],
   ['head_runs', AGENTS],
-  ['search_nodes', AGENTS],
-  ['mcts_search_runs', AGENTS],
 ]);
 
 /** Reads that ask only whether a row exists: updates never move them. */

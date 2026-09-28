@@ -12,7 +12,7 @@ test('a write names the reads of its table and nothing else', () => {
 
 test('a swarm worker added or removed moves tab presence; its status moves only the Agents panel', () => {
   expect(readsWrittenBy('INSERT INTO head_journal (id) VALUES (?)')).toEqual(['listWorkspaceAgents', 'getWorkspaceTabPresence']);
-  expect(readsWrittenBy('DELETE FROM search_nodes WHERE root_id = ?')).toEqual(['listWorkspaceAgents', 'getWorkspaceTabPresence']);
+  expect(readsWrittenBy('DELETE FROM search_nodes WHERE root_id = ?')).toEqual(['getWorkspaceTabPresence']);
   expect(readsWrittenBy('UPDATE head_journal SET status = ? WHERE id = ?')).toEqual(['listWorkspaceAgents']);
 });
 

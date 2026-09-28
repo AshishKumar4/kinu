@@ -2684,7 +2684,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async listWorkspaceAgents(): Promise<PanelAgent[]> {
     return readWorkspaceAgents({
       sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main',
-      rootWorking: this.actorSession.currentTurnId !== null, actors: this.workspaceActors().list({ retired: true }),
+      actors: this.workspaceActors().list({ retired: true }),
     });
   }
 

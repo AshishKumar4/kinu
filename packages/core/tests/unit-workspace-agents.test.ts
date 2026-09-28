@@ -36,8 +36,8 @@ function workspace() {
     return child;
   };
 
-  const read = (rootWorking = false): PanelAgent[] => readWorkspaceAgents({
-    sql, exec, root: actors.main, rootLabel: 'Kinu', rootWorking, actors: actors.directory.list({ retired: true }),
+  const read = (): PanelAgent[] => readWorkspaceAgents({
+    sql, exec, root: actors.main, rootLabel: 'Kinu', actors: actors.directory.list({ retired: true }),
   });
 
   return { db, main: actors.main, hire, read };
@@ -48,7 +48,7 @@ const byLabel = <T extends { label: string }>(rows: T[]): T[] => rows.sort((a, b
 const row = ({ label, category, activity, parent, tab, input, open }: PanelAgent) => ({ label, category, activity, parent, tab, input, open });
 
 describe('the Agents panel lists every agent in the workspace', () => {
-  test('main, the owner\'s own, one an agent hired, and a background helper, each placed as the design says', () => {
+  test('the owner\'s own, one an agent hired, and a background helper, each placed as the design says', () => {
     const { db, main, hire, read } = workspace();
     const alice = hire(main, 'alice', { createdBy: 'user' });
     hire(alice, 'scout-1', { status: 'working' });
@@ -57,14 +57,13 @@ describe('the Agents panel lists every agent in the workspace', () => {
     // Creation times tie within a millisecond; a child listed before its parent still sits under it.
     db.query('UPDATE workspace_actors SET created_at = 0 WHERE name = ?').run('scout-1');
 
-    expect(byLabel(read(true).map(row))).toEqual(byLabel([
-      { label: 'Kinu', category: 'main', activity: 'working', parent: null, tab: true, input: true, open: { kind: 'chat', path: null } },
+    expect(byLabel(read().map(row))).toEqual(byLabel([
       { label: 'alice', category: 'user', activity: 'idle', parent: 'Kinu', tab: true, input: true, open: { kind: 'chat', path: 'alice' } },
       { label: 'scout-1', category: 'hired', activity: 'working', parent: 'alice', tab: false, input: true, open: { kind: 'chat', path: 'alice/scout-1' } },
       { label: 'refiner-1', category: 'background', activity: 'idle', parent: 'Kinu', tab: false, input: false, open: { kind: 'chat', path: 'refiner-1' } },
       { label: 'lookup-1', category: 'hired', activity: 'working', parent: 'Kinu', tab: false, input: true, open: { kind: 'chat', path: 'lookup-1' } },
     ]));
-    expect(read(true).filter((agent) => agentActive(agent) && !agent.tab).map((agent) => agent.label).sort()).toEqual(['lookup-1', 'scout-1']);
+    expect(read().filter((agent) => agentActive(agent) && !agent.tab).map((agent) => agent.label).sort()).toEqual(['lookup-1', 'scout-1']);
   });
 
   test('a swarm\'s workers are listed under the agent that started it: working while the run runs, read-only', () => {

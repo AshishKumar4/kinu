@@ -372,14 +372,21 @@ function OwnedSwarmNodeColumn({ workspace, ownerPath, ...node }: {
 }
 
 /** The Agents panel's rows and picks, and what the counter counts: active agents without a tab. */
-function useAgentsPanel({ agents, workspace = "", node, subName, workbench }: {
-  agents: readonly PanelAgent[];
+function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench }: {
+  listed: readonly PanelAgent[];
+  live: boolean;
   workspace: string | undefined;
   node: string | null;
   subName: string | undefined;
   workbench: RefObject<WorkbenchHandle | null>;
 }) {
   const navigate = useNavigate();
+
+  const agents = useMemo((): readonly PanelAgent[] => [{
+    key: "main", label: "Main", category: "main", activity: live ? "working" : "idle", parent: null,
+    open: { kind: "chat", path: null }, tab: true, input: true,
+  }, ...listed], [listed, live]);
+
   const shownAgent = useMemo(() => shownPanelAgent(agents, node, subName), [agents, node, subName]);
 
   const open = useCallback((agent: PanelAgent) => settleLogged("agents.open_failed", { doing: "open an agent's chat", otherwise: "io" }, async () => {
@@ -710,7 +717,7 @@ export default function WorkspacePage() {
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
   const workbench = useRef<WorkbenchHandle | null>(null);
 
-  const { shownAgent, hiddenActive, panel: agentsPanel } = useAgentsPanel({ agents: state.workspaceAgents, workspace: agentId, node: shownNode, subName, workbench });
+  const { shownAgent, hiddenActive, panel: agentsPanel } = useAgentsPanel({ listed: state.workspaceAgents, live, workspace: agentId, node: shownNode, subName, workbench });
 
   // A surface opened from the chat, a note or a landing is brought into view; a collapsed inspector or a phone
   // showing the chat would hide it.

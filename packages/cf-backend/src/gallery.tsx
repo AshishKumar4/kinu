@@ -1331,6 +1331,17 @@ const GALLERY_SUBS: {
 
 let gallerySubSeq = 0;
 
+const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "panel";
+
+if (AGENTS_PANEL) {
+  const docs = {
+    name: "docs", actorId: galleryActorId("docs"), displayName: "Docs writer", role: "agent", nameOrigin: "user", createdBy: "user",
+    lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
+  };
+
+  GALLERY_SUBS.push(docs);
+}
+
 /** Derived from the name, so gate-stamped frames and the pane's snapshot id agree without a second fixture. */
 function galleryActorId(name: string): string {
   return `actor-${name}`;
@@ -1539,7 +1550,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     }] : [],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
-  listWorkspaceAgents: () => GALLERY_AGENTS,
+  listWorkspaceAgents: () => (AGENTS_PANEL ? GALLERY_AGENTS : []),
   // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
   // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture.
@@ -1722,8 +1733,7 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
 }
 
 const GALLERY_AGENTS: PanelAgent[] = [
-  { key: "a-main", label: "Main", category: "main", activity: "working", parent: null, open: { kind: "chat", path: null }, tab: true, input: true },
-  { key: "a-docs", label: "Docs writer", category: "user", activity: "idle", parent: "Main", open: { kind: "chat", path: "docs" }, tab: true, input: true },
+  { key: galleryActorId("docs"), label: "Docs writer", category: "user", activity: "idle", parent: "Main", open: { kind: "chat", path: "docs" }, tab: true, input: true },
   { key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "Main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true },
   { key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "Coupon auditor", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true },
   { key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "Main",
