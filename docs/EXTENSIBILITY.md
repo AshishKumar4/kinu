@@ -330,11 +330,11 @@ truncates useful "when to use" guidance.
   503 it honors a `Retry-After` of 60 s or less; a longer one ends the call as a
   spent allowance naming the reset time (`maxRetryDelayMs`, after oh-my-pi).
   Otherwise it waits a full-jitter draw under a ceiling that doubles from 2 s to
-  60 s. No elapsed time or attempt count ends the loop.
-  It stops on success, definitive failure or caller cancellation.
-  Non-replayable bodies pass through untouched. Do not cap attempts and count
-  on the SDK for the rest: `PROVIDER_SDK_RETRIES` is 2, and a cap under a
-  real cooldown turns a wait into a failed turn.
+  60 s. It retries at most the owner's count (`ProfileCatalog.retries`,
+  default 3), and not at all while the turn's fallback chain has an entry left:
+  that model hands over at once and cools down (`fallback-cooldown.ts`).
+  Non-replayable bodies pass through untouched. The SDK's own transport retry
+  takes the same count at the `streamText` call.
 - Requests wait out a provider host's declared cooldown. `ProviderPacer.admit`
   (`packages/core/src/providers/pacing.ts`) holds a caller until the cooldown a
   sibling declared has passed, so a `Retry-After` handed to one swarm node holds

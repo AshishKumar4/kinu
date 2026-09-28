@@ -1,4 +1,3 @@
-// Identity
 export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
@@ -61,7 +60,6 @@ export {
   renderSoulMarkdown,
   seedSoul,
   summarizeSoul,
-  summarizeSoulBytes,
   writeSoul,
 } from './identity/soul';
 
@@ -149,7 +147,6 @@ export {
 
 export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
 
-// Evolution
 export {
   EvolutionEngine, buildScaffoldProposalPrompt,
   type ProposalArchiveContext,
@@ -252,7 +249,6 @@ export {
   type ChangelogRevertContext, type ChangelogRevertResult,
 } from './evolution/changelog';
 
-// Configuration
 export { DEFAULT_CONFIG } from './config';
 
 export { UNBOUNDED_STEPS } from './chat';
@@ -265,7 +261,6 @@ export {
   type AgentConfigStore, type ShellApprovalMode,
 } from './config/index';
 
-// Types
 export type * from './types/primitives';
 
 export { VfsRevisionSchema } from './types/primitives';
@@ -304,7 +299,7 @@ export {
   LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
   type ShareKind, type LiveShareVisibility, type BlueprintAddress, type BlueprintInspection, type BlueprintView,
   type BlueprintFork, type BlueprintBundle,
-  type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry, type BlueprintWarning,
+  type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry,
   type ShareGrantMember, type ShareGrant, type SlateCapability,
   type SlateGraphMember, type SlateGraphBinding, type SlateCapabilityGraph,
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
@@ -330,7 +325,7 @@ export type { SlateProcess } from './slates/process';
 
 export {
   isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer,
-  type SlateSummary, type SlateProblem, type SlatesChangedEvent,
+  type SlateSummary, type SlateProblem,
 } from './slates/rpc';
 
 export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, routeSlateStorageCall, type SlateStorageOp } from './slates/state';
@@ -374,6 +369,8 @@ export {
   runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
   type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObservedCall, type ObserveStream,
 } from './chat';
+
+export { createFallbackCooldowns, type FallbackCooldowns } from './providers/fallback-cooldown';
 
 // Extension seam (public plugin API)
 export {
@@ -443,7 +440,6 @@ export {
   type OverflowRecoveryDecision,
 } from './turn-failure';
 
-// LLM
 export {
   createVercelAILLM, collectStepText, createChatModel, createCompletionLLM, estimateTokens,
   // Surfaces import this instead of retyping the number.
@@ -512,7 +508,6 @@ export {
   type CompactionSummaryPromptInput,
 } from './compaction';
 
-// Tool registry
 export {
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
@@ -525,9 +520,6 @@ export {
   WEB_TOOL_ACTIONS,
   FILE_TOOL_ACTIONS,
   memoryActionsFor,
-  type WebToolAction,
-  type FileToolAction,
-  type TasksToolAction,
   AGENTS_TOOL_NOTES,
   renderToolSchemaDescription,
   renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
@@ -932,7 +924,6 @@ export {
   type TranscriptFold, type TranscriptPart, type TurnSegment,
 } from './read-models/transcript';
 
-// Schemas
 export { initSearchTables } from './mcts/schemas';
 
 export { initSwarmNodeRecords } from './strategy/swarm-resume';
@@ -945,7 +936,6 @@ export {
 
 export { initScaffoldTables } from './scaffold/schemas';
 
-// Scaffolds
 export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap';
 
 export { modifyScaffold, type ModifyResult, type ModifyScaffoldOpts } from './scaffold/modify';
@@ -1036,7 +1026,6 @@ export { periodicCraftConsolidation } from './craft/consolidation';
 
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict';
 
-// Execution
 export {
   DefaultExecutionRouter,
   withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach,
@@ -1232,7 +1221,6 @@ export { MarkdownFrontmatterError, parseMarkdownFrontmatter } from './utils/mark
 
 export { compareCodeUnits } from './utils/text';
 
-// Sleep-time compute
 export {
   runSleepTimeCompute, applySleepTimeUpdate,
   SleepTimeUpdateSchema,
@@ -1305,7 +1293,6 @@ export {
 // EventsHub. Spec: docs/ARCHITECTURE.md "Events and ingress".
 export * from './events/hub/index';
 
-// Ingress
 export * from './events/ingress/index';
 
 export * from './subordinates/ingress';
@@ -1318,7 +1305,6 @@ export * from './strategy/index';
 // Bench harness: pure math; the runner lives in scripts/bench.ts.
 export * from './bench/index';
 
-// Curriculum
 export * from './curriculum/index';
 
 // Providers. Secrets stay inside UserDO and never enter the provider layer.
@@ -1449,9 +1435,7 @@ export {
   grantedEgressBindings,
   findEgressPlaceholders,
   egressSecretRule,
-  parseEgressSecretRule,
   egressHostMatches,
-  reviewEgressBinding,
   planEgress,
   scrubText,
   createScrubStream,
@@ -1543,7 +1527,6 @@ export {
 
 export { revealMisrepresenting } from './safety/untrusted-text';
 
-// Utils
 export { fnv1a64, Fnv1a64 } from './utils/fnv1a';
 
 export { nanoid } from './utils/nanoid';
@@ -1609,12 +1592,11 @@ export {
   BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
-  type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type BackgroundRefusal, type ThresholdDeps,
+  type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel,
 } from './jobs/index';
 
-// Tasks
 export {
   TaskListStore, initTaskListTable, TASK_STATUSES, MAX_TASK_TITLE_CHARS,
   type AgentTask, type AgentTaskTree, type TaskStatus,
@@ -1628,13 +1610,17 @@ export {
   taskReminderIdempotencyKey,
 } from './tasks/reminder';
 
-// Orchestration
 export {
   TurnAccumulator,
   type StepLike, type ToolResultLike, type TurnSinks,
 } from './orchestrator/turn-accumulator';
 
 export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema } from './read-models/workspace-work';
+
+export {
+  readWorkspaceAgents, agentActive,
+  type PanelAgent, type AgentCategory, type AgentActivity, type AgentOpening,
+} from './read-models/workspace-agents';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
 
@@ -1730,9 +1716,8 @@ export {
   inheritedContextOmissionNote,
 } from './orchestrator/heads-support';
 
-// Skills
 export {
-  parseSkillFile, stringifySkillFile, skillNameProblem,
+  parseSkillFile, skillNameProblem,
   discoverSkills, readSkillFile, workspaceSkillPath, compareSkillNames, skillBodyChars,
   BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, skillsMount,
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
@@ -1837,7 +1822,6 @@ export type {
   ConformancePlane, ConformanceReport, ConformanceRoot, ObservedSurface, RootStatuses,
 } from './conformance/index';
 
-// Read models
 export {
   classifyEvolutionType, getRunTimeline, runEventToSpan, toolKindFor,
   RUN_TIMELINE_MAX,
@@ -2028,7 +2012,6 @@ export type {
   EvolutionConfigView, SetModelDeps,
 } from './read-models/config-plane';
 
-// Advisor
 export {
   ADVISOR_EVENT_TYPE,
   ADVISOR_NOTE_MAX_CHARS,
@@ -2071,7 +2054,7 @@ export type { EvolutionChangelogView, TakePickDeps } from './read-models/evoluti
 
 // Profile catalogs
 export {
-  TIER_IDS, TierIdSchema, tierIdsOf, isTierId, ROLE_ID_RE,
+  TIER_IDS, DEFAULT_PROVIDER_RETRIES, TierIdSchema, tierIdsOf, isTierId, ROLE_ID_RE,
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
@@ -2114,7 +2097,7 @@ export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
   type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
-  type TabPresence, type ToolInfo, ownerFacingSubordinate,
+  type TabPresence, ownerFacingSubordinate,
 } from './protocol';
 
 export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';
@@ -2179,7 +2162,7 @@ export {
 } from './http/deployed-assets';
 
 export {
-  serveReleaseArtifact, type ReleaseArtifactObject, type ReleaseArtifactStore,
+  releaseArtifact, releaseArtifactHead, type ReleaseArtifactObject, type ReleaseArtifactStore,
 } from './http/release-artifact';
 
 export {
@@ -2282,7 +2265,7 @@ export {
   type SlateSurfaceKind,
   type SurfaceContent,
   type SurfaceKind,
-  ACTIVITY_SURFACE,
+  ACTIVITY_SURFACE, AGENTS_SURFACE,
   SLATE_PREFIX,
   SURFACES,
   landedSurface,

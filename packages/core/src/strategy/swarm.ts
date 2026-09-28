@@ -486,8 +486,7 @@ function instrumentFreeAlternative(resolved: ResolvedSwarm): string {
     + `sweep of ${String(row.branches)}, ranked, with no instrument and no other field required.`;
 }
 
-/** Shared by {@link swarmValidity} and `runSwarm` so an in-process caller cannot bypass it. */
-export function judgeMarginalisationRefusal(config: SwarmConfig): SwarmRefusal | null {
+function judgeMarginalisationRefusal(config: SwarmConfig): SwarmRefusal | null {
   if (!isTreeAdvance(config.advance.kind)) return null;
 
   if (config.score.kind !== 'judge') return null;
@@ -502,8 +501,7 @@ export function judgeMarginalisationRefusal(config: SwarmConfig): SwarmRefusal |
     + 'min(samples, maxEvalLLMCalls - 1), so raising this alone silently does nothing.');
 }
 
-/** Shared by both entry points for the same reason as {@link judgeMarginalisationRefusal}. */
-export function archiveRegionRefusal(
+function archiveRegionRefusal(
   config: SwarmConfig, caps: ResolvedSwarmCaps,
 ): SwarmRefusal | null {
   if (config.advance.kind !== 'archive') return null;

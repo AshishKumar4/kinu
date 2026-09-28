@@ -29,6 +29,7 @@ import { diagnostics, KinuError, toKinuError } from '../obs/index';
 import { atVfsPath, isVfsError } from './errno';
 import type { MountedVfs } from './mounts';
 import { mountedAuthority, type ShellMountTable } from './shell-mounts';
+import { mountCommands } from './mount-listing';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes';
 
@@ -61,7 +62,6 @@ export interface WorkspaceVFS extends VFS {
   readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
 }
 
-/** A vendor file view over absolute paths. */
 interface VendorFiles {
   readText(path: string): string | Promise<string>;
   readBytes(path: string): Uint8Array | Promise<Uint8Array>;
@@ -83,7 +83,6 @@ interface VendorStat {
   readonly type: string;
 }
 
-/** The VFS contract over one vendor view; a failure names its path. */
 function workspaceFiles(vendor: VendorFiles): WorkspaceVFS {
   const at = <T>(path: string, syscall: string, call: (absolute: string) => T | Promise<T>): Promise<T> => {
     const absolute = workspacePath(path);
@@ -204,6 +203,8 @@ export interface WorkspacePrivileged {
   readonly confiner: TmpConfiner;
 }
 
+type NimbusCreation = Parameters<typeof NimbusWorkspace.create>[0];
+
 export type SupervisorOpResult = Awaited<ReturnType<NimbusWorkspace['supervisorOp']>>;
 
 /** This workspace's Nimbus primitives for a host's process/port surface; reuse them, never open a second workspace over the same database. */
@@ -261,70 +262,85 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   const tableFor: ShellMountTable = (cred) => mountTables.get(cred.uid) ?? null;
   let booting: Promise<NimbusWorkspace> | undefined;
 
+  const shellOver = async (creation: NimbusCreation): Promise<NimbusWorkspace> => {
+    const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
+    const workspace = await NimbusWorkspace.create(creation);
+
+    for (const [name, command] of Object.entries(mountCommands(tableFor, () => workspace.vfs.getStats()))) workspace.registry.register(name, command);
+
+    return workspace;
+  };
+
+  const boot = async (): Promise<NimbusWorkspace> => {
+    // Boot revokes append writers at or below `generation * PID_GEN_STRIDE`, so the pid base must be
+    // this generation.
+    const generationNow = takeWorkspaceGeneration(opts);
+
+    processes.setPidBase(generationNow * PID_GEN_STRIDE);
+
+    let creation: NimbusCreation = {
+      sql: opts.sql,
+      transactions: opts.transactions,
+      generation: generationNow,
+      cwd: WORKSPACE_ROOT,
+      env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
+      processes,
+      fabric: opts.fabric,
+      filesystem: (authority) => mountedAuthority(authority, tableFor),
+    };
+
+    if (opts.runtimeSource !== undefined) {
+      creation = { ...creation, runtimeSource: opts.runtimeSource, runtimeInstall: 'on-demand' };
+    }
+
+    const workspace = await shellOver(creation);
+
+    settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
+    settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL));
+    resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);
+
+    // After substrate registrations so a runtime bin never shadows a coreutil.
+    const provisioning: Parameters<typeof provisionWorkspaceRuntimes>[0] = {
+      workspace,
+      runtimes: opts.runtimes ?? [],
+    };
+
+    if (opts.runtimeFacets !== undefined) provisioning.facets = opts.runtimeFacets;
+    await provisionWorkspaceRuntimes(provisioning);
+    const root = workspace.vfs.as(CRED_KERNEL);
+    const main = agentIdentity(opts.sql, MAIN_AGENT);
+    provisionAgentHome(root, MAIN_AGENT, main);
+    confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
+    restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
+    workspace.vfs.events.on((batch) => {
+      if (fileListeners.size === 0) return;
+      // A rename names where the file left as well as where it went.
+      const paths = batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]));
+
+      for (const listener of fileListeners) listener(paths);
+    });
+
+    return workspace;
+  };
+
   const open = async (): Promise<NimbusWorkspace> => {
-    booting ??= (async (): Promise<NimbusWorkspace> => {
-      try {
-        const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
-        // Boot revokes append writers at or below `generation * PID_GEN_STRIDE`, so the pid base must be
-        // this generation.
-        const generationNow = takeWorkspaceGeneration(opts);
+    const attempt = (booting ??= boot());
 
-        processes.setPidBase(generationNow * PID_GEN_STRIDE);
-
-        let creation: Parameters<typeof NimbusWorkspace.create>[0] = {
-          sql: opts.sql,
-          transactions: opts.transactions,
-          generation: generationNow,
-          cwd: WORKSPACE_ROOT,
-          env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
-          processes,
-          fabric: opts.fabric,
-          filesystem: (authority) => mountedAuthority(authority, tableFor),
-        };
-
-        if (opts.runtimeSource !== undefined) {
-          creation = { ...creation, runtimeSource: opts.runtimeSource, runtimeInstall: 'on-demand' };
-        }
-
-        const workspace = await NimbusWorkspace.create(creation);
-        settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
-        settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL));
-        resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);
-
-        // After substrate registrations so a runtime bin never shadows a coreutil.
-        const provisioning: Parameters<typeof provisionWorkspaceRuntimes>[0] = {
-          workspace,
-          runtimes: opts.runtimes ?? [],
-        };
-
-        if (opts.runtimeFacets !== undefined) provisioning.facets = opts.runtimeFacets;
-        await provisionWorkspaceRuntimes(provisioning);
-        const root = workspace.vfs.as(CRED_KERNEL);
-        const main = agentIdentity(opts.sql, MAIN_AGENT);
-        provisionAgentHome(root, MAIN_AGENT, main);
-        confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
-        restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
-        workspace.vfs.events.on((batch) => {
-          if (fileListeners.size === 0) return;
-          // A rename names where the file left as well as where it went.
-          const paths = batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]));
-
-          for (const listener of fileListeners) listener(paths);
-        });
-
-        return workspace;
-      } catch (cause) {
-        // Clear the cache before rethrowing: a cached rejection would poison the whole isolate.
+    try {
+      return await attempt;
+    } catch (cause) {
+      // The first waiter to see this attempt fail clears it, so the next call boots afresh instead of
+      // re-awaiting a cached rejection for the isolate's life; a newer attempt stays cached.
+      if (booting === attempt) {
         booting = undefined;
         diagnostics.failure(
           'workspace.boot_failed',
           toKinuError({ doing: 'boot the Nimbus workspace', cause, otherwise: 'unavailable' }),
         );
-        throw cause;
       }
-    })();
 
-    return await booting;
+      throw cause;
+    }
   };
 
   // One supervisor for this filesystem so no two shells share a pid; `open` sets its pid base.
@@ -375,11 +391,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         try {
           const origin = await open();
           const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
+
           // Second shell over the same `SqliteVFS`, never a second filesystem (stale cache).
           // `runAs` is the origin's so `sudo`/`su` keep working.
-          const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
-
-          const asAgent = await NimbusWorkspace.create({
+          const asAgent = await shellOver({
             sql: opts.sql,
             transactions: opts.transactions,
             vfs: origin.vfs,

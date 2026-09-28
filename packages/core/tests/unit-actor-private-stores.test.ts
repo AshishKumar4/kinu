@@ -462,8 +462,11 @@ describe('a fresh child actor', () => {
     const ledger = new MctsSearchStore(w.sql, w.b);
     facts.upsert('k', 'v');
 
-    // The stores captured `actorId` at construction; this is the drift `assertCurrent` catches.
-    void w.sql`UPDATE workspace_actors SET retiring_at = ${Date.now()} WHERE actor_id = ${w.b.actorId}`;
+    // The stores captured `actorId` at construction; this is the drift `assertCurrent` catches, in the same run.
+    w.actors.directory.apply(w.a, [], {
+      action: 'retire', name: 'sibling',
+      reference: { actorId: w.b.actorId, workspaceId: w.b.workspaceId, parentActorId: w.b.parentActorId },
+    });
 
     expect(() => facts.recall('k')).toThrow(/no longer present/);
     expect(() => taskList.count()).toThrow(/no longer present/);

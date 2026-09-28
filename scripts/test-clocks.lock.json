@@ -1,6 +1,6 @@
 {
   "measuredAt": "2026-09-28",
-  "total": 174,
+  "total": 169,
   "files": {
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
@@ -150,9 +150,6 @@
     },
     "packages/cli/tests/tui-theme.test.tsx": {
       "sleep": 2
-    },
-    "packages/devbox/bench/publication-meter.test.ts": {
-      "sleep": 5
     },
     "packages/devbox/tests/decisions.test.ts": {
       "sleep": 2

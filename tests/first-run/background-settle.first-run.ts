@@ -5,7 +5,7 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { SETTLE_ASK, SETTLE_MARKER as MARKER } from './asks';
-import { firstRunReplyText } from './turn-settlement';
+import { backgroundSettleWait, firstRunReplyText } from './turn-settlement';
 
 const SUITE = 'First-run · background-settle';
 
@@ -77,47 +77,32 @@ describe(SUITE, () => {
         // when that run has closed — or, when no such run ever opened, once
         // the job row is settled and nothing is still running, on two reads
         // that agree. A wake that never arrives is this row's finding, not
-        // its timeout.
+        // its timeout, and a call that never detached leaves nothing to wait
+        // for (backgroundSettleWait).
         let settledWakeSeen = false;
         let quiet = 0;
 
         while (!budget.aborted) {
           const [jobs, events] = await Promise.all([session.backgroundJobs(), session.runEvents()]);
+          const next = backgroundSettleWait(jobId, jobs, events);
 
-          const openRuns = new Set(
-            events.filter((event) => event.type === 'run_start').map((event) => event.runId)
-              .filter((runId) => !events.some((end) => end.type === 'run_end' && end.runId === runId)),
-          );
+          if (next === 'wake-closed') settledWakeSeen = true;
 
-          const wakeRuns = jobId === undefined ? [] : events
-            .filter((event) => event.type === 'run_start' && event.userMessage?.includes(jobId) === true)
-            .map((event) => event.runId);
+          if (next === 'wake-closed' || next === 'nothing-detached') break;
 
-          if (wakeRuns.length > 0) {
-            if (wakeRuns.every((runId) => !openRuns.has(runId))) {
-              settledWakeSeen = true;
-              break;
-            }
+          quiet = next === 'job-settled' ? quiet + 1 : 0;
 
-            quiet = 0;
-          } else {
-            const job = jobs.find((candidate) => candidate.id === jobId);
-            const settled = job !== undefined && job.status !== 'running';
-
-            if (!settled || openRuns.size > 0) {
-              quiet = 0;
-            } else {
-              quiet += 1;
-
-              if (quiet >= 2) break;
-            }
-          }
+          if (quiet >= 2) break;
 
           await new Promise<void>((resolve) => setTimeout(resolve, 250));
         }
 
         const history = await session.history();
-        const markerReply = history.find((row) => row.role === 'assistant' && row.text.includes(MARKER));
+
+        // The command itself carries the marker (`echo MARKER`), so a reply quoting the command, a refusal included,
+        // is no report of its output: on 2026-09-27 a not-ready devbox's error passed here.
+        const markerReply = history.find((row) => row.role === 'assistant'
+          && row.text.replaceAll(`echo ${MARKER}`, '').includes(MARKER));
 
         return [
           {

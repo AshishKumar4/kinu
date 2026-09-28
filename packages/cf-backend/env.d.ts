@@ -111,6 +111,8 @@ declare global {
     KINU_SELF_DEPLOY_REFRESH_TOKEN?: string;
     /** The one identity usable without OAuth; off localhost it also needs `DEV_IDENTITY_SECRET`. */
     DEV_USER_EMAIL?: string;
+    /** `on`: every user's Workers AI goes through this Worker's `AI` binding. */
+    WORKERS_AI_VIA_BINDING?: string;
     /** Presented in core's `DEV_IDENTITY_HEADER` to act as `DEV_USER_EMAIL` off localhost. */
     DEV_IDENTITY_SECRET?: string;
     /** Email Sending (`send_email`); optional, outbound email skips without it. */

@@ -1,7 +1,7 @@
 /**
  * SSRF and secret-exfiltration guards for outbound web fetches. The destination judgment lives in
- * `safety/egress-destination.ts` and must not be duplicated here. No DNS resolution (TOCTOU; none on Workers):
- * checks are scheme + hostname + IP literal, failing closed on any parse error.
+ * `safety/egress-destination.ts` and must not be duplicated here. A Worker needs no resolution: its platform
+ * refuses a name resolving inward (docs/CRAFT-ARCHITECTURE.md, "Names that resolve inward").
  */
 
 import { refusedHostname } from '../safety/egress-destination';
@@ -45,6 +45,30 @@ export function assertSafeUrl(url: string): URL {
   if (refusal) throw new UnsafeUrlError(refusal.error);
 
   return parsed;
+}
+
+export type HostResolver = (hostname: string) => Promise<readonly string[]>;
+
+function canonicalAddress(address: string): string | null {
+  const url = `http://${address.includes(':') ? `[${address}]` : address}/`;
+
+  return URL.canParse(url) ? new URL(url).hostname : null;
+}
+
+/** The fetch resolves again, so DNS rebinding in between is not caught. */
+export async function refusedResolution(url: URL, resolve: HostResolver): Promise<string | null> {
+  const host = url.hostname;
+
+  if (host.startsWith('[') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return null;
+
+  for (const address of await resolve(host)) {
+    const canonical = canonicalAddress(address);
+    const refusal = canonical === null ? `an unparseable address ${address}` : refusedHostname(canonical)?.error;
+
+    if (refusal !== undefined) return `${host} resolves to ${address}: ${refusal}`;
+  }
+
+  return null;
 }
 
 /** Only an unsafe URL answers false; any other error is rethrown, never counted as a pass. */

@@ -56,10 +56,9 @@ export function createFileTuiPreferenceStore(path = join(AGENT_HOME, 'tui.json')
       return parseTuiPreferences(readFileSync(path, 'utf8'), path);
     },
     write(preferences) {
-      const validated = parseTuiPreferences(JSON.stringify(preferences), path);
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       const temporary = `${path}.${String(process.pid)}.tmp`;
-      writeFileSync(temporary, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600 });
+      writeFileSync(temporary, `${JSON.stringify(preferences, null, 2)}\n`, { mode: 0o600 });
       renameSync(temporary, path);
     },
   };

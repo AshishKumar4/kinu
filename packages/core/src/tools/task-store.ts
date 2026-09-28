@@ -16,23 +16,14 @@ const TaskStatusSchema = v.picklist(TASK_STATUSES);
 
 const OPEN_STATUSES: ReadonlySet<string> = new Set(['open', 'active']);
 
-export interface AgentTask {
-  id: string;
-  parentId: string | null;
-  title: string;
-  status: TaskStatus;
-  updatedAt: number;
-  /** Operator annotation from `tasks.update`. */
-  readonly note: string | null;
-}
-
-export interface AgentTaskTree extends AgentTask {
-  subtasks: AgentTask[];
-}
-
+/** `note` is the operator annotation from `tasks.update`. */
 const AgentTaskSchema = v.object({ id: v.string(), parentId: v.nullable(v.string()), title: v.string(), status: TaskStatusSchema, updatedAt: v.number(), note: v.nullable(v.string()) });
 
+export type AgentTask = v.InferOutput<typeof AgentTaskSchema>;
+
 export const AgentTaskTreeSchema = v.object({ ...AgentTaskSchema.entries, subtasks: v.array(AgentTaskSchema) });
+
+export type AgentTaskTree = v.InferOutput<typeof AgentTaskTreeSchema>;
 
 /** Read-only plan progress for one actor, usable without a write handle. */
 export function readPlanTasks(sql: SqlExecutor, actor: ActorHandle, plan: TaskPlan): AgentTaskTree[] {
@@ -45,29 +36,14 @@ export function readPlanTasks(sql: SqlExecutor, actor: ActorHandle, plan: TaskPl
 }
 
 interface Row {
-  id: string; parent_id: string | null; title: string; status: string;
+  id: string; parent_id: string | null; title: string;
+  /** The column's CHECK admits only these. */
+  status: TaskStatus;
   updated_at: number; note: string | null;
 }
 
 function toTask(r: Row): AgentTask {
-  // An unknown stored status is corruption, never open (reads would disagree); name it for the repair.
-  const status = v.safeParse(TaskStatusSchema, r.status);
-
-  if (!status.success) {
-    throw new Error(
-      `agent_tasks row '${r.id}' stores unknown status '${r.status}'`
-      + `: expected one of ${TASK_STATUSES.join(', ')}`,
-    );
-  }
-
-  return {
-    id: r.id,
-    parentId: r.parent_id,
-    title: r.title,
-    status: status.output,
-    updatedAt: r.updated_at,
-    note: r.note,
-  };
+  return { id: r.id, parentId: r.parent_id, title: r.title, status: r.status, updatedAt: r.updated_at, note: r.note };
 }
 
 export function initTaskListTable(execRaw: RawSqlExec): void {

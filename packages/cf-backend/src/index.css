@@ -1009,6 +1009,11 @@ body { background: var(--c-bg); color: var(--c-text); }
   outline-offset: 1px;
 }
 
+/* Pressed: Kumo's controls carry no hook of their own, and a dim moves nothing, so a full-width row presses too. */
+:where(button, a[href], [role="button"], summary):not(:disabled, .p-tab):active {
+  filter: brightness(0.9);
+}
+
 
 /* ── Animations ────────────────────────────────────────────────────── */
 @keyframes fade-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }

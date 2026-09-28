@@ -77,8 +77,11 @@ test('a launcher killed outright takes its browser with it, and the profile it l
   await ended(processes);
 
   expect(runningFrom(profile)).toEqual([]);
-  expect(existsSync(dirname(profile))).toBe(true);
-  expect(reapAbandonedRoots(BROWSER_PROFILE_PARENT, '').reaped).toContain(dirname(profile));
+
+  // Any launch or suite on the box may reap the root first: every one sweeps the RAM parent for dead owners, and a
+  // concurrent sweep took it between the kill and this pass in 5 of 5 runs (2026-09-27). What must hold is that after a
+  // pass, this one or another's, nothing of the abandoned profile is left.
+  expect(reapAbandonedRoots(BROWSER_PROFILE_PARENT, '').unremovable).not.toContain(dirname(profile));
   expect(existsSync(dirname(profile))).toBe(false);
 });
 
@@ -108,6 +111,26 @@ test('a launch reaps the profile a dead launcher left in RAM, and keeps a live o
 
   expect(existsSync(dead)).toBe(false);
   expect(existsSync(live)).toBe(true);
+});
+
+test('a dead launcher\'s profile stays while a process still runs from it, and goes once none does', async () => {
+  const owner = currentOwner();
+
+  if (owner === null) throw new Error('/proc cannot name this process, so no owner can be recorded');
+  const root = scratchDir('chrome', BROWSER_PROFILE_PARENT);
+  mkdirSync(join(root, 'profile'));
+  writeFileSync(join(root, OWNER_RECORD), JSON.stringify({ ...owner, startTicks: owner.startTicks - 1 }));
+
+  // A browser a SIGKILLed launcher left: its launcher is gone, and its profile is still in its command line.
+  const survivor = Bun.spawn(['bash', '-c', 'exec -a "$0" sleep 30', `browser --user-data-dir=${join(root, 'profile')}`]);
+
+  expect(reapAbandonedRoots(BROWSER_PROFILE_PARENT, '').reaped).not.toContain(root);
+  expect(existsSync(root)).toBe(true);
+
+  survivor.kill('SIGKILL');
+  await survivor.exited;
+
+  expect(reapAbandonedRoots(BROWSER_PROFILE_PARENT, '').reaped).toContain(root);
 });
 
 /**

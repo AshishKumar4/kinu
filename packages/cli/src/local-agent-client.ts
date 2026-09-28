@@ -467,7 +467,6 @@ export class LocalAgentClient implements AgentClient {
       tierId: tier.id,
       scaffoldVersion: info.scaffoldVersion,
       searchNodeCount: info.searchNodeCount,
-      craftedToolCount: info.craftedToolCount,
       memorySize: info.memorySize,
       dbSize: statSync(this.deps.dbPath).size,
       toolCount: this.session.toolNames().length,
@@ -485,8 +484,8 @@ export class LocalAgentClient implements AgentClient {
     };
   }
 
-  async changelog(limit?: number): Promise<AgentChangelogView> {
-    const view = this.session.getEvolutionChangelog(limit);
+  async changelog(): Promise<AgentChangelogView> {
+    const view = this.session.getEvolutionChangelog();
     this.session.markChangelogSeen();
 
     return { entries: view.entries, unseenCount: view.unseenCount };
@@ -496,8 +495,8 @@ export class LocalAgentClient implements AgentClient {
     return this.session.revertChangelogEntry(id);
   }
 
-  async refinements(limit?: number): Promise<AgentRefinementView> {
-    return this.session.listRefinements(limit);
+  async refinements(): Promise<AgentRefinementView> {
+    return this.session.listRefinements();
   }
 
   async requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView> {

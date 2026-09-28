@@ -88,14 +88,7 @@ const SearchNodeSchema: v.GenericSchema<SearchNode> = v.object({
   created_at: v.number(),
 });
 
-interface ExecutorOutput {
-  stdout?: string;
-  stderr?: string;
-  exitCode?: number;
-  error?: string;
-}
-
-const ExecutorOutputSchema: v.GenericSchema<ExecutorOutput> = v.object({
+const ExecutorOutputSchema = v.object({
   stdout: v.optional(v.string()), stderr: v.optional(v.string()), exitCode: v.optional(v.number()), error: v.optional(v.string()),
 });
 

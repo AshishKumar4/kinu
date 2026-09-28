@@ -354,7 +354,6 @@ describe('E2E Full Lifecycle', () => {
     console.log(`  Reopened agent: ${rt2.identity.id} (${info.name})`);
     console.log(`  Purpose: ${info.purpose.slice(0, 60)}`);
     console.log(`  Scaffold version: ${info.scaffoldVersion}`);
-    console.log(`  Crafted tools: ${info.craftedToolCount}`);
     console.log(`  Search nodes: ${info.searchNodeCount}`);
     console.log(`  Memory size: ${info.memorySize} bytes`);
     console.log(`  Messages: ${msgCount}`);

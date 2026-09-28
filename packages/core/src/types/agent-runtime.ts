@@ -11,7 +11,7 @@ import type {
   Shell,
   VFS,
 } from './primitives';
-import type { CraftStoreView } from '@kinu.run/agent-utils';
+import type { CraftStore as SqlCraftStore } from '@kinu.run/agent-utils';
 import type { ExecutionRouter } from '../execution/types';
 import type { DeviceTransport } from '../execution/device-tunnel-executor';
 import type { FileCheckpoints } from '../checkpoints/types';
@@ -22,7 +22,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 /** Live channel for 'gate'-tier shell approvals (ACP `session/request_permission`). */
 export type RequestShellApproval = (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
 
-export type CraftStore = CraftStoreView;
+export type CraftStore = Pick<SqlCraftStore, 'create' | 'update' | 'get' | 'delete' | 'list' | 'search'>;
 
 export interface AgentRuntime {
   readonly actor: ActorHandle;

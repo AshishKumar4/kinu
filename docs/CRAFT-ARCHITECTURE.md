@@ -62,7 +62,22 @@ Both backends declare crafted tools the same way. The `eval` description declare
 
 ## 7. Outbound network and open questions
 
-The sandbox reaches the network through `CodemodeEgress` (`packages/cf-backend/src/codemode-egress.ts`). It judges each destination with `refusedHostname` (`packages/core/src/safety/egress-destination.ts`), the same classifier the container egress and `web.fetch` use, and forwards with `redirect: 'manual'` so it never follows a destination it has not judged. There is no per-workspace allow-list: a program may reach what the Worker may reach, minus addresses no untrusted code may reach. A public hostname that resolves to a private address is not caught here; that residual is unmeasured.
+The sandbox reaches the network through `CodemodeEgress` (`packages/cf-backend/src/codemode-egress.ts`). It judges each destination with `refusedHostname` (`packages/core/src/safety/egress-destination.ts`), the same classifier the container egress and `web.fetch` use, and forwards with `redirect: 'manual'` so it never follows a destination it has not judged. There is no per-workspace allow-list: a program may reach what the Worker may reach, minus addresses no untrusted code may reach. A public hostname that resolves to a private address is not caught here, and the platform refuses it (below).
+
+### Names that resolve inward
+
+Measured 2026-09-27 from a throwaway Worker on workers.dev (deployed, fetched once, deleted). A fetch of a public name whose DNS answer is inward reaches nothing:
+
+| URL | Answer |
+|---|---|
+| `http://127.0.0.1.nip.io/`, `https://127.0.0.1.nip.io/` | 403, `error code: 1002` |
+| `http://169.254.169.254.nip.io/latest/meta-data/` and `/computeMetadata/v1/` | 403, `error code: 1002` |
+| `http://10.0.0.1.nip.io/`, `http://192.168.1.1.nip.io/` | 403, `error code: 1002` |
+| `http://localtest.me/`, `https://localtest.me/` | 403, `error code: 1102` |
+| `http://127.0.0.1/`, `http://169.254.169.254/` | 403, `error code: 1003` |
+| `https://example.com/` (control) | 200 |
+
+So on Cloudflare the DNS residual is closed by the platform, for the codemode sandbox, the container egress and `web.fetch` alike. The CLI has no such platform: its `web.fetch` resolves each name with the OS resolver and refuses it when any address is one `refusedHostname` refuses (`refusedResolution`, `packages/core/src/web/url-safety.ts`). The fetch then resolves again, so a name that changes its answer in between (DNS rebinding) is not caught.
 
 Crafted tools stay out of the top-level AI SDK surface. Surfacing them there would let the model call `double({n: 7})` without `eval`. That stays deferred: every extra top-level tool grows the system-message tool schema, and no agent-side failure that would justify the cost is on record.
 

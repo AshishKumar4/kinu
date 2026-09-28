@@ -145,18 +145,8 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
       if (thrown === null || generation !== conversionGeneration.current) return;
       const names = convertible.map((file) => file.name).join(", ");
       const reason = renderThrownChain(thrown);
-      let message = `Could not read ${names}: ${reason}`;
-
-      try {
-        diagnostics.event('attachments.conversion_failed', {
-          names,
-          reason,
-        });
-      } catch (diagnosticCause) {
-        message += ` Recording the conversion failure also failed: ${renderThrownChain({ cause: diagnosticCause })}`;
-      }
-
-      dispatch({ kind: "conversion_failed", oversized, message });
+      diagnostics.event('attachments.conversion_failed', { names, reason });
+      dispatch({ kind: "conversion_failed", oversized, message: `Could not read ${names}: ${reason}` });
     })();
   }, [limitBytes]);
 

@@ -280,7 +280,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   const headline = (
     <div className="min-w-0 flex-1">
       <div className="flex items-center gap-2">
-        <span className="p-row-text p-text flex-1" title={entry.summary}>{entry.summary}</span>
+        <span className="p-row-text p-text flex-1 decoration-[var(--c-border-strong)] underline-offset-4 group-hover/expander:underline" title={entry.summary}>{entry.summary}</span>
         {fresh && !kept && <span className="shrink-0 size-1.5 rounded-full bg-[var(--c-accent)]" />}
       </div>
       <div className="mt-1 p-meta p-text-3">{timeAgo(entry.at)}</div>
@@ -294,7 +294,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
         {hasDetails ? (
           <button
             type="button"
-            className="min-w-0 rounded-md text-left"
+            className="group/expander min-w-0 cursor-pointer rounded-md text-left"
             aria-expanded={expanded}
             aria-controls={detailsId}
             onClick={() => setExpanded((previous) => !previous)}

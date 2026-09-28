@@ -101,3 +101,23 @@ export function firstRunTurnSettlement(
 
   return replied ? 'replied' : { ended: `${end.reason ?? 'ended'}${end.error === undefined ? '' : `: ${end.error}`}` };
 }
+
+/** What background-settle waits on next: the wake run naming the job to close, else the job's row to settle with
+ *  nothing running. With no job there is nothing to wait for: the call never detached, and that is the finding. */
+export type BackgroundSettleWait = 'wait' | 'wake-closed' | 'job-settled' | 'nothing-detached';
+
+export function backgroundSettleWait(
+  jobId: string | undefined, jobs: readonly { readonly id: string; readonly status: string }[], events: readonly RunEvent[],
+): BackgroundSettleWait {
+  if (jobId === undefined) return 'nothing-detached';
+
+  const ended = new Set(events.flatMap((event) => (event.type === 'run_end' ? [event.runId] : [])));
+  const started = events.flatMap((event) => (event.type === 'run_start' ? [event] : []));
+  const wakes = started.filter((event) => event.userMessage?.includes(jobId) === true);
+
+  if (wakes.length > 0) return wakes.every((wake) => ended.has(wake.runId)) ? 'wake-closed' : 'wait';
+
+  const job = jobs.find((candidate) => candidate.id === jobId);
+
+  return job !== undefined && job.status !== 'running' && started.every((run) => ended.has(run.runId)) ? 'job-settled' : 'wait';
+}

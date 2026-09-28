@@ -247,10 +247,17 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     Object.assign(this.env, bindings);
   }
 
+  /** The provider revision every later resolution reads, as the account's settings changing would move it. */
+  harnessProviderRevision(revision: string): void {
+    this._providerRevision = revision;
+  }
+  private _providerRevision = HARNESS_PROVIDER_SNAPSHOT.revision;
+
   protected override async profileInputs() {
     const overlay = this._catalogOverlay;
+    const revision = this._providerRevision;
 
-    if (overlay === null) return { envelope: HARNESS_PROFILE_ENVELOPE, provider: HARNESS_PROVIDER_SNAPSHOT };
+    if (overlay === null) return { envelope: HARNESS_PROFILE_ENVELOPE, provider: { ...HARNESS_PROVIDER_SNAPSHOT, revision } };
 
     // Merged over the builtins, digest recomputed. Overlay tier models join the
     // provider snapshot: a tier naming an unlisted model is refused before routing.
@@ -261,8 +268,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return {
       envelope: { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) },
-      provider: overlay.availableModels === undefined ? HARNESS_PROVIDER_SNAPSHOT : {
+      provider: overlay.availableModels === undefined ? { ...HARNESS_PROVIDER_SNAPSHOT, revision } : {
         ...HARNESS_PROVIDER_SNAPSHOT,
+        revision,
         availableModels: [...new Set([...HARNESS_PROVIDER_SNAPSHOT.availableModels, ...overlay.availableModels])],
       },
     };

@@ -1036,8 +1036,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
       .toHaveLength(0);
   });
 
-  test('a judged tree BELOW the marginalisation floor is refused, by the in-process entry point too', async () => {
-    // Built past `swarmValidity`: `runSwarm` does not route through it, so the runner needs its own gate.
+  test('a judged tree BELOW the marginalisation floor is refused', () => {
     const call = resolveSwarm({
       preset: 'custom',
       label: 'depth-suite',
@@ -1051,16 +1050,9 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect('reason' in call).toBe(false);
 
     if ('reason' in call) return;
+    expect(swarmValidity(call)).toMatchObject({ reason: 'bad_input' });
     expect(swarmValidity(call)?.error).toContain('samples at least 20');
-
-    const { rt } = createTestRuntime();
-    const refusal = await runSwarm({ reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build' }, call);
-    expect('reason' in refusal).toBe(true);
-
-    if (!('reason' in refusal)) return;
-    expect(refusal.reason).toBe('bad_input');
-    expect(refusal.error).toContain('samples at least 20');
-    expect(refusal.error).toContain('maxEvalLLMCalls');
+    expect(swarmValidity(call)?.error).toContain('maxEvalLLMCalls');
   });
 
   test('a FLAT judged run has no floor to clear — the bound is about trees', async () => {

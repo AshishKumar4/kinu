@@ -3,7 +3,7 @@
  * only toward the bound host, and scrubs secrets from anything coming back. Consent is per binding, not per request.
  */
 
-import type { ApprovalGrant, ApprovalResult } from './approval-gate';
+import type { ApprovalGrant } from './approval-gate';
 
 /** Version tag, so a stored binding from an older build is not mistaken for a secret. */
 export const EGRESS_PLACEHOLDER_PREFIX = 'pxs1_';
@@ -45,13 +45,6 @@ export function egressSecretRule(bindingId: string): string {
   return `egress-secret:${bindingId}`;
 }
 
-/** The binding id inside a rule name, or null when the rule is about something else. */
-export function parseEgressSecretRule(rule: string): string | null {
-  const id = rule.startsWith('egress-secret:') ? rule.slice('egress-secret:'.length) : '';
-
-  return id.length > 0 ? id : null;
-}
-
 /** Executor egress grants are scoped to; the grant writer and the binding filter must agree on this string. */
 const EGRESS_EXECUTOR = 'sandbox';
 
@@ -78,24 +71,6 @@ export function egressHostMatches(pattern: string, host: string): boolean {
   const escaped = glob.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
 
   return new RegExp(`^${escaped.join('.*')}$`).test(target);
-}
-
-/** Review shown when a secret is bound to a host. Always `gate`, whoever's files the executor holds; a standing grant still short-circuits it. */
-export function reviewEgressBinding(
-  binding: Pick<EgressSecretBinding, 'id' | 'label' | 'host'>,
-): ApprovalResult {
-  return {
-    decision: 'gate',
-    hits: [{
-      decision: 'gate',
-      rule: egressSecretRule(binding.id),
-      explanation:
-        `Lets the agent's container spend the secret "${binding.label}" on requests to `
-        + `${binding.host}. The container never holds the secret itself: it holds a `
-        + 'placeholder, substituted outside the container on the way out, but every '
-        + `request it makes to ${binding.host} can carry the owner's credential.`,
-    }],
-  };
 }
 
 /** What the adapter observed about one outbound request; bodies are absent (see {@link planEgress}). */

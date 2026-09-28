@@ -68,8 +68,6 @@ async function listWorkspaceRoster(c: UserContext): Promise<Response> {
   const bucket = v.safeParse(RosterBucketSchema, url.searchParams.get('bucket') ?? undefined);
   const query = url.searchParams.get('q') ?? undefined;
 
-  // Roster bounds live in roster.ts's clampRosterLimit; this only keeps NaN from reaching the
-  // registry as a throw instead of a 400.
   if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
     return err(400, 'Workspace roster limit must be a positive integer.');
   }

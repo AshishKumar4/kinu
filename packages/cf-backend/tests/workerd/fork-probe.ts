@@ -9,7 +9,7 @@ import {
   agentArtifactDirectory, agentHome, CHAT_SESSION_ID, MAIN_AGENT,
   FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver, NativeSinkPlan, SOUL_PATH,
   foldForkStream, forkTransferFrames, initWorkspaceSchema, readForkLineage, sealForkFrame,
-  SessionHistory, summarizeSoulBytes, WorkspaceActorDirectory, openWorkspaceMainActor,
+  SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
   type ForkFileSource, type ForkFrame, type ForkLineageRow, type ForkNativeFilePort, type ForkResult,
   type ForkStaging, type SqlExecutor, type SqlValue, type VFS, type VfsEntryStat,
 } from '@kinu.run/core';
@@ -28,7 +28,7 @@ export const PROBE_SOURCE_NAME = 'fork-source';
 
 const SOUL_CONTENT = '# Mission\nProve a fork survives an eviction.\n';
 
-export const PROBE_SOUL_MISSION = summarizeSoulBytes(new TextEncoder().encode(SOUL_CONTENT));
+export const PROBE_SOUL_MISSION = summarizeSoul(SOUL_CONTENT);
 
 /** workerd's streaming digest; the ambient `Crypto` type does not declare it. */
 interface WorkerdDigestStream extends WritableStream<ArrayBufferView | ArrayBuffer> {
@@ -472,7 +472,7 @@ export class ForkTargetProbeDO extends ForkProbeDO {
         publish: async (targetPath, bytes) => {
           await this.plane.writeFile(targetPath, bytes);
 
-          return { mission: summarizeSoulBytes(bytes) };
+          return { mission: summarizeSoul(new TextDecoder().decode(bytes)) };
         },
       }),
     );

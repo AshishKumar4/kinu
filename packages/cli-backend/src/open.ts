@@ -17,7 +17,6 @@ export interface WorkspaceInfo {
   purpose: string;
   soul: string;
   scaffoldVersion: number;
-  craftedToolCount: number;
   searchNodeCount: number;
   memorySize: number;
   createdAt: number;
@@ -74,8 +73,6 @@ export async function openWorkspaceCLI(
   // The live version, scoped to `rt.actor`: a facet opens as its own actor, and
   // the scaffold pointer is per-actor.
   const scaffoldVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? 0;
-  // Unscoped on purpose: `crafted_tools` is one catalog per workspace.
-  const craftedToolCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c ?? 0;
 
   const searchNodeCount = sql<{ c: number }>`
     SELECT COUNT(*) as c FROM search_nodes WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
@@ -90,7 +87,6 @@ export async function openWorkspaceCLI(
       purpose: summarizeSoul(soul),
       soul,
       scaffoldVersion,
-      craftedToolCount,
       searchNodeCount,
       memorySize,
       createdAt: identity.created_at,

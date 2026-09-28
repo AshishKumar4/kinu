@@ -123,6 +123,16 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   /** Sealed rows never change, so each is read once per reader. */
   private sealed = new Map<string, SealedMessage>();
 
+  /** For a row proven to encode as `source`: its text is the streamed string, one copy, not two. */
+  protected shareText(reference: MessageReference, source: ModelMessage): void {
+    const cached = this.sealed.get(reference.messageId);
+    const shared = cached === undefined ? undefined : decodeModelMessageValues([encodeModelMessage(source)])[0];
+
+    if (cached === undefined || shared === undefined) return;
+    freezeTree({ value: shared });
+    this.sealed.set(reference.messageId, { message: shared, origin: cached.origin });
+  }
+
   constructor(protected readonly sql: SqlExecutor, protected readonly actor: A, readonly payloads: P) {}
 
   protected row(messageId: string): MessageRow {
@@ -180,6 +190,26 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     this.actor.assertCurrent();
 
     return { row, parts };
+  }
+
+  /** Each named message's parts, its rows in one statement; a message no row holds is absent. */
+  async materializePartsOf(messageIds: readonly string[]): Promise<Map<string, readonly StoredPart[]>> {
+    this.actor.assertCurrent();
+
+    const rows = this.sql<MessageRow & { message_id: string }>`SELECT message_id,origin,role,native_content_kind,envelope_json,sealed_at,content_json,content_path,content_digest
+      FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id IN (SELECT value FROM json_each(${JSON.stringify(messageIds)}))`;
+
+    const parts = new Map<string, readonly StoredPart[]>();
+
+    for (const row of rows) {
+      parts.set(row.message_id, row.sealed_at === null
+        ? await this.streamed(row.message_id)
+        : storedParts(await this.payloads.read(payloadOf(row.content_json, row.content_path, row.content_digest))));
+    }
+
+    this.actor.assertCurrent();
+
+    return parts;
   }
 
   async projection(reference: MessageReference): Promise<JsonObject> {
@@ -267,6 +297,12 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
 
     if (!carries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
     this.sources.set(message, reference);
+
+    if (JSON.stringify(encodeModelMessage(recorded)) === JSON.stringify(encodeModelMessage(message))) {
+      this.shareText(reference, message);
+      const shared = await super.materialize(reference);
+      this.sources.set(shared, reference);
+    }
   }
 
   /** Frozen, so it cannot drift from the committed row it names. */

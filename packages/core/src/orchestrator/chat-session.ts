@@ -92,11 +92,9 @@ const NO_STRANDED_DELIVERY_GRACE = 0;
 
 /** The run end is classified once by `runTurn`, so the roster and the run row cannot disagree. */
 interface CommittedTurn {
-  readonly messageId: string;
   readonly turn: CompletedTurn;
   readonly owed: readonly OwedEffect[];
-  /** Null for a turn with no durable identity: it runs unledgered. */
-  readonly transition: TerminalTransition | null;
+  readonly transition: TerminalTransition;
 }
 
 /** Reported rather than thrown, because the signal settle after it must run either way. */
@@ -1034,6 +1032,7 @@ export class ChatSession {
     // One commit — see {@link commitTurn}.
     const commit = this.commitTurn({
       item,
+      turnId: lease.turnId,
       event: eventName,
       startedAt,
       assistantText: fullText,
@@ -1130,6 +1129,7 @@ export class ChatSession {
    */
   private commitTurn(input: {
     readonly item: QueueItem;
+    readonly turnId: string;
     readonly event: string | undefined;
     readonly startedAt: number;
     readonly assistantText: string;
@@ -1158,7 +1158,7 @@ export class ChatSession {
     try {
       // One row per steer: the walk-back pivot matches individual messages. A harness turn's row carries its
       // provenance; the `programmatic:` prefix only keys idempotency.
-      const turnId = this.turnId ?? crypto.randomUUID();
+      const { turnId } = input;
       // Minted at admission: the roster, frozen before the write, keys on it.
       const messageId = this.messageId;
 
@@ -1205,10 +1205,7 @@ export class ChatSession {
         overflowRetry: input.overflowRetry,
       });
 
-      // A response with no durable identity runs without a ledger key.
-      const transition: TerminalTransition | null = this.turnId === null
-        ? null
-        : { turnId, messageId };
+      const transition: TerminalTransition = { turnId, messageId };
 
       this.transaction(() => {
         this.persist(input.preparedAssistant);
@@ -1222,7 +1219,7 @@ export class ChatSession {
         this.ports.terminal().record(transition, owed);
       });
 
-      return { committed: { messageId, turn, owed, transition } };
+      return { committed: { turn, owed, transition } };
     } catch (cause) {
       // Classified at the boundary that caught it.
       return {

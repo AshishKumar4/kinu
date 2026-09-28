@@ -1156,7 +1156,6 @@ export function renderStatusLines(status: AgentClientStatus): string[] {
     row('Scaffold:', status.scaffoldVersion === undefined ? undefined : `v${status.scaffoldVersion}`),
     row('Messages:', status.messageCount),
     row('MCTS:', status.searchNodeCount === undefined ? undefined : `${status.searchNodeCount} nodes`),
-    row('Crafted:', status.craftedToolCount),
     row('Tools:', status.toolCount),
     row('Memory:', status.memorySize === undefined ? undefined : `${status.memorySize} B`),
     row('Database:', status.dbSize === undefined ? undefined : `${(status.dbSize / 1024).toFixed(1)} KB`),

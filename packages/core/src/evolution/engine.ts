@@ -232,6 +232,7 @@ export class EvolutionEngine {
   private readonly history: SessionHistory;
   private readonly config: EvolutionConfig;
   private readonly listeners: EvolutionListener[] = [];
+  private feedbackTable: boolean | undefined;
   /** Also holds the durable closed-window count the lifetime timescale paces by. */
   private readonly agentConfig: AgentConfigStore;
   /** Every completed turn still owed evolution work, one row per turn.
@@ -672,7 +673,9 @@ export class EvolutionEngine {
   /** turn_feedback is cf-backend-only (conformance/manifest.ts), so its absence is
      *  checked explicitly rather than inferred from an exception. */
   private readExplicitFeedback(turnId?: string): 'positive' | 'negative' | null {
-    if (!turnId || !tableExists(this.rt.storage.sql, 'turn_feedback')) return null;
+    this.feedbackTable ??= tableExists(this.rt.storage.sql, 'turn_feedback');
+
+    if (!turnId || !this.feedbackTable) return null;
 
     // Scoped: message ids are minted per actor, so an unscoped read can return a sibling's row.
     return this.rt.storage.sql<{ feedback: 'positive' | 'negative' }>`

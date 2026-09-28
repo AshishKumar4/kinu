@@ -10,14 +10,15 @@ export type Credential =
 export interface BearerCredential {
   kind: 'bearer';
   token: string;
+  /** Sent here instead of the provider's own endpoint (a proxy). */
+  baseURL?: string;
 }
 
-/** Refresh token is provider-dependent. */
 export interface OAuthCredential {
   kind: 'oauth';
   accessToken: string;
   refreshToken?: string;
-  /** Unix-ms when the access token expires. Undefined if unknown. */
+  /** Unix-ms when the access token expires. */
   expiresAt?: number;
   metadata?: JsonObject;
 }

@@ -176,25 +176,49 @@ seam once per construction, with `isolateGen` from
 
 ### One trace per turn
 
-`ActorSession.execute` runs each turn under root span `turn`, root and hosted
-actors alike (`AgentTracing.turns`). Its children open through the turn's
-handle (`core/src/turn-trace.ts`):
+A turn is a set of spans joined by `kinu.turn` (the digested turn id) and
+`kinu.turn.epoch`, root and hosted actors alike (`AgentTracing.turns`,
+`core/src/turn-trace.ts`). No turn span is another's parent, and none stays
+open: each is opened and closed in one call at the end of its unit, carrying
+`kinu.started_at_ms` and `kinu.duration_ms` from our own clock.
 
-| Span | Parent | Attributes |
+The reason is a platform rule measured on staging over the 3 days to
+2026-09-27 (5,131 turn spans, 220 force-closed with
+`cloudflare.warning.type = span_not_ended`). A span still open after its
+invocation returned is force-closed, attributes dropped, when the object starts
+any other invocation: 66 of 70 force-close instants fell within 10 ms of an
+alarm, WebSocket message or RPC starting in the same object. A turn outlives
+the message that started it, so a span open across any await could straddle
+one. Spans opened after the owning invocation had already ended were recorded
+with their attributes when they closed before the next invocation started (47 of
+47). The cost is nesting: the provider `fetch` and storage spans are siblings of
+our spans in the trace, not children.
+
+| Span | Recorded | Attributes |
 | --- | --- | --- |
-| `turn` | the invocation running it | `kinu.turn.mode`, `kinu.turn.steps`, `kinu.turn.interrupted` |
-| `turn.model_call` | `turn` | `gen_ai.request.model`, `gen_ai.provider.name`, `kinu.model.call`, `kinu.model.fallback`, `kinu.model.steps` |
-| `turn.tool_call` | `turn.model_call` | `gen_ai.tool.name` |
-| `turn.delegation` | the `agents` tool call | `kinu.delegation.action` (`swarm`, `hire`, `msg`) |
+| `turn.admitted` | after the claim is admitted, timed from `execute` | `kinu.turn.mode` |
+| `turn.step` | at each model step's `onStepFinish`, timed from its `prepareStep`; or when its call ends under it | `kinu.step`, `gen_ai.request.model`, `gen_ai.provider.name`, `gen_ai.response.model`, `gen_ai.response.finish_reasons`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `kinu.step.tool_calls`, `kinu.model.call`, `kinu.model.fallback`, `kinu.step.interrupted` |
+| `turn.tool_call` | when the tool's result settles | `kinu.step`, `gen_ai.tool.name` |
+| `turn.delegation` | when the `agents` action settles | `kinu.step`, `kinu.delegation.action` (`swarm`, `hire`, `msg`) |
+| `turn.settled` | when the claim gets its outcome, timed from `execute` | `kinu.turn.outcome`, `kinu.turn.steps`, `kinu.turn.interrupted` |
+| `turn.settled` (recovered) | when recovery closes a claim a dead process left admitted (`settleRecovered`) | `kinu.turn.outcome`, `kinu.turn.recovered` |
+
+A resumed turn is admitted again at the next epoch under the same `kinu.turn`,
+so the join is on `kinu.turn`: every `turn.admitted` has a `turn.settled` with
+the same key once the turn ends, from `execute` or from recovery. The query, on
+the telemetry `otel` dataset: `$metadata.spanName` in (`turn.admitted`,
+`turn.settled`), grouped by `kinu.turn`; and `cloudflare.warning.type eq
+span_not_ended` with `$metadata.spanName includes turn` must count zero.
 
 No attribute holds a message, a tool argument or a result;
 `core/tests/unit-turn-trace.test.ts` plants text in each and reads every
-attribute. Not spanned: scaffold-program turns' model calls, `agents.*` from
-`eval` code, and model calls outside a turn (`model-invocation.ts`). The CLI
-has no tracer, so its turns run unspanned.
+attribute, and fails if any turn span stays open across an await. Not spanned:
+a scaffold program's own model steps and tool calls (its turn is admitted and
+settled), `agents.*` from `eval` code, and model calls outside a turn
+(`model-invocation.ts`). The CLI has no tracer, so its turns run unspanned.
 
 The Agents SDK's `wrapAISDK` (`agents/observability/ai`, agents 0.22.0) was
-evaluated for `turn.model_call` and not adopted. It imports
+evaluated for the model-call span and not adopted. It imports
 `cloudflare:workers`, so it cannot sit in the core loop the CLI also runs. Its
 spans bypass `Tracer`, so they would carry no actor and no `kinu.error`, and no
 recording tracer can check them. When traced it also replaces every tool's
@@ -202,7 +226,8 @@ recording tracer can check them. When traced it also replaces every tool's
 turn.
 
 A handle is revoked when its invocation or turn settles. Work that escapes and
-opens a span afterwards throws `KinuError('unsupported')`. Context ends at
+opens a span afterwards (for a turn: begins a unit) throws
+`KinuError('unsupported')`. Context ends at
 `alarm()`: the turn that armed an alarm may be minutes or days old, in a reset
 isolate, so one span across both would claim time nothing measured. There is
 deliberately no `AsyncLocalStorage`: implicit context has no revocation point.
