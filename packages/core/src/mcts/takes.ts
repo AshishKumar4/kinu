@@ -1,6 +1,8 @@
 /** Alternate takes: competing answers offered to the user, whose pick is recorded in turn_outcomes
  *  (source 'take_pick'). */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -175,11 +177,11 @@ export async function recordTakePick(
   const row = sql<RawTakeRow>`SELECT * FROM alternate_takes
     WHERE actor_id = ${actor.actorId} AND id = ${input.takeId}`[0];
 
-  if (!row) throw new Error(`Unknown take set "${input.takeId}"`);
+  if (!row) return settle(Effect.die(new Error(`Unknown take set "${input.takeId}"`)));
   const set = toTakeSet(row);
   const chosen = set.candidates.find((c) => c.nodeId === input.nodeId);
 
-  if (!chosen) throw new Error(`Node "${input.nodeId}" is not a candidate of take set "${input.takeId}"`);
+  if (!chosen) return settle(Effect.die(new Error(`Node "${input.nodeId}" is not a candidate of take set "${input.takeId}"`)));
 
   const now = input.now ?? nowMs();
   const changedAnswer = chosen.nodeId !== set.winnerNodeId;

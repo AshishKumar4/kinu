@@ -26,7 +26,6 @@ export function parsesAsExpression(source: string): string | null {
   }
 }
 
-/** The names a program declares at its top level, in order. */
 function topLevelDeclarations(program: acorn.Program) {
   const functions: string[] = [];
   const variables: string[] = [];

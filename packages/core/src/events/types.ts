@@ -28,7 +28,6 @@ export type RunEventType =
   | 'turn_start'
   | 'tool_call_end'
   | 'step_finish'
-  | 'step_partial'
   | 'model_call'
   | 'provider_wait'
   | 'model_fallback'
@@ -88,14 +87,6 @@ export interface OpenTurnIdentity {
   readonly steerIds?: readonly string[];
 }
 
-export interface PartialToolCall {
-  readonly toolCallId: string;
-  readonly toolName: string;
-  readonly args: JsonValue;
-  readonly result?: string;
-  readonly error?: string;
-}
-
 export type RunEvent =
   | (RunEventBase & { type: 'run_start'; agentId: string; userMessage?: string;
       caused_by?: string;
@@ -122,9 +113,6 @@ export type RunEvent =
       account?: CallAccount | undefined;
       egress?: string | undefined;
     })
-  /** Superseded by the step's `step_finish`; the newest row of an unfinished step is where a
-   *  continuation resumes. */
-  | (RunEventBase & { type: 'step_partial'; stepIndex: number; text: string; toolCalls: readonly PartialToolCall[] })
   /** A model call that is not a turn step; separate from `step_finish` so it stays out of the
    *  prefix-cache EMA. `usage` is always written (`{}` = unmeasured); `usd` uses the call's own model. */
   | (RunEventBase & {

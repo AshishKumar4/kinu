@@ -359,7 +359,6 @@ export class SearchTree {
     return branch === undefined ? undefined : { score: branch.score, value: branch.value, phase: branch.phase, parent: branch.parent };
   }
 
-  /** Every foreground branch still in the picture, with its phase. */
   living(): readonly { readonly id: number; readonly phase: BranchPhase; readonly value: number; readonly age: number }[] {
     const layer = this.layers[0];
 
@@ -657,7 +656,6 @@ export class SearchTree {
     this.driftY += (targetY - this.driftY) * ease;
   }
 
-  /** What a branch's phase asks it to look like this instant. */
   private lookOf(layer: LayerState, branch: Branch, bestValue: number): readonly [tone: number, glow: number, alpha: number, width: number] {
     if (branch.phase === 'ember') {
       const fade = 1 - branch.phaseAge / EMBER_SECONDS;

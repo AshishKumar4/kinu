@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
+import { parseJsonValue, type JsonValue } from '../utils/json';
 
 export const KeySchema = v.pipe(v.string(), v.minLength(1), v.maxLength(512));
 
@@ -21,26 +21,24 @@ export function initCodemodeStateTable(execRaw: RawSqlExec): void {
   )`);
 }
 
-/** SQL stays in the trusted store. Programs receive only the four state operations. */
+/** SQL stays in the trusted store. Programs receive only the four state operations; the codemode provider validates
+ *  their keys and values, so the store does not again. */
 export function createProgramStateStore(sql: SqlExecutor, actorId: string, authorize: () => void): ProgramStateStore {
   return {
     get(key) {
       authorize();
-      v.parse(KeySchema, key);
       const row = sql<{ value: string }>`SELECT value FROM actor_program_state WHERE actor_id = ${actorId} AND key = ${key}`[0];
 
       return row === undefined ? null : parseJsonValue(row.value);
     },
     set(key, value) {
       authorize();
-      v.parse(KeySchema, key);
-      const encoded = JSON.stringify(v.parse(JsonValueSchema, value));
+      const encoded = JSON.stringify(value);
       void sql`INSERT INTO actor_program_state (actor_id, key, value, updated_at) VALUES (${actorId}, ${key}, ${encoded}, ${Date.now()})
         ON CONFLICT(actor_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`;
     },
     delete(key) {
       authorize();
-      v.parse(KeySchema, key);
       void sql`DELETE FROM actor_program_state WHERE actor_id = ${actorId} AND key = ${key}`;
     },
     list(prefix) {

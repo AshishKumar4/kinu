@@ -95,6 +95,28 @@ import {
  *  attempt, and `#armStartup` early-returns on a pinned attempt, so nothing re-arms. */
 const CONTAINER_STOP_ATTEMPTS = 50;
 
+export interface UntimedResult {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number;
+}
+
+/** The SDK's `killCommand` (D37). */
+const KILL_TREE = `
+tree() { for c in $(cat /proc/$1/task/$1/children 2>/dev/null); do tree "$c"; done; [ -d /proc/$1 ] && echo "$1"; }
+alive() { for p in $1; do [ -d /proc/$p ] && ! grep -q '^State:[[:space:]]*Z' /proc/$p/status 2>/dev/null && return 0; done; return 1; }
+first=$(tree "$1")
+alive "$first" || exit 3
+kill -TERM $first 2>/dev/null
+i=0
+while [ $i -lt 50 ] && alive "$first"; do sleep 0.1; i=$((i + 1)); done
+alive "$first" || exit 0
+kill -KILL $first $(tree "$1") 2>/dev/null
+exit 0
+`;
+
+const KILL_TREE_GONE = 3;
+
 const CONTAINER_STOP_INTERVAL_MS = 100;
 
 /** The SDK's default poll interval; the retry count derives from it. */
@@ -156,7 +178,6 @@ const STORE_MOUNT_S3FS_OPTIONS: readonly string[] = [
  *  survive an eviction, so writes are throttled rather than one per call. */
 const INTERACTION_PERSIST_INTERVAL_MS = 30_000;
 
-/** Twin of `LIVE_PROCESS_STATES` in `packages/cf-backend/src/sandbox-exec-lane.ts`. */
 function isProcessLive(status: string): boolean {
   return status === 'starting' || status === 'running';
 }
@@ -1061,7 +1082,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         running: this.ctx.container?.running === true, reason,
       });
 
-      // Only this generation's refusal is an incident.
       if (this.#owns(generation)) {
         this.#refused = { generation, reason };
         const failure = classifyRecovery({ cause });
@@ -1537,18 +1557,22 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** Strict {@link resolveReadiness}: `pending` is a refusal, never permission. */
   async ensureReady(): Promise<RestoreAdmission> {
-    return await this.#ensureReady(this.#teardowns);
+    return (await this.#ensureReady(this.#teardowns)).admission;
   }
 
-  async #ensureReady(arrived: number): Promise<RestoreAdmission> {
+  async #ensureReady(arrived: number): Promise<{ readonly admission: RestoreAdmission; readonly container: Container }> {
     const readiness = await this.#resolveReadiness(arrived);
+    const container = this.ctx.container;
 
-    if (readiness.kind === 'pending') throw new Error(readiness.reason);
+    if (readiness.kind === 'pending' || container?.running !== true) {
+      throw new Error(readiness.kind === 'pending' ? readiness.reason : 'this devbox is not ready: its container stopped after it was admitted');
+    }
+
     // Every operation route and only callers pass here (maintenance uses `#rawExec` and
     // scheduled callbacks), so file, port and process routes stamp the lease too (D18).
     this.stampInteraction();
 
-    return readiness;
+    return { admission: readiness, container };
   }
 
   /** Stamps the lease for a caller on a lane it cannot see, e.g. a terminal; the host calls
@@ -1571,6 +1595,39 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       return await super.exec(command, { cwd: DEVBOX_WORKDIR, ...options });
     });
   }
+
+  /** No deadline; the SDK's process lane lost output (D37). */
+  async execUntimed(command: string, options: { readonly cwd?: string; readonly execId: string }): Promise<UntimedResult> {
+    return await this.#withActiveCaller(async () => {
+      const { container } = await this.#ensureReady(this.#teardowns);
+      // Held before the start: a kill that arrives while it starts ends it.
+      const started = container.exec(['bash', '-c', command], { cwd: options.cwd ?? DEVBOX_WORKDIR });
+      this.#untimed.set(options.execId, started);
+
+      try {
+        const output = await (await started).output();
+        const text = new TextDecoder();
+
+        return { stdout: text.decode(output.stdout), stderr: text.decode(output.stderr), exitCode: output.exitCode };
+      } finally {
+        this.#untimed.delete(options.execId);
+      }
+    });
+  }
+
+  /** False when the command had already exited. */
+  async killUntimed(execId: string): Promise<boolean> {
+    const started = this.#untimed.get(execId);
+    const container = this.ctx.container;
+
+    if (started === undefined || container?.running !== true) return false;
+    const { pid } = await started;
+    const ended = await (await container.exec(['sh', '-c', KILL_TREE, 'kill-tree', String(pid)])).output();
+
+    return ended.exitCode !== KILL_TREE_GONE;
+  }
+
+  readonly #untimed = new Map<string, Promise<ExecProcess>>();
 
   /** The only transition that clears a terminal refusal; keeps the `replace` stage, so a failed
    *  retry refuses again instead of destroying. Also re-runs an incomplete restoration. */
@@ -2408,7 +2465,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     }
   }
 
-  /** Files the incident, then arms its delivery (`recordIncident`). */
   async #record(
     stage: IncidentStage,
     reason: string,

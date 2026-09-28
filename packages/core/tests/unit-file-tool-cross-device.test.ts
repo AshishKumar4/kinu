@@ -60,7 +60,7 @@ function fileToolOverTheFleet(written: JsonValue = { success: true }) {
   const plane = withMountTable(rt.storage.vfs, standardMounts((name) => router.getProvider(name)));
 
   const tools = buildBuiltinTools({
-    rt: { ...rt, storage: { ...rt.storage, vfs: plane }, executionRouter: router, deviceTransport: transport },
+    rt: { ...rt, storage: { ...rt.storage, vfs: plane }, toolFiles: plane, executionRouter: router, deviceTransport: transport },
     history: storesFor(rt).history,
   });
 

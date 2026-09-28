@@ -254,8 +254,6 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   /** The newest `limit` entries, oldest first, with their parts, in one statement. */
   entries(limit = 10_000): readonly ConversationEntry[] {
     this.actor.assertCurrent();
-
-    if (!Number.isSafeInteger(limit) || limit < 0) throw new KinuError('bad_input', 'history limit must be a nonnegative integer');
     const { actorId } = this.actor;
 
     return withParts(this.sql<EntryWithPartRow>`WITH newest AS (SELECT id,position FROM conversation_entries
@@ -508,12 +506,10 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
   }
 
   appendUser(entry: PreparedConversationEntry): void {
-    if (entry.role !== 'user') throw new KinuError('bad_input', 'user admission requires a user entry');
     this.atomic(() => { if (!this.has(entry.id)) this.record(entry); });
   }
 
   appendAssistant(entry: PreparedConversationEntry): void {
-    if (entry.role !== 'assistant') throw new KinuError('bad_input', 'assistant settlement requires an assistant entry');
     this.record(entry);
   }
 

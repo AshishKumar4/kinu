@@ -9,7 +9,9 @@
 
 import type { SqlExecutor } from '../../types/primitives';
 import type { ActorHandle } from '../../identity/actor-handle';
+import { Effect } from 'effect';
 import { renderThrownChain } from '../../obs/error';
+import { settleSync } from '../../obs/effect';
 import { checkMisevolutionForSurface } from '../../safety/misevolution';
 import { PROMPT_SECTIONS } from '../../prompting/section-templates';
 import { templateContract, type PromptSection } from '../../prompting/template';
@@ -96,26 +98,21 @@ export async function runSectionGepa<I = unknown, E = unknown>(
     onCandidate: opts.onCandidate,
     constraints: {
       maxSizeBytes: PROMPT_SECTION_MAX_BYTES,
-      customCheck: (source) => {
-        let offered;
+      customCheck: (source) => settleSync(Effect.try({ try: () => templateContract(section.id, source), catch: (cause) => ({ cause }) }).pipe(Effect.match({
+        onFailure: (failed) => renderThrownChain(failed),
+        onSuccess: (offered) => {
+          if (`${offered.slots.join('|')}//${offered.flags.join('|')}` !== wantedKey) {
+            return `slot contract changed: expected {slots: ${wanted.slots.join(', ') || '(none)'}; `
+              + `flags: ${wanted.flags.join(', ') || '(none)'}}`;
+          }
 
-        try {
-          offered = templateContract(section.id, source);
-        } catch (err) {
-          return renderThrownChain({ cause: err });
-        }
+          const misevolution = checkMisevolutionForSurface({ prose: source }, 'scaffold');
 
-        if (`${offered.slots.join('|')}//${offered.flags.join('|')}` !== wantedKey) {
-          return `slot contract changed: expected {slots: ${wanted.slots.join(', ') || '(none)'}; `
-            + `flags: ${wanted.flags.join(', ') || '(none)'}}`;
-        }
-
-        const misevolution = checkMisevolutionForSurface({ prose: source }, 'scaffold');
-
-        return misevolution.ok
-          ? null
-          : `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`;
-      },
+          return misevolution.ok
+            ? null
+            : `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`;
+        },
+      }))),
     },
   });
 

@@ -40,13 +40,13 @@ export interface TerminalTransitionDeps {
   /** Read per call, so a test can arm a cut after construction. */
   readonly fault?: () => TerminalEffectFault | null;
   /** Claim and roster go through this. A process that can die between statements must supply a real transaction. */
-  readonly transaction?: <T>(body: () => T) => T;
+  readonly transaction: <T>(body: () => T) => T;
   /** Gates the turn-wide tool-claim release: an auto-continuation may run tools before it has a terminal claim. */
-  readonly turnIsLive?: (turnId: string) => boolean;
+  readonly turnIsLive: (turnId: string) => boolean;
   /** A past instant means due now. */
   readonly scheduleRetry: (atMs: number) => Promise<void>;
   /** Called once a transition closes with nothing left to retry, so the host can let its arms go. */
-  readonly settled?: () => Promise<void>;
+  readonly settled: () => Promise<void>;
 }
 
 /** Owns the ordering: claim before the first effect, disposition before release, close only on an empty owed set, prune after close. */
@@ -58,21 +58,7 @@ export class TerminalTransitions {
   private readonly inFlight = new Set<string>();
 
   constructor(private readonly deps: TerminalTransitionDeps) {
-    const ledgerDeps = {
-      sql: deps.sql,
-      actor: deps.actor,
-      effects: deps.effects,
-      now: deps.now,
-      scheduleRetry: deps.scheduleRetry,
-    };
-
-    const withFault = deps.fault === undefined ? ledgerDeps : { ...ledgerDeps, fault: deps.fault };
-
-    const withTransaction = deps.transaction === undefined
-      ? withFault
-      : { ...withFault, transaction: deps.transaction };
-
-    this.ledger = new TerminalEffectLedger(withTransaction);
+    this.ledger = new TerminalEffectLedger(deps);
   }
 
   sequenceId(transition: TerminalTransition): string {
@@ -104,9 +90,7 @@ export class TerminalTransitions {
   /** Record the frozen roster and its claim together, before any effect runs.
      * A local adapter includes this synchronous write in its answer transaction. */
   record(transition: TerminalTransition, owed: readonly OwedEffect[]): TerminalDisposition {
-    const commit = this.deps.transaction ?? (<T>(body: () => T): T => body());
-
-    return commit(() => {
+    return this.deps.transaction(() => {
       const disposition = this.begin(transition);
 
       if (disposition === 'first') this.ledger.claim(this.sequenceId(transition), owed);
@@ -183,7 +167,7 @@ export class TerminalTransitions {
       await run.reported;
       this.end(transition);
 
-      if (this.nextRetryAt() === null) await this.deps.settled?.();
+      if (this.nextRetryAt() === null) await this.deps.settled();
     });
   }
 
@@ -217,7 +201,7 @@ export class TerminalTransitions {
         AND result_json IS NULL`[0]?.n ?? 0;
 
     // A live turn may be mid-continuation with no terminal claim yet, so zero open claims is not enough.
-    if (openResponses === 0 && !(this.deps.turnIsLive?.(transition.turnId) ?? false)) {
+    if (openResponses === 0 && !this.deps.turnIsLive(transition.turnId)) {
       void this.deps.sql`DELETE FROM tool_effect_claims
         WHERE actor_id = ${this.deps.actor.actorId} AND turn_id = ${transition.turnId}
           AND normalized_call_id NOT LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}`;
