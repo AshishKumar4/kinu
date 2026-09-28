@@ -368,7 +368,7 @@ turn. The local host already did this: an assignment is admitted there as
 the child's own chat turn, and `ChatSession.processTurn` calls `openTurnRun`
 (`caused_by: subordinate_task`). The cloud runner drives `runHeadInference`
 directly, which never enters that queue, so it wrote no bracket. Decided
-2026-09-17: the stricter side wins, and `runHostedTask` opens and closes the
+2026-09-17: the stricter side wins, and the delegated turn opens and closes the
 run with the same cause and the same input text. Measured the same day in the
 workerd pool. Before, a hired child's ledger held `step_finish` alone (one run
 id, no `run_start`, no `run_end`), so `getRunSummaries` answered
@@ -533,6 +533,30 @@ Heap was read as headroom: the largest held allocation that survived.
   about 1,000 touch the turn's own tables. At 5-10 ms a hop, storage that stays
   in the workspace object and is reached one statement at a time would cost a
   loader-hosted turn 5-50 s.
+
+D9. A hosted subordinate's turn runs in its own loader isolate, and every tool
+it calls runs in the workspace object. Decided 2026-09-28 on D8. The isolate
+(`AgentFacet`, a facet named by the agent's storage key, loaded from the agent
+bundle under a loader id of its own) holds the model loop and the agent's own
+stores: conversation, turn claims, effect claims, run ledger. The workspace
+object keeps everything shared, prepares each turn (profile, prompt, tool
+surface), runs each tool call through `AgentWorkspaceRPC.executeTool` with the
+same code a root tool runs, reviews the finished turn with its advisor, and
+settles the report the hirer is owed. No call into the isolate is held open:
+`deliver` returns once the turn is queued there, and `finishTurn` answers
+back. `agent_open_turns` is the workspace's only record of a turn handed out
+and not heard end; an activation after a reset asks each agent it names to
+recover its own claims (answered turns settle, owed ones are queued again,
+stalled ones retire). The browser's socket stays in the workspace object; an
+agent's stream reaches it as short `observe` calls. Main's turns stay in the
+workspace object.
+Measured 2026-09-28 on a throwaway Worker loading the shipped agent bundle
+(2.16 MB minified, 0.62 MB gzip; core, `ai` and the Nimbus SDK), deleted
+after the run: first call into a new agent 305 ms p50 (n=9, 329-416 ms at
+p90), its first chat read 41-44 ms p50 (the schema laid and the roster rows
+copied), a warm chat read 23-25 ms p50 from the workspace object. Idle heap
+with its stores open: 115 MB held on top of it lived, 118 MB reset only that
+isolate, so about 10-13 MB of its own 128.
 
 
 ## Deploy ladder

@@ -12,7 +12,7 @@ import { captureOperationProfile, CHAT_SESSION_ID, runOperationProfile, slatesCh
 import { SlateInlineContext } from '../src/components/slates/context';
 import { MessageView } from '../src/components/MessageView';
 import {
-  actorOver, chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
+  agentHistory, chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
   workspaceMainActor,
 } from './helpers/actor-harness';
 import { scriptedGateway } from './helpers/platform-gateway';
@@ -75,19 +75,9 @@ test("a hire's slate edit is previewed on the hire's answer, and nowhere else", 
     name: 'board-keeper', displayName: 'Board keeper', nameOrigin: 'user', mission: 'keep the board current',
   });
 
-  // A hire the owner has spoken to: its chat has a row, so its answer is recorded there.
-  const history = hire.actor.stores.history;
-
-  const opened = await history.append({
-    id: 'u-1', turnId: 'u-1', message: { role: 'user', content: 'Keep the board.' }, origin: 'input', assertOwner: () => hire.actor.handle.assertCurrent(),
-  });
-
-  const transcript = history.transcript(CHAT_SESSION_ID);
-
-  transcript.appendUser(await transcript.prepareUser({ id: 'u-1', turnId: 'u-1', message: opened }));
   await runDelegatedTask(workspace, hire.actor.handle.actorId, 'Add an expiry column to the board.');
 
-  const hireAnswers = (await storedChat(workspace, actorOver(workspace.db, hire.actor.handle.actorId))).filter((message) => message.role === 'assistant');
+  const hireAnswers = (await agentHistory(workspace, hire.actor.handle.actorId).history.transcript(CHAT_SESSION_ID).history()).filter((message) => message.role === 'assistant');
 
   expect(hireAnswers.map((message) => slatesChanged({ metadata: message.metadata }))).toEqual([['board']]);
   expect(await workspace.agent.readWorkspaceFile('/slates/board/client.tsx')).toMatchObject({ ok: true });
@@ -248,18 +238,9 @@ test("a hire whose report quotes the slate's line gets no second preview", async
     name: 'board-keeper', displayName: 'Board keeper', nameOrigin: 'user', mission: 'keep the board current',
   });
 
-  const history = hire.actor.stores.history;
-
-  const opened = await history.append({
-    id: 'u-1', turnId: 'u-1', message: { role: 'user', content: 'Keep the board.' }, origin: 'input', assertOwner: () => hire.actor.handle.assertCurrent(),
-  });
-
-  const transcript = history.transcript(CHAT_SESSION_ID);
-
-  transcript.appendUser(await transcript.prepareUser({ id: 'u-1', turnId: 'u-1', message: opened }));
   await runDelegatedTask(workspace, hire.actor.handle.actorId, 'Add an expiry column to the board.');
 
-  const answer = (await storedChat(workspace, actorOver(workspace.db, hire.actor.handle.actorId))).filter((message) => message.role === 'assistant').at(-1);
+  const answer = (await agentHistory(workspace, hire.actor.handle.actorId).history.transcript(CHAT_SESSION_ID).history()).filter((message) => message.role === 'assistant').at(-1);
 
   expect(slatesChanged({ metadata: answer?.metadata })).toEqual([]);
   expect(previewsDrawn(answer)).toEqual(['board']);

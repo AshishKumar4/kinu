@@ -30,7 +30,7 @@ let childSpoke = Promise.withResolvers<void>();
 /** Resolved when the durable lane's `msg` call was authored. */
 let durableMsgSent = Promise.withResolvers<void>();
 
-/** Resolved when the child's model has been asked for both durable turns. `runHostedTask` writes
+/** Resolved when the child's model has been asked for both durable turns. A delegated turn writes
  *  `run_start` before calling the model, so the second request means both runs are open. */
 let childAskedTwice = Promise.withResolvers<void>();
 

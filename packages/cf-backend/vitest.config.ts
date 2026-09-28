@@ -22,6 +22,7 @@ import {
 import { kCurrentWorker, type V4ModuleDefinition } from 'miniflare';
 import { builtinModules } from 'node:module';
 import { promptText } from './vite-prompt-text';
+import { buildAgentBundle } from './vite-agent-bundle';
 
 /**
  * KINU-065: Vite's oxc supports only legacy decorators, which break `@callable()` (they register the
@@ -171,6 +172,26 @@ const addressedNameProbe = buildSync({
   alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
+const agentFacetProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/agent-facet-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/agent-facet-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
+// The agent bundles a probe's workspace loads into its agents' own isolates, served as the asset binding serves them.
+const agentFacetProbeBundle = buildAgentBundle(fileURLToPath(new URL('./tests/workerd/agent-facet-probe-agent.ts', import.meta.url)));
+
+const shippedAgentBundle = buildAgentBundle();
+
+function agentAssets(bundle: string) {
+  return async (request: Request): Promise<Response> => (new URL(request.url).pathname === '/_agent/agent.js'
+    ? new Response(bundle, { headers: { 'content-type': 'text/javascript' } })
+    : new Response('Not found', { status: 404 }));
+}
 
 const attributionProbe = buildSync({
   entryPoints: [fileURLToPath(new URL('./tests/workerd/attribution-probe.ts', import.meta.url))],
@@ -380,7 +401,7 @@ export default defineConfig({
           workerLoaders: { LOADER: {} },
           modules: probeModules(hireProbe),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
-          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'HireAI' } },
+          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'HireAI' }, ASSETS: agentAssets(shippedAgentBundle) },
           outboundService: hireOutbound,
           durableObjects: {
             HIRE_PROBE: { className: 'HireProbeRoot', useSQLite: true },
@@ -447,6 +468,19 @@ export default defineConfig({
           },
           durableObjects: {
             ADDRESSED_NAME_PROBE: { className: 'AddressedNameProbeRoot', useSQLite: true },
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+            UserDO: { className: 'UserDO', useSQLite: true },
+          },
+        }, {
+          name: 'agent-facet-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: probeModules(agentFacetProbe),
+          bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YWdlbnQtZmFjZXQtcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
+          serviceBindings: { ASSETS: agentAssets(agentFacetProbeBundle) },
+          outboundService: async (request) => {
+            throw new Error('Unmatched test egress is disabled: ' + request.url);
+          },
+          durableObjects: {
+            AGENT_FACET_PROBE: { className: 'AgentFacetProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
@@ -547,6 +581,7 @@ export default defineConfig({
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },
           STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', scriptName: 'store-reset-probe', useSQLite: true },
           ADDRESSED_NAME_PROBE: { className: 'AddressedNameProbeRoot', scriptName: 'addressed-name-probe', useSQLite: true },
+          AGENT_FACET_PROBE: { className: 'AgentFacetProbeRoot', scriptName: 'agent-facet-probe', useSQLite: true },
           ATTRIBUTION_PROBE: { className: 'AttributionProbeRoot', scriptName: 'attribution-probe', useSQLite: true },
           // The shipped root as the product seals it: `public-surface-probe` re-exports `src/server`'s class unchanged.
           SEALED_ORCHESTRATOR: { className: 'OrchestratorAgent', scriptName: 'public-surface-probe', useSQLite: true },

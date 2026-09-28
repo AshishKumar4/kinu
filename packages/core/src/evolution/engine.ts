@@ -261,7 +261,12 @@ export class EvolutionEngine {
 
     if (actor === undefined) throw new KinuError('missing', 'the evolution actor has no membership record');
     this.recordsTurns = this.config.enabled && actor.kind === 'main';
-    this.craftLedger = createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql });
+    // Opened on first use: an engine with evolution off never scores a crafted tool, and an agent in its own
+    // isolate has no crafted-tool store (they are the workspace's).
+    let ledger: CraftLedger | undefined;
+    const craft = (): CraftLedger => (ledger ??= createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql }));
+
+    this.craftLedger = { names: () => craft().names(), observe: (names, quality) => craft().observe(names, quality) };
 
     // Created here so every backend gets the engine's ledgers without schema wiring.
     initTurnOutcomeTables(rt.storage.execRaw);

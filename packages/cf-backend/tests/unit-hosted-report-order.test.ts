@@ -4,7 +4,9 @@
  */
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
-import { GATEWAY_CATALOG, driveUntil, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask } from './helpers/actor-harness';
+import {
+  agentSql, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask,
+} from './helpers/actor-harness';
 import { abandonHarnessFibers, joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
@@ -33,7 +35,8 @@ test("a helper waiting on its task hire gets its answer, then takes up the repor
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
-  const middleDone = (): boolean => (sqlOver(workspace.db)<{ n: number }>`
+  // The helper's runs are in its own database.
+  const middleDone = (): boolean => (agentSql(middle.actor.handle.actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middle.actor.handle.actorId} AND type = 'run_end'`[0]?.n ?? 0) > 0;
 
   await wakeForDelegatedTask(workspace, middle.actor.handle.actorId, 'Middle task.');
@@ -41,7 +44,7 @@ test("a helper waiting on its task hire gets its answer, then takes up the repor
   await driveUntil(workspace, 'the helper\'s turn never ended', middleDone);
 
   // The durable hire reported while the helper waited: the helper takes it up in a turn of its own.
-  const turns = (): number => sqlOver(workspace.db)<{ n: number }>`
+  const turns = (): number => agentSql(middle.actor.handle.actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middle.actor.handle.actorId} AND type = 'run_start'`[0]?.n ?? 0;
 
   await driveUntil(workspace, 'the helper never took up the report in a turn of its own', () => turns() >= 2);
@@ -109,7 +112,7 @@ for (const { verb, args, notes } of CASES) {
 
     const sql = sqlOver(workspace.db);
     const middleId = middle.actor.handle.actorId;
-    const turnsEnded = (): number => sql<{ n: number }>`SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middleId} AND type = 'run_end'`[0]?.n ?? 0;
+    const turnsEnded = (): number => agentSql(middleId)<{ n: number }>`SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middleId} AND type = 'run_end'`[0]?.n ?? 0;
 
     await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
 

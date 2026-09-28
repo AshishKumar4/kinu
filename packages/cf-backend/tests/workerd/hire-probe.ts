@@ -7,7 +7,7 @@
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { ownerCaller } from '@kinu.run/core';
+import { actorReferenceOf, ownerCaller } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
@@ -16,7 +16,16 @@ import { HIRE_CHILD_MODEL, REPORT_MARK, type ActorRow, type ChildScript, type Hi
 
 export { UserDO } from '../../src/user/user-do';
 
+export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
+
+export { AgentWorkspaceRPC } from '../../src/agent-facets';
+
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
+
+const ChatTextSchema = v.object({
+  role: v.string(),
+  parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })),
+});
 
 export class HireOrchestrator extends ProductionOrchestrator {
   private readonly probeState: AgentContext;
@@ -102,74 +111,41 @@ export class HireOrchestrator extends ProductionOrchestrator {
     });
   }
 
+  /** Runs started per actor: the root's in this object, each subordinate's in its own database. */
   async turnCounts(): Promise<TurnCount[]> {
-    const rows = this.probeState.storage.sql.exec<{ actor_id: string; runs: number }>(
+    const counts: TurnCount[] = this.probeState.storage.sql.exec<{ actor_id: string; runs: number }>(
       `SELECT actor_id, COUNT(DISTINCT run_id) AS runs FROM run_events
-       WHERE type = 'run_start' GROUP BY actor_id`).toArray();
+       WHERE type = 'run_start' GROUP BY actor_id`).toArray().map((row) => ({ actorId: row.actor_id, runs: row.runs }));
 
-    return rows.map((row) => ({ actorId: row.actor_id, runs: row.runs }));
+    const subordinates = this.probeState.storage.sql.exec<{ actor_id: string }>(
+      `SELECT actor_id FROM workspace_actors WHERE kind = 'subordinate'`).toArray();
+
+    for (const { actor_id: actorId } of subordinates) {
+      const seen = await (await this.agentFacetOf(actorId)).inspect(this.agentSnapshot(actorId), { path: [], view: 'runs', page: { limit: 100 } });
+
+      if (seen.view === 'runs' && seen.page.items.length > 0) counts.push({ actorId, runs: seen.page.items.length });
+    }
+
+    return counts;
   }
 
-  /** A delegated turn's durable record is its own `run_events` (`run_start` brief, `step_partial` stream,
-   *  `step_finish` messages); the transcript store is never written by a delegated turn. */
+  /** The agent's chat as its pane reads it: the brief, and the answer its turn recorded. */
   async childTranscript(name: string): Promise<string[]> {
-    const rows = this.probeState.storage.sql.exec<{ run_id: string; type: string; payload: string }>(
-      `SELECT e.run_id AS run_id, e.type AS type, e.payload AS payload
-       FROM run_events e
-       JOIN workspace_actors a ON a.actor_id = e.actor_id
-       WHERE a.name = ? AND e.type IN ('run_start', 'step_partial', 'step_finish')
-       ORDER BY e.rowid`, name).toArray();
-
+    const rows = this.probeState.storage.sql.exec<{ actor_id: string }>('SELECT actor_id FROM workspace_actors WHERE name = ?', name).toArray();
     const lines: string[] = [];
-    // Partial flushes are cumulative, so only the last row per (run, step) counts.
-    const partials = new Map<string, string>();
 
-    for (const row of rows) {
-      const payload = v.parse(
-        v.fallback(v.looseObject({
-          userMessage: v.optional(v.unknown()),
-          text: v.optional(v.unknown()),
-          stepIndex: v.optional(v.number()),
-          messages: v.optional(v.array(v.unknown())),
-        }), {}),
-        JSON.parse(row.payload),
-      );
+    // The chat lives in the agent's own database; read it as its pane does.
+    for (const { actor_id: actorId } of rows) {
+      const messages = await (await this.agentFacetOf(actorId)).history(this.agentSnapshot(actorId));
 
-      if (row.type === 'run_start' && v.is(v.string(), payload.userMessage)) {
-        lines.push(`user: ${payload.userMessage}`);
-      }
-
-      if (row.type === 'step_partial' && v.is(v.string(), payload.text)) {
-        partials.set(`${row.run_id}:${String(payload.stepIndex ?? 0)}`, payload.text);
-      }
-
-      if (row.type !== 'step_finish') continue;
-
-      for (const message of payload.messages ?? []) {
-        const parsed = v.safeParse(v.looseObject({
-          role: v.optional(v.string()),
-          content: v.optional(v.union([
-            v.string(),
-            v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })),
-          ])),
-        }), message);
-
-        if (!parsed.success || parsed.output.role !== 'assistant') continue;
-
-        const content = parsed.output.content;
-
-        const text = v.is(v.string(), content)
-          ? content
-          : (content ?? []).map((part) => part.text ?? '').join('');
-
-        if (text !== '') lines.push(`assistant: ${text}`);
+      for (const message of v.parse(v.array(ChatTextSchema), messages)) {
+        for (const part of message.parts) if (part.type === 'text' && part.text !== undefined) lines.push(`${message.role}: ${part.text}`);
       }
     }
 
-    for (const text of partials.values()) lines.push(`assistant: ${text}`);
-
     return lines;
   }
+
 
   private readonly wakeReturn = Promise.withResolvers<void>();
 
@@ -187,9 +163,9 @@ export class HireOrchestrator extends ProductionOrchestrator {
   }
 
   private countReturnedWake(): void {
-    const inFlight = this.probeState.storage.sql.exec<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM actor_turn_claims c JOIN workspace_actors a ON a.actor_id = c.actor_id
-       WHERE a.kind = 'subordinate' AND c.outcome IS NULL`).one().n;
+    // A subordinate's turn claim is in its own database; the workspace knows which of its turns are running.
+    const inFlight = this.actorDirectoryStore().list()
+      .filter((record) => record.kind === 'subordinate' && this.currentTurnOf(actorReferenceOf(record)) !== null).length;
 
     diagnostics.event('probe.wake_returned', { delegatedTurnsInFlight: inFlight });
 

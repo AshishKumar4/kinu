@@ -114,6 +114,12 @@
     "consumed_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "agent_open_turns@packages/core/src/subordinates/open-turns.ts": [
+    "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
+    "turn_id TEXT NOT NULL",
+    "opened_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, turn_id)"
+  ],
   "agent_tasks@packages/core/src/tools/task-store.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",

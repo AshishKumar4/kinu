@@ -16,6 +16,7 @@ import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
 import type { AddressedAnswers } from './addressed-name-shapes';
+import type { OnePlaneObservation } from './agent-facet-shapes';
 import type { AttributedLine } from './attribution-shapes';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
@@ -168,6 +169,10 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   hashes(): Promise<Record<'ws-alpha' | 'ws-beta', string | null>>;
   reset(): Promise<{ ok: true; workspaces: number }>;
   freshProfile(): Promise<{ email: string; displayName: string | null; onboardedAt: number | null; workspaceCount: number } | null>;
+}
+
+interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
+  onePlane(workspace: string, agent: string): Promise<OnePlaneObservation>;
 }
 
 interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
@@ -335,6 +340,7 @@ declare global {
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
       ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;
+      AGENT_FACET_PROBE: DurableObjectNamespace<AgentFacetProbeRpc>;
       ATTRIBUTION_PROBE: DurableObjectNamespace<AttributionProbeRpc>;
       SEALED_ORCHESTRATOR: DurableObjectNamespace<SealedOrchestratorRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.

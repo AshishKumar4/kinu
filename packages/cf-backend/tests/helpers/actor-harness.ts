@@ -39,7 +39,7 @@ import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
   type AgentRuntime, type DynamicContext, type LLM,
   type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
-  type RoleCatalog, type ResolvedTurnProfile, type SqlValue,
+  type RoleCatalog, type ResolvedTurnProfile, type SqlValue, type SqlExecutor,
   type TierAssignments,
   composePrepareStep,
   BackgroundJobStore, type JsonValue,
@@ -51,6 +51,8 @@ import {
 import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
+import { agentDatabase, inProcessAgentFacets } from './agent-facets';
+import type { AgentFacetCalls } from '../../src/agent-facet/agent-facet';
 import { GATEWAY_MODEL, openingOf, platformGatewayEnv, type RecordedGatewayRun, type StubbedAiBinding } from './platform-gateway';
 import {
   TerminalEffectInterrupt,
@@ -77,6 +79,21 @@ const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
 };
 
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
+  private readonly harnessAgentFacets = inProcessAgentFacets(makeCtx);
+
+  protected override async agentCalls(actorId: string): Promise<AgentFacetCalls> {
+    return await this.harnessAgentFacets.open(this.agentPlacement(actorId), await this.agentWorkspace(actorId));
+  }
+
+  /** Work the object detached, run to its end: a task agent's retirement follows its answer this way. */
+  async harnessSettleDetached(): Promise<void> {
+    await this.settleBackgroundTasks();
+  }
+
+  protected override dropAgentFacet(storageKey: string): void {
+    this.harnessAgentFacets.drop(storageKey);
+  }
+
   /** Work the object still owes: maintenance, untimed owed arms (turn claims, queued deliveries), a due timed ledger, a
    *  detached task, or a due timer wake (which folds every hired agent's pending reactions). */
   harnessWorkRemains(now = Date.now()): boolean {
@@ -88,8 +105,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** Turns running now, the root's and every hosted actor's. */
   harnessTurnsInFlight(): number {
-    const host = this.actorHost();
-    const hosted = host.list().filter((reference) => host.hosted(reference)?.session.inFlight === true).length;
+    const hosted = this.actorHost().list().filter((reference) => this.actorHost().hosted(reference)?.session.inFlight === true
+      || this.currentTurnOf(reference) !== null).length;
 
     return hosted + (this._inFlight || this.actorSession.inFlight ? 1 : 0);
   }
@@ -687,6 +704,8 @@ export async function runDelegatedTask(
 ): Promise<void> {
   await wakeForDelegatedTask(workspace, actorId, task);
   await joinHarnessFibers();
+  // The turn's answer is relayed as its agent's isolate settles it, so what the relay detached may still run.
+  await workspace.agent.harnessSettleDetached();
 }
 
 /** {@link runDelegatedTask} up to the wake's return: the turn it starts may still be running. */
@@ -750,6 +769,22 @@ export async function admittedTurnClaim(
 }
 
 /** The stored chat conversation of an actor, oldest first, as a reload reads it. */
+/** A subordinate's own rows (its runs, claims, chat), as its turns wrote them in its own database. */
+export function agentSql(actorId: string): SqlExecutor {
+  return sqlOver(agentDatabase(actorId));
+}
+
+/**
+ * A subordinate's own conversation store, over its own database, once its facet copied its roster rows there (any
+ * read of its chat through the workspace does): to seed its chat, or to read it as its pane does.
+ */
+export function agentHistory(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent'>, actorId: string) {
+  const db = agentDatabase(actorId);
+  const actor = actorOver(db, actorId);
+
+  return { actor, history: historyOver({ agent: harness.agent, db }, actor) };
+}
+
 export function storedChat(
   harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actor?: ActorHandle,
 ): Promise<UIMessage[]> {

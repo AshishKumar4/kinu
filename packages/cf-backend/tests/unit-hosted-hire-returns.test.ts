@@ -7,7 +7,9 @@ import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
 import { actorConnectionTag } from '@kinu.run/core';
 import { asPane } from './helpers/agents-sdk';
-import { catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask } from './helpers/actor-harness';
+import {
+  agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask,
+} from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 /** A model call's own user turns, without the runtime's context blocks (which list other agents' briefs). */
@@ -35,7 +37,8 @@ async function helperWorkspace(respond: (run: RecordedGatewayRun) => Response | 
 
   const sql = sqlOver(workspace.db);
 
-  const count = (actorId: string, type: 'run_start' | 'run_end'): number => sql<{ n: number }>`
+  // A hire's runs are in its own database.
+  const count = (actorId: string, type: 'run_start' | 'run_end'): number => agentSql(actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = ${type}`[0]?.n ?? 0;
 
   const hired = (): string | undefined => sql<{ id: string }>`
@@ -202,7 +205,8 @@ test("an agent the owner added keeps its own Stop: a root Stop skips it, and its
   const { subordinate } = await workspace.agent.createSubordinateAgent();
   const added = subordinate.actorId ?? '';
 
-  const ended = (actorId: string): number => sql<{ n: number }>`
+  // A hire's runs are in its own database.
+  const ended = (actorId: string): number => agentSql(actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n ?? 0;
 
   await wakeForDelegatedTask(workspace, added, 'Added task.');

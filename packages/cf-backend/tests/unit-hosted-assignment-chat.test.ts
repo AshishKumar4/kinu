@@ -5,7 +5,9 @@
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-import { driveUntil, gatewayWorkspace, hostedSubordinateHarness, runDelegatedTask, wakeForDelegatedTask } from './helpers/actor-harness';
+import {
+  agentSql, driveUntil, gatewayWorkspace, hostedSubordinateHarness, runDelegatedTask, wakeForDelegatedTask,
+} from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 /** What an open pane is sent: the transcript, or a turn's stream. */
@@ -42,7 +44,8 @@ test("a durable grandchild that only worked its assignment shows the task, from 
   const grandchild = (): string | undefined => sql<{ id: string }>`
     SELECT actor_id AS id FROM workspace_actors WHERE parent_actor_id = ${middle.actor.handle.actorId}`[0]?.id;
 
-  const ended = (actorId: string): boolean => (sql<{ n: number }>`
+  // The agent's runs are in its own database.
+  const ended = (actorId: string): boolean => (agentSql(actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n ?? 0) > 0;
 
   await wakeForDelegatedTask(workspace, middle.actor.handle.actorId, 'Middle task.');

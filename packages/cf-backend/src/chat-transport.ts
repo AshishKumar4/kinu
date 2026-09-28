@@ -28,7 +28,7 @@ export interface ChatWire {
   getConnection(id: string): Connection | undefined;
   history(limit?: number): Promise<UIMessage[]>;
   /** A durable row or an accepted send's reservation: the hook resends its whole list per request. */
-  admitted(id: string): boolean;
+  admitted(id: string): Promise<boolean>;
   /** Rejects when the loop refuses the message: nothing was written and no turn ran. */
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
   interrupt(): void;
@@ -256,10 +256,10 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       // The client resends only its window, so reconcile against the window.
       const storedMessages = await this.wire.history(TRANSCRIPT_WINDOW);
 
-      const fresh = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage)
-        .filter((message) => message.role === 'user' && !this.wire.admitted(message.id));
+      const unseen = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage).filter((message) => message.role === 'user');
 
-      for (const message of fresh) {
+      for (const message of unseen) {
+        if (await this.wire.admitted(message.id)) continue;
         this.requests.set(message.id, requestId);
         taken.push(message.id);
 

@@ -9,7 +9,7 @@
 
 import type { Agent, AgentContext } from 'agents';
 import {
-  childContextResolver, createActorHost, defaultLoopOrigin,
+  childContextResolver, createActorHost, defaultLoopOrigin, runEventSinks,
   EvolutionEngine, EventLog, MissionGovernor,
   facetHomeProvisioner, facetHomeReleaser, isVfsError,
   headAgentName, subordinateAgentName, parseActorKey,
@@ -23,12 +23,12 @@ import {
   type ModelOperationSink, type ModelPricing, type NimbusSandboxHandle, type NodeHomeHost,
   type NodeWorkspace,
   type ProfileAuthorityInputs, type ProgrammaticTurn, type ResolvedTurnProfile,
-  type RunEventInput,
   type SlateCallResult, type SlateOperation, type SqlExec, type SqlExecutor,
   type SqlValue, type WorkMode,
   type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError, type AgentTracing } from '@kinu.run/core/obs';
+import { KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
 import type { HostedNodeHome, LiveRead } from '@kinu.run/core';
 
@@ -93,22 +93,22 @@ export interface WorkspaceHostSeams {
   chosenWriteObserver(record: WorkspaceActor): WriteObserver | null;
 }
 
-/** A toolless run actor (an MCTS branch) has no home; a swarm node's home is in `head-`. */
-function hasHome(record: WorkspaceActor): boolean {
-  return record.kind !== 'main' && record.toolProfile === 'full';
+/** Where a hosted actor lives in the workspace. The one reader of the profile fields that decide it. */
+export interface HostedActorPlacement {
+  /** A toolless run actor (an MCTS branch) has no home; a swarm node's home is in `head-`. */
+  readonly homeName: string | null;
+  /** Kind-prefixed so a head's and a subordinate's shell state cannot collide on one id. */
+  readonly shellId: string;
 }
 
-function hostedHomeName(record: WorkspaceActor): string {
+export function hostedActorPlacement(record: WorkspaceActor): HostedActorPlacement {
+  if (record.kind === 'main') return { homeName: null, shellId: `agent:${record.name}` };
+  const shellId = `${record.kind}:${record.storageKey}`;
+
+  if (record.toolProfile !== 'full') return { homeName: null, shellId };
   const id = parseActorKey(record.storageKey).id;
 
-  return record.kind === 'subordinate' ? subordinateAgentName(id) : headAgentName(id);
-}
-
-/** Kind-prefixed so a head's and a subordinate's shell state cannot collide on one id. */
-function hostedActorShellId(record: WorkspaceActor): string {
-  if (record.kind === 'main') return `agent:${record.name}`;
-
-  return `${record.kind}:${record.storageKey}`;
+  return { homeName: record.kind === 'subordinate' ? subordinateAgentName(id) : headAgentName(id), shellId };
 }
 
 /**
@@ -120,10 +120,14 @@ export async function provisionHostedActorHome(
   record: WorkspaceActor,
   reference: ActorReference,
 ): Promise<NodeWorkspace> {
+  const { homeName } = hostedActorPlacement(record);
+
+  if (homeName === null) return await settle(Effect.fail(new KinuError('denied', `Actor ${record.name} has no home of its own.`)));
+
   const path = seams.directory.storagePath(reference);
   const provision = facetHomeProvisioner(seams.homeHost(), () => { seams.directory.validate(reference, path); });
 
-  return await provision(hostedHomeName(record));
+  return await provision(homeName);
 }
 
 /** Build the workspace's one actor host over the root's `Storage` (open-38). */
@@ -134,7 +138,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
   let host: ActorHost | null = null;
 
   const homeFor = (record: WorkspaceActor, reference: ActorReference): Promise<HostedNodeHome> | null => {
-    if (!hasHome(record)) return null;
+    if (hostedActorPlacement(record).homeName === null) return null;
     const held = homes.get(record.actorId);
 
     if (held) return held;
@@ -173,7 +177,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     tracing: () => seams.tracing(),
     filesFor: async (bound) => {
       const provisioning = homeFor(bound.record, bound.reference);
-      const box = seams.workspaceBox(hostedActorShellId(bound.record));
+      const box = seams.workspaceBox(hostedActorPlacement(bound.record).shellId);
 
       if (provisioning === null) {
         if (bound.record.kind !== 'main') throw new KinuError('denied', 'Actor has no credentialed artifact home');
@@ -233,7 +237,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         workspaceName: seams.workspaceName,
         rootActor: bound.record.kind === 'main',
         ownerUserId: () => seams.ownerUserId(),
-        shellId: hostedActorShellId(bound.record),
+        shellId: hostedActorPlacement(bound.record).shellId,
         scaffoldPath: actorScaffoldPath(bound.record),
         capabilityToken: () => seams.capabilityToken(),
       }, hooks);
@@ -303,41 +307,24 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         reconcileDurableWake: () => { seams.reconcileDurableWake(); },
       };
 
-      // A failed recording is reported, never thrown: losing an event must not end the turn.
-      const recordRunEvent = (input: HostedRunEvent): void => {
-        const runId = activeRunOf(stores);
-
-        if (runId === null) return;
-
-        try {
-          stores.eventRecorder.emit(runId, input);
-        } catch (cause) {
-          diagnostics.failure(RUN_EVENT_EMIT_FAILED[input.type], toKinuError({
-            doing: `recording a hosted actor ${input.type} run event`, cause, otherwise: 'io',
-          }), { actor: handle.name });
-        }
-      };
-
       return {
         host: backendHost,
         engine,
         eventLog: new EventLog(seams.exec, handle),
         budget,
         refinementLane: seams.refinementLane(bound),
-        sinks: {
-          logActivity: (event, detail) => { seams.logActivity(handle.actorId, event, detail); },
-          onToolCallEvent: (event) => { recordRunEvent({ type: 'tool_call_end', ...event }); },
-          onStepEvent: (event) => { recordRunEvent({ type: 'step_finish', ...event }); },
-        },
+        sinks: runEventSinks(bound, (event, detail) => { seams.logActivity(handle.actorId, event, detail); }),
       };
     },
 
     /** Releases the home and state subtree on destroy only; an archived actor keeps its files. */
     discardBytes: async (record: WorkspaceActor): Promise<void> => {
-      if (hasHome(record)) await facetHomeReleaser(seams.homeHost())(hostedHomeName(record));
+      const { homeName, shellId } = hostedActorPlacement(record);
+
+      if (homeName !== null) await facetHomeReleaser(seams.homeHost())(homeName);
 
       homes.delete(record.actorId);
-      const box = seams.workspaceBox(hostedActorShellId(record));
+      const box = seams.workspaceBox(shellId);
 
       // A hired-but-idle actor never materialized its subtree, so absence is swallowed.
       try {
@@ -357,22 +344,6 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 function contextEventsFor(_actor: BoundActor): ContextEventRecorder | null {
   return null;
 }
-
-/**
- * The actor's newest unsettled claim, read from the ledger so it survives eviction.
- * No active run drops the event: a row keyed on '' would join to every actor.
- */
-function activeRunOf(stores: BoundActor['stores']): string | null {
-  return stores.claims.unsettled(1)[0]?.runId ?? null;
-}
-
-type HostedRunEvent = Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>;
-
-/** Written out so a lost recording stays greppable. */
-const RUN_EVENT_EMIT_FAILED = {
-  tool_call_end: 'event.tool_call_end_emit_failed',
-  step_finish: 'event.step_finish_emit_failed',
-} as const;
 
 export interface ActorRetirementRequest {
   readonly reference: ActorReference;

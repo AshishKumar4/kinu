@@ -7,18 +7,17 @@
  * Not facets: `do.facet.cpu_shared` means hosted actors serialise as in one isolate.
  */
 
-import { INTERRUPTED_TURN, REAL_CLOCK, type HeadReport, type ObserveStream } from '@kinu.run/core';
-import type { LanguageModel, Tool, ToolSet } from 'ai';
+import { INTERRUPTED_TURN, REAL_CLOCK, type HeadReport } from '@kinu.run/core';
+import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
 import {
   EventLog, HeadCapture, runHeadInference, titleActorFromMessage, buildHeadToolSet,
   admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus,
   receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles,
   subordinateForkContext, type SubordinateInheritedContext,
   inheritedAsModelMessage,
-  classifyRunEnd, closeTurnRun, openTurnRun,
   collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute,
   storedHeadReportStatus, subordinateDelegatesOf,
-  registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, CHAT_SESSION_ID,
+  registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
   type BranchExploration, type BranchHandle, type BranchReflection, type CraftedTool,
   type DelegationBudget,
@@ -75,6 +74,7 @@ export interface HostedActorSeams {
   /** Positional executor for the same database; the event log needs this port, not the tagged one. */
   readonly exec: SqlExec;
   readonly directory: WorkspaceActorDirectory;
+  turnInFlight(reference: ActorReference): boolean;
   transaction<Result>(body: () => Result): Result;
   /** Scoped to the actor, so a subordinate manages only its own subtree. */
   roster(actor: BoundActor): SubordinateRosterStore;
@@ -179,7 +179,7 @@ export async function admitHostedTask(
   },
 ): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> {
   const admitAs = async (actor: HostedActor): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> => {
-    const busy = actor.session.inFlight;
+    const busy = seams.turnInFlight(actor.reference);
 
     const admission: Parameters<typeof admitSubordinateTask>[1] = {
       fromWorkspace: actor.record.workspaceId,
@@ -199,7 +199,7 @@ export async function admitHostedTask(
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
 
     // No chat session means no `auto_title` effect: the first admitted message lands a stand-in title
-    // here; the naming model runs after the turn (`runHostedTask`), never inside admission.
+    // here; the naming model runs after the turn (`settleHostedTask`), never inside admission.
     if (result.admitted && input.kind === 'message' && await titleActorFromMessage(actor.handle, input.body)) {
       seams.announce(actor);
     }
@@ -270,7 +270,7 @@ export async function relayHostedReport(
       return written;
     }),
     announce: () => { seams.announce(hirer); },
-    onAdmitted: () => { if (seams.host.hosted(parent)?.session.inFlight !== true) seams.scheduleDrain(hirer); },
+    onAdmitted: () => { if (!seams.turnInFlight(parent)) seams.scheduleDrain(hirer); },
     onEvolutionAnswer: () => { seams.rederiveWake(); },
     temporary: seams.temporary(hirer),
   }, { fromSubordinate: name, ...event }, Date.now());
@@ -297,18 +297,49 @@ export async function retireStalledTask(
   });
 }
 
-/**
- * One delegated turn via `runHeadInference`; a report that already settled the run suppresses the terminal one.
- */
-export interface HostedTaskResult {
-  readonly text: string;
-  readonly relayed: SubordinateEventResult | null;
+export interface HostedTaskRequest {
+  readonly body: string;
+  readonly mode: WorkMode;
+  readonly sequenceId: string;
+  readonly inheritedContext?: SubordinateInheritedContext;
 }
 
-/** The actor's chat room, told the answer before the title model and the parent relay run. */
-export interface HostedChatSink {
-  readonly observeStream?: ObserveStream;
-  answered(outcome: { readonly completion: HeadReport['canonicalCompletion']; readonly error: string | null }): Promise<void>;
+/**
+ * One delegated turn's workspace half: the profile, the model the agent calls, and the tool surface the agent's
+ * own isolate calls back into. Decided once: the claim, the tools and the prompt read the same resolution.
+ */
+export interface PreparedHostedTask {
+  readonly turn: HostedTaskTurn;
+  readonly tools: ToolSet;
+  readonly framing: AssignedTurnFraming;
+  readonly birthContext: readonly ModelMessage[];
+}
+
+export function prepareHostedTask(
+  seams: HostedActorSeams,
+  reference: ActorReference,
+  task: HostedTaskRequest,
+): Promise<PreparedHostedTask> {
+  return settle(Effect.gen(function* () {
+    const actor = yield* Effect.promise(() => seams.host.acquire(reference));
+    const runtime = yield* cfRuntimeOf(actor, 'a hosted subordinate');
+    const resolved = yield* Effect.promise(() => seams.profile({ actor, availableTools: [], workMode: task.mode }));
+
+    yield* Effect.promise(() => seams.priceAs(actor, resolved.profile.tier.model));
+    const input = delegatedHeadInput(actor.record, task);
+
+    const turn: HostedTaskTurn = {
+      turnId: task.sequenceId, actor, runtime, reports: { spoke: false, settled: false }, input,
+      capture: new HeadCapture(),
+      model: seams.resolveModel(resolved.profile.tier.model),
+      profile: resolved,
+    };
+
+    // Without this framing the runner defaults to a fork's, telling a hire it is a parallel thread.
+    const profile = yield* Effect.promise(() => seams.taskProfile(turn));
+
+    return { turn, tools: profile.tools, framing: profile.framing, birthContext: input.inheritedContext.map(inheritedAsModelMessage) };
+  }));
 }
 
 /** Only completion answers; abort is resumable; spent budget and throws are errors. */
@@ -319,101 +350,36 @@ const TASK_TURN_ENDING: Readonly<Record<HeadReport['status'], TaskTurnEnding>> =
   errored: 'errored',
 };
 
-export async function runHostedTask(
+export interface HostedTaskEnd {
+  readonly status: HeadReport['status'];
+  readonly summary: string;
+  readonly errorMessage: string | null;
+  readonly narration: string;
+}
+
+export function hostedTaskEnding(end: HostedTaskEnd): TaskTurnEnding {
+  // An owner's Stop reaches the model call as an interrupted stream, which the head records as a failure.
+  return end.status === 'errored' && end.errorMessage?.includes(INTERRUPTED_TURN) === true
+    ? 'interrupted'
+    : TASK_TURN_ENDING[end.status];
+}
+
+/**
+ * The workspace half of a turn's end: the title, then the report the hirer is owed, relayed after the turn so a
+ * hirer waiting on this agent's queue is not waited on in turn. A report the run already settled suppresses it.
+ */
+export function settleHostedTask(
   seams: HostedActorSeams,
-  reference: ActorReference,
-  task: {
-    readonly body: string;
-    readonly mode: WorkMode;
-    readonly sequenceId: string;
-    readonly inheritedContext?: SubordinateInheritedContext;
-  },
-  chat?: HostedChatSink,
-): Promise<HostedTaskResult> {
-  const runTurn = async (actor: HostedActor, runtime: CFRuntime) => {
-    const reports: HostedReportLedger = { spoke: false, settled: false };
-    const resolved = await seams.profile({ actor, availableTools: [], workMode: task.mode });
-    await seams.priceAs(actor, resolved.profile.tier.model);
-    // Built once for both runner and tools: recovery verifies the claim against it.
-    const input = delegatedHeadInput(actor.record, task);
-    // One findings accumulator: the tools write it and `runHeadInference` reports from it; a second
-    // copy returned reports with no findings.
-    const capture = new HeadCapture();
-
-    const turn: HostedTaskTurn = {
-      turnId: task.sequenceId, actor, runtime, reports, input, capture,
-      model: seams.resolveModel(resolved.profile.tier.model),
-      profile: resolved,
-    };
-
-    // Without this framing the runner defaults to a fork's, telling a hire it is a parallel thread.
-    const profile = await seams.taskProfile(turn);
-
-    const runId = crypto.randomUUID();
-
-    const inference: HeadInferenceDeps = {
-      actor,
-      runId,
-      clock: REAL_CLOCK,
-      delegation: {
-        assignmentId: task.sequenceId,
-        birthContext: input.inheritedContext.map(inheritedAsModelMessage),
-      },
-      model: turn.model,
-      tools: profile.tools,
-      framing: {
-        system: profile.framing.system,
-        messages: profile.framing.messages,
-      },
-      capture,
-      workspaceLayout: 'shared-workspace',
-      // Never aborted by parent hang-up, socket close, or eviction: an unsettled claim records owed work.
-      isAborted: () => false,
-      profile: (request) => seams.profile({ actor, ...request }),
-      dynamic: (resolvedProfile, tools) => seams.dynamic(actor, resolvedProfile, tools),
-    };
-
-    if (chat?.observeStream !== undefined) inference.observeStream = chat.observeStream;
-
-    // The run bracket the local host writes via `ChatSession.processTurn`; `runHeadInference` bypasses
-    // it (measured 2026-09-17 in the workerd pool: a hire's child ledger held only `step_finish`).
-    // A thrown runner leaves the run open on purpose; the retry opens a new one.
-    openTurnRun(actor.stores.eventRecorder, runId, {
-      agentId: actor.record.actorId,
-      causedBy: 'subordinate_task',
-      userMessage: task.body,
-      turnIndex: actor.session.orchestrator.sessionTurnIndex,
-    });
-
-    const report = await runHeadInference(input, inference);
-
-    closeTurnRun(actor.stores.eventRecorder, runId, {
-      turnIndex: actor.session.orchestrator.sessionTurnIndex,
-      usage: report.usage,
-      workMode: task.mode,
-      ...classifyRunEnd({
-        completed: report.status === 'completed',
-        interrupted: report.status === 'aborted',
-        errorText: report.errorMessage,
-      }),
-    });
-
-    // An owner's Stop reaches the model call as an interrupted stream, which the head records as a failure.
-    const ending: TaskTurnEnding = report.status === 'errored' && report.errorMessage?.includes(INTERRUPTED_TURN) === true
-      ? 'interrupted'
-      : TASK_TURN_ENDING[report.status];
-
-    await chat?.answered({
-      completion: report.canonicalCompletion,
-      error: ending === 'errored' ? report.errorMessage ?? report.summary : null,
-    });
-
-    return { report, ending, reports };
-  };
+  prepared: PreparedHostedTask,
+  task: HostedTaskRequest,
+  end: HostedTaskEnd,
+): Promise<SubordinateEventResult | null> {
+  const { actor, reports } = prepared.turn;
+  const ending = hostedTaskEnding(end);
 
   // Title upgrade (#18): no `auto_title` effect on a hosted actor, so name it after the run.
   // A failed titling model keeps the stand-in; the turn does not fail over its name.
-  const titled = (actor: HostedActor): Effect.Effect<void> => attempt(
+  const titled = attempt(
     { doing: 'deriving a hosted actor title from its brief', otherwise: 'unavailable' },
     () => titleActorFromMessage(actor.handle, task.body, (brief) => seams.suggestTitle(brief)),
   ).pipe(Effect.match({
@@ -423,50 +389,39 @@ export async function runHostedTask(
     },
   }));
 
-  const owedReport = async (
-    actor: HostedActor,
-    { report, ending, reports }: Awaited<ReturnType<typeof runTurn>>,
-  ): Promise<{ readonly status: SubordinateReportStatus; readonly content: string; readonly quiet?: true } | null> => {
+  const owedReport = async (): Promise<{ readonly status: SubordinateReportStatus; readonly content: string; readonly quiet?: true } | null> => {
     const owed = reports.settled ? null : await terminalTaskReport({
-      lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary,
+      lifetime: hostedLifetime(actor.record), ending, assistantText: end.summary,
       delegating: taskAnswerIsLater({ roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle), turnTaskId: task.sequenceId }),
-      narration: () => actor.stores.history.transcript(CHAT_SESSION_ID).narration(report.canonicalCompletion?.outputPartReferences ?? []),
+      narration: async () => (end.narration === '' ? [] : [end.narration]),
     });
 
     // A task agent reports only its terminal answer.
-    const relayed = owed ?? (
+    return owed ?? (
       ending === 'answered' && hostedLifetime(actor.record) !== TEMPORARY_LIFETIME && subordinateRelaysTurnEnd({
-        reportedThisTurn: reports.spoke, ownerDriven: false, assistantText: report.summary,
+        reportedThisTurn: reports.spoke, ownerDriven: false, assistantText: end.summary,
       })
-        ? { status: 'progress' as const, content: report.summary }
+        ? { status: 'progress' as const, content: end.summary }
         : null
     );
-
-    if (relayed === null) new EventLog(seams.exec, actor.handle).markAnswered(task.sequenceId);
-
-    return relayed;
   };
 
-  // The relay runs after the child's queue is free: a hirer may be waiting on that queue while the relay waits on its.
-  const ran = await seams.host.run(reference, (actor) => settle(Effect.gen(function* () {
-    const runtime = yield* cfRuntimeOf(actor, 'a hosted subordinate');
-    const turn = yield* Effect.promise(() => runTurn(actor, runtime));
+  return settle(Effect.gen(function* () {
+    yield* titled;
+    const relayed = yield* Effect.promise(owedReport);
 
-    yield* titled(actor);
+    if (relayed === null) {
+      new EventLog(seams.exec, actor.handle).markAnswered(task.sequenceId);
 
-    return { actor, text: turn.report.summary, relayed: yield* Effect.promise(() => owedReport(actor, turn)) };
-  })));
+      return null;
+    }
 
-  if (ran.relayed === null) return { text: ran.text, relayed: null };
-
-  return {
-    text: ran.text,
-    relayed: await relayHostedReport(seams, ran.actor, {
-      status: ran.relayed.status, content: ran.relayed.content, origin: 'turn_end',
+    return yield* Effect.promise(() => relayHostedReport(seams, actor, {
+      status: relayed.status, content: relayed.content, origin: 'turn_end',
       mode: task.mode, sequenceId: task.sequenceId, answers: task.sequenceId,
-      ...(ran.relayed.quiet === true && { quiet: true }),
-    }),
-  };
+      ...(relayed.quiet === true && { quiet: true }),
+    }));
+  }));
 }
 
 /** One actor's child substrate: every verb is a call on the workspace's one host. */

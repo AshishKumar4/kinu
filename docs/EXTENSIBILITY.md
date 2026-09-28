@@ -106,7 +106,13 @@ it and `{}` at the depth cap, so the delegation budget stops recursion, not
 the class. The root builds a hosted subordinate's delegated-turn surface through
 `HostedActorSeams.taskProfile`
 (`packages/cf-backend/src/hosted-actors.ts`), which adds `report` because
-a delegated task is parent-assigned. `submitPlan` appears only on a turn that
+a delegated task is parent-assigned. The surface stays in the root: a hosted
+subordinate's turn runs in its own Worker Loader isolate
+(`packages/cf-backend/src/agent-facet/`), with its conversation, turn claims,
+effect claims and run ledger in that isolate's own SQLite, and it calls each
+tool back into the root through `AgentWorkspaceRPC.executeTool` (D8 in
+`docs/ARCHITECTURE-DECISIONS.md`). Its files and named shell are the
+workspace's, through Nimbus's session surface. `submitPlan` appears only on a turn that
 belongs to the owner, in Plan mode. The narrowing keys on the turn, not on a
 class. The same module builds head and node
 surfaces over that actor's own runtime. An MCTS branch has no tool surface and

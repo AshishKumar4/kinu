@@ -17,7 +17,7 @@ import { SUPERVISOR_OPS, type SupervisorOpEnvelope } from '@nimbus-sh/core/works
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { MountedVfs, ObjectNamespace } from '@kinu.run/core';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
+import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, HostedSession, HostedSessionScope, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
 import { clearPortCapability, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
 import * as v from 'valibot';
@@ -131,6 +131,9 @@ export interface HostedWorkspace {
   /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a
      *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. */
   supervisorOp(envelope: WireSupervisorEnvelope): Promise<SupervisorOpResult>;
+  /** The SDK's session surface over this workspace, bound to one shell and identity: what an agent in its own
+     *  isolate drives through `Nimbus.fromSession`, so it needs no second shell or filesystem. */
+  session(scope: HostedSessionScope): Promise<HostedSession>;
   /** The slate host's spawn/kill path and the one registrar of a resident's port. */
   facetManager(): Promise<ComposedFacetManager>;
   ports(): Promise<PortRegistry>;
@@ -355,6 +358,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
       return (await runtime()).supervisorOp(envelope);
     },
+    session: async (scope) => (await runtime()).session(scope),
     box: (shellId) => workspaceBox({
       runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
       mountTable: (plane, cred) => bundle.mountTable(plane, cred),

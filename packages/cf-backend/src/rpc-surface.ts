@@ -321,6 +321,7 @@ const ORCHESTRATOR_METHODS = [
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
   'requestOverviewPush',
   'supervisorOp',
+  'agentWorkspace',
   'workspaceTitle',
   // Eval-only. Never `@callable`; the route admits only the eval-service identity.
   'evalAbortActivation',

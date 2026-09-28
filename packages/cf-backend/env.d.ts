@@ -6,6 +6,7 @@ import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { DeployRunDO } from "./src/deploy/deploy-do";
 import type { CodemodeEgress } from "./src/codemode-egress";
+import type { AgentWorkspaceRPC } from "./src/agent-facets";
 import type { CodexEgress } from "./src/egress/codex-egress";
 import type { SlateBinding } from "./src/slates/bindings";
 import type { MossaicShardDO, MossaicUserDO } from "./src/server";
@@ -138,6 +139,7 @@ declare global {
     /** `enable_ctx_exports` loopback types; only read entrypoints, to avoid a recursive DO type. */
     interface GlobalProps {
       mainModule: {
+        AgentWorkspaceRPC: typeof AgentWorkspaceRPC;
         CodemodeEgress: typeof CodemodeEgress;
         SlateBinding: typeof SlateBinding;
         default: ExportedHandler<Env>;

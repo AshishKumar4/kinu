@@ -11,9 +11,9 @@ import {
 } from "agents";
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
-  actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle, readSessionTranscript,
+  actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS,
-  type RunEventInput, type SubordinateInspectionAuthority, type SessionTranscriptReader,
+  type RunEventInput, type SubordinateInspectionAuthority, type AgentOwnInspection,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -896,6 +896,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected stopSubtree(_actorId: string): void {}
 
+  protected async agentTurnSettled(_actor: ActorReference): Promise<void> {}
+
   protected temporaryAgentPort(reference: ActorReference = actorReferenceOf(this.actorHandle())): TemporaryAgentPort {
     return this.actorHost().temporary(reference, (bound) => {
       const seams = this.hostedSeams();
@@ -906,6 +908,7 @@ export abstract class ActorAgent extends Agent<Env> {
         roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
         afterTurn: (child, work) => {
           this.detachOwned(async () => {
+            await this.agentTurnSettled(child);
             await this.actorHost().run(child, () => Promise.resolve());
             await work();
           });
@@ -1923,7 +1926,7 @@ export abstract class ActorAgent extends Agent<Env> {
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
       history: (limit) => this.chatTranscript.history(undefined, limit),
-      admitted: (id) => this.admittedSend(id),
+      admitted: async (id) => this.admittedSend(id),
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
       interrupt: () => {
         this.chatLoop.interrupt();
@@ -3541,8 +3544,11 @@ export abstract class ActorAgent extends Agent<Env> {
       sql: this.boundSql, raw: this.ctx.storage.sql,
       actor: this.actorHandle(), directory: this.actorDirectoryStore(),
       transcriptFor: (actor) => this.transcriptFor(actor),
+      ownRows: (actor, own) => this.agentInspection(actor.actorId, own),
     }, request, authority);
   }
+
+  protected abstract agentInspection(actorId: string, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
 
   /**
    * One page of one chat: the caller's own by default, or the subordinate a pane names by actor id.
@@ -3552,14 +3558,14 @@ export abstract class ActorAgent extends Agent<Env> {
   async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<ChatHistoryPage> {
     const { actor, ...page } = request ?? {};
 
-    return getChatHistoryPage(actor === undefined ? this.chatTranscript : this.subordinateChat(actor), page);
+    if (actor === undefined) return getChatHistoryPage(this.chatTranscript, page);
+    this.requireSubordinateChat(actor);
+
+    return await this.agentHistoryPage(actor, page);
   }
 
-  /**
-   * The chat behind a pane's actor id; the directory refuses ids it never issued or outside this actor's subordinates.
-   * A retired actor is unbound, so it reads via the presence-fenced handle with no file plane.
-   */
-  private subordinateChat(actorId: string): SessionTranscriptReader {
+  /** The directory refuses ids it never issued or outside this actor's subordinates. */
+  private requireSubordinateChat(actorId: string): void {
     const directory = this.actorDirectoryStore();
     const record = directory.retained(actorId);
 
@@ -3568,11 +3574,9 @@ export abstract class ActorAgent extends Agent<Env> {
     for (let step: typeof record | null = record; step?.actorId !== this.actorHandle().actorId; step = directory.retained(step.parentActorId ?? '')) {
       if (step === null || step.kind !== 'subordinate') throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
     }
-
-    if (record.retiringAt === null && record.deletedAt === null) return this.transcriptFor(directory.open(actorId));
-
-    return readSessionTranscript(this.boundSql, actorReadHandle(this.boundSql, record), CHAT_SESSION_ID, null);
   }
+
+  protected abstract agentHistoryPage(actorId: string, page: PageRequest): Promise<ChatHistoryPage>;
 
   /** Used to preselect a menu entry; the model list comes from /api/user/models (user-scoped). */
   @callable()

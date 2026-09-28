@@ -36,6 +36,7 @@ import type { ActorTurnClaim, ClaimOutcome } from '../orchestrator/actor-claims'
 import type { ActorExecutionResult, ActorSession, ActorTurnLease } from '../orchestrator/actor-session';
 import type { MessageReference, MessagePartReference } from '../session/messages';
 import { snapshotCompletedTurn } from '../orchestrator/turn-lifecycle';
+import type { CompletedTurn } from '../evolution/types';
 
 /** A head's mutable findings; the backend's tools mutate the same instance runHeadInference reads. */
 export class HeadCapture {
@@ -429,6 +430,11 @@ export interface HeadInferenceDeps {
   /** The next turn's messages, or `null` to end the run; absent is one turn (every head). A node's turn may end
    *  with detached work running; only `null` makes the run terminal. */
   resume?: () => Promise<readonly ModelMessage[] | null>;
+  /**
+   * The advice a completed turn earns, reviewed where the advisor's state lives. Absent: this actor's own session
+   * reviews it. An agent in its own isolate supplies it, since the advisor's notes and ledger are the workspace's.
+   */
+  advise?: (turn: CompletedTurn, reachable: readonly string[], mode: WorkMode) => Promise<readonly ModelMessage[]>;
 }
 
 /** Duck-typed structurally so it survives an SDK spec bump. */
@@ -485,15 +491,18 @@ interface CompletedTurnReview {
 async function adviseCompletedTurn({ session, input, deps, lease, outcome }: CompletedTurnReview): Promise<ModelMessage[]> {
   const advice: ModelMessage[] = [];
 
-  if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return advice;
-
-  const turn = snapshotCompletedTurn(session.orchestrator.acc, {
+  const turn = (): CompletedTurn => snapshotCompletedTurn(session.orchestrator.acc, {
     userMessage: input.task, assistantResponse: outcome.text,
     turnId: `${deps.runId}:${lease.turnId}`, sessionId: input.id, origin: 'programmatic',
   });
 
+  // Its failure is recorded where the review ran, which answers no advice.
+  if (deps.advise !== undefined) return [...await deps.advise(turn(), Object.keys(deps.tools), input.mode)];
+
+  if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return advice;
+
   try {
-    await session.reviewTurn(session.advisorSnapshot(turn, Object.keys(deps.tools)), false, async (signal) => {
+    await session.reviewTurn(session.advisorSnapshot(turn(), Object.keys(deps.tools)), false, async (signal) => {
       advice.push({ role: 'user', content: signal.text });
 
       return 'queued';

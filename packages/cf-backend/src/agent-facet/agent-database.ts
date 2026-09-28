@@ -1,0 +1,340 @@
+/** An agent's own SQLite, under the core stores; its roster rows are copies the workspace sends on each call. */
+import type { UIMessage } from 'ai';
+import {
+  CHAT_SESSION_ID, EventLog, EvolutionEngine, REAL_CLOCK, WorkspaceActorDirectory, runEventSinks,
+  actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
+  initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
+  getChatHistoryPage, inheritedContextFromTranscript,
+  type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PageRequest, type SerializedMessage,
+  type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor, type VFS,
+  type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
+  type JsonObject, type NimbusSandboxHandle, type SqlValue,
+} from '@kinu.run/core';
+import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import * as v from 'valibot';
+import type { AgentActivity, AgentOpening, AgentRecovery, AgentSnapshot, StoredRow } from './protocol';
+
+const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
+
+interface AgentRuntimeFiles {
+  readonly agent: () => VFS;
+  readonly state: () => VFS;
+  readonly sql: SqlExecutor;
+  readonly storage: Pick<DurableObjectStorage, 'sql' | 'transactionSync'>;
+}
+
+/** The column each copied table is keyed by. An upsert, never a replace: a replace deletes the row first, which
+ *  would cascade through every row keyed to the agent. */
+const COPIED_KEY = { workspace_identity: 'singleton', workspace_actors: 'actor_id' } as const;
+
+function upsertRow(storage: DurableObjectStorage, table: keyof typeof COPIED_KEY, row: StoredRow): void {
+  const columns = Object.keys(row);
+  const values: SqlValue[] = columns.map((column) => row[column] ?? null);
+  const updates = columns.filter((column) => column !== COPIED_KEY[table]).map((column) => `${column} = excluded.${column}`);
+
+  storage.sql.exec(
+    `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})
+     ON CONFLICT(${COPIED_KEY[table]}) DO UPDATE SET ${updates.join(', ')}`,
+    ...values,
+  );
+}
+
+interface AgentReadable {
+  readonly actor: ActorHandle;
+  readonly transcript: SessionTranscriptReader;
+}
+
+const IdentitySchema = v.object({
+  actor: v.looseObject({ actor_id: v.string(), parent_actor_id: v.nullable(v.string()) }),
+  workspace: v.looseObject({ id: v.string(), owner_user_id: v.nullable(v.string()) }),
+});
+
+export class AgentDatabase {
+  private snapshot: AgentSnapshot | undefined;
+
+  private host: ActorHost | undefined;
+
+  private lines: AgentActivity[] = [];
+
+  takeActivity(): AgentActivity[] {
+    const taken = this.lines;
+
+    this.lines = [];
+
+    return taken;
+  }
+
+  private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
+
+  private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
+    this.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
+
+  constructor(
+    private readonly storage: DurableObjectStorage,
+    private readonly workspace: { readonly agent: () => NimbusSandboxHandle; readonly state: () => NimbusSandboxHandle },
+  ) {
+    initWorkspaceSchema({
+      execRaw: (ddl) => { storage.sql.exec(ddl); },
+      sql: this.sql,
+      transactionSync: (write) => storage.transactionSync(write),
+      exec: { exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) },
+    });
+  }
+
+  adopt(snapshot: AgentSnapshot): void {
+    this.storage.transactionSync(() => {
+      upsertRow(this.storage, 'workspace_identity', snapshot.identity);
+
+      for (const row of snapshot.lineage) upsertRow(this.storage, 'workspace_actors', row);
+    });
+    this.snapshot = snapshot;
+  }
+
+  current(): AgentSnapshot {
+    if (this.snapshot !== undefined) return this.snapshot;
+
+    return settleSync(Effect.fail(new KinuError('missing', 'The agent was reached before its workspace sent its rows.')));
+  }
+
+  private identity(): v.InferOutput<typeof IdentitySchema> {
+    const snapshot = this.current();
+
+    return v.parse(IdentitySchema, { actor: snapshot.lineage.at(-1), workspace: snapshot.identity });
+  }
+
+  reference(): ActorReference {
+    const { actor, workspace } = this.identity();
+
+    return actorReferenceOf({ actorId: actor.actor_id, workspaceId: workspace.id, parentActorId: actor.parent_actor_id });
+  }
+
+  private actorHost(): ActorHost {
+    this.host ??= this.buildHost();
+
+    return this.host;
+  }
+
+  private buildHost(): ActorHost {
+    const storage = this.storage;
+    const snapshot = this.current();
+    const { workspace } = this.identity();
+
+    const directory = new WorkspaceActorDirectory(this.sql, {
+      workspaceId: workspace.id,
+      ownerUserId: workspace.owner_user_id,
+    });
+
+    const files: AgentRuntimeFiles = {
+      agent: () => nimbusSessionFiles(this.workspace.agent()),
+      state: () => nimbusSessionFiles(this.workspace.state()),
+      sql: this.sql,
+      storage,
+    };
+
+    return createActorHost({
+      storage: {
+        sql: this.sql,
+        transactionSync: (write) => storage.transactionSync(write),
+        exec: (query, ...bindings) => storage.sql.exec(query, ...bindings),
+      },
+      directory,
+      installedBuild: snapshot.installedBuild,
+      workspace: snapshot.workspaceName,
+      runtimeFor: (bound) => this.runtime(bound, files),
+      filesFor: async () => ({ vfs: files.agent(), artifactDirectory: snapshot.artifactDirectory }),
+      loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.kind), parent: null }),
+      orchestrationFor: (bound) => ({
+        host: this.backendHost(),
+        budget: new MissionGovernor({
+          storage: bound.runtime.storage,
+          actor: bound.handle,
+          pricing: (spec) => (this.priced !== null && (spec === undefined || spec === this.priced.model) ? this.priced.pricing : null),
+        }),
+        sinks: runEventSinks(bound, (event, detail) => { this.lines.push(detail === undefined ? { event } : { event, detail }); }),
+        engine: new EvolutionEngine(bound.runtime, bound.stores.history, {
+          enabled: false,
+          transaction: (body) => { storage.transactionSync(body); },
+          reportModelCall: () => undefined,
+        }),
+        eventLog: new EventLog({ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) }, bound.handle),
+      }),
+      contextEvents: () => null,
+      tracing: undefined,
+    });
+  }
+
+  runtime(bound: BoundActor, files: AgentRuntimeFiles): AgentRuntime {
+    return {
+      actor: bound.handle,
+      agentStateVfs: files.state(),
+      storage: {
+        vfs: files.agent(),
+        sql: files.sql,
+        execRaw: (ddl) => { files.storage.sql.exec(ddl); },
+        transactionSync: (write) => files.storage.transactionSync(write),
+      },
+      workspaceIsMachine: false,
+      get memory() { return settleSync(refused('Memory')); },
+      get executor() { return settleSync(refused('Code execution')); },
+      get llm() { return settleSync(refused('The reflection model lane')); },
+      get craftStore() { return settleSync(refused('Crafted tools')); },
+      schedule: {
+        after: () => settle(refused('A delayed schedule')),
+        cron: () => settle(refused('A cron schedule')),
+        fiber: async (_name, fn) => await fn({ stash: () => undefined, snapshot: null }),
+      },
+      identity: {
+        id: bound.handle.actorId,
+        name: bound.handle.name,
+        scaffold: createScaffoldSurface({ vfs: files.state(), sql: files.sql, actor: bound.handle, path: actorScaffoldPath(bound.record) }),
+      },
+      spawnBranch: () => settle(refused('An MCTS branch')),
+      abortBranch: () => settle(refused('An MCTS branch')),
+    };
+  }
+
+  backendHost(): BackendHost {
+    return {
+      broadcast: () => undefined,
+      enqueueTurn: () => settle(refused('A programmatic turn')),
+      turnInFlight: () => false,
+      closed: () => false,
+      setTimer: (fn, ms) => {
+        setTimeout(() => settle(attempt({ doing: "running an agent's debounced drain", otherwise: 'io' }, fn).pipe(
+          Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('agent.timer_failed', failure); })),
+        )), ms);
+      },
+      reconcileDurableWake: null,
+    };
+  }
+
+  price(model: string, pricing: ModelPricing | null): void {
+    this.priced = { model, pricing };
+  }
+
+  async acquire(): Promise<HostedActor> {
+    return await this.actorHost().acquire(this.reference());
+  }
+
+  private transcript() {
+    return this.actorHost().bindStores(this.reference()).stores.history.transcript(CHAT_SESSION_ID);
+  }
+
+  readable(): AgentReadable {
+    const record = this.actorHost().describe(this.reference().actorId);
+
+    if (record === null) return settleSync(Effect.fail(new KinuError('missing', 'The agent is not in its own database.')));
+
+    if (record.retiringAt === null && record.deletedAt === null) {
+      const bound = this.actorHost().bindStores(this.reference());
+
+      return { actor: bound.handle, transcript: bound.stores.history.transcript(CHAT_SESSION_ID) };
+    }
+
+    const actor = actorReadHandle(this.sql, record);
+
+    return { actor, transcript: readSessionTranscript(this.sql, actor, CHAT_SESSION_ID, null) };
+  }
+
+  async inspect(request: AgentOwnInspection): Promise<SubordinateInspectionResult> {
+    const { actor, transcript } = this.readable();
+
+    return await readSubordinateInspection({
+      sql: this.sql, raw: { exec: (query, ...bindings) => this.storage.sql.exec(query, ...bindings) }, actor, transcriptFor: () => transcript,
+    }, request);
+  }
+
+  async historyPage(page: PageRequest): Promise<ChatHistoryPage> {
+    return await getChatHistoryPage(this.readable().transcript, page);
+  }
+
+  async inheritedContext(): Promise<SerializedMessage[]> {
+    return await inheritedContextFromTranscript(this.readable().transcript);
+  }
+
+  async open(opening: AgentOpening): Promise<void> {
+    const bound = this.actorHost().bindStores(this.reference());
+    const history = bound.stores.history;
+    const rows = history.transcript(CHAT_SESSION_ID);
+
+    if (rows.has(opening.id)) return;
+
+    const message = await history.admitInput({
+      id: opening.id, turnId: opening.id, message: opening.message, assertOwner: () => bound.handle.assertCurrent(),
+    });
+
+    const prepared = await rows.prepareUser({ id: opening.id, turnId: opening.id, message, metadata: opening.metadata });
+
+    this.storage.transactionSync(() => rows.appendUser(prepared));
+  }
+
+  async recover(answered: ReadonlySet<string>): Promise<AgentRecovery> {
+    const host = this.actorHost();
+    const epochs = new Map(host.resumable().map((turn) => [turn.claim.turnId, turn.claim.epoch]));
+
+    const recovered = await recoverActorTurns({
+      installedBuild: host.installedBuild,
+      workspace: this.current().workspaceName,
+      resumable: (limit) => host.resumable(limit),
+      acquire: async (reference) => {
+        const actor = await host.acquire(reference);
+
+        return { runtime: actor.runtime, stores: actor.stores, session: { get turnOpen() { return actor.session.turnOpen; } } };
+      },
+    });
+
+    const owed: string[] = [];
+    const claims = host.bindStores(this.reference()).stores.claims;
+
+    for (const turnId of recovered.verified) {
+      const epoch = epochs.get(turnId);
+
+      if (answered.has(turnId) && epoch !== undefined) claims.settleRecovered(turnId, epoch, 'completed');
+      else owed.push(turnId);
+    }
+
+    return {
+      owed,
+      stalled: recovered.stalled.map((turn) => ({ turnId: turn.claim.turnId, runs: turn.claim.epoch, workMode: turn.claim.workMode })),
+    };
+  }
+
+  async answer(completion: NonNullable<HeadReport['canonicalCompletion']>, metadata: JsonObject | null): Promise<void> {
+    const transcript = this.transcript();
+    const parentId = transcript.newestId();
+
+    if (parentId === null) return;
+
+    const entry = await transcript.prepareAssistant({
+      id: crypto.randomUUID(), parentId, turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
+      finalText: completion.finalTextReference, ...(metadata !== null && { metadata }),
+    });
+
+    this.storage.transactionSync(() => transcript.appendAssistant(entry));
+  }
+
+  async history(limit?: number): Promise<UIMessage[]> {
+    return await this.readable().transcript.history(undefined, limit);
+  }
+
+  admitted(id: string): boolean {
+    return this.readable().transcript.has(id);
+  }
+
+  interrupt(): void {
+    this.actorHost().hosted(this.reference())?.session.interrupt();
+  }
+
+  clear(): void {
+    const reference = this.reference();
+
+    this.actorHost().bindStores(reference).stores.history.clearConversation(CHAT_SESSION_ID, () => {
+      if (this.actorHost().hosted(reference)?.session.inFlight === true) {
+        return settleSync(Effect.fail(new KinuError('denied', 'Stop the active turn before clearing its conversation')));
+      }
+    });
+  }
+
+  readonly clock = REAL_CLOCK;
+}

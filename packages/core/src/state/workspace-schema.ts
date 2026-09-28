@@ -1,6 +1,7 @@
 // The one table list every composition root creates, in one idempotent transaction. Root-only tables are
 // declared in `conformance/manifest.ts`, which checks `sqlite_master` against this.
 
+import { initAgentOpenTurnsTable } from '../subordinates/open-turns';
 import type { RawSqlExec, SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
@@ -101,6 +102,7 @@ function createWorkspaceTables(db: WorkspaceSchemaSql): void {
   const { execRaw } = db;
   initWorkspaceOwnershipTables(execRaw);
   initWorkspaceActorTable(execRaw);
+  initAgentOpenTurnsTable(execRaw);
   initActorStateSchema(db);
   execRaw(`CREATE TABLE IF NOT EXISTS slates (
     id TEXT NOT NULL, workspace_id TEXT NOT NULL, revision INTEGER NOT NULL, bytes BLOB NOT NULL,
