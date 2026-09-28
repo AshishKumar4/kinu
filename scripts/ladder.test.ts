@@ -781,7 +781,7 @@ describe('every test file is claimed by some runner', () => {
     const script = readFileSync(resolve(root, LIVE_TIER_SCRIPT), 'utf8');
 
     expect(liveTierTargets(script)).toEqual(['./tests/live-model/']);
-    expect(SKIP_RATCHET_TARGETS).toContain('./tests/');
+    expect(SKIP_RATCHET_TARGETS).toContain('./tests/live-model/');
     expect(script).toContain('RATCHET_ARGS=(--junit "$JUNIT" --target "${TARGETS[0]}")');
   });
 

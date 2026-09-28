@@ -54,11 +54,12 @@ import { INFRA_FAILURE_MARKER } from '../packages/test-utils/src/live-model';
 const root = new URL('..', import.meta.url).pathname;
 
 /**
- * The bun suites this gate covers, as `bun test` argv. Note `./tests/` — the
- * leading `./` is load bearing, and `assertMeasured` below is what keeps it
- * honest.
+ * The bun suites this gate covers, as `bun test` argv. The leading `./` is
+ * load bearing, and `assertMeasured` below is what keeps it honest.
+ * `./tests/browser/` is not here: its suites skip nothing and their rows run
+ * them, and walking into them held this gate to its deadline (2026-09-28).
  *
- * THREE ENTRIES, EACH A SET NOTHING ELSE CAN ANSWER FOR.
+ * FOUR ENTRIES, EACH A SET NOTHING ELSE CAN ANSWER FOR.
  *
  * `./packages/core/tests/e2e/` holds three live tests — one MCTS search cycle
  * and two scaffold lifecycles, all behind `describe.skipIf(!isE2EConfigured())`
@@ -73,7 +74,7 @@ const root = new URL('..', import.meta.url).pathname;
  * in the reports so an accidental skip or missing sampler check remains visible.
  */
 export const SKIP_RATCHET_TARGETS: readonly string[] = [
-  './tests/', './packages/core/tests/e2e/', './scripts/bench-external.test.ts',
+  './tests/live-model/', './tests/first-run/', './packages/core/tests/e2e/', './scripts/bench-external.test.ts',
 ];
 
 export const SKIP_LOCK_PATH = resolve(root, 'scripts/skip-ratchet.lock.json');
