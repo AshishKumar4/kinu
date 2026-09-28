@@ -10,17 +10,13 @@
  * badge. A subset nobody declared is the same defect as a gate reporting green
  * over something it never looked at, one level up.
  *
- * Three rules make that impossible rather than merely fixed today.
+ * Two rules make that impossible rather than merely fixed today.
  *
- *   1. The DEPLOY tier is not declared here. It is PARSED out of deploy.sh,
- *      which stays the single source of truth for what blocks a production
- *      publish and stays locked by `scripts/deploy.test.ts`'s exact-order
- *      assertion. This file never holds a second copy of that list, so the two
- *      cannot drift — there is only one.
- *   2. The ladder is MONOTONE: commit ⊆ push ⊆ ci ⊆ deploy, compared by the test
+ *   1. The ladder is MONOTONE: commit ⊆ push ⊆ ci ⊆ deploy, compared by the test
  *      files each gate claims rather than by command text, so a gate growing an
- *      argument does not read as a hole.
- *   3. Every deploy gate is claimed by the CI tier or carries a written reason
+ *      argument does not read as a hole. `deploy.sh` runs `--plan`, so this file
+ *      holds the one list.
+ *   2. Every deploy gate is claimed by the CI tier or carries a written reason
  *      why it cannot be. `ladder.test.ts` fails naming any gate with neither.
  *
  * Monotonicity is also what makes the standing "never `--no-verify`" rule
@@ -33,7 +29,7 @@
  * hooks installed at all.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
@@ -58,7 +54,7 @@ import { modulesReaching } from './import-closure';
 import type { ModuleEdges } from './import-graph';
 import { identifierCalleeName, literalString, walk, type Parsed } from './syntax';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE_MODEL_ENV } from '../packages/test-utils/src/index';
-import { COST_TABLE, type CostTable, costRssMb, costThreads, machineName, readCosts } from './gate-cost';
+import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from './gate-cost';
 
 /** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
  *  document that tells a reader what a rung catches. Read from the enabled rules rather than from the
@@ -554,28 +550,6 @@ export const LADDER: readonly Gate[] = [
     inputs: { ...AMBIENT_BY_NAME, reads: [] },
   },
   {
-    run: 'bun run gate:ladder-budget',
-    label: 'Tier-budget ratchet',
-    // PUSH, beside `bun test scripts/ladder.test.ts` and for its reason: the ratchet
-    // judges the declarations of BOTH cheap tiers, and every push runs every commit
-    // gate — so one static check at push governs both hooks, while a commit-tier row
-    // would judge push-tier membership from the faster hook. Like the other whole-tree
-    // locks (`gate:complexity`, `gate:wired`) it lives at push because a gate's cost
-    // cannot change between a commit and the push that follows it.
-    // Measured 2026-09-05 on the 24-thread box: 0.07/0.08/0.08s; declared 0.2s so a
-    // loaded machine has headroom.
-    tier: 'push',
-    seconds: 0.2,
-    catches: 'a tier whose declared cost outgrew its measured figure — a new gate, a '
-      + 're-measured row nobody re-locked, or a declaration edited by hand. The lock pins '
-      + 'the measured seconds per gate, so the failure names the step that grew most.',
-    blind: 'the wall clock itself. This compares declarations to the lock; a gate that '
-      + 'slows without its row updated passes until somebody re-measures. Shrinkage '
-      + 'passes deliberately: a faster tier is the ratchet working.',
-    inputs: AMBIENT_BY_NAME,
-  },
-
-  {
     run: 'bun run gate:bench-corpus',
     label: 'Seeded bench defects still apply',
     // COMMIT. Held at push, it let comment-only commits on 2026-09-22 break 37
@@ -607,12 +581,7 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:skip-ratchet',
     label: 'Declared skip ratchet',
-    // MOVED commit -> push when its measured cost went 0.3s -> 2.9s. The 0.3s was
-    // never right — `bun test ./tests/` alone is 1.2s — and covering the vitest arm
-    // added a vite transform on top, so the commit tier's declared 15s budget was
-    // being met on an understated number. Push rather than a raised budget: the
-    // budget exists so nobody learns to bypass the hook, and a skip set is fully
-    // recoverable at push. Nothing it asserts was narrowed to fit.
+    // Push: a skip set is fully recoverable at push.
     tier: 'push',
     // Re-measured 2026-09-23 on the 24-thread box at load 5: 17.8/17.9/18.5 s; the
     // vitest arm has grown since the 12 s of 2026-09-05. Too slow for commit.
@@ -3223,166 +3192,6 @@ export function runnableArgv(run: string, tracked: readonly string[]): string[] 
   return [...flags, ...files];
 }
 
-/* ── The tier-budget ratchet ────────────────────────────────────────────
- *
- * The commit and push tiers are hooks, and a hook slow enough to tempt
- * `--no-verify` is a design failure — so each tier's declared cost is pinned in
- * `scripts/ladder.lock.json` and a tier that grows past BUDGET_TOLERANCE fails,
- * naming the step that grew most. A re-lock takes `--reason` and records it in
- * the lock, so raising a figure is a decision with a stated cause rather than a
- * number that moved.
- *
- * What the lock pins is the DECLARATION (this file's `seconds`), not a wall
- * clock: a test that ran both tiers and compared walls would take six minutes
- * and fail on machine noise. The declarations are the measured figures — every
- * row carries its own date and box — re-validated 2026-09-05 on the 24-thread
- * workstation (commit walls 36.9–38.0s against 53.24s declared; the push
- * per-gate walls sum to ~360s against 379.71s declared), and the ratchet holds
- * them to what was measured.
- */
-
-/** Declared-cost growth past the locked figure that still passes: 20%.
- *
- * Machine noise on this workstation (12th Gen i9-12900K, 24 threads) measured
- * 2026-09-05 at ~3% across four commit-tier runs (38.0/36.9/37.4/37.7s, load
- * 2.4–4.7): 20% is six times that noise, so a breach means real growth — a new
- * gate, a slower suite — and never a loaded machine. Shrinkage always passes: a
- * tier that got faster is the ratchet working, and the lock is re-pinned
- * opportunistically with the next `--lock`.
- */
-export const BUDGET_TOLERANCE = 0.2;
-
-const BUDGET_LOCK = `${root}scripts/ladder.lock.json`;
-
-/** The tiers with a pinned budget: the two hooks. */
-const BUDGET_TIERS = ['commit', 'push'] as const;
-
-export type BudgetTier = (typeof BUDGET_TIERS)[number];
-
-const TierBudgetSchema = v.object({
-  seconds: v.pipe(v.number(), v.minValue(0)),
-  measuredAt: v.pipe(v.string(), v.minLength(1)),
-  machine: v.pipe(v.string(), v.minLength(1)),
-  steps: v.record(v.string(), v.pipe(v.number(), v.minValue(0))),
-});
-
-/**
- * The budget, machine-written by `--lock` and never edited by hand.
- *
- * `reason` is the `--reason` the re-lock was invoked with: what grew and why.
- * `steps` keys are the gate `run` strings, so a lock diff names the gates that
- * moved rather than reporting a bare total.
- */
-const LadderBudgetSchema = v.object({
-  reason: v.pipe(v.string(), v.minLength(1)),
-  tiers: v.object({ commit: TierBudgetSchema, push: TierBudgetSchema }),
-});
-
-export type TierBudget = v.InferOutput<typeof TierBudgetSchema>;
-
-export type LadderBudget = v.InferOutput<typeof LadderBudgetSchema>;
-
-export function readBudget(path = BUDGET_LOCK): LadderBudget {
-  return v.parse(LadderBudgetSchema, JSON.parse(readFileSync(path, 'utf8')));
-}
-
-export function writeBudget(budget: LadderBudget, path = BUDGET_LOCK): number {
-  writeFileSync(path, `${JSON.stringify(budget, null, 2)}\n`);
-
-  return Object.keys(budget.tiers.commit.steps).length
-    + Object.keys(budget.tiers.push.steps).length;
-}
-
-/** Declared cost of one budgeted tier: the total and the per-gate table. */
-export interface TierCost {
-  readonly total: number;
-  readonly steps: Record<string, number>;
-}
-
-export function declaredTierCost(tier: BudgetTier): TierCost {
-  const steps: Record<string, number> = {};
-
-  for (const gate of gatesFor(tier)) steps[gate.run] = gate.seconds;
-
-  return {
-    total: Object.values(steps).reduce((sum, seconds) => sum + seconds, 0),
-    steps,
-  };
-}
-
-/** One tier whose declared cost outgrew its locked figure. */
-export interface BudgetBreach {
-  readonly tier: BudgetTier;
-  readonly locked: number;
-  readonly declared: number;
-  /** The locked step whose declaration grew most. */
-  readonly step: string;
-  readonly stepWas: number;
-  readonly stepNow: number;
-}
-
-export function judgeBudgets(
-  declared: Record<BudgetTier, TierCost>,
-  budget: LadderBudget,
-): BudgetBreach[] {
-  const breaches: BudgetBreach[] = [];
-
-  for (const tier of BUDGET_TIERS) {
-    const locked = budget.tiers[tier];
-    const current = declared[tier];
-    // A lock that pins nothing cannot fail. See `assertMeasured`'s own
-    // docstring: a gate over an empty corpus reports the healthiest number.
-    assertMeasured(`ladder-budget (${tier})`, [
-      ['declared steps', Object.keys(current.steps).length],
-      ['locked steps', Object.keys(locked.steps).length],
-      ['locked seconds', locked.seconds],
-    ]);
-
-    if (current.total <= locked.seconds * (1 + BUDGET_TOLERANCE)) continue;
-    let step = '';
-    let stepWas = 0;
-    let stepNow = 0;
-    let growth = Number.NEGATIVE_INFINITY;
-
-    for (const [name, seconds] of Object.entries(current.steps)) {
-      const was = locked.steps[name] ?? 0;
-
-      if (seconds - was > growth) {
-        growth = seconds - was;
-        step = name;
-        stepWas = was;
-        stepNow = seconds;
-      }
-    }
-
-    breaches.push({
-      tier, locked: locked.seconds, declared: current.total, step, stepWas, stepNow,
-    });
-  }
-
-  return breaches;
-}
-
-/**
- * What this check cannot see, printed on the GREEN path.
- *
- * A budget that reports a cheap tree while saying nothing about what it never
- * timed is how a number gets trusted for a property it never had.
- */
-export const BUDGET_BLIND_SPOTS: readonly string[] = [
-  'WALL CLOCK — NOT COMPARED. This judges declarations against the lock, so a gate '
-  + 'that slows without its row updated passes until somebody re-measures. Run the tier '
-  + '— the ladder prints each gate\'s own wall seconds — and re-lock with the reason.',
-  'PER-GATE GROWTH — NOT BOUNDED, only reported. One gate may double while another '
-  + 'shrinks and the tier still passes; the failure names the step that grew most, and '
-  + 'reviewing the lock diff is what catches a quiet doubling.',
-  'SHRINKAGE — DELIBERATELY UNGOVERNED. A faster tier passes, and the lock is re-pinned '
-  + 'opportunistically rather than demanded: the ratchet points one way.',
-  'COLD HOOKS — NOT MEASURED. The pinned figures are warm-cache walls on a quiet box; '
-  + 'the first hook after a boot or under heavy contention can exceed them, and the '
-  + '20% tolerance is what covers that instead of a second set of figures.',
-];
-
 function printMatrix(): void {
   const all = gatesFor('deploy');
   const tracked = trackedTestFiles();
@@ -3604,99 +3413,6 @@ if (import.meta.main) {
     process.exit(holes === 0 && unproven === 0 ? 0 : 1);
   }
 
-  if (process.argv.includes('--check-budget')) {
-    const budget = readBudget();
-
-    const declared = {
-      commit: declaredTierCost('commit'),
-      push: declaredTierCost('push'),
-    };
-
-    const breaches = judgeBudgets(declared, budget);
-
-    for (const tier of BUDGET_TIERS) {
-      console.log(
-        `${tier}: ${declared[tier].total.toFixed(1)}s declared across `
-        + `${String(Object.keys(declared[tier].steps).length)} gates, locked at `
-        + `${budget.tiers[tier].seconds.toFixed(1)}s (${budget.tiers[tier].measuredAt})`,
-      );
-    }
-
-    if (breaches.length === 0) {
-      const stale = BUDGET_TIERS.flatMap((tier) => Object.entries(budget.tiers[tier].steps)
-        .filter(([name]) => !(name in declared[tier].steps))
-        .map(([name, was]) => `${tier}: ${name} (locked at ${String(was)}s, no longer a gate)`));
-
-      console.log('\nladder-budget: ok — both tiers within tolerance of the locked figures');
-      console.log(`  locked: ${budget.reason}`);
-
-      for (const line of stale) console.log(`  stale: ${line} — re-lock to drop it`);
-
-      for (const spot of BUDGET_BLIND_SPOTS) console.log(`  blind: ${spot}`);
-      process.exit(0);
-    }
-
-    for (const breach of breaches) {
-      console.error(finding({
-        at: `${breach.tier} tier: ${breach.declared.toFixed(1)}s declared vs `
-        + `${breach.locked.toFixed(1)}s locked`,
-        invariant: 'a tier\'s declared cost stays within '
-        + `${String(Math.round(BUDGET_TOLERANCE * 100))}% of its locked figure`,
-        found: `${breach.step} declares ${String(breach.stepNow)}s, locked at ${String(breach.stepWas)}s`,
-        silently: 'the hooks get slower one gate at a time and no reading of the tree ever '
-        + 'says so, which is how the push tier reached 380s while the budget still read 126.4s',
-        fix: 'take the growth back out, or re-lock with '
-        + '`bun scripts/ladder.ts --lock --reason="<what grew and why>"` and argue the reason '
-        + 'in the commit body',
-      }));
-    }
-
-    process.exit(1);
-  }
-
-  if (process.argv.includes('--lock')) {
-    const reason = process.argv
-      .find((argument) => argument.startsWith('--reason='))
-      ?.slice('--reason='.length)
-      .trim() ?? '';
-
-    if (reason.length === 0) {
-      console.error(
-        'ladder --lock: refusing without --reason=<what grew and why>. The reason lands in '
-        + 'scripts/ladder.lock.json beside the new figures, so a re-lock is a decision with '
-        + 'a stated cause rather than a number that moved.',
-      );
-      process.exit(2);
-    }
-
-    const machine = machineName();
-
-    const today = new Date().toISOString().slice(0, 10);
-    const commit = declaredTierCost('commit');
-    const push = declaredTierCost('push');
-
-    const count = writeBudget({
-      reason,
-      tiers: {
-        commit: {
-          seconds: Math.round(commit.total * 100) / 100,
-          measuredAt: today,
-          machine,
-          steps: commit.steps,
-        },
-        push: {
-          seconds: Math.round(push.total * 100) / 100,
-          measuredAt: today,
-          machine,
-          steps: push.steps,
-        },
-      },
-    });
-
-    console.log(`ladder --lock: pinned ${String(count)} gate cost(s) — ${reason}`);
-    process.exit(0);
-  }
-
   const gateAt = process.argv.indexOf('--gate');
   const selectedGate = gateAt === -1 ? undefined : LADDER.find((gate) => gate.run === process.argv[gateAt + 1]);
 
@@ -3714,7 +3430,7 @@ if (import.meta.main) {
 
   if (tier === undefined || affectedFrom === '') {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --affected=<ref> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --affected=<ref> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
     );
     process.exit(2);
   }

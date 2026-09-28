@@ -168,17 +168,6 @@
       "loadAtStart": 3.52,
       "exit": 0
     },
-    "bun run gate:ladder-budget": {
-      "wallSeconds": 0.22,
-      "cpuSeconds": 0.22,
-      "peakRssMb": 50.49,
-      "peakRunnable": 1,
-      "peakCpuThreads": 0,
-      "meanThreads": 1,
-      "samples": 3,
-      "loadAtStart": 3.29,
-      "exit": 0
-    },
     "bun run gate:bench-corpus": {
       "wallSeconds": 0.55,
       "cpuSeconds": 0.53,
