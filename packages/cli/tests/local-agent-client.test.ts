@@ -131,7 +131,7 @@ function setup(model: LanguageModel, profileAuthority: CliProfileSource = async 
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
-    craftedToolCount: 0, searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
+    searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
   };
 
   const client = new LocalAgentClient({
@@ -166,7 +166,7 @@ function openPersistentClient(
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
-    craftedToolCount: 0, searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
+    searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
   };
 
   return new LocalAgentClient({
