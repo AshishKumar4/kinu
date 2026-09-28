@@ -208,7 +208,7 @@ describe('the labeling file', () => {
     const rendered = renderLabelingFile(items);
     expect(rendered).toContain('fix the parser');
     expect(rendered).toContain('no, still broken');
-    expect(rendered).toContain('(none — the session ended here)');
+    expect(rendered).toContain('(none: the session ended here)');
   });
 
   test('truncates long turns rather than producing an unreadable file', () => {
@@ -266,7 +266,7 @@ describe('the labeling file', () => {
   });
 
   test('a file that is not a labeling file says so', () => {
-    expect(parseLabelingFile('some notes I took').errors).toEqual(['no turns found — is this a Kinu labeling file?']);
+    expect(parseLabelingFile('some notes I took').errors).toEqual(['no turns found: is this a Kinu labeling file?']);
   });
 });
 
@@ -330,7 +330,7 @@ describe('calibrationReport', () => {
     expect(report.segments.every((s) => s.rate === null)).toBe(true);
 
     const rendered = renderCalibrationReport(report);
-    expect(rendered).toContain('uncalibrated — no hand-labeled turns yet');
+    expect(rendered).toContain('uncalibrated: no hand-labeled turns yet');
     expect(rendered).toContain('252 classifier-graded turns are waiting');
     expect(rendered).toContain('kinu label export');
   });
@@ -391,7 +391,7 @@ describe('calibrationReport', () => {
 
     const rendered = renderCalibrationReport(report);
     expect(rendered).toContain('Sensitivity:');
-    expect(rendered).toContain("Cohen's κ:");
+    expect(rendered).toContain("Cohen's kappa:");
     expect(rendered).toContain('per 100 turns');
     expect(rendered).toContain('the classifier said');
     // Judge drift: the report always dates itself.

@@ -235,16 +235,14 @@ title, description, declared bindings by kind, the file tree, and one action,
 
 **Data.** Workspace object: `slate_live_shares` (id, slate, visibility, handle,
 grant, created, revoked), `slate_live_share_users` (share id, user id, email)
-and `slate_viewer_requests` (share id, viewer, slate, path, calls, outcome,
-created, settled), all in `packages/core/src/slates/live-shares.ts`. Blueprints:
+and `slate_viewer_requests` (share id, viewer, path, calls, outcome, created,
+settled), all in `packages/core/src/slates/live-shares.ts`. Blueprints:
 `slate_shares` and `slate_share_users` in `packages/core/src/slates/shares.ts`,
 used by `packages/core/src/slates/blueprints.ts`. User object:
 `user_shares_received`, for the Drive's "Shared with you". There is no public
 index: the Drive lists only your own and what was shared with you by name, and
 the index that fed the removed Public list was deleted with its last reader.
-Deployed control-plane objects still hold a `cp_public_shares` table that
-nothing writes or reads, with rows that stopped being forgotten on revoke; a
-public gallery must build its index anew and treat every row as a projection,
+A public gallery must build its index anew and treat every row as a projection,
 re-checked against the owner's share row, never as an authority.
 
 **Routes.** Edge: the share hostname is parsed ahead of the preview parser

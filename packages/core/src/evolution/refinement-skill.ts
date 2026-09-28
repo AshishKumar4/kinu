@@ -60,7 +60,7 @@ export async function routeSkill(
   if (nameProblem !== null) return refused(`skill name ${nameProblem}`);
 
   if (BUILTIN_SKILL_NAMES[parsed.skill.name]) {
-    return refused(`"${parsed.skill.name}" is a built-in skill — a workspace file may not claim `
+    return refused(`"${parsed.skill.name}" is a built-in skill: a workspace file may not claim `
       + 'its name, because a built-in carries system placement no file has earned');
   }
 
@@ -68,23 +68,23 @@ export async function routeSkill(
 
   if (edit.path !== canonical) {
     return refused(`the path must be the canonical skill path for its own name (${canonical}), `
-      + `not ${edit.path} — discovery reads that directory and nothing else`);
+      + `not ${edit.path}: discovery reads that directory and nothing else`);
   }
 
   const standing = deps.approvals.get(canonical);
 
   if (standing !== null) {
     return refused(standing.decision === 'revoked'
-      ? 'the owner has revoked trust for this path — a refinement must not re-propose bytes they '
+      ? 'the owner has revoked trust for this path: a refinement must not re-propose bytes they '
         + 'already refused'
-      : `the owner already has a standing decision about ${canonical} — a proposal must not talk `
+      : `the owner already has a standing decision about ${canonical}: a proposal must not talk `
         + 'over it. Revoke that decision first, or propose a differently-named skill');
   }
 
   const vfs = planeOf(deps);
 
   if (await vfs.exists(canonical)) {
-    return refused(`${canonical} already exists — those bytes are the owner's or another `
+    return refused(`${canonical} already exists: those bytes are the owner's or another `
       + "author's, and a promotion that overwrote them would not be a promotion. Propose a "
       + 'differently-named skill');
   }
@@ -154,7 +154,7 @@ export async function showRefinementRoute(
   if (source === null) {
     return {
       ok: false,
-      error: `the staged file for this edit is gone (${stagedPathFor(request, route)}) — nothing to show`,
+      error: `the staged file for this edit is gone (${stagedPathFor(request, route)}): nothing to show`,
     };
   }
 
@@ -188,7 +188,7 @@ function locate(
   if (!DECIDABLE_STAGES.has(request.stage)) {
     return {
       ok: false,
-      error: `refinement ${request.id} is ${request.stage} — its edits are `
+      error: `refinement ${request.id} is ${request.stage}: its edits are `
         + (request.stage === 'requested' || request.stage === 'planning'
           ? 'not routed yet'
           : 'already settled')
@@ -206,7 +206,7 @@ function locate(
     return {
       ok: false,
       error: `edit ${String(input.routeIndex)} of ${request.id} is a ${route.kind} edit and needs `
-        + 'no decision from you — only a staged skill does',
+        + 'no decision from you, only a staged skill does',
     };
   }
 
@@ -257,7 +257,7 @@ export async function decideRefinementRoute(
   if (input.expectedDigest !== route.digest) {
     return {
       ok: false,
-      error: 'that is not the edit you were shown — the proposal has changed since. Run '
+      error: 'that is not the edit you were shown: the proposal has changed since. Run '
         + '`/refine show` again and decide on what it prints',
     };
   }
@@ -276,14 +276,14 @@ export async function decideRefinementRoute(
         disposition: 'rejected',
         reason: `you rejected these bytes; the staged file is deleted and nothing was written to ${route.target}`,
       },
-      detail: `rejected — ${route.target} was never created`,
+      detail: `rejected: ${route.target} was never created`,
     });
   }
 
   const source = await readStagedSkill(deps, request, route);
 
   if (source === null) {
-    return { ok: false, error: `the staged file for this edit is gone (${staged}) — nothing to approve` };
+    return { ok: false, error: `the staged file for this edit is gone (${staged}): nothing to approve` };
   }
 
   if (instructionDigest(source) !== route.digest) {
@@ -299,7 +299,7 @@ export async function decideRefinementRoute(
   if (existing !== null && instructionDigest(existing) !== route.digest) {
     return {
       ok: false,
-      error: `${route.target} now holds different bytes — promoting onto it would overwrite `
+      error: `${route.target} now holds different bytes: promoting onto it would overwrite `
         + "somebody's file. The staged proposal is left where it is",
     };
   }
@@ -318,7 +318,7 @@ export async function decideRefinementRoute(
       disposition: 'applied',
       reason: `you approved digest ${route.digest}; ${route.target} is now trusted instructions`,
     },
-    detail: `approved — ${route.target} is now trusted instructions`,
+    detail: `approved: ${route.target} is now trusted instructions`,
   });
 }
 
@@ -370,7 +370,7 @@ async function promoteStagedSkill(
   if (existing !== null && instructionDigest(existing) !== expected) {
     return {
       ok: false,
-      error: `${route.target} holds bytes that are not the approved ones — refusing to overwrite. `
+      error: `${route.target} holds bytes that are not the approved ones: refusing to overwrite. `
         + `The proposal is still staged at ${staged}`,
     };
   }
@@ -383,7 +383,7 @@ async function promoteStagedSkill(
     if (source === null) {
       return {
         ok: false,
-        error: `neither ${route.target} nor its staging at ${staged} exists — the approved bytes `
+        error: `neither ${route.target} nor its staging at ${staged} exists: the approved bytes `
           + 'are gone and cannot be reconstructed',
       };
     }
@@ -391,7 +391,7 @@ async function promoteStagedSkill(
     if (instructionDigest(source) !== expected) {
       return {
         ok: false,
-        error: `the staging at ${staged} no longer holds the approved bytes — refusing to promote `
+        error: `the staging at ${staged} no longer holds the approved bytes: refusing to promote `
           + 'something the owner did not approve',
       };
     }
@@ -410,7 +410,7 @@ async function promoteStagedSkill(
     if (written === null || instructionDigest(written) !== expected) {
       return {
         ok: false,
-        error: `${route.target} did not read back as the approved bytes after writing — the `
+        error: `${route.target} did not read back as the approved bytes after writing: the `
           + `proposal is still staged at ${staged} and the promotion can be retried`,
       };
     }

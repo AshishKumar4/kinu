@@ -538,9 +538,9 @@ describe('turn-pipeline correctness wiring', () => {
         `INSERT INTO agent_log
            (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
             trust, priority, payload_visibility, payload, received_at,
-            schema_version, dedupe_key, consumed_at)
+            dedupe_key, consumed_at)
          VALUES (?, 'ev-1', 'event', NULL, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
-                 'authenticated', 'normal', 'full', ?, 1, 1, NULL, NULL)`,
+                 'authenticated', 'normal', 'full', ?, 1, NULL, NULL)`,
       ).run(workspaceMainActor(harness.db).actorId, JSON.stringify({
         webhook_id: 'hook-1',
         http_method: 'POST',
@@ -605,9 +605,9 @@ describe('turn-pipeline correctness wiring', () => {
         `INSERT INTO agent_log
            (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
             trust, priority, payload_visibility, payload, received_at,
-            schema_version, dedupe_key, consumed_at)
+            dedupe_key, consumed_at)
          VALUES (?, 'ev-mail', 'event', NULL, 0, NULL, 'tr-2', 'email_inbound', 'email',
-                 'authenticated', 'normal', 'full', ?, 1, 1, NULL, NULL)`,
+                 'authenticated', 'normal', 'full', ?, 1, NULL, NULL)`,
       ).run(actorId, JSON.stringify({
         from: 'owner@example.com', to: 'agent@example.com', subject: 'the build', body_text: 'did it pass?',
         message_id: null, in_reply_to: null, references: null, attachments: [],
@@ -621,15 +621,21 @@ describe('turn-pipeline correctness wiring', () => {
       harness.db.run(`CREATE TRIGGER refuse_reply_record BEFORE INSERT ON agent_log
         WHEN NEW.kind = 'reply_attempt' BEGIN SELECT RAISE(ABORT, 'storage refused the reply record'); END`);
       const bound = await spliceDrain(harness);
+      const logger = createRecordingLogger();
+      const restore = tapDiagnostics(logger);
 
-      await chatSessionTurns(harness.agent).settle({ messageId: 'a-mail', text: 'the answer', requestId: 'req-mail' });
+      try {
+        await chatSessionTurns(harness.agent).settle({ messageId: 'a-mail', text: 'the answer', requestId: 'req-mail' });
+        await logger.until((lines) => lines.some((line) => line.event === 'turn.terminal_effect_failed'));
+      } finally {
+        restore();
+      }
 
-      const owed = () => harness.db.query<{ status: string; outcome: string | null }, [string]>(
-        'SELECT status, outcome FROM terminal_effects WHERE effect_key LIKE ?',
-      ).all(`%:event_reply:${bound}`);
-
-      await until(() => owed().some((row) => row.outcome !== null), 'the reply effect reported its outcome');
-      expect(owed()).toEqual([{ status: 'pending', outcome: expect.stringContaining('storage refused the reply record') }]);
+      expect(logger.emitted.filter((line) => line.event === 'turn.terminal_effect_failed').map((line) => line.cause))
+        .toEqual([expect.stringContaining('storage refused the reply record')]);
+      expect(harness.db.query<{ status: string }, [string]>(
+        'SELECT status FROM terminal_effects WHERE effect_key LIKE ?',
+      ).all(`%:event_reply:${bound}`)).toEqual([{ status: 'pending' }]);
     });
 
     test('a turn with no durable answer leaves the delivery recoverable', async () => {
@@ -683,9 +689,9 @@ describe('turn-pipeline correctness wiring', () => {
       `INSERT INTO agent_log
          (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
           trust, priority, payload_visibility, payload, received_at,
-          schema_version, dedupe_key, consumed_at)
+          dedupe_key, consumed_at)
        VALUES (?, 'ev-1', 'event', 'drain-1', 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
-               'authenticated', 'normal', 'full', ?, 1, 1, NULL, ?)`,
+               'authenticated', 'normal', 'full', ?, 1, NULL, ?)`,
     ).run(workspaceMainActor(harness.db).actorId, JSON.stringify({
       webhook_id: 'hook-1', http_method: 'POST', http_headers: {}, body: { text: 'a build finished' },
       delivery_id: 'delivery-1',
@@ -695,16 +701,25 @@ describe('turn-pipeline correctness wiring', () => {
     harness.agent.harnessDrivingUserMessage('the drain text', { kinuEvent: 'event_drain', drainTurnId: 'drain-1' });
     await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the drain text' }] });
     await chatSessionTurns(harness.agent).settle({ messageId: 'a-drain', text: 'the answer' });
-    // The alarm frame dispatches the owed reply.
-    await harness.agent.terminalRetryPass();
+    const logger = createRecordingLogger();
+    const restore = tapDiagnostics(logger);
+
+    try {
+      // The alarm frame dispatches the owed reply.
+      await harness.agent.terminalRetryPass();
+    } finally {
+      restore();
+    }
 
     const leased = () => harness.db.query<{ turn_id: string | null; consumed_at: number | null }, []>(
       "SELECT turn_id, consumed_at FROM agent_log WHERE id = 'ev-1'",
     ).get();
 
-    expect(harness.db.query<{ status: string; outcome: string | null }, []>(
-      "SELECT status, outcome FROM terminal_effects WHERE effect_key = 'v1:event_reply:drain-1'",
-    ).all()).toEqual([{ status: 'pending', outcome: expect.stringContaining('storage refused the lease close') }]);
+    expect(harness.db.query<{ status: string }, []>(
+      "SELECT status FROM terminal_effects WHERE effect_key = 'v1:event_reply:drain-1'",
+    ).all()).toEqual([{ status: 'pending' }]);
+    expect(logger.emitted.filter((line) => line.event === 'turn.terminal_effect_failed').map((line) => line.cause))
+      .toEqual([expect.stringContaining('storage refused the lease close')]);
     expect(leased()?.consumed_at).not.toBeNull();
 
     harness.db.run('DROP TRIGGER refuse_lease_close');

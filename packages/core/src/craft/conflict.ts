@@ -10,8 +10,6 @@ interface CraftCandidate {
   description: string;
   code: string;
   score: number;
-  /** Null for extracted tools; imported tools carry the source workspace's declaration. */
-  params?: Record<string, string> | null;
 }
 
 export function checkConflictsBeforeAdding(
@@ -80,7 +78,6 @@ export async function upsertCraftedTool(
       void rt.storage.sql`
         UPDATE crafted_tools
         SET code = ${candidate.code}, description = ${candidate.description},
-            params = ${candidate.params == null ? null : JSON.stringify(candidate.params)},
             updated_at = ${nowMs()}, score = ${candidate.score}, last_used_at = ${nowMs()}
         WHERE name = ${conflicting[0]}
       `;
@@ -93,9 +90,7 @@ export async function upsertCraftedTool(
   rt.craftStore.create({
     name: candidate.name,
     description: candidate.description,
-    params: candidate.params ?? null,
     code: candidate.code,
-    scope: 'local',
   });
 
   return { accepted: true };

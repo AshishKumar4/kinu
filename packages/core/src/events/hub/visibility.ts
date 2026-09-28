@@ -349,7 +349,7 @@ function briefForVariant(event: KinuEvent): string {
 }
 
 function rest(what: string, path: string | undefined, unsaved: string | undefined): string {
-  if (path) return ` — full ${what}: ${path}`;
+  if (path) return `: full ${what}: ${path}`;
 
-  return unsaved ? ` — full ${what} could not be saved: ${unsaved}` : '';
+  return unsaved ? `: full ${what} could not be saved: ${unsaved}` : '';
 }

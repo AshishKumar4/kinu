@@ -123,15 +123,18 @@ export function codexRouteFetch(input: {
 
   return asFetchFunction(async (request, init) => {
     const signal = init?.signal ?? undefined;
-    signal?.throwIfAborted();
     const turn = liveTurnOf(activeOperationProfile(), currentTurn);
-    const who = await caller();
+    // Checked before anything is sent.
+    const unstopped = Effect.suspend(() => (signal?.aborted === true ? Effect.die(abortCause(signal)) : Effect.void));
 
     return settle(Effect.gen(function* () {
+      yield* unstopped;
       const route = yield* routeOf(turn);
 
       if (route.kind === 'container') return yield* viaContainer(request, init);
+      const who = yield* attempt({ doing: 'reading who asks for Codex', otherwise: 'unavailable' }, () => caller());
       const callId = crypto.randomUUID();
+      yield* unstopped;
       const stopped = stoppedBy(signal, () => hub.cancelCodexRelay(who, callId), 'device');
 
       const lostDevice = (failure: { readonly cause: unknown }): KinuError => {
@@ -169,7 +172,6 @@ export function codexRouteFetch(input: {
       return yield* Effect.catch(named, (failure) => {
         if (signal?.aborted === true) return Effect.die(failure.cause);
 
-        // Nothing left the machine: re-pinned, not switched.
         if (isDeviceUnknownMethodError(failure)) {
           if (turn !== null && PINNED.get(turn.actor)?.turn === turn.turn) PINNED.set(turn.actor, { turn: turn.turn, route: Promise.resolve(CONTAINER) });
           diagnostics.event('codex.route_pinned', { route: 'container', device: '', reason: 'daemon_without_relay' });

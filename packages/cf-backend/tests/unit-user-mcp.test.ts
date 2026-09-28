@@ -378,7 +378,7 @@ describe('admitMcpDescriptors', () => {
 
     expect(admission.admitted.map((d) => d.name)).toEqual(['loud', 'quiet']);
     expect(admission.admitted[0]?.description?.length).toBeLessThan(essay.length);
-    expect(admission.admitted[0]?.description?.endsWith('…')).toBe(true);
+    expect(admission.admitted[0]?.description?.endsWith('...')).toBe(true);
     expect(admission.admitted[1]?.description).toBe('Short.');
   });
 

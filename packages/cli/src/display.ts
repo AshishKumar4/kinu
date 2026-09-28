@@ -1,7 +1,8 @@
 import { stripVTControlCharacters } from 'node:util';
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS, clipText, describeToolCall, fmtUsd, quotaWindowText, summarizeToolCall, timeAgo, TUI_MARKS, usageTotal } from '@kinu.run/core';
+import { BUILTIN_TOOLS, describeToolCall, fmtUsd, quotaWindowText, summarizeToolCall, timeAgo, usageTotal } from '@kinu.run/core';
+import { clipText, TUI_MARKS } from '@kinu.run/core/tui';
 import type { AccountSpend, SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
 import type { AgentSearchNode } from './agent-client';
 import { guideFailure } from './provider-guidance';

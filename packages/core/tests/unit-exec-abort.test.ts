@@ -118,7 +118,7 @@ describe('remote executor exec abort', () => {
       const { promise, reject } = Promise.withResolvers<{ exitCode?: number }>();
       opts?.signal?.addEventListener('abort', () => {
         reject(new DOMException(
-          'sandbox exec cancelled — container process proc-1 was killed',
+          'sandbox exec cancelled: container process proc-1 was killed',
           'AbortError',
         ));
       }, { once: true });
@@ -207,7 +207,7 @@ describe('remote executor exec abort', () => {
     controller.abort();
     await expect(pending).rejects.toMatchObject({
       name: 'AbortError',
-      message: 'device exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run',
+      message: 'device exec stopped: the device confirmed its owned command process group terminated; separately sessioned processes may still run',
     });
 
     expect(calls.map((call) => call.method)).toEqual(['exec', DEVICE_CANCEL_METHOD]);
@@ -231,7 +231,7 @@ describe('remote executor exec abort', () => {
     controller.abort();
     await expect(pending).rejects.toMatchObject({
       name: 'AbortError',
-      message: 'device exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
+      message: 'device exec stopped: no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
     });
   });
 
@@ -351,7 +351,7 @@ describe('remote executor exec abort', () => {
     controller.abort();
     await expect(pending).rejects.toMatchObject({
       name: 'AbortError',
-      message: 'device exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
+      message: 'device exec stopped: no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
     });
 
     held.resolve({ stdout: 'all 900 tests passed', stderr: '', exitCode: 0 });
@@ -405,7 +405,7 @@ describe('remote executor exec abort', () => {
     await expect(provider.tools.exec.execute('ls', { signal: controller.signal }))
       .rejects.toMatchObject({
         name: 'AbortError',
-        message: 'device exec stopped before the command was sent — nothing ran on the device',
+        message: 'device exec stopped before the command was sent: nothing ran on the device',
       });
     expect(calls).toEqual([]);
   });

@@ -124,7 +124,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     fork_transfer: EVERYWHERE,
     fork_staged_files: EVERYWHERE,
     scaffold_versions: EVERYWHERE,
-    scaffold_regression_fixtures: EVERYWHERE,
     scaffold_evaluations: EVERYWHERE,
     scaffold_trial_queue: EVERYWHERE,
 
@@ -137,7 +136,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // Actor-private: resume keys on task text, so rows carry `actor_id` in the primary key.
     head_runs: EVERYWHERE,
     head_journal: EVERYWHERE,
-    head_evidence: EVERYWHERE,
     head_steps: EVERYWHERE,
     head_merge_results: EVERYWHERE,
     mcts_search_runs: EVERYWHERE,
@@ -162,9 +160,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     actor_config: EVERYWHERE,
     // Per-actor list; uniqueness is (actor_id, seq).
     agent_tasks: EVERYWHERE,
-    // Separate because agent_tasks is genesis-locked; reads LEFT JOIN it.
-    agent_task_notes: EVERYWHERE,
-    plan_task_links: EVERYWHERE,
     // Rows are actor-private; the `*InWorkspace` aggregates are machine-wide because
     // every detached job is a live process tree (jobs/runner.ts).
     background_jobs: EVERYWHERE,
@@ -232,13 +227,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     slates: EVERYWHERE,
     slate_versions: EVERYWHERE,
     slate_publications: EVERYWHERE,
-    slate_deployments: EVERYWHERE,
-    slate_resources: EVERYWHERE,
-    slate_previews: EVERYWHERE,
-    slate_deployment_reservations: EVERYWHERE,
-    slate_resource_reservations: EVERYWHERE,
-    slate_invocations: EVERYWHERE,
-    slate_receipts: EVERYWHERE,
     // The authored slate's `this.storage` KV.
     slate_state: EVERYWHERE,
     slate_file_manifest: EVERYWHERE,
@@ -258,7 +246,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     gepa_candidates: EVERYWHERE,
 
     prompt_section_versions: EVERYWHERE,
-    prompt_section_evaluations: EVERYWHERE,
 
     // The Evolution Changelog reads it on every root.
     refinement_requests: EVERYWHERE,
@@ -297,12 +284,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: WIRED,
     },
-    // On cf these fields are columns on the child's `workspace_actors` row.
-    subordinate_identity: {
-      'cf-orchestrator': { absent: "a hosted actor's identity is its `workspace_actors` row, which the directory owns" },
-      'cf-subordinate': { absent: "a hosted actor's identity is its `workspace_actors` row, which the directory owns" },
-      cli: LAZY_ON_FIRST_USE("the first local hire's SubordinateIdentityStore"),
-    },
     // `facetHomeProvisioner` creates it on first provision in the owning workspace's database.
     kinu_agent_identity: {
       'cf-orchestrator': LAZY_ON_FIRST_USE('facetHomeProvisioner'),
@@ -329,7 +310,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     },
     vfs_baseline_manifest: EVERYWHERE,
     vfs_baseline_blob: EVERYWHERE,
-    vfs_baseline_generation: EVERYWHERE,
     change_notes: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': WIRED,
@@ -390,9 +370,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // On cf created in the ActorAgent constructor, since `onStart` may not precede an RPC.
     // On the CLI `turn_id` is nullable: an idle-queued send is held by the queue.
     pending_steers: EVERYWHERE,
-    // File parts of a pending send, one row per part.
     pending_steer_files: EVERYWHERE,
-    pending_steer_metadata: EVERYWHERE,
     // Created by `initWorkspaceSchema` (CLI) and the `ActorAgent` constructor (cf),
     // ahead of the `onStart` recovery sweep.
     actor_turn_claims: EVERYWHERE,
@@ -405,7 +383,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     context_memberships: EVERYWHERE,
     context_proposals: EVERYWHERE,
     context_proposal_entries: EVERYWHERE,
-    context_proposal_sources: EVERYWHERE,
     actor_requests: EVERYWHERE,
     request_renders: EVERYWHERE,
     conversation_entries: EVERYWHERE,

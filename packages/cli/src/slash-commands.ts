@@ -113,7 +113,6 @@ function instructionState(row: InstructionSourceRow): string {
   if (row.reason !== undefined) return `not readable: ${row.reason}`;
 
   switch (row.decision) {
-    case 'grandfathered': return 'carried over';
     case 'approved': return 'approved';
     case 'revoked': return 'refused';
     case 'none': return 'not decided';

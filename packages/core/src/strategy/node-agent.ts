@@ -70,7 +70,7 @@ export const NODE_WITHHELD_TOOLS = {
   memory: 'durable notes, facts and the past conversation live in per-workspace stores the node '
     + 'shares with its parent and siblings; search grades reports, not state left behind',
   tasks: 'one `agent_tasks` list per workspace, shared with the parent and siblings; '
-    + 'its `mode` action selects the parent agent’s durable role',
+    + 'its `mode` action selects the parent agent\'s durable role',
 } as const satisfies Readonly<Record<string, string>>;
 
 export const PROPOSE_BRANCH_TOOL = 'propose_branch';
@@ -231,7 +231,7 @@ function buildProposeTool(
         + `${String(BRANCH_PROPOSAL_WIDTH.max)} narrower threads of your task. You are PROPOSING, `
         + 'not spawning: the search decides against a depth cap and a shared budget you cannot see, '
         + 'and this call returns either the children it reserved or the reason it refused. Each '
-        + 'branch names what it starts from — "inherit" gives it your whole conversation, "fresh" gives '
+        + 'branch names what it starts from: "inherit" gives it your whole conversation, "fresh" gives '
         + 'it your report and its own focus. Call it at most once, when one thread genuinely '
         + 'deserves its own budget.',
       inputSchema: ProposeBranchInputSchema,
@@ -245,7 +245,7 @@ function buildProposeTool(
 
           if (prior.kind === 'granted') {
             return `Refused (already granted): ${String(prior.width)} children were reserved `
-              + `(${prior.nodeIds.join(', ')}) when you proposed earlier. Finish and report — `
+              + `(${prior.nodeIds.join(', ')}) when you proposed earlier. Finish and report: `
               + 'they are created from your report, so put in it what they will need.';
           }
 
@@ -372,7 +372,7 @@ export function nodeSystemPrompt(input: {
     input.base,
     isolationDisclosure(input.isolation, input.home),
     'You are ONE node of a search. Other nodes are working on sibling angles of the same task at '
-    + 'the same time, and the search compares what each of you REPORTS — not the state you leave '
+    + 'the same time, and the search compares what each of you REPORTS, not the state you leave '
     + 'behind. So use your tools to find things out, then finish by calling `report` with '
     + 'status:"completed" and your answer as `content`. An answer that exists only in the workspace '
     + 'or only in your reasoning is an answer the search cannot see.',
@@ -386,7 +386,7 @@ export function nodeSystemPrompt(input: {
     );
   }
 
-  parts.push(`Tools available to you: ${input.toolNames.join(', ')}. There are no others — in `
+  parts.push(`Tools available to you: ${input.toolNames.join(', ')}. There are no others: in `
     + 'particular you cannot delegate to another agent, because the search owns that decision.');
 
   return parts.join('\n\n');

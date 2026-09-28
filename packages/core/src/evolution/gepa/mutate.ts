@@ -70,13 +70,13 @@ export function renderReflectionPrompt<I, E>(opts: {
 
   return `You are improving a ${desc}. The current version scored sub-optimally on the following instances.
 
-Read each instance's input + evidence + feedback. Identify a SPECIFIC defect that explains the failures, then propose a revised ${desc} that fixes it without regressing on other axes. Keep the revision tightly scoped — large rewrites get rejected by downstream gates.
+Read each instance's input + evidence + feedback. Identify a SPECIFIC defect that explains the failures, then propose a revised ${desc} that fixes it without regressing on other axes. Keep the revision tightly scoped: large rewrites get rejected by downstream gates.
 
 Specific and tightly scoped, by contrast:
-  Good: "i2 and i5 both stop as soon as a tool result comes back empty — treat an empty result as a step to continue from rather than a reason to finish." One defect, one edit, named instances.
+  Good: "i2 and i5 both stop as soon as a tool result comes back empty; treat an empty result as a step to continue from rather than a reason to finish." One defect, one edit, named instances.
   Bad: "it is too rigid; restructure it and add error handling." No instance named, no defect named, and a rewrite the downstream gate rejects on size alone.
 
-You are shown only the instances that scored badly. The rest of the eval set is scored too, and you cannot see it — so do not remove or weaken anything the failures above do not implicate. A revision that trades one instance for another scores worse, not better.${processRubric}
+You are shown only the instances that scored badly. The rest of the eval set is scored too, and you cannot see it, so do not remove or weaken anything the failures above do not implicate. A revision that trades one instance for another scores worse, not better.${processRubric}
 
 Current ${desc}:
 \`\`\`
@@ -88,7 +88,7 @@ Aggregate score on the full eval set: ${opts.parent.aggregateScore.toFixed(3)}
 Recent rollouts on minibatch:
 ${traceLines.join('\n')}
 
-Return ONLY the revised ${desc} source — no commentary, no markdown fences. If you cannot improve on the current version, return the source unchanged.`;
+Return ONLY the revised ${desc} source: no commentary, no markdown fences. If you cannot improve on the current version, return the source unchanged.`;
 }
 
 export async function proposeMutation<I, E>(

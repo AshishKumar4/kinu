@@ -5,7 +5,7 @@ import { asFetchFunction } from './fetch-shim';
 import { toolCallIdFor } from './tool-call-id';
 import { withRateLimitRetry, type RateLimitRetryOptions } from './rate-limit-retry';
 import { Effect } from 'effect';
-import { diagnostics, renderCauseChain, settle, toKinuError, tolerate } from '../obs/index';
+import { KinuError, diagnostics, renderCauseChain, settle, toKinuError, tolerate } from '../obs/index';
 import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
 import { createCachedUsageRepair } from './stream-usage-repair';
@@ -96,8 +96,13 @@ export function createDirectWorkersAIFetch(
     if (affinity) options.extraHeaders = { 'x-session-affinity': affinity };
 
     const startedAt = Date.now();
+    const messages = jsonObjectElements(body.messages);
 
-    return settle(Effect.tryPromise({ try: () => binding.run(route.model, bindingInputs(body, route), options), catch: (cause) => ({ cause }) }).pipe(
+    if (body.messages !== undefined && messages === null) {
+      return settle(Effect.fail(new KinuError('bad_input', 'the request `messages` is not a list of objects')));
+    }
+
+    return settle(Effect.tryPromise({ try: () => binding.run(route.model, bindingInputs(body, route, messages), options), catch: (cause) => ({ cause }) }).pipe(
       Effect.matchEffect({
         onSuccess: (answer) => Effect.promise(() => (route.stream
           ? streamedResponse(answer, route.model, startedAt)
@@ -118,10 +123,9 @@ export function createDirectWorkersAIFetch(
 
 /** Tool-call ids are forwarded as-is: the upstream pairs on equality and re-keying would split pairs.
  *  Null `content` becomes `''` because the binding's message schema rejects null (AiError on tool-only turns). */
-function bindingInputs(body: JsonObject, route: ChatCompletionRoute): JsonObject {
+function bindingInputs(body: JsonObject, route: ChatCompletionRoute, messages: readonly JsonObject[] | null): JsonObject {
   const inputs: JsonObject = { ...body, stream: route.stream };
   delete inputs.model;
-  const messages = jsonObjectElements(body.messages);
 
   if (messages !== null) inputs.messages = messages.map(withoutNullContent);
 
@@ -137,7 +141,6 @@ function withoutNullContent(message: JsonObject): JsonObject {
   return message.content === null ? { ...message, content: '' } : message;
 }
 
-/** A request that asked for a whole completion. */
 async function completedResponse(
   answer: Response | ReadableStream<Uint8Array> | JsonObject,
   model: string,
@@ -154,7 +157,6 @@ async function completedResponse(
   return openAICompletion(v.parse(JsonObjectSchema, JSON.parse(text)), model);
 }
 
-/** A request that asked to stream. */
 async function streamedResponse(
   answer: Response | ReadableStream<Uint8Array> | JsonObject,
   model: string,

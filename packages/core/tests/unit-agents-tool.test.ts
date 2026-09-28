@@ -11,7 +11,7 @@ import {
   agentsActionsFor, buildBuiltinTools, createAgentsTool, parseAgentsToolInput,
   renderAgentsToolDescription, resumableAgentsInput,
   AGENTS_TOOL_ACTIONS, BUILTIN_TOOL_DESCRIPTIONS,
-  delegationBudgetAtDepth, ROOT_DELEGATION_BUDGET,
+  deriveChildDelegationBudget, ROOT_DELEGATION_BUDGET,
   PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
   classifyToolFailure, JsonObjectSchema, failedToolOutcome,
   type AgentsToolInput,
@@ -356,8 +356,8 @@ describe('agents tool — the field contract', () => {
 
     const pending = t.execute(input);
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
-    await expect(pending).rejects.toThrow('unknown field "budgetUsd" — did you mean "budget_usd"?');
-    await expect(pending).rejects.toThrow('unknown field "budgetLabel" — did you mean "budget_label"?');
+    await expect(pending).rejects.toThrow('unknown field "budgetUsd": did you mean "budget_usd"?');
+    await expect(pending).rejects.toThrow('unknown field "budgetLabel": did you mean "budget_label"?');
   });
 
   test('the refusal counts as the tool DECLINING, not as the tool breaking', async () => {
@@ -439,13 +439,17 @@ describe('agents tool — the field contract', () => {
 // Depth cap: primarily enforced by not wiring `team` at the cap; these cover the seam, since a
 // ToolSet is cached across turns and a facet's identity is seeded after it is built.
 
+/** A hire chain `depth` levels below the root. */
+const budgetAt = (depth: number) =>
+  Array.from({ length: depth }, () => 0).reduce((budget) => deriveChildDelegationBudget(budget), ROOT_DELEGATION_BUDGET);
+
 describe('agents tool — delegation depth', () => {
   const depthDeps = (depth: number, extra: Partial<AgentsToolDeps> = {}) => {
     const team = makeTeam();
 
     return {
       team,
-      deps: withBuildMode({ team: { ...team.deps, delegation: delegationBudgetAtDepth(depth) }, profile: () => testProfile(), ...extra }),
+      deps: withBuildMode({ team: { ...team.deps, delegation: budgetAt(depth) }, profile: () => testProfile(), ...extra }),
     };
   };
 
@@ -612,11 +616,11 @@ describe('agents tool — subordinate actions', () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps, profile: () => testProfile() });
     await expect(t.execute({ action: 'hire', agent: 'researcher', message: 'Survey auth', mission: 'Map it' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: 'field "mission" is not available on a hire that names an existing agent — its brief is `message`' });
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "mission" is not available on a hire that names an existing agent: its brief is `message`' });
     await expect(t.execute({ action: 'hire', agent: 'researcher', message: 'Survey auth', tier: 'deep' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: 'field "tier" is not available on a hire that names an existing agent — it already runs at its own tier' });
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "tier" is not available on a hire that names an existing agent: it already runs at its own tier' });
     await expect(t.execute({ action: 'hire', agent: 'researcher', message: 'Survey auth', lifetime: 'task' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: 'field "lifetime" is not available on a hire that names an existing agent — it already has one; `lifetime` belongs to a hire that creates with `role`' });
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "lifetime" is not available on a hire that names an existing agent: it already has one; `lifetime` belongs to a hire that creates with `role`' });
     expect(calls).toEqual([]);
   });
 
@@ -624,7 +628,7 @@ describe('agents tool — subordinate actions', () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps, profile: () => testProfile() });
     await expect(t.execute({ action: 'hire', lifetime: 'task', role: 'researcher', mission: 'Survey auth', tier: 'deep' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: 'field "tier" is not available on a lifetime:"task" hire — it runs at its role\'s tier; omit it, or hire `durable` for an override' });
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "tier" is not available on a lifetime:"task" hire: it runs at its role\'s tier; omit it, or hire `durable` for an override' });
     expect(calls).toEqual([]);
   });
 
@@ -632,9 +636,9 @@ describe('agents tool — subordinate actions', () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps, profile: () => testProfile() });
     await expect(t.execute({ action: 'hire', role: 'researcher', mission: 'Map it', deliverable: 'a note' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: 'field "deliverable" is not available on a hire that creates an agent — say what the result should be in `mission`' });
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "deliverable" is not available on a hire that creates an agent: say what the result should be in `mission`' });
     await expect(t.execute({ action: 'hire', role: 'researcher', mission: 'Map it', topic: 'auth' }))
-      .rejects.toMatchObject({ code: 'bad_input', message: 'field "topic" is not available on a hire that creates an agent — it labels a message to an agent that already exists' });
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "topic" is not available on a hire that creates an agent: it labels a message to an agent that already exists' });
     expect(calls).toEqual([]);
   });
 
@@ -776,8 +780,8 @@ describe('agents tool — subordinate actions', () => {
 
   test('a name on neither roster is a caller mistake, not an unknown transport state', async () => {
     const t = agentsTool({ team: makeTeam().deps });
-    await expect(t.execute({ action: 'hire', agent: 'ghost', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'unknown agent "ghost" — check the roster with action:"list"' });
-    await expect(t.execute({ action: 'msg', agent: 'ghost', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'unknown agent "ghost" — check the roster with action:"list"' });
+    await expect(t.execute({ action: 'hire', agent: 'ghost', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'unknown agent "ghost": check the roster with action:"list"' });
+    await expect(t.execute({ action: 'msg', agent: 'ghost', message: 'x' })).rejects.toMatchObject({ code: 'bad_input', message: 'unknown agent "ghost": check the roster with action:"list"' });
   });
 
   test('deps exceptions surface as tool error objects (never throw into the turn)', async () => {
@@ -843,7 +847,7 @@ describe('agents tool — peer workspace actions', () => {
       .rejects.toMatchObject({
         code: 'bad_input',
         message: 'msg takes ONE target: `agent` to name an agent, or `event_id` to answer the agent '
-          + 'message event you were given. Naming both leaves it undecided who this is for — '
+          + 'message event you were given. Naming both leaves it undecided who this is for: '
           + 'drop `event_id` to message the named agent, or drop `agent` to answer that event.',
       });
     await expect(t.execute({ action: 'msg', message: 'x' }))

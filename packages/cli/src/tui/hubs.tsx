@@ -12,7 +12,7 @@ import { tierIdsOf,
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { agentWorkspaceKey } from '../agent-list';
 import type { TuiAgentStatus, TuiAgentSummary, TuiSubordinate } from './tui-shell';
-import { agentDisplayLabel } from '@kinu.run/core';
+import { agentDisplayLabel } from '@kinu.run/core/tui';
 import { MessageList, type DisplayMessage } from './messages';
 import * as v from 'valibot';
 import { useTuiTheme, type TuiThemeColors } from './theme';

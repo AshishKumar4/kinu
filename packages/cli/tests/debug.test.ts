@@ -11,7 +11,7 @@ import {
   initRunEventTables, initSearchTables, recordExploration,
   type ExplorationWrite, type ObjectiveIdentity,
 } from '@kinu.run/core';
-import { makeSql } from '@kinu.run/cli-backend';
+import { makeSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
 import { scratchDir, createTestActorsOver } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
@@ -61,6 +61,7 @@ const PRIVATE_KEY = ['-----BEGIN ', 'PRIVATE KEY-----'].join('');
  */
 function seedInvestigationWorkspace(dbPath: string): void {
   const db = new Database(dbPath, { create: true });
+  stampSchemaGenesis(db);
   const execRaw = (sql: string) => { db.exec(sql); };
 
   initRunEventTables(execRaw);
@@ -153,7 +154,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
         identity: CALLS, descriptor: null, artifact: 'solve()', value: 23,
         detail: '23 calls', measured: null, preset: 'optimise', label: null,
         rootId: 'search-new', configDigest: 'cfg-1', depth: 5, branches: 3,
-        floor: null, costUsd: null, costTokens: null, at: 20_000, ...over,
+        floor: null, costTokens: null, at: 20_000, ...over,
       },
     });
   };

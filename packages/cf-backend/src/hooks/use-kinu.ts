@@ -251,8 +251,6 @@ const MctsProgressHeadSchema = v.object({
   })),
   merge: v.nullable(v.object({
     narrative: v.string(),
-    headCount: v.number(),
-    totalTokens: v.nullable(v.number()),
   })),
 });
 

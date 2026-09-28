@@ -29,7 +29,6 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['agent_facts', LEDGER],
   ['crafted_tools', ['getToolDescriptions', ...LEDGER]],
   ['gepa_runs', LEDGER],
-  ['prompt_section_evaluations', LEDGER],
   ['prompt_section_versions', LEDGER],
   ['refinement_requests', LEDGER],
   ['replay_evals', LEDGER],
@@ -41,7 +40,6 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['plan_reviews', ['getActivePlanReview', 'getToolDescriptions', ...QUEUE, 'listWorkspaceWork']],
   ['background_jobs', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['agent_tasks', WORK],
-  ['agent_task_notes', WORK],
 ]);
 
 /** Reads that ask only whether a row exists: updates never move them. */

@@ -189,41 +189,6 @@ describe('EventLog.defer + dismiss', () => {
   });
 });
 
-describe('EventLog audit + non-event rows', () => {
-  test('appendNonEventRow writes step/tool_call/etc. rows', () => {
-    const { sql, actor } = makeSql();
-    initEventsHubTables(sql);
-    const log = new EventLog(sql, actor);
-
-    const id = log.appendNonEventRow({
-      kind: 'step',
-      turn_id: 'turn-1', step_idx: 0, parent_id: null, trace_id: 'trace-1',
-      payload: { finished: true, tool_call_count: 0 },
-      now: 1,
-    });
-
-    expect(id.length).toBeGreaterThan(0);
-    const steps = log.turnSteps('turn-1');
-    expect(steps).toHaveLength(1);
-    expect(steps[0].kind).toBe('step');
-  });
-
-  test('currentPhase reads the latest phase row for a turn', () => {
-    const { sql, actor } = makeSql();
-    initEventsHubTables(sql);
-    const log = new EventLog(sql, actor);
-    log.appendNonEventRow({
-      kind: 'phase', turn_id: 't1', step_idx: null, parent_id: null, trace_id: 't1',
-      payload: { phase: 'linear' }, now: 100,
-    });
-    log.appendNonEventRow({
-      kind: 'phase', turn_id: 't1', step_idx: null, parent_id: null, trace_id: 't1',
-      payload: { phase: 'heads' }, now: 200,
-    });
-    expect(log.currentPhase('t1')?.phase).toBe('heads');
-  });
-});
-
 describe('EventLog.traceEventCount', () => {
   test('counts events on a trace', () => {
     const { sql, actor } = makeSql();

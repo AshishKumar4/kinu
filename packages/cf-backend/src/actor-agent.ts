@@ -96,8 +96,8 @@ import {
   nanoid,
   type HeadJournal, LiveHeadJournal,
   type HeadStreamFrame,
-  type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
-  type SerializedMessage, type HeadRuntime, type HeadGrounding, type MergeResult,
+  type HeadId, type HeadInput, type HeadReport,
+  type SerializedMessage, type HeadRuntime, type HeadGrounding,
   readMemoryTail,
   type RunEventRecorder,
   // Spend governor is opt-in: no label means no cap.
@@ -2124,8 +2124,8 @@ export abstract class ActorAgent extends Agent<Env> {
     this.headJournal.recordReport(report);
   }
 
-  async headJournalCacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): Promise<void> {
-    this.headJournal.cacheMerge(rootId, result, strategy);
+  async headJournalCacheMerge(rootId: HeadId, narrative: string): Promise<void> {
+    this.headJournal.cacheMerge(rootId, narrative);
   }
 
   private _evolutionSettling: AsyncTaskOwner | null = null;
@@ -3744,7 +3744,7 @@ export abstract class ActorAgent extends Agent<Env> {
       return this._cachedTools;
     }
 
-    this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} → ${cacheKey}`);
+    this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} -> ${cacheKey}`);
 
     try {
       // No registry sync: the eval sandbox reads craftStore.list() fresh at every execute.
@@ -3797,7 +3797,7 @@ export abstract class ActorAgent extends Agent<Env> {
         this._cachedToolsKey = cacheKey;
       }
 
-      this.logActivity("gettools_end", `rebuilt — ${Object.keys(tools).length} tools`);
+      this.logActivity("gettools_end", `rebuilt: ${Object.keys(tools).length} tools`);
 
       return tools;
     } catch (err) {
@@ -4663,7 +4663,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     throw new KinuError('io', 
       `settleBackgroundTasks: ${String(this._backgroundTasks.size)} task(s) still detached after 32 `
-      + 'laps — something keeps enqueuing work; join a narrower seam instead',
+      + 'laps: something keeps enqueuing work; join a narrower seam instead',
     );
   }
 

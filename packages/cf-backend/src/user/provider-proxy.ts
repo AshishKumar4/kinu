@@ -98,15 +98,15 @@ async function forwardUpstream(
   const credKey = request.headers.get(PROXY_CRED_HEADER)?.trim();
   const target = request.headers.get(PROXY_TARGET_HEADER)?.trim();
 
-  if (!credKey) return errorResponse(400, `${PROXY_CRED_HEADER} is required — name the credential to attach.`);
+  if (!credKey) return errorResponse(400, `${PROXY_CRED_HEADER} is required: name the credential to attach.`);
 
-  if (!target) return errorResponse(400, `${PROXY_TARGET_HEADER} is required — name the upstream URL.`);
+  if (!target) return errorResponse(400, `${PROXY_TARGET_HEADER} is required: name the upstream URL.`);
 
   try { validateCredentialKey(credKey); }
   catch (cause) { return errorResponse(400, publicText(authoredRefusal({ doing: 'reading the credential key', cause }))); }
 
   if (isProxyDeniedCredentialKey(credKey)) {
-    return errorResponse(403, `${credKey} is not served by this proxy — Cloudflare-backed models go through /api/user/ai/v1, and Codex must be connected on the machine that uses it.`);
+    return errorResponse(403, `${credKey} is not served by this proxy: Cloudflare-backed models go through /api/user/ai/v1, and Codex must be connected on the machine that uses it.`);
   }
 
   const base = await userDO.getCredentialBaseURL(owner, credKey)

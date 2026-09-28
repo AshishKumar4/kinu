@@ -56,7 +56,7 @@ async function offload(vfs: VFS, text: string): Promise<Offload> {
 /** Charged against the same cap as the output it replaces. */
 function truncationMarker(saved: Offload | null): string {
   return saved === null || 'failure' in saved
-    ? '[truncated; the full result was not saved — rerun with a filter (grep/head/tail)]'
+    ? '[truncated; the full result was not saved: rerun with a filter (grep/head/tail)]'
     : `[truncated; use ranged reads to read the full result at ${saved.path}]`;
 }
 

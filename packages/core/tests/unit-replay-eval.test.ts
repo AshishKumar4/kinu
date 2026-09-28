@@ -128,8 +128,8 @@ describe('listReplayEvals — the quality-panel data series', () => {
     actor: ActorHandle,
     row: { id: string; ranAt: number; meanScore: number; scaffoldVersion: number | null },
   ) {
-    void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES (${actor.actorId}, ${row.id}, ${row.ranAt}, 4, 2, 2, ${row.meanScore}, ${1 - row.meanScore}, ${row.scaffoldVersion}, ${'[]'})`;
+    void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
+        VALUES (${actor.actorId}, ${row.id}, ${row.ranAt}, 4, 2, 2, ${row.meanScore}, ${row.scaffoldVersion}, ${'[]'})`;
   }
 
   test('returns the series newest-first with the fields the panel renders', () => {

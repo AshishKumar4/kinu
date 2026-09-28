@@ -1,6 +1,5 @@
 import { ContentRef, type WorkspaceId } from '@agent-core/core';
 import type { BindingRequirement } from '@agent-core/core/facets';
-import type { EnvironmentSessionCapability, PortExposureId } from '@agent-core/core/environment-provider';
 import {
   SlateId, SlateVersionId, SlatePublicationId, SlateDeploymentId, SlateResourceId, SlatePreviewId,
   SlateIdSource, SlateMutationSeam, SlateRuntime, SlateSkeleton,
@@ -13,12 +12,8 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settle, settleSync } from '../obs/effect';
 
-function withCapability<Capability, A>(
-  capability: Capability | undefined, name: string, call: (present: Capability) => A,
-): Effect.Effect<A, KinuError> {
-  return capability === undefined
-    ? Effect.fail(new KinuError('unsupported', 'Slate ' + name + ' capability is not configured'))
-    : Effect.sync(() => call(capability));
+function unsupported(name: string): KinuError {
+  return new KinuError('unsupported', 'Slate ' + name + ' is not supported');
 }
 
 class WorkspaceSlateIds extends SlateIdSource {
@@ -56,32 +51,28 @@ export interface WorkspaceSlatesDeps {
   readonly workspaceId: WorkspaceId;
   readonly store: SlateStore;
   readonly files: SlateFiles;
-  readonly provider?: SlateProvider;
   /** Owns the outer VFS transaction so record writes and source restoration roll back together. */
   readonly mutations: SlateMutationSeam;
-  readonly invocations?: SlateInvocationSeam;
-  readonly previewValidation?: SlatePreviewValidationSeam;
 }
 
 export class WorkspaceSlates {
   constructor(private readonly deps: WorkspaceSlatesDeps) {}
 
-  // The vendored runtime requires each seam. Capabilities arrive independently;
-  // an absent effect capability refuses only when that operation is attempted.
-  /** Handed to the vendored runtime: its surface. */
+  // The vendored runtime requires each seam even though Kinu stores no deployment, resource
+  // or preview; each refuses only when that operation is attempted.
   readonly provider: SlateProvider = {
-    deploy: (request) => settleSync(withCapability(this.deps.provider, 'deployment', (provider) => provider.deploy(request))),
-    reconcileDeployment: (request) => settleSync(withCapability(this.deps.provider, 'deployment', (provider) => provider.reconcileDeployment(request))),
-    materializeResource: (request) => settleSync(withCapability(this.deps.provider, 'resource provisioning', (provider) => provider.materializeResource(request))),
-    reconcileResource: (request) => settleSync(withCapability(this.deps.provider, 'resource provisioning', (provider) => provider.reconcileResource(request))),
+    deploy: () => settleSync(Effect.fail(unsupported('deployment'))),
+    reconcileDeployment: () => settleSync(Effect.fail(unsupported('deployment'))),
+    materializeResource: () => settleSync(Effect.fail(unsupported('resource provisioning'))),
+    reconcileResource: () => settleSync(Effect.fail(unsupported('resource provisioning'))),
   };
   readonly invocations: SlateInvocationSeam = {
-    prepare: (request) => settleSync(withCapability(this.deps.invocations, 'external invocation', (seam) => seam.prepare(request))),
-    invoke: (request, id, effect) => settleSync(withCapability(this.deps.invocations, 'external invocation', (seam) => seam.invoke(request, id, effect))),
-    reconcile: (request, id, effect) => settleSync(withCapability(this.deps.invocations, 'external invocation', (seam) => seam.reconcile(request, id, effect))),
+    prepare: () => settleSync(Effect.fail(unsupported('external invocation'))),
+    invoke: () => settleSync(Effect.fail(unsupported('external invocation'))),
+    reconcile: () => settleSync(Effect.fail(unsupported('external invocation'))),
   };
   readonly previewValidation: SlatePreviewValidationSeam = {
-    validate: (request) => settleSync(withCapability(this.deps.previewValidation, 'durable preview validation', (seam) => seam.validate(request))),
+    validate: () => settleSync(Effect.fail(unsupported('preview linking'))),
   };
 
   async synchronize(id: SlateId): Promise<Slate> {
@@ -153,18 +144,6 @@ export class WorkspaceSlates {
   /** Admit a skeleton as a new slate of this workspace: every requirement comes back unsatisfied, nothing runs. */
   instantiate(skeleton: SlateSkeleton, source: ContentRef): Promise<SlateInstantiation> {
     return this.runtime().instantiate(skeleton, this.deps.workspaceId, source);
-  }
-
-  deploy(publicationId: SlatePublicationId, externalKey: string) {
-    return this.runtime().deploy(publicationId, 'kinu', externalKey);
-  }
-
-  rollback(id: SlateId, deploymentId: SlateDeploymentId, expectedActiveDeploymentId: SlateDeploymentId) {
-    return this.runtime().rollback(id, deploymentId, expectedActiveDeploymentId);
-  }
-
-  linkPreview(id: SlateId, capability: EnvironmentSessionCapability, exposureId: PortExposureId, versionId?: SlateVersionId) {
-    return this.runtime().linkPreview(id, capability, exposureId, versionId);
   }
 
   source(versionId: SlateVersionId): ContentRef {

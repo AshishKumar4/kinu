@@ -17,7 +17,7 @@ const ROW_READS = [
   'listRecentEvents',
 ] as const;
 
-/** An allowlist: `schema_version`, `dedupe_key` and `reply_channel` stay inside the workspace. */
+/** An allowlist: `dedupe_key` and `reply_channel` stay inside the workspace. */
 const EVENT_ROW_FIELDS = [
   'caused_by', 'id', 'ingress', 'payload', 'payload_visibility',
   'priority', 'received_at', 'trace_id', 'trust', 'variant',

@@ -36,7 +36,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
 
     const crafted: CraftedTool = {
       name: 'calculate', code: 'async ({n}) => ({answer: n*2, agent:typeof agent, agents:typeof agents})', description: 'Double',
-      params: null, scope: 'local', createdAt: 0, updatedAt: 0,
+      createdAt: 0, updatedAt: 0,
     };
 
     const factory = createCodemodeToolFactory({

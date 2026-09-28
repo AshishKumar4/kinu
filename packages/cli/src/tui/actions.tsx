@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import { TUI_ADVERTISED_PRESET_BINDINGS } from '@kinu.run/core';
+import { TUI_ADVERTISED_PRESET_BINDINGS } from '@kinu.run/core/tui';
 
 export const KEYMAP_PRESET_IDS = ['pi-omp', 'kinu', 'opencode'] as const;
 

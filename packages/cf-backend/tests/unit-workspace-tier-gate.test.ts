@@ -102,6 +102,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'mcp.manage', name: 'userMcp_warmConnections', run: (u, c) => u.userMcp_warmConnections(c) },
   { capability: 'mcp.manage', name: 'userMcp_handleOAuthCallback', run: (u, c) => u.userMcp_handleOAuthCallback(c, 'https://app/api/user/mcp/callback') },
 
+  { capability: 'device.rpc', name: 'deviceName', run: (u, c) => u.deviceName(c, 'dev-none') },
   { capability: 'device.rpc', name: 'deviceRpc', run: (u, c) => u.deviceRpc(c, 'exec', ['ls'], { agentName: WORKSPACE }) },
   { capability: 'device.rpc', name: 'acknowledgeDeviceRequest', run: (u, c) => u.acknowledgeDeviceRequest(c, 'rpc-1') },
   { capability: 'device.rpc', name: 'cancelDeviceRequestsForTurn', run: (u, c) => u.cancelDeviceRequestsForTurn(c, 'turn-1') },
@@ -258,7 +259,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
     name: 'sharesReceived_add',
     run: (u, c) => u.sharesReceived_add(c, {
       ownerUserId: USER_ID, ownerEmail: 'owner@x', workspace: WORKSPACE,
-      shareId: 'share-1', title: 'a blueprint',
+      shareId: 'share-1',
     }),
   },
   { capability: 'shares', name: 'sharesReceived_list', run: (u, c) => u.sharesReceived_list(c) },
@@ -567,23 +568,21 @@ describe('workspace name reservation', () => {
     .prepare<{ name: string }, []>(`SELECT name FROM user_workspaces ORDER BY name`)
     .all().map((row) => row.name);
 
-  test('a fork conflict leaves an archived roster row byte-for-byte unchanged', async () => {
+  test('a fork conflict leaves an existing roster row byte-for-byte unchanged', async () => {
     const harness = createTestUserDO();
     const owner = await testOwner();
-    await harness.userDO.registerWorkspace(owner, 'archived-name', 'Archived title');
-    harness.db.prepare(
-      'UPDATE user_workspaces SET archived_at = ?, last_visited = ? WHERE name = ?',
-    ).run(777, 123, 'archived-name');
+    await harness.userDO.registerWorkspace(owner, 'existing-name', 'Existing title');
+    harness.db.prepare('UPDATE user_workspaces SET last_visited = ? WHERE name = ?').run(123, 'existing-name');
 
     const before = harness.db.prepare(
       'SELECT * FROM user_workspaces WHERE name = ?',
-    ).get('archived-name');
+    ).get('existing-name');
 
-    const result = await harness.userDO.reserveWorkspace(owner, 'archived-name', 'Fork title');
+    const result = await harness.userDO.reserveWorkspace(owner, 'existing-name', 'Fork title');
 
     const after = harness.db.prepare(
       'SELECT * FROM user_workspaces WHERE name = ?',
-    ).get('archived-name');
+    ).get('existing-name');
 
     expect(result.reserved).toBe(false);
     expect(after).toEqual(before);

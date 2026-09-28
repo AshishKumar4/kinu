@@ -93,9 +93,7 @@ export async function receiveSubordinateEvent(
     }
 
     deps.transaction(() => {
-      deps.roster.helpers.storeAnswer(
-        input.fromSubordinate, subordinate.taskEventId, input.status === 'blocked' ? 'blocked' : 'completed', answer,
-      );
+      deps.roster.helpers.storeAnswer(input.fromSubordinate, input.status === 'blocked' ? 'blocked' : 'completed', answer);
       deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now);
     });
     deps.onEvolutionAnswer();

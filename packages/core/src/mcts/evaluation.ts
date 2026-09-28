@@ -260,7 +260,7 @@ must raise or throw if that one aspect of the task is unsatisfied. Make them
 independent: each block must stand alone, check a DIFFERENT property, and not
 depend on another block having run. If the code defines functions, call them
 with representative inputs and check the outputs. No imports, no network, no
-printing — just exercise and fail loudly.
+printing: just exercise and fail loudly.
 
 If the code cannot be meaningfully verified by assertions, reply with exactly:
 UNVERIFIABLE`;
@@ -350,7 +350,7 @@ ${evidenceWindow(task, EVIDENCE_BUDGETS.judgeTask)}
 
 Candidate approach:
 ${evidenceWindow(trajectory, EVIDENCE_BUDGETS.judgeTrajectory)}
-${siblingBlock ? `\nSibling approaches competing in the same expansion (calibration only — do NOT score them):\n${siblingBlock}\n` : ''}${executionBlock}
+${siblingBlock ? `\nSibling approaches competing in the same expansion (calibration only: do NOT score them):\n${siblingBlock}\n` : ''}${executionBlock}
 Score the CANDIDATE from 0.0 to 1.0 for how well it solves the Task:
 - correctness and completeness with respect to the Task (dominant criterion)
 - concreteness: a specific, actionable approach beats vague prose

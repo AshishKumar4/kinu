@@ -302,7 +302,8 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
   await expect(claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }] })).rejects.toThrow(KinuError);
   expect(() => claims.settle(stale, 'completed')).toThrow(KinuError);
   await claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'live step' }] });
-  expect(claims.read('turn-fence')).toMatchObject({ epoch: 2, runId: 'run-new', consumedRevision: 1 });
+  expect(claims.read('turn-fence')).toMatchObject({ epoch: 2, runId: 'run-new' });
+  expect((await claims.consumedContext('turn-fence'))?.revision).toBe(1);
   claims.settle(live, 'completed');
   await expect(claims.consume(live, { index: 1, messages: [{ role: 'user', content: 'after settle' }] })).rejects.toThrow(KinuError);
 });

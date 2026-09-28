@@ -48,7 +48,6 @@ export interface AlternateTakeSet {
   chosenNodeId: string | null;
   candidates: AlternateTakeCandidate[];
   createdAt: number;
-  pickedAt: number | null;
 }
 
 export interface TakePickRecord {
@@ -75,7 +74,6 @@ export function initAlternateTakesTable(execRaw: RawSqlExec): void {
     candidates TEXT NOT NULL,
     settlement_key TEXT,
     created_at INTEGER NOT NULL,
-    picked_at INTEGER,
     PRIMARY KEY (actor_id, id)
   )`);
   // Unique so a replayed settlement fails instead of adding a second set; NULL keys stay distinct.
@@ -130,19 +128,19 @@ export function recordBranchTakeSet(
   const now = input.now ?? nowMs();
   void sql`INSERT INTO alternate_takes
         (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates,
-         settlement_key, created_at, picked_at)
+         settlement_key, created_at)
       VALUES
         (${actor.actorId}, ${id}, ${input.turnId}, ${input.sessionId},
          ${input.task.slice(0, 500)}, ${'branch'},
          ${candidates[0].nodeId}, ${null}, ${JSON.stringify(candidates)},
-         ${settlementKey}, ${now}, ${null})`;
+         ${settlementKey}, ${now})`;
 
-  if (settlementKey !== null) recordEffectDone(sql, actor, { scope: BRANCH_SCOPE, key: settlementKey }, now);
+  if (settlementKey !== null) recordEffectDone(sql, actor, { scope: BRANCH_SCOPE, key: settlementKey });
 
   return {
     id, turnId: input.turnId, sessionId: input.sessionId, task: input.task.slice(0, 500),
     source: 'branch', winnerNodeId: candidates[0].nodeId, chosenNodeId: null,
-    candidates, createdAt: now, pickedAt: null,
+    candidates, createdAt: now,
   };
 }
 
@@ -150,7 +148,7 @@ interface RawTakeRow {
   id: string; turn_id: string | null; session_id: string | null; task: string;
   source: string | null;
   winner_node_id: string; chosen_node_id: string | null; candidates: string;
-  created_at: number; picked_at: number | null;
+  created_at: number;
 }
 
 function readTakeSource(stored: string | null): AlternateTakeSource {
@@ -163,7 +161,7 @@ function toTakeSet(r: RawTakeRow): AlternateTakeSet {
     source: readTakeSource(r.source),
     winnerNodeId: r.winner_node_id, chosenNodeId: r.chosen_node_id,
     candidates: v.parse(v.array(AlternateTakeCandidateSchema), JSON.parse(r.candidates)),
-    createdAt: r.created_at, pickedAt: r.picked_at,
+    createdAt: r.created_at,
   };
 }
 
@@ -207,7 +205,7 @@ export async function recordTakePick(
   const changedAnswer = chosen.nodeId !== set.winnerNodeId;
 
   void sql`UPDATE alternate_takes
-      SET chosen_node_id = ${chosen.nodeId}, winner_node_id = ${chosen.nodeId}, picked_at = ${now}
+      SET chosen_node_id = ${chosen.nodeId}, winner_node_id = ${chosen.nodeId}
       WHERE actor_id = ${actor.actorId} AND id = ${set.id}`;
 
   let userMessage = set.task;
@@ -226,7 +224,6 @@ export async function recordTakePick(
   const outcome = changedAnswer ? 'corrected' : 'accepted';
   recordTurnOutcome(sql, actor, {
     turnId: set.turnId,
-    sessionId: set.sessionId ?? 'default',
     outcome,
     confidence: 1,
     source: 'take_pick',
@@ -244,7 +241,7 @@ export async function recordTakePick(
     outcome,
     changedAnswer,
     chosen,
-    set: { ...set, chosenNodeId: chosen.nodeId, winnerNodeId: chosen.nodeId, pickedAt: now },
+    set: { ...set, chosenNodeId: chosen.nodeId, winnerNodeId: chosen.nodeId },
   };
 }
 
@@ -272,6 +269,6 @@ export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: Alter
   return (
     `${framing}\n\n` +
     `${evidenceWindow(chosen.text, EVIDENCE_BUDGETS.takeChosen)}\n\n` +
-    `Please continue with this approach — briefly acknowledge the switch, then carry the work forward from it.`
+    `Please continue with this approach: briefly acknowledge the switch, then carry the work forward from it.`
   );
 }

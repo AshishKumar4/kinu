@@ -201,16 +201,4 @@ describe('no carry-over — a discovered file starts unverified', () => {
     expect(s.trustOf(PATH, content)).toBe('approved');
     expect(s.trustOf(PATH, `${content}\nagent rewrite`)).toBe('unverified');
   });
-
-  test('a stored grandfathered row keeps its force — the deletion drops the write path, not retained answers', () => {
-    // No API writes 'grandfathered' anymore; raw SQL stands in for a row stored before.
-    const { db, actor, store: s } = store();
-    const content = 'carried-over doctrine';
-    db.exec(`INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
-      VALUES ('${actor.actorId}', '${OWNER}', '${PATH}', '${instructionDigest(content)}', 'grandfathered')`);
-
-    expect(s.get(PATH)?.decision).toBe('grandfathered');
-    expect(s.trustOf(PATH, content)).toBe('approved');
-    expect(s.trustOf(PATH, `${content} changed`)).toBe('unverified');
-  });
 });

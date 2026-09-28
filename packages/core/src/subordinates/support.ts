@@ -5,14 +5,9 @@ import type { EventLog, PublishResult } from '../events/hub/log';
 import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
 import type { SpilledContent } from '../events/hub/content-spill';
 import type { SerializedMessage } from '../heads/types';
-import type { SqlExec, SqlExecRow } from '../types/primitives';
+import type { SqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import {
-  DELEGATION_MAX_DEPTH,
-  delegationBudgetAtDepth,
-  type DelegationBudget,
-} from './depth';
-import type { AgentIdentity } from '../vfs/agent-home';
+import type { DelegationBudget } from './depth';
 import { SubordinateRosterStore } from './roster';
 import { requireSubordinateActorName } from '../identity/actor-key';
 import { codenameFor, type NameOrigin } from '../identity/naming';
@@ -26,7 +21,7 @@ import type {
   SubordinateRosterEntry,
   TeamToolDeps,
 } from '../delegation/agents-tool';
-import { SUBORDINATE_LIFETIMES, type SubordinateLifetime, type TemporaryAgentPort } from './temporary';
+import type { TemporaryAgentPort } from './temporary';
 import { KinuError, renderThrownChain } from '../obs/index';
 import { subordinateBirthContext, type SubordinateInheritedContext } from '../types/subordinates';
 import type { ModelMessage } from 'ai';
@@ -81,164 +76,6 @@ export function readSubordinateLiveStatus(
     lastActivity: recentSteps[0]?.createdAt ?? null,
     recentSteps,
   };
-}
-
-/** Immutable lineage; everything mutable lives only in the child's `actor_config` ({@link SubordinateDescriptorSource}). */
-export interface SubordinateIdentity {
-  name: string;
-  mission: string;
-  /** Inherited unchanged down a nested tree, so never the immediate parent's name past depth 1. */
-  parentWorkspace: string;
-  ownerUserId: string;
-  /** Durable tree depth (1 = hired by the orchestrator); the cap's backbone. */
-  depth: number;
-  /** Immutable so a `task` child still owes exactly one report per turn end after an eviction (`terminalTaskReport`). */
-  lifetime: SubordinateLifetime;
-  /** The uid allocated for `sub-<name>`; immutable because a home is owned by uid on real inodes. Absent where the workspace re-provisions at open. */
-  cred?: AgentIdentity;
-}
-
-interface IdentityRow {
-  name: string;
-  mission: string;
-  parent_workspace: string;
-  owner_user_id: string;
-  depth: number;
-  lifetime: SubordinateLifetime;
-  uid: number | null;
-  gid: number | null;
-}
-
-const IdentityRowSchema = v.object({
-  name: v.string(),
-  mission: v.string(),
-  parent_workspace: v.string(),
-  owner_user_id: v.string(),
-  depth: v.number(),
-  lifetime: v.picklist(SUBORDINATE_LIFETIMES),
-  uid: v.nullable(v.number()),
-  gid: v.nullable(v.number()),
-});
-
-function parseIdentityRow(row: SqlExecRow): IdentityRow | null {
-  const parsed = v.safeParse(IdentityRowSchema, row);
-
-  return parsed.success ? parsed.output : null;
-}
-
-function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
-  const identity: SubordinateIdentity = {
-    name: row.name,
-    mission: row.mission,
-    parentWorkspace: row.parent_workspace,
-    ownerUserId: row.owner_user_id,
-    depth: row.depth,
-    lifetime: row.lifetime,
-  };
-
-  // Assigned, not spread: a row with no credential leaves the key absent, and readers decide by presence.
-  if (row.uid !== null && row.gid !== null) identity.cred = { uid: row.uid, gid: row.gid };
-
-  return identity;
-}
-
-function identitiesEqual(stored: SubordinateIdentity, attempted: SubordinateIdentity): boolean {
-  if (
-    stored.ownerUserId !== attempted.ownerUserId
-    || stored.parentWorkspace !== attempted.parentWorkspace
-  ) return false;
-
-  if (stored.name !== attempted.name || stored.mission !== attempted.mission) return false;
-
-  if (stored.lifetime !== attempted.lifetime) return false;
-
-  if (stored.cred?.uid !== attempted.cred?.uid || stored.cred?.gid !== attempted.cred?.gid) return false;
-
-  return stored.depth === attempted.depth;
-}
-
-/** The parent may retry the exact seed, but nothing can retarget an initialized facet's workspace, owner or depth. */
-export class SubordinateIdentityStore {
-  private readonly actorId: string;
-
-  /** Per actor, not per database: `PRIMARY KEY (actor_id, id)` plus the `id = 1` CHECK. */
-  constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
-    this.actorId = actor.actorId;
-  }
-
-  ensureSchema(): void {
-    this.actor.assertCurrent();
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS subordinate_identity (
-      actor_id         TEXT NOT NULL,
-      id               INTEGER NOT NULL CHECK (id = 1),
-      name             TEXT NOT NULL,
-      mission          TEXT NOT NULL,
-      parent_workspace TEXT NOT NULL,
-      owner_user_id    TEXT NOT NULL,
-      depth            INTEGER NOT NULL DEFAULT 1,
-      lifetime         TEXT NOT NULL DEFAULT 'durable',
-      uid              INTEGER,
-      gid              INTEGER,
-      PRIMARY KEY (actor_id, id)
-    )`);
-  }
-
-  seed(identity: SubordinateIdentity): void {
-    this.actor.assertCurrent();
-    const existing = this.read();
-
-    if (existing) {
-      if (identitiesEqual(existing, identity)) return;
-      throw new Error('Subordinate identity is already initialized and cannot be changed.');
-    }
-
-    this.sql.exec(
-      `INSERT INTO subordinate_identity
-         (actor_id, id, name, mission, parent_workspace, owner_user_id, depth, lifetime, uid, gid)
-       VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      this.actorId,
-      identity.name,
-      identity.mission,
-      identity.parentWorkspace,
-      identity.ownerUserId,
-      identity.depth,
-      identity.lifetime,
-      identity.cred?.uid ?? null,
-      identity.cred?.gid ?? null,
-    );
-  }
-
-  read(): SubordinateIdentity | null {
-    this.actor.assertCurrent();
-
-    const rows = this.sql.exec(
-      `SELECT name, mission, parent_workspace, owner_user_id, depth, lifetime, uid, gid
-       FROM subordinate_identity WHERE actor_id = ? AND id = 1`,
-      this.actorId,
-    ).toArray();
-
-    if (rows.length === 0) return null;
-    const row = parseIdentityRow(rows[0]);
-
-    if (!row) throw new Error('Stored subordinate identity is malformed.');
-
-    return mapIdentityRow(row);
-  }
-
-  ownerUserId(): string | null {
-    return this.read()?.ownerUserId ?? null;
-  }
-
-  workspaceName(): string | null {
-    return this.read()?.parentWorkspace ?? null;
-  }
-
-  /** Fails closed on an unseeded facet: no identity row means no delegation budget. */
-  delegationBudget(): DelegationBudget {
-    const identity = this.read();
-
-    return delegationBudgetAtDepth(identity?.depth ?? DELEGATION_MAX_DEPTH);
-  }
 }
 
 /** Read from the child's own `actor_config`, the single authority; never persisted elsewhere. */
@@ -521,7 +358,7 @@ export function createTeamToolDeps(deps: {
       throw new KinuError(
         'bad_input',
         `subordinate "${entry.name}" is a temporary agent for one question (lifetime 'task'), `
-          + 'released by the call that asked it — assign, message and dismiss apply to durable subordinates only',
+          + 'released by the call that asked it: assign, message and dismiss apply to durable subordinates only',
       );
     }
 

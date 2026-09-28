@@ -106,7 +106,7 @@ describe('email dedupe', () => {
         id: 'e', trace_id: 't', caused_by: null,
         ingress: 'email_inbound', variant: 'email',
         trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
-        received_at, schema_version: 1, reply_channel: null, dedupe_key: null,
+        received_at, reply_channel: null, dedupe_key: null,
         payload,
       };
     };
@@ -173,7 +173,7 @@ describe('email_thread reply channels', () => {
 
     const id = present(store.open({
       event_id: 'pending', kind: 'email_thread',
-      holder_addr: JSON.stringify({ to: 'owner@example.com' }), payload_policy: 'full',
+      holder_addr: JSON.stringify({ to: 'owner@example.com' }),
     }, 1000), 'the opened email thread channel');
 
     store.bindEvent(id, 'evt-1');
@@ -197,7 +197,7 @@ describe('email_thread reply channels', () => {
     const store = new ReplyChannelStore(sql, actor, {});
 
     const id = present(store.open({
-      event_id: 'e', kind: 'email_thread', holder_addr: '{}', payload_policy: 'full',
+      event_id: 'e', kind: 'email_thread', holder_addr: '{}',
     }, 0), 'the opened email thread channel');
 
     const outcome = await store.reply(id, 'late', 25 * 60 * 60 * 1000);

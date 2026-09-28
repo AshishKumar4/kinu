@@ -38,11 +38,9 @@ describe('UserDO schema bootstrap', () => {
     const db = new Database(':memory:');
     initUserTables(sqlExec(db));
     db.run(
-      `INSERT INTO user_config (key, value, updated_at) VALUES (?, ?, ?)`,
-      ['default_model', 'workers-ai/example', 1],
+      `INSERT INTO user_config (key, value) VALUES (?, ?)`,
+      ['default_model', 'workers-ai/example'],
     );
-
-    expect(columns(db, 'user_config')).toEqual(['key', 'value', 'updated_at', 'version']);
 
     const row = required(db.query<{ value: string; version: number }, []>(
       `SELECT value, version FROM user_config WHERE key = 'default_model'`,
@@ -83,40 +81,6 @@ describe('UserDO schema bootstrap', () => {
     db.prepare(`DELETE FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`)
       .run(foreign, 'scout');
     expect(has(foreign, 'scout')).toBe(false);
-    db.close();
-  });
-
-  test('every column a writer names is in the CREATE that owns the table', () => {
-    // A writer naming a column the CREATE lacks fails with `no such column` at runtime, uncaught.
-    const db = new Database(':memory:');
-    initUserTables(sqlExec(db));
-
-    expect(columns(db, 'user_devices')).toEqual([
-      'id', 'token_hash', 'prev_token_hash', 'label', 'os', 'hostname',
-      'created_at', 'connected_at', 'last_seen_at', 'expires_at', 'revoked_at',
-      'last_ip', 'last_agent', 'replaced_at',
-      'consented_root', 'device_home', 'sandbox_capability', 'sandbox_reason', 'sandbox_detail', 'sandbox_gpu',
-      'agent_root', 'tier', 'unstopped_at',
-    ]);
-    // `user_devices` is shipped storage: a column added to it never reaches pre-existing accounts.
-    expect(columns(db, 'user_device_builds')).toEqual([
-      'device_id', 'version', 'update_check', 'reported_at',
-    ]);
-    expect(columns(db, 'device_inflight_requests')).toEqual([
-      'request_id', 'device_id', 'workspace', 'turn_id', 'background_job_id',
-      'cancel_claim', 'cancel_outcome',
-    ]);
-    expect(columns(db, 'device_consent')).toEqual([
-      'agent_name', 'device_id', 'policy', 'last_method',
-      'last_summary', 'updated_at',
-    ]);
-    // `user_mcp_servers` is shipped storage: a column added to it never reaches pre-existing accounts.
-    expect(columns(db, 'user_mcp_servers')).toEqual([
-      'id', 'name', 'server_url', 'transport', 'headers', 'allowed_tools',
-      'created_at', 'updated_at',
-    ]);
-    expect(columns(db, 'user_mcp_server_presets')).toEqual(['server_id', 'preset_id']);
-    expect(columns(db, 'user_workspaces')).toContain('name_origin');
     db.close();
   });
 

@@ -1051,7 +1051,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect('reason' in call).toBe(false);
 
     if ('reason' in call) return;
-    expect(swarmValidity(call)?.error).toContain('samples ≥ 20');
+    expect(swarmValidity(call)?.error).toContain('samples at least 20');
 
     const { rt } = createTestRuntime();
     const refusal = await runSwarm({ reportModelCall: unobservedSpend, rt, hostNode: NO_NODE, model: answering(null), mode: 'build' }, call);
@@ -1059,7 +1059,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
 
     if (!('reason' in refusal)) return;
     expect(refusal.reason).toBe('bad_input');
-    expect(refusal.error).toContain('samples ≥ 20');
+    expect(refusal.error).toContain('samples at least 20');
     expect(refusal.error).toContain('maxEvalLLMCalls');
   });
 

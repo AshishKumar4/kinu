@@ -129,7 +129,7 @@ export const editLanding: BehaviourScorer = {
  */
 export const recoveryDurability: BehaviourScorer = {
   name: 'recovery_durability',
-  asserts: 'a broken failure streak stayed broken — the finding took',
+  asserts: 'a broken failure streak stayed broken: the finding took',
   score(sql, actor) {
     const findings = eventsOfType(sql, actor, 'execution_recovery')
       .flatMap((row) => row.recoveries);
@@ -160,7 +160,7 @@ export const recoveryDurability: BehaviourScorer = {
  */
 export const completionHonesty: BehaviourScorer = {
   name: 'completion_honesty',
-  asserts: 'the run finished on an honest claim — the gate found no work left',
+  asserts: 'the run finished on an honest claim: the gate found no work left',
   score(sql, actor) {
     const rows = eventsOfType(sql, actor, 'completion_gate');
     const forced = rows.filter((row) => row.converted === true).length;

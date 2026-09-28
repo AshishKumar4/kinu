@@ -26,30 +26,30 @@ const ARGS_ECHO_MAX_CHARS = 200;
 
 /** The model must never read a harness steer as something the user typed. */
 export const TURN_STEERING_HEADER =
-  '[Runtime steering — a mechanical nudge from the Kinu harness, not written by the user.]';
+  '[Runtime steering: a mechanical nudge from the Kinu harness, not written by the user.]';
 
 function repeatedCallText(tool: string, args: string, calls: number): string {
-  return `\`${tool}\` has run ${calls} times with the same arguments and returned the same output every time — ${args}. `
+  return `\`${tool}\` has run ${calls} times with the same arguments and returned the same output every time: ${args}. `
     + 'Repeating it cannot tell you anything new; the output you already have is everything it has to say. '
     + 'Read that output again for the actual cause, or change the approach: a different command, a different file, '
     + 'a different approach. '
-    + 'This is a hint, not an instruction — push on if you know why the repeat is right.';
+    + 'This is a hint, not an instruction: push on if you know why the repeat is right.';
 }
 
 function repeatedFailureText(tool: string, failures: number): string {
   return `\`${tool}\` has failed ${failures} times in a row. Running the same approach again is the least likely thing to work: `
-    + 'read the failure text for the actual cause and change something real — a different command, a different file, '
+    + 'read the failure text for the actual cause and change something real: a different command, a different file, '
     + 'a different approach. '
-    + 'This is a hint, not an instruction — push on if you already know the fix.';
+    + 'This is a hint, not an instruction: push on if you already know the fix.';
 }
 
 function noProgressText(steps: number): string {
   return `${steps} steps in a row with nothing new in any of them: every call was one this turn had already made, `
     + 'no file was touched for the first time, and no edit landed. '
-    + 'Steps that succeed are not the same as steps that get somewhere — this turn is spending and not moving. '
+    + 'Steps that succeed are not the same as steps that get somewhere: this turn is spending and not moving. '
     + 'Stop and say what is actually blocking you, then change something real: a different file, a different command, '
     + 'a different approach. '
-    + 'This is a hint, not an instruction — push on if the ground you are re-covering is the right ground.';
+    + 'This is a hint, not an instruction: push on if the ground you are re-covering is the right ground.';
 }
 
 /** SDK invocation status is independent of the value a successful tool returned. */
@@ -87,7 +87,7 @@ function echoArgs(args: JsonObject): string {
 
   return rendered.length <= ARGS_ECHO_MAX_CHARS
     ? rendered
-    : `${rendered.slice(0, ARGS_ECHO_MAX_CHARS)}…`;
+    : `${rendered.slice(0, ARGS_ECHO_MAX_CHARS)}...`;
 }
 
 /** Structural so steering depends on two monotone numbers, not on `TurnFileLedger`'s shape. */

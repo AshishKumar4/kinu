@@ -12,8 +12,6 @@
  *   - A card of two short searches reserved the whole column and drew several
  *     hundred pixels of nothing under its trees.
  *   - The key and the controls floated OVER the branches they explain.
- *   - An unselected search receded to half opacity, which at 11px is not
- *     recession but illegibility.
  *
  * And one that is worse than any of them: `?frame=forkbig`, `?frame=forkfull`
  * and `?frame=forkswarmfull` rendered an EMPTY BODY. `scripts/computed-style.ts`
@@ -65,8 +63,6 @@ interface FrameGeometry {
   readonly card: { height: number; right: number } | null;
   /** The column the card lives in — never shrinks, so it is the budget. */
   readonly cellHeight: number | null;
-  /** Every band's group opacity, selected band first. */
-  readonly bandOpacity: readonly number[];
   /**
    * Each band's caption against the band it names: how far its right edge is
    * PAST the band's own right edge, in screen pixels.
@@ -137,8 +133,6 @@ function readGeometry(page: Page): Promise<FrameGeometry> {
       scene: sceneBox === null ? null : { bottom: sceneBox.bottom, right: sceneBox.right },
       card: cardBox === null ? null : { height: cardBox.height, right: cardBox.right },
       cellHeight: cellBox === null ? null : cellBox.height,
-      bandOpacity: [...document.querySelectorAll('g.mcts-region')]
-        .map((region) => Number(region.getAttribute('opacity'))),
       // Matched by RUN, never by index: the caption overlay and the band layer
       // are rebuilt from the same list, so an index pairing would silently
       // compare a caption against somebody else's band the day one of them is
@@ -582,22 +576,6 @@ describe('the swarm trees, as a browser lays them out', () => {
           card.height,
           `${where}: card reserves ${Math.round(card.height)} of ${Math.round(cellHeight)}`,
         ).toBeLessThan(cellHeight * 0.6);
-      }
-    }
-  });
-
-  test('an unselected search recedes without becoming illegible', () => {
-    for (const [where, frame] of every()) {
-      const [selected, ...rest] = frame.bandOpacity;
-
-      if (selected !== undefined) expect(selected, `${where}: selected band dimmed`).toBe(1);
-
-      for (const opacity of rest) {
-        // Half opacity on 11px type is not recession. The floor is the contrast
-        // at which an unselected band's labels are still readable, which is the
-        // comparison one canvas exists for.
-        expect(opacity, `${where}: unselected band at ${opacity}`).toBeGreaterThanOrEqual(0.7);
-        expect(opacity, `${where}: unselected band not receding`).toBeLessThan(1);
       }
     }
   });

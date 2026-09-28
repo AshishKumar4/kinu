@@ -250,7 +250,6 @@ function seedGradedTurns(rt: AgentRuntime, negatives: number, accepted = 2) {
     const turnId = `neg-${String((seeded += 1))}`;
     recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId,
-      sessionId: 'session-1',
       outcome: 'corrected',
       confidence: 0.9,
       source: 'classifier',
@@ -267,7 +266,6 @@ function seedGradedTurns(rt: AgentRuntime, negatives: number, accepted = 2) {
     const turnId = `ok-${String((seeded += 1))}`;
     recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId,
-      sessionId: 'session-1',
       outcome: 'accepted',
       confidence: 0.9,
       source: 'classifier',
@@ -407,7 +405,6 @@ async function gatheredSkillPaths(rt: AgentRuntime): Promise<string[]> {
   return sources.filter((source) => source.kind === 'skill').map((source) => source.path);
 }
 
-/** A lane step rejects, and `cause` is somewhere in the chain it carries (the lane names its step around it). */
 async function failsFrom(pending: Promise<unknown>, cause: string): Promise<void> {
   let chain = '';
 
@@ -429,7 +426,7 @@ describe('refinement request — durable, and behaviourally inert', () => {
     const before = activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(fx.deps(port), {
-      trigger: 'explicit', scope: 'workspace', sessionId: 'session-1',
+      trigger: 'explicit', scope: 'workspace',
     });
 
     expect(opened.stage).toBe('requested');
@@ -449,7 +446,7 @@ describe('refinement request — durable, and behaviourally inert', () => {
     const { port } = scriptedRefiner('{}');
 
     const opened = await requestRefinement(fx.deps(port), {
-      trigger: 'explicit', scope: 'workspace', sessionId: 'session-1',
+      trigger: 'explicit', scope: 'workspace',
     });
 
     for (const id of negatives) expect(opened.turnIds).toContain(id);
@@ -1002,7 +999,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(bare.sql<{ name: string }>`
       SELECT name FROM pragma_table_info('refinement_requests')`.map((row) => row.name))
       .toEqual([
-        'actor_id', 'id', 'trigger', 'scope', 'stage', 'claim', 'session_id', 'turn_ids',
+        'actor_id', 'id', 'trigger', 'scope', 'stage', 'claim', 'turn_ids',
         'debt_key', 'proposal', 'routes', 'detail', 'created_at', 'updated_at',
       ]);
     bare.close();
@@ -2254,6 +2251,14 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
   const root = directory.main();
   const roster = new SubordinateRosterStore(exec, root);
   roster.ensureSchema();
+  const assigned = Promise.withResolvers<void>();
+  const recordAssignment = roster.recordAssignmentEvent.bind(roster);
+
+  roster.recordAssignmentEvent = (name, eventId) => {
+    recordAssignment(name, eventId);
+    assigned.resolve();
+  };
+
   const log = new EventLog(exec, root);
   const handoff: SubordinateHandoff = { eventId: 'evt-refine', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
 
@@ -2275,6 +2280,7 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
     roster,
     log,
     port,
+    assigned: assigned.promise,
     helper: 'ask-refiner-a1b2c3',
     reports: () => log.pending().filter((event) => event.variant === 'subordinate_report'),
     deliver: (temporary: TemporaryAgentPort, content: string) => receiveSubordinateEvent({
@@ -2294,9 +2300,10 @@ function evictedAfterAssign(rail: ReturnType<typeof refinerRail>, evicted: Tempo
   return {
     ...evicted,
     run: async (request) => {
-      lost.push(evicted.run(request));
-
-      for (let attempt = 0; attempt < 50 && !rail.roster.get(rail.helper)?.taskEventId; attempt++) await Promise.resolve();
+      const run = evicted.run(request);
+      lost.push(run);
+      // A run that settles before it is assigned ends the wait too: a broken hire fails with its own error.
+      await Promise.race([rail.assigned, run]);
       throw new Error('the activation was evicted');
     },
   };
@@ -2387,6 +2394,27 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     expect(nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId)).toBeNull();
   });
 
+  test('a store read that throws while planning a stored answer refuses that request with its cause', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
+    const dying = evictedAfterAssign(rail, rail.port());
+    const opened = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
+    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    const resumed = rail.port();
+    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
+
+    // The reviewed turns are read synchronously, after the answer is taken and before any route.
+    void fx.rt.storage.sql`ALTER TABLE turn_outcomes RENAME TO turn_outcomes_away`;
+    await advanceRefinementLane(fx.deps(resumed));
+    void fx.rt.storage.sql`ALTER TABLE turn_outcomes_away RENAME TO turn_outcomes`;
+
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
+    expect(row.stage).toBe('refused');
+    expect(row.detail).toContain('turn_outcomes');
+    expect(nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId)).toBeNull();
+  });
+
   test('any throw in a pass holds the lane: its stored answer stops reading as due', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
@@ -2399,13 +2427,11 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
     expect(owed()).not.toBeNull();
 
-    // Taking the request throws, outside every catch the routing has.
     fx.db.run(`CREATE TRIGGER refuse_claim BEFORE UPDATE ON refinement_requests
       BEGIN SELECT RAISE(ABORT, 'the request table refused the write'); END`);
     await failsFrom(refinementPass(fx.deps(resumed)), 'the request table refused the write');
     expect(owed()).toBeNull();
 
-    // A pass that completes lifts the hold and routes the answer.
     fx.db.run('DROP TRIGGER refuse_claim');
     expect((await refinementPass(fx.deps(resumed))).step).toBe('planned');
   });

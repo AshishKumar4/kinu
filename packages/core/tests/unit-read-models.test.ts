@@ -480,14 +480,14 @@ describe('agent status', () => {
     const sql = makeSql(db);
     // This UPDATE stands in for a real usage history on the crafted_tools row.
     await rt.craftStore.create({
-      name: 'summarize', description: 'sum', params: null, code: 'x', scope: 'local',
+      name: 'summarize', description: 'sum', code: 'x',
     });
     void sql`UPDATE crafted_tools SET score = 0.9, uses = 7 WHERE name = 'summarize'`;
 
     const list = getToolList(sql, rt.craftStore);
     expect(list.builtIn.length).toBeGreaterThan(0);
     expect(list.crafted).toEqual([
-      { name: 'summarize', description: 'sum', scope: 'local', qualityScore: 0.9, usageCount: 7 },
+      { name: 'summarize', description: 'sum', qualityScore: 0.9, usageCount: 7 },
     ]);
     // An unscored tool reads as the neutral prior, never as zero.
     void sql`UPDATE crafted_tools SET score = 0.5, uses = 0 WHERE name = 'summarize'`;
@@ -589,7 +589,7 @@ describe('executor file plane', () => {
     await rt.storage.vfs.writeFile('big', 'z'.repeat(512 * 1024 + 10));
 
     expect(await readExecutorFile(r, 'workspace', 'dir')).toEqual({ error: 'path is a directory' });
-    expect(await readExecutorFile(r, 'workspace', 'bin')).toEqual({ error: 'binary file — not previewable' });
+    expect(await readExecutorFile(r, 'workspace', 'bin')).toEqual({ error: 'binary file, not previewable' });
     // A plane without ranged read (seven base VFS methods) refuses an over-budget preview and names
     // the download.
     const refused = await readExecutorFile(r, 'workspace', 'big');
@@ -816,8 +816,8 @@ describe('config plane', () => {
 describe('changelog view', () => {
   test('unseen counts against the stored watermark, and marking seen zeroes it', () => {
     const { db, sql, actor, config } = workspace();
-    void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
-      VALUES ('summarize', 'sum', NULL, 'x', 'local', ${Date.now()}, ${Date.now()})`;
+    void sql`INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
+      VALUES ('summarize', 'sum', 'x', ${Date.now()}, ${Date.now()})`;
 
     expect(getEvolutionChangelog(sql, actor).entries).toHaveLength(1);
     expect(getEvolutionChangelog(sql, actor).unseenCount).toBe(1);

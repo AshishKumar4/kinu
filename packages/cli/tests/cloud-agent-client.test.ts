@@ -782,7 +782,7 @@ describe('CloudAgentClient protocol', () => {
     const set = {
       id: 'take-1', turnId: 'm2', sessionId: 'default', task: 'choose a plan',
       source: 'branch',
-      winnerNodeId: 'win', chosenNodeId: null, createdAt: 1, pickedAt: null,
+      winnerNodeId: 'win', chosenNodeId: null, createdAt: 1,
       candidates: [
         { nodeId: 'win', text: 'plan A', score: 0.9, visits: 3, depth: 1 },
         { nodeId: 'alt', text: 'plan B', score: 0.85, visits: 2, depth: 1 },
@@ -802,7 +802,7 @@ describe('CloudAgentClient protocol', () => {
       type: 'rpc', id: pickRpc.id, success: true, done: true,
       result: {
         outcome: 'corrected', changedAnswer: true, continuationQueued: true,
-        chosen: set.candidates[1], set: { ...set, chosenNodeId: 'alt', winnerNodeId: 'alt', pickedAt: 2 },
+        chosen: set.candidates[1], set: { ...set, chosenNodeId: 'alt', winnerNodeId: 'alt' },
       },
     });
     await expect(pick).resolves.toMatchObject({ outcome: 'corrected', changedAnswer: true, continuationQueued: true });

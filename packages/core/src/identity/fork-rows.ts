@@ -19,7 +19,6 @@ export const ForkSessionMessageRowSchema = v.object({
   role: v.picklist(['system', 'user', 'assistant', 'tool']),
   native_content_kind: v.picklist(['string', 'parts']),
   origin: v.picklist(['input', 'output', 'edit', 'context_transform', 'render']),
-  recorded_at: v.number(),
   envelope_json: v.string(),
   sealed_at: v.number(),
   content_json: v.nullable(v.string()),
@@ -66,16 +65,13 @@ export const ForkMemoryChunkRowSchema = v.object({
   end_line: v.number(),
   hash: v.string(),
   text: v.string(),
-  updated_at: v.number(),
 });
 
 /** One crafted tool, snapshotted; the fork evolves it independently. */
 export const ForkCraftedToolRowSchema = v.object({
   name: v.string(),
   description: v.string(),
-  params: v.nullable(v.string()),
   code: v.string(),
-  scope: v.string(),
   created_at: v.number(),
   updated_at: v.number(),
 });

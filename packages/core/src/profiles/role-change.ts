@@ -37,7 +37,7 @@ export function roleChangeOutcomeText(
         locked: `role changes are locked on this agent by its owner, so ${asked} cannot be set `
           + `here and retrying will not change that. ${live} stays active.`,
         'unknown-role': `role ${asked} is not in this account's catalog, so there is nothing to `
-          + `switch to. ${live} stays active — ask the owner to add the role, or pick one the `
+          + `switch to. ${live} stays active: ask the owner to add the role, or pick one the `
           + 'catalog carries.',
         'invalid-role-id': `${asked} is not a well-formed role id, so it names no role. `
           + `${live} stays active.`,

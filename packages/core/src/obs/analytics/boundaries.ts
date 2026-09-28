@@ -69,7 +69,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     mechanism: 'diagnostics',
     emitter: 'failure',
     means: 'One send attempt on a queued outbound message failed and was backed '
-      + 'off. Carries no address, no subject and no body — the retry LOOP was '
+      + 'off. Carries no address, no subject and no body: the retry LOOP was '
       + 'the silent part, and a count is the whole signal.',
   },
   {
@@ -126,7 +126,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     mechanism: 'writer',
     emitter: 'recordToolRow',
     means: 'One tool call finished. Name, whether it failed, and how long it took '
-      + '— never its arguments or its result.',
+      + '(never its arguments or its result).',
   },
   {
     id: 'model.call',
@@ -135,7 +135,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     site: 'packages/cf-backend/src/actor-agent.ts',
     mechanism: 'writer',
     emitter: 'recordModelRow',
-    means: 'One model request outside the turn loop as well as inside it — a '
+    means: 'One model request outside the turn loop as well as inside it: a '
       + 'judge, the fast tier, an evolution pass, a compaction fold. Who served '
       + 'it and what it reported.',
   },

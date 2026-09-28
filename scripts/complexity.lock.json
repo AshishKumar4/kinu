@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-28",
-  "files": 2792,
-  "functions": 69188,
+  "files": 2807,
+  "functions": 69341,
   "ceiling": 87,
   "line": 30,
   "inventory": [
@@ -58,10 +58,6 @@
       "complexity": 41
     },
     {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
-      "complexity": 40
-    },
-    {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
       "complexity": 40
     },
@@ -82,15 +78,15 @@
       "complexity": 38
     },
     {
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
+      "complexity": 37
+    },
+    {
       "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
       "complexity": 37
     },
     {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison",
-      "complexity": 37
-    },
-    {
-      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive",
       "complexity": 37
     },
     {
@@ -119,6 +115,10 @@
     },
     {
       "key": "packages/cli/src/cc-transcript.ts#mineSession",
+      "complexity": 35
+    },
+    {
+      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive",
       "complexity": 35
     },
     {

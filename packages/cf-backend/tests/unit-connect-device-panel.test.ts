@@ -22,7 +22,7 @@ function device(id: string, connected: boolean, label = id): UserDevice {
   return {
     id, label, os: 'linux', hostname: 'pc', connected,
     createdAt: AT, lastSeenAt: connected ? AT : null, expiresAt: AT + 864e5,
-    lastIp: null, lastAgent: null, replacedAt: null, revokedAt: null, unstoppedAt: null,
+    replacedAt: null, revokedAt: null, unstoppedAt: null,
     reuseDetectedAt: null, wholeMachine: false,
     sandbox: { tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] },
     version: null, servedVersion: null, update: 'unreported',
@@ -130,7 +130,7 @@ describe('the command on screen is the one the server handed over', () => {
     const html = render(flow, []);
 
     for (const line of DEVICE_CONNECT_DISCLOSURE) {
-      expect(html).toContain(line.replaceAll('&', '&amp;'));
+      expect(html).toContain(line.replaceAll('&', '&amp;').replaceAll('>', '&gt;'));
     }
 
     expect(html).not.toContain('data-connect-command');

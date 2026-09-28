@@ -125,7 +125,7 @@ function renderTemporaryTaskBrief(input: {
 
   if (input.contextRefs && input.contextRefs.length > 0) {
     parts.push(
-      'Material for this question, by workspace path — read it yourself, in ranges when it is '
+      'Material for this question, by workspace path: read it yourself, in ranges when it is '
       + `large: ${input.contextRefs.join(', ')}.`,
     );
   }
@@ -243,7 +243,7 @@ export function createTemporaryAgentPort(deps: {
       deps.roster.create({
         name, actorReference: null, deleteRequested: false,
         birth: { creationId, assignment, seed: { name, displayName: codenameFor(name), nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME } },
-        createdBy: 'orchestrator', status: 'working', currentTask: task, createdAt: startedAt,
+        createdBy: request.lane ? 'evolution' : 'orchestrator', status: 'working', currentTask: task, createdAt: startedAt,
         dismissedAt: null, lifetime: TEMPORARY_LIFETIME, taskEventId: null,
       });
       // A child can report before its assignment acknowledgement returns.

@@ -106,22 +106,22 @@ function renderArchiveBlock(archive: ProposalArchiveContext): string {
     const real = archive.realRates?.get(e.version);
 
     const realNote = real && real.accepted + real.negative > 0
-      ? `, real ${real.accepted}✓/${real.negative}✗`
+      ? `, real ${real.accepted} accepted/${real.negative} negative`
       : '';
 
     const targeted = e.pathology !== null ? `, for ${e.pathology}` : '';
     const rejection = archive.rejections?.get(e.version);
     const why = rejection ? `\n    refused: ${rejection}` : '';
 
-    return `  v${e.version} [${e.status}, ${lineage}, ${record}${realNote}${targeted}] — ${e.rationale.slice(0, 80)}${why}`;
+    return `  v${e.version} [${e.status}, ${lineage}, ${record}${realNote}${targeted}]: ${e.rationale.slice(0, 80)}${why}`;
   });
 
   const baseNote = archive.base.mode === 'explore'
-    ? `You are branching from ARCHIVED v${archive.base.version} (a stepping stone, not the live current) — its code is shown above.`
+    ? `You are branching from ARCHIVED v${archive.base.version} (a stepping stone, not the live current): its code is shown above.`
     : `You are branching from the live current v${archive.base.version}.`;
 
   return (
-    `Scaffold archive (your prior variants — lineage + shadow record):\n` +
+    `Scaffold archive (your prior variants: lineage + shadow record):\n` +
     `${lines.join('\n')}\n` +
     `${baseNote} You may take ideas from any archived variant; cite its version when you do.\n\n`
   );
@@ -141,29 +141,29 @@ export function buildScaffoldProposalPrompt(
 ): string {
   return (
     `${renderScaffoldHandbook(baseScaffold)}\n` +
-    `Current agent scaffold (your agentic loop — it runs inside a sandboxed worker):\n` +
+    `Current agent scaffold (your agentic loop: it runs inside a sandboxed worker):\n` +
     `\`\`\`js\n${baseScaffold}\n\`\`\`\n\n` +
     (archive ? renderArchiveBlock(archive) : '') +
     (pathologies.length > 0 ? renderPathologyBlock(pathologies) : '') +
     `Based on these session patterns:\n${evidenceWindow(reflection, EVIDENCE_BUDGETS.reflection)}\n\n` +
     `Propose an improved scaffold. The scaffold MUST:\n` +
     `1. Export exactly \`async function* run(rt, task)\`. There is NO host runtime object in the ` +
-    `sandbox — BOTH parameters receive the task STRING; read the task from either, e.g. ` +
+    `sandbox: BOTH parameters receive the task STRING; read the task from either, e.g. ` +
     `\`const prompt = task;\`. Neither parameter carries members to reach through.\n` +
     `2. Reach the host ONLY through the global \`host\` bridge:\n` +
     `\`\`\`ts\n${SCAFFOLD_HOST_TYPES}\n\`\`\`\n` +
-    `\`await host.defaultInference()\` runs the standard inference loop — build on it or replace it ` +
+    `\`await host.defaultInference()\` runs the standard inference loop: build on it or replace it ` +
     `with your own strategy via host.llmStream / host.callTool.\n` +
     `3. Stream text to the user by yielding { type: 'chunk', data: '<text>' }.\n` +
     `4. NOT use ${SCAFFOLD_FORBIDDEN_DESCRIPTION}. Also never reference raw network globals ` +
-    `(fetch/WebSocket — use host.callTool for I/O), the scaffold version files/tables, ` +
-    `promotion/rollout config keys, or shell-approval/consent settings — any of these is a hard ` +
+    `(fetch/WebSocket: use host.callTool for I/O), the scaffold version files/tables, ` +
+    `promotion/rollout config keys, or shell-approval/consent settings: any of these is a hard ` +
     `misevolution veto.\n` +
     `5. Be a self-contained agentic loop.\n` +
     (pathologies.length > 0
       ? `6. Name the failure pathology it targets, as a tag line in the code: ` +
         `\`${PATHOLOGY_TAG_EXAMPLE}\`, using one of the ids listed above. The archive is ` +
-        `read by pathology — a version that names none cannot be compared with the ones ` +
+        `read by pathology: a version that names none cannot be compared with the ones ` +
         `that do, and cannot show whether that failure ever went away.\n`
       : '') +
     `\nReturn ONLY the JavaScript code, no explanation.`
@@ -203,7 +203,7 @@ function buildTurnReflectionPrompt(input: {
     `have none of the evidence above, so name the trigger and the action, not the incident.\n` +
     `  Good: "When a run result's text begins \`Error (exit N)\`, treat it as a failure and re-run ` +
     `before reporting the work done."\n` +
-    `  Bad: "Should have been more careful here." — no trigger, no action, and nothing a later reader ` +
+    `  Bad: "Should have been more careful here.": no trigger, no action, and nothing a later reader ` +
     `can apply.`
   );
 }
@@ -476,7 +476,6 @@ export class EvolutionEngine {
       if (outcome && !graded && !preRecorded) {
         recordTurnOutcome(this.rt.storage.sql, this.rt.actor, {
           turnId: turn.turnId ?? null,
-          sessionId: turn.sessionId ?? 'default',
           outcome, confidence, source,
           userMessage: turn.userMessage,
           assistantResponse: turn.assistantResponse,
@@ -580,7 +579,7 @@ export class EvolutionEngine {
         toKinuError({
           doing: 'defer a turn review for the next host',
           cause: new Error(outcome === 'queue_full'
-            ? `the review queue is full (${this.sessionWindow.countQueuedReviews()} owed) — nothing has drained it`
+            ? `the review queue is full (${this.sessionWindow.countQueuedReviews()} owed): nothing has drained it`
             : 'the turn does not serialize'),
           otherwise: outcome === 'queue_full' ? 'unavailable' : 'bad_input',
         }),
@@ -652,7 +651,6 @@ export class EvolutionEngine {
     const pair = await conversationTurnPair(this.history.transcript(CHAT_SESSION_ID), messageId);
     recordTurnOutcome(this.rt.storage.sql, this.rt.actor, {
       turnId: messageId,
-      sessionId: pair?.sessionId ?? 'default',
       outcome: feedback === 'positive' ? 'accepted' : 'corrected',
       confidence: 1,
       source: 'explicit',
@@ -785,7 +783,7 @@ export class EvolutionEngine {
     const parts = [...counts].map(([kind, n]) => `${n} ${kind}`).join(' · ');
     this.emit({
       type: 'changelog_digest',
-      message: `Self-change digest: ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} this session (${parts}) — every line is revertable in the changelog`,
+      message: `Self-change digest: ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} this session (${parts}): every line is revertable in the changelog`,
       data: { since, counts: Object.fromEntries(counts) },
     });
   }
@@ -854,7 +852,7 @@ export class EvolutionEngine {
     if (pending.length > 0) {
       this.emit({
         type: 'scaffold_proposed',
-        message: `Skipped — scaffold v${pending[0].version} is still pending shadow evaluation`,
+        message: `Skipped: scaffold v${pending[0].version} is still pending shadow evaluation`,
       });
 
       return;
@@ -915,7 +913,7 @@ export class EvolutionEngine {
     this.emit({
       type: 'scaffold_proposed',
       message: `Scaffold evolved to v${result.version} (${branchNote}): ${reflection.slice(0, 60)}` +
-        (targeted ? ` — targets ${describePathology(targeted)}` : ''),
+        (targeted ? `: targets ${describePathology(targeted)}` : ''),
     });
   }
 
@@ -982,7 +980,7 @@ export class EvolutionEngine {
     if (meaningfulCalls.length === 0) return;
 
     const callSummary = meaningfulCalls
-      .map(tc => `${tc.name}(${evidenceWindow(JSON.stringify(tc.args), EVIDENCE_BUDGETS.patternToolCall)}) → ${evidenceWindow(JSON.stringify(tc.result), EVIDENCE_BUDGETS.patternToolCall)}`)
+      .map(tc => `${tc.name}(${evidenceWindow(JSON.stringify(tc.args), EVIDENCE_BUDGETS.patternToolCall)}) -> ${evidenceWindow(JSON.stringify(tc.result), EVIDENCE_BUDGETS.patternToolCall)}`)
       .join('\n');
 
     // The answer is persisted before it is applied, so a replay applies what was
@@ -1012,8 +1010,8 @@ export class EvolutionEngine {
     if (!parsed.success || !parsed.output.name || !parsed.output.code) return;
 
     if (patternKey !== null && recorded === undefined) {
-      void this.rt.storage.sql`INSERT INTO pattern_extractions (actor_id, effect_key, answer, created_at)
-        VALUES (${this.rt.actor.actorId}, ${patternKey}, ${generalized}, ${Date.now()})
+      void this.rt.storage.sql`INSERT INTO pattern_extractions (actor_id, effect_key, answer)
+        VALUES (${this.rt.actor.actorId}, ${patternKey}, ${generalized})
         ON CONFLICT(actor_id, effect_key) DO NOTHING`;
     }
 

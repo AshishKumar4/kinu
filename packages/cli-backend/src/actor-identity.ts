@@ -5,17 +5,14 @@
 import { resolve } from 'node:path';
 import type { Database } from 'bun:sqlite';
 import {
-  SubordinateIdentityStore, readMission, WorkspaceActorDirectory, bindActorHandle, explorationActorKey,
-  type ActorHandle, type ActorReference, type CreateWorkspaceActor, type SqlExec, type SqlExecutor,
+  WorkspaceActorDirectory, bindActorHandle, explorationActorKey,
+  type ActorHandle, type ActorReference, type CreateWorkspaceActor, type SqlExecutor,
   type WorkspaceActor, type NodeIdentity,
 } from '@kinu.run/core';
-import type { AgentRuntime } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 
 interface LocalActorScope {
   readonly directory: WorkspaceActorDirectory;
-  readonly workspaceName: string;
-  readonly ownerUserId: string;
   readonly path: readonly string[];
 }
 
@@ -36,16 +33,6 @@ export type LocalActorConfig =
    */
   | { readonly facet: string; readonly actorBinding: LocalActorBinding; readonly actor?: ActorHandle };
 
-export function localActorMission(rt: AgentRuntime, exec: SqlExec): string | null {
-  if (rt.actor.parentActorId === null) return readMission(rt.storage.sql);
-  // One workspace database holds every child's descriptor; the handle selects whose.
-  const identity = new SubordinateIdentityStore(exec, rt.actor).read();
-
-  if (!identity) throw new KinuError('missing', 'The subordinate has no mission identity.');
-
-  return identity.mission;
-}
-
 const actors = new WeakMap<ActorHandle, LocalActorScope>();
 
 const bindings = new WeakMap<LocalActorBinding, LocalActorScope>();
@@ -60,7 +47,7 @@ export function requireLocalDatabasePath(db: Database, path: string): void {
 
 /** Open only. Root birth registers the main actor before calling this function. */
 export function openLocalRootActor(sql: SqlExecutor): ActorHandle {
-  const rows = sql<{ id: string; name: string; owner_user_id: string }>`SELECT id, name, owner_user_id FROM workspace_identity`;
+  const rows = sql<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`;
   const identity = rows[0];
 
   if (!identity) throw new KinuError('missing', 'The local workspace has no durable identity.');
@@ -68,7 +55,7 @@ export function openLocalRootActor(sql: SqlExecutor): ActorHandle {
   if (rows.length !== 1) throw new KinuError('denied', 'The database has more than one workspace identity.');
   const directory = new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id });
   const actor = directory.main();
-  actors.set(actor, { directory, workspaceName: identity.name, ownerUserId: identity.owner_user_id, path: [] });
+  actors.set(actor, { directory, path: [] });
 
   return actor;
 }
@@ -80,13 +67,6 @@ export function localActorDirectory(root: ActorHandle) {
   if (root.parentActorId !== null) throw new KinuError('denied', 'Only the local root owns the actor directory.');
 
   return { directory: scope.directory };
-}
-
-/** Owner and name from `workspace_identity`, the only place the pair exists. */
-export function localActorOwner(actor: ActorHandle) {
-  const scope = scopeFor(actor);
-
-  return { ownerUserId: scope.ownerUserId, workspaceName: scope.workspaceName };
 }
 
 function scopeFor(actor: ActorHandle): LocalActorScope {

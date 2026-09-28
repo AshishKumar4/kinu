@@ -59,16 +59,14 @@ function seedJournalledRun(
 
   if (run.merged) {
     db.prepare(
-      `INSERT INTO head_merge_results
-         (actor_id, root_id, merged_narrative, cost_head_count, cost_total_tokens, cost_total_wall_ms, cost_max_depth, merged_at, merge_strategy)
-       VALUES (?, ?, 'synthesis', ?, 0, 0, 1, ?, 'synthesize')`,
-    ).run(actorId, run.rootId, run.heads.length, run.at + 100);
+      `INSERT INTO head_merge_results (actor_id, root_id, merged_narrative) VALUES (?, ?, 'synthesis')`,
+    ).run(actorId, run.rootId);
   }
 }
 
 /** A node's own score, where a swarm writes it. */
 function scoreNode(db: Database, node: { actorId: string; rootId: string; nodeId: string; score: number }): void {
-  db.prepare(`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json, created_at) VALUES (?, ?, ?, ?, 0)`)
+  db.prepare(`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json) VALUES (?, ?, ?, ?)`)
     .run(node.actorId, node.nodeId, node.rootId, JSON.stringify({ outcome: { score: node.score } }));
 }
 

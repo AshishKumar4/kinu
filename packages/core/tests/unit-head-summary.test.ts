@@ -35,7 +35,7 @@ describe("synthesizeHeadSummary", () => {
       toolCalls: [{ name: "record_decision" }],
     });
 
-    expect(s).toContain("Best DB? → Postgres");
+    expect(s).toContain("Best DB?: Postgres");
     expect(s).toContain("Postgres has mature JSONB");
   });
 

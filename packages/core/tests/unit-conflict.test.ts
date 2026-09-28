@@ -8,7 +8,7 @@ import type { ExecuteResult, Executor } from '../src/types/primitives';
 describe('CraftStore conflict detection', () => {
   test('detects exact name conflict', () => {
     const { rt } = createTestRuntime();
-    rt.craftStore.create({ name: 'parse_csv', description: 'Parse CSV files', params: null, code: 'fn()', scope: 'local' });
+    rt.craftStore.create({ name: 'parse_csv', description: 'Parse CSV files', code: 'fn()' });
 
     const result = checkConflictsBeforeAdding(rt, {
       name: 'parse_csv', description: 'Different desc', code: 'other()', score: 0.9,
@@ -21,7 +21,7 @@ describe('CraftStore conflict detection', () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
       name: 'extract_csv', description: 'parse and extract CSV data from files with headers',
-      params: null, code: 'fn()', scope: 'local',
+      code: 'fn()',
     });
 
     const result = checkConflictsBeforeAdding(rt, {
@@ -37,7 +37,7 @@ describe('CraftStore conflict detection', () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
       name: 'parse_csv', description: 'parse CSV files',
-      params: null, code: 'fn()', scope: 'local',
+      code: 'fn()',
     });
 
     const result = checkConflictsBeforeAdding(rt, {
