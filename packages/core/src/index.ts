@@ -579,7 +579,7 @@ export { drainAssignments, type AdmittedAssignment, type DrainAssignmentsOptions
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
 // open-38: one physical workspace SQLite for every logical actor.
 export {

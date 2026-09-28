@@ -198,7 +198,7 @@ async function assigned(workspace: ReturnType<typeof gatewayWorkspace>): Promise
 }
 
 test('a task hire whose answer settled its waiting hirer is not run again after a reset', async () => {
-  // The root hires a task agent and waits inside the call; the hire answers at its turn's end.
+  // The root hires a task agent; the hire answers at its turn's end.
   const gateway = stubAiBinding((run) => {
     if (openingOf(run).includes(BRIEF)) return chatCompletion(run, 'summarised');
     const step = requestOf(run).messages.filter((message) => message.role === 'tool').length;
@@ -226,7 +226,7 @@ test('a task hire whose answer settled its waiting hirer is not run again after 
     if (mark) Object.defineProperty(EventLog.prototype, 'markTurnCompleted', mark);
   }
 
-  // The reset lands after the waiter took the answer and before the hirer archived the hire and retired it.
+  // The reset lands after the answer was held and before the hire was archived and retired.
   restore(workspace, beforeRelease);
 
   const first = asked(gateway);
@@ -236,12 +236,13 @@ test('a task hire whose answer settled its waiting hirer is not run again after 
   expect(asked(gateway) - first).toBe(0);
 });
 
-/** The relay's transaction rolled back by a reset: no report on the rail, the roster as before it, the lease open. */
+/** The relay's transaction rolled back by a reset: no report on the rail, the roster and the actor as before it, the lease open. */
 async function reportLostToReset(): Promise<{ asked: number; reports: number; leaseOpen: boolean }> {
   const gateway = answeringGateway('summarised');
   const workspace = gatewayWorkspace(gateway);
   const actorId = await hire(workspace, 'task');
-  const rosterBefore = snapshot(workspace, ['actor_subordinates']);
+  // A task agent retires only after its report is held, so a reset that lost the report lost the retire too.
+  const rosterBefore = snapshot(workspace, ['actor_subordinates', 'workspace_actors']);
 
   await runDelegatedTask(workspace, actorId, BRIEF);
 

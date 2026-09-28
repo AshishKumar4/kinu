@@ -302,6 +302,7 @@ export interface LocalParentRelay {
     readonly status: SubordinateReportStatus;
     readonly mode: WorkMode;
     readonly sequenceId: string;
+    readonly quiet?: true;
   }) => Promise<string>;
 }
 
@@ -1890,6 +1891,7 @@ export class LocalAgentSession {
         text: input.owedReport.content,
         status: input.owedReport.status,
         sequenceId: relay.sequenceId(input.messageId),
+        ...(input.owedReport.quiet === true && { quiet: true as const }),
       };
     }
 
@@ -2012,11 +2014,11 @@ export class LocalAgentSession {
       parent_report: terminalEffect({
         input: v.object({
           text: v.string(), status: v.picklist(SUBORDINATE_REPORT_STATUSES),
-          sequenceId: v.string(), mode: WorkModeSchema,
+          sequenceId: v.string(), mode: WorkModeSchema, quiet: v.optional(v.boolean()),
         }),
-        run: async ({ text, status, sequenceId, mode }) => ({
+        run: async ({ text, status, sequenceId, mode, quiet }) => ({
           status: 'completed',
-          detail: await relay.send({ text, status, mode, sequenceId }),
+          detail: await relay.send({ text, status, mode, sequenceId, ...(quiet === true && { quiet }) }),
         }),
       }),
     };

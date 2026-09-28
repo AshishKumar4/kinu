@@ -74,7 +74,7 @@ import {
   type WorkspaceActorDirectory,
   readWorkspaceWork, type WorkspaceWork,
 } from '@kinu.run/core';
-import { KinuError, diagnostics, refusalOf, toKinuError } from '@kinu.run/core/obs';
+import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, toWire, type Wire } from '@kinu.run/core/obs';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
   buildLocalActorRuntime, cleanupFacetCwdScratch,
@@ -214,6 +214,7 @@ interface ChildReportRelay {
   sequenceId: string;
   /** The `report` tool's structured handoff; absent on the automatic turn-end relay. */
   handoff?: SubordinateReportHandoff;
+  quiet?: true;
 }
 
 type AgentEventListener = (agent: string, event: SessionEvent) => void;
@@ -227,7 +228,7 @@ export class LocalAgentHost {
   private readonly opening = new Map<string, Promise<HostEntry>>();
   private readonly trees = new Map<string, HostTree>();
   private closed = false;
-  /** Passes a stored refiner answer started; close() joins them before ending the sessions they use. */
+  /** Passes started outside a turn; close() joins them before ending the sessions they use. */
   private readonly answerPasses = new Set<Promise<void>>();
 
   constructor(private readonly opts: LocalAgentHostOptions) {}
@@ -270,6 +271,11 @@ export class LocalAgentHost {
   }
 
   /** Session events stay live after an interactive client disconnects. */
+  /** A task child's retire; a failure is the outcome. */
+  retireTaskChild(work: () => Promise<void>): Promise<Wire<void, KinuError>> {
+    return settle(toWire(attempt({ doing: 'retiring a task child after its answer', otherwise: 'io' }, work), (failure) => failure));
+  }
+
   subscribe(listener: AgentEventListener): () => void {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
     this.listeners.add(listener);
@@ -661,6 +667,14 @@ export class LocalAgentHost {
         runtime: this.childRuntime(input.key),
         now: () => Date.now(),
         createName: mintSubordinateName,
+        afterTurn: (_child, work) => {
+          const pass: Promise<void> = this.retireTaskChild(work).then((outcome) => {
+            if (!outcome.ok) diagnostics.failure('host.task_child_release_failed', outcome.error, { agent: input.key });
+            this.answerPasses.delete(pass);
+          });
+
+          this.answerPasses.add(pass);
+        },
       }),
       team: null,
       peers: null,
@@ -994,12 +1008,18 @@ export class LocalAgentHost {
 
         // Suppressed only by a run-settling report, never a progress note.
         if (state === null || state.settledRun) return null;
-        // A task child always reports its ending, even an empty one: its caller asked.
-        const task = await terminalTaskReport({ lifetime: child.actor.record.lifetime, ending, assistantText, narration });
 
-        if (task) return task;
+        // A task child always reports its ending, and any child its failure.
+        const terminal = await terminalTaskReport({
+          lifetime: child.actor.record.lifetime, ending, assistantText, narration,
+          delegating: child.roster.list().some((hire) => hire.status === 'working')
+            || child.eventLog.pending({ variant: 'subordinate_task' }).length > 0,
+        });
 
-        if (ending !== 'answered') return null;
+        if (terminal) return terminal;
+
+        // A task agent reports only its terminal answer.
+        if (ending !== 'answered' || child.actor.record.lifetime === 'task') return null;
 
         return subordinateRelaysTurnEnd({
           reportedThisTurn: state.reportedThisTurn,
@@ -1010,7 +1030,7 @@ export class LocalAgentHost {
           : null;
       },
       sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
-      send: async ({ text, status, mode, sequenceId }) => {
+      send: async ({ text, status, mode, sequenceId, quiet }) => {
         // Recorded before the send, so a second terminal path on this turn is suppressed.
         if (child.relay) {
           child.relay.reportedThisTurn = true;
@@ -1018,7 +1038,7 @@ export class LocalAgentHost {
         }
 
         const relayed = await this.relayToParent({
-          child, content: text, mode, status, origin: 'turn_end', sequenceId,
+          child, content: text, mode, status, origin: 'turn_end', sequenceId, ...(quiet === true && { quiet }),
         });
 
         return relayed.disposition;
@@ -1028,7 +1048,7 @@ export class LocalAgentHost {
 
   /** Publish one child report into its parent's rail. `status` is the child's own word; it moves the parent's roster row. */
   private async relayToParent(relay: ChildReportRelay): Promise<SubordinateEventResult> {
-    const { child, content, mode, status, origin, sequenceId, handoff } = relay;
+    const { child, content, mode, status, origin, sequenceId, handoff, quiet } = relay;
 
     if (!child.parentKey) return { id: '', disposition: 'not_awaited' };
     const parent = this.entries.get(child.parentKey);
@@ -1056,7 +1076,6 @@ export class LocalAgentHost {
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
       onEvolutionAnswer: () => this.answerWake(parent),
-      // A temporary child's answer goes to the waiting `agents.ask` port, never as an event waking this parent.
       temporary: parent.temporary,
     }, {
       fromSubordinate: child.name,
@@ -1066,6 +1085,7 @@ export class LocalAgentHost {
       sequenceId,
       mode,
       handoff,
+      ...(quiet === true && { quiet }),
     }, Date.now());
   }
 

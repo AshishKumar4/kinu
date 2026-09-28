@@ -27,6 +27,8 @@ export class DelegatedTurnRunners {
 
   private free: number;
 
+  private readonly stops = new Map<string, number>();
+
   constructor(private readonly deps: DelegatedTurnRunnerDeps) {
     this.free = deps.slots;
   }
@@ -37,14 +39,26 @@ export class DelegatedTurnRunners {
     this.holdLane();
   }
 
-  async turn<T>(actorId: string, body: () => Promise<T>): Promise<T> {
+  async turn(actorId: string, body: () => Promise<void>): Promise<void> {
+    const queuedAt = this.stops.get(actorId) ?? 0;
+
     await this.acquire(actorId);
 
     try {
-      return await body();
+      if ((this.stops.get(actorId) ?? 0) === queuedAt) await body();
     } finally {
       this.release(actorId);
     }
+  }
+
+  /** Settles once no runner is left. */
+  async idle(): Promise<void> {
+    while (this.lane !== null) await this.lane;
+  }
+
+  /** A Stop skips these actors' queued turns. */
+  cancelQueued(actorIds: readonly string[]): void {
+    for (const id of actorIds) this.stops.set(id, (this.stops.get(id) ?? 0) + 1);
   }
 
   /** Waiting on a delegate frees the slot. */

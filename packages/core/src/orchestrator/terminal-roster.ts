@@ -71,6 +71,8 @@ export interface TerminalTurnParts {
     readonly status: SubordinateReportStatus;
     /** The parent's ingress dedupes on it. */
     readonly sequenceId: string;
+    /** A Stop: wakes no one. */
+    readonly quiet?: true;
   };
 }
 
@@ -200,6 +202,7 @@ export function declareTerminalRoster(
         sequenceId: parts.parentReport.sequenceId,
         // The mode travels: a replay must not turn a Plan report into a Build one.
         mode: facts.workMode,
+        quiet: parts.parentReport.quiet === true,
       },
     });
   }

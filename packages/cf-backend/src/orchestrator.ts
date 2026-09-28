@@ -12,7 +12,7 @@ import {
   createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
-  recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf,
+  recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
@@ -40,7 +40,7 @@ import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCaptur
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import {
-  createWorkspaceActorHost, provisionHostedActorHome, type WorkspaceHostSeams,
+  actorRetirementFor, createWorkspaceActorHost, provisionHostedActorHome, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
   admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
@@ -713,7 +713,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       taskProfile: (turn) => this.hostedTaskProfile(turn),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       announce: () => { this.broadcastSubordinatesChanged(); },
-      scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
+      // The root's turns run on this object's own chat loop, not its hosted slot.
+      scheduleDrain: (actor) => {
+        if (actor.record.parentActorId === null) this.orch.scheduleDrain();
+        else actor.session.orchestrator.scheduleDrain();
+      },
       armWake: () => { this.armDelegationWake(); },
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
       whileWaiting: (actorId, waited) => this.delegatedTurns.whileWaiting(actorId, waited),
@@ -1152,7 +1156,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  private readonly delegatedTurns = new DelegatedTurnRunners({
+  protected readonly delegatedTurns = new DelegatedTurnRunners({
     slots: DELEGATED_TURN_SLOTS,
     pass: (record) => this.drainActorAssignments(record),
     holdLane: async (body) => {
@@ -1170,8 +1174,67 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Admitted delegated turns run on a fiber, off the wake: inside it a turn held the alarm to its
    * 15-minute wall, whose reset closed every socket (warm-forge-4d6acc02, 2026-09-25).
    */
-  protected override whileWaitingOnDelegate<T>(actorId: string, waited: Promise<T>): Promise<T> {
-    return this.delegatedTurns.whileWaiting(actorId, waited);
+  /** One the owner added has its own Stop. */
+  protected override stopSubtree(actorId: string): void {
+    const seams = this.hostedSeams();
+    const directory = this.actorDirectoryStore();
+
+    const rosterOf = (actor: WorkspaceActor) => {
+      const hirer = directory.retained(actor.parentActorId ?? '');
+
+      return hirer === null ? null : { hirer, roster: seams.roster(this.actorHost().bindStores(actorReferenceOf(hirer))) };
+    };
+
+    const ownerMade = (actor: WorkspaceActor): boolean => {
+      for (let step: WorkspaceActor | null = actor; step !== null && step.actorId !== actorId; step = directory.retained(step.parentActorId ?? '')) {
+        if (rosterOf(step)?.roster.get(step.name)?.createdBy === 'user') return true;
+      }
+
+      return false;
+    };
+
+    const below = subordinateDescendants(this.workspaceActors().list(), actorId).filter((actor) => !ownerMade(actor));
+
+    if (below.length === 0) return;
+    this.delegatedTurns.cancelQueued(below.map((actor) => actor.actorId));
+
+    this.detachOwned(async () => {
+      for (const actor of below) {
+        const reference = actorReferenceOf(actor);
+        const live = this.actorHost().hosted(reference);
+
+        if (live?.session.inFlight === true) {
+          live.session.interrupt();
+          continue;
+        }
+
+        const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
+
+        for (const pending of log.pending({ variant: 'subordinate_task' })) log.dismiss(pending.id, 'stopped by the owner', 'system');
+        const held = rosterOf(actor);
+
+        if (held === null) continue;
+        const { hirer, roster } = held;
+
+        if (roster.get(actor.name)?.status !== 'working') continue;
+        roster.applyReport(actor.name, 'blocked', 'turn_end', Date.now());
+
+        if (actor.lifetime === TEMPORARY_LIFETIME) {
+          await this.actorHost().retire(actorReferenceOf(hirer), actorRetirementFor({ reference, name: actor.name, keepHistory: true, interrupt: true }));
+        }
+      }
+    });
+  }
+
+  private settledTaskAgent(record: WorkspaceActor): boolean {
+    const directory = this.actorDirectoryStore();
+
+    if (directory.retained(record.actorId)?.retiringAt !== null) return true;
+
+    if (record.lifetime !== TEMPORARY_LIFETIME) return false;
+    const hirer = directory.retained(record.parentActorId ?? '');
+
+    return hirer !== null && this.hostedSeams().roster(this.actorHost().bindStores(actorReferenceOf(hirer))).get(record.name)?.status === 'dismissed';
   }
 
   private startDelegationDrain(): void {
@@ -1221,8 +1284,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           throw cause;
         } finally {
           await room?.closeTurn();
+
           // Mid-turn reports drain here, a reset's re-run too.
-          (await this.actorHost().acquire(reference)).session.orchestrator.scheduleDrain();
+          if (!this.settledTaskAgent(record)) {
+            (await this.actorHost().acquire(reference)).session.orchestrator.scheduleDrain();
+          }
         }
       }),
       onFailure: ({ cause }) => {
@@ -1909,7 +1975,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return handoff.delivery === 'starts_now' ? 'turn' : 'mid-turn';
       },
-      interrupt: () => { this.actorHost().hosted(reference)?.session.interrupt(); },
+      interrupt: () => {
+        this.actorHost().hosted(reference)?.session.interrupt();
+        this.stopSubtree(actorId);
+      },
       clear: () => {
         history.clearConversation(CHAT_SESSION_ID, () => {
           if (this.actorHost().hosted(reference)?.session.inFlight === true) {

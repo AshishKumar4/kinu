@@ -1,14 +1,14 @@
 /**
- * Task-lifetime agents: a full child run inside the calling tool call, answered as its result, then released, on a
- * durable hire's runtime and roster. The in-memory waiter is a fast path; the report is a `subordinate_report` event.
+ * Task-lifetime agents on a durable hire's runtime and roster: started at once; the settling report wakes the hirer.
  */
 
 import type { SubordinateReportStatus } from '../events/hub/types';
-import { KinuError, renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';
+import { renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
 import { finishSubordinateBirth, type SubordinateBirth } from './birth';
 import { codenameFor } from '../identity/naming';
+import type { ActorReference } from '../identity/actor-handle';
 import {
   TEMPORARY_LIFETIME,
   subordinateBirthContext,
@@ -26,7 +26,7 @@ export const SUBORDINATE_LIFETIMES = ['durable', 'task'] as const;
 
 export type SubordinateLifetime = (typeof SUBORDINATE_LIFETIMES)[number];
 
-/** How a task child's turn ended. The set must stay closed: the caller blocks on exactly one report. */
+/** How a task child's turn ended. The set must stay closed: the hirer is owed exactly one report. */
 export const TASK_TURN_ENDINGS = [
   'answered',
   'silent',
@@ -62,6 +62,8 @@ const TASK_ENDING_REPORT = {
 export interface OwedReport {
   readonly status: SubordinateReportStatus;
   readonly content: string;
+  /** A Stop: settles the row, wakes no one. */
+  readonly quiet?: true;
 }
 
 /** How a turn ended, as a task child's caller hears it. */
@@ -71,7 +73,7 @@ export function taskTurnEnding(completed: boolean, interrupted: boolean): TaskTu
   return interrupted ? 'interrupted' : 'errored';
 }
 
-/** A task child's one report per ending: `completed` for an answer, else `blocked`; null for a durable child. */
+/** A child's terminal report: a task answer, any failure, a quiet Stop; null for a durable answer. */
 export async function terminalTaskReport(input: {
   readonly lifetime: SubordinateLifetime;
   readonly ending: TaskTurnEnding;
@@ -79,9 +81,12 @@ export async function terminalTaskReport(input: {
   readonly assistantText: string;
   /** Each step's words, oldest first; read only for a task that did not answer. */
   readonly narration: () => Promise<readonly string[]>;
+  /** Its hires still work or more input is queued for it: a later turn's reply is its answer. */
+  readonly delegating?: boolean;
 }): Promise<OwedReport | null> {
-  if (input.lifetime !== TEMPORARY_LIFETIME) return null;
   const text = input.assistantText.trim();
+
+  if (input.ending === 'answered' && (input.lifetime !== TEMPORARY_LIFETIME || input.delegating === true)) return null;
 
   if (input.ending === 'answered') {
     // An empty `answered` is `silent`: the content decides.
@@ -101,7 +106,9 @@ export async function terminalTaskReport(input: {
 
   if (text.length > 0 && !said.includes(text)) said.push(text);
 
-  return { status: 'blocked', content: [...said, TASK_ENDING_REPORT[input.ending]].join('\n\n') };
+  const content = [...said, TASK_ENDING_REPORT[input.ending]].join('\n\n');
+
+  return input.ending === 'interrupted' ? { status: 'blocked', content, quiet: true } : { status: 'blocked', content };
 }
 
 /**
@@ -131,7 +138,7 @@ function renderTemporaryTaskBrief(input: {
   }
 
   parts.push(
-    'You exist for this one question. Your answer is returned directly to the agent that asked, '
+    'You exist for this one question. Your final reply is delivered to the agent that asked as a message, '
     + 'and there is no second exchange: put the whole finished answer in one reply, and say what '
     + 'you could not establish rather than leaving it out.',
   );
@@ -145,55 +152,10 @@ export function createTemporaryAgentPort(deps: {
   runtime: SubordinateRuntime;
   createName(role: string): string;
   now(): number;
-  whileWaiting?<T>(waited: Promise<T>): Promise<T>;
+  afterTurn(child: ActorReference, work: () => Promise<void>): void;
 }): TemporaryAgentPort {
-  const waiters = new Map<string, (answer: TemporarySettlement) => void>();
-
-  const registerWaiter = (name: string, signal?: AbortSignal) => {
-    const { promise, resolve } = Promise.withResolvers<TemporarySettlement | 'cancelled'>();
-
-    const cleanup = () => {
-      waiters.delete(name);
-      signal?.removeEventListener('abort', onAbort);
-    };
-
-    const onAbort = () => {
-      cleanup();
-      resolve('cancelled');
-    };
-
-    if (signal?.aborted) {
-      onAbort();
-    } else {
-      waiters.set(name, (answer) => {
-        cleanup();
-        resolve(answer);
-      });
-      signal?.addEventListener('abort', onAbort, { once: true });
-    }
-
-    return { promise, cancel: onAbort };
-  };
-
   return {
-    settle: (input) => {
-      const entry = deps.roster.get(input.name);
-
-      // Only a task-lifetime row's report is a return value; durable reports stay parent events.
-      if (!entry || entry.lifetime !== TEMPORARY_LIFETIME) return false;
-
-      if (input.taskEventId !== entry.taskEventId) return false;
-
-      if (!temporaryRunSettles(input)) return false;
-      const waiter = waiters.get(input.name);
-
-      if (!waiter) return false;
-      waiter({ status: input.status, content: input.content });
-
-      return true;
-    },
-
-    run: async (request) => {
+    start: async (request) => {
       const task = request.task.trim();
 
       if (!task) return { reason: 'bad_input', error: 'hire requires a non-empty mission' };
@@ -204,28 +166,9 @@ export function createTemporaryAgentPort(deps: {
       const name = deps.createName(`ask-${roleLabel}`);
       const startedAt = deps.now();
 
-      const failure = (
-        reason: ErrorCode,
-        answer: string,
-        transcript: 'kept' | 'none' = 'kept',
-      ): TemporaryRunOutcome => ({
-        status: 'failed',
-        agent: name,
-        lifetime: TEMPORARY_LIFETIME,
-        role: roleLabel,
-        answer,
-        transcript,
-        elapsed_ms: deps.now() - startedAt,
-        reason,
+      const outcome = (status: TemporaryRunOutcome['status'], answer: string, transcript: 'kept' | 'none', reason?: ErrorCode): TemporaryRunOutcome => ({
+        status, agent: name, lifetime: TEMPORARY_LIFETIME, role: roleLabel, answer, transcript, ...(reason !== undefined && { reason }),
       });
-
-      const release = async (interrupt: boolean): Promise<void> => {
-        const actor = deps.roster.requireExisting(name).actorReference;
-
-        if (!actor) throw new KinuError('missing', 'The temporary actor has no confirmed identity.');
-        deps.roster.dismiss(name, deps.now());
-        await deps.runtime.dismiss(name, { keepHistory: true, interrupt }, actor);
-      };
 
       const creationId = crypto.randomUUID();
 
@@ -237,7 +180,7 @@ export function createTemporaryAgentPort(deps: {
 
       if (inherited) assignment.inheritedContext = inherited;
 
-      if (deps.roster.get(name)) return failure('denied', 'The generated actor name is already in use.', 'none');
+      if (deps.roster.get(name)) return outcome('failed', 'The generated actor name is already in use.', 'none', 'denied');
 
       if (request.lane) deps.roster.helpers.record(name, request.lane, startedAt);
       deps.roster.create({
@@ -246,49 +189,29 @@ export function createTemporaryAgentPort(deps: {
         createdBy: request.lane ? 'evolution' : 'orchestrator', status: 'working', currentTask: task, createdAt: startedAt,
         dismissedAt: null, lifetime: TEMPORARY_LIFETIME, taskEventId: null,
       });
-      // A child can report before its assignment acknowledgement returns.
-      const waiter = registerWaiter(name, request.signal);
 
       try {
         await finishSubordinateBirth(deps.roster, deps.runtime, name);
       } catch (cause) {
-        waiter.cancel();
         const error = toKinuError({ doing: 'completing an admitted temporary actor birth', cause, otherwise: 'unavailable' });
 
-        return failure(error.code, renderCauseChain(error));
+        return outcome('failed', renderCauseChain(error), 'kept', error.code);
       }
 
-      // Released inside the wait, before the caller takes its slot back.
-      const answered = waiter.promise.then(async (settled) => {
-        await release(settled === 'cancelled');
+      return outcome('working', TEMPORARY_ANSWER_ARRIVES, 'kept');
+    },
 
-        return settled;
-      });
+    release: (name) => {
+      const actor = deps.roster.get(name)?.actorReference;
 
-      const settlement = await (deps.whileWaiting?.(answered) ?? answered);
-
-      if (settlement === 'cancelled') {
-        return failure('cancelled', 'the caller cancelled this hire before the agent answered.');
-      }
-
-      if (settlement.status === 'blocked') return failure('unavailable', settlement.content);
-
-      return {
-        status: 'completed',
-        agent: name,
-        lifetime: TEMPORARY_LIFETIME,
-        role: roleLabel,
-        answer: settlement.content,
-        transcript: 'kept',
-        elapsed_ms: deps.now() - startedAt,
-      };
+      if (!actor) return;
+      deps.roster.dismiss(name, deps.now());
+      deps.afterTurn(actor, () => deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor));
     },
 
     reclaim: (request) => deps.roster.helpers.answerFor(request),
   };
 }
 
-interface TemporarySettlement {
-  readonly status: SubordinateReportStatus;
-  readonly content: string;
-}
+const TEMPORARY_ANSWER_ARRIVES = 'Working. Its answer, or why it could not answer, arrives later as a message '
+  + 'that opens your next turn; end this turn when you have nothing else to do.';

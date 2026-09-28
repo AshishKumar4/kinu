@@ -1254,7 +1254,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
 
     if (deps.team.temporary !== undefined) {
       Object.assign(properties, {
-        lifetime: { type: 'string', enum: [...SUBORDINATE_LIFETIMES], description: 'For hire with `role`: durable (default) stays in your roster; task answers one question and is archived.' },
+        lifetime: { type: 'string', enum: [...SUBORDINATE_LIFETIMES], description: 'For hire with `role`: durable (default) stays in your roster; task answers one question, as a later message, and is archived.' },
       });
     }
   }
@@ -1377,13 +1377,13 @@ async function hireWorkspace({ deps, input, mode, toolOptions, spawnDepthRefusal
   return await peers.spawnWorkspace(request);
 }
 
-interface CreateHireCall extends AgentsActionCall {
+interface CreateHireCall extends Omit<AgentsActionCall, 'toolOptions'> {
   team: TeamToolDeps;
   input: AgentsToolInput & { role: string; mission: string };
   lifetime: 'durable' | 'task';
 }
 
-async function hireCreate({ deps, team, input, mode, lifetime, toolOptions }: CreateHireCall): Promise<object> {
+async function hireCreate({ deps, team, input, mode, lifetime }: CreateHireCall): Promise<object> {
   const ctx = deps.profile?.();
 
   if (!ctx) {
@@ -1404,7 +1404,7 @@ async function hireCreate({ deps, team, input, mode, lifetime, toolOptions }: Cr
     const temporary = team.temporary;
 
     if (!temporary) {
-      throw new KinuError('denied', 'lifetime:"task" runs the agent to its single answer inside this call, which this actor has no substrate for: '
+      throw new KinuError('denied', 'lifetime:"task" needs a task-agent substrate, which this actor has none of: '
         + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (action:"list" shows the roster).');
     }
 
@@ -1421,9 +1421,7 @@ async function hireCreate({ deps, team, input, mode, lifetime, toolOptions }: Cr
 
     if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
 
-    if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-
-    return await temporary.run(request);
+    return await temporary.start(request);
   }
 
   const delegated = resolveDelegatedProfile(ctx, input.role, input.tier);
@@ -1549,7 +1547,7 @@ async function runHireAction(
   // `agent` is the name to create under; the role is validated, spawn-checked, and stored with its tier.
   if (!isHireCreateInput(input)) return badInput('hire requires role and mission');
 
-  return await hireCreate({ deps, team, input, mode, lifetime, toolOptions });
+  return await hireCreate({ deps, team, input, mode, lifetime });
 }
 
 export async function dispatchAgentsAction(
