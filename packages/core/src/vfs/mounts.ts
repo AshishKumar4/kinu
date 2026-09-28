@@ -449,6 +449,14 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		writeFile(path, data) {
 			return mutate(path, 'written', (files, native) => files.writeFile(native, data));
 		},
+		writeFileWithReport(path, data) {
+			return mutate(path, 'written', async (files, native) => {
+				if (files.writeFileWithReport) return files.writeFileWithReport(native, data);
+				await files.writeFile(native, data);
+
+				return null;
+			});
+		},
 		writeFileIfRevision(path, data, expectedRevision) {
 			return mutate(path, 'written', (files, native) => {
 				if (!files.writeFileIfRevision) {

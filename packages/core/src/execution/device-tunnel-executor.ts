@@ -5,11 +5,11 @@
 
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
-import type { VFS, VfsEntryStat } from '../types/primitives';
+import type { VFS, VfsEntryStat, VfsWriteReport } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { makeVfsError } from '../vfs/errno';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { commandResult, type CommandResult } from './exec-result';
+import { commandResult, uncheckpointedSentence, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
@@ -133,6 +133,8 @@ const DeviceExecResultSchema = v.object({
   exitCode: v.number(),
   uncheckpointed: v.optional(v.object({ dir: v.string(), why: v.string() })),
 });
+
+const WriteReportSchema = v.object({ uncheckpointed: v.object({ dir: v.string(), why: v.string() }) });
 
 const DeviceListResultSchema = v.array(JsonValueSchema);
 
@@ -359,9 +361,10 @@ export function createDeviceTunnelExecutor(
 
           if (target.kind === 'refusal') return target.refusal;
           const view = target.view;
-          await view.writeFile(path, content);
+          const report = await view.writeFileWithReport(path, content);
+          const written = `Written ${content.length} bytes to ${path}`;
 
-          return `Written ${content.length} bytes to ${path}`;
+          return report ? `${written}\n${uncheckpointedSentence(report.uncheckpointed, 'this write')}` : written;
         } catch (err) {
           if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
@@ -551,7 +554,7 @@ const ALWAYS_CONSENTED: DeviceFileConsent = {
 
 const AGENT_TMP_PATHS = ['/tmp', '/var/tmp'] as const;
 
-export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
+export type DeviceVFS = VFS & Required<Pick<VFS, 'writeFileWithReport'>> & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
 
 /**
  * The machine's filesystem in its own absolute paths. The daemon resolves root and path before the sink; this client
@@ -652,6 +655,28 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     return bytes;
   };
 
+  const writeFileWithReport = async (path: string, data: string | Uint8Array): Promise<VfsWriteReport | null> => {
+    const root = await guard(path, 'open');
+    let result: JsonValue | undefined;
+
+    if (v.is(v.string(), data)) {
+      result = await transport.rpc('writeFile', [path, data, { root }], target);
+    } else {
+      const text = asLosslessText(data);
+      result = text !== null
+        ? await transport.rpc('writeFile', [path, text, { root }], target)
+        : await transport.rpc('writeFile', [path, bytesToBase64(data), { encoding: 'base64', root }], target);
+    }
+
+    const ok = result === 'ok'
+      || (result !== undefined && isJsonObject(result) && result.success === true);
+
+    if (!ok) throw new Error(`writeFile failed on the device: ${JSON.stringify(result)}`);
+    const report = v.safeParse(WriteReportSchema, result);
+
+    return report.success ? report.output : null;
+  };
+
   return {
     homeDir: openingDir,
     async readFile(path, opts) {
@@ -669,23 +694,10 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     },
 
     async writeFile(path, data) {
-      const root = await guard(path, 'open');
-      let result: JsonValue | undefined;
-
-      if (v.is(v.string(), data)) {
-        result = await transport.rpc('writeFile', [path, data, { root }], target);
-      } else {
-        const text = asLosslessText(data);
-        result = text !== null
-          ? await transport.rpc('writeFile', [path, text, { root }], target)
-          : await transport.rpc('writeFile', [path, bytesToBase64(data), { encoding: 'base64', root }], target);
-      }
-
-      const ok = result === 'ok'
-        || (result !== undefined && isJsonObject(result) && result.success === true);
-
-      if (!ok) throw new Error(`writeFile failed on the device: ${JSON.stringify(result)}`);
+      await writeFileWithReport(path, data);
     },
+
+    writeFileWithReport,
 
     async readdir(path) {
       const root = await guard(path, 'scandir');
@@ -823,6 +835,9 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     },
     async writeFile(path, data) {
       await dispatch(path, (view, native) => view.writeFile(native, data));
+    },
+    async writeFileWithReport(path, data) {
+      return dispatch(path, (view, native) => view.writeFileWithReport(native, data));
     },
     async readdir(path) {
       if (isFleetRoot(path)) return routes().map((route) => route.segment);

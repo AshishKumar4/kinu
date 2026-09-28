@@ -1623,6 +1623,27 @@ describe('daemon process under Bun against a local hub', () => {
     }, root);
   });
 
+  test('a daemon whose KINU_HOME is elsewhere keeps its checkpoints and in-flight commands there', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    const owner = fs.realpathSync(scratchDir('daemon-owner-home'));
+    const project = path.join(owner, 'shop');
+    fs.mkdirSync(path.join(project, '.git'), { recursive: true });
+
+    await withDaemon({ HOME: owner, KINU_INFLIGHT_ROOT: '' }, async ({ hub, root, reply }) => {
+      hub.socket().send(JSON.stringify({
+        id: 'rpc-kinuhome00-1', method: 'exec', sandbox: RAW, cwd: project, params: ['printf a > a.txt'],
+        checkpoint: { agent: 'ws-1', turnId: 't1', sessionId: 's', dir: null },
+      }));
+      await reply('rpc-kinuhome00-1');
+      // Under the device home, which every sandbox masks, and never under a ~/.kinu a consented home would expose.
+      expect(fs.existsSync(path.join(root, 'inflight', 'rpc-kinuhome00-1'))).toBe(true);
+      expect(fs.readdirSync(path.join(root, 'checkpoints'))).toEqual(['ws-1']);
+      expect(fs.existsSync(path.join(owner, '.kinu'))).toBe(false);
+      hub.socket().send(JSON.stringify({ id: 'rpc-kinuhomeak-1', method: 'execAck', params: ['rpc-kinuhome00-1', 1] }));
+      await reply('rpc-kinuhomeak-1');
+    });
+  });
+
   test('a sandboxed command spills into its own tmp, named as its shell and the file methods name it', async () => {
     if (process.platform !== 'linux') return;
     const sandbox = require('../src/sandbox.js');

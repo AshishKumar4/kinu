@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import { ERROR_CODES, KinuError, refusalOf, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../types/file-edits';
-import type { VFS } from '../types/primitives';
+import type { Uncheckpointed, VFS } from '../types/primitives';
 import type { ExecutorTool, PreviewRouteCheck } from './types';
 
 const RefusalSchema = v.object({
@@ -15,11 +15,6 @@ const RefusalSchema = v.object({
 
 /** A file-plane verdict (`tools/file-tool.ts` `failure()`): unmet precondition, not an error class. */
 const FileVerdictSchema = v.object({ reason: v.picklist(FILE_REFUSAL_REASONS), error: v.string() });
-
-interface Uncheckpointed {
-  readonly dir: string;
-  readonly why: string;
-}
 
 /** The shape every transport settles a command into. */
 export interface ExecOutcome {
@@ -75,8 +70,11 @@ export function formatExecResult(result: ExecOutcome): string {
 
   return result.uncheckpointed === undefined || result.refusal !== undefined
     ? output
-    : `${output}\nNo checkpoint covers ${result.uncheckpointed.dir}: ${result.uncheckpointed.why}, `
-      + 'so undo cannot restore what this command changed there.';
+    : `${output}\n${uncheckpointedSentence(result.uncheckpointed, 'this command')}`;
+}
+
+export function uncheckpointedSentence(uncheckpointed: Uncheckpointed, change: string): string {
+  return `No checkpoint covers ${uncheckpointed.dir}: ${uncheckpointed.why}, so undo cannot restore what ${change} changed there.`;
 }
 
 function formatOutput(result: ExecOutcome): string {

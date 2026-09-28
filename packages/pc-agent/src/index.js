@@ -240,7 +240,7 @@ function rpc(ws, id, result, error) {
 // through both engines) so a machine's checkpoints are one format regardless
 // of which side wrote them:
 //
-//   ~/.kinu/checkpoints/<agent>/<sha256(dir)[:16]>/   — bare GIT_DIR
+//   <device home>/checkpoints/<agent>/<sha256(dir)[:16]>/ — bare GIT_DIR
 //     KINU_WORKDIR                                    — the target dir
 //     info/exclude                                       — default excludes
 //     refs/kinu/<ms13>-<seq>                          — one ref per snapshot
@@ -332,7 +332,7 @@ function reasonWithSkips(reason, unreadable) {
 }
 
 function createCheckpoints(opts = {}) {
-  const base = opts.base ?? path.join(os.homedir(), '.kinu', 'checkpoints');
+  const base = opts.base ?? path.join(DEVICE_HOME, 'checkpoints');
   const keep = Math.max(1, opts.keep ?? 50);
   const gitBin = opts.gitBin ?? 'git';
   let gitAvailable = null;
@@ -855,7 +855,7 @@ function whichAll(names) {
 // from being selected accidentally; it cannot defend against a malicious
 // same-user command that already has equivalent local authority.
 const INFLIGHT_ROOT = path.resolve(
-  KINU_INFLIGHT_ROOT === undefined || KINU_INFLIGHT_ROOT === '' ? path.join(os.homedir(), '.kinu', 'inflight') : KINU_INFLIGHT_ROOT,
+  KINU_INFLIGHT_ROOT === undefined || KINU_INFLIGHT_ROOT === '' ? path.join(DEVICE_HOME, 'inflight') : KINU_INFLIGHT_ROOT,
 );
 
 const REQUEST_ID = /^rpc-[A-Za-z0-9_-]{10}-[1-9]\d*$/;
