@@ -15,7 +15,7 @@ open Kinu
 
 inductive EvolutionAction where
   | assessTurn | reflectOnTurn | extractPattern | reflectOnSession
-  | mutateScaffold | consolidateCraft | runMCTS | appendMemory
+  | mutateScaffold | consolidateCraft | appendMemory
 
 def evolTransition (s s' : EvolutionState) (a : EvolutionAction) : Prop :=
   match a with
@@ -43,10 +43,6 @@ def evolTransition (s s' : EvolutionState) (a : EvolutionAction) : Prop :=
     s'.craftToolCount ≤ s.craftToolCount ∧ s'.turnCount = s.turnCount ∧
     s'.scaffoldVersion = s.scaffoldVersion ∧ s'.memorySize = s.memorySize ∧
     s'.sessionCount = s.sessionCount ∧ s'.reflectionCount = s.reflectionCount
-  | .runMCTS =>
-    s'.craftToolCount ≥ s.craftToolCount ∧ s'.memorySize ≥ s.memorySize ∧
-    s'.turnCount = s.turnCount ∧ s'.scaffoldVersion = s.scaffoldVersion ∧
-    s'.sessionCount = s.sessionCount ∧ s'.reflectionCount = s.reflectionCount
   | .appendMemory =>
     s'.memorySize ≥ s.memorySize ∧ s'.turnCount = s.turnCount ∧
     s'.craftToolCount = s.craftToolCount ∧ s'.scaffoldVersion = s.scaffoldVersion ∧
@@ -65,7 +61,6 @@ theorem scaffoldVersion_nondecreasing (s s' : EvolutionState) (a : EvolutionActi
   | .reflectOnSession => simp only [evolTransition] at h; omega
   | .mutateScaffold => simp only [evolTransition] at h; omega
   | .consolidateCraft => simp only [evolTransition] at h; omega
-  | .runMCTS => simp only [evolTransition] at h; omega
   | .appendMemory => simp only [evolTransition] at h; omega
 
 theorem memorySize_nondecreasing (s s' : EvolutionState) (a : EvolutionAction)
@@ -77,7 +72,6 @@ theorem memorySize_nondecreasing (s s' : EvolutionState) (a : EvolutionAction)
   | .reflectOnSession => simp only [evolTransition] at h; omega
   | .mutateScaffold => simp only [evolTransition] at h; omega
   | .consolidateCraft => simp only [evolTransition] at h; omega
-  | .runMCTS => simp only [evolTransition] at h; omega
   | .appendMemory => simp only [evolTransition] at h; omega
 
 theorem sessionCount_nondecreasing (s s' : EvolutionState) (a : EvolutionAction)
@@ -89,7 +83,6 @@ theorem sessionCount_nondecreasing (s s' : EvolutionState) (a : EvolutionAction)
   | .reflectOnSession => simp only [evolTransition] at h; omega
   | .mutateScaffold => simp only [evolTransition] at h; omega
   | .consolidateCraft => simp only [evolTransition] at h; omega
-  | .runMCTS => simp only [evolTransition] at h; omega
   | .appendMemory => simp only [evolTransition] at h; omega
 
 def totalBudget (maxDepth budgetPerLevel : Nat) : Nat := maxDepth * budgetPerLevel

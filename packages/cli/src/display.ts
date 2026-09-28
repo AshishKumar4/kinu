@@ -191,7 +191,7 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
   console.log(DIM(`${BOX.v}${'─'.repeat(w - 3)}`));
 
   console.log(boxRow(L('Scaffold:'), `v${info.scaffoldVersion}`, w));
-  console.log(boxRow(L('MCTS nodes:'), String(info.searchNodeCount), w));
+  console.log(boxRow(L('Swarm nodes:'), String(info.searchNodeCount), w));
 
   if (extra?.conversationCount !== undefined) {
     console.log(boxRow(L('Chats:'), String(extra.conversationCount), w));
@@ -290,7 +290,7 @@ export function printSearchTree(nodes: SearchNode[]): void {
     return;
   }
 
-  console.log(`\n${DIM('MCTS search tree:')}`);
+  console.log(`\n${DIM('Swarm search tree:')}`);
 
   for (const line of renderSearchTreeLines(nodes)) console.log(line);
   console.log('');

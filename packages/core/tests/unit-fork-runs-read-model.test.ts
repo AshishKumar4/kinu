@@ -78,7 +78,7 @@ function seedSearchRun(
     /** The root's own label, which is the run's name. */
     name?: string;
     winner?: number;
-    ledger?: 'running' | 'converged' | 'failed' | 'no_acceptable_candidate';
+    ledger?: 'running' | 'converged' | 'failed';
   },
 ): void {
   const node = db.prepare(

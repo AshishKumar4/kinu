@@ -103,7 +103,7 @@ function runs(db: Database): ReadonlyArray<{ run_id: string; type: string }> {
 describe('the loop admits a send queued while the slot is held, with every one-shot kick dead', () => {
   test('at turn close: the pump\'s own recheck runs the queued wake, which reaches a model call', async () => {
     const db = openDb('turn-close');
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
     const gate = Promise.withResolvers<void>();
     const asked: string[] = [];
     const events: SessionEvent[] = [];
@@ -135,7 +135,7 @@ describe('the loop admits a send queued while the slot is held, with every one-s
 
   test('at wake: the retry a dead process left in the ledger, its drain timer never fired, is admitted by the next activation and reaches a model call', async () => {
     const db = openDb('wake');
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
     // The runner's durable retry row, left by a process gone before its debounced drain fired.
     new EventLog(makeSqlExec(db), rt.actor).publish({

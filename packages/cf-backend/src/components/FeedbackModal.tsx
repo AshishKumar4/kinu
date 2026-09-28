@@ -31,7 +31,7 @@ const FeedbackReplySchema = v.object({
 });
 
 const WORKSPACE_ROUTES: Readonly<Record<string, true>> = Object.freeze({
-  workspace: true, mcts: true, settings: true, triggers: true,
+  workspace: true, swarm: true, settings: true, triggers: true,
 });
 
 function workspaceOf(pathname: string): string {

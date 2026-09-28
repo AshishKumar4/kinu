@@ -172,12 +172,10 @@ function gateSizes(client: LocalAgentClient): number[] {
 function setup(model: LanguageModel, profileAuthority: CliProfileSource = async () => null) {
   const home = scratchDir('client');
   const dbPath = join(home, 'agent.db');
-  // `createCLIRuntime` requires the actor database to be `dbPath` on disk (`requireLocalDatabasePath`),
-  // which no in-memory handle satisfies.
   const db = new Database(dbPath, { create: true });
   // The production initializer, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
@@ -212,7 +210,7 @@ function openPersistentClient(
   const dbPath = join(home, 'agent.db');
   const db = new Database(dbPath);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,

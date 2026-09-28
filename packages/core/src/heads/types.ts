@@ -217,7 +217,7 @@ export interface MergeResult {
   };
 }
 
-/** Mirrors MCTS BranchEvaluation (evaluation.ts). */
+/** Mirrors BranchEvaluation (mcts/evaluation.ts). */
 export interface HeadScore {
   readonly id: HeadId;
   readonly text: string;

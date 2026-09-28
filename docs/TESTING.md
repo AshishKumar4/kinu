@@ -84,7 +84,7 @@ This is a terminal tier, never a commit, push, CI, or deploy gate. The tier prin
 
 | Suite | What it measures |
 |---|---|
-| `e2e-lifecycle.test.ts` | a five-turn conversation with a threaded history, judged on content per turn, with evolution and MCTS on the in-process runtime |
+| `e2e-lifecycle.test.ts` | a five-turn conversation with a threaded history, judged on content per turn, with evolution on the in-process runtime |
 | `e2e-full-lifecycle.test.ts`, `deep-evolution.test.ts`, `evolution-proof.test.ts` | evolution across sessions and cross-session transfer |
 | `exploration.test.ts` | whether the agent reaches for a search and leaves a durably ranked winner |
 | `live-smoke.test.ts` | one real turn per backend; under `--backend cloud`, the deployed worker |
@@ -125,7 +125,7 @@ Workspaces use the `eval-` prefix and `finally` calls `teardown`. `infraBoundary
 
 #### The five-turn conversation
 
-`tests/live-model/e2e-lifecycle.test.ts` certifies the core loop: soul and memory reach the model, tools round-trip, history accumulates, evolution and MCTS run. It is an inner API, without turn assembly, reactor, wakes, or prompt cache. The eval suite covers those paths on the deployment.
+`tests/live-model/e2e-lifecycle.test.ts` certifies the core loop: soul and memory reach the model, tools round-trip, history accumulates, evolution runs. It is an inner API, without turn assembly, reactor, wakes, or prompt cache. The eval suite covers those paths on the deployment.
 
 It once sent `messages: [user]`: five one-turn conversations. Turn 5 asked "Summarize what we discussed", received "nothing", and passed on `length > 0`. Threading the history is not enough to prove it works. Measured 2026-08-20: the `memory` builtin searches the same conversation store (`packages/core/src/tools/memory-tool.ts`, `packages/core/src/memory/conversation-search.ts`). An unthreaded turn 5 reproduced turn 1's code and said "Here's a summary of our previous discussion" from 118 characters holding only turn 3's note. Two runs scored 6/0 and 5/1.
 

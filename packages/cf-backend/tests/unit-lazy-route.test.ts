@@ -16,10 +16,10 @@ const LIVE = 'deadbee';
 
 /** The messages the four engines and Vite's preload helper really produce. */
 const ENGINE_MESSAGES = {
-  chromium: 'Failed to fetch dynamically imported module: https://kinu.run/assets/MCTSExplorer-a1b2c3.js',
-  firefox: 'error loading dynamically imported module: https://kinu.run/assets/MCTSExplorer-a1b2c3.js',
+  chromium: 'Failed to fetch dynamically imported module: https://kinu.run/assets/SwarmExplorer-a1b2c3.js',
+  firefox: 'error loading dynamically imported module: https://kinu.run/assets/SwarmExplorer-a1b2c3.js',
   safari: 'Importing a module script failed.',
-  viteCss: 'Unable to preload CSS for https://kinu.run/assets/MCTSExplorer-a1b2c3.css',
+  viteCss: 'Unable to preload CSS for https://kinu.run/assets/SwarmExplorer-a1b2c3.css',
 } as const;
 
 function store(seed: string | null = null): ChunkReloadStore & { read: () => string | null } {

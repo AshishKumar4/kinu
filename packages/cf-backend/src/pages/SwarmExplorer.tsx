@@ -45,7 +45,7 @@ function CanvasNotice({ failure, loading, what, waiting, empty, onRetry }: {
   );
 }
 
-export default function MCTSExplorer() {
+export default function SwarmExplorer() {
   const { agentId } = useParams();
   const [params] = useSearchParams();
   const runId = params.get("run");

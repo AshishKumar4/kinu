@@ -13,7 +13,7 @@ export const APP_ROUTES = {
   workspace: '/workspace/:agentId',
   workspaceAgent: '/workspace/:agentId/agents/:subName',
   workspaceAgentPath: '/workspace/:agentId/agents/:subName/*',
-  explore: '/mcts/:agentId',
+  explore: '/swarm/:agentId',
   control: '/control',
   agentSettings: '/settings/:agentId',
   triggers: '/triggers/:agentId',

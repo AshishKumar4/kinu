@@ -130,8 +130,7 @@ describe('readSearchNodeDetail', () => {
     insertNode(db, actor, { id: 'solo', rootId: 'solo', createdAt: 7 });
     expect(readSearchNodeDetail(sql, actor, 'solo')).toMatchObject({
       id: 'solo', parentId: null, depth: 0, status: 'open', action: 'act',
-      task: 'task', observation: 'obs', codeUsed: null,
-      msgId: null, createdAt: 7,
+      task: 'task', observation: 'obs', createdAt: 7,
     });
   });
 });

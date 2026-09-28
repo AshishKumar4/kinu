@@ -69,14 +69,13 @@ import {
 import type { LocalOAuthStore } from './oauth-store';
 import type { FileCheckpoints } from '@kinu.run/core';
 import { diagnostics, KinuError, renderCauseChain, settleLogged, toKinuError } from '@kinu.run/core/obs';
-import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
+import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from '@kinu.run/core';
 import * as v from 'valibot';
 import { stampSchemaGenesis } from './schema-genesis';
 
 const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV];
 
 interface CLIRuntimeOptions {
-  dbPath: string;
   /**
    * Physical directory the workspace plane binds to. Absent deliberately does not
    * default to `process.cwd()`: an eval episode would write into the developer's repo.
@@ -220,7 +219,6 @@ export function createCLIRuntime(
   db.exec(`PRAGMA busy_timeout = ${String(SHARED_WRITE_WAIT_MS)}`);
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  requireLocalDatabasePath(db, config.dbPath);
 
   initFiberTable(execRaw);
 

@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createCLIRuntime } from '../src/runtime';
-import { localActorDirectory } from '../src/actor-identity';
+import { localActorDirectory } from '@kinu.run/core';
 import { SessionPayloads } from '../../core/src/session/payload';
 
 test('large canonical payloads use the issued child home and deny sibling reads', async () => {
   const db = new Database(':memory:');
-  const runtime = createCLIRuntime(db, { dbPath: db.filename, llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' } });
+  const runtime = createCLIRuntime(db, { llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' } });
 
   try {
     const { directory } = localActorDirectory(runtime.actor);

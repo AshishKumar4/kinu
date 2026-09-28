@@ -23,7 +23,7 @@ async function until(holds: () => boolean): Promise<void> {
 test('a step that reset the workspace on each of its runs closes, naming the cause, and is not run again', async () => {
   const db = new Database(scratchPath('poison-step', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
   let calls = 0;
 
   // The step never returns: the process running it dies first.

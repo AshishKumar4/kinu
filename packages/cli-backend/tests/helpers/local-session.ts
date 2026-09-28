@@ -220,7 +220,7 @@ export function systemCapturingModel(answer: string, sink: (system: string) => v
 export function workspaceRuntime() {
   const db = new Database(scratchPath('local-session', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
   return { db, rt };
 }

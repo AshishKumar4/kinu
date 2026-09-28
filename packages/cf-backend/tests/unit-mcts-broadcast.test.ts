@@ -13,8 +13,6 @@ const BroadcastSchema = v.object({
   rootId: v.string(),
   isolateGen: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
   pushSeq: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-  phase: v.string(),
-  nodeCount: v.number(),
   nodes: v.array(v.object({
     id: v.string(),
     task: v.string(),
@@ -59,8 +57,8 @@ function seedNode(
 ): void {
   // Seed under the handle the agent reads back with; another handle's scoped read answers nothing.
   harness.db.prepare(
-    `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, code_used, depth, visits, value, status, created_at)
-     VALUES (?, ?, ?, ?, ?, 'action', ?, NULL, ?, ?, 0.5, 'open', ?)`,
+    `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, depth, visits, value, status, created_at)
+     VALUES (?, ?, ?, ?, ?, 'action', ?, ?, ?, 0.5, 'open', ?)`,
   ).run(
     workspaceMainActor(harness.db).actorId,
     node.id,
@@ -83,7 +81,7 @@ describe('broadcastMctsProgress', () => {
     seedNode(harness, { id: 'old-child', root: 'old-root', parent: 'old-root', depth: 1, at: 1_100 });
     seedNode(harness, { id: 'new-root', root: 'new-root', at: 9_000 });
 
-    harness.agent.broadcastMctsProgress('new-root', 'explore', 1, 5);
+    harness.agent.broadcastMctsProgress('new-root');
 
     expect(sent.length).toBe(1);
     expect(sent[0].type).toBe('mcts-progress');
@@ -141,22 +139,22 @@ describe('broadcastMctsProgress', () => {
     const sent = captureBroadcasts(harness.agent);
 
     seedNode(harness, { id: 'root', root: 'root', at: 1_000 });
-    harness.agent.broadcastMctsProgress('root', 'explore', 1, 3);
+    harness.agent.broadcastMctsProgress('root');
     expect(sent.length).toBe(1);
 
-    harness.agent.broadcastMctsProgress('root', 'evaluate', 1, 3);
+    harness.agent.broadcastMctsProgress('root');
     expect(sent.length).toBe(1);
 
     seedNode(harness, { id: 'branch', root: 'root', parent: 'root', depth: 1, at: 1_200 });
-    harness.agent.broadcastMctsProgress('root', 'evaluate', 1, 3);
+    harness.agent.broadcastMctsProgress('root');
     expect(sent.length).toBe(2);
     expect(sent[1].nodes.map((n) => n.id)).toEqual(['root', 'branch']);
 
         // Backpropagation changes visits without adding a node — still a change.
     harness.db.prepare(`UPDATE search_nodes SET visits = 4 WHERE id = 'root'`).run();
-    harness.agent.broadcastMctsProgress('root', 'iteration-complete', 1, 2);
+    harness.agent.broadcastMctsProgress('root');
     expect(sent.length).toBe(3);
-    expect(sent[2].nodeCount).toBe(2);
+    expect(sent[2].nodes).toHaveLength(2);
   });
 
   /** Two concurrent searches: each broadcast must carry its own search's tree. */
@@ -165,21 +163,21 @@ describe('broadcastMctsProgress', () => {
     const sent = captureBroadcasts(harness.agent);
 
     seedNode(harness, { id: 'a', root: 'a', at: 1_000 });
-    harness.agent.broadcastMctsProgress('a', 'explore', 1, 5);
+    harness.agent.broadcastMctsProgress('a');
     expect(present(sent.at(-1), 'the latest broadcast').nodes.map((n) => n.id)).toEqual(['a']);
 
     seedNode(harness, { id: 'b', root: 'b', at: 2_000 });
     seedNode(harness, { id: 'b1', root: 'b', parent: 'b', depth: 1, at: 2_100 });
-    harness.agent.broadcastMctsProgress('b', 'explore', 1, 9);
+    harness.agent.broadcastMctsProgress('b');
     expect(present(sent.at(-1), 'the latest broadcast').nodes.map((n) => n.id)).toEqual(['b', 'b1']);
 
     harness.db.prepare(`UPDATE search_nodes SET visits = 7 WHERE id = 'a'`).run();
-    harness.agent.broadcastMctsProgress('a', 'iteration-complete', 1, 4);
+    harness.agent.broadcastMctsProgress('a');
     expect(present(sent.at(-1), 'the latest broadcast').rootId).toBe('a');
     expect(present(sent.at(-1), 'the latest broadcast').nodes.map((n) => n.id)).toEqual(['a']);
 
     seedNode(harness, { id: 'b2', root: 'b', parent: 'b', depth: 1, at: 2_200 });
-    harness.agent.broadcastMctsProgress('b', 'evaluate', 2, 8);
+    harness.agent.broadcastMctsProgress('b');
     expect(present(sent.at(-1), 'the latest broadcast').rootId).toBe('b');
     expect(present(sent.at(-1), 'the latest broadcast').nodes.map((n) => n.id)).toEqual(['b', 'b1', 'b2']);
 
@@ -204,16 +202,16 @@ describe('broadcastMctsProgress', () => {
 
     seedNode(harness, { id: 'a', root: 'a', at: 1_000 });
     seedNode(harness, { id: 'b', root: 'b', at: 2_000 });
-    harness.agent.broadcastMctsProgress('a', 'explore', 1, 5);
-    harness.agent.broadcastMctsProgress('b', 'explore', 1, 5);
+    harness.agent.broadcastMctsProgress('a');
+    harness.agent.broadcastMctsProgress('b');
     expect(sent.length).toBe(2);
 
-    harness.agent.broadcastMctsProgress('a', 'evaluate', 1, 5);
-    harness.agent.broadcastMctsProgress('b', 'evaluate', 1, 5);
+    harness.agent.broadcastMctsProgress('a');
+    harness.agent.broadcastMctsProgress('b');
     expect(sent.length).toBe(2);
 
     seedNode(harness, { id: 'a1', root: 'a', parent: 'a', depth: 1, at: 3_000 });
-    harness.agent.broadcastMctsProgress('a', 'evaluate', 1, 4);
+    harness.agent.broadcastMctsProgress('a');
     expect(sent.length).toBe(3);
     expect(sent[2].rootId).toBe('a');
     expect(sent[2].nodes.map((n) => n.id)).toEqual(['a', 'a1']);
@@ -222,7 +220,7 @@ describe('broadcastMctsProgress', () => {
   test('a search with no nodes yet broadcasts nothing rather than an empty tree', () => {
     const harness = orchestratorHarness();
     const sent = captureBroadcasts(harness.agent);
-    harness.agent.broadcastMctsProgress('not-yet-rooted', 'explore', 1, 5);
+    harness.agent.broadcastMctsProgress('not-yet-rooted');
     // Explicit empty keeps the per-search fingerprint from having to encode "no tree".
     expect(sent.length).toBe(0);
   });

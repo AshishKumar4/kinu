@@ -3492,7 +3492,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** Run-level MCTS ledger, newest-updated first; identifies the latest search without node ordering. */
+  /** Run-level swarm search ledger, newest-updated first; identifies the latest search without node ordering. */
   @callable() async getMctsSearchRuns(limit = 20): Promise<MctsSearchRunSummary[]> {
     return this.mctsSearchStore.list(limit);
   }
@@ -3614,7 +3614,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Server-side merge of run_events, evolution_events, and MCTS nodes into ordered TimelineSpans.
+   * Server-side merge of run_events, evolution_events, and swarm search nodes into ordered TimelineSpans.
    * Defaults to the active run, else the most recent recorded run.
    */
   @callable()

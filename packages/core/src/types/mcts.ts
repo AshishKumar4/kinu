@@ -14,13 +14,10 @@ export interface SearchNode {
   task: string;
   action: string;
   observation: string;
-  code_used: string | null;
   visits: number;
   /** Subtree mean in [0, 1], initialized to 0. */
   value: number;
   depth: number;
   status: NodeStatus;
-  msg_id: string | null;
-  /** Null for the root, a failed evaluation and a swarm node. */
   created_at: number;
 }

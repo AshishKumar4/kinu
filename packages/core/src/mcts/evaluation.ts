@@ -1,5 +1,5 @@
 /**
- * Grounded branch evaluation: the one MCTS scorer, called from the engine's EVALUATE phase on every backend.
+ * Grounded branch evaluation: the one search scorer, called by swarm scoring and grounded heads on every backend.
  * Execution picks the band, the judge ensemble (median, unparsed samples dropped) places within it.
  * Band table (WP-A5):
  *   code passed 0.60 + 0.40·j; code failed 0.05 + 0.25·j; code did not parse 0.05 (no judge);

@@ -202,7 +202,7 @@ function seedInterruptedRun(input: {
   insertSearchNode(sql, input.rt.actor, {
     nodeId: rootId, parentNodeId: null, rootId,
     task: input.task, action: '', observation: input.task,
-    codeUsed: null, depth: 0, msgId: null,
+    depth: 0,
   });
 
   return rootId;

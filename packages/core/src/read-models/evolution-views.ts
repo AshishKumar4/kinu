@@ -1,4 +1,4 @@
-/** Self-evolution surfaces: changelog, near-tied takes, curriculum proposals, each with its one action. */
+/** Self-evolution surfaces: changelog, alternate takes, curriculum proposals, each with its one action. */
 
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';

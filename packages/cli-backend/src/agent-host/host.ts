@@ -87,7 +87,7 @@ import {
   bindLocalActor, bindLocalActorReference, localActorDirectory,
   adoptLocalActorHandle, cancelLocalCreation, openLocalActor, recoverLocalActorRetirements, registerLocalActor,
   requireLocalActorWorkspace, type LocalActorBinding,
-} from '../actor-identity';
+} from '@kinu.run/core';
 import { OS_LEASE_PROCESS } from './lease-process';
 import {
   DriverLeaseHold, REAL_CLOCK,
@@ -159,7 +159,6 @@ interface LocalTickResult {
  * per file, so a hold per entry would have siblings invalidate each other's tokens.
  */
 interface HostTree {
-  readonly dbPath: string;
   readonly db: Database;
   readonly host: ActorHost;
   /** The root's actor directory, held: `localActorDirectory` refuses a non-root handle. */
@@ -432,7 +431,7 @@ export class LocalAgentHost {
 
     try {
       const ws = await this.opts.open(ref, db, dbPath);
-      const tree = this.createTree(ref, db, dbPath, ws);
+      const tree = this.createTree(ref, db, ws);
       this.trees.set(name, tree);
 
       try {
@@ -463,7 +462,6 @@ export class LocalAgentHost {
   private createTree(
     ref: HostedAgentRef,
     db: Database,
-    dbPath: string,
     ws: LocalHostedAgent,
   ): HostTree {
     const { directory } = localActorDirectory(ws.rt.actor);
@@ -483,7 +481,7 @@ export class LocalAgentHost {
       directory,
       // No build identity for the builtin loop: a `bun`-run checkout has no build stamp.
       installedBuild: null,
-      runtimeFor: (bound) => this.runtimeFor(runtimes, dbPath, db, bound),
+      runtimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
       filesFor: async (bound) => {
         if (!ws.rt.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
 
@@ -528,7 +526,7 @@ export class LocalAgentHost {
     });
 
     return {
-      dbPath, db, host, directory, runtimes, orchestrations, driving: 0,
+      db, host, directory, runtimes, orchestrations, driving: 0,
       hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: OS_LEASE_PROCESS }, this.driverKind),
     };
   }
@@ -539,7 +537,6 @@ export class LocalAgentHost {
    */
   private async runtimeFor(
     runtimes: Map<string, CLIRuntime>,
-    dbPath: string,
     db: Database,
     bound: BoundActor,
   ): Promise<AgentRuntime> {
@@ -568,7 +565,7 @@ export class LocalAgentHost {
     const openConfig = this.childOpenConfig(parent, binding);
 
     const built = createCLIRuntime(db, {
-      ...openConfig, dbPath, agentName: binding.name, actor: bound.handle,
+      ...openConfig, agentName: binding.name, actor: bound.handle,
     });
 
     const shared = await shareLocalWorkspacePlane(built, parent.ws.rt, openConfig.facet);

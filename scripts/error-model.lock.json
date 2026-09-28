@@ -254,7 +254,7 @@
     "packages/cf-backend/src/user/workspace-ownership.ts#result-type": 2,
     "packages/cf-backend/src/workspace-host.ts#catch": 3,
     "packages/cf-backend/src/workspace-host.ts#throw": 6,
-    "packages/cli-backend/src/actor-identity.ts#throw": 10,
+    "packages/core/src/state/local-actors.ts#throw": 9,
     "packages/cli-backend/src/agent-host/host.ts#catch": 11,
     "packages/cli-backend/src/agent-host/host.ts#throw": 31,
     "packages/cli-backend/src/agent-host/lease-process.ts#catch": 1,

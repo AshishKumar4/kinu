@@ -9,7 +9,7 @@ import {
   type SqlExec, type SqlValue, type WriteObserver,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
 } from '@kinu.run/core';
-import { bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '../src/actor-identity';
+import { bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import type { HeadSeat } from '@kinu.run/core';
 

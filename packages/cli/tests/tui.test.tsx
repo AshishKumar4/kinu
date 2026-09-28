@@ -721,15 +721,12 @@ describe('CLI TUI layout', () => {
               turnId: 'turn-1',
               sessionId: 'session-1',
               task: 'Choose an implementation',
-              source: 'branch',
               winnerNodeId: 'node-1',
               chosenNodeId: null,
               candidates: [{
                 nodeId: 'node-1',
                 text: 'Use the indexed path',
-                score: 0.8,
-                visits: 3,
-                depth: 1,
+                origin: 'live',
               }],
               createdAt: 1,
             }}
@@ -1348,7 +1345,7 @@ async function runHomeScreen(options: {
     const db = new Database(resolve(home, name, 'agent.db'), { create: true });
 
     try {
-      createCLIRuntime(db, { dbPath: db.filename, llm: null, agentName: name }).actor.config.setDisplayName(workspaceTitle(name));
+      createCLIRuntime(db, { llm: null, agentName: name }).actor.config.setDisplayName(workspaceTitle(name));
     } finally {
       db.close();
     }

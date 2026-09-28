@@ -2474,7 +2474,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
     const rootId = this.headJournal.readHead(headId)?.root_id ?? headId;
 
-    if (!isSteerBranchRunId(rootId)) this.broadcastMctsProgress(rootId, 'head-activity');
+    if (!isSteerBranchRunId(rootId)) this.broadcastMctsProgress(rootId);
   }
 
   /** Broadcast only, no state: a missed frame is corrected by the `head_activity` sent when its
@@ -2670,7 +2670,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Push one search's tree (search_nodes plus head journal), scoped by `rootId` since searches run
    * concurrently. `(isolateGen, pushSeq)` orders a root's frames across isolates.
    */
-  broadcastMctsProgress(rootId: string, phase: string, iteration?: number, budget?: number): void {
+  broadcastMctsProgress(rootId: string): void {
     try {
       const nodes = readSearchTree(this.boundSql, this.actorHandle(), rootId);
       const head = this.headJournal.readRun(rootId);
@@ -2683,15 +2683,14 @@ export abstract class ActorAgent extends Agent<Env> {
       const pushSeq = (this._mctsPushSeq.get(rootId) ?? 0) + 1;
       this._mctsPushSeq.set(rootId, pushSeq);
       this.broadcast(JSON.stringify({
-        type: 'mcts-progress', rootId, isolateGen: this.isolateGeneration, pushSeq, phase, iteration, budget,
-        nodeCount: nodes.length, nodes, head,
+        type: 'mcts-progress', rootId, isolateGen: this.isolateGeneration, pushSeq, nodes, head,
       }));
     } catch (err) {
       diagnostics.failure('mcts.progress_broadcast_failed', toKinuError({
-        doing: 'pushing an MCTS search tree to connected surfaces',
+        doing: 'pushing a swarm search tree to connected surfaces',
         cause: err,
         otherwise: 'io',
-      }), { rootId, phase });
+      }), { rootId });
     }
   }
 
@@ -2993,7 +2992,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._chatTranscript ??= this.stores.history.transcript(CHAT_SESSION_ID);
   }
 
-  /** Persisted once per activation; tracing and MCTS frames share it so neither advances the other. */
+  /** Persisted once per activation; tracing and swarm-progress frames share it so neither advances the other. */
   private _isolateGeneration: number | null = null;
   protected get isolateGeneration(): number {
     return (this._isolateGeneration ??= this.config.countIsolateGeneration());
