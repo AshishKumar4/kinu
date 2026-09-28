@@ -93,7 +93,6 @@ export interface SelectEnsembleJudgesOpts {
   chatSpec: () => string;
   /** Available specs in registry preference order. */
   candidates: () => Promise<readonly string[]>;
-  count?: number;
 }
 
 /**
@@ -103,7 +102,6 @@ export interface SelectEnsembleJudgesOpts {
 export async function selectEnsembleJudges(
   opts: SelectEnsembleJudgesOpts,
 ): Promise<EnsembleJudgeSelection> {
-  const count = opts.count ?? ENSEMBLE_JUDGE_COUNT;
   const configured = (opts.specs ?? []).map((spec) => spec.trim()).filter((spec) => spec !== '');
 
   if (configured.length > 0) return { specs: configured, source: 'configured' };
@@ -118,7 +116,7 @@ export async function selectEnsembleJudges(
     seen.add(family);
     specs.push(candidate);
 
-    if (specs.length === count) break;
+    if (specs.length === ENSEMBLE_JUDGE_COUNT) break;
   }
 
   return { specs, source: 'cross-family' };

@@ -316,7 +316,7 @@ function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: numbe
     const entry: ChangelogEntry = {
       id: `prompt_section:${row.sectionId}:v${String(row.version)}:${row.status}`,
       kind: 'prompt_section',
-      at: row.writtenAt,
+      at: row.decidedAt ?? row.writtenAt,
       summary: `${SECTION_SUMMARY[row.status]} ${row.sectionId} guidance`,
       evidence:
         `${SECTION_VERB[row.status]} ${row.sectionId} v${String(row.version)}: ${row.rationale} · ${size} · ${trial}`,

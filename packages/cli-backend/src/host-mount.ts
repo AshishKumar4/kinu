@@ -5,11 +5,9 @@
 
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { FileCheckpoints, ShellApprovalPolicy, VFS, VfsErrorCode } from '@kinu.run/core';
-import {
-  ERRNO, gateExec, LEGACY_WORKSPACE_ROOT, makeVfsError, reviewCommand, shellQuote, SLATES_ROOT, WORKSPACE_ROOT,
-} from '@kinu.run/core';
-import { type KinuError, tolerateAsync } from '@kinu.run/core/obs';
+import type { FileCheckpoints, FileReach, MountedVfs, VFS, VfsErrorCode } from '@kinu.run/core';
+import { ERRNO, LEGACY_WORKSPACE_ROOT, makeVfsError, SLATES_ROOT, WORKSPACE_ROOT } from '@kinu.run/core';
+import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const nodeErrorSchema = v.object({
@@ -31,11 +29,13 @@ function nodeError(input: { error: unknown }): v.InferOutput<typeof nodeErrorSch
 
 function throwVfsError(input: { error: unknown; syscall: string; path: string }): never {
   const error = nodeError(input);
-  const code = error?.code !== undefined && isVfsErrorCode(error.code) ? error.code : null;
 
-  throw code === null
-    ? input.error
-    : makeVfsError(code, `${error?.message ?? String(input.error)}, ${input.syscall} '${input.path}'`, input.path);
+  if (error?.code && isVfsErrorCode(error.code)) {
+    const message = error.message ?? String(input.error);
+    throw makeVfsError(error.code, `${message}, ${input.syscall} '${input.path}'`, input.path);
+  }
+
+  throw input.error;
 }
 
 function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefined): VFS {
@@ -88,61 +88,52 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
   };
 }
 
-/**
- * The working directory as the workspace file plane; agent state stays in
- * `agentStateVfs`. Accepts relative paths, plane-root aliases (`/workspace`,
- * `/home/main`, `/`, and `/slates` for its `slates/`) and real absolute paths inside
- * the tree; with `outside`, any absolute path without `..`, gated. Else EACCES. Not a sandbox.
- */
-export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined, outside?: ShellApprovalPolicy): VFS {
+/** Relative paths and aliases (`/workspace`, `/home/main`, `/`, `/slates`) stay in the tree, or EACCES; any other
+ *  absolute path is that host path. Not a sandbox. */
+function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: string; readonly outside: boolean } {
   const root = resolve(cwd);
-  const host = createHostMountVFS(root, checkpoints);
 
-  const hostPath = (path: string) => {
+  return (path) => {
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
 
     // A real path inside the directory wins over every alias.
-    if (withinRoot(root, direct)) return { at: direct, outside: false };
+    if (withinRoot(root, direct)) return { hostPath: direct, outside: false };
     const inner = isAbsolute(path) ? planeRootRelative(path) : null;
 
+    if (inner === null && isAbsolute(path)) return { hostPath: direct, outside: true };
     const mapped = inner === null ? null : resolve(root, inner || '.');
 
-    if (mapped !== null && withinRoot(root, mapped)) return { at: mapped, outside: false };
+    if (mapped !== null && withinRoot(root, mapped)) return { hostPath: mapped, outside: false };
 
-    if (mapped !== null || outside === undefined || !isAbsolute(path) || path.split('/').includes('..')) {
-      throw makeVfsError('EACCES', `path escapes the workspace directory ${root}: ${path}`, path);
-    }
-
-    return { at: direct, outside: true };
+    throw makeVfsError('EACCES', `path escapes the workspace directory ${root}: ${path}; name a file outside it by its absolute path`, path);
   };
+}
 
-  const gated = async <T>(path: string, command: (at: string) => string, op: (at: string) => Promise<T>): Promise<T> => {
-    const target = hostPath(path);
+/** The file gate's reach: `cwd` under `table`'s mounts, or the in-SQLite plane (null). */
+export function directoryFileReach(cwd: string | null, table: MountedVfs | null): FileReach {
+  const userRoots = () => table?.userRoots() ?? [];
 
-    if (!target.outside || outside === undefined) return op(target.at);
+  if (cwd === null) return { userRoots, locate: null, parksWrites: false };
+  const locate = cwdPlaneLocator(cwd);
 
-    const run = gateExec<{ readonly done: T } | { readonly refused: KinuError }>(
-      async () => ({ done: await op(target.at) }),
-      (refused) => ({ refused }),
-      { name: 'workspace', filesOwner: 'user' },
-      { policy: outside, review: async (cmd) => reviewCommand(cmd, 'user') },
-    );
+  // A mounted path is its mount's; the CLI asks, so nothing parks.
+  return { userRoots, locate: (path) => ((table?.mountOf(path) ?? null) === null ? locate(path) : { hostPath: path, outside: false }), parksWrites: false };
+}
 
-    const result = await run(command(shellQuote(target.at)));
-
-    if ('refused' in result) throw makeVfsError('EACCES', result.refused.message, path);
-
-    return result.done;
-  };
+/** The working directory as the file plane ({@link cwdPlaneLocator}). */
+export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
+  const host = createHostMountVFS(resolve(cwd), checkpoints);
+  const locate = cwdPlaneLocator(cwd);
+  const hostPath = (path: string): string => locate(path).hostPath;
 
   return {
-    readFile: (path, opts) => gated(path, (at) => `cat ${at}`, (at) => host.readFile(at, opts)),
-    writeFile: (path, data) => gated(path, (at) => `tee ${at}`, (at) => host.writeFile(at, data)),
-    readdir: (path) => gated(path, (at) => `ls ${at}`, (at) => host.readdir(at)),
-    stat: (path) => gated(path, (at) => `stat ${at}`, (at) => host.stat(at)),
-    unlink: (path) => gated(path, (at) => `rm -rf ${at}`, (at) => host.unlink(at)),
-    mkdir: (path, opts) => gated(path, (at) => `mkdir${opts?.recursive === true ? ' -p' : ''} ${at}`, (at) => host.mkdir(at, opts)),
-    exists: (path) => gated(path, (at) => `test -e ${at}`, (at) => host.exists(at)),
+    readFile: (path, opts) => host.readFile(hostPath(path), opts),
+    writeFile: (path, data) => host.writeFile(hostPath(path), data),
+    readdir: (path) => host.readdir(hostPath(path)),
+    stat: (path) => host.stat(hostPath(path)),
+    unlink: (path) => host.unlink(hostPath(path)),
+    mkdir: (path, opts) => host.mkdir(hostPath(path), opts),
+    exists: (path) => host.exists(hostPath(path)),
   };
 }
 

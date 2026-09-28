@@ -18,7 +18,7 @@ import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/works
 import { unmovedSince } from '../vfs/unmoved';
 
 /** `do.sqlite.row_bytes` caps a body's row, which also holds its 64-hex key. */
-const BODY_MAX_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;
+export const BODY_MAX_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;
 
 /** Quarter of the facet RPC ceiling: the reply is UTF-16 in the isolate plus per-line overhead.
  *  Files past it are listed with +/- counts and no body. */

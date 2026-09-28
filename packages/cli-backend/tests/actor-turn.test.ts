@@ -125,7 +125,7 @@ test('the real head caller executes its selected program and retains its produce
     id: 'head-one', rootId: 'origin', parentId: null, depth: 0, task: 'go', mode: 'build',
     rationale: 'exercise the selected program', inheritedContext: [],
     budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('run'),
+    loop: defaultLoopOrigin('swarm'),
   }, {
     ...headLoopSeams(rt), clock: REAL_CLOCK, model: chat.model, tools: {}, capture: new HeadCapture(),
     workspaceLayout: 'private-scratch', isAborted: () => false,
@@ -151,7 +151,7 @@ test('separate model calls inside a selected head program share its real mission
     id: 'head-budgeted', rootId: 'origin', parentId: null, depth: 0, task: 'go', mode: 'build',
     rationale: 'exercise the selected program budget', inheritedContext: [],
     budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('run'),
+    loop: defaultLoopOrigin('swarm'),
   }, {
     ...headLoopSeams(rt), clock: REAL_CLOCK, model: chat.model, tools: {}, capture: new HeadCapture(), mission,
     workspaceLayout: 'private-scratch', isAborted: () => false,

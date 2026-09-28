@@ -473,7 +473,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return {
       spawnHead: async (input: HeadInput) => {
         // The `exp:`-marked name `hostHead` registers; a head has no database of its own.
-        await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, kind: 'run', lifetime: 'task' });
+        await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, origin: 'swarm', lifetime: 'task' });
 
         return {
           id: input.id,
@@ -648,7 +648,7 @@ export async function until(holds: () => boolean, what: string): Promise<void> {
 export function ledgerOver(db: Database): TerminalTransitions {
   return new TerminalTransitions({
     actor: workspaceMainActor(db), sql: sqlOver(db), effects: {}, now: () => Date.now(),
-    scheduleRetry: async () => {},
+    scheduleRetry: async () => {}, transaction: (body) => body(), turnIsLive: () => false, settled: async () => {},
   });
 }
 
@@ -756,18 +756,20 @@ export function storedChat(
   return historyOver(harness, actor).transcript(CHAT_SESSION_ID).history();
 }
 
-/** A settled response's improvement-lanes effect ran: its row completed, or the whole terminal
- *  sequence closed and pruned it. Other effects of the sequence may still be owed. */
+/** A settled response's improvement lanes and advisor review ran: their rows completed, or the whole
+ *  terminal sequence closed and pruned them. Other effects of the sequence may still be owed. */
 export function improvementLanesRan(db: Database, messageId: string): boolean {
-  const effect = db.query<{ n: number }, [string]>(
-    "SELECT COUNT(*) AS n FROM terminal_effects WHERE effect_name = 'improvement_lanes' AND sequence_id LIKE ? AND status = 'completed'",
-  ).get(`%/${messageId}`)?.n === 1;
+  // The review is its own detached row: the lanes have run once neither row is still owed.
+  const effect = db.query<{ n: number; owed: number }, [string]>(
+    `SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE status != 'completed') AS owed FROM terminal_effects
+     WHERE effect_name IN ('improvement_lanes', 'advisor_review') AND sequence_id LIKE ?`,
+  ).get(`%/${messageId}`);
 
   const closed = db.query<{ n: number }, [string]>(
     'SELECT COUNT(*) AS n FROM tool_effect_claims WHERE normalized_call_id = ? AND result_json IS NOT NULL',
   ).get(`terminal:response:${messageId}`)?.n === 1;
 
-  return effect || closed;
+  return (effect !== null && effect.n > 0 && effect.owed === 0) || closed;
 }
 
 /** Loggers suites record with. A settle swaps in its own sink to catch close failures, and forwards to these. */
@@ -1696,14 +1698,17 @@ export async function hostedSubordinateHarness(
     readonly nameOrigin: 'user' | 'auto';
     readonly mission: string;
     readonly roleId?: string;
+    /** `evolution` stands in for a lane's helper: a view-only task agent. */
+    readonly origin?: 'agent' | 'evolution';
   },
 ): Promise<HostedActorHarness> {
   const seed: SubordinateSeed & { creationId: string } = {
     name: identity.name,
     displayName: identity.displayName,
     nameOrigin: identity.nameOrigin,
-    // Durable: this stands in for a hire.
-    lifetime: 'durable',
+    // Durable: this stands in for a hire; a lane's helper lives one task.
+    lifetime: identity.origin === 'evolution' ? 'task' : 'durable',
+    origin: identity.origin ?? 'agent',
     mission: identity.mission,
     role: identity.roleId ?? 'task',
     // Absent, not null: null would pin "no tier", which the catalog cannot honour.
@@ -1721,7 +1726,7 @@ export async function hostedExplorationHarness(
   id: string,
 ): Promise<HostedActorHarness> {
   const entry = await workspace.agent.actorDirectory({
-    action: 'register', creationId: id, name: `exp:${id}`, kind: 'run', lifetime: 'task',
+    action: 'register', creationId: id, name: `exp:${id}`, origin: 'swarm', lifetime: 'task',
   });
 
   const actor = await workspace.agent.observeActorHost().acquire(entry.reference);

@@ -137,6 +137,8 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
   const rt: AgentRuntime = {
     actor,
     workspaceIsMachine: false,
+    // A test plane holds nothing of the user's.
+    get toolFiles() { return rt.storage.vfs; },
     storage: {
       vfs: workspace.vfs,
       sql: testSql.sql,

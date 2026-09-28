@@ -1459,11 +1459,10 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(runs[0].eventCount).toBeGreaterThan(0);
 
     const events = session.getRunEvents(runs[0].runId);
-    // The `model_operation` pair brackets its step, so a call that never returned names itself. The first delta writes
-    // the partial an interrupted turn continues from; the finish row supersedes it.
+    // The `model_operation` pair brackets its step, so a call that never returned names itself.
     expect(events.map((e) => e.type)).toEqual([
       'run_start', 'turn_start', 'profile_resolution', 'context_admitted', 'model_operation',
-      'step_partial', 'step_finish', 'model_operation',
+      'step_finish', 'model_operation',
       'turn_end', 'run_end',
     ]);
 
@@ -1480,8 +1479,8 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(end.reason).toBe('completed');
     expect(end.error).toBeUndefined();
 
-    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    expect(session.getRunEvents(runs[0].runId, { since: 8 }).map((e) => e.type))
+    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(session.getRunEvents(runs[0].runId, { since: 7 }).map((e) => e.type))
       .toEqual(['turn_end', 'run_end']);
 
     await session.end();
@@ -2178,7 +2177,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
       id: 'h-fork', rootId: 'r1', parentId: null, depth: 0, mode: 'build',
       task: 'look at the parser', rationale: 'because', inheritedContext: [],
       budget: { maxDepth: 2, spawnedAt: Date.now() },
-      loop: defaultLoopOrigin('run'), mergeStrategy: 'synthesize', model: 'local/fork',
+      loop: defaultLoopOrigin('swarm'), mergeStrategy: 'synthesize', model: 'local/fork',
     });
 
     await head.run();

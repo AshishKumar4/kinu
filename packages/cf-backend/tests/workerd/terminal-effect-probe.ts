@@ -155,6 +155,8 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
       now: () => Date.now() + this.clockSkewMs,
       fault: () => this.fault,
       transaction: (body) => this.ctx.storage.transactionSync(body),
+      turnIsLive: () => false,
+      settled: async () => {},
       // Arms before replaying: a one-shot alarm must not be consumed with the suffix uncarried.
       // Soonest wins: core arms again after the pass at a later instant, which would push the wake past a due row.
       scheduleRetry: async (atMs) => {

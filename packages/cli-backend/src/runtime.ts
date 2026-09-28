@@ -25,7 +25,7 @@ import {
   type ParentWorkspaceHandle, type ParentRpcWrite,
   DefaultExecutionRouter, createInlineExecutor,
   withMountTable, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
-  withApprovalGatedShell, createShellSession, shellCwd, holdsGrant,
+  withApprovalGatedShell, withApprovalGatedFiles, createShellSession, shellCwd, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
   resolveRoutingProfile, createRoutedModelLane,
@@ -33,6 +33,7 @@ import {
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
   type WorkspaceActor,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, nanoid, SPILL_DIRS, unsandboxedCommandEnvironment,
+  isSubordinateOrigin,
 } from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -54,7 +55,7 @@ import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
-import { createCwdPlaneVFS } from './host-mount';
+import { createCwdPlaneVFS, directoryFileReach } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { agentViewMount, createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
 import { dotenvLoadedNames } from './dotenv-provenance';
@@ -100,6 +101,8 @@ export type CLIRuntimeConfig = CLIRuntimeOptions & LocalActorConfig;
  */
 export interface CLIRuntime extends AgentRuntime {
   filesForActor?: (actor: ActorHandle) => Promise<SessionFilePlane>;
+  /** Gates shells and tool files, a head's too. */
+  approvalPolicy: ShellApprovalPolicy;
   setApprovalDeferrals?(channel: DeferredApprovalChannel | null): void;
   setModelCallSink?(sink: ModelCallSink | null): void;
   /** Lifecycle sink bound beside {@link setModelCallSink}. */
@@ -199,9 +202,9 @@ function adaptMemory(store: MemoryStore, vfs: VFS & Pick<VfsNativeReads, 'readRa
 /** Heads, nodes and branches are named by storage key: roster names are not
  *  unique across expansions. */
 function actorFacetName(record: WorkspaceActor): string {
-  if (record.kind === 'main') return MAIN_AGENT;
+  if (record.origin === 'system') return MAIN_AGENT;
 
-  if (record.kind === 'subordinate') return subordinateAgentName(record.name);
+  if (isSubordinateOrigin(record.origin)) return subordinateAgentName(record.name);
 
   return headAgentName(record.storageKey);
 }
@@ -371,7 +374,7 @@ export function createCLIRuntime(
     get deferrals() { return approvalDeferrals ?? undefined; },
   };
 
-  const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints, approvalPolicy) : agentStateVfs;
+  const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints) : agentStateVfs;
 
   // A directory-bound shell runs on the user's machine and may mutate the tree, so it
   // snapshots first; the in-SQLite shell is the agent's own and serves the mount table.
@@ -441,11 +444,14 @@ export function createCLIRuntime(
   ]);
 
   if (cwd === null) workspace.mountTable(agentVfs);
+  // Only the agent's tools: the shell and the owner's views keep `agentVfs`.
+  const toolFiles = withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(cwd, agentVfs), approvalPolicy);
 
   const limits = hostResourceLimits();
 
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
-    vfs: agentVfs,
+    vfs: toolFiles,
+    files: agentVfs,
     memory,
     craftStore,
     shell,
@@ -468,6 +474,7 @@ export function createCLIRuntime(
     execRaw,
     vfs: agentVfs,
     agentStateVfs,
+    toolFiles,
     llm,
     executor: createSandboxedExecutor(),
     schedule,
@@ -480,6 +487,7 @@ export function createCLIRuntime(
   }), {
     stores,
     filesForActor,
+    approvalPolicy,
     setApprovalDeferrals: (channel: DeferredApprovalChannel | null) => { approvalDeferrals = channel; },
     setChildContext: (resolver: ChildContextResolver | null) => { childContext = resolver; },
     cwd,
@@ -529,7 +537,7 @@ export async function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLI
   const plane = await workspace.nodeRuntime(home, actor.actor, actor);
 
   return Object.assign(actor, {
-    storage: { ...actor.storage, vfs: plane.storage.vfs }, memory: workspace.memory, craftStore: workspace.craftStore,
+    storage: { ...actor.storage, vfs: plane.storage.vfs }, toolFiles: plane.toolFiles, memory: workspace.memory, craftStore: workspace.craftStore,
     executionRouter: plane.executionRouter, shell: plane.shell, checkpoints: workspace.checkpoints, cwd: workspace.cwd ?? null,
     nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell,
   });
@@ -574,7 +582,7 @@ export async function buildLocalActorRuntime(
   const binding = bindLocalActorReference(parent.actor, bound.reference);
   adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
 
-  const run = binding.kind === 'run';
+  const run = binding.origin === 'swarm';
 
   if (run && swarmSeat === true) {
     if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
@@ -595,7 +603,7 @@ export async function buildLocalActorRuntime(
     return await buildCLIHeadRuntime(opts);
   }
 
-  throw new KinuError('denied', `A ${binding.kind} actor's runtime is not built by this workspace's own session.`);
+  throw new KinuError('denied', `A ${binding.origin} actor's runtime is not built by this workspace's own session.`);
 }
 
 
@@ -617,7 +625,7 @@ async function buildCLIHeadRuntime(
   const { parentRuntime: parent } = opts;
   const sql = parent.storage.sql;
 
-  if (opts.actorBinding.kind !== 'run') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
+  if (opts.actorBinding.origin !== 'swarm') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
   const physicalName = headAgentName(actor.storageKey);
 
@@ -648,7 +656,8 @@ async function buildCLIHeadRuntime(
   const executionRouter = new DefaultExecutionRouter();
 
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
-    vfs, memory: parent.memory, craftStore: parent.craftStore, shell, sql,
+    vfs: withApprovalGatedFiles(vfs, 'workspace', directoryFileReach(parent.cwd ?? null, null), parent.approvalPolicy), files: vfs,
+    memory: parent.memory, craftStore: parent.craftStore, shell, sql,
     // The same machine the parent's shell runs on.
     filesOwner: parent.cwd ? 'user' : 'agent',
     toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
@@ -709,6 +718,7 @@ async function buildCLIHeadRuntime(
     // programs; with the default, the parent would execute its head's source.
     scaffoldPath: actorScaffoldPath(opts.actorBinding),
     actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, agentStateVfs,
+    toolFiles: withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(parent.cwd ?? null, agentVfs), parent.approvalPolicy),
     workspaceIsMachine: parent.workspaceIsMachine,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     memory: parent.memory, craftStore: parent.craftStore,

@@ -30,7 +30,6 @@ export function subordinateBirthContext(
   return messages === undefined ? undefined : { kind: 'fork', messages };
 }
 
-/** The lifetime a task-lifetime hire is listed under. */
 export const TEMPORARY_LIFETIME = 'task';
 
 export interface TemporaryRunRequest {

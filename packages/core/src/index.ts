@@ -397,7 +397,7 @@ export {
 
 export { toolPairingGaps } from './session/tool-pairing';
 
-export { STAGED_CONTEXT_DEFERRALS, type StagedContextDeferral, type ContextProposalClosure, type ContextEditEffect, type ContextEventRecorder, type ContextEditEvent } from './types/context-plane';
+export { type StagedContextDeferral, type ContextProposalClosure, type ContextEditEffect, type ContextEventRecorder, type ContextEditEvent } from './types/context-plane';
 
 export { SessionHistory, type SessionHistoryDependencies } from './session/history';
 
@@ -571,7 +571,7 @@ export { drainAssignments, type AdmittedAssignment, type DrainAssignmentsOptions
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
 export {
   openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, registerLocalNode, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
@@ -657,7 +657,7 @@ export {
   type TemporaryRunRequest,
 } from './subordinates/temporary';
 
-export { DELEGATED_TURN_SLOTS, DelegatedTurnRunners, type DelegatedTurnRunnerDeps } from './subordinates/delegated-turns';
+export { DelegatedTurnRunners, type DelegatedTurnRunnerDeps } from './subordinates/delegated-turns';
 
 // The depth cap is derived per child, never stated by one.
 export {
@@ -1033,7 +1033,7 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 
 export {
   DefaultExecutionRouter,
-  withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach,
+  withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach,
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
@@ -1529,6 +1529,14 @@ export {
   type SecretPattern,
   type SecretFinding,
   type SecretSighting,
+  boundWriteOf,
+  performBoundWrite,
+  ParkedWriteFiles,
+  type ParkedWriteFileOps,
+  type ApprovalContent,
+  type BoundFileWrite,
+  type WriteSubject,
+  type ParkedWrites,
 } from './safety/index';
 
 export {
@@ -1641,8 +1649,10 @@ export {
 
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
+export { flushSignal, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal } from './orchestrator/flush-cadence';
+
 export {
-  ChatSession, turnInputMessage, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
+  ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
@@ -1965,6 +1975,8 @@ export type {
 
 export { buildPendingActions, needsTheUser } from './read-models/pending-actions';
 
+export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
+
 export {
   listInstructionApprovals, readInstructionSource, openInstructionSource,
   previewInstruction, gatherApprovableInstructions,
@@ -2035,7 +2047,6 @@ export {
   DEFAULT_ADVISOR_MIN_SEVERITY,
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
-  ADVISOR_LANE_FIBER,
   reviewRecordedTurn,
   AdvisorRecoverySnapshotSchema,
   buildAdvisorPrompt,
@@ -2107,7 +2118,7 @@ export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
   type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
-  type TabPresence, ownerFacingSubordinate,
+  type TabPresence, evolutionHelper, ownerFacingSubordinate,
 } from './protocol';
 
 export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';

@@ -190,7 +190,8 @@ describe('the delegation depth cap', () => {
   });
 });
 
-const initialRosterEntry: SubordinateRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Map the market.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null };
+/** Unborn: until birth confirms an actor, the seed says who asked for the hire. */
+const initialRosterEntry = { name: 'researcher', actorReference: null, birth: { creationId: 'c-researcher', seed: { name: 'researcher', displayName: 'Researcher', nameOrigin: 'user', role: 'researcher', mission: 'Map the market.', lifetime: 'durable', origin: 'agent' }, assignment: null }, deleteRequested: false, status: 'working', currentTask: 'Map the market.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null } satisfies Omit<SubordinateRosterEntry, 'origin'>;
 
 describe('workspace subordinate roster', () => {
   test('owns closed status transitions and can restore an exact snapshot', () => {
@@ -245,7 +246,7 @@ describe('workspace subordinate roster', () => {
   test('a durable hire whose turn ended reads idle, and keeps the assignment it may still answer', () => {
     const roster = makeRosterStore();
     roster.ensureSchema();
-    roster.create({ ...initialRosterEntry, name: 'hello', createdBy: 'user', status: 'idle', currentTask: null });
+    roster.create({ ...initialRosterEntry, name: 'hello', status: 'idle', currentTask: null });
 
     roster.assign('hello', 'Say hello to the team.');
     roster.applyReport('hello', 'progress', 'report_tool', NOW);
@@ -323,7 +324,9 @@ interface TeamHarness {
 const HARNESS_OWN_MISSION = 'Keep the release train moving.';
 
 function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarness {
-  const roster = makeRosterStore();
+  // One database: a hire's origin is read from its actor row, beside the roster.
+  const actorDb = new Database(':memory:');
+  const roster = makeRosterStore(actorDb);
   roster.ensureSchema();
   const calls: string[] = [];
   const assignments: Array<Parameters<SubordinateRuntime['assign']>[1]> = [];
@@ -337,10 +340,7 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
     if (failures.has(operation)) throw new KinuError('unavailable', `${operation} failed`);
   };
 
-  const actorDb = new Database(':memory:');
-  const actorSql = makeTagged(actorDb);
-  createTestActor(actorSql, makeExecRaw(actorDb), 'team-workspace', 'main');
-  const directory = new WorkspaceActorDirectory(actorSql, { workspaceId: 'team-workspace', ownerUserId: '' });
+  const directory = new WorkspaceActorDirectory(makeTagged(actorDb), { workspaceId: 'subordinates-workspace', ownerUserId: '' });
 
   const runtime: SubordinateRuntime = {
     async spawn(input) {
@@ -348,10 +348,10 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
       calls.push(`spawn:${input.name}:${input.mission}`);
       fail('spawn');
 
-      return directory.apply(directory.main(), [], { action: 'register', creationId: input.creationId, name: input.name, kind: 'subordinate', lifetime: input.lifetime }).reference;
+      return directory.apply(directory.main(), [], { action: 'register', creationId: input.creationId, name: input.name, origin: input.origin, lifetime: input.lifetime }).reference;
     },
     async cancelBirth(input) {
-      const entry = directory.apply(directory.main(), [], { action: 'cancelCreation', creationId: input.creationId, name: input.name, kind: 'subordinate', lifetime: input.lifetime });
+      const entry = directory.apply(directory.main(), [], { action: 'cancelCreation', creationId: input.creationId, name: input.name, origin: input.origin, lifetime: input.lifetime });
 
       if (entry.state !== 'deleted') directory.apply(directory.main(), [], { action: 'release', name: input.name, reference: entry.reference });
 
@@ -420,10 +420,10 @@ describe('team action routing', () => {
 
     expect(await h.team.create({ role: 'researcher', mission: 'Understand the domain.' })).toEqual({
       name: 'researcher-a1b2c3', displayName: 'Researcher',
-      subordinate: { name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+      subordinate: { name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null },
     });
     expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
-      createdBy: 'user', status: 'idle', currentTask: null,
+      origin: 'user', status: 'idle', currentTask: null,
     });
     expect(h.seeds[0]).toMatchObject({
       displayName: 'Researcher', nameOrigin: 'auto',
@@ -442,7 +442,7 @@ describe('team action routing', () => {
 
     const created = await h.team.create({});
 
-    expect(created.subordinate).toEqual({ name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null });
+    expect(created.subordinate).toEqual({ name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null });
     expect(created.displayName).toBe(codenameFor('researcher-a1b2c3'));
     expect(h.seeds).toEqual([{
       creationId: expect.any(String), name: 'researcher-a1b2c3',
@@ -451,6 +451,7 @@ describe('team action routing', () => {
       mission: HARNESS_OWN_MISSION,
       role: 'task',
       lifetime: 'durable',
+      origin: 'user',
     }]);
     expect(h.assignments).toEqual([]);
     expect(h.tasks).toEqual([]);
@@ -587,7 +588,7 @@ describe('team action routing', () => {
     });
     expect(await h.team.list()).toEqual([{
       name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false,
-      createdBy: 'orchestrator', status: 'working', currentTask: 'Map the market.',
+      origin: 'agent', status: 'working', currentTask: 'Map the market.',
       createdAt: 1_700_000_000_000, dismissedAt: null,
       // A durable hire's row names its mission's event id, which its report will cite.
       lifetime: 'durable', taskEventId: 'evt-starts_now',
@@ -679,7 +680,7 @@ describe('team action routing', () => {
   test('assign and message refuse a task-lifetime row before trying anything', async () => {
     const h = makeTeamHarness();
     // A task agent answers its one brief and retires; more work belongs to a durable hire.
-    h.roster.create({ name: 'ask-auditor-a1b2c3', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
+    h.roster.create({ name: 'ask-auditor-a1b2c3', actorReference: null, birth: { creationId: 'c-auditor', seed: { name: 'ask-auditor-a1b2c3', displayName: 'Auditor', nameOrigin: 'auto', role: 'auditor', mission: 'Is the migration reversible?', lifetime: 'task', origin: 'agent' }, assignment: null }, deleteRequested: false, status: 'working', currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
     const before = h.roster.get('ask-auditor-a1b2c3');
 
     const attempts: Array<() => Promise<object>> = [
@@ -727,11 +728,13 @@ describe('team action routing', () => {
   });
 
   test('publishes roster transitions before invoking the corresponding facet action', async () => {
-    const roster = makeRosterStore();
+    // One database: the hire's origin is read from the actor the spawn returns.
+    const actorDb = new Database(':memory:');
+    const roster = makeRosterStore(actorDb);
     roster.ensureSchema();
     const observed: Array<{ operation: string; roster: SubordinateRosterEntry | null }> = [];
-    const actorDb = new Database(':memory:');
-    const actor = createTestActor(makeTagged(actorDb), makeExecRaw(actorDb), 'transition-workspace', 'main');
+    const directory = new WorkspaceActorDirectory(makeTagged(actorDb), { workspaceId: 'subordinates-workspace', ownerUserId: '' });
+    const actor = directory.create({ parent: directory.main(), name: 'researcher-a1b2c3', creationId: 'c-transition', origin: 'agent', lifetime: 'durable' });
 
     const observe = (operation: 'assign' | 'message', name: string) => {
       observed.push({ operation, roster: roster.get(name) });

@@ -79,8 +79,8 @@ let parityHold: { readonly gate: HeldGate; readonly parkAt: 'first' | 'partial' 
 /** The gate a parity call is parked on now, apart from the arm so release reaches it after consumption. */
 let parityParked: HeldGate | null = null;
 
-/** The wake proof's hold (`/wake/hold`): `reply` parks the reply step carrying the detach handle;
- *  `settle` parks the turn-end extension over `/wake/wait`, inside the just-closed turn's settle. */
+/** The wake proof's hold (`/wake/hold`): `start` parks before a turn's first step; `reply` parks the reply step
+ *  carrying the detach handle; `settle` parks inside the just-closed turn's settle. */
 let wakeHold: { readonly where: WakeHoldPlacement; readonly gate: HeldGate } | null = null;
 
 async function holdWakeWindow(where: WakeHoldPlacement): Promise<void> {
@@ -591,7 +591,7 @@ async function probeControl(url: URL, request: Request): Promise<Response> {
   }
 
   if (url.pathname === '/wake/wait' && request.method === 'GET') {
-    await holdWakeWindow('settle');
+    await holdWakeWindow(v.parse(WakeHoldPlacementSchema, url.searchParams.get('at')));
 
     return Response.json({ ok: true });
   }

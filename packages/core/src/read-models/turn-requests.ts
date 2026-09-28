@@ -3,7 +3,9 @@ import type { StoredActorClaim } from '../orchestrator/actor-claims';
 import type { RunEvent } from '../events/types';
 import type { AgentStores } from '../state/agent-stores';
 import { PLATFORM_CATALOG } from '../platform-catalog';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settle } from '../obs/effect';
 import type { JsonObject, JsonValue } from '../utils/json';
 
 const PAGE_BYTES = PLATFORM_CATALOG['run_events.page_bytes'].limit.value;
@@ -53,42 +55,46 @@ export function turnRequestIndex(sources: TurnRequestSources, turnId: string): T
   };
 }
 
-export async function turnRequestPage(
+export function turnRequestPage(
   sources: TurnRequestSources,
   at: { readonly turnId: string; readonly epoch: number; readonly revision: number; readonly from?: number },
 ): Promise<TurnRequestPage> {
-  const { requests, messages: store } = sources.history;
-  const request = requests.forTurn(at.turnId).find((row) => row.epoch === at.epoch && row.revision === at.revision);
+  return settle(Effect.gen(function* () {
+    const { requests, messages: store } = sources.history;
+    const request = requests.forTurn(at.turnId).find((row) => row.epoch === at.epoch && row.revision === at.revision);
 
-  if (request === undefined) throw new KinuError('missing', `turn ${at.turnId} has no request ${String(at.epoch)}-${String(at.revision)}`);
-  const references = requests.messagesOf(request);
-  const from = Math.max(0, Math.min(at.from ?? 0, references.length));
-  const head = from === 0 ? await requestHead(sources, request) : null;
-  const page: JsonObject[] = [];
-  let bytes = head === null ? 0 : byteLength(head);
-  let next = from;
+    if (request === undefined) return yield* new KinuError('missing', `turn ${at.turnId} has no request ${String(at.epoch)}-${String(at.revision)}`);
+    const references = requests.messagesOf(request);
+    const from = Math.max(0, Math.min(at.from ?? 0, references.length));
+    const head = from === 0 ? yield* Effect.promise(() => requestHead(sources, request)) : null;
+    const page: JsonObject[] = [];
+    let bytes = head === null ? 0 : byteLength(head);
+    let next = from;
 
-  // The first message always ships.
-  for (; next < references.length; next += 1) {
-    const reference = references[next];
+    // The first message always ships.
+    for (; next < references.length; next += 1) {
+      const reference = references[next];
 
-    if (reference === undefined) break;
-    const message = await store.projection(reference);
-    const size = byteLength(message);
+      if (reference === undefined) break;
+      const message = yield* Effect.promise(() => store.projection(reference));
+      const size = byteLength(message);
 
-    if (page.length > 0 && bytes + size > PAGE_BYTES) break;
-    page.push(message);
-    bytes += size;
-  }
+      if (page.length > 0 && bytes + size > PAGE_BYTES) break;
+      page.push(message);
+      bytes += size;
+    }
 
-  return {
-    request: { requestId: request.id, runId: request.runId, epoch: request.epoch, revision: request.revision, step: request.step },
-    head,
-    messageCount: references.length,
-    from,
-    messages: page,
-    nextFrom: next < references.length ? next : null,
-  };
+    const answered: TurnRequestPage = {
+      request: { requestId: request.id, runId: request.runId, epoch: request.epoch, revision: request.revision, step: request.step },
+      head,
+      messageCount: references.length,
+      from,
+      messages: page,
+      nextFrom: next < references.length ? next : null,
+    };
+
+    return answered;
+  }));
 }
 
 type StoredRequest = ReturnType<TurnRequestSources['history']['requests']['forTurn']>[number];

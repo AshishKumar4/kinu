@@ -18,7 +18,7 @@ async function addedAgent(): Promise<{ parent: ActorHarness<HarnessOrchestratorA
   const { name } = await parent.agent.createSubordinateAgent();
 
   const row = parent.db.query<{ storage_key: string }, [string]>(
-    "SELECT storage_key FROM workspace_actors WHERE name = ? AND kind = 'subordinate'",
+    "SELECT storage_key FROM workspace_actors WHERE name = ? AND origin IN ('user', 'agent', 'evolution')",
   ).get(name);
 
   if (row === null) throw new Error(`no directory row names ${name}`);

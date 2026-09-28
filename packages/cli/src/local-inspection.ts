@@ -902,8 +902,11 @@ export interface LocalActorRow {
   readonly actorId: string;
   readonly name: string;
   readonly storageKey: string;
-  readonly kind: WorkspaceActor['kind'];
+  readonly origin: WorkspaceActor['origin'];
+  readonly tab: boolean;
+  readonly input: boolean;
   readonly lifetime: WorkspaceActor['lifetime'];
+  readonly evolves: boolean;
   readonly createdAt: number;
   readonly retired: boolean;
 }
@@ -935,8 +938,11 @@ export function listLocalActors(name: string, opts: { readonly retired?: boolean
       actorId: row.actorId,
       name: row.name,
       storageKey: row.storageKey,
-      kind: row.kind,
+      origin: row.origin,
+      tab: row.tab,
+      input: row.input,
       lifetime: row.lifetime,
+      evolves: row.evolves,
       createdAt: row.createdAt,
       retired: row.retiringAt !== null || row.deletedAt !== null,
     }));

@@ -4,7 +4,7 @@ import type { Database } from 'bun:sqlite';
 import { makeSqlExec } from './helpers';
 import { KinuError } from '../src/obs/error';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
-import { WorkspaceActorDirectory, type WorkspaceActor } from '../src/identity/workspace-actors';
+import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { explorationActorKey } from '../src/identity/actor-key';
 import { createActorHost, type ActorHost, type BoundActor } from '../src/state/actor-host';
 import type { AgentTracing } from '../src/obs/agent-tracing';
@@ -51,7 +51,7 @@ export interface HostedSeats {
   readonly broadcasts: readonly BroadcastEvent[];
   readonly enqueued: readonly ProgrammaticTurn[];
   /** The seat one logical actor's turn runs on; idempotent per name, so a re-hosted node keeps its actor. */
-  seat(name: string, kind: Exclude<WorkspaceActor['kind'], 'main'>): Promise<HostedNodeSeat>;
+  seat(name: string, origin: 'agent' | 'swarm'): Promise<HostedNodeSeat>;
   /** `hostNode` over these seats: one actor per node id, all over the one database. */
   readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
 }
@@ -144,7 +144,7 @@ export function hostedSeatsOver(input: {
 
   const seat = async (
     name: string,
-    kind: Exclude<WorkspaceActor['kind'], 'main'>,
+    origin: 'agent' | 'swarm',
   ): Promise<HostedNodeSeat> => {
     const known = seats.get(name);
 
@@ -154,10 +154,10 @@ export function hostedSeatsOver(input: {
     // the caller's name, so re-seating a node is the same admitted creation.
     const handle = directory.create({
       parent,
-      name: kind === 'subordinate' ? name : explorationActorKey(name),
+      name: origin === 'agent' ? name : explorationActorKey(name),
       creationId: `creation-${name}`,
-      kind,
-      lifetime: kind === 'subordinate' ? 'durable' : 'task',
+      origin,
+      lifetime: origin === 'agent' ? 'durable' : 'task',
     });
 
     const actor = await host.acquire({
@@ -189,7 +189,7 @@ export function hostedSeatsOver(input: {
     broadcasts,
     enqueued,
     seat,
-    hostNode: (node) => seat(node.nodeId, 'run'),
+    hostNode: (node) => seat(node.nodeId, 'swarm'),
   };
 }
 

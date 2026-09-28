@@ -193,8 +193,8 @@ export function createTemporaryAgentPort(deps: {
       if (request.lane) deps.roster.helpers.record(name, request.lane, startedAt);
       deps.roster.create({
         name, actorReference: null, deleteRequested: false,
-        birth: { creationId, assignment, seed: { name, displayName: codenameFor(name), nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME } },
-        createdBy: request.lane ? 'evolution' : 'orchestrator', status: 'working', currentTask: task, createdAt: startedAt,
+        birth: { creationId, assignment, seed: { name, displayName: codenameFor(name), nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME, origin: request.lane ? 'evolution' : 'agent' } },
+        status: 'working', currentTask: task, createdAt: startedAt,
         dismissedAt: null, lifetime: TEMPORARY_LIFETIME, taskEventId: null,
       });
 

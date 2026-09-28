@@ -223,6 +223,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // (`state/actor-host.ts`), so it is not a plane member.
     // Only cf wires the deferral channel; the table is shared schema.
     deferred_approvals: EVERYWHERE,
+    deferred_approval_hits: EVERYWHERE,
     device_consent_requests: EVERYWHERE,
     slates: EVERYWHERE,
     slate_versions: EVERYWHERE,

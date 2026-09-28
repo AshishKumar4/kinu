@@ -22,10 +22,11 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
-- **Background work a provider refuses for good stops retrying.** A turn's after-work (memory compression, naming the chat, prompt tuning and the like) whose model call is answered with a permanent refusal, such as a 404 from an AI Gateway route that no longer exists, is now recorded as failed after one attempt, shown once in the Activity log with the status the provider gave, and no longer wakes the workspace every minute to try again. Rate limits, timeouts and server errors are still retried.
+- **Background work a provider refuses for good stops retrying.** A turn's after-work (memory compression, naming the chat, prompt tuning and the like) whose model call is answered with a permanent refusal, such as a 404 from an AI Gateway route that no longer exists, ends after one attempt, shown once in the Activity log with the status the provider gave, and no longer wakes the workspace every minute to try again. The same goes for a request the provider refuses as malformed. Rate limits, timeouts, server errors and refusals you can fix yourself (an expired key, an empty balance, a denied permission) are still retried.
 
 ### Changed
 
+- **Evolution's helpers show up in Work, and a promoted prompt change reads as new.** The refiner a self-improvement lane hires has no chat tab; the web's Work tab now lists it under Now and the TUI's Agent Hub under Work, and opening it shows its kept conversation. A prompt-section change dated by its proposal could hide a promotion that happened after you last looked; the changelog now dates it by when it was promoted or rolled back. This is a reset deployment: prompt_section_versions gains a column.
 - **`/compact` folds the conversation when you run it.** It used to arm a fold for your next message; it now summarizes right away, shows its progress in the TUI, and the context number drops as soon as it finishes. A message you send meanwhile waits for it. If the summary fails you see why, and the conversation is left exactly as it was, with nothing armed to fire later. The fold keeps your last two exchanges, and it now stays in place on the turns that follow instead of being dropped one turn later.
 - **The TUI and the web show the same context number, and a reload keeps it.** The TUI header and the web's Context block now read one recorded number: the prompt size the provider reported for the latest step, or the admission gate's measure of a turn's request when that is newer. Opening or reloading either one reads it back without asking a model, and it updates live during a turn. A new conversation, `/clear` and a model or role switch measure the next request once, before any turn, so the number is there from the start and never shows the conversation you just left.
 - **A compacted conversation re-summarizes its oldest turns once.** The first line of a stored summary no longer carries a dash, so a summary written before this release no longer counts as one: the next compaction writes it again from the turns, without the old summary as its starting point. This happens once per conversation, and later summaries build on each other as before.
@@ -730,6 +731,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- Answering "always" to a parked command grants the rules it tripped even when the wording of the approval reason has changed since it parked, and the agent is told those rules by name. Before, both were read back out of the reason text, and a rewording left the grant empty.
+- **`kinu exec` is no longer refused while the local daemon runs scheduled work.** The daemon hands the conversation back after every pass and takes it again for the next. A `kinu exec` that tried to take over in that moment was refused with "another interactive driver … claimed this conversation first". It now decides again when the conversation changed hands under it, so your turn wins over the daemon's.
 - **`kinu exec` is no longer refused while the local daemon runs scheduled work.** The daemon hands the conversation back after every pass and takes it again for the next. A `kinu exec` that tried to take over in that moment was refused with "another interactive driver … claimed this conversation first". It now decides again whenever the conversation changed hands under it, so your turn wins over the daemon's, and a refusal names the driver that actually holds it.
 - **Self-evolution stays out of your conversation.** The helper that reviews recent turns for prompt and skill edits answered the main agent when its host restarted mid-review: the main agent woke in Plan mode, read the proposed edits as a task, and could file them as a plan for you to approve. Its answer now goes back to the review that asked for it, even across a restart, and is never shown to the main agent. A turn the harness started (an event, a helper's report) can no longer submit a plan, so a plan only comes from a turn you wrote or its own feedback. Helpers started by self-evolution are listed as `createdBy: 'evolution'`. An answer that arrives while its review is not running wakes that review on its own, instead of waiting for your next message. After the reset deployment, the helper table starts empty: helpers started before it keep reading as `orchestrator`. An edit that fails to apply is refused on its own with its reason, and the edits that did land stay listed as applied. A review that fails, at any step, records why and waits for your next message or decision instead of retrying on a timer. On this machine an answer that arrives while another process drives the workspace is picked up by that process's next pass.
 - **A workspace answers whatever reaches it first.** Its tables are made when the workspace object is created, and it finishes starting before it answers any call, not only a web request. So a read that arrives first from another part of Kinu (the account's spend total, an owner's inspection of a helper) no longer fails, or answers from a half-started workspace, when the workspace has not been opened since it last slept.
@@ -810,6 +813,18 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - **Long conversations no longer slow down turn by turn.** Each turn re-read the conversation's whole membership
   list several times, so a turn's database reads grew with the conversation (14,432 rows at 300 turns). A turn now
   reads only what it adds.
+
+- **The agent's file tools ask before replacing your files.** Its `file` tool and its programs' `workspace.*` and
+  `device.writeFile` calls overwrote files on your connected machine (`/pc`) and your Drive (`/shared`) without
+  asking, while the shell asked before the same change. A new file there is still the agent's to create; replacing
+  one now waits for you, as does any change outside a CLI workspace's directory, which the tools can now reach by its
+  absolute path. With nobody there to answer, the hosted workspace queues the replacement with its exact bytes:
+  approving writes those bytes unless the file changed since the ask, and "always" lets the next ones through. Reads
+  stay unasked, except a file that looks like a secret (`.env`, `.npmrc`, credentials), which follows the rule `cat`
+  does. A new file the file tool writes on a connected machine no longer fails on the machine's "no such file".
+  In Needs you, "Show the change" draws a queued replacement as the Changes tab draws a diff (binary or very large
+  content as its sizes), and says when the file changed since the ask. A queued replacement's bytes are deleted once
+  it is approved and written, denied, or its denial expires.
 
 - **A workspace's card shows the owner's words, never Kinu's own.** A new workspace's card showed the prompt Kinu
   starts its first turn with as the owner's latest task, and a background event after the owner's message did the

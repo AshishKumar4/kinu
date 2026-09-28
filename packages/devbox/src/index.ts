@@ -1,6 +1,6 @@
 /** Export a type only when a caller must write its name. */
 
-export { Devbox, devboxSyncHandlers } from './devbox';
+export { Devbox, devboxSyncHandlers, type UntimedResult } from './devbox';
 
 export type { RestoreClockPhase, RestoreStatus } from './restoration';
 

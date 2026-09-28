@@ -4,7 +4,10 @@
 // Private because reclaim keys on task text; search_nodes reach their owner through this row's root_id.
 
 import { modelMessageSchema, type ModelMessage } from 'ai';
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { settleSync } from '../obs/effect';
+import { jsonText, type JsonValue } from '../utils/json';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { WorkMode } from '../types/turn';
@@ -81,6 +84,10 @@ export function initMctsSearchTable(execRaw: RawSqlExec): void {
 
 const SETTLED_RETENTION_MS = 24 * 60 * 60 * 1000;
 
+function storedJson(rootId: string, configJson: string): Effect.Effect<JsonValue> {
+  return jsonText(configJson, `swarm run ${rootId}: its ledger config_json will not parse`);
+}
+
 export class MctsSearchStore {
   private readonly actorId: string;
 
@@ -121,22 +128,14 @@ export class MctsSearchStore {
   }
 
   /** A swarm run's initial expansion budget from its frozen config; unparseable throws rather than reading zero. */
-  private storedBudget(rootId: string, configJson: string): number {
-    let raw: unknown;
+  private storedBudget(rootId: string, configJson: string): Effect.Effect<number> {
+    return Effect.flatMap(storedJson(rootId, configJson), (raw) => {
+      const parsed = v.safeParse(v.object({ budget: v.number() }), raw);
 
-    try {
-      raw = JSON.parse(configJson);
-    } catch (error) {
-      throw new Error(`swarm run ${rootId}: its ledger config_json will not parse`, { cause: error });
-    }
-
-    const parsed = v.safeParse(v.object({ budget: v.number() }), raw);
-
-    if (!parsed.success) {
-      throw new Error(`swarm run ${rootId}: its ledger config_json carries no budget`);
-    }
-
-    return parsed.output.budget;
+      return parsed.success
+        ? Effect.succeed(parsed.output.budget)
+        : Effect.die(new Error(`swarm run ${rootId}: its ledger config_json carries no budget`));
+    });
   }
 
   private childrenOf(rootId: string): number {
@@ -163,47 +162,36 @@ export class MctsSearchStore {
       WHERE r.actor_id=${this.actorId} AND r.status='running' AND r.task=${task}
       ORDER BY r.updated_at DESC, r.created_at DESC, r.root_id DESC`;
 
-    return rows.map((row) => ({
+    return settleSync(Effect.forEach(rows, (row) => Effect.map(this.storedBudget(row.root_id, row.config_json), (budget): ResumableSwarm => ({
       rootId: row.root_id,
       iteration: row.children,
-      budget: Math.max(0, this.storedBudget(row.root_id, row.config_json) - row.children),
+      budget: Math.max(0, budget - row.children),
       epoch: row.epoch,
-    }));
+    }))));
   }
 
   private readStoredSwarmConfig(
     rootId: string,
-  ): v.InferOutput<typeof StoredSwarmConfigSchema> | null {
+  ): Effect.Effect<v.InferOutput<typeof StoredSwarmConfigSchema> | null> {
     const row = this.sql<{ config_json: string }>`
       SELECT config_json FROM mcts_search_runs
       WHERE actor_id = ${this.actorId} AND root_id = ${rootId} LIMIT 1`[0];
 
-    if (!row) return null;
-    let raw: unknown;
+    if (!row) return Effect.succeed(null);
 
-    try {
-      raw = JSON.parse(row.config_json);
-    } catch (error) {
-      throw new Error(`swarm run ${rootId}: its ledger config_json will not parse`, { cause: error });
-    }
-
-    try {
-      return v.parse(StoredSwarmConfigSchema, raw);
-    } catch (error) {
-      throw new Error(`swarm run ${rootId}: its ledger config_json is not an object`, { cause: error });
-    }
+    return Effect.flatMap(storedJson(rootId, row.config_json), (raw) => Effect.try({
+      try: () => v.parse(StoredSwarmConfigSchema, raw),
+      catch: (cause) => ({ cause }),
+    }).pipe(Effect.catch((failed) => Effect.die(new Error(`swarm run ${rootId}: its ledger config_json is not an object`, { cause: failed.cause })))));
   }
 
   readSwarmProfile(rootId: string): SwarmProfileSnapshot | null {
-    const stored = this.readStoredSwarmConfig(rootId);
-
-    return stored?.profile === undefined ? null : validateSwarmProfileSnapshot({ value: stored.profile });
+    return settleSync(Effect.map(this.readStoredSwarmConfig(rootId), (stored) =>
+      (stored?.profile === undefined ? null : validateSwarmProfileSnapshot({ value: stored.profile }))));
   }
 
   readSwarmOriginContext(rootId: string): readonly ModelMessage[] | null {
-    const stored = this.readStoredSwarmConfig(rootId);
-
-    return stored?.originContext ?? null;
+    return settleSync(Effect.map(this.readStoredSwarmConfig(rootId), (stored) => stored?.originContext ?? null));
   }
   /** Whether any swarm row still claims a live executor; covers headless `unit:'thought'` searches. */
   hasRunningSwarms(): boolean {
@@ -290,13 +278,13 @@ export class MctsSearchStore {
 
     if (!r) return null;
 
-    return { status: readStatus(r.status), ...this.swarmProgress(r.root_id, r.config_json), epoch: r.epoch };
+    return settleSync(Effect.map(this.swarmProgress(r.root_id, r.config_json), (progress) => ({ status: readStatus(r.status), ...progress, epoch: r.epoch })));
   }
 
-  private swarmProgress(rootId: string, configJson: string) {
+  private swarmProgress(rootId: string, configJson: string): Effect.Effect<{ iteration: number; budget: number }> {
     const children = this.childrenOf(rootId);
 
-    return { iteration: children, budget: Math.max(0, this.storedBudget(rootId, configJson) - children) };
+    return Effect.map(this.storedBudget(rootId, configJson), (budget) => ({ iteration: children, budget: Math.max(0, budget - children) }));
   }
 
 
@@ -308,14 +296,14 @@ export class MctsSearchStore {
       FROM mcts_search_runs WHERE actor_id=${this.actorId}
       ORDER BY updated_at DESC LIMIT ${limit}`;
 
-    return rows.map((r) => ({
+    return settleSync(Effect.forEach(rows, (r) => Effect.map(this.swarmProgress(r.root_id, r.config_json), (progress): MctsSearchRunSummary => ({
       rootId: r.root_id,
       task: r.task,
       status: readStatus(r.status),
-      ...this.swarmProgress(r.root_id, r.config_json),
+      ...progress,
       epoch: r.epoch,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
-    }));
+    }))));
   }
 }

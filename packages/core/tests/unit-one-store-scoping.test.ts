@@ -62,6 +62,7 @@ import {
   initImportedExperienceTable, stageImport, listImportedExperience, bindPendingImports,
 } from '../src/experience/imports';
 import { MissionBudgetLedger, listMissionSpend } from '../src/mission-budget';
+import { initWorkspaceActorTable } from '../src/identity/workspace-actors';
 import { SubordinateRosterStore } from '../src/subordinates/roster';
 import { readSubordinateLiveStatus } from '../src/subordinates/support';
 import { initEventsHubTables } from '../src/events/hub/schema';
@@ -110,6 +111,7 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
   return {
     workspaceIsMachine: false,
     actor,
+    toolFiles: vfs,
     storage: {
       vfs,
       sql: w.sql,
@@ -504,8 +506,8 @@ describe('two actors, one database: deferred_approvals', () => {
       reason: 'destructive', requestedAt: 1,
     };
 
-    a.create(action);
-    b.create(action);
+    a.create(action, []);
+    b.create(action, []);
     expect(w.count('deferred_approvals')).toBe(2);
 
     expect(a.decide('appr-1', 'approved', 5)?.status).toBe('approved');
@@ -783,14 +785,18 @@ describe('two actors, one database: mission_budget', () => {
 describe('two actors, one database: actor_subordinates', () => {
   test('two parents each hire a "reviewer" and neither can dismiss the other\'s', () => {
     const w = world();
+    // A roster row reads its hire's origin from the actor directory, so the table exists.
+    initWorkspaceActorTable(w.execRaw);
     const a = new SubordinateRosterStore(w.exec, w.a);
     const b = new SubordinateRosterStore(w.exec, w.b);
     a.ensureSchema();
     b.ensureSchema();
 
+    // Unborn: the seed says who asked for the hire.
     const entry = {
-      name: 'reviewer', actorReference: null, birth: null, deleteRequested: false,
-      createdBy: 'orchestrator' as const, status: 'idle' as const, currentTask: null,
+      name: 'reviewer', actorReference: null, deleteRequested: false,
+      birth: { creationId: 'c-reviewer', seed: { name: 'reviewer', displayName: 'Reviewer', nameOrigin: 'user' as const, role: 'reviewer', mission: 'review', lifetime: 'durable' as const, origin: 'agent' as const }, assignment: null },
+      status: 'idle' as const, currentTask: null,
       createdAt: 1, dismissedAt: null, lifetime: 'durable' as const, taskEventId: null,
     };
 
@@ -989,7 +995,7 @@ describe('a handle whose validation throws is refused before the statement runs'
       })],
       ['deferred_approvals', () => approvals.create({
         id: 'appr-1', command: 'c', executor: 'e', reason: 'r', requestedAt: 1,
-      })],
+      }, [])],
       ['instruction_approvals', () => new InstructionApprovalStore(
         w.sql, w.revocable, 'scope',
       ).approve('SKILL.md', 'digest')],

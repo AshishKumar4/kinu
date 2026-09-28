@@ -1,5 +1,5 @@
 /**
- * An owed effect whose provider refuses for good ends after one attempt, recorded as failed, with no wake left.
+ * An owed effect whose provider refuses for good ends after one attempt, its row gone, with no wake left.
  * Found on prod: fact compression routed to a dead AI Gateway route answered a plain 404 on every attempt, 203 times.
  */
 import { expect, test } from 'bun:test';
@@ -51,20 +51,21 @@ function ledgerOver(status: number) {
   return { ledger, wakes, rows, activity: () => readActivityLog(sql, actor, 10).map((entry) => [entry.event, entry.detail]) };
 }
 
-test('a gateway 404 ends the owed effect after one attempt and leaves no wake', async () => {
-  const { ledger, wakes, rows, activity } = ledgerOver(404);
+test.each([404, 400, 413, 422])('a gateway %i ends the owed effect after one attempt and leaves no wake', async (status) => {
+  const { ledger, wakes, rows, activity } = ledgerOver(status);
 
   await (await ledger.run('turn-1', [{ name: 'sleep_time', scope: 'm-1', input: {}, lane: 'detached' }])).reported;
 
-  expect(rows()).toEqual([{ status: 'failed', attempts: 1 }]);
+  expect(rows()).toEqual([]);
   expect(ledger.nextRetryAt()).toBeNull();
   // The one arm is the pre-attempt one; the pass that ran the effect armed nothing after it.
   expect(wakes).toEqual([NOW]);
   // Said once, where the owner looks.
-  expect(activity()).toEqual([['terminal_effect_abandoned', 'memory compression failed: the model provider answered HTTP 404, so it is not retried']]);
+  expect(activity()).toEqual([['terminal_effect_abandoned', `memory compression failed: the model provider answered HTTP ${String(status)}, so it is not retried`]]);
 });
 
-test.each([429, 408, 503])('a %i stays owed, with its wake', async (status) => {
+// 401/402/403 are owner-fixable (a key or a top-up), so they replay once fixed.
+test.each([429, 408, 503, 401, 402, 403])('a %i stays owed, with its wake', async (status) => {
   const { ledger, rows, activity } = ledgerOver(status);
 
   await (await ledger.run('turn-1', [{ name: 'sleep_time', scope: 'm-1', input: {}, lane: 'detached' }])).reported;

@@ -62,7 +62,7 @@ export interface SubordinateRosterEntry {
 	displayName: string;
 	role: string;
 	nameOrigin: "user" | "auto";
-	createdBy: "orchestrator" | "user" | "evolution";
+	origin: "user" | "agent" | "evolution";
 	lifetime: "durable" | "task";
 	status: SubordinateStatus;
 	currentTask: string | null;
@@ -71,8 +71,12 @@ export interface SubordinateRosterEntry {
 }
 
 /** Evolution and one-question helpers get no tab or list row. */
-export function ownerFacingSubordinate(entry: Pick<SubordinateRosterEntry, "createdBy" | "lifetime">): boolean {
-	return entry.createdBy !== "evolution" && entry.lifetime === "durable";
+export function ownerFacingSubordinate(entry: Pick<SubordinateRosterEntry, "origin" | "lifetime">): boolean {
+	return !evolutionHelper(entry) && entry.lifetime === "durable";
+}
+
+export function evolutionHelper(entry: Pick<SubordinateRosterEntry, "origin">): boolean {
+	return entry.origin === "evolution";
 }
 
 /** A task assignment or report mirrored into the main chat as a linked card. */

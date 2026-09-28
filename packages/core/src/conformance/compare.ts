@@ -133,7 +133,6 @@ const ActionEnumSchema = v.object({
   }),
 });
 
-/** The `action` enum in the JSON Schema a provider is sent. */
 export function observedActionEnum(sent: JSONSchema7 | undefined): Set<string> {
   const parsedAction = v.safeParse(ActionEnumSchema, sent);
 

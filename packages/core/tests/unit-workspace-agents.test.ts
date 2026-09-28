@@ -29,11 +29,12 @@ function workspace() {
   new SubordinateRosterStore(exec, actors.main).ensureSchema();
 
   const hire = (parent: ActorHandle, name: string, entry: Partial<SubordinateRosterEntry>): ActorHandle => {
-    const child = actors.directory.create({ parent, name, kind: 'subordinate', lifetime: 'durable', creationId: name });
+    const { origin = 'agent', lifetime = 'durable', ...rest } = entry;
+    const child = actors.directory.create({ parent, name, origin, lifetime, creationId: name });
 
     new SubordinateRosterStore(exec, parent).create({
-      name, actorReference: actorReferenceOf(child), birth: null, deleteRequested: false, createdBy: 'orchestrator',
-      status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null, ...entry,
+      name, actorReference: actorReferenceOf(child), birth: null, deleteRequested: false,
+      status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime, taskEventId: null, ...rest,
     });
 
     return child;
@@ -58,9 +59,9 @@ const row = ({ label, category, activity, parent, tab, input, open }: PanelAgent
 describe('the Agents panel lists every agent in the workspace', () => {
   test('the owner\'s own, one an agent hired, and a background helper, each placed as the design says', () => {
     const { db, main, hire, read, openTurn } = workspace();
-    const alice = hire(main, 'alice', { createdBy: 'user' });
+    const alice = hire(main, 'alice', { origin: 'user' });
     openTurn(hire(alice, 'scout-1', {}));
-    hire(main, 'refiner-1', { createdBy: 'evolution', lifetime: 'task' });
+    hire(main, 'refiner-1', { origin: 'evolution', lifetime: 'task' });
     openTurn(hire(main, 'lookup-1', { lifetime: 'task' }));
     db.query('UPDATE workspace_actors SET created_at = 0 WHERE name = ?').run('scout-1');
 
@@ -112,7 +113,7 @@ describe('the Agents panel lists every agent in the workspace', () => {
 
   test('an agent is working while it holds an open turn, whatever its roster row last said', () => {
     const { db, main, hire, read, openTurn } = workspace();
-    const chatting = hire(main, 'chatting', { createdBy: 'user', status: 'idle' });
+    const chatting = hire(main, 'chatting', { origin: 'user', status: 'idle' });
     openTurn(chatting);
 
     expect(read().find((agent) => agent.label === 'chatting')?.activity).toBe('working');

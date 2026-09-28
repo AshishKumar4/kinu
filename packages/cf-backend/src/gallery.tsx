@@ -23,7 +23,7 @@ import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema } from "@kinu.run/core";
-import type { ReasoningEffort } from "@kinu.run/core";
+import type { ParkedWriteReview, ReasoningEffort } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@kinu.run/core";
@@ -1323,7 +1323,7 @@ function maybeRefuseCreate(): void {
 
 /* The `workspacepage` frame's additional-agent roster, mutated by the real page; only the chat stays inert (`agentchats` covers send). */
 const GALLERY_SUBS: {
-  name: string; actorId: string; displayName: string; role: string; createdBy: string;
+  name: string; actorId: string; displayName: string; role: string; origin: string;
   status: string; currentTask: string | null; createdAt: number; dismissedAt: number | null;
 }[] = [];
 
@@ -1333,7 +1333,7 @@ const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "pan
 
 if (AGENTS_PANEL) {
   const docs = {
-    name: "docs", actorId: galleryActorId("docs"), displayName: "Docs writer", role: "agent", nameOrigin: "user", createdBy: "user",
+    name: "docs", actorId: galleryActorId("docs"), displayName: "Docs writer", role: "agent", nameOrigin: "user", origin: "user",
     lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
   };
 
@@ -1650,7 +1650,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     const name = `agent-${++gallerySubSeq}`;
 
     const entry = {
-      name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable",
+      name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", nameOrigin: "auto", origin: "user", lifetime: "durable",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     };
 
@@ -3600,11 +3600,11 @@ function All() {
 }
 
 const SUBORDINATES: Parameters<typeof SubordinateTabs>[0]["subordinates"] = [
-  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
-  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
-  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", nameOrigin: "user", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
+  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", nameOrigin: "auto", origin: "agent", lifetime: "durable", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", nameOrigin: "auto", origin: "agent", lifetime: "durable", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
+  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", nameOrigin: "user", origin: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
   // A one-click agent the titler has not reached: blank name, shown as "New agent".
-  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
+  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", nameOrigin: "auto", origin: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
 ];
 
 /* The open tab is the strip's hook, so a gate can compare strips. */
@@ -3651,9 +3651,9 @@ type GalleryRosterEntry = Parameters<typeof SubordinateTabs>[0]["subordinates"][
 
 const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
   // Distinctive: the gate asserts it never renders; subordination shows as hierarchy, not a badge.
-  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", nameOrigin: "user", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", nameOrigin: "user", origin: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
   // Agent-created: keeps the confirmation path, unlike the user-created seed.
-  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
+  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", nameOrigin: "auto", origin: "agent", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
 ];
 
 const AGENTCHATS_ROWS = 40;
@@ -3737,7 +3737,7 @@ function AgentChatsScene() {
     const name = `agent-${++counter.current}`;
     missions.current[name] = AGENTCHATS_MISSION;
     setRoster((current) => [...current, {
-      name, actorId: galleryActorId(name), displayName: "", role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable",
+      name, actorId: galleryActorId(name), displayName: "", role: "agent", nameOrigin: "auto", origin: "user", lifetime: "durable",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     }]);
     await navigate(`/workspace/checkout-fixes/agents/${name}`);
@@ -4269,6 +4269,12 @@ const PENDING_ACTIONS: PendingAction[] = [
     detail: "sudo launchctl kickstart -k system/com.docker.dockerd",
   },
   {
+    id: "defer-w7r1te0notes", kind: "deferred_action", at: NOW - 30 * 60e3,
+    title: "Replace /pc/ashish@studio/home/ashish/notes.md",
+    detail: "file write /pc/ashish@studio/home/ashish/notes.md",
+    write: { path: "/pc/ashish@studio/home/ashish/notes.md" },
+  },
+  {
     id: "plan:main:plan-gateway:3", kind: "plan_review", at: NOW - 9e5,
     title: "Approve the plan · Gateway timeout repair",
     detail: null,
@@ -4486,6 +4492,21 @@ function WorkFrame() {
   );
 }
 
+const PARKED_WRITE_REVIEW: ParkedWriteReview = {
+  path: "/pc/ashish@studio/home/ashish/notes.md", currentBytes: 58, nextBytes: 71, changedSinceAsked: false,
+  diff: {
+    path: "/pc/ashish@studio/home/ashish/notes.md", status: "changed", added: 2, removed: 1,
+    lines: [
+      { kind: "hunk", text: "@@ -1,3 +1,4 @@" },
+      { kind: "ctx", text: "# Notes" },
+      { kind: "del", text: "- ship the gateway fix" },
+      { kind: "add", text: "- ship the gateway fix (done)" },
+      { kind: "add", text: "- write the incident note" },
+      { kind: "ctx", text: "- call the vendor" },
+    ],
+  },
+};
+
 /** Both halves of a shell approval: the queue that grants, the list that revokes. Fed directly: `?frame=settings` needs a live agent socket. */
 const SHELL_GRANTS = [
   { rule: "rm-recursive", executor: "device" },
@@ -4497,6 +4518,8 @@ const approvalsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
   if (method === "getShellApprovalGrants") return rpcResult({ grants: SHELL_GRANTS }).json<T>();
 
   if (method === "revokeShellApprovalGrants") return rpcResult({ ok: true, grants: SHELL_GRANTS }).json<T>();
+
+  if (method === "reviewParkedWrite") return rpcResult(v.parse(JsonValueSchema, PARKED_WRITE_REVIEW)).json<T>();
 
   return workRpc<T>(method, args);
 };

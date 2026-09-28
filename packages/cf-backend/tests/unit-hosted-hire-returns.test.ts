@@ -5,9 +5,10 @@
  */
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
-import { actorConnectionTag } from '@kinu.run/core';
+import { EventLog, actorConnectionTag, admitSubordinateTask } from '@kinu.run/core';
+import { makeSqlExec } from '../../core/tests/helpers';
 import { asPane } from './helpers/agents-sdk';
-import { catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask } from './helpers/actor-harness';
+import { actorOver, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 /** A model call's own user turns, without the runtime's context blocks (which list other agents' briefs). */
@@ -164,7 +165,7 @@ test("a task agent does not settle while more input is queued for it: its answer
 
   await driveUntil(workspace, 'the task helper never started', () => gateway.runs.some((run) => openingOf(run).includes('Helper brief.')));
   await turn;
-  const helperId = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE kind = 'subordinate'`[0]?.id ?? '';
+  const helperId = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE origin IN ('user','agent','evolution')`[0]?.id ?? '';
   // More input queues for the helper while its first turn is still out.
   await wakeForDelegatedTask(workspace, helperId, 'Queued note.');
   release.resolve();
@@ -284,4 +285,72 @@ test("a Stop discards the input already queued for a descendant it interrupts", 
   await workspace.agent.cancelCurrentWork();
 
   await expect(driveUntil(workspace, 'the queued input never ran', () => queuedAsked)).rejects.toThrow('the queued input never ran');
+});
+
+// Owner, 2026-09-26: no limit on helper turns. Two hired agents' admitted turns run at once, neither queued behind the other.
+test("two hired agents' admitted turns run at once", async () => {
+  const running = new Set<string>();
+  let together = false;
+  const release = Promise.withResolvers<void>();
+
+  const { workspace, middleId } = await helperWorkspace(async (run) => {
+    const opening = openingOf(run);
+    const which = ['First brief.', 'Second brief.'].find((brief) => opening.includes(brief));
+
+    if (which === undefined) return chatCompletion(run, 'ok');
+    running.add(which);
+    together ||= running.size === 2;
+    await release.promise;
+
+    return chatCompletion(run, `${which} done`);
+  });
+
+  const other = await hostedSubordinateHarness(workspace, {
+    name: 'other', displayName: 'Other', nameOrigin: 'user', mission: 'coordinate too',
+  });
+
+  await wakeForDelegatedTask(workspace, middleId, 'First brief.');
+  await wakeForDelegatedTask(workspace, other.actor.handle.actorId, 'Second brief.');
+  await driveUntil(workspace, 'the two turns never ran at once', () => together);
+  release.resolve();
+});
+
+// A Stop between two turns an agent has admitted: the second, already read by the agent's runner, does not run.
+test("a Stop skips a turn the stopped agent's runner had already picked up", async () => {
+  let secondRan = false;
+  let firstHeld = false;
+
+  const { workspace, middleId } = await helperWorkspace((run) => {
+    const opening = openingOf(run);
+
+    if (opening.includes('Second queued.')) {
+      secondRan = true;
+
+      return chatCompletion(run, 'second ran');
+    }
+
+    if (opening.includes('First queued.')) {
+      firstHeld = true;
+
+      return heldUntilAborted(run);
+    }
+
+    return chatCompletion(run, 'ok');
+  });
+
+  const sql = sqlOver(workspace.db);
+  const parent = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE actor_id = ${middleId}`[0]?.id ?? '';
+
+  // Both admitted before the runner reads the queue, so one pass holds both.
+  const child = actorOver(workspace.db, parent);
+  admitSubordinateTask(new EventLog(makeSqlExec(workspace.db), child), {
+    fromWorkspace: child.workspaceId, kind: 'task', body: 'First queued.', mode: 'build', now: Date.now(),
+  });
+  await wakeForDelegatedTask(workspace, parent, 'Second queued.');
+  await driveUntil(workspace, 'the first turn never started', () => firstHeld);
+
+  // The helper is below the root: the root's Stop reaches it.
+  await workspace.agent.cancelCurrentWork();
+
+  await expect(driveUntil(workspace, 'the second turn never ran', () => secondRan)).rejects.toThrow('the second turn never ran');
 });

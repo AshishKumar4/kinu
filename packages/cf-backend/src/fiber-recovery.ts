@@ -1,5 +1,5 @@
 /**
- * Recovery of interrupted durable lanes (`bg:<kind>`, `mcts`, `evolution:settle`, `advisor:review`, ...).
+ * Recovery of interrupted durable lanes (`bg:<kind>`, `mcts`, `evolution:settle`, ...).
  * Arms only classify and hand off to {@link FiberLaneTransports.redrive}: the scan runs inside the DO
  * init gate (`blockConcurrencyWhile`), and awaiting a lane there trips `do.block_concurrency.cancel_ms`,
  * resetting the object into a re-offer loop. `scripts/do-init-gate.ts` enforces this shape.
@@ -9,8 +9,7 @@ import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 
 import {
   BACKGROUND_FIBER_PREFIX, BackgroundJobRunner, recoveryBackoffMs,
-  AdvisorRecoverySnapshotSchema, ADVISOR_LANE_FIBER, projectJsonValue,
-  type AdvisorDisposition, type AdvisorRecoverySnapshot, type JsonValue,
+  projectJsonValue, type JsonValue,
   type SqlExecutor,
   JsonObjectSchema, type AgentSignal, type SendOutcome,
 } from '@kinu.run/core';
@@ -131,12 +130,6 @@ const FORK_NOTICE_LANE_FIBER = 'fork:notice';
 export interface FiberLaneTransports {
   readonly jobs: Pick<BackgroundJobRunner, 'recover' | 'recoverOrphans'>;
   readonly runDueSessionEvolution: () => Promise<void>;
-  /** Idempotency guard for the advisor lane; synchronous because it is decided inside the init gate. */
-  readonly hasAdvisorNoteForTurn: (turnId: string) => boolean;
-  /** The one review body both the live lane and its recovery run. */
-  readonly reviewAdvisorSnapshot: (
-    snapshot: AdvisorRecoverySnapshot,
-  ) => Promise<AdvisorDisposition | null>;
   /** Arm the terminal ledger's durable wake and replay nothing here (a replay may await SMTP). */
   readonly armOwedTerminalRecovery: () => Promise<void>;
   /** Fork-notice replay body. `undelivered` means the notice is still owed. */
@@ -167,8 +160,6 @@ export function classifyRecoveredFiber(
     if (ctx.name === EVOLUTION_LANE_FIBER) {
       return redriveLane(transports, ctx, { name: EVOLUTION_LANE_FIBER, redrive: 'session-evolution' }, () => transports.runDueSessionEvolution());
     }
-
-    if (ctx.name === ADVISOR_LANE_FIBER) return redriveAdvisorLane(transports, ctx);
 
     if (ctx.name === MCP_WARM_LANE_FIBER) return recoverMcpWarmLane();
 
@@ -232,50 +223,6 @@ function redriveBackgroundJobLane(
   });
 
   return { status: 'completed', snapshot: { lane: ctx.name, redrive: 'background-job' } };
-}
-
-/**
- * Advisor lane: idempotent on the note, not the attempt. The guard runs before detaching, so a
- * review that already recorded its note is never re-run. A turn without a durable id re-runs.
- */
-function redriveAdvisorLane(
-  transports: FiberLaneTransports,
-  ctx: FiberRecoveryContext,
-): FiberRecoveryResult {
-  const checkpoint = fiberSnapshot(ctx);
-  const parsed = v.safeParse(AdvisorRecoverySnapshotSchema, checkpoint);
-
-  if (!parsed.success) {
-    return {
-      status: 'error',
-      error: 'the interrupted advisor review left no readable snapshot of the turn it was '
-        + `about: ${parsed.issues.map((issue) => issue.message).join('; ')}`,
-      snapshot: { lane: ADVISOR_LANE_FIBER, redrive: null },
-    };
-  }
-
-  const snapshot = parsed.output;
-  const turnId = snapshot.turn.turnId;
-
-  if (turnId !== undefined && transports.hasAdvisorNoteForTurn(turnId)) {
-    return {
-      status: 'completed',
-      snapshot: { lane: ADVISOR_LANE_FIBER, turnId, redrive: null, alreadyRecorded: true },
-    };
-  }
-
-  transports.redrive(ADVISOR_LANE_FIBER, checkpoint, async () => {
-    const disposition = await transports.reviewAdvisorSnapshot(snapshot);
-    diagnostics.event('fiber.advisor_lane_redriven', {
-      turnId: turnId ?? '(none)',
-      disposition: disposition ?? '(none)',
-    });
-  });
-
-  return {
-    status: 'completed',
-    snapshot: { lane: ADVISOR_LANE_FIBER, turnId: turnId ?? null, redrive: 'advisor-review' },
-  };
 }
 
 /** Replay a minted, unconfirmed notice; the checkpoint is the whole signal. */

@@ -68,7 +68,6 @@ function turnUsageDetail(usage: Usage | undefined): string | undefined {
 
 /** Shown by name only; a new event type must be placed here or given a switch arm. */
 type DiagnosisOnlyEvent = Extract<RunEvent, { type:
-  | 'step_partial'
   | 'model_call'
   | 'provider_wait'
   | 'model_operation'
@@ -88,7 +87,6 @@ type DiagnosisOnlyEvent = Extract<RunEvent, { type:
 }>;
 
 const DIAGNOSIS_ONLY_EVENTS: ReadonlySet<string> = new Set<DiagnosisOnlyEvent['type']>([
-  'step_partial',
   'model_call',
   'provider_wait',
   'model_operation',

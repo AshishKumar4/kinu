@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { sameActorReference, testModel, type ModelTestResult } from '@kinu.run/core';
+import { sameActorReference, testModel, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
@@ -34,7 +34,7 @@ import type {
   BuiltinToolName,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
-  WorkMode, JsonValue, SessionHistory,
+  WorkMode, SessionHistory,
 } from '@kinu.run/core';
 import { TierIdSchema,
   ActorSession, type ActorTurnLease, type ActorExecutionInput,
@@ -85,7 +85,7 @@ import { TierIdSchema,
   measureCompactionTrigger,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   AdvisorRecoverySnapshotSchema,
-  ADVISOR_LANE_FIBER, reviewRecordedTurn,
+  reviewRecordedTurn,
   advisorWorkspaceGuidance,
   createDefaultWebSearchProvider, createWebCodemodeProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   createAgentsCodemodeProvider, createStateCodemodeProvider,
@@ -163,7 +163,7 @@ import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
-import { detectOrphanedFibers, type OrphanedFiber } from '@kinu.run/core';
+import { detectOrphanedFibers } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
 import {
@@ -703,6 +703,7 @@ export class LocalAgentSession {
         this.eventRecorder.emit(this.chat.currentRunId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },
       announce: () => { this.host.broadcast({ type: 'pending_actions_changed' }); },
+      writes: null,
     });
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channel);
@@ -1144,7 +1145,7 @@ export class LocalAgentSession {
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
     opts: Pick<SendOptions, 'tier' | 'id' | 'mode'>,
   ): Promise<SendLanding> {
-    return this.chat.send(input, opts);
+    return whenActorTakesInput(this.rt.storage.sql, this.rt.actor.actorId, () => this.chat.send(input, opts));
   }
 
   /** Run a mid-turn redirect as a budgeted head beside the live turn, settling into Alternate Takes
@@ -1416,14 +1417,8 @@ export class LocalAgentSession {
       verified: recovered.verified.length, refused: recovered.refused.length, failed: recovered.failed.length,
       unreadable: recovered.unreadable.length, active: recovered.active.length, stalled: recovered.stalled.length,
     });
-    const advisorOrphans: OrphanedFiber[] = [];
 
     for (const orphan of detectOrphanedFibers(this.rt.storage.sql, this.rt.actor)) {
-      if (orphan.name === ADVISOR_LANE_FIBER) {
-        advisorOrphans.push(orphan);
-        continue;
-      }
-
       if (orphan.name.startsWith('bg:')) await this.jobRunner.recover(orphan.snapshot);
       void this.rt.storage.sql`DELETE FROM fibers
         WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
@@ -1458,17 +1453,14 @@ export class LocalAgentSession {
       });
     }
 
-    await this.recoverTerminalTransitions(advisorOrphans);
+    await this.recoverTerminalTransitions();
   }
 
   /**
    * Finish owed terminal sequences under the driver lease: core's in-flight guard is process-local,
    * so two processes would run the same effects. No gate installed means no other driver.
-   * Advisor orphans first (each is a model call), then the terminal ledger.
    */
-  async recoverTerminalTransitions(
-    advisorOrphans: readonly OrphanedFiber[] = [],
-  ): Promise<void> {
+  async recoverTerminalTransitions(): Promise<void> {
     const refusal = this.driverGate?.();
 
     if (refusal) {
@@ -1477,37 +1469,9 @@ export class LocalAgentSession {
       return;
     }
 
-    for (const orphan of advisorOrphans) {
-      await this.recoverAdvisorLane(orphan.snapshot);
-      void this.rt.storage.sql`DELETE FROM fibers
-        WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
-    }
-
     await this.terminal.resumeAll();
     // A replayed sequence can enqueue a turn; the advisor gate state travels in the row, not RAM.
     this.chat.pump();
-  }
-
-  /** Re-drive an interrupted advisor review from its snapshot (DO fiber recovery parity).
-   *  Idempotent on the note: its presence says whether the review already finished. */
-  private async recoverAdvisorLane(snapshot: JsonValue | null): Promise<void> {
-    const parsed = v.safeParse(RecordedAdvisorSchema, snapshot);
-
-    if (!parsed.success) {
-      diagnostics.failure('advisor.snapshot_unreadable', toKinuError({
-        doing: 'reading the turn an interrupted advisor review was about',
-        cause: new Error(parsed.issues.map((issue) => issue.message).join('; ')),
-        otherwise: 'unsupported',
-      }));
-
-      return;
-    }
-
-    const turnId = parsed.output.turn.turnId;
-
-    if (turnId !== undefined && this.engine.hasAdvisorNoteForTurn(turnId)) return;
-    // The gate verdict comes off the checkpoint; this process never armed the RAM gate.
-    await this.runAdvisorReview(parsed.output);
   }
 
   /** Re-drive an interrupted background job through core's shared resume gate over the raw surface,
@@ -2002,25 +1966,25 @@ export class LocalAgentSession {
       turn_record: turnRecordTerminalEffect(this.actorSession.orchestrator),
       event_drain: eventDrainTerminalEffect(this.actorSession.orchestrator),
 
+      // The CLI's lanes run elsewhere (evolution on its own queue); the row keeps the roster whole.
       improvement_lanes: terminalEffect({
-        input: v.object({
-          status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema,
-          advisor: RecordedAdvisorSchema,
-        }),
-        // Verdict uses the recorded mode. Awaited to its checkpoint: before it nothing is on disk for
-        // `recoverAdvisorLane`, so "recoverable" and "row done" must coincide.
-        run: async ({ status, workMode, advisor }) => {
-          if (!this.actorSession.orchestrator.improvementLanesOpen(status, workMode)) {
+        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
+        run: () => ({ status: 'completed' }),
+      }),
 
-            return { status: 'completed', detail: 'improvement lanes closed for this turn' };
+      // The snapshot is the row's input, gate verdict included (the gate is RAM-only here), so a replay
+      // reviews what the turn earned, and a note already recorded for the turn is never reviewed again.
+      advisor_review: terminalEffect({
+        input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: RecordedAdvisorSchema }),
+        run: async ({ status, workMode, advisor }) => {
+          const turnId = advisor.turn.turnId;
+
+          if (!this.actorSession.reviewsTurns || !this.actorSession.orchestrator.improvementLanesOpen(status, workMode)
+            || (turnId !== undefined && this.engine.hasAdvisorNoteForTurn(turnId))) {
+            return { status: 'completed' };
           }
 
-          await this.actorSession.startAdvisorLane({
-            turn: advisor.turn,
-            snapshot: projectJsonValue({ value: advisor }),
-            carry: (name, body) => this.trackFiber(name, body),
-            review: () => this.runAdvisorReview(advisor),
-          });
+          await this.runAdvisorReview(advisor);
 
           return { status: 'completed' };
         },
@@ -2569,7 +2533,7 @@ export class LocalAgentSession {
       }).deps,
       // A head inherits the parent's promoted program, making it a fork of this agent.
       loopFor: (bound) => ({
-        origin: this.loopOrigins.get(bound.reference.actorId) ?? defaultLoopOrigin(bound.record.kind),
+        origin: this.loopOrigins.get(bound.reference.actorId) ?? defaultLoopOrigin(bound.record.origin),
         parent: this.rt,
       }),
       contextEvents: (bound) => bound.stores.eventRecorder,
@@ -2921,7 +2885,7 @@ export class LocalAgentSession {
     readonly seat: HostedNodeSeat;
   }> {
     const binding = registerLocalActor(this.rt.actor, {
-      name: explorationActorKey(creationId), creationId, kind: 'run', lifetime: 'task',
+      name: explorationActorKey(creationId), creationId, origin: 'swarm', lifetime: 'task',
     });
 
     declare(binding.reference.actorId);

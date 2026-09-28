@@ -32,7 +32,7 @@ function headRig(subordinate = false) {
   const parent = subordinate ? fixture.actors.sibling('helper') : fixture.actor;
 
   const head = fixture.actors.directory.create({
-    parent, name: explorationActorKey('head-a'), creationId: 'head-a', kind: 'run', lifetime: 'task',
+    parent, name: explorationActorKey('head-a'), creationId: 'head-a', origin: 'swarm', lifetime: 'task',
   });
 
   const journal = new HeadJournal(fixture.ws.sql, parent);
@@ -40,7 +40,7 @@ function headRig(subordinate = false) {
   const input = {
     id: 'head-a', rootId: 'root-a', parentId: null, depth: 0, task: 'inspect', rationale: 'inspect',
     mode: 'build', inheritedContext: [], budget: { maxDepth: 3, spawnedAt: 1 },
-    mergeStrategy: 'synthesize', loop: defaultLoopOrigin('run'),
+    mergeStrategy: 'synthesize', loop: defaultLoopOrigin('swarm'),
   } satisfies Parameters<HeadJournal['insertSpawn']>[0];
 
   journal.recordSplit('root-a', 'inspect', 1);
@@ -105,7 +105,7 @@ describe('workspaceSpend', () => {
     const parent = actors.sibling('helper');
 
     const siblingHead = actors.directory.create({
-      parent, name: explorationActorKey(input.id), creationId: input.id, kind: 'run', lifetime: 'task',
+      parent, name: explorationActorKey(input.id), creationId: input.id, origin: 'swarm', lifetime: 'task',
     });
 
     const siblingJournal = new HeadJournal(ws.sql, parent);
@@ -244,7 +244,7 @@ describe('workspaceSpend', () => {
         id, rootId: 'root-1', parentId: null, depth: 0, task: `task ${id}`, rationale: 'r',
         mode: 'build', inheritedContext: [], budget: { maxDepth: 3, spawnedAt: 1 },
         mergeStrategy: 'synthesize',
-        loop: defaultLoopOrigin('run'),
+        loop: defaultLoopOrigin('swarm'),
       });
     }
 
