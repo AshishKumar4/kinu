@@ -348,10 +348,8 @@ const SOURCE_HELPERS: ReadonlySet<string> = new Set(['memberBody', 'anchor', 'be
 /**
  * The repository file a path literal names, or `undefined` when it names none.
  *
- * RESOLVED, NEVER PATTERN-MATCHED, and that is a set-equality rule rather than
- * a preference. A private regex — `(^|\/)(src|scripts)\/…` — is exactly the
- * shape `gate:set-equality` refuses: a second spelling of "a source file"
- * beside the one in `sources.ts`, free to drift narrower than the set it
+ * RESOLVED, NEVER PATTERN-MATCHED. A private regex — `(^|\/)(src|scripts)\/…` — is
+ * a second spelling of "a source file" beside the one in `sources.ts`, free to drift narrower than the set it
  * reports on. Only a path the ENUMERATION holds counts, and what counts as
  * source is asked of the named predicates — so a path that is not in the tree
  * cannot be reported as read, which a pattern match would allow.
@@ -2795,8 +2793,8 @@ export interface RunnerClaim {
  * for each gate command — it follows `bun run` bodies, expands globs, and
  * narrows by bunfig's `pathIgnorePatterns` and by bun's own matcher — and
  * `deployGates()` is the ladder's deploy plan. The non-ladder runners come from
- * `package.json`'s scripts table. A second resolver here would be the defect
- * `gate-set-equality` exists to prevent: one set measured, another governed.
+ * `package.json`'s scripts table. A second resolver here would measure one set
+ * and govern another.
  *
  * The one claim that is not a command: the anti-slop aggregator imports its
  * per-rule suites dynamically, so `isAntiSlopRuleSuite` IS the claim. Those
@@ -3064,9 +3062,8 @@ export interface Measured {
  * One file's whole classification.
  *
  * The seam the suite drives, and the reason it is a seam: a fixture proving the
- * ratchet goes red must never be WRITTEN INTO THE TREE. `gate-set-equality.test.ts`
- * makes the same argument for the same reason — a red demonstration that seeds a
- * real file changes what every other gate measures while it runs.
+ * ratchet goes red must never be WRITTEN INTO THE TREE: a red demonstration that
+ * seeds a real file changes what every other gate measures while it runs.
  */
 export function measureFile(file: string, text: string, inputs: CensusInputs): Measured {
   const parsed = parseFile(file, text);

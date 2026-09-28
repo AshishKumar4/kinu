@@ -65,8 +65,7 @@ export const RAW_NODE_MODULE =
 
 /** Extensions TypeScript would have emitted from. A specifier ending in one of these names a build
  *  output, and there are no build outputs. Set membership over `extname`, not a pattern: the
- *  question is which of four fixed extensions a specifier carries, and a regex that reads as a
- *  filename predicate is a finding in `gate-set-equality` for good reasons that do not apply here. */
+ *  question is which of four fixed extensions a specifier carries. */
 const EMITTED_EXTENSION: ReadonlySet<string> = new Set([".js", ".jsx", ".mjs", ".cjs"]);
 
 /** TypeScript source extensions, which only the raw-Node regime may name. */

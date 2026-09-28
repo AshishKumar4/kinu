@@ -23,9 +23,8 @@
 //      shape in this repository, so each keeps a test.
 //
 // EVERY FIXTURE IS TEXT. `measureFile` takes a path and a body, so a red
-// demonstration never writes a file — the reason `gate-set-equality.test.ts`
-// gives for the same choice: a seeded file changes what every other gate
-// measures while it runs.
+// demonstration never writes a file: a seeded file changes what every other
+// gate measures while it runs.
 
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';

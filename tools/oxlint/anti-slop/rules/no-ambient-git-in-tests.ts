@@ -69,8 +69,7 @@ export const TEST_DIRECTORY = /(^|\/)(tests?|__tests__)\//;
  * `packages` while `bun run lint` scans the repo leaves a gap, and that exact
  * gap held three real sites. Both arms here, the gate's live scan at `.`, and
  * naming the arms so a narrower consumer imports one instead of copying it, are
- * all that same equality. `scripts/gate-set-equality.ts` enforces it across
- * every gate rather than in this file alone.
+ * all that same equality.
  */
 export const TEST_FILE = new RegExp(`${TEST_DIRECTORY.source}|${TEST_SUFFIX.source}`);
 

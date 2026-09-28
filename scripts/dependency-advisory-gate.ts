@@ -21,8 +21,7 @@
  *     whose acceptance would otherwise pre-approve the next one against that
  *     package.
  *
- * That is the same shape as `ALLOWED_INSTALL_SCRIPTS` next door and as
- * `gate-set-equality.ts`: pin the reviewed set, fail when it CHANGES, and make
+ * That is the same shape as `ALLOWED_INSTALL_SCRIPTS` next door: pin the reviewed set, fail when it CHANGES, and make
  * every change an edit somebody has to justify. It is deliberately not a
  * judgement about whether an advisory is exploitable here — it cannot be, and a
  * gate that guessed would be worse than one that reports honestly.
@@ -122,8 +121,7 @@ const ScanSchema: v.GenericSchema<AdvisoryScan> = v.variant('status', [
  *
  * Bun enumerates the lockfile and hands the set to the scanner, so this gate
  * never derives its own package list — a second derivation is a second
- * enumeration, and drifting narrower than the thing enforced is the defect
- * `gate:set-equality` exists to prevent. A run that produces no report line is
+ * enumeration, free to drift narrower than the thing enforced. A run that produces no report line is
  * a broken measurement and throws: it is not an empty one, and it is certainly
  * not a clean tree.
  */

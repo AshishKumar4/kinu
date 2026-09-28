@@ -117,7 +117,7 @@ export interface OwningPackage {
 /** Whether a `workspaces` glob claims a directory. Bun's patterns are
  *  path-segment globs (`packages/*`), so `*` spans one segment and `**` spans
  *  the rest — matched segment-wise rather than by building a regex, because a
- *  regex over paths is the shape `gate:set-equality` exists to refuse. */
+ *  regex over paths is a second spelling of the tree. */
 export function workspaceGlobMatches(pattern: string, directory: string): boolean {
   const wanted = pattern.split('/');
   const actual = directory.split('/');

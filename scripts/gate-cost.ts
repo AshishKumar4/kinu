@@ -16,7 +16,7 @@
  * This module is the table they land in and the arithmetic the runner schedules
  * by — no process ever walks the machine from here, because everything reachable
  * from a ladder row is a gate program and a gate program reads the tree through
- * `scripts/sources.ts` alone (`gate:set-equality`).
+ * `scripts/sources.ts` alone.
  *
  * Nothing edits the table by hand. `deployPlan()` reads it and refuses to print
  * a plan while a concurrently scheduled row has no measurement, so a new heavy

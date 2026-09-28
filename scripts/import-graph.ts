@@ -6,8 +6,7 @@
  * with a resolver of its own, so that the ladder's input-closure derivation
  * (`scripts/ladder-closure.ts`) reads the graph through the same edges and the
  * same resolution rather than a second walker that could disagree with the
- * first. Two walkers over one tree is the drift `gate:set-equality` exists to
- * refuse, one level up.
+ * first.
  *
  * Edges: `import … from`, `export … from`, `export * from`, literal `import()`,
  * literal `require()`, and literal `import.meta.resolve()`. Each edge carries

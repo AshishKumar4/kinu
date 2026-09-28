@@ -133,7 +133,7 @@ export function loadBenchCorpus(repoRoot: string, opts: PartitionOptions = {}): 
  * enumeration, narrowed by a named predicate. `trackedFiles()` also lists
  * untracked additions, and an untracked `.patch` is not part of the corpus: a
  * fresh checkout lacks it, so counting it would let a task pass here that fails
- * to load everywhere else. `gate:set-equality` refuses a private walk.
+ * to load everywhere else.
  */
 export function benchPatchFiles(repoRoot: string): readonly string[] {
   return enumerateRepository(repoRoot).tracked.filter(isBenchDefectPatch);
