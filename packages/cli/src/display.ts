@@ -1,11 +1,10 @@
 import { stripVTControlCharacters } from 'node:util';
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS, describeToolCall, fmtUsd, quotaWindowText, summarizeToolCall, timeAgo, usageTotal } from '@kinu.run/core';
+import { BUILTIN_TOOLS, describeProviderError, describeToolCall, fmtUsd, quotaWindowText, summarizeToolCall, timeAgo, usageTotal } from '@kinu.run/core';
 import { clipText, TUI_MARKS } from '@kinu.run/core/tui';
 import type { AccountSpend, SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
 import type { AgentSearchNode } from './agent-client';
-import { guideFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
 
 // Kinu design tokens; cf-backend index.css :root is the source of truth. Fixed hexes assume a dark terminal.
@@ -351,14 +350,11 @@ export function printError(message: string, hint?: string): void {
 
 /** Every command action funnels here, so no thrown value reaches a user unrendered. */
 export function printFailure(failure: { readonly cause: unknown }): void {
-  const { message, hint } = guideFailure(failure);
-  printError(message, hint);
+  printError(describeProviderError(failure));
 }
 
 export function formatFailure(failure: { readonly cause: unknown }): string {
-  const { message, hint } = guideFailure(failure);
-
-  return hint ? `${ERR('error')} ${message}\n${DIM('hint:')} ${hint}` : `${ERR('error')} ${message}`;
+  return `${ERR('error')} ${describeProviderError(failure)}`;
 }
 
 /** Guarantees a command registered without `.helpGroup()` is still listed. */

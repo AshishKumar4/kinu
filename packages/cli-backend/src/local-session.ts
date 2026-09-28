@@ -1784,6 +1784,7 @@ export class LocalAgentSession {
       const normalize = (spec: string) => this.profiles().normalizeSpec(spec);
       liveTurn.modelSpec = normalize(profile.tier.model);
       liveTurn.credentialOf = (spec) => resolver.credentialFor(spec);
+      liveTurn.retries = profile.retries;
       liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
         spec: normalize(spec),
         bind: () => {

@@ -375,6 +375,8 @@ export {
   type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObservedCall, type ObserveStream,
 } from './chat';
 
+export { createFallbackCooldowns, type FallbackCooldowns } from './providers/fallback-cooldown';
+
 // Extension seam (public plugin API)
 export {
   ExtensionHost,
@@ -2097,7 +2099,7 @@ export type { EvolutionChangelogView, TakePickDeps } from './read-models/evoluti
 
 // Profile catalogs
 export {
-  TIER_IDS, TierIdSchema, tierIdsOf, isTierId, ROLE_ID_RE,
+  TIER_IDS, DEFAULT_PROVIDER_RETRIES, TierIdSchema, tierIdsOf, isTierId, ROLE_ID_RE,
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
