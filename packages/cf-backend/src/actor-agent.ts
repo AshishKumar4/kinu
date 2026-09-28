@@ -36,7 +36,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { hostedWindowMay, PAGE_KEEPALIVE, requiredRpcAccess, rpcMovesOverview, type LiveRead } from "@kinu.run/core";
+import { hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -782,9 +782,20 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private _subordinateRoster: SubordinateRosterStore | null = null;
 
+  protected get watchedExec(): SqlExec {
+    return {
+      exec: (query, ...bindings) => {
+        const cursor = this.ctx.storage.sql.exec(query, ...bindings);
+        this.liveReadsMoved(readsWrittenBy(query));
+
+        return cursor;
+      },
+    };
+  }
+
   protected get subordinateRoster(): SubordinateRosterStore {
     if (!this._subordinateRoster) {
-      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql, this.actorHandle());
+      this._subordinateRoster = new SubordinateRosterStore(this.watchedExec, this.actorHandle());
       this._subordinateRoster.ensureSchema();
     }
 

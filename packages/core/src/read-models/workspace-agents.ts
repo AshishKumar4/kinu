@@ -8,13 +8,14 @@ import { codenameFor } from '../identity/naming';
 import type { SubordinateRosterEntry } from '../delegation/agents-tool';
 import { headStatusUnsettled } from '../heads/types';
 import { HeadJournal } from '../heads/journal';
+import type { HeadRunView } from '../heads/types';
 import { actorReadHandle } from './workspace-work';
 
 export type AgentCategory = 'main' | 'user' | 'hired' | 'swarm' | 'background';
 
 export type AgentActivity = 'working' | 'waiting' | 'idle' | 'done' | 'failed' | 'dismissed';
 
-/** `owner`: the path of the agent whose swarm it is; null is main. */
+/** `owner`: its swarm's agent's path; null is main. */
 export type AgentOpening =
   | { readonly kind: 'chat'; readonly path: string | null }
   | { readonly kind: 'node'; readonly runId: string; readonly nodeId: string; readonly owner: string | null };
@@ -42,15 +43,15 @@ function subordinateCategory(entry: SubordinateRosterEntry): AgentCategory {
   return entry.createdBy === 'evolution' ? 'background' : 'hired';
 }
 
-function subordinateActivity(entry: SubordinateRosterEntry): AgentActivity {
-  if (entry.status === 'working') return 'working';
+/** Working: an open turn claim. */
+function subordinateActivity(entry: SubordinateRosterEntry, inTurn: boolean): AgentActivity {
+  if (entry.status === 'dismissed') return 'dismissed';
 
   if (entry.status === 'awaiting_input') return 'waiting';
 
-  return entry.status === 'dismissed' ? 'dismissed' : 'idle';
+  return inTurn ? 'working' : 'idle';
 }
 
-/** An unsettled head of a finished run was abandoned. */
 function headActivity(status: string, runRunning: boolean): AgentActivity {
   if (headStatusUnsettled(status)) return runRunning ? 'working' : 'failed';
 
@@ -77,6 +78,11 @@ function treeOrder(rootId: string, actors: readonly WorkspaceActor[]): Workspace
   return ordered;
 }
 
+function turnOpen(sql: SqlExecutor, actorId: string): boolean {
+  return tableExists(sql, 'actor_turn_claims')
+    && sql<{ x: number }>`SELECT 1 AS x FROM actor_turn_claims WHERE actor_id = ${actorId} AND outcome IS NULL LIMIT 1`.length > 0;
+}
+
 interface Walk {
   readonly sql: SqlExecutor;
   readonly exec: SqlExec;
@@ -87,7 +93,18 @@ interface Walk {
   readonly handleOf: (row: WorkspaceActor) => ActorHandle;
 }
 
-function rosterAgents({ exec, root, actors, labels, paths, handleOf }: Walk): PanelAgent[] {
+/** A running head's run is listed however old. */
+function swarmRuns(sql: SqlExecutor, owner: ActorHandle): HeadRunView[] {
+  const journal = new HeadJournal(sql, owner);
+  const recent = journal.listRuns(SWARM_RUNS);
+  const shown = new Set(recent.map((run) => run.rootId));
+  const live = sql<{ root_id: string }>`SELECT DISTINCT root_id FROM head_journal WHERE actor_id = ${owner.actorId} AND status = 'running'`;
+  const older = live.filter((row) => !shown.has(row.root_id)).map((row) => journal.readRun(row.root_id));
+
+  return [...older.filter((run) => run !== null), ...recent];
+}
+
+function rosterAgents({ sql, exec, root, actors, labels, paths, handleOf }: Walk): PanelAgent[] {
   const byId = new Map(actors.map((row) => [row.actorId, row]));
   const agents: PanelAgent[] = [];
 
@@ -95,7 +112,6 @@ function rosterAgents({ exec, root, actors, labels, paths, handleOf }: Walk): Pa
     const parentRow = row.parentActorId === root.actorId ? null : byId.get(row.parentActorId ?? '');
     const parentPath = parentRow === null ? '' : paths.get(row.parentActorId ?? '');
 
-    // Reached through its parent's conversation, so an unlisted parent hides it.
     if (parentRow === undefined || parentPath === undefined) continue;
     const entry = new SubordinateRosterStore(exec, parentRow === null ? root : handleOf(parentRow)).get(row.name);
 
@@ -108,7 +124,7 @@ function rosterAgents({ exec, root, actors, labels, paths, handleOf }: Walk): Pa
     const category = subordinateCategory(entry);
 
     agents.push({
-      key: row.actorId, label, category, activity: subordinateActivity(entry), parent: labels.get(row.parentActorId ?? '') ?? null,
+      key: row.actorId, label, category, activity: subordinateActivity(entry, turnOpen(sql, row.actorId)), parent: labels.get(row.parentActorId ?? '') ?? null,
       open: { kind: 'chat', path }, tab: row.parentActorId === root.actorId && ownerFacingSubordinate(entry),
       input: category !== 'background',
     });
@@ -125,7 +141,7 @@ function swarmAgents({ sql, root, actors, labels, paths, handleOf }: Walk): Pane
     const ownerPath = paths.get(owner.actorId) ?? null;
 
     // Search-tree branches are model calls, not agents.
-    for (const run of new HeadJournal(sql, owner).listRuns(SWARM_RUNS)) {
+    for (const run of swarmRuns(sql, owner)) {
       const running = run.status === 'running';
       const nodeLabels = new Map<string, string>();
 

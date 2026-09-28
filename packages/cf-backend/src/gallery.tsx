@@ -1541,11 +1541,11 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   // `dataset.workMoved`: a task written during an outage.
   listWorkspaceWork: () => ({
     plans: [{
-      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false, path: [] },
+      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] },
       plan: galleryAgentPlan, tasks: [],
     }],
     tasks: document.documentElement.dataset.workMoved === "1" ? [{
-      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
+      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
       tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
     }] : [],
   }),
@@ -1812,7 +1812,6 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
   return agentPageFallback<T>(method, args);
 };
 
-/** The agent's own reads, then a swarm worker's transcript opened from the Agents panel, then the blanket stub. */
 async function agentPageFallback<T>(method: string, args: unknown[] | undefined): Promise<T> {
   const agent = AGENT_RPC.get(method);
 
@@ -4168,7 +4167,7 @@ const AGENT_TASKS = [
 const WORKSPACE_WORK = {
   plans: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false, path: [] },
+      owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] },
       plan: {
         id: "plan-gateway", sessionId: "default", revision: 3,
         content: "# Gateway timeout repair\n\nPatch the gateway timeout, then prove the expired-coupon branch.",
@@ -4178,7 +4177,7 @@ const WORKSPACE_WORK = {
       tasks: AGENT_TASKS.filter((task) => task.id === "t2"),
     },
     {
-      owner: { actorId: "actor-courier", name: "courier", retired: false, path: ["courier"] },
+      owner: { actorId: "actor-courier", name: "courier", title: "courier", retired: false, path: ["courier"] },
       plan: {
         id: "plan-courier", sessionId: "default", revision: 1,
         content: "# Courier rollout\n\nStage the rollout and verify the receipt.",
@@ -4192,7 +4191,7 @@ const WORKSPACE_WORK = {
   ],
   tasks: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false, path: [] }, plan: null,
+      owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id !== "t2"),
     },
   ],
@@ -4415,7 +4414,7 @@ const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promis
   if (method === "listWorkspaceWork") return rpcResult({
     plans: [],
     tasks: [{
-      owner: { actorId: "actor-main", name: "main", retired: false, path: [] }, plan: null,
+      owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id === "t1"),
     }],
   }).json<T>();
@@ -6176,6 +6175,12 @@ function GalleryNavigator() {
 }
 
 /** Both app routes as App.tsx keys them, so creating an agent can navigate. */
+function nodeQuery(): string {
+  const node = new URLSearchParams(location.search).get("node");
+
+  return node === null ? "" : `?node=${encodeURIComponent(node)}`;
+}
+
 function workspacePageFrame(): MountedFrame {
   serveGalleryRpc(workspacePageRpc);
 
@@ -6183,7 +6188,7 @@ function workspacePageFrame(): MountedFrame {
   scheduleDeviceNotice(new URLSearchParams(location.search).get("devices"));
 
   return {
-    entries: [`/workspace/${WORKSPACE_PAGE_NAME}`],
+    entries: [`/workspace/${WORKSPACE_PAGE_NAME}${nodeQuery()}`],
     node: (
       <>
         <GalleryNavigator />

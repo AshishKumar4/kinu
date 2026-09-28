@@ -19,6 +19,8 @@ import type { PendingAction } from './pending-actions';
 export interface WorkspaceWorkOwner {
   readonly actorId: string;
   readonly name: string;
+  /** What the owner calls it: its display name, else `name`. */
+  readonly title: string;
   /** Retiring or released: shown as retained, not live. */
   readonly retired: boolean;
   /** For `inspectSubordinate`; null: none. */
@@ -42,7 +44,7 @@ export interface WorkspaceWork {
   readonly tasks: OwnedTask[];
 }
 
-const OwnerSchema = v.object({ actorId: v.string(), name: v.string(), retired: v.boolean(), path: v.nullable(v.array(v.string())) });
+const OwnerSchema = v.object({ actorId: v.string(), name: v.string(), title: v.string(), retired: v.boolean(), path: v.nullable(v.array(v.string())) });
 
 export const WorkspaceWorkSchema = v.object({
   plans: v.array(v.object({ owner: OwnerSchema, plan: PlanReviewSchema, tasks: v.array(AgentTaskTreeSchema) })),
@@ -92,7 +94,8 @@ export function readWorkspaceWork(
     const actor = actorReadHandle(sql, row);
 
     const owner: WorkspaceWorkOwner = {
-      actorId: row.actorId, name: row.name, retired: row.retiringAt !== null || row.deletedAt !== null,
+      actorId: row.actorId, name: row.name, title: actor.config.getDisplayName() ?? row.name,
+      retired: row.retiringAt !== null || row.deletedAt !== null,
       path: conversationPath(row, byId, root.actorId),
     };
 

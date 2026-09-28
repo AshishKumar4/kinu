@@ -134,7 +134,7 @@ async function panelSubgoal({ socket, opened }: { socket: PublicSocket; opened: 
       return { what: 'panel-opens-a-worker-read-only', reached: false, detail: `the panel listed ${String(workers.length)} swarm worker(s) for ${String(nodes)} node(s)` };
     }
 
-    const counted = Number(/(\d+) working/u.exec(drawn.counter)?.[1] ?? 0);
+    const counted = Number(/(\d+) active/u.exec(drawn.counter)?.[1] ?? 0);
 
     return {
       what: 'panel-opens-a-worker-read-only',

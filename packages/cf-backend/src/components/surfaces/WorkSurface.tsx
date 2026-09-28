@@ -345,7 +345,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
   );
 }
 
-/** The two surfaces opened by an icon rather than a strip tab. */
 function SideSurface({ shown, rpc, isStreaming, agents }: Pick<WorkSurfaceProps, "rpc" | "isStreaming" | "agents"> & { shown: SurfaceKind | null }) {
   if (shown === ACTIVITY_SURFACE) return <ActivitySurface rpc={rpc} isStreaming={isStreaming} />;
 
