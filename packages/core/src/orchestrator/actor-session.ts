@@ -599,6 +599,11 @@ export class ActorSession {
   ): Promise<ActorTurnClaim> {
     const previous = this.options.claims.read(lease.turnId);
 
+    // A step whose run reset the workspace, resumed on the same build, would reset it again: closed, not re-issued.
+    if (previous?.status === 'admitted' && sameBuildOf(previous.program.build, this.options.installedBuild) !== 'no') {
+      await this.options.claims.closePoisoned(lease.turnId, previous.epoch);
+    }
+
     const claim = await this.options.claims.admit({
       runId: lease.runId,
       turnId: lease.turnId,
