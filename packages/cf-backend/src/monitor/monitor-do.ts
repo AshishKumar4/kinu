@@ -41,8 +41,9 @@ export class MonitorDO extends DurableObject<Env> {
    * Run every probe against the public origin and alert on what changed.
    * Opens the analytics write window: the budget is per invocation, the constructor's install is per activation.
    */
-  async check(now: number = Date.now()): Promise<MonitorRunResult> {
+  async check(): Promise<MonitorRunResult> {
     openAnalyticsWindow(this.env);
+    const now = Date.now();
     const origin = this.env.CLI_PUBLIC_ORIGIN;
 
     if (!origin) {

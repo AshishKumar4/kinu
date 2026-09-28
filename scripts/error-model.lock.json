@@ -154,7 +154,7 @@
     "packages/cf-backend/src/hooks/use-kinu.ts#result-type": 1,
     "packages/cf-backend/src/hooks/use-kinu.ts#throw": 4,
     "packages/cf-backend/src/hooks/use-paged-scroll.ts#catch": 1,
-    "packages/cf-backend/src/hooks/use-pending-attachments.ts#catch": 2,
+    "packages/cf-backend/src/hooks/use-pending-attachments.ts#catch": 1,
     "packages/cf-backend/src/hooks/use-steer-actions.ts#catch": 2,
     "packages/cf-backend/src/hooks/use-workspace-roster.tsx#catch": 1,
     "packages/cf-backend/src/hooks/use-workspace-roster.tsx#promise-rejection": 2,

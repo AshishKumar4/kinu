@@ -4,11 +4,11 @@ import { useState, type ReactElement, type ReactNode } from 'react';
 
 import { KinuLogo } from '@/components/ui/KinuLogo';
 import { toggleMode, useTheme } from '@/hooks/use-theme';
-import { useCopy, type CopyStatus } from '@/hooks/use-copy';
+import { useCopy } from '@/hooks/use-copy';
 
 import { LandingActionLink } from './LandingActionLink';
 import { LandingFrame } from './LandingFrame';
-import { LandingHero } from './LandingHero';
+import { COPY_LABEL, LandingHero } from './LandingHero';
 import { LandingShowcases, SectionHead } from './LandingShowcases';
 
 const REPOSITORY = 'https://github.com/AshishKumar4/kinu';
@@ -22,9 +22,6 @@ const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
 const NOTE = 'px-1 pt-3 text-[11px] leading-relaxed p-text-4';
 
 const TRAILING_LINK = 'mt-6 inline-block text-sm font-semibold p-accent';
-
-/** A failure asks for the click again: the commands are on screen either way. */
-const COPY_LABEL: Record<CopyStatus, string> = { idle: 'Copy', copied: 'Copied', failed: 'Retry copy' };
 
 function Accent({ children }: { children: ReactNode }): ReactElement {
   return <span className="p-accent">{children}</span>;
