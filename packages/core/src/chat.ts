@@ -77,7 +77,6 @@ export type ChatEvent =
     context?: ContextComposition;
     /** The fallback spec that served the step; absent for the turn's own model. */
     fallback?: string;
-    /** The provider's model id for the step, when reported. */
     modelId?: string;
   }
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
@@ -651,7 +650,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   };
 
   const chain = [...(opts.fallbacks ?? [])];
-  /** The fallback serving the turn, once one took over. */
   let servingFallback: string | undefined;
   let calls = 0;
 

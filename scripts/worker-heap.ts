@@ -54,6 +54,11 @@ export const PER_HELPER_RETAINED_BOUND_BYTES = 250_000;
  *  SDK's record of the call's response messages, and the request JSON the retry wrapper keeps for a resend. */
 export const HELPER_TURN_LIVE_BOUND_BYTES = 3_600_000;
 
+/** Measured 2026-09-27 at {@link HELPERS}, a helper with 4 pages of 0.2 MB waiting on its own hire: 2.3 MB on lane/memory
+ *  b38ffa4c6f, each page held twice, as streamed and as decoded for the step's prompt; 1.5-1.6 MB over 3 runs once a
+ *  verified row shares the streamed text. */
+export const WAITING_PARENT_LIVE_BOUND_BYTES = 1_900_000;
+
 /** Measured 2026-09-27 at {@link LONG_TURN}, after the setup, step and heads above in the same isolate: 104-116 MB
  *  used over 3 runs on main 20cacf3423, 99-117 MB over 10 once no step keeps its request body. The collector decides
  *  when garbage goes, hence the spread; this row trips only as the peak nears the 128 MB isolate, and the growth row
@@ -264,6 +269,8 @@ export interface HeapMeasurement {
   readonly perHelperRetained: number;
   /** What one running helper turn holds live, parked on its last working step, beyond the settled workspace. */
   readonly helperTurnLive: number;
+  /** What a helper holds live while it waits on a helper of its own, with the root waiting on it, beyond settled. */
+  readonly waitingParentLive: number;
   /** The most used heap (uncollected) read at any model call of {@link LONG_TURN}. */
   readonly longTurnPeak: number;
   /** What {@link LONG_TURN} holds live at its last model call beyond its first. */
@@ -395,9 +402,18 @@ export async function measure(): Promise<HeapMeasurement> {
       const helperTurnLive = await inspector.liveHeap() - settledHelpers;
       await ask('/model?holdHelper=0');
       await running;
-      await ask('/model?hires=0');
 
-      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, wide };
+      // The helper, its pages written, hires one of its own, held on its first call: the helper and the root wait.
+      await ask(`/model?answerBytes=${String(HELPERS.answerBytes)}&hires=1&nest=1&holdHelper=1`);
+      const nested = ask('/turn?workspace=helpers&text=HIRE-ROOT');
+
+      while (!v.parse(v.object({ helperParked: v.boolean() }), JSON.parse(await ask('/model'))).helperParked) await Bun.sleep(50);
+      const waitingParentLive = await inspector.liveHeap() - settledHelpers;
+      await ask('/model?holdHelper=0');
+      await nested;
+      await ask('/model?hires=0&nest=0');
+
+      return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, wide };
     } finally {
       inspector.close();
     }
@@ -465,6 +481,10 @@ async function main(args: readonly string[]): Promise<number> {
     findings.push(`a running helper turn holds ${mb(measured.helperTurnLive)} live, over ${mb(HELPER_TURN_LIVE_BOUND_BYTES)}`);
   }
 
+  if (measured.waitingParentLive > WAITING_PARENT_LIVE_BOUND_BYTES) {
+    findings.push(`a helper waiting on its own hire holds ${mb(measured.waitingParentLive)} live, over ${mb(WAITING_PARENT_LIVE_BOUND_BYTES)}`);
+  }
+
   if (measured.longTurnGrowth > LONG_TURN_GROWTH_BOUND_BYTES) {
     findings.push(`a ${String(LONG_TURN.steps)}-step turn holds ${mb(measured.longTurnGrowth)} more live at its last step than its first, over ${mb(LONG_TURN_GROWTH_BOUND_BYTES)}`);
   }
@@ -484,7 +504,8 @@ async function main(args: readonly string[]): Promise<number> {
   console.log(`${GATE}: ok — ${mb(measured.afterSetup)} used after setup, a parked step holds ${mb(measured.stepLive)} live at `
     + `${transcript()}, the idle workspace holds ${mb(measured.idleRetained)} after them, `
     + `${String(HEADS.count)} released heads leave ${mb(measured.headsRetained)}, a finished helper `
-    + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
+    + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
+    + `own hire ${mb(measured.waitingParentLive)}, a ${String(LONG_TURN.steps)}-step turn peaks at `
     + `${mb(measured.longTurnPeak)} used and grows ${mb(measured.longTurnGrowth)} live; no wasm on the static graph, every module ASCII, every request Latin-1`);
   console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; and memory outside V8 (compiled wasm, SQLite pages)');
 
