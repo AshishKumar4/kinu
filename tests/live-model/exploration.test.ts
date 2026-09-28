@@ -64,7 +64,7 @@ describe('Exploration evals — the agent reaches for exploration', () => {
     // returns is what open.ts:49-50 calls "degraded inline
     // VFS/Memory/Executor", and its `spawnBranch` is a HARDCODED MOCK whose
     // every branch resolves to the literal string 'exploration result'
-    // (workspace-birth.ts:57-68). An MCTS suite driving that stub is scoring
+    // (workspace-birth.ts:57-68). A search suite driving that stub is scoring
     // the stub, not exploration. `initWorkspaceSchema` is also what makes
     // `head_journal` exist at all, which this suite's settle-visibility
     // assertion requires of both halves. Binding no directory keeps every

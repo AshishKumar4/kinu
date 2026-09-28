@@ -331,7 +331,7 @@ the model through `core/src/providers/model-invocation.ts`, which reports the
 call's usage through the `ModelCallSink` the call was handed.
 
 - `MODEL_ROUTE_POLICY` (`profiles/model-route.ts`) is the only `SpendSource`
-  table. `agent`, `head`, `mcts`, `swarm` and `slate` use the turn's tier.
+  table. `agent`, `head`, `swarm` and `slate` use the turn's tier.
   `scaffold`, `judge` and `advisor` use `deep`; `compaction`, `reflection` and
   `fast` use `fast`; `platform` and `warming` resolve no profile.
   `resolveModelRoute` is the only read path.

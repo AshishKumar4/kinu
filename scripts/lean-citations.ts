@@ -279,7 +279,7 @@ function readDeclarations(): Map<string, string> {
 
 export function citations(): Citations {
   const declarations = readDeclarations();
-  // Modules by basename, because `docs/MCTS.md` and the exploration spec cite bare
+  // Modules by basename, because the exploration spec cites bare
   // `StorageIsolation.lean`. An ambiguous basename fails rather than guessing: two
   // modules of one name make every bare citation of it unresolvable in principle, and
   // picking the first is how a check starts governing a set it did not measure.
