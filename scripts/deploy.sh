@@ -611,6 +611,12 @@ echo "Environment:  $KINU_ENV"
 echo "Kinu root: $KINU_ROOT"
 echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
 echo "Build sha:    $KINU_SHA"
+# The tiers' scripted model answers only this bearer (Step 4a); without it every
+# post-publish tier would fail after the upload, so it is asked for before any.
+if [ "$KINU_GATES_ONLY" != "1" ] && [ -z "${KINU_SCRIPTED_MODEL_KEY:-}" ]; then
+  echo -e "${RED}KINU_SCRIPTED_MODEL_KEY is not set: the tiers' scripted model answers only that bearer. Nothing was deployed.${NC}"
+  exit 1
+fi
 if [ -n "$(git -C "$KINU_ROOT" status --porcelain 2>/dev/null)" ]; then
   echo -e "${RED}Worktree is dirty — build $KINU_SHA would not describe the bytes being published.${NC}"
   echo "Commit the verified tree before deploying."
@@ -1046,10 +1052,19 @@ fi
 # (Workers fetch docs: otherwise error 1042). The tier proves both before its
 # cases (scripts/scripted-tier.ts): one hosted turn must come back with the
 # script's own answer, and the proxy must list the model.
+#
+# Its route is public, so it answers only the bearer KINU_SCRIPTED_MODEL_KEY
+# holds: uploaded with it as SCRIPTED_MODEL_KEY through a 0600 file this step
+# removes, never on an argv or in the log, and stored by the tiers as the
+# scripted account's API key.
 echo ""
 echo -e "${BOLD}Step 4a: Publishing the tiers' scripted model${NC}"
-bunx wrangler deploy -c scripts/scripted-model-worker.jsonc \
-  || { echo -e "${RED}❌ publishing the scripted model Worker failed${NC}"; exit 1; }
+KINU_SCRIPTED_SECRETS="$(umask 077 && mktemp -t kinu-scripted-secrets.XXXXXX.json)"
+bun -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({ SCRIPTED_MODEL_KEY: process.env.KINU_SCRIPTED_MODEL_KEY }))' "$KINU_SCRIPTED_SECRETS"
+bunx wrangler deploy -c scripts/scripted-model-worker.jsonc --secrets-file "$KINU_SCRIPTED_SECRETS"
+KINU_SCRIPTED_PUBLISHED=$?
+rm -f "$KINU_SCRIPTED_SECRETS"
+[ "$KINU_SCRIPTED_PUBLISHED" = "0" ] || { echo -e "${RED}❌ publishing the scripted model Worker failed${NC}"; exit 1; }
 
 # ── Step 4b: The post-publish tiers ─────────────────────────────────────────
 #

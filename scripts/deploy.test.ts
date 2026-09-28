@@ -229,6 +229,8 @@ interface DeployRun {
   /** Record when each gate started and ended, each stub holding its slot for
    *  `spanSleep` seconds: the only way to see whether two rows overlapped. */
   readonly spans?: boolean;
+  /** The scripted model Worker's bearer; empty is the deploy that has none. */
+  readonly scriptedKey?: string;
 }
 
 function runDeploy({
@@ -243,6 +245,7 @@ function runDeploy({
   threads,
   rssMb,
   spans = false,
+  scriptedKey = "fixture-scripted-key",
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   const log = join(fixture, "events.log");
@@ -327,6 +330,7 @@ exit 87
       KINU_INFRA_ENVIRONMENT: ambientEnvironment,
       ...budget,
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
+      KINU_SCRIPTED_MODEL_KEY: scriptedKey,
       SKIP_E2E: "1",
     }),
     stdout: "pipe",
@@ -797,6 +801,14 @@ describe("deploy gate", () => {
 
     expect(run.status).not.toBe(0);
     expect(run.events).toEqual([]);
+  });
+
+  // Every post-publish tier reaches the scripted model through its bearer, so a deploy without it would fail after the upload.
+  test("a deploy with no scripted model key runs nothing, and --gates-only needs none", () => {
+    const refused = runDeploy({ scriptedKey: "" });
+
+    expect([refused.status, refused.events]).toEqual([1, []]);
+    expect(runDeploy({ scriptedKey: "", option: "--gates-only" }).status).toBe(0);
   });
 
 

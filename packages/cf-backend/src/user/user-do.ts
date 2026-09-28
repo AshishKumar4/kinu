@@ -3674,6 +3674,8 @@ export class UserDO extends Agent<Env> {
 
     if (cred?.kind === 'openai-compat') return cred.baseURL;
 
+    if (cred?.kind === 'bearer' && cred.baseURL !== undefined) return cred.baseURL;
+
     if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred?.kind === 'oauth') {
       if (!isCloudflareCredentialUsable(cred)) return null;
       const accountId = accountIdFromCloudflareCredential(cred);
