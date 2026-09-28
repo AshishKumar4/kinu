@@ -25,7 +25,7 @@ import { DEFAULT_CACHE_RETENTION, type CacheRetention } from './providers/types'
 import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import type { MissionGovernor } from './mission-budget';
-import type { AttachmentPolicy, MediaModality } from './prompting/attachment-sanitizer';
+import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality } from './prompting/attachment-sanitizer';
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import type { LostToolCall } from './tools/effect-claim';
@@ -612,6 +612,11 @@ function* admittedEvent(tokens: number | undefined, contextWindow: number): Gene
   if (tokens !== undefined) yield { type: 'context-admitted', tokens, contextWindow };
 }
 
+/** Every medium some model of the chain takes. */
+function chainMedia(primary: ReadonlySet<MediaModality>, fallbacks: readonly ChatFallback[]): ReadonlySet<MediaModality> {
+  return new Set([primary, ...fallbacks.map((fallback) => fallback.accepts)].flatMap((accepts) => [...accepts]));
+}
+
 async function admitRequest(opts: ChatOptions) {
   const extensions = opts.extensions;
 
@@ -625,7 +630,8 @@ async function admitRequest(opts: ChatOptions) {
   const assembly: Parameters<typeof assembleTurnMessages>[0] = {
     system: opts.system,
     history: opts.history,
-    attachments: opts.attachments,
+    // What any model in the chain takes survives assembly; each attempt narrows it to its own model's media.
+    attachments: opts.attachments && { ...opts.attachments, accepts: chainMedia(opts.attachments.accepts, opts.fallbacks ?? []) },
     extensions,
     sessionKey: opts.cache?.sessionKey ?? '',
     contextWindow,
@@ -747,6 +753,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   /** One provider call; a continuation or fallback is another. `stepOffset` keeps the turn's step numbers, by which
    *  prompting/step-injections.ts places steers. */
+  /** The request as this attempt's model takes it: narrowed only where the chain took more than the model does. */
+  const narrowedFor = async (request: readonly ModelMessage[]): Promise<ModelMessage[]> => {
+    const policy = assembly.attachments;
+
+    if (policy === undefined || current.accepts === undefined || current.accepts.size === policy.accepts.size) return [...request];
+
+    return sanitizeAttachmentsForModel(request, { ...policy, accepts: current.accepts });
+  };
+
   const callModel = async function* (
     request: readonly ModelMessage[],
     stepOffset: number,
@@ -785,7 +800,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       model: current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts),
       system: cache.system,
       maxRetries: route.callRetries,
-      messages: [...request],
+      messages: await narrowedFor(request),
       tools: withToolSchemaDialect(tools, toolSchemaDialect(dialectSpec(current))),
       ...offeredTools,
       stopWhen: [opts.stopWhen ?? UNBOUNDED_STEPS, () => call.stepFailure !== null],

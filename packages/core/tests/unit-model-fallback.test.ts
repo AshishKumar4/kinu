@@ -140,7 +140,34 @@ function whatModelSaw(served: readonly Served[], model: string) {
   return { roles: messages.map((message) => message.role), image: body.includes(SCREENSHOT), note: body.includes('image omitted') };
 }
 
-describe('a tool result image follows the model each attempt calls', () => {
+/** A picture the owner attached to the turn's question. */
+const WITH_ATTACHED_PICTURE: ModelMessage[] = [
+  { role: 'user', content: [{ type: 'text', text: 'what does this show?' }, { type: 'image', image: SCREENSHOT, mediaType: 'image/png' }] },
+];
+
+describe('an image follows the model each attempt calls', () => {
+  test('a vision primary that fails over to a text-only model: an attached picture goes to the first, a stored reference to the second', async () => {
+    const { threw, served } = await turn((model) => (model === 'primary' ? refused(402) : answer('described from the reference')), ['blind'], {
+      history: WITH_ATTACHED_PICTURE, accepts: { primary: new Set(['image']), blind: new Set() },
+    });
+
+    expect(threw).toBeNull();
+    expect(served.find((entry) => entry.model === 'primary')?.body).toContain(SCREENSHOT);
+    const blind = served.find((entry) => entry.model === 'blind')?.body ?? '';
+    expect(blind).not.toContain(SCREENSHOT);
+    expect(blind).toContain('attachments/');
+  });
+
+  test('a text-only primary that fails over to a vision model: a stored reference to the first, the attached picture to the second', async () => {
+    const { threw, served } = await turn((model) => (model === 'primary' ? refused(402) : answer('it shows a page')), ['seeing'], {
+      history: WITH_ATTACHED_PICTURE, accepts: { primary: new Set(), seeing: new Set(['image']) },
+    });
+
+    expect(threw).toBeNull();
+    expect(served.find((entry) => entry.model === 'primary')?.body).not.toContain(SCREENSHOT);
+    expect(served.find((entry) => entry.model === 'seeing')?.body).toContain(SCREENSHOT);
+  });
+
   test('a text-only primary that fails over to a vision model: the note to the first, the image to the second', async () => {
     const { threw, served } = await turn((model) => (model === 'primary' ? refused(402) : answer('it shows Example Domain')), ['seeing'], {
       history: WITH_SCREENSHOT, accepts: { primary: new Set(), seeing: new Set(['image']) },
