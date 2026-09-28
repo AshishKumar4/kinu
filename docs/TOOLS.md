@@ -18,7 +18,7 @@ their surface. Crafted tools are called as `tools.<name>(args)` inside `eval`.
 | `agents` | Delegation: `swarm \| hire \| msg \| list \| dismiss` |
 | `memory` | Durable state: `save \| search` prose notes, `remember \| recall \| forget` keyed facts, `conversations` to search or browse this agent's past conversation |
 | `tasks` | The agent's task list and active role: `add` titles (with a `parent` for subtasks), `update` one item's status or note, `list` it back, `mode` to set or read the role. One row per item in `agent_tasks`; open items render into the live context block every step and into the Tasks tab |
-| `web` | `search` returns ranked results (title, url, snippet, date); `fetch` returns one URL as markdown. Works without a key through DuckDuckGo and the Cloudflare markdown service; a stored `tavily` credential upgrades search |
+| `web` | `search` returns ranked results (title, url, snippet, date); `fetch` returns one URL as markdown. Works without a key through DuckDuckGo and the Cloudflare markdown service; a stored `tavily` credential upgrades search, at `https://api.tavily.com` or at the credential's own `baseURL` (a bearer credential's optional endpoint, for a proxy) |
 | `report` | A subordinate's progress back to its orchestrator: `progress \| completed \| blocked` |
 
 `submit_plan` is not one of the eight. `buildBuiltinTools` adds it only on a

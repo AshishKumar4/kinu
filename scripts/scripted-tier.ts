@@ -1,7 +1,8 @@
 /**
  * Puts one eval account a deployed tier acts as on the scripted model, and proves the deployment reaches it. The
  * account's `openai-compat` credential points at the tiers' Worker and its default tier becomes the scripted model, so
- * its workspaces, and the helpers and swarm nodes they hire, all answer from `tierModel`. Run by the tier before its
+ * its workspaces, and the helpers and swarm nodes they hire, all answer from `tierModel`; its `tavily` credential points
+ * at the same Worker's scripted search. Run by the tier before its
  * cases, against the build it drives, with that account's CLI bearer in KINU_TOKEN.
  *   bun scripts/scripted-tier.ts <origin> <eval account>
  *
@@ -18,7 +19,7 @@ import { resolvePublicSessionPlan, resolveWebIdentity, webHeaders } from '../eva
 import {
   SCRIPTED_MODEL_ID, SCRIPTED_MODEL_KEY_ENV, SCRIPTED_MODEL_ORIGIN, SCRIPTED_MODEL_SPEC,
 } from '../packages/test-utils/src/scripted-model-spec';
-import { SCRIPTED_CREDENTIAL, defaultToScriptedModel, registerScriptedModel } from './scripted-model';
+import { SCRIPTED_CREDENTIAL, defaultToScriptedModel, registerScriptedModel, registerScriptedSearch } from './scripted-model';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 
 const [origin, named, ...rest] = process.argv.slice(2);
@@ -49,6 +50,8 @@ if (identity.kind === 'absent') throw new Error(identity.remedy);
 const headers = webHeaders(identity.identity);
 
 await registerScriptedModel(origin, SCRIPTED_MODEL_ORIGIN, headers, modelKey);
+
+await registerScriptedSearch(origin, SCRIPTED_MODEL_ORIGIN, headers, modelKey);
 
 await defaultToScriptedModel(origin, headers);
 

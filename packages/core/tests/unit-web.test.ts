@@ -190,6 +190,19 @@ describe('web provider — search', () => {
     expect(calls[0].url).toContain('tavily.com');
     expect(new Headers(calls[0].init?.headers).get('authorization')).toContain('tvly-test');
   });
+
+  // A self-hoster's proxy, or the tiers' scripted search: the credential's endpoint, never api.tavily.com.
+  test('a Tavily credential with a base URL searches there', async () => {
+    const { fetch, calls } = stubFetch(() => ({ body: JSON.stringify({ results: [{ title: 'Doc', url: 'https://docs.example.com/x' }] }) }));
+
+    const provider = createDefaultWebSearchProvider({
+      fetch,
+      getAuth: async (key) => (key === 'tavily' ? { headers: { authorization: 'Bearer tvly-test' }, baseURL: 'https://search.example.net/v1' } : null),
+    });
+
+    expect((await provider.search('query')).results[0]?.url).toBe('https://docs.example.com/x');
+    expect(calls.map((call) => call.url)).toEqual(['https://search.example.net/v1/search']);
+  });
   test('an unreadable Tavily response maps to a non-retriable WebFetchError with cause', async () => {
     const bodies = ['not-json-at-all', JSON.stringify({ results: [{ url: 123 }] })];
 

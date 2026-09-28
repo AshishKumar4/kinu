@@ -9,11 +9,12 @@
  * Domain (Workers fetch docs; anything else answers error 1042), and the first two would put a test fixture into
  * production's own configuration.
  *
- * Its route is public, so it answers only a request bearing `SCRIPTED_MODEL_KEY`, the secret deploy.sh uploads with
- * it and the tiers store as the scripted account's API key (scripted-tier.ts), and it reads a body only up to
- * MAX_BODY_BYTES.
+ * It also answers Tavily's `/search` (scripted-search.ts). Its route is public, so it answers only a request bearing
+ * `SCRIPTED_MODEL_KEY`, the secret deploy.sh uploads with it and the tiers store as the scripted account's model and
+ * search keys (scripted-tier.ts), and it reads a body only up to MAX_BODY_BYTES.
  */
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
+import { scriptedSearch } from './scripted-search';
 import { tierModel } from './tier-model';
 import { SCRIPTED_MODELS_BODY, pacedStream, readScriptedRequest, scriptedBody } from './scripted-protocol';
 
@@ -80,6 +81,15 @@ export default {
 
     if (pathname === '/models' && request.method === 'GET') {
       return new Response(SCRIPTED_MODELS_BODY, { headers: { 'content-type': 'application/json' } });
+    }
+
+    if (pathname === '/search' && request.method === 'POST') {
+      const text = await boundedText(request, MAX_BODY_BYTES);
+
+      if (text === null) return refused(413, `the body is over ${String(MAX_BODY_BYTES)} bytes`);
+      const answer = scriptedSearch(text);
+
+      return new Response(answer.body, { status: answer.status, headers: { 'content-type': 'application/json' } });
     }
 
     if (pathname === '/chat/completions' && request.method === 'POST') {

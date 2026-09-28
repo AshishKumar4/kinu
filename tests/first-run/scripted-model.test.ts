@@ -86,3 +86,17 @@ describe('the deployed tiers\' Worker answers only its key, and reads a bounded 
     expect([declared.status, undeclared.status]).toEqual([413, 413]);
   });
 });
+
+// The first-run web-search case searches through the account's `tavily` credential, pointed here.
+describe('the deployed tiers\' Worker answers a Tavily search', () => {
+  test('with results whose URLs the provider keeps, and refuses a body with no query', async () => {
+    const search = 'https://scripted-model.kinu.run/search';
+    const answered = await worker.fetch(asked(search, JSON.stringify({ query: 'Cloudflare Durable Objects documentation', max_results: 2 })), ENV);
+    const body = v.parse(v.object({ results: v.array(v.object({ url: v.pipe(v.string(), v.url()) })) }), await answered.json());
+
+    expect([answered.status, body.results.length]).toEqual([200, 2]);
+    expect(body.results.every((result) => result.url.startsWith('https://'))).toBe(true);
+    expect((await worker.fetch(asked(search, '{}'), ENV)).status).toBe(400);
+    expect((await worker.fetch(new Request(search, { method: 'POST', body: '{}' }), ENV)).status).toBe(401);
+  });
+});

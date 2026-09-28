@@ -3,7 +3,7 @@
 import * as v from 'valibot';
 import { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety';
 import { decodeEntities, htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images, stripTags } from './markdown';
-import type { AuthResolver } from '../providers/types';
+import type { AuthResolution, AuthResolver } from '../providers/types';
 import { TOOL_REACH } from '../tools/registry';
 import { readExecSignal } from '../execution/signal';
 import { codemodeText } from '../tools/sandbox-contract';
@@ -11,6 +11,8 @@ import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { REAL_CLOCK, type Clock } from '../types/clock';
 
 const TAVILY_CRED_KEY = 'tavily';
+
+const TAVILY_API = 'https://api.tavily.com';
 
 export interface WebSearchResult {
   title: string;
@@ -132,21 +134,18 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     }
   };
 
-  async function tavilyKey(): Promise<Record<string, string> | null> {
-    if (!deps.getAuth) return null;
-    const auth = await deps.getAuth(TAVILY_CRED_KEY);
-
-    return auth?.headers ?? null;
+  async function tavilyAuth(): Promise<AuthResolution | null> {
+    return deps.getAuth ? await deps.getAuth(TAVILY_CRED_KEY) : null;
   }
 
   async function tavilySearch(
     query: string,
     limit: number,
-    headers: Record<string, string>,
+    { headers, baseURL = TAVILY_API }: AuthResolution,
     caller: AbortSignal | undefined,
   ): Promise<WebSearchResponse> {
     return withRequestBudget(caller, async (signal) => {
-      const res = await fetchImpl('https://api.tavily.com/search', {
+      const res = await fetchImpl(new URL('search', baseURL.endsWith('/') ? baseURL : `${baseURL}/`).href, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...headers },
         body: JSON.stringify({
@@ -228,9 +227,9 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
 
       if (!q) throw new WebFetchError('search query is empty');
       const limit = clampLimit(opts?.limit);
-      const headers = await tavilyKey();
+      const auth = await tavilyAuth();
 
-      if (headers) return tavilySearch(q, limit, headers, opts?.signal);
+      if (auth) return tavilySearch(q, limit, auth, opts?.signal);
 
       return duckDuckGoSearch(q, limit, opts?.signal);
     },

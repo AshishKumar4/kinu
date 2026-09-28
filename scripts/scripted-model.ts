@@ -142,22 +142,47 @@ export async function registerScriptedModel(
   });
 }
 
+/** Point the account's `tavily` search credential at the scripted search the tiers' Worker serves (scripted-search.ts),
+ *  so a `web` search takes the keyed path end to end without a real provider. */
+export async function registerScriptedSearch(origin: string, baseURL: string, headers: Record<string, string>, token: string): Promise<void> {
+  await apiJson(origin, '/api/user/credentials/tavily', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ kind: 'bearer', token, baseURL }),
+  });
+}
+
 const ProfileCatalogEnvelopeSchema = v.object({
   version: v.number(),
   catalog: v.looseObject({ tiers: v.looseObject({ default: v.looseObject({}) }) }),
 });
 
+/** One writer per tier sharing the account, and a spare: each lost race means another writer landed. */
+const CATALOG_WRITE_ATTEMPTS = 4;
+
 /** Make the scripted model the default tier of the account `headers` name, so every workspace it makes runs on it,
  *  the ones made from the home page included. Its credential must be registered first. */
 export async function defaultToScriptedModel(origin: string, headers: Record<string, string> = {}): Promise<void> {
-  const { version, catalog } = v.parse(ProfileCatalogEnvelopeSchema, await apiJson(origin, '/api/user/profile-catalog', { headers }));
-  const tiers = { ...catalog.tiers, default: { ...catalog.tiers.default, model: SCRIPTED_MODEL_SPEC } };
+  // The tiers of one deploy set the same account up at once, so a write can lose the version race to another's
+  // (409, measured on staging 569bb6869d, 2026-09-27): read again, and stop once the default is the scripted model.
+  for (let attempt = 1; ; attempt += 1) {
+    const { version, catalog } = v.parse(ProfileCatalogEnvelopeSchema, await apiJson(origin, '/api/user/profile-catalog', { headers }));
 
-  await apiJson(origin, '/api/user/profile-catalog', {
-    method: 'PUT',
-    headers,
-    body: JSON.stringify({ catalog: { ...catalog, tiers }, expectedVersion: version }),
-  });
+    if (catalog.tiers.default['model'] === SCRIPTED_MODEL_SPEC) return;
+    const tiers = { ...catalog.tiers, default: { ...catalog.tiers.default, model: SCRIPTED_MODEL_SPEC } };
+
+    const answer = await fetch(`${origin}/api/user/profile-catalog`, {
+      method: 'PUT',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ catalog: { ...catalog, tiers }, expectedVersion: version }),
+    });
+
+    if (answer.ok) return;
+
+    if (answer.status !== 409 || attempt === CATALOG_WRITE_ATTEMPTS) {
+      throw new Error(`PUT /api/user/profile-catalog -> ${String(answer.status)}: ${await answer.text()}`);
+    }
+  }
 }
 
 /* ── The paced turn ───────────────────────────────────────────────────── */
