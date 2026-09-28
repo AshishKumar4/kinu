@@ -16,7 +16,8 @@ const ACTION_STRIP = '[data-plan-document] [data-print-region="article"] > [data
 const PLAN_CLASSES = '[data-plan-review-root] [class]:not(pre > code)';
 
 interface ActionStrip {
-  readonly actionStripInLayout: boolean;
+  readonly actionStripDisplay: string;
+  readonly actionStripButtons: number;
 }
 
 interface DesktopPlan extends ActionStrip {
@@ -27,18 +28,25 @@ interface DesktopPlan extends ActionStrip {
   readonly titlePx: number;
   readonly sectionPx: number;
   readonly bodyPx: number;
+  readonly documentWidth: number;
   readonly railInitiallyOpen: boolean;
+  readonly railWidth: number;
+  readonly codeLabel: string;
   readonly codeBackground: string;
   readonly pageBackground: string;
+  readonly codeBorder: string;
+  readonly codeOverflow: string;
   readonly overflow: number;
-  readonly scrimInLayout: boolean;
+  readonly scrimDisplay: string;
   /** Classes the review carries, rail closed or open, that no served rule selects. */
   readonly unruled: readonly string[];
 }
 
 interface MobilePlan {
   readonly overflow: number;
+  readonly codeOverflow: string;
   readonly codeScrollable: boolean;
+  readonly railPosition: string;
   readonly railWidth: number;
   readonly rootWidth: number;
   readonly footerInsideViewport: boolean;
@@ -47,11 +55,12 @@ interface MobilePlan {
 interface WorkspacePlan {
   readonly title: string;
   readonly rootWidth: number;
+  readonly railPosition: string;
   readonly railWidth: number;
   readonly documentWidthBefore: number;
   readonly documentWidthWithRail: number;
   readonly overflow: number;
-  readonly scrimInLayout: boolean;
+  readonly scrimDisplay: string;
   readonly railDismissed: boolean;
 }
 
@@ -76,13 +85,17 @@ interface CodePathHover {
   readonly codeBlocks: readonly string[];
 }
 
+interface SettledPlan extends ActionStrip {
+  readonly status: string;
+}
+
 interface ObservedPlan {
   readonly desktop: Record<Mode, DesktopPlan>;
   readonly mobile: MobilePlan;
   readonly workspace: WorkspacePlan;
   readonly lateHeading: PromotedPlan;
   readonly annotatedHeading: PromotedPlan;
-  readonly settled: ActionStrip;
+  readonly settled: SettledPlan;
   readonly codePath: CodePathHover;
 }
 
@@ -107,7 +120,8 @@ async function openFrame(newPage: Gallery['newPage'], origin: string, request: F
 
 async function readActionStrip(page: Page, selector: string): Promise<ActionStrip> {
   return await page.$eval(selector, (strip) => ({
-    actionStripInLayout: strip.getClientRects().length > 0,
+    actionStripDisplay: getComputedStyle(strip).display,
+    actionStripButtons: strip.querySelectorAll('button').length,
   }));
 }
 
@@ -121,10 +135,12 @@ async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode:
     const title = titleRoot?.matches('h1') ? titleRoot : titleRoot?.querySelector<HTMLElement>('h1');
     const section = document.querySelector<HTMLElement>('[data-plan-document] h2');
     const body = document.querySelector<HTMLElement>('[data-plan-document] p[data-block-id]');
+    const plan = document.querySelector<HTMLElement>('[data-plan-document]');
     const code = document.querySelector<HTMLElement>('[data-plan-document] pre');
+    const scroll = document.querySelector<HTMLElement>('[data-plan-scroll]');
     const root = document.querySelector<HTMLElement>('[data-plan-review-root]');
 
-    if (!title || !section || !body || !code || !root) throw new Error('plan fixture did not render its document contract');
+    if (!title || !section || !body || !plan || !code || !scroll || !root) throw new Error('plan fixture did not render its document contract');
 
     return {
       mode: document.documentElement.dataset.mode,
@@ -134,9 +150,13 @@ async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode:
       titlePx: Number.parseFloat(getComputedStyle(title).fontSize),
       sectionPx: Number.parseFloat(getComputedStyle(section).fontSize),
       bodyPx: Number.parseFloat(getComputedStyle(body).fontSize),
+      documentWidth: Math.round(plan.getBoundingClientRect().width),
       railInitiallyOpen: document.querySelector('[data-annotation-panel="true"]') !== null,
+      codeLabel: getComputedStyle(code, '::before').content.replace(/^['"]|['"]$/g, ''),
       codeBackground: getComputedStyle(code).backgroundColor,
       pageBackground: getComputedStyle(root).backgroundColor,
+      codeBorder: getComputedStyle(code).borderTopStyle,
+      codeOverflow: getComputedStyle(code).overflowX,
       overflow: document.documentElement.scrollWidth - innerWidth,
     };
   });
@@ -155,7 +175,8 @@ async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode:
     if (!rail || !scrim) throw new Error('the open rail did not render beside a scrim element');
 
     return {
-      scrimInLayout: scrim.getClientRects().length > 0,
+      railWidth: Math.round(rail.getBoundingClientRect().width),
+      scrimDisplay: getComputedStyle(scrim).display,
     };
   });
 
@@ -180,7 +201,8 @@ async function observeMobile(newPage: Gallery['newPage'], origin: string): Promi
 
     return {
       overflow: document.documentElement.scrollWidth - innerWidth,
-      codeScrollable: code.scrollWidth > code.clientWidth && ['auto', 'scroll'].includes(getComputedStyle(code).overflowX),
+      codeOverflow: getComputedStyle(code).overflowX,
+      codeScrollable: code.scrollWidth > code.clientWidth,
       footerInsideViewport: footerBox.left >= 0 && footerBox.right <= innerWidth && footerBox.bottom <= innerHeight,
     };
   });
@@ -189,6 +211,7 @@ async function observeMobile(newPage: Gallery['newPage'], origin: string): Promi
   await page.waitForSelector('[data-annotation-panel="true"]');
 
   const rail = await page.$eval('[data-annotation-panel="true"]', (panel) => ({
+    railPosition: getComputedStyle(panel).position,
     railWidth: Math.round(panel.getBoundingClientRect().width),
     rootWidth: Math.round(document.querySelector<HTMLElement>('[data-plan-review-root]')?.getBoundingClientRect().width ?? 0),
   }));
@@ -238,9 +261,10 @@ async function observeWorkspace(newPage: Gallery['newPage'], origin: string): Pr
     if (!rail || !plan || !scrim) throw new Error('WorkspacePage annotation rail did not open over a scrim');
 
     return {
+      railPosition: getComputedStyle(rail).position,
       railWidth: Math.round(rail.getBoundingClientRect().width),
       documentWidthWithRail: Math.round(plan.getBoundingClientRect().width),
-      scrimInLayout: scrim.getClientRects().length > 0,
+      scrimDisplay: getComputedStyle(scrim).display,
     };
   });
 
@@ -326,16 +350,17 @@ async function observePromotion(
   return observed;
 }
 
-async function observeSettled(newPage: Gallery['newPage'], origin: string): Promise<ActionStrip> {
+async function observeSettled(newPage: Gallery['newPage'], origin: string): Promise<SettledPlan> {
   const page = await openFrame(
     newPage, origin,
     { frame: 'planreview', mode: 'dark', viewport: { width: 1280, height: 900 }, params: { plan: 'read-only' } });
 
   await page.waitForSelector('[data-plan-document] [data-block-id]');
+  const status = await page.$eval('[data-plan-status]', (badge) => badge.textContent ?? '');
   const strip = await readActionStrip(page, ACTION_STRIP);
   await page.close();
 
-  return strip;
+  return { status, ...strip };
 }
 
 /**
@@ -408,7 +433,7 @@ beforeAll(async () => {
 });
 
 describe('the plan review document, as a browser lays it out', () => {
-  test('both themes preserve one document title and its hierarchy without horizontal overflow', () => {
+  test('both themes keep one document title, a readable measure, and a structured file tree', () => {
     for (const [mode, plan] of Object.entries(observed.desktop)) {
       expect(plan.mode).toBe(mode);
       // Viewer renders the promoted h1. Its inline renderer turns the Markdown
@@ -418,15 +443,22 @@ describe('the plan review document, as a browser lays it out', () => {
       expect(plan.headingCount).toBe(1);
       expect(plan.titlePx).toBeGreaterThan(plan.sectionPx);
       expect(plan.sectionPx).toBeGreaterThan(plan.bodyPx);
+      expect(plan.documentWidth).toBeGreaterThan(600);
+      expect(plan.documentWidth).toBeLessThan(800);
       expect(plan.railInitiallyOpen).toBe(false);
+      expect(plan.railWidth).toBeGreaterThanOrEqual(300);
+      expect(plan.codeLabel).toBe('File tree');
       expect(plan.codeBackground).not.toBe(plan.pageBackground);
+      expect(plan.codeBorder).toBe('solid');
+      expect(plan.codeOverflow).toBe('auto');
       expect(plan.overflow).toBe(0);
       // An editable plan keeps the global-comment control, so the strip is
       // still a strip: the collapse rule below must not reach this state.
-      expect(plan.actionStripInLayout).toBe(true);
+      expect(plan.actionStripButtons).toBe(2);
+      expect(plan.actionStripDisplay).not.toBe('none');
       // Wide enough for the rail to sit BESIDE the document, so there is
       // nothing to dim and nothing to click through.
-      expect(plan.scrimInLayout).toBe(false);
+      expect(plan.scrimDisplay).toBe('none');
     }
 
     expect(observed.desktop.dark.pageBackground).not.toBe(observed.desktop.light.pageBackground);
@@ -439,19 +471,24 @@ describe('the plan review document, as a browser lays it out', () => {
 
   test('mobile scrolls wide blocks and opens annotations as a drawer without page overflow', () => {
     expect(observed.mobile.overflow).toBe(0);
+    expect(observed.mobile.codeOverflow).toBe('auto');
     expect(observed.mobile.codeScrollable).toBe(true);
+    expect(observed.mobile.railPosition).toBe('fixed');
     expect(observed.mobile.railWidth).toBeLessThanOrEqual(observed.mobile.rootWidth);
+    expect(observed.mobile.rootWidth - observed.mobile.railWidth).toBeLessThan(8);
     expect(observed.mobile.footerInsideViewport).toBe(true);
   });
 
   test('the real WorkspacePage route keeps the rail over its narrow Work column', () => {
     expect(observed.workspace.title).toBe('Repair the applyCoupon eligibility guard');
+    expect(observed.workspace.rootWidth).toBeLessThan(500);
+    expect(observed.workspace.railPosition).toBe('absolute');
     expect(observed.workspace.railWidth).toBeLessThanOrEqual(observed.workspace.rootWidth);
     expect(observed.workspace.documentWidthWithRail).toBe(observed.workspace.documentWidthBefore);
     expect(observed.workspace.overflow).toBe(0);
     // Painted over the whole column — the rail's own close control is the
     // reachable way out here, and it must actually close the rail.
-    expect(observed.workspace.scrimInLayout).toBe(true);
+    expect(observed.workspace.scrimDisplay).toBe('block');
     expect(observed.workspace.railDismissed).toBe(true);
   });
 
@@ -477,7 +514,9 @@ describe('the plan review document, as a browser lays it out', () => {
     // Read-only hides the copy button but leaves it in the DOM, so `:empty`
     // never matched and a zero-height strip kept spending its bottom margin
     // above the first block.
-    expect(observed.settled.actionStripInLayout).toBe(false);
+    expect(observed.settled.status).toBe('Superseded');
+    expect(observed.settled.actionStripButtons).toBe(1);
+    expect(observed.settled.actionStripDisplay).toBe('none');
   });
 });
 

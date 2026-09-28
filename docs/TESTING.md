@@ -66,7 +66,7 @@ The preload also assigns a throwaway `KINU_HOME`. `createCLIRuntime` builds its 
 ## The live tier, which calls a real model
 
 ```bash
-bun run test:live                        # every suite under tests/live; resolves a credential by itself
+bun run test:live                        # every suite under tests/live-model; resolves a credential by itself
 bun run test:live:cloud                  # the one suite with a hosted arm, against the deployment
 ```
 

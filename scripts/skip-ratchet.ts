@@ -61,10 +61,10 @@ const root = new URL('..', import.meta.url).pathname;
  *
  * FOUR ENTRIES, EACH A SET NOTHING ELSE CAN ANSWER FOR.
  *
- * `./packages/core/tests/e2e/` holds three live tests — one MCTS search cycle
- * and two scaffold lifecycles, all behind `describe.skipIf(!isE2EConfigured())`
- * over `AI_GATEWAY_BASE_URL` + `AI_GATEWAY_AUTH` — and no ratchet target reached
- * `packages/`, so all three skipped at every push inside `bun run test` with
+ * `./packages/core/tests/e2e/` holds two live tests, both scaffold lifecycles,
+ * behind `describe.skipIf(!isE2EConfigured())` over `AI_GATEWAY_BASE_URL` +
+ * `AI_GATEWAY_AUTH`, and no ratchet target reached `packages/`, so both
+ * skipped at every push inside `bun run test` with
  * nothing declaring them and no report anyone read. The same false green this
  * file exists for, one directory over.
  *

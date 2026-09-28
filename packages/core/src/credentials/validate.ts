@@ -32,7 +32,10 @@ const OpenAICompatCredentialSchema = v.object({
 });
 
 /** Bearer keys whose reader honours `baseURL`; any other refuses one. */
-const ENDPOINT_BEARER_KEYS: ReadonlySet<string> = new Set(['tavily']);
+/** The web search credential: web/provider.ts reads it, and it alone may name an endpoint. */
+export const TAVILY_CRED_KEY = 'tavily';
+
+const ENDPOINT_BEARER_KEYS: ReadonlySet<string> = new Set([TAVILY_CRED_KEY]);
 
 export function validateCredential(input: { key: string; value: unknown }): Credential {
   return settleSync(credentialOf(input));
