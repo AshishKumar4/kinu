@@ -1,6 +1,8 @@
 /** Event trust is assigned once at ingress; head trust is the meet over its causal set and only
  *  restricts. Priority and visibility derive from ingress + variant, never from payload. */
 
+import { Effect } from 'effect';
+import { settleSync } from '../../obs/index';
 import {
   TRUST_ORDER,
   type TrustLevel, type Priority, type PayloadPolicy,
@@ -50,8 +52,9 @@ export function deriveEventTrust(d: IngressDescriptor): TrustLevel {
       if (d.same_owner) return 'authenticated';
 
       if (d.receiver_grant_present) return 'external';
-      throw new IngressRejectedError('peer_async',
-        'cross-owner peer message requires explicit receiver-side grant');
+
+      return settleSync(Effect.die(new IngressRejectedError('peer_async',
+        'cross-owner peer message requires explicit receiver-side grant')));
 
     case 'subordinate':
       return 'authenticated';
@@ -115,10 +118,10 @@ export function derivePriority(trust: TrustLevel, variant: EventVariant): Priori
   const prio = table.get(trust)?.get(variant);
 
   if (!prio) {
-    throw new IngressRejectedError(
+    return settleSync(Effect.die(new IngressRejectedError(
       'invalid_combination',
       `trust=${trust} + variant=${variant} is not a permitted combination`,
-    );
+    )));
   }
 
   return prio;

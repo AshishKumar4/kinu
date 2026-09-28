@@ -1,7 +1,8 @@
 import * as v from 'valibot';
 import type { SqlExec } from '../../types/primitives';
 import type { JsonValue } from '../../utils/json';
-import { KinuError } from '../../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settleSync } from '../../obs/index';
 
 const WINDOW_MS = 60_000;
 
@@ -39,14 +40,14 @@ export function normalizeWebhookRateLimitPerMin(value: JsonValue | undefined): n
   const parsed = v.safeParse(RateLimitInputSchema, value);
 
   if (!parsed.success) {
-    throw new KinuError('bad_input', `rate_limit_per_min must be an integer between 1 and ${MAX_RATE_LIMIT_PER_MIN}`);
+    return settleSync(Effect.fail(new KinuError('bad_input', `rate_limit_per_min must be an integer between 1 and ${MAX_RATE_LIMIT_PER_MIN}`)));
   }
 
   if (parsed.output === undefined || parsed.output === null) return DEFAULT_RATE_LIMIT_PER_MIN;
   const n = Number(parsed.output);
 
   if (!Number.isInteger(n) || n < 1 || n > MAX_RATE_LIMIT_PER_MIN) {
-    throw new KinuError('bad_input', `rate_limit_per_min must be an integer between 1 and ${MAX_RATE_LIMIT_PER_MIN}`);
+    return settleSync(Effect.fail(new KinuError('bad_input', `rate_limit_per_min must be an integer between 1 and ${MAX_RATE_LIMIT_PER_MIN}`)));
   }
 
   return n;

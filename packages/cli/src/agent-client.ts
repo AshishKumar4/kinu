@@ -25,21 +25,12 @@ export type AgentClientMode = 'local' | 'cloud';
 
 export type AgentPrompt = string | { text: string; files: ReadonlyArray<PromptFile> };
 
-const AgentPromptObjectSchema = v.object({
-  text: v.string(),
-  files: v.array(v.object({ filename: v.string(), mediaType: v.string(), url: v.string() })),
-});
-
 export function promptText(prompt: AgentPrompt): string {
-  const text = v.safeParse(v.string(), prompt);
-
-  return text.success ? text.output : v.parse(AgentPromptObjectSchema, prompt).text;
+  return v.is(v.string(), prompt) ? prompt : prompt.text;
 }
 
 export function promptFiles(prompt: AgentPrompt): ReadonlyArray<PromptFile> {
-  const text = v.safeParse(v.string(), prompt);
-
-  return text.success ? [] : v.parse(AgentPromptObjectSchema, prompt).files;
+  return v.is(v.string(), prompt) ? [] : prompt.files;
 }
 
 interface AgentToolCallResult {
@@ -90,7 +81,6 @@ export interface AgentClientStatus {
   scaffoldVersion?: number;
   messageCount?: number;
   searchNodeCount?: number;
-  craftedToolCount?: number;
   taskCount?: number;
   memorySize?: number;
   dbSize?: number;
@@ -313,9 +303,9 @@ export interface AgentClient {
 
   status(): Promise<AgentClientStatus>;
   describeTools(): Promise<AgentToolSurface>;
-  changelog(limit?: number): Promise<AgentChangelogView>;
+  changelog(): Promise<AgentChangelogView>;
   revertChangelogEntry(id: string): Promise<ChangelogRevertResult>;
-  refinements(limit?: number): Promise<AgentRefinementView>;
+  refinements(): Promise<AgentRefinementView>;
   /** Resolves with the durable request; the agent's behaviour has not moved yet. */
   requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView>;
   /** The only path by which a proposed skill becomes trusted instructions; owner client only. */

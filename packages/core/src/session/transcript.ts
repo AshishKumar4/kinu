@@ -32,6 +32,37 @@ interface EntryRow { id: string; position: number; role: ConversationEntry['role
 
 interface EntryPartRow { message_id: string; part_no: number; text_start: number | null; text_length: number | null }
 
+type EntryWithPartRow = EntryRow & { [K in keyof EntryPartRow]: EntryPartRow[K] | null };
+
+/** Folds one row per part (a partless entry: one row of nulls) into entries, in row order. */
+function withParts(rows: readonly EntryWithPartRow[]): ConversationEntry[] {
+  const entries: Array<ConversationEntry & { parts: ConversationPartReference[] }> = [];
+
+  for (const row of rows) {
+    let entry = entries.at(-1);
+
+    if (entry?.id !== row.id) {
+      let metadata: SessionPayload | null = null;
+
+      if (row.metadata_json !== null) metadata = { json: row.metadata_json, path: null, digest: null };
+      else if (row.metadata_path !== null && row.metadata_digest !== null) metadata = { json: null, path: row.metadata_path, digest: row.metadata_digest };
+
+      entry = { id: row.id, position: row.position, role: row.role, turnId: row.turn_id, runId: row.run_id, recordedAt: row.recorded_at, metadata,
+        context: row.context_id === null || row.context_revision === null ? null : { contextId: row.context_id, revision: row.context_revision },
+        parts: [] };
+      entries.push(entry);
+    }
+
+    if (row.message_id === null || row.part_no === null) continue;
+    const reference: ConversationPartReference = { messageId: row.message_id, partNo: row.part_no };
+
+    if (row.text_start !== null && row.text_length !== null) reference.textRange = { start: row.text_start, length: row.text_length };
+    entry.parts.push(reference);
+  }
+
+  return entries;
+}
+
 export interface ConversationProjection {
   readonly id: string;
   readonly position: number;
@@ -188,28 +219,13 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
 
   read(id: string): ConversationEntry | null {
     this.actor.assertCurrent();
+    const { actorId } = this.actor;
 
-    const row = this.sql<EntryRow>`SELECT id,position,role,turn_id,run_id,recorded_at,metadata_json,metadata_path,metadata_digest,context_id,context_revision FROM conversation_entries
-      WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND id=${id}`[0];
-
-    if (row === undefined) return null;
-    let metadata: SessionPayload | null = null;
-
-    if (row.metadata_json !== null) metadata = { json: row.metadata_json, path: null, digest: null };
-    else if (row.metadata_path !== null && row.metadata_digest !== null) metadata = { json: null, path: row.metadata_path, digest: row.metadata_digest };
-    const parts = this.sql<EntryPartRow>`SELECT message_id,part_no,text_start,text_length FROM conversation_entry_parts WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND entry_id=${id} ORDER BY position`;
-
-    return { id: row.id, position: row.position, role: row.role, turnId: row.turn_id, runId: row.run_id, recordedAt: row.recorded_at, metadata,
-      context: row.context_id === null || row.context_revision === null ? null : { contextId: row.context_id, revision: row.context_revision },
-      parts: parts.map(part => {
-        const reference: ConversationPartReference = { messageId: part.message_id, partNo: part.part_no };
-
-        if (part.text_start !== null && part.text_length !== null) reference.textRange = { start: part.text_start, length: part.text_length };
-
-        return reference;
-      }) };
+    return withParts(this.sql<EntryWithPartRow>`SELECT e.id,e.position,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,e.metadata_digest,
+        e.context_id,e.context_revision,p.message_id,p.part_no,p.text_start,p.text_length
+      FROM conversation_entries e LEFT JOIN conversation_entry_parts p ON p.actor_id=e.actor_id AND p.session_id=e.session_id AND p.entry_id=e.id
+      WHERE e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=${id} ORDER BY p.position`)[0] ?? null;
   }
-
 
   count(): number {
     return (this.newest()?.position ?? -1) + 1;
@@ -233,20 +249,20 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return row === undefined ? null : { contextId: row.context_id, revision: row.context_revision };
   }
 
-  /** The newest `limit` entries, oldest first. */
+  /** The newest `limit` entries, oldest first, with their parts, in one statement. */
   entries(limit = 10_000): readonly ConversationEntry[] {
     this.actor.assertCurrent();
 
     if (!Number.isSafeInteger(limit) || limit < 0) throw new KinuError('bad_input', 'history limit must be a nonnegative integer');
+    const { actorId } = this.actor;
 
-    return this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}
-      ORDER BY position DESC LIMIT ${limit}`.reverse().map((row) => {
-      const entry = this.read(row.id);
-
-      if (entry === null) throw new KinuError('missing', 'conversation entry disappeared mid-read');
-
-      return entry;
-    });
+    return withParts(this.sql<EntryWithPartRow>`WITH newest AS (SELECT id,position FROM conversation_entries
+        WHERE actor_id=${actorId} AND session_id=${this.sessionId} ORDER BY position DESC LIMIT ${limit})
+      SELECT e.id,e.position,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,e.metadata_digest,
+        e.context_id,e.context_revision,p.message_id,p.part_no,p.text_start,p.text_length
+      FROM newest CROSS JOIN conversation_entries e ON e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=newest.id
+      LEFT JOIN conversation_entry_parts p ON p.actor_id=e.actor_id AND p.session_id=e.session_id AND p.entry_id=e.id
+      ORDER BY e.position, p.position`);
   }
 
   /** Each text part among `references`, oldest first. */
@@ -254,8 +270,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return (await this.parts(references)).flatMap((part) => (part.type === 'text' ? [v.parse(v.string(), part.text)] : []));
   }
 
-  async parts(references: readonly ConversationPartReference[]): Promise<JsonObject[]> {
-    const cache = new Map<string, readonly StoredPart[]>();
+  async parts(references: readonly ConversationPartReference[], cache = new Map<string, readonly StoredPart[]>()): Promise<JsonObject[]> {
     const parts: JsonObject[] = [];
 
     for (const ref of references) {
@@ -285,7 +300,10 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   async history(limit = 10_000): Promise<UIMessage[]> {
     const messages: UIMessage[] = [];
 
-    for (const entry of this.entries(limit)) messages.push(await this.materializeEntry(entry));
+    const entries = this.entries(limit);
+    const parts = await this.messages.materializePartsOf([...new Set(entries.flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
+
+    for (const entry of entries) messages.push(await this.materializeEntry(entry, parts));
 
     return messages;
   }
@@ -338,8 +356,8 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return entry === null ? null : this.materializeEntry(entry);
   }
 
-  private async materializeEntry(entry: ConversationEntry): Promise<UIMessage> {
-      const parts = await this.parts(entry.parts);
+  private async materializeEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>): Promise<UIMessage> {
+      const parts = await this.parts(entry.parts, cache);
       const projected: JsonObject[] = [];
       const calls = new Map<string, JsonObject>();
 

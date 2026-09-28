@@ -1,6 +1,6 @@
 {
-  "measuredAt": "2026-09-26",
-  "total": 177,
+  "measuredAt": "2026-09-28",
+  "total": 172,
   "files": {
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
@@ -52,8 +52,8 @@
       "sleep": 1
     },
     "packages/cf-backend/tests/workerd/two-turn-probe.ts": {
-      "sleep": 11,
-      "clock-compare": 9
+      "clock-compare": 9,
+      "sleep": 11
     },
     "packages/cf-backend/tests/workerd/worker.ts": {
       "sleep": 3
@@ -165,9 +165,6 @@
     },
     "packages/cli/tests/tui-theme.test.tsx": {
       "sleep": 2
-    },
-    "packages/devbox/bench/publication-meter.test.ts": {
-      "sleep": 5
     },
     "packages/devbox/tests/decisions.test.ts": {
       "sleep": 2

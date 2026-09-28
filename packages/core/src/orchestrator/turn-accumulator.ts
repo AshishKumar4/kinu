@@ -16,14 +16,10 @@ import { digestJsonValue, projectJsonValue, type JsonObject, type JsonValue } fr
 import { ToolOutcomeSchema, type ToolOutcome } from '../tools/outcome';
 import type { CallAccount } from '../providers/quota';
 
-const UndefinedSchema = v.undefined();
-
-const StringSchema = v.string();
-
 /** The subset of an ai-SDK v6 StepResult the accounting reads, usage already normalized. */
 export interface StepLike {
   text?: string;
-  finishReason?: unknown;
+  finishReason?: string | undefined;
   toolCalls?: ReadonlyArray<{ toolName?: string; name?: string }>;
   toolResults?: ReadonlyArray<unknown>;
   /** Normalized by the caller holding the SDK object; carries fields no SDK type expresses. */
@@ -159,7 +155,7 @@ export class TurnAccumulator {
       if (args !== undefined) event.args = args;
     }
 
-    if (!v.safeParse(UndefinedSchema, recorded).success) {
+    if (recorded !== undefined) {
       event.result = projectJsonValue({ value: recorded });
     }
 
@@ -226,11 +222,9 @@ export class TurnAccumulator {
       egress: ctx.egress,
     };
 
-    const reason = v.safeParse(StringSchema, ctx.finishReason);
-
-    if (reason.success) {
-      stepEvent.reason = reason.output;
-      this.lastFinishReason = reason.output;
+    if (ctx.finishReason !== undefined) {
+      stepEvent.reason = ctx.finishReason;
+      this.lastFinishReason = ctx.finishReason;
     }
 
     if (produced.length > 0) stepEvent.messages = [...produced];
@@ -245,9 +239,9 @@ export class TurnAccumulator {
 
       if (usd !== undefined) stepEvent.usd = usd;
 
-      const modelId = v.safeParse(StringSchema, ctx.response?.modelId);
+      const modelId = ctx.response?.modelId;
 
-      if (modelId.success && modelId.output.length > 0) stepEvent.modelId = modelId.output;
+      if (modelId !== undefined && modelId.length > 0) stepEvent.modelId = modelId;
     }
 
 

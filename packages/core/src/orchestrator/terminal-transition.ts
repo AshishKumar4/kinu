@@ -22,16 +22,13 @@ export const TERMINAL_TRANSITION_CALL_ID = 'terminal:response';
 
 const TERMINAL_TRANSITION_SETTLED = '"settled"';
 
-/** Bounded: a wake that refuses twice refuses for a reason a third call cannot change. */
-const TERMINAL_RECOVERY_ARM_ATTEMPTS = 2;
-
 export interface TerminalTransition {
   readonly turnId: string;
   readonly messageId: string;
 }
 
-/** `resumed`: begun and never recorded; the ledger decides per effect. `unclaimed`: no durable identity, runs unledgered. */
-export type TerminalDisposition = 'first' | 'resumed' | 'done' | 'unclaimed';
+/** `resumed`: begun and never recorded; the ledger decides per effect. */
+export type TerminalDisposition = 'first' | 'resumed' | 'done';
 
 export interface TerminalTransitionDeps {
   readonly sql: SqlExecutor;
@@ -94,8 +91,7 @@ export class TerminalTransitions {
     };
   }
 
-  begin(transition: TerminalTransition | null): TerminalDisposition {
-    if (transition === null) return 'unclaimed';
+  begin(transition: TerminalTransition): TerminalDisposition {
     const claim = claimToolEffect(this.deps.sql, this.deps.actor, this.key(transition));
 
     switch (claim.kind) {
@@ -107,13 +103,13 @@ export class TerminalTransitions {
 
   /** Record the frozen roster and its claim together, before any effect runs.
      * A local adapter includes this synchronous write in its answer transaction. */
-  record(transition: TerminalTransition | null, owed: readonly OwedEffect[]): TerminalDisposition {
+  record(transition: TerminalTransition, owed: readonly OwedEffect[]): TerminalDisposition {
     const commit = this.deps.transaction ?? (<T>(body: () => T): T => body());
 
     return commit(() => {
       const disposition = this.begin(transition);
 
-      if (transition !== null && disposition === 'first') this.ledger.claim(this.sequenceId(transition), owed);
+      if (disposition === 'first') this.ledger.claim(this.sequenceId(transition), owed);
 
       return disposition;
     });
@@ -143,22 +139,15 @@ export class TerminalTransitions {
    * frozen at what the first attempt claimed. `hold` keeps the runtime alive for the close (per backend).
    */
   async settle(input: {
-    readonly transition: TerminalTransition | null;
+    readonly transition: TerminalTransition;
     /** Called once, before any durable write; used only on a first attempt. */
     readonly declare: () => readonly OwedEffect[];
-    /** The backend decides what stays alive for the thunk. Never called for an unledgered response. */
+    /** The backend decides what stays alive for the thunk. */
     readonly hold: (transition: TerminalTransition, close: () => Promise<void>) => void;
   }): Promise<void> {
     const { transition, declare, hold } = input;
     // Built first: a throw here must not leave an open claim with no rows, which recovery reads as finished.
     const owed = declare();
-
-    // No durable identity: run unledgered rather than invent a shared identity.
-    if (transition === null) {
-      await this.runUnledgered(owed);
-
-      return;
-    }
 
     if (!this.enter(transition)) {
       diagnostics.event('turn.terminal_transition_in_flight', {
@@ -198,41 +187,12 @@ export class TerminalTransitions {
     });
   }
 
-  /** Nothing is recoverable here; detached bodies still start in order and this caller owns them until settled. */
-  private async runUnledgered(owed: readonly OwedEffect[]): Promise<void> {
-    const detached: Promise<void>[] = [];
-
-    for (const effect of owed) {
-      const body = this.deps.effects[effect.name];
-
-      if (body === undefined) continue;
-
-      const running = (async (): Promise<void> => {
-        try {
-          await body.run(effect.input, effect.scope);
-        } catch (cause) {
-          diagnostics.failure('turn.terminal_effect_failed', toKinuError({
-            doing: `running the ${effect.name} effect a settled turn owed`,
-            cause,
-            otherwise: 'unavailable',
-          }), { sequence: '(unledgered)', effect: effect.name });
-        }
-      })();
-
-      if (effect.lane === 'inline') await running;
-      else detached.push(running);
-    }
-
-    await Promise.all(detached);
-  }
-
   nextRetryAt(): number | null {
     return this.ledger.nextRetryAt(this.inFlight);
   }
 
   /** Records completion only once every effect is terminal; must never move into a `finally`. */
-  end(transition: TerminalTransition | null): void {
-    if (transition === null) return;
+  end(transition: TerminalTransition): void {
     this.leave(transition);
     const sequenceId = this.sequenceId(transition);
     const owed = this.ledger.owed(sequenceId);
@@ -349,7 +309,7 @@ export class TerminalTransitions {
     await this.armRecovery(transition, failure);
   }
 
-  /** Bounded retries of the backend's sanctioned wake; when all refuse, rows stay owed and visible with a named failure. Never reach around the wake. */
+  /** When the backend's sanctioned wake refuses, rows stay owed and visible with a named failure. Never reach around the wake. */
   async armRecovery(
     transition: TerminalTransition,
     failure: { readonly cause: unknown },
@@ -370,19 +330,13 @@ export class TerminalTransitions {
 
   /** Shared attempt; callers report the refusal differently. */
   private async armWake(atMs: number): Promise<{ armed: true } | { armed: false; refusal: unknown }> {
-    let refusal: unknown;
+    try {
+      await this.deps.scheduleRetry(atMs);
 
-    for (let attempt = 0; attempt < TERMINAL_RECOVERY_ARM_ATTEMPTS; attempt++) {
-      try {
-        await this.deps.scheduleRetry(atMs);
-
-        return { armed: true };
-      } catch (err) {
-        refusal = err;
-      }
+      return { armed: true };
+    } catch (refusal) {
+      return { armed: false, refusal };
     }
-
-    return { armed: false, refusal };
   }
 
   /** Idempotent: re-arms from what is left. */

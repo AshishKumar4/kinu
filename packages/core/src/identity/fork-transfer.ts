@@ -560,11 +560,6 @@ export class ForkTransferReceiver {
     this.staging = writer.staging;
   }
 
-  /** The receiver retains no file bytes; each range reaches the sink before this method resolves. */
-  get stagingBytes(): number {
-    return 0;
-  }
-
   /** One frame, or a refusal. Every refusal removes the in-flight file's sibling temp. */
   async accept(wire: ForkFrameWire): Promise<ForkFrameOutcome> {
     try {

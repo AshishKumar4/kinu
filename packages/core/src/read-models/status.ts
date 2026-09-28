@@ -26,7 +26,6 @@ export interface AgentStatus {
   createdAt: number;
   scaffoldVersion: number;
   searchNodeCount: number;
-  craftedToolCount: number;
   messageCount: number;
   model: string;
   reasoningEffort: ReasoningEffort | null;
@@ -76,7 +75,6 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
   const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes
     WHERE actor_id = ${actor.actorId}`;
 
-  const craftedTools = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
 
   return {
     name: identity[0]?.name ?? deps.name,
@@ -87,7 +85,6 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     scaffoldVersion: scaffoldVersion[0]?.v ?? 0,
     searchNodeCount: searchNodes[0]?.c ?? 0,
     messageCount,
-    craftedToolCount: craftedTools[0]?.c ?? 0,
     model: deps.model,
     reasoningEffort: deps.reasoningEffort,
     forkLineage: readForkLineage(sql),

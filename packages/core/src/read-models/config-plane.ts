@@ -51,15 +51,11 @@ export function getStoredModelSpec(config: AgentConfigStore) {
 }
 
 export function setModel(deps: SetModelDeps, spec: string) {
-  try {
-    const normalized = deps.normalize(spec);
-    deps.config.setModel(normalized);
-    deps.onChanged();
+  const normalized = deps.normalize(spec);
+  deps.config.setModel(normalized);
+  deps.onChanged();
 
-    return { ok: true, spec: normalized };
-  } catch (error) {
-    throw new Error(`setModel(${spec}) failed`, { cause: error });
-  }
+  return { ok: true, spec: normalized };
 }
 
 export function getReasoningEffort(config: AgentConfigStore) {

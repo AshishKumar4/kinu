@@ -1,11 +1,13 @@
-// A tier's fallback chain, driven over a real OpenAI-compatible endpoint: a failed call hands the turn to the next
-// model, from what the turn kept, and says so; nothing retries silently.
+// A fallback chain, driven over a real OpenAI-compatible endpoint, with OMP's semantics: a failed call hands the turn to
+// the next model at once, from what the turn kept, and says so; only the chain's last model spends the owner's retries;
+// a model that failed over sits out its cooldown, then serves again.
 import { describe, expect, test } from 'bun:test';
 import { tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
-  createChatModel, createOpenAICompatProvider, createProviderRegistry, runChat,
+  createChatModel, createFallbackCooldowns, createOpenAICompatProvider, createProviderRegistry, runChat,
+  type FallbackCooldowns,
   type AuthResolution, type ChatEvent, type ChatFallback, type ProviderDeps,
 } from '../src/index';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
@@ -53,7 +55,11 @@ interface Served {
 const ServedSchema = v.looseObject({ model: v.string(), reasoning_effort: v.optional(v.string()) });
 
 /** One endpoint for every model; `answerFor` decides each request from the model it names and how often it asked. */
-async function turn(answerFor: (model: string, seen: number) => Response, fallbacks: readonly string[]) {
+async function turn(
+  answerFor: (model: string, seen: number) => Response,
+  fallbacks: readonly string[],
+  opts: { readonly retries?: number; readonly cooldowns?: FallbackCooldowns } = {},
+) {
   const served: Served[] = [];
 
   const server = Bun.serve({
@@ -91,7 +97,8 @@ async function turn(answerFor: (model: string, seen: number) => Response, fallba
 
   try {
     for await (const event of runChat({
-      model: modelFor('primary'), modelContext: { id: 'openrouter/primary' }, fallbacks: chain,
+      model: modelFor('primary'), modelContext: { id: 'openrouter/primary' }, modelSpec: 'openrouter/primary', fallbacks: chain,
+      cooldowns: opts.cooldowns ?? createFallbackCooldowns(), ...(opts.retries !== undefined && { retries: opts.retries }),
       providerOptions: { openrouter: { reasoningEffort: 'low' } },
       system: 'sys', history: [{ role: 'user', content: 'go' }], tools,
     })) events.push(event);
@@ -116,7 +123,7 @@ describe('a failed call hands the turn down its fallback chain', () => {
     expect(events.find((event) => event.type === 'done')).toMatchObject({ text: 'from backup' });
   });
 
-  test('a model that keeps failing hands over after its retries, and the next model carries on from the kept steps under its own name', async () => {
+  test('a model with a chain behind it hands over at its first failure, and the next model carries on from the kept steps under its own name', async () => {
     const { events, threw, served } = await turn((model, seen) => {
       if (model === 'backup') return answer('done after the tool');
 
@@ -124,8 +131,8 @@ describe('a failed call hands the turn down its fallback chain', () => {
     }, ['backup']);
 
     expect(threw).toBeNull();
-    // One tool step, then the SDK's own attempts at the failing second step, then the backup.
-    expect(served.map((entry) => entry.model)).toEqual(['primary', 'primary', 'primary', 'primary', 'backup']);
+    // One tool step, one failed second step, then the backup: no retry while a chain entry is left.
+    expect(served.map((entry) => entry.model)).toEqual(['primary', 'primary', 'backup']);
     // The backup continues the turn: the finished tool step and its result are in its request.
     expect(served.at(-1)?.body).toContain('ran: wc -l');
     expect(events.filter((event) => event.type === 'model-fallback')).toHaveLength(1);
@@ -153,12 +160,33 @@ describe('a failed call hands the turn down its fallback chain', () => {
     })).toEqual([['primary', 'low'], ['backup', 'high']]);
   });
 
-  test('a chain that runs out fails the turn with the last model\u2019s error', async () => {
+  test('a chain that runs out names the models it tried and the last one\u2019s own words', async () => {
     const { events, threw } = await turn(() => refused(402), ['backup']);
 
     expect(events.filter((event) => event.type === 'model-fallback')).toHaveLength(1);
-    expect(threw?.message ?? '').toContain('HTTP 402');
+    expect(threw?.message ?? '').toBe('Tried openrouter/primary, openrouter/backup: refused with 402 (HTTP 402)');
     expect(events.some((event) => event.type === 'done')).toBe(false);
+  });
+
+  test('only the last model spends the owner\u2019s retries, on a transient failure', async () => {
+    const { threw, served } = await turn(() => overloaded(), ['backup'], { retries: 2 });
+
+    expect(served.map((entry) => entry.model)).toEqual(['primary', 'backup', 'backup', 'backup']);
+    expect(threw?.message ?? '').toStartWith('Tried openrouter/primary, openrouter/backup: ');
+  });
+
+  test('a model that failed over sits out its cooldown, then the next turn starts on it again', async () => {
+    let now = 1_000_000;
+    const cooldowns = createFallbackCooldowns(() => now);
+
+    await turn((model) => (model === 'primary' ? refused(402) : answer('from backup')), ['backup'], { cooldowns });
+    const parked = await turn(() => answer('from backup'), ['backup'], { cooldowns });
+
+    expect(parked.served.map((entry) => entry.model)).toEqual(['backup']);
+    now += 5 * 60 * 1000 + 1;
+    const back = await turn(() => answer('from primary'), ['backup'], { cooldowns });
+
+    expect(back.served.map((entry) => entry.model)).toEqual(['primary']);
   });
 
   test('a model that fails after streaming part of its answer fails the turn, as the person already saw that part', async () => {
@@ -238,7 +266,7 @@ async function accountTurn(
 
   try {
     for await (const event of runChat({
-      model: registry.resolve(primary, deps), modelContext: { id: 'm' }, modelSpec: primary, fallbacks: chain,
+      model: registry.resolve(primary, deps), modelContext: { id: 'm' }, modelSpec: primary, fallbacks: chain, cooldowns: createFallbackCooldowns(),
       // A store the backend cannot reach, as a UserDO RPC failing after the 401.
       credentialOf: opts.lookupFails ? () => Promise.reject(new Error('credential store unreachable')) : (spec) => registry.credentialFor(spec, deps),
       system: 'sys', history: [{ role: 'user', content: 'go' }], tools: {},

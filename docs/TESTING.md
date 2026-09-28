@@ -259,7 +259,7 @@ packages/
 ├─ compaction/tests/          (7 suite files: codec, stores, summarizer, manifest, layergate, …)
 └─ test-utils/src/
    ├─ sql.ts            ── createTestSql()
-   ├─ llm.ts            ── createScriptedLLM / createJSONLLM / createEchoLLM
+   ├─ llm.ts            ── createScriptedLLM / createJSONLLM
    ├─ network.ts        ── createMockFetch(handlers)
    ├─ runtime.ts        ── createTestRuntime()
    ├─ credentials.ts    ── createTestAuth

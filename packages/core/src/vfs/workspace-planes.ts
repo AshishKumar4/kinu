@@ -9,7 +9,7 @@ import {
 import type { ForkFileSource } from '../identity/fork-transfer';
 import type { ForkTreeReader } from '../identity/fork';
 import type { ArchiveFileSource, ArchiveFileTarget } from '../identity/archive';
-import { SOUL_PATH, storeDurableSoulDb, summarizeSoulBytes } from '../identity/soul';
+import { SOUL_PATH, storeDurableSoulDb, summarizeSoul } from '../identity/soul';
 import { tolerate } from '../obs/index';
 import { resealWorkspaceSoul, sealWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
@@ -117,7 +117,7 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
     async publish(_targetPath, bytes) {
       await writeWorkspaceSoul(bundle, bytes);
 
-      return { mission: summarizeSoulBytes(bytes) };
+      return { mission: summarizeSoul(new TextDecoder().decode(bytes)) };
     },
   });
 }

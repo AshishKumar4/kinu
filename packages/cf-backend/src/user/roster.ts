@@ -99,14 +99,6 @@ function decodeRosterCursor(cursor?: string | null): { v: number; n: string } | 
   return parsed.output;
 }
 
-function clampRosterLimit(limit?: number): number {
-  if (limit === undefined) return WORKSPACE_LIST_LIMIT;
-
-  if (!Number.isSafeInteger(limit) || limit < 1) throw new KinuError('bad_input', 'Workspace roster limit must be a positive integer.');
-
-  return Math.min(limit, WORKSPACE_LIST_LIMIT);
-}
-
 /** A tile a later schema cannot read shows as none until the workspace pushes again. */
 function rosterEntry(row: RosterRow): RosterEntry {
   const stored = row.overview === null ? null : v.safeParse(WorkspaceOverviewSchema, JSON.parse(row.overview));
@@ -169,7 +161,7 @@ function pageRows(sql: SqlExec, query: RosterQuery, cursor: { v: number; n: stri
 
 /** A chunk short of matches reads on past its last row. */
 export function rosterPage(sql: SqlExec, query: RosterQuery = {}): RosterPage {
-  const limit = clampRosterLimit(query.limit);
+  const limit = Math.min(query.limit ?? WORKSPACE_LIST_LIMIT, WORKSPACE_LIST_LIMIT);
   const entries: RosterEntry[] = [];
   let cursor = decodeRosterCursor(query.cursor);
   let more = false;

@@ -7,7 +7,8 @@ import type { TriggerRow, TrustLevel } from '../hub/types';
 import { nextCronFire } from '../hub/cron';
 import type { WebhookSecretStore } from './secrets';
 import { JsonObjectSchema, type JsonObject } from '../../utils/json';
-import { KinuError } from '../../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settleSync } from '../../obs/index';
 
 export interface TimerTriggerOpts {
   cron?: string;
@@ -42,9 +43,9 @@ export async function createTimerTrigger(
   const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
   const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
 
-  if (opts.cron && nextFireAt === null) throw new KinuError('bad_input', `Unsupported cron expression: ${opts.cron}`);
+  if (opts.cron && nextFireAt === null) return settleSync(Effect.fail(new KinuError('bad_input', `Unsupported cron expression: ${opts.cron}`)));
 
-  if (!opts.cron && nextFireAt === null) throw new KinuError('bad_input', 'Timer trigger requires cron or atMs');
+  if (!opts.cron && nextFireAt === null) return settleSync(Effect.fail(new KinuError('bad_input', 'Timer trigger requires cron or atMs')));
   const triggerSpec: JsonObject = {};
 
   if (opts.cron !== undefined) Object.assign(triggerSpec, { cron: opts.cron });

@@ -9,7 +9,7 @@ import { basename, join } from 'node:path';
 import {
   EVIDENCE_BUDGETS, evidenceWindow, isTrivialTurn,
   JsonArraySchema, JsonObjectSchema, JsonValueSchema, parseJsonValue,
-  type CorpusTurn, type JsonObject, type JsonValue, type ToolCallRecord,
+  type CorpusTurn, type JsonValue, type ToolCallRecord,
 } from '@kinu.run/core';
 import { classify, tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -18,123 +18,57 @@ export function defaultTranscriptRoot(home: string): string {
   return join(home, '.claude', 'projects');
 }
 
-interface ContentBlock {
-  type?: string;
-  text?: string;
-  name?: string;
-  input?: JsonObject;
-  content?: JsonValue;
-  is_error?: boolean;
-}
+/** A field of the wrong type reads as absent: the transcript format drifts across CLI versions. */
+const lenient = <S extends v.GenericSchema>(schema: S) => v.fallback(v.optional(schema), undefined);
 
-interface Entry {
-  type?: string;
-  uuid?: string;
-  parentUuid?: string;
-  isSidechain?: boolean;
-  isMeta?: boolean;
-  isCompactSummary?: boolean;
-  entrypoint?: string;
-  sessionKind?: string;
-  version?: string;
-  timestamp?: string;
-  interruptedMessageId?: string;
-  toolDenialKind?: string;
-  message?: { role?: string; content?: JsonValue };
-}
+const lenientString = lenient(v.string());
+
+const lenientBoolean = lenient(v.boolean());
+
+const ContentBlockSchema = v.object({
+  type: lenientString,
+  text: lenientString,
+  name: lenientString,
+  input: lenient(JsonObjectSchema),
+  content: lenient(JsonValueSchema),
+  is_error: lenientBoolean,
+});
+
+type ContentBlock = v.InferOutput<typeof ContentBlockSchema>;
+
+const EntrySchema = v.object({
+  type: lenientString,
+  uuid: lenientString,
+  parentUuid: lenientString,
+  isSidechain: lenientBoolean,
+  isMeta: lenientBoolean,
+  isCompactSummary: lenientBoolean,
+  entrypoint: lenientString,
+  sessionKind: lenientString,
+  version: lenientString,
+  timestamp: lenientString,
+  interruptedMessageId: lenientString,
+  toolDenialKind: lenientString,
+  message: lenient(v.object({ role: lenientString, content: lenient(JsonValueSchema) })),
+});
+
+type Entry = v.InferOutput<typeof EntrySchema>;
 
 function normalizedEntry(input: { value: JsonValue }): Entry | null {
-  const record = v.safeParse(JsonObjectSchema, input.value);
+  // A JSON array passes `v.object`; it is still an unparsable line.
+  const entry = Array.isArray(input.value) ? null : v.safeParse(EntrySchema, input.value);
 
-  if (!record.success) return null;
-  const entry: Entry = {};
-  const type = stringValue(record.output.type);
-  const uuid = stringValue(record.output.uuid);
-  const parentUuid = stringValue(record.output.parentUuid);
-  const entrypoint = stringValue(record.output.entrypoint);
-  const sessionKind = stringValue(record.output.sessionKind);
-  const version = stringValue(record.output.version);
-  const timestamp = stringValue(record.output.timestamp);
-  const interruptedMessageId = stringValue(record.output.interruptedMessageId);
-  const toolDenialKind = stringValue(record.output.toolDenialKind);
-  const isSidechain = booleanValue(record.output.isSidechain);
-  const isMeta = booleanValue(record.output.isMeta);
-  const isCompactSummary = booleanValue(record.output.isCompactSummary);
-
-  if (type !== undefined) entry.type = type;
-
-  if (uuid !== undefined) entry.uuid = uuid;
-
-  if (parentUuid !== undefined) entry.parentUuid = parentUuid;
-
-  if (entrypoint !== undefined) entry.entrypoint = entrypoint;
-
-  if (sessionKind !== undefined) entry.sessionKind = sessionKind;
-
-  if (version !== undefined) entry.version = version;
-
-  if (timestamp !== undefined) entry.timestamp = timestamp;
-
-  if (interruptedMessageId !== undefined) entry.interruptedMessageId = interruptedMessageId;
-
-  if (toolDenialKind !== undefined) entry.toolDenialKind = toolDenialKind;
-
-  if (isSidechain !== undefined) entry.isSidechain = isSidechain;
-
-  if (isMeta !== undefined) entry.isMeta = isMeta;
-
-  if (isCompactSummary !== undefined) entry.isCompactSummary = isCompactSummary;
-  const message = v.safeParse(JsonObjectSchema, record.output.message);
-
-  if (message.success) {
-    const normalizedMessage: Entry['message'] = {};
-    const role = stringValue(message.output.role);
-
-    if (role !== undefined) normalizedMessage.role = role;
-    const content = v.safeParse(v.optional(JsonValueSchema), message.output.content);
-
-    if (content.success && content.output !== undefined) normalizedMessage.content = content.output;
-    entry.message = normalizedMessage;
-  }
-
-  return entry;
+  return entry?.success === true ? entry.output : null;
 }
 
 function normalizedBlock(input: { value: JsonValue }): ContentBlock | null {
-  const record = v.safeParse(JsonObjectSchema, input.value);
+  const block = v.safeParse(ContentBlockSchema, input.value);
 
-  if (!record.success) return null;
-  const block: ContentBlock = {};
-  const type = stringValue(record.output.type);
-  const text = stringValue(record.output.text);
-  const name = stringValue(record.output.name);
-  const isError = booleanValue(record.output.is_error);
-
-  if (type !== undefined) block.type = type;
-
-  if (text !== undefined) block.text = text;
-
-  if (name !== undefined) block.name = name;
-
-  if (isError !== undefined) block.is_error = isError;
-  const parsedInput = v.safeParse(JsonObjectSchema, record.output.input);
-
-  if (parsedInput.success) block.input = parsedInput.output;
-  const content = v.safeParse(v.optional(JsonValueSchema), record.output.content);
-
-  if (content.success && content.output !== undefined) block.content = content.output;
-
-  return block;
+  return block.success ? block.output : null;
 }
 
 function stringValue(value: JsonValue | undefined): string | undefined {
   const parsed = v.safeParse(v.string(), value);
-
-  return parsed.success ? parsed.output : undefined;
-}
-
-function booleanValue(value: JsonValue | undefined): boolean | undefined {
-  const parsed = v.safeParse(v.boolean(), value);
 
   return parsed.success ? parsed.output : undefined;
 }

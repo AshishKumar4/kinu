@@ -1,4 +1,3 @@
-/** Shared setup for the LocalAgentSession suites: fake models, a real CLI runtime, and the waits they use. */
 import { expect } from 'bun:test';
 import { createTestActorsOver, createTestSql, readTranscriptRows, scratchPath, type HandClock, type TranscriptRow } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';

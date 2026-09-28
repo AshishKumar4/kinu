@@ -10,10 +10,16 @@ test('a write names the reads of its table and nothing else', () => {
   expect(readsWrittenBy('INSERT INTO t (a) VALUES (?) ON CONFLICT (a) DO UPDATE SET a = excluded.a')).toEqual([]);
 });
 
-test('a row added to or removed from a membership table names its read; an update does not', () => {
-  expect(readsWrittenBy('INSERT INTO head_journal (id) VALUES (?)')).toEqual(['getWorkspaceTabPresence']);
+test('a swarm worker added or removed moves tab presence; its status moves only the Agents panel', () => {
+  expect(readsWrittenBy('INSERT INTO head_journal (id) VALUES (?)')).toEqual(['listWorkspaceAgents', 'getWorkspaceTabPresence']);
   expect(readsWrittenBy('DELETE FROM search_nodes WHERE root_id = ?')).toEqual(['getWorkspaceTabPresence']);
-  expect(readsWrittenBy('UPDATE head_journal SET status = ? WHERE id = ?')).toEqual([]);
+  expect(readsWrittenBy('UPDATE head_journal SET status = ? WHERE id = ?')).toEqual(['listWorkspaceAgents']);
+});
+
+// 2026-09-28: the workerd parity record held these notices and flaked with the timer's latency; the mapping is pinned here.
+test('a turn claim taken or released moves the Agents panel', () => {
+  expect(readsWrittenBy('INSERT INTO actor_turn_claims (actor_id, turn_id) VALUES (?, ?)')).toContain('listWorkspaceAgents');
+  expect(readsWrittenBy('DELETE FROM actor_turn_claims WHERE turn_id = ?')).toContain('listWorkspaceAgents');
 });
 
 test('many writes in one tick send one frame naming each moved read once', () => {

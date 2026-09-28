@@ -1,6 +1,4 @@
-// LocalAgentSession loop over the real createCLIRuntime and a fake streaming model: turns stream and persist,
-// programmatic turns serialize, broadcast fans out, end() flushes.
-// This file: steering, durable pending sends, parity surfaces, branches, the lifetime search, the cloud proxy, the run-event log, codemode, the completion gate, roles and a directory-bound workspace.
+// LocalAgentSession over the real CLI runtime and a fake model: steering, durable sends, branches and the run-event log.
 import { describe, test, expect } from 'bun:test';
 import { present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';

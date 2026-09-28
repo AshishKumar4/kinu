@@ -6,7 +6,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import type { UIMessage } from "ai";
-import { threadLiveTail, type TurnLiveness, requestUrl } from "@kinu.run/core";
+import { threadLiveTail, type PanelAgent, type TurnLiveness, requestUrl } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };
@@ -80,14 +80,14 @@ import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
-  BUILTIN_PROFILE_CATALOG, BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
-  CHARS_PER_TOKEN, DEVICE_TIERS, TOOL_REACH, JsonObjectSchema, JsonValueSchema,
+  BUILTIN_PROFILE_CATALOG,
+  CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type AdvisorSeverity, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
-import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc, ToolInfo } from "@kinu.run/core";
+import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { buildTree, type MctsRow } from "@kinu.run/core";
 import { formatWorkspaceError, type AgentStatus, type ExecutorOutput, type WorkspaceErrors } from "@/hooks/use-kinu";
@@ -1024,7 +1024,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
       displayName: "Checkout coupon bug", purpose: "Find why the SAVE20 coupon 500s and fix it.",
       soul: "# Checkout coupon bug\n\nI own the checkout coupon path. I read the migration before I guess.\n",
       createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 106,
-      craftedToolCount: 2, messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null, reasoningEffort: "medium",
+      messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null, reasoningEffort: "medium",
     },
     tools: { builtIn: [], crafted: [] },
     memoryContent: "",
@@ -1331,6 +1331,17 @@ const GALLERY_SUBS: {
 
 let gallerySubSeq = 0;
 
+const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "panel";
+
+if (AGENTS_PANEL) {
+  const docs = {
+    name: "docs", actorId: galleryActorId("docs"), displayName: "Docs writer", role: "agent", nameOrigin: "user", createdBy: "user",
+    lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
+  };
+
+  GALLERY_SUBS.push(docs);
+}
+
 /** Derived from the name, so gate-stamped frames and the pane's snapshot id agree without a second fixture. */
 function galleryActorId(name: string): string {
   return `actor-${name}`;
@@ -1530,15 +1541,16 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   // `dataset.workMoved`: a task written during an outage.
   listWorkspaceWork: () => ({
     plans: [{
-      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false, path: [] },
+      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] },
       plan: galleryAgentPlan, tasks: [],
     }],
     tasks: document.documentElement.dataset.workMoved === "1" ? [{
-      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
+      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
       tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
     }] : [],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
+  listWorkspaceAgents: () => (AGENTS_PANEL ? GALLERY_AGENTS : []),
   // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
   // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture.
@@ -1719,6 +1731,17 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
   return from === 0 ? { status: "end", items } : { status: "more", items, next: { before: from } };
 }
 
+const GALLERY_AGENTS: PanelAgent[] = [
+  { key: galleryActorId("docs"), label: "Docs writer", category: "user", activity: "idle", parent: "Main", open: { kind: "chat", path: "docs" }, tab: true, input: true },
+  { key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "Main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true },
+  { key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "Coupon auditor", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true },
+  { key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "Main",
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false },
+  { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "Main",
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false },
+  { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "Main", open: { kind: "chat", path: "refiner" }, tab: false, input: false },
+];
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getChatHistoryPage" && HISTORY_ROWS > 0) return rpcResult(await galleryHistoryPage(args)).json<T>();
 
@@ -1784,12 +1807,19 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
   const page = WORKSPACE_PAGE_RPC.get(method);
 
   if (page !== undefined) return rpcResult(v.parse(JsonValueSchema, page(args))).json<T>();
+
+  return agentPageFallback<T>(method, args);
+};
+
+async function agentPageFallback<T>(method: string, args: unknown[] | undefined): Promise<T> {
   const agent = AGENT_RPC.get(method);
 
   if (agent !== undefined) return rpcResult(agent).json<T>();
 
+  if (EXPLORATION_READS.has(method)) return rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? []))).json<T>();
+
   return stubRpc<T>(method, args);
-};
+}
 
 /** A named-preset search. `prove` because its resolved axes are the least guessable from its name. */
 // `lean/Checkout/Coupon.lean` is invented along with the coupon table; the module does not exist. Enrolled in `CITATION_ILLUSTRATIVE`.
@@ -2925,7 +2955,7 @@ function Shell(
             <div className="z-[2] -ml-[3px] w-[5px] shrink-0" />
             <div className="w-[430px] shrink-0 min-w-0">
               <WorkSurface
-                surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]}
+                surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}}
                 memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} headActivity={headActivity} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
                 backgroundJobs={backgroundJobs} onRefreshJobs={() => {}} pendingActions={pendingActions}
@@ -4037,30 +4067,10 @@ function MarksFrame() {
   );
 }
 
-/* At the width Column C gets. */
-/* Real docstrings from the registry, so length problems are visible; getToolDescriptions() lists only
-   BUILTIN_TOOLS. `exposure` is declared reach (TOOL_REACH); `wired` is whether this agent has it (`report` is false on an orchestrator). */
-function galleryTool(info: ToolInfo): ToolInfo { return info; }
-
-const BRAIN_TOOLS: ToolInfo[] = [
-  ...BUILTIN_TOOLS.map((name) => galleryTool({
-    name,
-    summary: BUILTIN_TOOL_SPECS[name].summary,
-    description: BUILTIN_TOOL_DESCRIPTIONS[name],
-    learned: false,
-    exposure: TOOL_REACH[name].codemode ? "both" : "native",
-    wired: name !== "report",
-    qualityScore: 1,
-    usageCount: 0,
-  })),
-  galleryTool({ name: "bisect_migration", summary: "Walk a migration's revisions to find the one that changed a column's shape.", description: "Walk a migration's revisions to find the one that changed a column's shape.", learned: true, exposure: "codemode", wired: true, qualityScore: 0.82, usageCount: 14 }),
-  galleryTool({ name: "coupon_replay", summary: "Replay a checkout against a coupon code and diff the response.", description: "Replay a checkout against a coupon code and diff the response.", learned: true, exposure: "codemode", wired: true, qualityScore: 0.61, usageCount: 3 }),
-];
-
 const BRAIN_STATUS = {
   name: "checkout-coupon-bug-9935d3", displayName: "Checkout coupon bug",
   purpose: "Find why the SAVE20 coupon 500s and fix it.", model: "anthropic/claude-opus-4",
-  scaffoldVersion: 7, searchNodeCount: 12, craftedToolCount: 2, messageCount: 48,
+  scaffoldVersion: 7, searchNodeCount: 12, messageCount: 48,
   soul: "# Checkout coupon bug", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
 } satisfies AgentStatus;
 
@@ -4150,7 +4160,7 @@ const AGENT_TASKS = [
 const WORKSPACE_WORK = {
   plans: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false, path: [] },
+      owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] },
       plan: {
         id: "plan-gateway", sessionId: "default", revision: 3,
         content: "# Gateway timeout repair\n\nPatch the gateway timeout, then prove the expired-coupon branch.",
@@ -4160,7 +4170,7 @@ const WORKSPACE_WORK = {
       tasks: AGENT_TASKS.filter((task) => task.id === "t2"),
     },
     {
-      owner: { actorId: "actor-courier", name: "courier", retired: false, path: ["courier"] },
+      owner: { actorId: "actor-courier", name: "courier", title: "courier", retired: false, path: ["courier"] },
       plan: {
         id: "plan-courier", sessionId: "default", revision: 1,
         content: "# Courier rollout\n\nStage the rollout and verify the receipt.",
@@ -4174,7 +4184,7 @@ const WORKSPACE_WORK = {
   ],
   tasks: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false, path: [] }, plan: null,
+      owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id !== "t2"),
     },
   ],
@@ -4397,7 +4407,7 @@ const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promis
   if (method === "listWorkspaceWork") return rpcResult({
     plans: [],
     tasks: [{
-      owner: { actorId: "actor-main", name: "main", retired: false, path: [] }, plan: null,
+      owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id === "t1"),
     }],
   }).json<T>();
@@ -4444,7 +4454,7 @@ function WorkFrame() {
       <div className="w-[430px] min-h-screen border-x p-border">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={lane.memory} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={lane.memory} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={lane.jobs} onRefreshJobs={() => {}} pendingActions={lane.queue}
@@ -4477,7 +4487,7 @@ function ApprovalsFrame() {
       <div className="w-[720px] min-h-screen border-x p-border p-5 space-y-5">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={PARKED_ONLY}
@@ -4505,7 +4515,7 @@ function WorkEmptyFrame() {
       <div className="w-[720px] h-screen border-x p-border">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
@@ -4766,7 +4776,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
         )}
         <WorkSurface
           surface={surface} onSurface={setSurface}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={executors} executorOutputs={executorOutputs}
           onExecute={runCommand} lastActiveExecutor="workspace"
@@ -5455,10 +5465,9 @@ const OUTAGE: WorkspaceErrors = { snapshot: LOST, memoryContent: LOST };
 
 /** One rung of the snapshot ladder; any two rungs rendering the same is the defect. */
 function AgentPanel(
-  { label, snapshot, tools, memoryContent, errors }: {
+  { label, snapshot, memoryContent, errors }: {
     label: string;
     snapshot: AsyncResource<AgentStatus>;
-    tools: ToolInfo[];
     memoryContent: string;
     errors: WorkspaceErrors;
   },
@@ -5475,7 +5484,7 @@ function AgentPanel(
              action: banner.retry === null ? undefined : { label: banner.retry, onClick: () => {} } }]
         : []} />
       <AgentSurface
-        snapshot={snapshot} tools={tools} memory={[]} memoryContent={memoryContent}
+        snapshot={snapshot} memory={[]} memoryContent={memoryContent}
         onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={evolutionRpc}
       />
     </section>
@@ -5489,22 +5498,22 @@ function AgentFrame() {
         <AgentPanel
           label="Loaded — everything current"
           snapshot={{ status: "ready", value: BRAIN_STATUS }}
-          tools={BRAIN_TOOLS} memoryContent={BRAIN_MEMORY} errors={{}}
+          memoryContent={BRAIN_MEMORY} errors={{}}
         />
         <AgentPanel
           label="Loaded, then the connection dropped — last known data, one reason"
           snapshot={{ status: "error", message: LOST, last: BRAIN_STATUS }}
-          tools={BRAIN_TOOLS} memoryContent={BRAIN_MEMORY} errors={OUTAGE}
+          memoryContent={BRAIN_MEMORY} errors={OUTAGE}
         />
         <AgentPanel
           label="Nothing loaded yet — the snapshot is still coming"
           snapshot={{ status: "loading" }}
-          tools={[]} memoryContent="" errors={{}}
+          memoryContent="" errors={{}}
         />
         <AgentPanel
           label="Nothing loaded — the snapshot failed"
           snapshot={{ status: "error", message: LOST, last: null }}
-          tools={[]} memoryContent="" errors={OUTAGE}
+          memoryContent="" errors={OUTAGE}
         />
       </div>
     </div>
@@ -6159,6 +6168,12 @@ function GalleryNavigator() {
 }
 
 /** Both app routes as App.tsx keys them, so creating an agent can navigate. */
+function nodeQuery(): string {
+  const node = new URLSearchParams(location.search).get("node");
+
+  return node === null ? "" : `?node=${encodeURIComponent(node)}`;
+}
+
 function workspacePageFrame(): MountedFrame {
   serveGalleryRpc(workspacePageRpc);
 
@@ -6166,7 +6181,7 @@ function workspacePageFrame(): MountedFrame {
   scheduleDeviceNotice(new URLSearchParams(location.search).get("devices"));
 
   return {
-    entries: [`/workspace/${WORKSPACE_PAGE_NAME}`],
+    entries: [`/workspace/${WORKSPACE_PAGE_NAME}${nodeQuery()}`],
     node: (
       <>
         <GalleryNavigator />

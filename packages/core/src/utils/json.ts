@@ -66,9 +66,16 @@ const BoundaryArraySchema = v.array(v.unknown());
 
 const BoundaryObjectSchema = v.record(v.string(), v.unknown());
 
+/** `JSON.parse` output is JSON by construction: no walk. */
 export function parseJsonValue(text: string): JsonValue {
-  return v.parse(JsonValueSchema, JSON.parse(text));
+  const value: JsonValue = JSON.parse(text);
+
+  return value;
 }
+
+const ParsedObjectSchema = v.custom<JsonObject>((value) => !Array.isArray(value) && v.is(BoundaryObjectSchema, value), 'Invalid type: Expected Object');
+
+const ParsedArraySchema = v.custom<JsonValue[]>(Array.isArray, 'Invalid type: Expected Array');
 
 /** Text that is not JSON reads back as itself; any other failure throws. */
 export function safeJsonParse(text: string): JsonValue {
@@ -78,12 +85,13 @@ export function safeJsonParse(text: string): JsonValue {
   ));
 }
 
+/** Checks the top level only; the members are JSON by construction. */
 export function parseJsonObject(text: string): JsonObject {
-  return v.parse(JsonObjectSchema, JSON.parse(text));
+  return v.parse(ParsedObjectSchema, parseJsonValue(text));
 }
 
 export function parseJsonArray(text: string): JsonValue[] {
-  return v.parse(JsonArraySchema, JSON.parse(text));
+  return v.parse(ParsedArraySchema, parseJsonValue(text));
 }
 
 export function decodeJsonValue(input: { value: unknown }): JsonValue {

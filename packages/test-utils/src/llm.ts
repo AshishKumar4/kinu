@@ -39,14 +39,6 @@ export function createScriptedLLM(responses: string[]): ScriptedLLM {
   };
 }
 
-/** An LLM that echoes the prompt. */
-export function createEchoLLM(): LLM {
-  return {
-    async *stream() { yield ''; },
-    async complete(prompt: string) { return prompt; },
-  };
-}
-
 /** An LLM that returns canned JSON. */
 export function createJSONLLM(payload: JsonValue): LLM {
   const stringPayload = v.safeParse(v.string(), payload);

@@ -1,6 +1,4 @@
-// LocalAgentSession loop over the real createCLIRuntime and a fake streaming model: turns stream and persist,
-// programmatic turns serialize, broadcast fans out, end() flushes.
-// This file: the BackendHost lifecycle and the forked turn-outcome review.
+// LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
 import { createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
 import { initWorkspaceSchema } from '@kinu.run/core';

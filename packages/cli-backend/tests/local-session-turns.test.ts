@@ -1,6 +1,4 @@
-// LocalAgentSession loop over the real createCLIRuntime and a fake streaming model: turns stream and persist,
-// programmatic turns serialize, broadcast fans out, end() flushes.
-// This file: a user turn end to end: streaming, persistence, walk-back, tools, checkpoints, programmatic turns, overflow, the context window, titling, the advisor lane and AGENTS.md recall.
+// LocalAgentSession over the real CLI runtime and a fake model: a user turn end to end.
 import { describe, test, expect } from 'bun:test';
 import { present, scratchDir, scriptedTurnModel } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
@@ -365,6 +363,35 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(text).not.toContain('device tunnel');
     expect(text).not.toContain('asks the user for consent');
     expect(text).not.toContain('OFFLINE');
+  });
+
+  // Issue #36: a local workspace has neither mount, so nothing the model reads may offer one.
+  test('cli-local offers no /pc or /sandbox in its prompt or its tool schemas', async () => {
+    const base = fakeModel('ok');
+    let sent = '';
+
+    const model = new TestLanguageModelV2({
+      provider: base.provider,
+      modelId: base.modelId,
+      doGenerate: base.doGenerate,
+      doStream: async (options) => {
+        sent = JSON.stringify({ prompt: options.prompt, tools: options.tools });
+
+        return base.doStream(options);
+      },
+    });
+
+    const { session } = setup('ok', model);
+    await session.send('hi', { id: crypto.randomUUID() });
+
+    // The project's own AGENTS.md is the user's text, and it may name anything.
+    // The block as the prompt opens and closes it, newlines escaped by JSON; prose may name the tag inline.
+    const start = sent.indexOf('<workspace_instructions>\\n');
+    const end = sent.indexOf('\\n</workspace_instructions>', start);
+    const ours = start === -1 || end === -1 ? sent : sent.slice(0, start) + sent.slice(end);
+
+    expect(ours).toContain('Relative paths resolve at the workspace root');
+    expect(ours.match(/\/pc\b|\/sandbox\b|sandbox:\/\//gu)).toBeNull();
   });
 
   test('head-inherited context drops file-part data URLs, keeps the reference', () => {

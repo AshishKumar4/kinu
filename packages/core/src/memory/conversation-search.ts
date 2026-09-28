@@ -5,10 +5,12 @@
  */
 
 import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from '@kinu.run/agent-utils/memory';
+import { Deferred, Effect } from 'effect';
 import * as v from 'valibot';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { boundedInt } from '../utils/bounds';
 import { KinuError } from '../obs/error';
+import { settle } from '../obs/effect';
 // MCTS sessions hold tree nodes, not conversation: excluded from indexing and browse.
 import { MCTS_SESSION_ID } from '../session/transcript-schema';
 import type { SqlExecutor } from '../types/primitives';
@@ -100,7 +102,7 @@ function ensureIndexTables(sql: SqlExecutor): void {
 
 export class ConversationSearchStore {
   private ensured = false;
-  private syncing: Promise<void> | null = null;
+  private syncing: Deferred.Deferred<void, KinuError> | null = null;
   private readonly actorId: string;
 
   constructor(
@@ -112,10 +114,19 @@ export class ConversationSearchStore {
   }
 
   /** Strict all-term page, then ranked partial matches until full ({@link fillToCapacity}). */
-  async search(query: string, limit = 5): Promise<ConversationSearchHit[]> {
-    this.actor.assertCurrent();
-    await this.ensure();
+  search(query: string, limit = 5): Promise<ConversationSearchHit[]> {
+    return settle(Effect.map(this.ensure(), () => this.searchIndexed(query, limit)));
+  }
 
+  scroll(aroundMessageId: string, window = 5, maxChars?: number): Promise<ConversationScrollResult | null> {
+    return settle(Effect.flatMap(this.ensure(), () => Effect.promise(() => this.scrollIndexed(aroundMessageId, window, maxChars))));
+  }
+
+  browse(limit = 10): Promise<ConversationSummary[]> {
+    return settle(Effect.flatMap(this.ensure(), () => Effect.promise(() => this.browseIndexed(limit))));
+  }
+
+  private searchIndexed(query: string, limit: number): ConversationSearchHit[] {
     if (!query.trim()) return [];
     const capacity = boundedInt(limit, 1, 1, 10);
     const safe = sanitizeFtsQuery(query);
@@ -129,10 +140,7 @@ export class ConversationSearchStore {
     return rows.map(toHit);
   }
 
-  async scroll(aroundMessageId: string, window = 5, maxChars?: number): Promise<ConversationScrollResult | null> {
-    this.actor.assertCurrent();
-    await this.ensure();
-
+  private async scrollIndexed(aroundMessageId: string, window: number, maxChars: number | undefined): Promise<ConversationScrollResult | null> {
     // Entry ids are unique per session only: the chat answers an ambiguous anchor first.
     const anchor = this.sql<EntryRow>`
       SELECT id, session_id, role, recorded_at, rowid AS rid FROM conversation_entries
@@ -190,9 +198,7 @@ export class ConversationSearchStore {
     };
   }
 
-  async browse(limit = 10): Promise<ConversationSummary[]> {
-    this.actor.assertCurrent();
-    await this.ensure();
+  private async browseIndexed(limit: number): Promise<ConversationSummary[]> {
     const lim = boundedInt(limit, 1, 1, 20);
 
     const groups = this.sql<{ session_id: string; n: number; started_at: number; last_active: number }>`
@@ -224,78 +230,80 @@ export class ConversationSearchStore {
   }
 
   /** Triggers are table-wide: a trigger cannot carry a bound actor. */
-  private async ensure(): Promise<void> {
-    if (!this.ensured) {
-      ensureIndexTables(this.sql);
-      void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_entries_ai AFTER INSERT ON conversation_entries BEGIN
-        UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
-      void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_entries_ad AFTER DELETE ON conversation_entries BEGIN
-        UPDATE conversation_fts_state SET rev = rev + 1, purges = purges + 1 WHERE id = 1; END`;
-      this.ensured = true;
-    }
+  private ensure(): Effect.Effect<void, KinuError> {
+    return Effect.suspend(() => {
+      this.actor.assertCurrent();
 
-    await this.refreshIndex();
+      if (!this.ensured) {
+        ensureIndexTables(this.sql);
+        void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_entries_ai AFTER INSERT ON conversation_entries BEGIN
+          UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
+        void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_entries_ad AFTER DELETE ON conversation_entries BEGIN
+          UPDATE conversation_fts_state SET rev = rev + 1, purges = purges + 1 WHERE id = 1; END`;
+        this.ensured = true;
+      }
+
+      return this.refreshIndex();
+    });
   }
 
   /** One sync at a time: projection awaits, so interleaved syncs would double-index. A failed sync invalidates the index. */
-  private async refreshIndex(): Promise<void> {
+  private refreshIndex(): Effect.Effect<void, KinuError> {
     const pending = this.syncing;
 
-    if (pending !== null) {
-      await pending;
-
-      return;
-    }
-
-    const run = this.sync();
+    if (pending !== null) return Deferred.await(pending);
+    const run = Deferred.makeUnsafe<void, KinuError>();
     this.syncing = run;
 
-    try { await run; }
-    catch (cause) {
-      invalidateConversationSearchIndex(this.sql);
-      throw cause;
-    }
-    finally { this.syncing = null; }
+    return this.sync().pipe(
+      Effect.onError(() => Effect.sync(() => invalidateConversationSearchIndex(this.sql))),
+      Effect.exit,
+      Effect.tap((exit) => Deferred.done(run, exit)),
+      Effect.flatten,
+      Effect.ensuring(Effect.andThen(Deferred.interrupt(run), Effect.sync(() => { this.syncing = null; }))),
+    );
   }
 
-  private async sync(): Promise<void> {
-    const state = this.sql<SyncState>`
-      SELECT actor_id, rev, purges, synced_rev, synced_purges, synced_rowid
-      FROM conversation_fts_state WHERE id = 1`[0];
+  private sync(): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const state = this.sql<SyncState>`
+        SELECT actor_id, rev, purges, synced_rev, synced_purges, synced_rowid
+        FROM conversation_fts_state WHERE id = 1`[0];
 
-    if (state === undefined) throw new KinuError('io', 'the transcript search index lost its sync state');
-    const rebuild = state.actor_id !== this.actorId || state.purges !== state.synced_purges;
+      if (state === undefined) return yield* new KinuError('io', 'the transcript search index lost its sync state');
+      const rebuild = state.actor_id !== this.actorId || state.purges !== state.synced_purges;
 
-    if (!rebuild && state.rev === state.synced_rev) return;
+      if (!rebuild && state.rev === state.synced_rev) return;
 
-    if (rebuild) void this.sql`DELETE FROM conversation_fts`;
-    const watermark = rebuild ? 0 : state.synced_rowid;
+      if (rebuild) void this.sql`DELETE FROM conversation_fts`;
+      const watermark = rebuild ? 0 : state.synced_rowid;
 
-    const rows = this.sql<EntryRow>`
-      SELECT id, session_id, role, recorded_at, rowid AS rid FROM conversation_entries
-      WHERE actor_id = ${this.actorId} AND session_id <> ${MCTS_SESSION_ID}
-        AND role IN ('user', 'assistant') AND rowid > ${watermark}
-      ORDER BY rowid ASC`;
+      const rows = this.sql<EntryRow>`
+        SELECT id, session_id, role, recorded_at, rowid AS rid FROM conversation_entries
+        WHERE actor_id = ${this.actorId} AND session_id <> ${MCTS_SESSION_ID}
+          AND role IN ('user', 'assistant') AND rowid > ${watermark}
+        ORDER BY rowid ASC`;
 
-    let synced = watermark;
+      let synced = watermark;
 
-    for (const row of rows) {
-      const projected = await this.transcriptFor(row.session_id).project(row.id);
+      for (const row of rows) {
+        const projected = yield* Effect.promise(() => this.transcriptFor(row.session_id).project(row.id));
 
-      if (projected !== null) {
-        void this.sql`
-          INSERT INTO conversation_fts (content, msg_id, session_id, role, created_at)
-          VALUES (${projected.content}, ${row.id}, ${row.session_id}, ${row.role}, ${row.recorded_at})`;
+        if (projected !== null) {
+          void this.sql`
+            INSERT INTO conversation_fts (content, msg_id, session_id, role, created_at)
+            VALUES (${projected.content}, ${row.id}, ${row.session_id}, ${row.role}, ${row.recorded_at})`;
+        }
+
+        synced = row.rid;
       }
 
-      synced = row.rid;
-    }
-
-    // Record the counters this sync read: writes landing during projection belong to the next pass.
-    void this.sql`
-      UPDATE conversation_fts_state
-      SET actor_id = ${this.actorId}, synced_rev = ${state.rev}, synced_purges = ${state.purges}, synced_rowid = ${synced}
-      WHERE id = 1`;
+      // Record the counters this sync read: writes landing during projection belong to the next pass.
+      void this.sql`
+        UPDATE conversation_fts_state
+        SET actor_id = ${this.actorId}, synced_rev = ${state.rev}, synced_purges = ${state.purges}, synced_rowid = ${synced}
+        WHERE id = 1`;
+    });
   }
 
   /** Rowid breaks bm25 ties so merged pages are reproducible. */
