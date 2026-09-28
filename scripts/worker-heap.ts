@@ -54,10 +54,10 @@ export const PER_HELPER_RETAINED_BOUND_BYTES = 250_000;
  *  SDK's record of the call's response messages, and the request JSON the retry wrapper keeps for a resend. */
 export const HELPER_TURN_LIVE_BOUND_BYTES = 3_600_000;
 
-/** Measured 2026-09-27 at {@link HELPERS}, a helper with 4 pages of 0.2 MB waiting on its own hire: 2.3 MB on lane/memory
- *  b38ffa4c6f, each page held twice, as streamed and as decoded for the step's prompt; 1.5-1.6 MB over 3 runs once a
- *  verified row shares the streamed text. */
-export const WAITING_PARENT_LIVE_BOUND_BYTES = 1_900_000;
+/** Measured 2026-09-27 at {@link HELPERS}, a helper with 4 pages of 1 MB waiting on its own hire: 16.8 MB (twice) before
+ *  4920df14d6, each page held as streamed and as decoded for the prompt; 12.8-13.4 MB over 4 runs after. At 0.2 MB
+ *  pages the two overlapped in collector noise (1.5-2.2 against 2.3). */
+export const WAITING_PARENT_LIVE_BOUND_BYTES = 14_500_000;
 
 /** Measured 2026-09-27 at {@link LONG_TURN}, after the setup, step and heads above in the same isolate: 104-116 MB
  *  used over 3 runs on main 20cacf3423, 99-117 MB over 10 once no step keeps its request body. The collector decides
@@ -248,7 +248,7 @@ export const HEADS = { warm: 5, count: 200 } as const;
 
 /** The delegation the helper bound is about: the root hires COUNT task helpers, each working 4 pages of
  *  ANSWER_BYTES (`worker-heap/driver.ts`) before a one-word answer. */
-export const HELPERS = { warm: 2, count: 12, answerBytes: 200_000 } as const;
+export const HELPERS = { warm: 2, count: 12, answerBytes: 200_000, waitingPageBytes: 1_000_000 } as const;
 
 /** The long turn the peak bound is about: STEPS model calls, each after a small `file stat` result. */
 export const LONG_TURN = { steps: 150 } as const;
@@ -404,7 +404,7 @@ export async function measure(): Promise<HeapMeasurement> {
       await running;
 
       // The helper, its pages written, hires one of its own, held on its first call: the helper and the root wait.
-      await ask(`/model?answerBytes=${String(HELPERS.answerBytes)}&hires=1&nest=1&holdHelper=1`);
+      await ask(`/model?answerBytes=${String(HELPERS.waitingPageBytes)}&hires=1&nest=1&holdHelper=1`);
       const nested = ask('/turn?workspace=helpers&text=HIRE-ROOT');
 
       while (!v.parse(v.object({ helperParked: v.boolean() }), JSON.parse(await ask('/model'))).helperParked) await Bun.sleep(50);
