@@ -32,4 +32,20 @@ describe('the workspace work read', () => {
       'ask-reader-b2': null,
     });
   });
+
+  test('a task owner is shown by its display name, and by its name when it has none', () => {
+    const workspace = createTestWorkspace();
+    const { directory, main } = createTestActorsOver(workspace.db, { name: 'workspace' });
+    const auditor = directory.create({ parent: main, name: 'auditor', creationId: 'auditor', kind: 'subordinate', lifetime: 'durable' });
+    const unnamed = directory.create({ parent: main, name: 'lookup-a1', creationId: 'lookup', kind: 'subordinate', lifetime: 'task' });
+    auditor.config.setDisplayName('Coupon auditor');
+
+    for (const actor of [auditor, unnamed]) {
+      new TaskListStore(workspace.sql, actor, (write) => workspace.db.transaction(write)()).add(['a task'], null, 1);
+    }
+
+    const titles = readWorkspaceWork(workspace.sql, main, directory.list({ retired: true })).tasks.map(({ owner }) => [owner.name, owner.title]);
+
+    expect(Object.fromEntries(titles)).toEqual({ auditor: 'Coupon auditor', 'lookup-a1': 'lookup-a1' });
+  });
 });

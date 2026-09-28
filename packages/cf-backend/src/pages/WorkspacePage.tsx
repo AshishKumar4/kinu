@@ -333,47 +333,49 @@ function NestedAgentColumn({ workspace, path, rpc, ids, input }: { workspace: st
   );
 }
 
-/** Read through the socket of the agent that started the swarm. */
-function SwarmNodeColumn({ owner, runId, nodeId, agent }: {
-  owner: ReturnType<typeof useKinu>;
+/** Opened for Stop alone: a hired agent's swarm stops with its turn. */
+function OwnerStopBar({ workspace, ownerPath, running }: { workspace: string; ownerPath: string; running: boolean }) {
+  const owner = useKinu({ workspace, subordinate: ownerPath });
+
+  return <ViewOnlyBar running={running} onStop={() => settleLogged("agents.stop_failed", { doing: "stop a swarm", otherwise: "io" }, owner.abortChat)} />;
+}
+
+function SwarmNodeColumn({ main, workspace, ownerPath, runId, nodeId, agent }: {
+  main: ReturnType<typeof useKinu>;
+  workspace: string;
+  ownerPath: string | null;
   runId: string;
   nodeId: string;
-  agent: PanelAgent | undefined;
+  agent: PanelAgent;
 }) {
-  const working = agent?.activity === "working";
+  const working = agent.activity === "working";
+
+  // Main's socket reads every journal and carries every head's stream.
+  const rpc = useCallback<Rpc>(<T,>(method: string, args?: unknown[]) => main.rpc<T>(
+    method, method === "getNodeTranscript" && ownerPath !== null ? [...(args ?? []).slice(0, 2), (args ?? [])[2] ?? {}, ownerPath] : args,
+  ), [main, ownerPath]);
 
   const trees = useMemo(() => new Map<string, ForkNode>([[runId, {
     id: nodeId, parentId: null, depth: 0, value: null, visits: null, status: working ? "running" : "terminal",
-    action: agent?.label ?? nodeId, children: [],
-  }]]), [runId, nodeId, working, agent?.label]);
+    action: agent.label, children: [],
+  }]]), [runId, nodeId, working, agent.label]);
 
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`node/${runId}/${nodeId}`}>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 py-4">
-        {agent?.parent !== undefined && agent.parent !== null && <p className="p-meta p-text-3">Swarm worker from {agent.parent}</p>}
-        <NodeTranscript selection={{ runId, nodeId }} trees={trees} rpc={owner.rpc} headActivity={owner.headActivity}
-          headDeltas={owner.headDeltas} onSelect={() => undefined} />
+        {agent.parent !== null && <p className="p-meta p-text-3">Swarm worker from {agent.parent}</p>}
+        <NodeTranscript selection={{ runId, nodeId }} trees={trees} rpc={rpc} headActivity={main.headActivity}
+          headDeltas={main.headDeltas} onSelect={() => undefined} />
       </div>
-      <ViewOnlyBar running={working} onStop={() => settleLogged("agents.stop_failed", { doing: "stop a swarm", otherwise: "io" }, owner.abortChat)} />
+      {ownerPath === null
+        ? <ViewOnlyBar running={working} onStop={() => settleLogged("agents.stop_failed", { doing: "stop a swarm", otherwise: "io" }, main.abortChat)} />
+        : <OwnerStopBar workspace={workspace} ownerPath={ownerPath} running={working} />}
     </div>
   );
 }
 
-function OwnedSwarmNodeColumn({ workspace, ownerPath, ...node }: {
-  workspace: string;
-  ownerPath: string;
-  runId: string;
-  nodeId: string;
-  agent: PanelAgent | undefined;
-}) {
-  const owner = useKinu({ workspace, subordinate: ownerPath });
-
-  return <SwarmNodeColumn owner={owner} {...node} />;
-}
-
-/** The Agents panel's rows and picks, and what the counter counts: active agents without a tab. */
 function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench }: {
-  listed: readonly PanelAgent[];
+  listed: readonly PanelAgent[] | null;
   live: boolean;
   workspace: string | undefined;
   node: string | null;
@@ -385,7 +387,7 @@ function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench
   const agents = useMemo((): readonly PanelAgent[] => [{
     key: "main", label: "Main", category: "main", activity: live ? "working" : "idle", parent: null,
     open: { kind: "chat", path: null }, tab: true, input: true,
-  }, ...listed], [listed, live]);
+  }, ...listed ?? []], [listed, live]);
 
   const shownAgent = useMemo(() => shownPanelAgent(agents, node, subName), [agents, node, subName]);
 
@@ -396,12 +398,12 @@ function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench
 
   return {
     shownAgent,
+    rosterLoaded: listed !== null,
     hiddenActive: agents.filter((agent) => agentActive(agent) && !agent.tab).length,
     panel: { list: agents, shown: shownAgent?.key ?? null, open },
   };
 }
 
-/** The row for what the chat column shows: a swarm worker by `?node`, else the conversation at `subName`. */
 function shownPanelAgent(agents: readonly PanelAgent[], node: string | null, subName: string | undefined): PanelAgent | undefined {
   if (node !== null) return agents.find((agent) => agent.key === node);
 
@@ -415,20 +417,27 @@ function agentPagePath(workspace: string, { open }: PanelAgent): string {
   return `/workspace/${workspace}?node=${encodeURIComponent(`${open.runId}/${open.nodeId}`)}${owner}`;
 }
 
-/** `node` is `<run>/<node>`; a swarm a subordinate started is read over that subordinate's socket. */
-function SwarmNodePane({ main, workspace, node, ownerPath, agent }: {
+/** `node` is `<run>/<node>`. */
+function SwarmNodePane({ main, workspace, node, ownerPath, agent, rosterLoaded }: {
   main: ReturnType<typeof useKinu>;
   workspace: string;
   node: string;
   ownerPath: string | null;
   agent: PanelAgent | undefined;
+  rosterLoaded: boolean;
 }) {
   const [runId = "", ...rest] = node.split("/");
   const nodeId = rest.join("/");
 
-  if (ownerPath === null) return <SwarmNodeColumn owner={main} runId={runId} nodeId={nodeId} agent={agent} />;
+  if (agent === undefined) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-6 text-center p-meta p-text-3" data-agent-pane={`node/${node}`}>
+        {rosterLoaded ? "This swarm worker is no longer listed. Open the Agents panel to pick another." : "Loading this swarm worker…"}
+      </div>
+    );
+  }
 
-  return <OwnedSwarmNodeColumn workspace={workspace} ownerPath={ownerPath} runId={runId} nodeId={nodeId} agent={agent} />;
+  return <SwarmNodeColumn main={main} workspace={workspace} ownerPath={ownerPath} runId={runId} nodeId={nodeId} agent={agent} />;
 }
 
 function helperBase(workspace: string, subName: string): string {
@@ -717,7 +726,7 @@ export default function WorkspacePage() {
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
   const workbench = useRef<WorkbenchHandle | null>(null);
 
-  const { shownAgent, hiddenActive, panel: agentsPanel } = useAgentsPanel({ listed: state.workspaceAgents, live, workspace: agentId, node: shownNode, subName, workbench });
+  const { shownAgent, rosterLoaded, hiddenActive, panel: agentsPanel } = useAgentsPanel({ listed: state.workspaceAgents, live, workspace: agentId, node: shownNode, subName, workbench });
 
   // A surface opened from the chat, a note or a landing is brought into view; a collapsed inspector or a phone
   // showing the chat would hide it.
@@ -1045,7 +1054,7 @@ export default function WorkspacePage() {
               onRename={(name, displayName) => state.renameSubordinate(name, displayName).then((entry) => entry.displayName)}
               trailing={<>
                 <button type="button" onClick={() => show(AGENTS_SURFACE)} data-agents-counter
-                  aria-label={hiddenActive === 0 ? "Agents" : `Agents: ${hiddenActive} working without a tab`}
+                  aria-label={hiddenActive === 0 ? "Agents" : `Agents: ${hiddenActive} active without a tab`}
                   title="Every agent in this workspace"
                   className="relative flex size-7 items-center justify-center rounded-md p-text-2 transition-colors hover:bg-[var(--c-elevated)] hover:p-text focus-visible:bg-[var(--c-elevated)]">
                   <UsersThreeIcon size={15} />
@@ -1061,10 +1070,12 @@ export default function WorkspacePage() {
                 {inspectorControl && <InspectorToggle control={inspectorControl} />}
               </>}
             />
-            {shownNode !== null && <SwarmNodePane key={shownNode} main={state} workspace={agentId} node={shownNode} ownerPath={nodeOwner} agent={shownAgent} />}
+            {shownNode !== null && (
+              <SwarmNodePane key={shownNode} main={state} workspace={agentId} node={shownNode} ownerPath={nodeOwner} agent={shownAgent} rosterLoaded={rosterLoaded} />
+            )}
             {shownNode === null && (subName ? (
               <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}
-                input={shownAgent?.input ?? true} />
+                input={shownAgent?.input ?? false} />
             ) : (
             <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${agentId}/main`}
               {...chatDrop}>

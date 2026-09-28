@@ -703,7 +703,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       exec: this.boundExec(),
       directory: this.workspaceActors(),
       transaction: (body) => this.ctx.storage.transactionSync(body),
-      roster: (actor) => new SubordinateRosterStore(this.ctx.storage.sql, actor.handle),
+      roster: (actor) => new SubordinateRosterStore(this.watchedExec, actor.handle),
       vfs: () => this.rt.storage.vfs,
       // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
       // surface are framed from it.
@@ -953,7 +953,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => subordinateDelegatesOf(
-        new SubordinateRosterStore(this.ctx.storage.sql, actor.handle).list(),
+        new SubordinateRosterStore(this.watchedExec, actor.handle).list(),
       ),
     });
   }
@@ -1842,7 +1842,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private rosterOf(parent: ActorHandle): SubordinateRosterStore {
-    return parent.actorId === this.actorHandle().actorId ? this.subordinateRoster : new SubordinateRosterStore(this.ctx.storage.sql, parent);
+    return parent.actorId === this.actorHandle().actorId ? this.subordinateRoster : new SubordinateRosterStore(this.watchedExec, parent);
   }
 
   protected override hostedWindowName(actorId: string): string | null {
@@ -3899,8 +3899,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** One branch's transcript across both fork mechanisms; core picks the store, not the client.
    *  See read-models/node-transcript.ts for what each store can report. */
   @callable()
-  async getNodeTranscript(runId: string, nodeId: string, request?: PageRequest): Promise<NodeTranscriptView | null> {
-    return readNodeTranscript(this.boundSql, this.actorHandle(), { runId, nodeId }, request ?? {});
+  /** `owner`: the path of the agent whose swarm it is. */
+  async getNodeTranscript(runId: string, nodeId: string, request?: PageRequest, owner?: string): Promise<NodeTranscriptView | null> {
+    const actor = owner === undefined ? this.actorHandle() : this.hostedTarget(owner)?.handle;
+
+    return actor === undefined ? null : readNodeTranscript(this.boundSql, actor, { runId, nodeId }, request ?? {});
   }
 
   /**

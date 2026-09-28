@@ -831,7 +831,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const error = formatWorkspaceError(liveErrors, agentStatus !== null);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
-  const [workspaceAgents, setWorkspaceAgents] = useState<PanelAgent[]>([]);
+  const [workspaceAgents, setWorkspaceAgents] = useState<PanelAgent[] | null>(null);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
   // Listing ports never provisions a sandbox: getExposedPorts returns [] unless the executor is already active.

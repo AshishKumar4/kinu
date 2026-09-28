@@ -8,6 +8,7 @@ import { initHeadsTables } from '../src/heads/schema';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
+import { initActorClaimTables } from '../src/orchestrator/actor-claims';
 import { SubordinateRosterStore } from '../src/subordinates/roster';
 import { actorReferenceOf, type ActorHandle } from '../src/identity/actor-handle';
 import type { SubordinateRosterEntry } from '../src/delegation/agents-tool';
@@ -22,6 +23,7 @@ function workspace() {
   initMctsSearchTable(execRaw);
   initHeadsTables(execRaw);
   initSwarmNodeRecords(execRaw);
+  initActorClaimTables(execRaw);
   const actors = createTestActors(sql, execRaw);
   new SubordinateRosterStore(exec, actors.main).ensureSchema();
 
@@ -40,7 +42,12 @@ function workspace() {
     sql, exec, root: actors.main, rootLabel: 'Kinu', actors: actors.directory.list({ retired: true }),
   });
 
-  return { db, main: actors.main, hire, read };
+  const openTurn = (actor: ActorHandle): void => {
+    db.query(`INSERT INTO actor_turn_claims (actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version, outcome, claimed_at)
+      VALUES (?, ?, 'run', 0, 'build', 'builtin', 1, NULL, 1)`).run(actor.actorId, `turn-${actor.name}`);
+  };
+
+  return { db, main: actors.main, hire, read, openTurn };
 }
 
 const byLabel = <T extends { label: string }>(rows: T[]): T[] => rows.sort((a, b) => a.label.localeCompare(b.label));
@@ -49,12 +56,11 @@ const row = ({ label, category, activity, parent, tab, input, open }: PanelAgent
 
 describe('the Agents panel lists every agent in the workspace', () => {
   test('the owner\'s own, one an agent hired, and a background helper, each placed as the design says', () => {
-    const { db, main, hire, read } = workspace();
+    const { db, main, hire, read, openTurn } = workspace();
     const alice = hire(main, 'alice', { createdBy: 'user' });
-    hire(alice, 'scout-1', { status: 'working' });
+    openTurn(hire(alice, 'scout-1', {}));
     hire(main, 'refiner-1', { createdBy: 'evolution', lifetime: 'task' });
-    hire(main, 'lookup-1', { lifetime: 'task', status: 'working' });
-    // Creation times tie within a millisecond; a child listed before its parent still sits under it.
+    openTurn(hire(main, 'lookup-1', { lifetime: 'task' }));
     db.query('UPDATE workspace_actors SET created_at = 0 WHERE name = ?').run('scout-1');
 
     expect(byLabel(read().map(row))).toEqual(byLabel([
@@ -83,5 +89,37 @@ describe('the Agents panel lists every agent in the workspace', () => {
       { label: 'Try the Pratt parser', category: 'swarm', activity: 'done', parent: 'Kinu', tab: false, input: false, open: { kind: 'node', runId: 'run-1', nodeId: 'h-b', owner: null } },
     ]);
     expect(read().filter(agentActive).map((agent) => agent.label)).toEqual(['Try the PEG parser']);
+  });
+
+  test('an agent is working while it holds an open turn, whatever its roster row last said', () => {
+    const { db, main, hire, read, openTurn } = workspace();
+    const chatting = hire(main, 'chatting', { createdBy: 'user', status: 'idle' });
+    openTurn(chatting);
+
+    expect(read().find((agent) => agent.label === 'chatting')?.activity).toBe('working');
+
+    db.query("UPDATE actor_turn_claims SET outcome = 'indeterminate' WHERE turn_id = 'turn-chatting'").run();
+    expect(read().find((agent) => agent.label === 'chatting')?.activity).toBe('idle');
+  });
+
+  test('a worker still running in an old swarm stays listed past the newest twenty runs', () => {
+    const { db, main, read } = workspace();
+    const run = db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)');
+
+    const head = db.query(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+      VALUES (?, ?, NULL, ?, 0, ?, 'r', ?, ?, 'synthesize')`);
+
+    run.run(main.actorId, 'old', 'a long job', 1);
+    head.run(main.actorId, 'old-h', 'old', 'Still grinding', 'running', 1);
+
+    for (let i = 0; i < 25; i += 1) {
+      run.run(main.actorId, `run-${String(i)}`, 'r', 100 + i);
+      head.run(main.actorId, `h-${String(i)}`, `run-${String(i)}`, `Finished ${String(i)}`, 'completed', 100 + i);
+    }
+
+    const workers = read().filter((agent) => agent.category === 'swarm');
+
+    expect(workers.find((agent) => agent.label === 'Still grinding')?.activity).toBe('working');
+    expect(workers.filter((agent) => agent.label.startsWith('Finished'))).toHaveLength(20);
   });
 });

@@ -20,7 +20,6 @@ const ACTIVITY = {
 } satisfies Record<PanelAgent["activity"], { word: string; dot: string }>;
 
 export function AgentsSurface({ panel }: {
-  /** Absent where no chat column takes a pick. */
   panel: { readonly list: readonly PanelAgent[]; readonly shown: string | null; readonly open: (agent: PanelAgent) => void } | undefined;
 }) {
   const agents = panel?.list ?? [];
