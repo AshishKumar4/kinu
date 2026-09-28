@@ -76,7 +76,7 @@ function CappedNote({ file }: { file: FileDiff }) {
   );
 }
 
-function FileBody({ file, stacked, split = false, onOpenInFiles }: {
+export function FileBody({ file, stacked, split = false, onOpenInFiles }: {
   file: FileDiff;
   stacked: boolean;
   split?: boolean;

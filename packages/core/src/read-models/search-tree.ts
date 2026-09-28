@@ -5,7 +5,6 @@ import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { NodeStatus, SearchNode } from '../types/mcts';
 
-/** A drawn tree's row: the node and its own score. */
 export type SearchTreeRow = SearchNode & { readonly own_score: number | null };
 
 export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): SearchTreeRow[] {

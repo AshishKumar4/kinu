@@ -1989,8 +1989,9 @@ export const PLATFORM_CATALOG = {
     notes:
       "The VENDOR SDK's shipped default, not a Cloudflare runtime bound and not ours: filed "
       + 'under platform because Kinu cannot widen it per call. It is why "no deadline" work '
-      + 'rides the process lane (startProcess + waitForExit installs no timer) instead of a '
-      + 'bigger exec timeout: execution/sandbox.ts routes on exactly this entry.',
+      + 'rides the runtime\'s own ctx.container.exec, which has no timeout (Cloudflare Containers '
+      + '"Execute commands", read 2026-09-28), instead of a bigger exec timeout: '
+      + 'execution/sandbox.ts routes on exactly this entry.',
   },
 } as const satisfies Readonly<Record<string, PlatformFact>>;
 

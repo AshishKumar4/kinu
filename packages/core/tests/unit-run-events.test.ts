@@ -858,30 +858,16 @@ describe('RunEventRecorder.openTurn — the continuation ledger', () => {
     expect(recorder.openTurn()?.runId).toBe('run-1');
   });
 
-  test('the open run answers its turn, the finished steps and the cut step\'s newest partial', () => {
+  test('the open run answers its turn and the finished steps', () => {
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'run_start', agentId: 'a', turn });
-    recorder.emit('run-1', { type: 'step_partial', stepIndex: 1, text: 'thi', toolCalls: [] });
     recorder.emit('run-1', { type: 'step_finish', stepIndex: 1, messages: [{ role: 'assistant', content: 'think' }] });
-    recorder.emit('run-1', { type: 'step_partial', stepIndex: 2, text: '', toolCalls: [{ toolCallId: 'c1', toolName: 'file', args: { path: 'a' } }] });
-    recorder.emit('run-1', { type: 'step_partial', stepIndex: 2, text: 'and', toolCalls: [{ toolCallId: 'c1', toolName: 'file', args: { path: 'a' }, result: 'ok' }] });
 
     const open = recorder.openTurn();
     expect(open?.runId).toBe('run-1');
     expect(open?.turn).toEqual(turn);
     expect(open?.steps).toEqual([{ role: 'assistant', content: 'think' }]);
-    expect(open?.partial).toMatchObject({ stepIndex: 2, text: 'and', toolCalls: [{ toolCallId: 'c1', result: 'ok' }] });
-  });
-
-  test('a partial the step then finished is superseded by the step row', () => {
-    const { recorder } = setup();
-    recorder.emit('run-1', { type: 'run_start', agentId: 'a', turn });
-    recorder.emit('run-1', { type: 'step_partial', stepIndex: 1, text: 'par', toolCalls: [] });
-    recorder.emit('run-1', { type: 'step_finish', stepIndex: 1, messages: [{ role: 'assistant', content: 'partial then done' }] });
-
-    const open = recorder.openTurn();
-    expect(open?.steps).toEqual([{ role: 'assistant', content: 'partial then done' }]);
-    expect(open?.partial).toBeNull();
+    expect(open?.finishedSteps).toBe(1);
   });
 
   test('the newest open run wins when a dead process left more than one', () => {

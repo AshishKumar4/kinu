@@ -1365,9 +1365,9 @@ export function boxState(parts: BoxStateParts): BoxState {
   };
 }
 
-/** Only `running` is live; the rest refuse because the class reaches the control plane
- *  through the SDK, never through `ctx.container`. */
-export function containerHandle(flag: { running: boolean }): Container {
+/** Only `running` and, when a test supplies it, `exec` are live; the rest refuse because the class reaches the
+ *  control plane through the SDK, never through `ctx.container`. */
+export function containerHandle(flag: { running: boolean }, exec?: Container['exec']): Container {
   return {
     get running(): boolean { return flag.running; },
     start: () => unreached('container.start'),
@@ -1381,7 +1381,7 @@ export function containerHandle(flag: { running: boolean }): Container {
     interceptOutboundHttps: () => unreached('container.interceptOutboundHttps'),
     snapshotDirectory: () => unreached('container.snapshotDirectory'),
     snapshotContainer: () => unreached('container.snapshotContainer'),
-    exec: () => unreached('container.exec'),
+    exec: exec ?? (() => unreached('container.exec')),
   };
 }
 
@@ -1415,6 +1415,7 @@ interface SyncServing {
 export function harness<Box extends SyncServing>(
   Box: new (state: BoxState, env: TestEnv) => Box,
   id: string = TEST_BOX_ID,
+  exec?: Container['exec'],
 ): Harness<Box> {
   const storage = fakeStorage();
 
@@ -1437,7 +1438,7 @@ export function harness<Box extends SyncServing>(
 
   // Set after construction because the class reads `ctx.container` only at call
   // time, and the fake owns the flag it flips on stop and destroy.
-  state.container = containerHandle(container.running);
+  state.container = containerHandle(container.running, exec);
 
   container.running.running = false;
 

@@ -66,13 +66,11 @@ export const OUTPUT_CONTINUATION_TEXT =
 export interface OutputContinuationFacts {
   /** A cut or failed turn is not an answer waiting to be finished. */
   readonly completed: boolean;
-  /** The `finishReason` of the turn's LAST step (`acc.lastFinishReason`). */
   readonly lastFinishReason: string | undefined;
   /** This turn already was the continuation; a second `length` is partial completion. */
   readonly turnWasContinuation: boolean;
 }
 
-/** Whether a settled turn owes exactly one output-limit continuation. */
 export function owesOutputLimitContinuation(facts: OutputContinuationFacts): boolean {
   return facts.completed
     && facts.lastFinishReason === OUTPUT_LIMIT_REACHED

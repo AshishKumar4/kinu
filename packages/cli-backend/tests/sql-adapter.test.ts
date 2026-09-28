@@ -23,7 +23,7 @@ function approvedGrant(db: Database): DeferredApprovalStore {
     executor: 'device',
     reason: 'the build directory is stale',
     requestedAt: 1,
-  });
+  }, []);
   expect(store.decide('act-1', 'approved', 2)?.status).toBe('approved');
 
   return store;

@@ -1,7 +1,7 @@
 /**
  * Parity net: the hosted root on core's ChatSession changes no durable row or frame against `fixtures/chat-session-parity.json`,
  * normalized like the local backend's parity test. Re-record from the logged `chat-session-parity snapshot` line only for a
- * change meant to alter the record, read field by field against the previous fixture (last: 2026-09-28, read notices left out as timing).
+ * change meant to alter the record, read field by field against the previous fixture (last: 2026-09-28, a session start's context frame; no step_partial rows).
  */
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';

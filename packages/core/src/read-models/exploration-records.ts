@@ -21,7 +21,6 @@ export interface RecordObjectiveSummary {
   readonly objectiveId: string;
   readonly floorDigest: string | null;
   readonly metric: string;
-  /** The unit the raw values are in. */
   readonly unit: string;
   readonly direction: ObjectiveDirection;
   readonly scale: ObjectiveScale;

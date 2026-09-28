@@ -301,7 +301,7 @@ export type ParityCompleted = v.InferOutput<typeof ParityCompletedSchema>;
 export const WAKE_MARKER = 'KINU_SETTLED_AFTER_DETACH';
 
 /** Where the interactive turn is held while its detached job settles. */
-export const WakeHoldPlacementSchema = v.picklist(['reply', 'settle']);
+export const WakeHoldPlacementSchema = v.picklist(['start', 'reply', 'settle']);
 
 export type WakeHoldPlacement = v.InferOutput<typeof WakeHoldPlacementSchema>;
 

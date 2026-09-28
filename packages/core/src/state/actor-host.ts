@@ -552,7 +552,6 @@ export async function recoverActorTurns(
       readonly session: Pick<ActorSession, 'turnOpen'>;
     }>;
   },
-  limit?: number,
 ): Promise<{
   readonly verified: readonly string[];
   readonly refused: readonly string[];
@@ -568,7 +567,7 @@ export async function recoverActorTurns(
   const active: string[] = [];
   const stalled: ResumableActorTurn[] = [];
 
-  for (const turn of host.resumable(limit)) {
+  for (const turn of host.resumable()) {
     try {
       const actor = await host.acquire(turn.reference);
 

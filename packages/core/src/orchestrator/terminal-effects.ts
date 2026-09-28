@@ -428,8 +428,6 @@ export class TerminalEffectLedger {
     readonly now: () => number;
     /** Read per call: a test arms the fault after the ledger exists. */
     readonly fault?: () => TerminalEffectFault | null;
-    /** Claim and roster as one unit. Identity is honest where a synchronous run cannot be interrupted; otherwise supply a real transaction. */
-    readonly transaction?: <T>(body: () => T) => T;
     /** Called after every pass that leaves anything owed; a past instant means due now. */
     readonly scheduleRetry: (atMs: number) => Promise<void>;
   }) {

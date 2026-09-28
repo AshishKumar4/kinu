@@ -4,11 +4,8 @@ import { Effect } from 'effect';
 import type { KinuError } from '../obs/error';
 import { attempt, settle } from '../obs/effect';
 
-/** Raising it is the owner's call (NESTED-HIRE-0926). */
-export const DELEGATED_TURN_SLOTS = 1;
-
+/** One runner per hired agent: its own turns in order, every agent's at once (owner, 2026-09-26: no limit). */
 export interface DelegatedTurnRunnerDeps {
-  readonly slots: number;
   pass(record: WorkspaceActor): Promise<boolean>;
   holdLane(body: () => Promise<void>): Promise<void>;
   failed(record: WorkspaceActor | null, error: KinuError): void;
@@ -21,15 +18,7 @@ export class DelegatedTurnRunners {
 
   private lane: Promise<void> | null = null;
 
-  private readonly queued: (() => void)[] = [];
-
-  private free: number;
-
-  private readonly stops = new Map<string, number>();
-
-  constructor(private readonly deps: DelegatedTurnRunnerDeps) {
-    this.free = deps.slots;
-  }
+  constructor(private readonly deps: DelegatedTurnRunnerDeps) {}
 
   start(records: readonly WorkspaceActor[]): void {
     for (const record of records) this.startActorRunner(record);
@@ -37,43 +26,9 @@ export class DelegatedTurnRunners {
     this.holdLane();
   }
 
-  async turn(actorId: string, body: () => Promise<void>): Promise<void> {
-    const queuedAt = this.stops.get(actorId) ?? 0;
-
-    await this.acquire();
-
-    try {
-      if ((this.stops.get(actorId) ?? 0) === queuedAt) await body();
-    } finally {
-      this.release();
-    }
-  }
-
   /** Settles once no runner is left. */
   async idle(): Promise<void> {
     while (this.lane !== null) await this.lane;
-  }
-
-  /** A Stop skips these actors' queued turns. */
-  cancelQueued(actorIds: readonly string[]): void {
-    for (const id of actorIds) this.stops.set(id, (this.stops.get(id) ?? 0) + 1);
-  }
-
-  private async acquire(): Promise<void> {
-    if (this.free > 0) {
-      this.free -= 1;
-    } else {
-      const turn = Promise.withResolvers<void>();
-      this.queued.push(turn.resolve);
-      await turn.promise;
-    }
-  }
-
-  private release(): void {
-    const next = this.queued.shift();
-
-    if (next === undefined) this.free += 1;
-    else next();
   }
 
   private startActorRunner(record: WorkspaceActor): void {

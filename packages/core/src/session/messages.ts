@@ -35,6 +35,13 @@ export interface PreparedMessage {
   readonly content: PreparedContent;
 }
 
+/** The claim a write belongs to, and the check that throws once it is no longer current. */
+export interface ClaimFence {
+  readonly turnId: string;
+  readonly epoch: number;
+  readonly assert: () => void;
+}
+
 export interface StreamPartInput {
   readonly partNo: number;
   readonly kind: string;
@@ -426,16 +433,26 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     if (part.text !== undefined && part.text !== '') this.streamAppend(messageId, part.partNo, part.text);
   }
 
-  streamAppend(messageId: string, partNo: number, text: string): void {
+  /** With a `fence`, the append checks the turn's claim in its own statement; without one, the caller has. */
+  streamAppend(messageId: string, partNo: number, text: string, fence: ClaimFence | null = null): void {
     this.actor.assertCurrent();
     const actorId = this.actor.actorId;
 
     for (const piece of segmented(text)) {
-      const extended = this.sql<{ segment: number }>`UPDATE stream_parts SET text = text || ${piece}
-        WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 AND length(text) + ${piece.length} <= ${STREAM_SEGMENT_CHARS}
-        AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`;
+      // Two statements, not one with an optional clause: a store without claims has no claim table to name.
+      const extended = fence === null
+        ? this.sql<{ segment: number }>`UPDATE stream_parts SET text = text || ${piece}
+          WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 AND length(text) + ${piece.length} <= ${STREAM_SEGMENT_CHARS}
+          AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`
+        : this.sql<{ segment: number }>`UPDATE stream_parts SET text = text || ${piece}
+          WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 AND length(text) + ${piece.length} <= ${STREAM_SEGMENT_CHARS}
+          AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo})
+          AND EXISTS (SELECT 1 FROM actor_turn_claims c WHERE c.actor_id=${actorId} AND c.turn_id=${fence.turnId} AND c.epoch=${fence.epoch} AND c.outcome IS NULL)
+          RETURNING segment`;
 
       if (extended.length > 0) continue;
+      // A stale claim is refused here, not by a new segment.
+      fence?.assert();
 
       const last = this.sql<{ segment: number; ended: number; kind: string; stream_order: number }>`SELECT segment,ended,kind,stream_order FROM stream_parts
         WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} ORDER BY segment DESC LIMIT 1`[0];
