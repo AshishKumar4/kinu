@@ -233,7 +233,7 @@
     "packages/cf-backend/src/user/mcp.ts#throw": 17,
     "packages/cf-backend/src/user/provider-proxy.ts#catch": 2,
     "packages/cf-backend/src/user/roster.ts#catch": 1,
-    "packages/cf-backend/src/user/roster.ts#throw": 3,
+    "packages/cf-backend/src/user/roster.ts#throw": 2,
     "packages/cf-backend/src/user/routes.ts#catch": 15,
     "packages/cf-backend/src/user/routes.ts#result-literal": 15,
     "packages/cf-backend/src/user/routes.ts#throw": 14,
