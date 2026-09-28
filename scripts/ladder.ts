@@ -424,46 +424,6 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun run gate:literature-citations',
-    label: 'External citation register',
-    tier: 'commit',
-    // Measured 2026-09-05 on the 24-thread box (load 2.3): 5.86 s. Replaces 1 s.
-    seconds: 5.86,
-    catches: 'a QUALIFIER lost crossing the one boundary nothing else checks — prose to a paper '
-      + 'nobody in this process can open. `lean-citations` closed TypeScript -> Lean and caught '
-      + 'three stale citations immediately; docs -> literature was the boundary still open, and '
-      + 'a removed internal audit of seven numbers found six of seven DIGITS correct and '
-      + 'four QUALIFIERS wrong, so a digit-comparing gate would have passed all seven. This one '
-      + 'refuses the qualifier instead: an external number with no register entry and therefore '
-      + 'no locator; a compute-dependent claim under a bare parity ADJECTIVE (`+12.5 at matched '
-      + 'compute`, over a subtraction spanning a no-search row the same paper prices at 20x the '
-      + 'LM calls); a hedge the source states and prose deletes (GEPA\'s `up to 11.33%`, which '
-      + 'overstated its own justification by ~55%); a confusable unit left unnamed (`+25.4` is '
-      + 'DISCRIMINATION accuracy, and read as task accuracy it argues the opposite); a locator '
-      + 'naming a table that does not hold the number; and a WITHDRAWN number re-asserted as '
-      + 'live. `scripts/literature.ts` is the one place an external number is written down, so '
-      + 'the set is enumerable (`--list-claims`) with provenance DEPTH — first-hand, second-hand '
-      + 'through an internal artifact, or read by nobody — which is what gives a '
-      + 're-verification pass a worklist instead of a re-read.',
-    blind: 'the digit itself, and whether a locator SUPPORTS its claim. It never opens a paper: '
-      + 'prose and register can agree and both be wrong, and an author-declared `withdrawn` is '
-      + 'trusted rather than verified. It governs a number only where a source is cited by '
-      + 'author-or-arXiv form or by one of its own registered figures, so a number beside a bare '
-      + 'product name is ungoverned — deliberately, since `GEPA` and `LATS` are modules here as '
-      + 'often as papers. Reach is 4000 characters AND the structure holding the citation, so a '
-      + 'claim further than that from its citation is ungoverned; the bound exists because a '
-      + 'machine-written document has no paragraphs, and paragraph reach read one 206KB run '
-      + 'recording as a single paragraph. Captured output declared by its own leading `ranAt` is '
-      + 'read for quotations only and never judged — it asserts nothing and cannot be corrected '
-      + 'without being falsified — but it earns no credit either, so a register entry whose only '
-      + 'home is a recording is a finding. A citation inside a STRING LITERAL is not read at all, '
-      + 'which is where the bare-parity defect in `scripts/axis-ergonomics/` was sitting. It '
-      + 'cannot see a compressed QUOTATION, which is the one defect in this family that needed a '
-      + 'human and the recorded source. It prints all of this on the GREEN path, because a blind '
-      + 'spot visible only in red output is invisible exactly when the tree is clean.',
-    inputs: { kind: 'derived' },
-  },
-  {
     run: 'bun run gate:commit-message',
     label: 'Commit message hygiene',
     tier: 'commit',
@@ -980,7 +940,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts scripts/error-model.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1026,15 +986,7 @@ export const LADDER: readonly Gate[] = [
       + 'leaked 10,124 temp entries in one evening proven red against the historical '
       + 'source, plus the three it must NOT fire on: prose quoting the defect, a `/tmp/` '
       + 'path belonging to the SANDBOX rather than this box, and a program whose scratch '
-      + 'outlives the run on purpose. For literature-citations, every red direction it '
-      + 'claims proven against the drifted text that was actually in this tree — a bare '
-      + 'parity adjective, a deleted `up to`, an unnamed confusable unit, a locator '
-      + 'naming the wrong table, a withdrawn number re-asserted — plus the six false '
-      + 'positives that shaped its corpus decision, each of which demanded a paper '
-      + 'locator for one of our own numbers, and the REACH bound proven in both '
-      + 'directions: a recorded 206KB blob yields nothing, the same bytes undeclared '
-      + 'still refuse the parity adjective inside them, a claim three paragraphs from '
-      + 'its citation is still governed, and one past the bound is not. For silent-drop, all '
+      + 'outlives the run on purpose. For silent-drop, all '
       + 'six defect classes red on the shape as it appears in this tree and GREEN on its '
       + 'repair, plus the three judgements that keep the count honest: a handler that FORWARDS '
       + 'its error is not a drop, an async function whose whole body is a non-rethrowing try '

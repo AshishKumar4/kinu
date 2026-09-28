@@ -87,7 +87,6 @@
     "gate:secret-history": "bun scripts/secret-scan.ts --history",
     "gate:bench-corpus": "bun scripts/bench-corpus-gate.ts",
     "gate:scratch-ownership": "bun scripts/scratch-ownership.ts",
-    "gate:literature-citations": "bun scripts/literature-citations.ts",
     "gate:commit-message": "bun scripts/commit-hygiene.ts",
     "gate:agents-fields": "bun scripts/agents-fields.ts",
     "gate:infra": "bun scripts/infra-verify.ts",

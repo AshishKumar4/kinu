@@ -22,10 +22,6 @@
       "complexity": 48
     },
     {
-      "key": "scripts/literature-citations.ts#auditProse",
-      "complexity": 46
-    },
-    {
       "key": "scripts/silent-drop.ts#auditFile>walk",
       "complexity": 46
     },
