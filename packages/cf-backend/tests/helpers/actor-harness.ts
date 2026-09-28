@@ -1576,9 +1576,14 @@ function instantiate<T extends WorkspaceHostTarget>(
 
 /** Starts the activation as the SDK's first fetch would. Its synchronous part has run on return; the async
  *  boot's promise is dropped (a failed boot classifies inside `onStart`). */
-function startActivation(agent: InstanceType<typeof OrchestratorAgent>): void {
-  const started: unknown = agent.lifecycle.start();
-  void started;
+/** The SDK's own start, as a request would trigger it; a failed start is the caller's to read, never unhandled. */
+function startActivation(agent: InstanceType<typeof OrchestratorAgent>): Promise<void> {
+  const started = agent.lifecycle.start();
+  // Settling observes it, so a start nobody reads is not an unhandled rejection.
+  const observed: unknown = Promise.allSettled([started]);
+  void observed;
+
+  return started;
 }
 
 
@@ -1597,7 +1602,8 @@ export function orchestratorHarness(
   const harness = instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), userPlane, world, env });
   // Born as a first claim bears it, then started.
   harness.agent.harnessBear(world?.ownerUserId ?? 'harness-owner');
-  startActivation(harness.agent);
+  const started: unknown = startActivation(harness.agent);
+  void started;
   // Without the capability this root cannot reach its title registry, so every settle
   // would owe an auto title forever.
   harness.agent.harnessHoldsCapability('harness-capability');
@@ -1640,7 +1646,7 @@ export async function reactivateOrchestratorHarness(
     readonly env?: Env;
     readonly beforeStart?: (agent: HarnessOrchestratorAgent) => void;
   },
-): Promise<ActorHarness<HarnessOrchestratorAgent>> {
+): Promise<ActorHarness<HarnessOrchestratorAgent> & { readonly started: Promise<void> }> {
   // Durable state the prior activation left, written through the stores before `onStart` runs the recovery.
   const config = workspaceMainActor(db).config;
 
@@ -1656,7 +1662,7 @@ export async function reactivateOrchestratorHarness(
 
   const harness = instantiate(HarnessOrchestratorAgent, { db, userPlane, world: opts?.world, env: opts?.env });
   opts?.beforeStart?.(harness.agent);
-  startActivation(harness.agent);
+  const started = startActivation(harness.agent);
 
   if (opts?.world?.freshScaffold !== true) harness.agent.declareScaffoldPresent();
 
@@ -1664,7 +1670,7 @@ export async function reactivateOrchestratorHarness(
   // once no fiber body is left.
   for (let tick = 0; tick < 8; tick++) await joinHarnessFibers();
 
-  return harness;
+  return { ...harness, started };
 }
 
 

@@ -2893,17 +2893,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Stale `running` fork heads are recovered under the terminal wake (`maintenanceWork`), not here:
     // recovery can queue a turn, and awaiting that inside the init gate can reset the object.
 
-    // Boot awaits only this object's SQLite and session composition. A failure
-    // clears the memo so the next workspace request can retry after activation.
-    try {
-      await this.hostedWorkspace().bundle.session();
-    } catch (err) {
-      diagnostics.failure('workspace.activation_boot_failed', toKinuError({
-        doing: 'booting the workspace at activation',
-        cause: err,
-        otherwise: 'io',
-      }), { workspace: this.name });
-    }
+    // Boot awaits only this object's SQLite and session composition. A failure fails the start, so the object
+    // stays unstarted and every request fails with the cause until one boots; owed work keeps its wake.
+    await this.hostedWorkspace().bundle.session();
   }
 
   /**
