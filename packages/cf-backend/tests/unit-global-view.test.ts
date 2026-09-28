@@ -4,10 +4,10 @@
  * (the regression that reverted the last isolation attempt, `unit-head-fork.test.ts:4-8`).
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, type SqlDatabase, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import {
   agentCred,
@@ -19,6 +19,7 @@ import {
   AGENT_UID_FLOOR,
   MAIN_AGENT,
   SESSION_UID,
+  settleWorkspaceRoot,
   WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import {
@@ -27,6 +28,7 @@ import {
   rpcExec,
   type ProgrammaticHost,
 } from './helpers/programmatic-host';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 
 const databases: Database[] = [];
 
@@ -35,21 +37,6 @@ afterEach(() => {
 });
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
-
-function sqlBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) {
-    const bytes = new Uint8Array(value.byteLength);
-    const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
-
-    for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
-
-    return bytes;
-  }
-
-  return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-}
 
 interface Fixture {
   readonly workspace: NimbusWorkspace;
@@ -64,26 +51,19 @@ async function openFixture(): Promise<Fixture> {
   const database = new Database(':memory:');
   databases.push(database);
 
-  const sql: SqlDatabase = {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-      const bound = bindings.map(sqlBinding);
-
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
-      statement.run(...bound);
-
-      return [];
-    },
-  };
+  const { sql, transactions } = inlineWorkspaceStorage(database);
 
   const processes = new SessionProcessSupervisor();
 
   const workspace = await NimbusWorkspace.create({
     sql,
-    transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
+    transactions,
     generation: 1,
     processes,
   });
+
+  // As Kinu's boot leaves it: the workspace root, and its old name a link to it.
+  settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
 
   const host = programmaticHostOver(workspace).host;
 

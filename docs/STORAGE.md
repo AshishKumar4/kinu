@@ -276,29 +276,33 @@ agent's own database (`~/.kinu/<name>/agent.db`). There it holds the agent's
 state; the project directory is the workspace (see "Local and cloud construction").
 
 Nimbus owns those bytes and their tables. `core/src/conformance/manifest.ts`
-declares the exact set, which is what `NimbusWorkspace.destroy()` drops. An
-addition means the dependency changed its storage contract. At
-`@nimbus-sh/core` 0.12.0 the set is `inodes`, `file_chunks`,
-`content_lifecycle`, `vfs_schema_migrations`, `vfs_append_receipts_v2`,
-`vfs_append_writer_state_v2`, `vfs_append_module_state_v2`,
-`vfs_append_pid_revocations_v2`, `vfs_append_acked_gaps_v2`,
-`nimbus_filesystem_identity`, `nimbus_filesystem_devices`, and
-`vfs_ino_allocator`. Kinu adds its own `kinu_workspace_generation`. The
-manifest declares all of them present on every root (`cf-orchestrator`,
+declares the exact set; an addition means the dependency changed its storage
+contract. At `@nimbus-sh/core` 0.13.1 the set is `vfs_state`, `vfs_inodes`,
+`vfs_chunks`, `vfs_contents`, `vfs_content_chunks`, `vfs_inode_history`,
+`vfs_gc_queue`, `vfs_jobs`, `vfs_snapshots`, `vfs_tombstones`,
+`vfs_cold_trash`, the five `vfs_append_*_v2` tables, and
+`nimbus_filesystem_identity`, `nimbus_filesystem_devices`,
+`nimbus_storage_ledger`, `nimbus_storage_reservation` and
+`nimbus_facet_storage`. `NimbusWorkspace.destroy()` drops the `vfs_*` tables
+and keeps the `nimbus_*` ones. Kinu adds its own `kinu_workspace_generation`.
+The manifest declares all of them present on every root (`cf-orchestrator`,
 `cf-subordinate`, `cli`).
 
 Three properties follow:
 
-- Content addressing: `inodes(path, content_id)` points at
-  `file_chunks(content_id, chunk_id, data)`, with a `content_lifecycle` GC
-  table. A snapshot of the plane copies the small inode index and no blobs.
+- Content addressing: `vfs_inodes(path, content_id)` points at a
+  `vfs_contents` row, whose `vfs_content_chunks` rows name `vfs_chunks` rows,
+  unique by hash, so equal chunks are stored once; `vfs_gc_queue` collects
+  what nothing names. A snapshot of the plane copies the small inode index and
+  no blobs.
 - POSIX semantics: one filesystem, addressed the same way by
   `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
   resolve at `WORKSPACE_ROOT` (`/home/main`; `/home/user` links to it). Ownership is uid/gid/mode on
   inodes. That makes a swarm node's `/home/<node>` and its private `/tmp` an
   enforced boundary, not a convention (`core/src/vfs/agent-home.ts`).
-- Chunked blobs: `SqliteVFS` splits file content into `file_chunks` rows of
-  `CHUNK_SIZE` bytes, 65,536 as `@nimbus-sh/platform` declares it. Merge-back
+- Chunked blobs: `SqliteVFS` cuts file content into `vfs_chunks` rows of at
+  most `CHUNK_SIZE` bytes, 65,536 as `@nimbus-sh/platform` declares it (one
+  chunk up to that size, content-defined cuts above it). Merge-back
   sizes its write batches with the same constant, imported rather than
   restated (`core/src/strategy/merge-back.ts:60`).
 

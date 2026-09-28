@@ -15,6 +15,7 @@ import { defineConfig, type Plugin } from 'vitest/config';
 import { probeOutbound } from './tests/workerd/http-model-fake';
 import { hireOutbound } from './tests/workerd/hire-model-fake';
 import { registryOutbound } from './tests/workerd/npm-registry-fake';
+import { nimbusAssets } from './tests/helpers/nimbus-assets';
 import {
   DEPLOY_FAKE_CHANNEL, DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_RECORD, DEPLOY_FAKE_REFRESH_TOKEN,
   assetsOutbound, deployOutbound,
@@ -400,6 +401,8 @@ export default defineConfig({
             CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=',
           },
           outboundService: registryOutbound,
+          // A git network facet imports its bundle from ASSETS, as the deployed Worker serves it.
+          serviceBindings: { ASSETS: nimbusAssets },
           durableObjects: {
             SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },

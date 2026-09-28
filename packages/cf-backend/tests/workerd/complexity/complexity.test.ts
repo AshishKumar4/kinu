@@ -85,9 +85,13 @@ const SUBJECTS: readonly Subject[] = [{
   sizes: [10, 1_000, 10_000],
   run: async (probe, size) => await probe.diffRead(size),
   rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
-  tables: { vfs_baseline_manifest: { rowsRead: 'O(n)' } },
-  why: 'a read compares the tree with the baseline manifest, which it reads whole; it reads the bytes of '
-    + 'only the files whose size or mtime moved (file_chunks, vfs_baseline_blob) and writes nothing',
+  tables: {
+    vfs_baseline_manifest: { rowsRead: 'O(n)' },
+    vfs_inodes: { rowsRead: 'O(n)', statements: 'O(n)', rowsScanned: 'O(n)' },
+  },
+  why: 'a read walks the tree, a page of inode rows per listing, and compares it with the baseline manifest, which it '
+    + 'reads whole; it reads the bytes of only the files whose size or mtime moved (vfs_chunks, vfs_baseline_blob) '
+    + 'and writes nothing',
 }, {
   name: 'workspace Diffs, a poll with nothing changed',
   unit: 'files in the workspace',
@@ -126,9 +130,11 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * asking `sqlite_master` whether the actor tables exist and 2,041 re-reading the actor and identity rows before every
  * statement; 1,514 once `WorkspaceActorDirectory` checked a handle once a synchronous run, in one statement; 1,024
  * once the directory remembered the actors it retired instead of re-reading their rows (1,515 before, at 41ffcb57b7);
- * 775 once the transcript frame read its ancestry and its messages in one statement each, not one or two an entry.
+ * 775 once the transcript frame read its ancestry and its messages in one statement each, not one or two an entry;
+ * 776 at 1c0a48714e; 783 on Nimbus core 0.13.1, whose tree lives in SQL rather than an in-memory inode map, so the
+ * turn's seven path lookups are seven vfs_inodes statements.
  */
-const TURN_STATEMENTS = 775;
+const TURN_STATEMENTS = 783;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

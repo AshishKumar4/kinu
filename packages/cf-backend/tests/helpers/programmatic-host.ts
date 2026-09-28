@@ -7,6 +7,7 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { encodeExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { adoptCtxExports, composeFabric, type CtxExports } from '@nimbus-sh/fabric/composition.js';
@@ -67,7 +68,7 @@ export function durableStorage(durable: DurableState): TestDurableStorage {
 
 /** The runtime's verbs, composed lazily by whichever verb runs first. */
 export type ProgrammaticHost = Pick<HostedRuntime,
-  'ready' | 'exec' | 'startProcess' | 'runCode' | 'listProcesses' | 'killProcess' | 'processLogs'
+  'ready' | 'exec' | 'execStream' | 'startProcess' | 'runCode' | 'listProcesses' | 'killProcess' | 'processLogs'
   | 'listPorts' | 'exposeApp' | 'removeApp' | 'listApps' | 'routeCapabilityPort' | 'ensureRuntimes'
   | 'installRuntime' | 'listRuntimes' | 'spawnWorker' | 'supervisorOp' | 'files' | 'facets'
 >;
@@ -159,20 +160,17 @@ class DurableSqlStatement {}
 
 /** One Durable Object's SQLite over a bun database. */
 export function durableSqlStorage(database: Database): SqlStorage {
-  const refuse = refusing('SqlStorage');
+  const pragma = (name: 'page_count' | 'page_size'): number => (
+    v.parse(v.record(v.string(), v.number()), database.prepare(`PRAGMA ${name}`).get())[name] ?? 0
+  );
 
   return {
     exec<T extends SqlStorageRow>(query: string, ...bindings: SqlValue[]): SqlStorageCursor<T> {
-      const statement = database.prepare<T, SQLQueryBindings[]>(query);
-      const bound = bindings.map(sqlBinding);
-
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return new DurableSqlRows(statement.all(...bound));
-      statement.run(...bound);
-
-      return new DurableSqlRows();
+      // Every statement answers its rows, as the platform's do: a write with RETURNING has some.
+      return new DurableSqlRows(database.prepare<T, SQLQueryBindings[]>(query).all(...bindings.map(sqlBinding)));
     },
     get databaseSize(): number {
-      return refuse('databaseSize')();
+      return pragma('page_count') * pragma('page_size');
     },
     Cursor: DurableSqlRows,
     Statement: DurableSqlStatement,
@@ -368,6 +366,7 @@ export function programmaticHostOver(workspace: NimbusWorkspace, seams: Programm
   const host: ProgrammaticHost = {
     ready: async (options) => (await runtime()).ready(options),
     exec: async (command, options) => (await runtime()).exec(command, options),
+    execStream: async (command, options) => (await runtime()).execStream(command, options),
     startProcess: async (command, options) => (await runtime()).startProcess(command, options),
     runCode: async (code, options) => (await runtime()).runCode(code, options),
     listProcesses: async () => (await runtime()).listProcesses(),
@@ -401,6 +400,11 @@ export const ensureProgrammaticReady = (host: ProgrammaticHost, options?: Parame
 
 export const rpcExec = (host: ProgrammaticHost, ...args: Parameters<HostedRuntime['exec']>) => host.exec(...args);
 
+/** What the session entrypoint answers the SDK's `exec`: the command's output as a framed byte stream. */
+export const rpcExecStream = async (host: ProgrammaticHost, ...args: Parameters<HostedRuntime['execStream']>) => (
+  encodeExecStream(await host.execStream(...args))
+);
+
 export const rpcStartProcess = (host: ProgrammaticHost, ...args: Parameters<HostedRuntime['startProcess']>) => host.startProcess(...args);
 
 export const rpcProcessLogs = (host: ProgrammaticHost, ...args: Parameters<HostedRuntime['processLogs']>) => host.processLogs(...args);
@@ -426,8 +430,8 @@ export function credentialedSessionBox(
 
     return {
       as: filesAs,
-      read: async (path) => await (await view()).exists(path) ? (await view()).readFile(path) : null,
-      readBytes: async (path) => await (await view()).exists(path) ? (await view()).readFile(path, null) : null,
+      read: async (path) => await (await view()).exists(path) ? (await view()).readFileString(path) : null,
+      readBytes: async (path) => await (await view()).exists(path) ? (await view()).readFile(path) : null,
       readRange: async (path, offset, length) => {
         const vfs = (await runtime()).workspace.vfs.as(agent);
 
@@ -436,17 +440,14 @@ export function credentialedSessionBox(
       write: async (path, content) => { await (await view()).writeFile(path, content); },
       list: async (path) => (await (await view()).readdir(path ?? '/')).map((entry) => ({ name: entry.name, type: entry.type })),
       stat: async (path) => {
-        const files = await view();
+        const stat = await (await view()).stat(path);
 
-        if (!await files.exists(path)) return null;
-        const stat = await files.stat(path);
-
-        return v.parse(FileStatSchema, { type: stat.type, size: stat.size, mtime: stat.mtime });
+        return stat === null ? null : v.parse(FileStatSchema, { type: stat.type, size: stat.size, mtime: stat.mtimeMs });
       },
       rename: async (from, to) => { await (await view()).rename(from, to); },
       exists: async (path) => (await view()).exists(path),
       mkdir: async (path) => { await (await view()).mkdir(path, { recursive: true }); },
-      delete: async (path, options) => { await (await view()).rm(path, { recursive: options?.recursive ?? false }); },
+      delete: async (path, options) => { await (await view()).remove(path, { recursive: options?.recursive ?? false }); },
     };
   };
 

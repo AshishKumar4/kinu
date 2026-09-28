@@ -18,6 +18,7 @@ import {
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 import { mockAgentsSdk } from './helpers/agents-sdk';
+import { nimbusAssets } from './helpers/nimbus-assets';
 
 // Dynamic so the `agents` stand-in is registered first.
 mockAgentsSdk();
@@ -109,7 +110,12 @@ function hostActor(): Actor {
   // Unchecked: `WorkerLoader` is a workerd binding with no constructible form, and the fabric reaches only `load`.
   const LOADER: WorkerLoader = Object.create(loader);
 
-  const actorEnv: ActorBindings = { LOADER, OrchestratorAgent: OBJECT_NAMESPACE };
+  const ASSETS = {
+    fetch: async (input: RequestInfo | URL) => nimbusAssets(input instanceof Request ? input : new Request(input)),
+    connect: (): never => { throw new Error('ASSETS.connect: not reachable in this test'); },
+  };
+
+  const actorEnv: ActorBindings = { LOADER, OrchestratorAgent: OBJECT_NAMESPACE, ASSETS };
 
   const hosted = createHostedWorkspace({
     ctx: actorCtx(SCRIPT_EXPORTS),
@@ -223,15 +229,15 @@ describe('hosted workspace facets', () => {
 
 describe('hosted file reads report absence by code, not by message', () => {
   test('a non-absence failure still throws when its path contains ENOENT', async () => {
-    // `/ENOENT-probe` guards reading the VFS `code` rather than matching the message (EISDIR's text holds the substring).
+    // `ENOENT-probe` guards reading the VFS `code` rather than matching the message (EISDIR's text holds the substring).
     const actor = hostActor();
     const files = actor.hosted.box('probe').files;
 
     if (!files) throw new Error('the hosted box carries no files plane');
 
     if (!files.mkdir) throw new Error('the hosted files plane carries no mkdir');
-    await files.mkdir('/ENOENT-probe');
-    await expect(files.read('/ENOENT-probe')).rejects.toThrow('EISDIR');
-    await expect(files.read('/no-such-file')).resolves.toBeNull();
+    await files.mkdir('/home/main/ENOENT-probe');
+    await expect(files.read('/home/main/ENOENT-probe')).rejects.toThrow('EISDIR');
+    await expect(files.read('/home/main/no-such-file')).resolves.toBeNull();
   });
 });

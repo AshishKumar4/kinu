@@ -14,7 +14,8 @@ import {
   ChangeSetCache, DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory,
   agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables,
   initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceBaselineTable, initWorkspaceSchema,
-  classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, standardMounts, withMountTable,
+  classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, settleWorkspaceSlates, standardMounts,
+  withMountTable,
   type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor,
   type SqlValue, type StepContextPlane, type StepPipeline, type VFS,
 } from '@kinu.run/core';
@@ -135,7 +136,12 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
   private workspace(): Promise<SqliteVFS> {
     this.opened ??= NimbusWorkspace.create({ sql: this.sql, transactions: { storage: this.ctx.storage } })
-      .then((workspace) => workspace.vfs);
+      .then((workspace) => {
+        // As a workspace boot leaves it: /slates the kernel's, shared with the workspace's agents.
+        settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
+
+        return workspace.vfs;
+      });
 
     return this.opened;
   }

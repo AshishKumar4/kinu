@@ -3,38 +3,19 @@
  * to the workspace kernel, so a listening port answers and an empty one refuses as a refused connection.
  */
 import { describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import * as v from 'valibot';
-import type { SqlDatabase, SqlRow, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { Database } from 'bun:sqlite';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { provisionWorkspaceRuntimes } from '../src/vfs/workspace-runtimes';
-
-function sqlBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-
-  return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-}
+import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 
 async function loopbackWorkspace(): Promise<{ database: Database; workspace: NimbusWorkspace }> {
   const database = new Database(':memory:');
 
-  const sql: SqlDatabase = {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-      const bound = bindings.map(sqlBinding);
-
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
-      statement.run(...bound);
-
-      return [];
-    },
-  };
+  const { sql, transactions } = inlineWorkspaceStorage(database);
 
   const workspace = await NimbusWorkspace.create({
     sql,
-    transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
+    transactions,
     generation: 1,
     cwd: '/home/user',
   });

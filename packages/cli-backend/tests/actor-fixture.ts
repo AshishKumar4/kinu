@@ -7,7 +7,7 @@ import {
   type ActorHost, type AgentRuntime, type BroadcastEvent, type HostedNodeSeat,
   type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs,
   type SqlExec, type SqlValue, type WriteObserver,
-  DEFAULT_WORKERS_AI_MODEL_SPEC,
+  DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import { bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '../src/actor-identity';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
@@ -150,7 +150,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
     workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '',
   });
 
-  const stores = createAgentStores(() => rt.storage.sql, () => handle, rt.storage.transactionSync, async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
+  const stores = createAgentStores(() => rt.storage.sql, () => handle, rt.storage.transactionSync, async () => ({ vfs: rt.storage.vfs, artifactDirectory: `${WORKSPACE_ROOT}/actors/${handle.actorId}` }));
 
   const session: ActorSession = new ActorSession({ history: stores.history, runtime,
   claims: stores.claims,

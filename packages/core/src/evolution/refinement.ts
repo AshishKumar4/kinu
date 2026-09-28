@@ -20,6 +20,7 @@ import { nowMs } from '../utils/date';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { NEGATIVE_TURN_OUTCOMES, listTurnOutcomes } from './outcomes';
 import { workspaceSkillPath } from '../skills/discover';
+import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 export const REFINEMENT_TRIGGERS = ['explicit', 'evolution_debt'] as const;
 
@@ -233,7 +234,7 @@ export function refinementStagingPath(requestId: string, skillName: string): str
 }
 
 /** Private: name staged files only via `refinementStagingPath`. */
-const REFINEMENT_STAGED_ROOT = '/workspace/.kinu/refinement';
+const REFINEMENT_STAGED_ROOT = `${WORKSPACE_ROOT}/.kinu/refinement`;
 
 export function refinementRequestView(request: RefinementRequest): RefinementRequestView {
   return {

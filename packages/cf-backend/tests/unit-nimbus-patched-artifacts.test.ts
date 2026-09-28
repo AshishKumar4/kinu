@@ -1,13 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import type { Connection } from 'agents';
 import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { Nimbus } from '@nimbus-sh/sdk';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import type {
-  SqlDatabase,
-  SqlValue,
-} from '@nimbus-sh/core/runtime/os-contracts.js';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import * as v from 'valibot';
@@ -15,6 +11,7 @@ import {
   LEGACY_WORKSPACE_ROOT, TurnContextBudget, WORKSPACE_ROOT, createFileDispatcher, nimbusSessionFiles, settleWorkspaceRoot,
 } from '@kinu.run/core';
 import { workspaceBoxFiles } from '@kinu.run/core/workspace';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 import { TurnFileLedger } from '../../core/src/vfs/file-ledger';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -67,39 +64,10 @@ function doneFrames(sent: readonly string[]): Array<{ id: string }> {
   });
 }
 
-type NativeSqlValue = string | number | bigint | null | Uint8Array;
-
-type NativeSqlRow = Record<string, NativeSqlValue>;
-
-function nativeBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  }
-
-  return value;
-}
-
-function workspaceSql(database: Database): SqlDatabase {
-  return {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<NativeSqlRow, SQLQueryBindings[]>(query);
-      const bound = bindings.map(nativeBinding);
-
-      if (statement.columnNames.length > 0) return statement.all(...bound);
-      statement.run(...bound);
-
-      return [];
-    },
-  };
-}
-
 /** A workspace booted as Kinu boots one: the root at /home/main, /home/user a link to it. */
 async function linkedWorkspace(db: Database): Promise<NimbusWorkspace> {
   const workspace = await NimbusWorkspace.create({
-    sql: workspaceSql(db),
-    transactions: { storage: { transactionSync: <T,>(fn: () => T): T => db.transaction(fn)() } },
+    ...inlineWorkspaceStorage(db),
     generation: 1,
     cwd: WORKSPACE_ROOT,
     env: { HOME: WORKSPACE_ROOT },
@@ -136,8 +104,7 @@ describe('installed Nimbus dependency integrity', () => {
     const db = new Database(':memory:');
 
     const workspace = await NimbusWorkspace.create({
-      sql: workspaceSql(db),
-      transactions: { storage: { transactionSync: <T,>(fn: () => T): T => db.transaction(fn)() } },
+      ...inlineWorkspaceStorage(db),
       generation: 1,
       cwd: '/home/main',
     });
@@ -148,8 +115,8 @@ describe('installed Nimbus dependency integrity', () => {
     db.close();
   });
 
-  // patches/@nimbus-sh%2Fcore@0.12.0.patch (Nimbus ask N21) until a release carries it: SqliteVFS.readdir keyed
-  // its children on the path as given, so a directory reached through a link listed nothing.
+  // Nimbus ask N21, fixed in core 0.13.0: SqliteVFS.readdir keyed its children on the path as given, so a directory
+  // reached through a link listed nothing.
   test('the workspace root, reached through its legacy link, lists what the root holds', async () => {
     const db = new Database(':memory:');
     const workspace = await linkedWorkspace(db);
@@ -179,9 +146,9 @@ describe('installed Nimbus dependency integrity', () => {
     db.close();
   });
 
-  // patches/@nimbus-sh%2Fcore@0.12.0.patch (Nimbus ask N22) until a release carries it: SqliteVFS keyed a new entry on
-  // the path as given, so one made through the link landed under the link's own name, where nothing reached through
-  // the link finds it; rmdir and revision read that name too. Old SOULs and conversations still name /home/user.
+  // Nimbus ask N22, fixed in core 0.13.0: SqliteVFS keyed a new entry on the path as given, so one made through the
+  // link landed under the link's own name, where nothing reached through the link finds it; rmdir and revision read
+  // that name too. Old SOULs and conversations still name /home/user.
   describe('through the legacy link, an entry lands where the root holds it', () => {
     test('the file plane writes into a directory that does not exist yet', async () => {
       const db = new Database(':memory:');

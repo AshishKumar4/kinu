@@ -743,7 +743,7 @@ describe('cloud agent ownership safety', () => {
     }
 
     /** A statement against the Nimbus filesystem's own inode table. */
-    const touchesFilesystem = (sql: string): boolean => /\binodes\b/u.test(sql);
+    const touchesFilesystem = (sql: string): boolean => /\bvfs_inodes\b/u.test(sql);
 
     test('an already-owned claim does not touch the Nimbus filesystem', async () => {
       const { db } = orchestratorHarness();

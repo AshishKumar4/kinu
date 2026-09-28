@@ -1,14 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import * as v from 'valibot';
+import { Database } from 'bun:sqlite';
 import { Nimbus, type NimbusExecOptions } from '@nimbus-sh/sdk';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import type { SqlDatabase, SqlRow, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   programmaticHostOver,
   type DurableState,
   ensureProgrammaticReady,
-  rpcExec,
+  rpcExecStream,
   rpcListPorts,
   rpcRouteCapabilityPort,
   durableStorage,
@@ -16,6 +14,7 @@ import {
   type TestProgrammaticHost,
 } from './helpers/programmatic-host';
 import { clearPortCapability } from '@nimbus-sh/worker/port-capability';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 
 const databases: Database[] = [];
 
@@ -23,44 +22,12 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-interface WorkspaceDatabase {
-  readonly database: Database;
-  readonly sql: SqlDatabase;
-}
-
-function sqlBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) {
-    const bytes = new Uint8Array(value.byteLength);
-    const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
-
-    for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
-
-    return bytes;
-  }
-
-  return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-}
-
-function openWorkspaceDatabase(): WorkspaceDatabase {
+/** A workspace's SQLite, as the CLI hosts it. */
+function openWorkspaceDatabase() {
   const database = new Database(':memory:');
   databases.push(database);
 
-  return {
-    database,
-    sql: {
-      exec(query: string, ...bindings: SqlValue[]) {
-        const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-        const bound = bindings.map(sqlBinding);
-
-        if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
-        statement.run(...bound);
-
-        return [];
-      },
-    },
-  };
+  return inlineWorkspaceStorage(database);
 }
 
 type DurableShellState = DurableState;
@@ -73,7 +40,7 @@ function workerHost(workspace: NimbusWorkspace, durableState: DurableShellState)
 function sdkBox({ host, portRegistry, durable }: TestProgrammaticHost) {
   const stub = {
     _rpcReady: (options?: { preinstall?: string[] }) => ensureProgrammaticReady(host, options),
-    _rpcExec: (command: string, options?: ProgrammaticExecOptions) => rpcExec(host, command, options),
+    _rpcExecStream: (command: string, options?: ProgrammaticExecOptions) => rpcExecStream(host, command, options),
     _rpcListPorts: () => rpcListPorts(host),
     _rpcExposePort: (port: number) => host.exposeApp({ port }),
     _rpcUnexposePort: async (port: number) => {
@@ -96,11 +63,10 @@ const shell = (shellId: string): NimbusExecOptions => ({ shellId });
 
 describe('hosted workspace actor shell state', () => {
   test('successive public SDK calls keep cwd over the authoritative VFS bytes', async () => {
-    const { database, sql } = openWorkspaceDatabase();
+    const storage = openWorkspaceDatabase();
 
     const workspace = await NimbusWorkspace.create({
-      sql,
-      transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
+      ...storage,
       generation: 1,
     });
 
@@ -117,15 +83,14 @@ describe('hosted workspace actor shell state', () => {
       stdout: 'same bytes',
       exitCode: 0,
     });
-    expect(await workspace.fs.readFile('/home/main/repo/proof.txt')).toBe('same bytes');
+    expect(await workspace.fs.readFileString('/home/main/repo/proof.txt')).toBe('same bytes');
   });
 
   test('concurrent actor shells serialize their own calls without cwd or env leakage', async () => {
-    const { database, sql } = openWorkspaceDatabase();
+    const storage = openWorkspaceDatabase();
 
     const workspace = await NimbusWorkspace.create({
-      sql,
-      transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
+      ...storage,
       generation: 1,
     });
 
@@ -150,19 +115,16 @@ describe('hosted workspace actor shell state', () => {
   });
 
   test('durable shell state survives worker reconstruction', async () => {
-    const { database, sql } = openWorkspaceDatabase();
+    const storage = openWorkspaceDatabase();
 
-    const transactions = {
-      storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() },
-    };
 
     const durableState: DurableShellState = new Map();
-    const firstWorkspace = await NimbusWorkspace.create({ sql, transactions, generation: 1 });
+    const firstWorkspace = await NimbusWorkspace.create({ ...storage, generation: 1 });
     await firstWorkspace.fs.mkdir('/home/main/repo', { recursive: true });
     const firstBox = sdkBox(workerHost(firstWorkspace, durableState));
     await firstBox.exec('cd /home/main/repo; export RECONSTRUCTED=yes', shell('agent:main'));
 
-    const reconstructedWorkspace = await NimbusWorkspace.create({ sql, transactions, generation: 2 });
+    const reconstructedWorkspace = await NimbusWorkspace.create({ ...storage, generation: 2 });
     const reconstructedBox = sdkBox(workerHost(reconstructedWorkspace, durableState));
     expect(await reconstructedBox.exec('pwd; echo $RECONSTRUCTED', shell('agent:main'))).toMatchObject({
       stdout: '/home/main/repo\nyes\n',
@@ -173,11 +135,10 @@ describe('hosted workspace actor shell state', () => {
 
 describe('hosted workspace preview capabilities', () => {
   test('the public SDK capability reaches the actual worker/core guest route and is revoked on unexpose', async () => {
-    const { database, sql } = openWorkspaceDatabase();
+    const storage = openWorkspaceDatabase();
 
     const workspace = await NimbusWorkspace.create({
-      sql,
-      transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
+      ...storage,
       generation: 1,
     });
 

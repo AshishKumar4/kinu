@@ -3,18 +3,18 @@
  * The workerd tier (slate-durability.test.ts) drives one real socket through both.
  */
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import type { Connection } from 'agents';
 import { AwaitedList } from '@kinu.run/test-utils';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import type { SqlDatabase, SqlRow, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { programmaticHostOver } from './helpers/programmatic-host';
 import { orchestratorHarness } from './helpers/actor-harness';
 import { WORKSPACE_TERMINAL_TAG, WorkspaceTerminalOutputSchema } from '@kinu.run/core';
 import type { TerminalSocket, WorkspaceTerminal } from '../src/workspace-host';
 import { socketConnection } from './helpers/bindings';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 
 // After the harness registers the SDK mock: a static import would bind it to the real `agents` Agent.
 const { ActorAgent } = await import('../src/actor-agent');
@@ -25,33 +25,15 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-function sqlBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-
-  return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-}
-
 async function openRuntimeTerminal(): Promise<WorkspaceTerminal> {
   const database = new Database(':memory:');
   databases.push(database);
 
-  const sql: SqlDatabase = {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-      const bound = bindings.map(sqlBinding);
-
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
-      statement.run(...bound);
-
-      return [];
-    },
-  };
+  const { sql, transactions } = inlineWorkspaceStorage(database);
 
   const workspace = await NimbusWorkspace.create({
     sql,
-    transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
+    transactions,
     generation: 1,
     processes: new SessionProcessSupervisor(),
   });

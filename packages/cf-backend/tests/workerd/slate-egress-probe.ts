@@ -2,6 +2,7 @@ import { Agent } from 'agents';
 import * as v from 'valibot';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
+import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
@@ -35,13 +36,14 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
   private readonly processes = new SessionProcessSupervisor();
   private readonly ports = new PortRegistry();
+  private readonly filesystem = new ProcessFiles(this.vfs);
   private readonly facets = probeFacetManager({
-    ctx: this.ctx, env: this.env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs,
+    ctx: this.ctx, env: this.env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs, filesystem: this.filesystem,
   });
 
   private readonly host = new SlateHost({
     ctx: this.ctx, workspace: this.ctx.id.toString(),
-    session: async () => ({ vfs: this.vfs, processes: this.processes }),
+    session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
     facetManager: async () => this.facets,
     dispatch: async () => { throw new Error('The fixture declares no capability bindings'); },
     apps: {
@@ -60,7 +62,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
         ...v.parse(v.array(v.union([v.string(), v.number(), v.boolean(), v.null()])), values)),
       transactionSync: (write) => this.ctx.storage.transactionSync(write),
     });
-    seedBaseFilesystem(this.vfs, ['home', 'etc']);
+    seedBaseFilesystem(this.vfs);
     const files = this.vfs.as(CRED_KERNEL);
     const root = '/slates/network';
 

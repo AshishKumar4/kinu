@@ -64,7 +64,7 @@ function transcriptOf(n: number): SeedRow[] {
 function chatStore(w: { db: Database; sql: SqlExecutor; actor: ActorHandle; vfs: VFS }) {
   const history = new SessionHistory({
     sql: w.sql, actor: w.actor, transactionSync: (write) => w.db.transaction(write)(),
-    files: async () => ({ vfs: w.vfs, artifactDirectory: '/actor/.kinu/context' }),
+    files: async () => ({ vfs: w.vfs, artifactDirectory: '/home/main/.kinu/context' }),
   });
 
   return { history, transcript: history.transcript(CHAT_SESSION_ID) };
@@ -529,10 +529,10 @@ describe('executor file plane', () => {
 
   test('workspace listings are typed, sized and directories-first', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.mkdir('/proj/sub', { recursive: true });
-    await rt.storage.vfs.writeFile('/proj/a.txt', 'aa');
+    await rt.storage.vfs.mkdir('/home/main/proj/sub', { recursive: true });
+    await rt.storage.vfs.writeFile('/home/main/proj/a.txt', 'aa');
 
-    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/proj');
+    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/proj');
     expect(listed.entries?.map((e) => [e.name, e.type])).toEqual([['sub', 'dir'], ['a.txt', 'file']]);
     expect(listed.entries?.find((e) => e.name === 'a.txt')?.size).toBe(2);
     db.close();
@@ -550,11 +550,11 @@ describe('executor file plane', () => {
 
   test('the directories the platform manages are not listed beside the work', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.mkdir('/proj/.nimbus/runtimes', { recursive: true });
-    await rt.storage.vfs.mkdir('/proj/.kinu/tool-output', { recursive: true });
-    await rt.storage.vfs.writeFile('/proj/hello.py', 'print(42)\n');
+    await rt.storage.vfs.mkdir('/home/main/proj/.nimbus/runtimes', { recursive: true });
+    await rt.storage.vfs.mkdir('/home/main/proj/.kinu/tool-output', { recursive: true });
+    await rt.storage.vfs.writeFile('/home/main/proj/hello.py', 'print(42)\n');
 
-    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/proj');
+    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/proj');
     expect(listed.entries?.map((e) => e.name)).toEqual(['hello.py']);
     db.close();
   });
