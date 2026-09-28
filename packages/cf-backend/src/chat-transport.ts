@@ -1,29 +1,29 @@
 /**
  * Core's {@link ChatTransport} over the SDK's `cf_agent_*` protocol, one room per actor tag. It writes no
- * row; the loop does. A hosted actor's room has no resume store: {@link ResumableStream} keeps one active
- * stream per database, so a second store would read the root's live turn as the actor's.
+ * row; the loop does, and the answer's one durable copy is the loop's `stream_parts`. A tab that reconnects
+ * mid-turn is replayed the chunks this relay sent for the turn in progress, over the SDK's documented resume
+ * handshake (RESUME_REQUEST, RESUMING, ACK, replay frames, replayComplete); an evicted turn has no relay
+ * left, so the tab reads the partial from the transcript frame and the loop's re-drive streams afresh.
  */
 import type { Connection } from 'agents';
 import {
-  ContinuationState, MessageType, ResumableStream, ResumeHandshake, StreamAccumulator,
+  MessageType, StreamAccumulator,
   parseProtocolMessage, reconcileMessages, sanitizeMessage, sendIfOpen,
   type ChatProtocolEvent,
 } from 'agents/chat';
-import type { Streams } from 'agents/streams';
 import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import {
-  flushSignal, partialFlushCadence, type PartialFlushCadence, isWorkMode, INTERRUPTED_TURN,
-  type ChatTransport, type ObservedCall, type PromptFile, type SendLanding, type SessionEvent, type SqlExecutor, type WorkMode,
+  isWorkMode, INTERRUPTED_TURN,
+  type ChatTransport, type ObservedCall, type PromptFile, type SendLanding, type SessionEvent, type WorkMode,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 
-/** The frame paths take the whole `Connection` because the SDK's `ResumeHandshake` declares it. */
 export type ChatSocket = Pick<Connection, 'id'>;
 
 export interface ChatWire {
-  /** Null for a wire whose turns stream live only (hosted actors; see header). */
-  readonly resumeStore: { readonly streams: Streams; readonly sql: SqlExecutor } | null;
+  /** False for a wire whose turns stream live only: a hosted actor's tab reads its partial from the transcript. */
+  readonly resumes: boolean;
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): Connection | undefined;
@@ -62,11 +62,11 @@ interface LiveStream {
   readonly requestId: string;
   /** Requests of the other messages a rerun carried, answered when it closes. */
   readonly carried: readonly string[];
-  readonly streamId: string;
   /** Renewed per provider call against the turn's parts, so the answer stays one message under one id. */
   accumulator: StreamAccumulator;
   readonly open: OpenParts;
-  readonly cadence: PartialFlushCadence;
+  /** Every chunk body this turn relayed, in order: a reconnecting tab's replay. Dropped with the turn. */
+  readonly relayed: string[];
   /** The relay broke before the stream ended, so the accumulated parts are not the answer. */
   broken: boolean;
   /** Why the turn failed, sent as the frame that ends it. */
@@ -125,50 +125,63 @@ function doneFrame(requestId: string, extra: { landed?: SendLanding; error?: str
 }
 
 export class ChatWireTransport implements ChatTransport, ChatRoom {
-  /** Built on first use: `getCallableMethods` evaluates this getter on a bare prototype, and
-   *  touching storage there would break the whole RPC surface. */
-  private _resume: { readonly resumable: ResumableStream; readonly handshake: ResumeHandshake } | null = null;
+  /** Tabs told a stream is resuming and not yet acknowledged: live chunks skip them until their replay. */
   private readonly pendingResume = new Set<string>();
-  private readonly continuation = new ContinuationState<Connection>();
   private readonly requests = new Map<string, string>();
   private live: LiveStream | null = null;
 
   constructor(private readonly wire: ChatWire) {}
 
-  private get resume(): { readonly resumable: ResumableStream; readonly handshake: ResumeHandshake } | null {
-    if (this._resume !== null) return this._resume;
-    const store = this.wire.resumeStore;
-
-    if (store === null) return null;
-    const resumable = new ResumableStream(store.streams, store.sql);
-
-    return this._resume = {
-      resumable,
-      handshake: new ResumeHandshake({
-        responseMessageType: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
-        resumableStream: resumable,
-        continuation: this.continuation,
-        pendingResumeConnections: this.pendingResume,
-        pendingChatTerminal: () => Promise.resolve(null),
-        // An orphaned stream is the loop's to continue from its ledger.
-        persistOrphanedStream: () => Promise.resolve(),
-        isConnectionPresent: (id) => this.wire.getConnection(id) !== undefined,
-      }),
-    };
+  /** The turn a reconnecting tab can be replayed, or null. */
+  private get resumable(): LiveStream | null {
+    return this.wire.resumes ? this.live : null;
   }
 
   /** The connect frame is the pane's only seed, so a socket opening mid-turn gets the current window. */
   async onConnect(connection: Connection): Promise<void> {
-    const resume = this.resume;
     const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
-    if (resume !== null && resume.resumable.hasActiveStream()) resume.handshake.notifyStreamResuming(connection);
+    this.notifyResuming(connection);
     sendIfOpen(connection, transcriptFrame(history));
   }
 
   onClose(connection: ChatSocket): void {
     this.pendingResume.delete(connection.id);
-    this.continuation.releaseConnection(connection.id);
+  }
+
+  /** Told proactively on connect and again on the tab's own request; the client acknowledges once. */
+  private notifyResuming(connection: Connection, probeId?: string): boolean {
+    const live = this.resumable;
+
+    if (live === null) return false;
+
+    if (sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUMING, id: live.requestId, ...(probeId !== undefined && { probeId }) }))) {
+      this.pendingResume.add(connection.id);
+    }
+
+    return true;
+  }
+
+  /** What this relay sent for the turn, then `replayComplete`; the live chunks that follow continue it. */
+  private replay(connection: Connection, requestId: string): void {
+    this.pendingResume.delete(connection.id);
+    const live = this.resumable;
+
+    const frame = (fields: { body: string; replayComplete?: true; done: boolean }): string =>
+      JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: requestId, replay: true, ...fields });
+
+    // A request that is no longer live settles; its answer is in the transcript frame.
+    if (live === null || live.requestId !== requestId) {
+      sendIfOpen(connection, frame({ body: '', done: true }));
+
+      return;
+    }
+
+    for (const body of live.relayed) {
+      if (!sendIfOpen(connection, frame({ body, done: false }))) return;
+    }
+
+    sendIfOpen(connection, frame({ body: '', done: false, replayComplete: true }));
   }
 
   async onMessage(connection: Connection, raw: string): Promise<boolean> {
@@ -182,23 +195,16 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   private async handle(connection: Connection, event: ChatProtocolEvent): Promise<void> {
     switch (event.type) {
-      case 'stream-resume-request': {
-        const resume = this.resume;
-
+      case 'stream-resume-request':
         // `idle` is load-bearing: the hook keeps waiting on a probe answered with anything weaker.
-        if (resume === null) {
+        if (!this.notifyResuming(connection, event.probeId)) {
           sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId: event.probeId }));
-
-          return;
         }
 
-        await resume.handshake.handleResumeRequest(connection, event.probeId);
-
         return;
-      }
 
       case 'stream-resume-ack':
-        await this.resume?.handshake.handleResumeAck(connection, event.id);
+        this.replay(connection, event.id);
 
         return;
 
@@ -214,7 +220,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         return;
 
       case 'clear': {
-        this.resume?.resumable.clearAll();
         this.pendingResume.clear();
         await this.wire.clear();
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_CLEAR }), [connection.id]);
@@ -294,9 +299,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
 
     this.releaseWaiters();
-    const streamId = this.resume?.resumable.start(requestId, { messageId: turn.messageId }) ?? requestId;
-
-    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), broken: false, failure: null };
+    this.live = { requestId, carried, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), relayed: [], broken: false, failure: null };
 
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
   }
@@ -310,7 +313,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
-    this.resume?.resumable.complete(live.streamId);
     this.pendingResume.clear();
     this.done(live.requestId, live.failure === null ? {} : { error: live.failure });
 
@@ -340,7 +342,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         // Their resume names this stream: its own terminal frame, with the error, settles it.
         this.pendingResume.clear();
-        this.resume?.resumable.markError(live.streamId);
         live.failure = event.message;
 
         return;
@@ -367,7 +368,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
   }
 
-  /** Stored for resume and broadcast; a continuation renews from the turn's parts, keeping one answer id. */
+  /** Held for a reconnecting tab and broadcast; a continuation renews from the turn's parts, keeping one answer id. */
   async observe(stream: ReadableStream<UIMessageChunk>, call: ObservedCall): Promise<void> {
     const live = this.live;
 
@@ -403,16 +404,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         if (chunk.type === 'start') chunk.messageId = live.accumulator.messageId;
 
         const body = JSON.stringify(chunk);
-        const resume = this.resume;
 
-        if (resume !== null) {
-          resume.resumable.storeChunk(live.streamId, body);
-
-          // The stream buffer flushes at these same positions, so a resumed step and this replay agree on what survived.
-          if (live.cadence.flushes(flushSignal(chunk))) resume.resumable.flushBuffer();
-        }
-
-        if (chunk.type === 'finish-step') live.cadence.reset();
+        if (this.wire.resumes) live.relayed.push(body);
 
         // A joining tab reads it in its replay; sent now, it would run ahead of the parts the replay opens.
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);
@@ -426,7 +419,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   /** A tab told to resume a stream that will not grow again hears it end, so its resume settles. */
   private releaseWaiters(): void {
-    const stale = this.resume?.resumable.activeRequestId ?? null;
+    const stale = this.live?.requestId ?? null;
 
     for (const id of this.pendingResume) {
       const connection = this.wire.getConnection(id);
@@ -442,7 +435,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     diagnostics.failure('chat.stream_observe_failed', error);
     live.broken = true;
     this.pendingResume.clear();
-    this.resume?.resumable.markError(live.streamId);
     this.wire.broadcast(JSON.stringify({
       type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: refusalOf(error).error, done: false, error: true,
     }));

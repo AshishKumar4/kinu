@@ -37,9 +37,8 @@ const FiberMetaRowSchema = v.object({
 export type FiberMetaRow = v.InferOutput<typeof FiberMetaRowSchema>;
 
 /** Narrow port over `cf_agents_runs`: no method can return a snapshot blob. */
+/** Over `cf_agents_runs`, which the SDK's `Agent` constructor creates (agents 0.24 `_ensureSchema`). */
 export interface FiberRowStore {
-  /** The framework creates the table lazily, on the first `runFiber`. */
-  present(): boolean;
   /** `MAX(rowid)`, read once and then frozen by the caller. */
   upperBoundary(): number | null;
   /** Expired rows in `(after, through]`, oldest rowid first. The cutoff is in the query
@@ -52,8 +51,6 @@ export interface FiberRowStore {
 /** {@link FiberRowStore} over a Durable Object's own storage. */
 export function fiberRowStore(sql: SqlExecutor): FiberRowStore {
   return {
-    present: () => sql<{ name: string }>`
-      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cf_agents_runs'`.length > 0,
     upperBoundary: () => sql<{ boundary: number | null }>`
       SELECT MAX(rowid) AS boundary FROM cf_agents_runs`[0]?.boundary ?? null,
     page: (after, through, cutoff) => sql<unknown>`
@@ -87,8 +84,6 @@ export function sweepUnrecoverableFibers(
   const cutoff = now - FIBER_RECOVERY_MAX_AGE_MS;
   const nothing: FiberSweepResult = { dropped: 0, scanned: 0, truncated: false };
 
-  // No table means the actor never detached durable work: zero rows, not a failure.
-  if (!store.present()) return nothing;
   const boundary = store.upperBoundary();
 
   if (boundary === null) return nothing;

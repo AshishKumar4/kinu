@@ -194,33 +194,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
           + '`triggers` rows driven by the local AlarmScheduler (core/src/events/hub/triggers.ts)',
       },
     },
-    // Created by the first `runFiber` in the shared workspace database.
+    // Created by the Agents SDK's constructor (agents 0.24 `_ensureSchema`), so the fiber sweep asks no schema.
     cf_agents_runs: {
-      'cf-orchestrator': LAZY_ON_FIRST_USE('runFiber'),
-      'cf-subordinate': LAZY_ON_FIRST_USE('runFiber'),
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
     cf_agents_fibers: {
-      'cf-orchestrator': LAZY_ON_FIRST_USE('runFiber'),
-      'cf-subordinate': LAZY_ON_FIRST_USE('runFiber'),
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
-    },
-    // The Agents SDK's Streams capability, which the actor installs; its tables are made at start.
-    cf_agents_streams: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
-    },
-    cf_agents_stream_blocks: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
-    },
-    // Agents SDK `ResumableStream` progress marker, created by the chat transport.
-    cf_agents_chat_progress: {
-      'cf-orchestrator': LAZY_ON_FIRST_USE('the chat transport'),
-      'cf-subordinate': LAZY_ON_FIRST_USE('the chat transport'),
-      cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
     },
     // `cf_agents_sub_agents` is absent on purpose: no actor calls `subAgent()`
     // (`state/actor-host.ts`), so it is not a plane member.

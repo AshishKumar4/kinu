@@ -20,7 +20,6 @@ import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage, sendIfOpen } from "agents/chat";
-import { Streams } from "agents/streams";
 import {
   ActorChatRooms, ChatWireTransport, type ChatWire,
 } from './chat-transport';
@@ -1038,9 +1037,6 @@ export abstract class ActorAgent extends Agent<Env> {
   // The bare prototype must read as sound.
   protected storageRefusal?: StoragePredatesResetError;
 
-  /** The SDK's chunk log behind the tab's stream replay; Kinu's own record is `stream_parts`. */
-  protected readonly streams = new Streams();
-
   /** Kinu's two durable wakes; see wake-jobs.ts. */
   protected readonly wakes = new WakeJobs({
     [KINU_TIMER_JOB]: () => this._kinuTimerTick(),
@@ -1052,7 +1048,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
-    this.lifecycle.use(this.wakes).use(this.streams);
+    this.lifecycle.use(this.wakes);
     // Must precede any read or write of it; see initCapabilitySchema.
     this.initCapabilitySchema();
     // A Durable Object is a DIFFERENT ISOLATE from the Worker that routes to it,
@@ -1850,7 +1846,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private _chatTransport: ChatWireTransport | null = null;
   protected get chatTransport(): ChatWireTransport {
     this._chatTransport ??= new ChatWireTransport({
-      resumeStore: { streams: this.streams, sql: this.boundSql },
+      resumes: true,
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
       history: (limit) => this.chatTranscript.history(limit),
@@ -4580,11 +4576,16 @@ export abstract class ActorAgent extends Agent<Env> {
     fiberRecoveryMaxAgeMs: FIBER_RECOVERY_MAX_AGE_MS,
   };
 
+  /** Set when this activation's fiber sweep ran to its end; later ticks skip it. */
+  private fiberSweepFinished = false;
+
   /**
    * Cleanup only; called from `onStart`, synchronous and bounded so safe in the init gate.
    * Failures are logged and dropped so activation still succeeds.
    */
-  protected sweepUnrecoverableFiberRows(): boolean {
+  protected sweepUnrecoverableFiberRows(activation: boolean): boolean {
+    // Once per activation: only a truncated or failed pass leaves rows for the wake's ticks.
+    if (this.fiberSweepFinished && !activation) return false;
     // A failed pass reports truncated so the caller arms the wake and retries.
     let truncated = true;
 
@@ -4600,6 +4601,7 @@ export abstract class ActorAgent extends Agent<Env> {
       }
 
       truncated = result.truncated;
+      this.fiberSweepFinished = !truncated;
     } catch (err) {
       diagnostics.failure('fiber.unrecoverable_sweep_failed', toKinuError({
         doing: 'dropping the interrupted-fiber rows the recovery budget refused',
@@ -4659,9 +4661,10 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Every budgeted activation sweep; subclasses fold in their own. True if any pass filled its
-   *  budget (caller arms the wake). Synchronous so the init gate can run the same seam. */
-  protected maintenanceSweeps(): boolean {
-    return this.sweepUnrecoverableFiberRows();
+   *  budget (caller arms the wake). Synchronous so the init gate can run the same seam. `activation`:
+   *  the pass `onStart` runs, which sweeps the fiber table whatever a previous pass on this instance found. */
+  protected maintenanceSweeps(activation = false): boolean {
+    return this.sweepUnrecoverableFiberRows(activation);
   }
 
   /**

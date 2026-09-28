@@ -1647,9 +1647,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Every pass runs (no short-circuit): each owns a different table and is budgeted and idempotent. */
-  protected override maintenanceSweeps(): boolean {
+  protected override maintenanceSweeps(activation = false): boolean {
     const branches = this.reconcileOrphanedBranches();
-    const fibers = super.maintenanceSweeps();
+    const fibers = super.maintenanceSweeps(activation);
 
     return branches || fibers;
   }
@@ -1885,7 +1885,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
 
     return {
-      resumeStore: null,
+      resumes: false,
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
       history: (limit) => rows.history(limit),
@@ -2886,7 +2886,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (this.storageRefusal !== undefined || this.nimbusSibling || !this.workspaceBorn()) return;
     this.rependDeadActivationLeases();
     // Row-budgeted (init gate); a truncated pass drains under the wake below.
-    this.maintenanceUnfinished = this.maintenanceSweeps();
+    this.maintenanceUnfinished = this.maintenanceSweeps(true);
     // An activation is the only moment a workspace whose wake was lost can notice; the arm is detached.
     this.armDurableWake();
 

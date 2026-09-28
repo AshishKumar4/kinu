@@ -1647,7 +1647,6 @@ export {
 
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
-export { flushSignal, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal } from './orchestrator/flush-cadence';
 
 export {
   ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,

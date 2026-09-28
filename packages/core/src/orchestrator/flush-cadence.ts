@@ -1,8 +1,5 @@
-/**
- * When a streamed step's buffered output is written: the stream buffer and a backend's tab-replay store
- * flush at the same stream positions, so a resumed step and a reconnecting tab agree on what survived.
- */
-import type { TextStreamPart, ToolSet, UIMessageChunk } from 'ai';
+/** When a streamed step's buffered output is written to the stream buffer. */
+import type { TextStreamPart, ToolSet } from 'ai';
 
 const FLUSH_EVERY = 10;
 
@@ -36,12 +33,11 @@ export function partialFlushCadence(): PartialFlushCadence {
   };
 }
 
-/** Model stream parts and the UI chunks the SDK makes of them, by type: each part and its chunk weigh the same. */
-const SETTLED: ReadonlySet<string> = new Set(['tool-result', 'tool-error', 'tool-output-denied', 'tool-output-available', 'tool-output-error']);
+const SETTLED: ReadonlySet<string> = new Set(['tool-result', 'tool-error', 'tool-output-denied']);
 
-const CONTENT: ReadonlySet<string> = new Set(['text-delta', 'reasoning-delta', 'tool-call', 'tool-input-available']);
+const CONTENT: ReadonlySet<string> = new Set(['text-delta', 'reasoning-delta', 'tool-call']);
 
-export function flushSignal(part: TextStreamPart<ToolSet> | UIMessageChunk): PartialFlushSignal {
+export function flushSignal(part: TextStreamPart<ToolSet>): PartialFlushSignal {
   if (SETTLED.has(part.type)) return 'settled';
 
   return CONTENT.has(part.type) ? 'content' : 'none';

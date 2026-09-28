@@ -481,11 +481,6 @@ function scriptedFibers(
   const table = new Map(rows.map((row) => [row.id, row]));
 
   const store: FiberRowStore = {
-    present: () => {
-      asked.push('present');
-
-      return true;
-    },
     upperBoundary: () => {
       asked.push('upperBoundary');
       const live = [...table.values()];
@@ -522,7 +517,7 @@ const NOW = 1_700_000_000_000;
   const overAge = (ms: number) => NOW - FIBER_RECOVERY_MAX_AGE_MS - ms;
   const inBudget = (ms: number) => NOW - ms;
 
-  test('it asks only the four questions the port declares', () => {
+  test('it asks only the three questions the port declares', () => {
     const scene = scriptedFibers([
       { rowid: 1, id: 'old-1', created_at: overAge(1) },
       { rowid: 2, id: 'fresh-1', created_at: inBudget(1_000) },
@@ -531,7 +526,7 @@ const NOW = 1_700_000_000_000;
     sweepUnrecoverableFibers(scene.store, NOW);
 
     // No `FiberRowStore` member can return a snapshot, so the property rides the interface, not a query string.
-    expect(new Set(scene.asked)).toEqual(new Set(['present', 'upperBoundary', 'page', 'dropIfExpired']));
+    expect(new Set(scene.asked)).toEqual(new Set(['upperBoundary', 'page', 'dropIfExpired']));
     // The cutoff lives in the query: the fresh row is never paged.
     expect(scene.asked.filter((question) => question === 'dropIfExpired')).toHaveLength(1);
   });

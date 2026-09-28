@@ -210,6 +210,8 @@ export function mockAgentsSdk(): void {
           configurable: true,
           value: ctx.id.name ?? ctx.id.toString(),
         });
+        // The SDK's constructor creates its fiber tables (`_ensureSchema`); the actor's sweep relies on it.
+        this.#fiberTables();
       }
       /** A prototype method, as the vendor's is (`agents/dist/src-5W6JNKVb.js:574`), so a subclass override runs. */
       sql(strings: TemplateStringsArray, ...values: SqlValue[]) {

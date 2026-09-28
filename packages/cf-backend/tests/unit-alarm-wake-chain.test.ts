@@ -154,6 +154,20 @@ describe('the workspace keeps exactly one wake per job', () => {
     expect(held(db, seededFibers)).toBe(0);
   });
 
+  test('an activation whose fiber sweep finished does not sweep again on its ticks', async () => {
+    // 2026-09-28: the sweep ran on every tick, so a retry tick inside a turn read the fiber table again.
+    const { agent, db, started } = orchestratorHarness();
+    await started;
+    await agent.activateActor();
+    const expired = Date.now() - 25 * 60 * 60 * 1000;
+    db.prepare(`INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES ('after-sweep', 'bg:stale', NULL, ?)`).run(expired);
+
+    await agent.terminalRetryPass();
+
+    // The next activation's sweep takes it.
+    expect(held(db, "SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id = 'after-sweep'")).toBe(1);
+  });
+
   test('a quiet turn keeps the wake a truncated sweep still needs', async () => {
     // Unfinished maintenance is found only by running a pass, so a turn settling over it must not take its wake.
     const workspace = gatewayWorkspace(answeringGateway('done'));

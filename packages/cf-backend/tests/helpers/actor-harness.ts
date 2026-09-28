@@ -4,9 +4,6 @@
  */
 import { Database } from 'bun:sqlite';
 import { setSystemTime } from 'bun:test';
-import { DurableObject } from 'cloudflare:workers';
-import { Lifecycle } from 'agents/lifecycle';
-import { Streams } from 'agents/streams';
 import { makeSqlExec } from '../../../core/tests/helpers';
 import type { AgentContext, Connection, FiberRecoveryContext, FiberRecoveryResult, WSMessage } from 'agents';
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
@@ -1341,16 +1338,6 @@ export async function fireSoonestWake(agent: Pick<HarnessOrchestratorAgent, 'ala
   await agent.alarm();
 }
 
-/** The SDK's Streams over `db`, installed on the SDK's own Lifecycle as a root actor installs it. */
-export function streamsOver(db: Database): Streams {
-  const streams = new Streams();
-
-  new Lifecycle(new StreamsHost(makeCtx(db), makeEnv())).use(streams);
-
-  return streams;
-}
-
-class StreamsHost extends DurableObject<Env> {}
 
 /**
  * Env with the bindings actor construction reaches. UserDO is present-but-inert unless the
