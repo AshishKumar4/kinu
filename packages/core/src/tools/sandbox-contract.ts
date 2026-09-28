@@ -1,5 +1,6 @@
 /** Codemode sandbox contract: namespace names, the crafted `tools.*` declaration, and crafted-tool labelling. */
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { ToolSet } from 'ai';
 import { z } from 'zod';
@@ -9,7 +10,7 @@ import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
 import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
-import { KinuError } from '../obs';
+import { KinuError, settle, settleSync } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 
 export {
@@ -80,7 +81,7 @@ export function codemodeText(argument: { readonly value: unknown; readonly param
   if (argument.value === undefined || argument.value === null) return '';
   const text = v.safeParse(v.string(), argument.value);
 
-  if (!text.success) throw new KinuError('bad_input', `${argument.parameter} takes a string, not ${receivedKind(argument)}`);
+  if (!text.success) return settleSync(Effect.fail(new KinuError('bad_input', `${argument.parameter} takes a string, not ${receivedKind(argument)}`)));
 
   return text.output;
 }
@@ -98,15 +99,16 @@ export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
       execute: async (...args: unknown[]) => {
         const input = v.safeParse(JsonObjectSchema, args[0] === undefined ? {} : args[0]);
 
-        return branchableToolCall(async () => {
+        return branchableToolCall(() => settle(Effect.gen(function* () {
           if (!input.success || args.length > 1) {
-            throw new KinuError('bad_input', `tools.${name}(input): input must be one JSON object, the same shape the native \`${name}\` tool takes`);
+            return yield* new KinuError('bad_input', `tools.${name}(input): input must be one JSON object, the same shape the native \`${name}\` tool takes`);
           }
 
-          const result = await execute(input.output, { toolCallId: 'codemode-' + nanoid(), messages: [] });
+          const output = input.output;
+          const result = yield* Effect.promise(() => Promise.resolve(execute(output, { toolCallId: 'codemode-' + nanoid(), messages: [] })));
 
           return result === undefined ? undefined : decodeJsonValue({ value: result });
-        });
+        })));
       },
     };
   }
@@ -152,7 +154,8 @@ export function craftedFailureFunctions(crafted: readonly CraftedDeclaration[]):
       description: entry.description,
       execute: async (...args) => {
         const failure = v.parse(v.object({ message: v.string(), name: v.string(), code: v.nullable(v.string()) }), args[0]);
-        throw Object.assign(new Error(failure.message), { name: failure.name, code: failure.code });
+
+        return settle(Effect.die(Object.assign(new Error(failure.message), { name: failure.name, code: failure.code })));
       },
     };
   }
@@ -173,16 +176,16 @@ export function slateToolReach(caller: ToolSurfaceNarrowing): ToolSurfaceNarrowi
 
 /** A held slate binding is not a grant: reach is re-resolved per call. */
 export async function callCodemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string, args: readonly JsonValue[]): Promise<JsonValue | undefined> {
-  const call = codemodeFunction(namespace, member, async () => {
+  const call = codemodeFunction(namespace, member, () => settle(Effect.gen(function* () {
     const provider = providers.find((candidate) => candidate.name === namespace);
 
-    if (provider === undefined) throw new KinuError('denied', `${namespace} is not within this actor's reach right now`);
+    if (provider === undefined) return yield* new KinuError('denied', `${namespace} is not within this actor's reach right now`);
     const entry = Object.hasOwn(provider.tools, member) ? provider.tools[member] : undefined;
 
-    if (entry === undefined) throw new KinuError('missing', `${namespace} has no member ${member}; it offers ${Object.keys(provider.tools).join(', ')}`);
+    if (entry === undefined) return yield* new KinuError('missing', `${namespace} has no member ${member}; it offers ${Object.keys(provider.tools).join(', ')}`);
 
-    return entry.execute(...args);
-  });
+    return yield* Effect.promise(() => Promise.resolve(entry.execute(...args)));
+  })));
 
   return call(...args);
 }
