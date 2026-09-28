@@ -6,7 +6,7 @@ import { SubordinateRosterStore, subordinateTitle } from '../subordinates/roster
 import { ownerFacingSubordinate } from '../protocol';
 import { codenameFor } from '../identity/naming';
 import type { SubordinateRosterEntry } from '../delegation/agents-tool';
-import { headStatusUnsettled } from '../heads/types';
+import { headStatusUnsettled, shownHeadStatus } from '../heads/types';
 import { HeadJournal } from '../heads/journal';
 import type { HeadRunView } from '../heads/types';
 import { actorReadHandle } from './workspace-work';
@@ -52,13 +52,12 @@ function subordinateActivity(entry: SubordinateRosterEntry, inTurn: boolean): Ag
   return inTurn ? 'working' : 'idle';
 }
 
-function headActivity(status: string, runRunning: boolean): AgentActivity {
+function headActivity(status: string, errorMessage: string | null, runRunning: boolean): AgentActivity {
   if (headStatusUnsettled(status)) return runRunning ? 'working' : 'failed';
 
   if (status === 'completed') return 'done';
 
-  // Stopped by the owner or with its search, not failed.
-  return status === 'aborted' ? 'stopped' : 'failed';
+  return shownHeadStatus(status, errorMessage) === 'stopped' ? 'stopped' : 'failed';
 }
 
 /** Parents first: creation times tie. */
@@ -153,7 +152,7 @@ function swarmAgents({ sql, root, actors, labels, paths, handleOf }: Walk): Pane
         nodeLabels.set(node.id, label);
 
         agents.push({
-          key: `${run.rootId}/${node.id}`, label, category: 'swarm', activity: headActivity(node.status, running),
+          key: `${run.rootId}/${node.id}`, label, category: 'swarm', activity: headActivity(node.status, node.errorMessage, running),
           parent: (node.parentId === null ? undefined : nodeLabels.get(node.parentId)) ?? ownerLabel,
           open: { kind: 'node', runId: run.rootId, nodeId: node.id, owner: ownerPath }, tab: false, input: false,
         });

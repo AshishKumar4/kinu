@@ -2656,10 +2656,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return outcome;
   }
 
-  /** Stops one swarm worker or branch head; its siblings and the search run on. */
+  /** Stops one swarm worker or branch head; its siblings and the search run on. Nothing when it is not running. */
   @callable()
-  async stopSwarmWorker(headId: string): Promise<{ stopped: boolean }> {
-    return { stopped: await this.liveWorkers.stop(headId, 'stopped by the owner') };
+  async stopSwarmWorker(headId: string): Promise<void> {
+    await this.liveWorkers.stop(headId);
   }
 
   @callable()

@@ -6,7 +6,7 @@ import {
   TreeStructureIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type { HeadStep, NodeTranscriptView } from "@kinu.run/core";
-import { threadLiveTail, usageTotal, type TurnLiveness } from "@kinu.run/core";
+import { shownHeadStatus, threadLiveTail, usageTotal, type TurnLiveness } from "@kinu.run/core";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { ChatLiveTail, MessageView } from "@/components/MessageView";
 import {
@@ -34,14 +34,9 @@ export function statusDot(status: string): string {
 
   if (status === "completed" || status === "terminal") return "p-dot-success";
 
-  if (status === "errored" || status === "failed") return "p-dot-danger";
+  if (status === "errored" || status === "failed" || status === "aborted") return "p-dot-danger";
 
   return "p-dot-neutral";
-}
-
-/** An aborted head was stopped, by its owner or with its search; the Agents panel says the same. */
-function statusWord(status: string): string {
-  return status === "aborted" ? "stopped" : status;
 }
 
 const TASK_CLAMP = 240;
@@ -109,7 +104,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
           style={{ background: "var(--c-danger-tint)", borderLeftColor: "var(--c-danger)" }}>
           <div className="flex items-center gap-1.5 p-t-status uppercase tracking-normal p-danger">
             <WarningCircleIcon size={11} weight="fill" />
-            {view.status === "aborted" ? "Stopped" : "Failed"}
+            {shownHeadStatus(view.status, view.errorMessage) === "stopped" ? "Stopped" : "Failed"}
           </div>
           <div className="mt-1 p-row-text p-text-2 break-words">{view.errorMessage}</div>
         </div>
@@ -224,8 +219,8 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
   return (
     <div className="min-h-0 flex-1 flex flex-col">
       <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b p-border">
-        <span className={`size-1.5 rounded-full shrink-0 ${statusDot(view.status)} ${live ? "p-dot-pulse" : ""}`} />
-        <span className="p-t-status uppercase tracking-normal p-text-3 shrink-0">{statusWord(view.status)}</span>
+        <span className={`size-1.5 rounded-full shrink-0 ${statusDot(shownHeadStatus(view.status, view.errorMessage))} ${live ? "p-dot-pulse" : ""}`} />
+        <span className="p-t-status uppercase tracking-normal p-text-3 shrink-0">{shownHeadStatus(view.status, view.errorMessage)}</span>
         <div className="h-3 w-px bg-[var(--c-border)] shrink-0" />
         <SearchPath view={view} onSelect={onSelect} />
       </div>

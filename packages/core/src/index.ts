@@ -1582,7 +1582,7 @@ export type {
 export {
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
-  headStatusUnsettled, storedHeadReportStatus,
+  headStatusUnsettled, storedHeadReportStatus, OWNER_STOPPED, shownHeadStatus,
   initHeadsTables,
   HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
   LiveHeadJournal, type AnnounceHeadActivity,

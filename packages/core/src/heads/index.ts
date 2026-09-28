@@ -26,6 +26,8 @@ export {
   deriveChildBudget,
   HEAD_BUILTIN_TOOLS,
   headStatusUnsettled,
+  OWNER_STOPPED,
+  shownHeadStatus,
   storedHeadReportStatus,
 } from './types';
 

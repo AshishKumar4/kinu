@@ -9,7 +9,7 @@ import {
   GitForkIcon, TreeStructureIcon, ArrowsOutIcon, ArrowLeftIcon, CaretRightIcon, CaretDownIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { isRateLimitedTurnError } from "@kinu.run/core";
+import { isRateLimitedTurnError, shownHeadStatus } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript, statusDot } from "@/components/NodeTranscript";
@@ -489,13 +489,13 @@ function RunNodeRow({ node, score, moving, onOpen }: {
   return (
     <button type="button" onClick={onOpen} data-run-node={node.id}
       className="w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 p-card-hover transition-colors">
-      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${rateLimited ? "p-dot-warning" : statusDot(node.status)} ${live && moving ? "p-dot-pulse" : ""}`} />
+      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${rateLimited ? "p-dot-warning" : statusDot(shownHeadStatus(node.status, node.errorMessage))} ${live && moving ? "p-dot-pulse" : ""}`} />
       <div className="min-w-0 flex-1">
         <div className="p-row-text p-text-2 truncate" title={node.task}>
           {cleanNodeLabel(node.task, node.id)}
         </div>
         <div className="p-meta p-text-3 tabular-nums truncate">
-          {node.status}
+          {shownHeadStatus(node.status, node.errorMessage)}
           {score !== null && ` · ${formatScore(score)}`}
           {live
             ? ` · ${node.lastStepAt === null ? "no step yet" : `last step ${timeAgo(node.lastStepAt)}`}`
