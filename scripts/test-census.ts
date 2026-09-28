@@ -431,9 +431,44 @@ interface PathScope {
   /** The same variables as the file spells them, relative to the suite: what a later
    *  `join(root, 'src', 'x.ts')` builds on. */
   readonly spelledPaths: ReadonlyMap<string, string>;
+  /**
+   * Names bound INSIDE a scope to a product path, by the node that binds them: a local function's
+   * parameter that one of its calls hands a product path (`walk(join(REPO, root))` makes `walk`'s
+   * `dir` one), and a loop or callback binding over a local array holding one (`for (const root of
+   * ROOTS)`, `ROOTS.flatMap((root) => …)`). A name is read through the innermost scope binding it,
+   * so a same-named parameter elsewhere, bound to a directory the test made, is not one.
+   */
+  readonly boundPaths: ReadonlyMap<SyntaxNode, ReadonlyMap<string, string>>;
 }
 
-const NO_PATHS: PathScope = { treeReaders: new Set(), pathValues: new Map(), spelledPaths: new Map() };
+const NO_PATHS: PathScope = { treeReaders: new Set(), pathValues: new Map(), spelledPaths: new Map(), boundPaths: new Map() };
+
+/** Every name a scope introduces, including destructured bindings that shadow an outer product path. */
+function scopeBindings(node: SyntaxNode): readonly string[] {
+  const { raw } = node;
+
+  if (raw.type === 'ForOfStatement' || raw.type === 'ForInStatement') {
+    const left = raw.left.type === 'VariableDeclaration' ? raw.left.declarations[0]?.id : raw.left;
+
+    return patternNames(left);
+  }
+
+  if (!isFunctionLike(node) || raw.type === 'MethodDefinition' || !('params' in raw)) return [];
+
+  return raw.params.flatMap(patternNames);
+}
+
+/** The product path an identifier names: through the innermost scope binding it, or, when none
+ *  does, the file's own path variables. */
+function pathOfName(identifier: SyntaxNode, name: string, paths: PathScope): string | undefined {
+  for (let scope = identifier.parent; scope !== undefined; scope = scope.parent) {
+    if (!scopeBindings(scope).includes(name)) continue;
+
+    return paths.boundPaths.get(scope)?.get(name);
+  }
+
+  return paths.pathValues.get(name);
+}
 
 interface LocalFacts {
   /** Functions that assert, transitively — through a helper, or by throwing. */
@@ -512,7 +547,7 @@ function productPathNamed(
     if (found !== undefined) return;
 
     if (inner.raw.type === 'Identifier' && !isPropertyName(inner)) {
-      found = paths.pathValues.get(inner.raw.name);
+      found = pathOfName(inner, inner.raw.name, paths);
 
       return;
     }
@@ -553,12 +588,125 @@ function productPathRead(
   return undefined;
 }
 
+/** Which callback parameter receives an array element; reductions put the accumulator first. */
+const ELEMENT_CALLBACKS = new Map([
+  ['map', 0], ['flatMap', 0], ['forEach', 0], ['filter', 0], ['some', 0], ['every', 0], ['find', 0],
+  ['reduce', 1], ['reduceRight', 1],
+]);
+
+/** A simple parameter at its actual argument position; destructuring does not renumber later parameters. */
+function parameterNameAt(node: SyntaxNode, index: number): string | undefined {
+  const parameter = 'params' in node.raw ? node.raw.params[index] : undefined;
+  const plain = parameter?.type === 'AssignmentPattern' ? parameter.left : parameter;
+
+  return plain?.type === 'Identifier' ? plain.name : undefined;
+}
+
+/**
+ * The scoped bindings of {@link PathScope.boundPaths}, to a fixed point: a parameter found to name a
+ * product path can hand one on to the next call (`sourceFiles(root)` calls `walk(join(REPO, root))`).
+ * A binding is a product path when ANY call hands it one: the read it reaches reads product source
+ * on that call, whatever the others pass.
+ */
+function bindPaths(parsed: ParsedFile, tracked: ReadonlySet<string>, scope: PathScope, bound: Map<SyntaxNode, Map<string, string>>): void {
+  const functions = new Map<string, SyntaxNode[]>();
+  const arrays = new Map<SyntaxNode, SyntaxNode>();
+  const bindings = bindingsOf(parsed);
+
+  walk(parsed.tree, (node) => {
+    // A tree reader's CALL is its read, judged at the call site; binding its parameter would count its reads twice.
+    if (isFunctionLike(node)) {
+      const name = functionName(node);
+
+      if (name !== undefined && !scope.treeReaders.has(name)) functions.set(name, [...(functions.get(name) ?? []), node]);
+    }
+
+    if (node.raw.type === 'VariableDeclarator' && node.raw.init?.type === 'ArrayExpression') {
+      const init = nodeAt(node, node.raw.init);
+
+      if (init !== undefined) arrays.set(node, init);
+    }
+  });
+
+  const named = (path: string): string | undefined => productFileNamed(path, parsed.file, tracked)
+    ?? productDirNamed(path, parsed.file, tracked);
+
+  const pathOf = (node: SyntaxNode): string | undefined => productPathNamed(node, scope, named);
+
+  /** The product path a local array holds, by its first element that names one. */
+  const arrayPath = (reference: SyntaxNode | undefined): string | undefined => {
+    const declaration = reference === undefined ? undefined : bindings.resolve(reference);
+    const array = declaration === undefined ? undefined : arrays.get(declaration);
+
+    return array === undefined ? undefined : array.children.map(pathOf).find((path) => path !== undefined);
+  };
+
+  const bind = (at: SyntaxNode | undefined, name: string | undefined, path: string | undefined): boolean => {
+    if (at === undefined || name === undefined || path === undefined) return false;
+    const names = bound.get(at) ?? new Map<string, string>();
+
+    if (names.has(name)) return false;
+    names.set(name, path);
+    bound.set(at, names);
+
+    return true;
+  };
+
+  for (let changed = true; changed;) {
+    changed = false;
+
+    walk(parsed.tree, (node) => {
+      const { raw } = node;
+
+      if (raw.type === 'ForOfStatement' && raw.right.type === 'Identifier') {
+        const binding = raw.left.type === 'VariableDeclaration' ? raw.left.declarations[0]?.id : raw.left;
+        const name = binding?.type === 'Identifier' ? binding.name : undefined;
+        const path = arrayPath(nodeAt(node, raw.right));
+
+        if (bind(node, name, path)) changed = true;
+
+        return;
+      }
+
+      if (raw.type !== 'CallExpression') return;
+      const handed = argumentNodes(node);
+
+      const elementIndex = raw.callee.type === 'MemberExpression' && !raw.callee.computed
+        ? ELEMENT_CALLBACKS.get(chainText(raw.callee.property)) : undefined;
+
+      // `ROOTS.flatMap((root) => …)`: the callback's element parameter.
+      if (raw.callee.type === 'MemberExpression' && !raw.callee.computed && raw.callee.object.type === 'Identifier'
+        && elementIndex !== undefined) {
+        const path = arrayPath(nodeAt(node, raw.callee.object));
+        const [callback] = handed;
+        const name = callback === undefined ? undefined : parameterNameAt(callback, elementIndex);
+
+        if (bind(callback, name, path)) changed = true;
+
+        return;
+      }
+
+      const called = raw.callee.type === 'Identifier' ? raw.callee.name : undefined;
+
+      for (const target of called === undefined ? [] : functions.get(called) ?? []) {
+        for (const [index, argument] of handed.entries()) {
+          const param = parameterNameAt(target, index);
+          const path = param === undefined ? undefined : pathOf(argument);
+
+          if (bind(target, param, path)) changed = true;
+        }
+      }
+    });
+  }
+}
+
 /** Tree walkers and product path variables, read before any read is judged. */
 function pathScope(parsed: ParsedFile, tracked: ReadonlySet<string>): PathScope {
   const treeReaders = new Set<string>();
   const pathValues = new Map<string, string>();
   const spelledPaths = new Map<string, string>();
-  const scope: PathScope = { treeReaders, pathValues, spelledPaths };
+  const boundPaths = new Map<SyntaxNode, Map<string, string>>();
+  const scope: PathScope = { treeReaders, pathValues, spelledPaths, boundPaths };
 
   walk(parsed.tree, (node) => {
     if (isFunctionLike(node) || node.raw.type === 'ArrowFunctionExpression') {
@@ -595,6 +743,8 @@ function pathScope(parsed: ParsedFile, tracked: ReadonlySet<string>): PathScope 
     pathValues.set(name, named);
     spelledPaths.set(name, joined);
   });
+
+  bindPaths(parsed, tracked, scope, boundPaths);
 
   return scope;
 }

@@ -1,9 +1,11 @@
-// Devbox must not import the product's core; asserted by scanning files on disk for every path.
-// Worker graph is checked by building it: re-exported specifiers escape a source scan.
+// Devbox must not import the product's core. Asserted on the module graph the bundler resolves from every
+// entry the repository declares for the package, so an import, a re-export and a dynamic import all count.
 import { describe, expect, test } from 'bun:test';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
 import * as v from 'valibot';
+import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
 /** Only the manifest fields this test reads, parsed rather than asserted: a manifest on disk
  *  is input. */
@@ -38,42 +40,49 @@ function forbiddenScope(): string {
   return name;
 }
 
-function sourceFiles(dir: string): readonly string[] {
-  const found: string[] = [];
+const REPOSITORY = join(PACKAGE_DIR, '..', '..');
 
-  for (const entry of readdirSync(dir)) {
-    const path = join(dir, entry);
+const Exports = v.object({ exports: v.record(v.string(), v.string()) });
 
-    if (statSync(path).isDirectory()) {
-      found.push(...sourceFiles(path));
-      continue;
-    }
+const KnipWorkspaces = v.object({ knip: v.object({ workspaces: v.record(v.string(), v.object({ entry: v.array(v.string()) })) }) });
 
-    if (entry.endsWith('.ts') || entry.endsWith('.tsx')) found.push(path);
-  }
+const WorkerConfig = v.object({ main: v.string() });
 
-  return found;
+/**
+ * Every file the repository declares as an entry of this package, read from configuration and never from source:
+ * its manifest's exports, the production entries (`!`) the root's knip config names for it, and the `main` of each
+ * Worker it deploys from `bench/`. A module no entry reaches ships nowhere, and knip names it unused.
+ */
+function declaredEntries(): readonly string[] {
+  const exported = Object.values(v.parse(Exports, JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8'))).exports);
+  const knip = v.parse(KnipWorkspaces, JSON.parse(readFileSync(join(REPOSITORY, 'package.json'), 'utf8')));
+
+  const production = (knip.knip.workspaces[relative(REPOSITORY, PACKAGE_DIR)]?.entry ?? [])
+    .filter((entry) => entry.endsWith('!')).map((entry) => entry.slice(0, -1));
+
+  const workers = [join(PACKAGE_DIR, 'bench', 'wrangler.jsonc'), join(PACKAGE_DIR, 'bench', 'wrangler.probe.jsonc')]
+    .map((config) => join('bench', v.parse(WorkerConfig, Bun.JSONC.parse(readFileSync(config, 'utf8'))).main));
+
+  return [...new Set([...exported, ...production, ...workers].map((entry) => join(PACKAGE_DIR, entry)))].sort();
 }
 
 describe('package independence', () => {
   const scope = forbiddenScope();
 
-  test('the shipped source imports nothing from the product core', () => {
-    const offenders: string[] = [];
+  test('nothing any entry of the package reaches imports the product core', async () => {
+    const entries = declaredEntries();
+    const crossing: Record<string, readonly string[]> = {};
 
-    for (const dir of ['src', 'bench']) {
-      for (const file of sourceFiles(join(PACKAGE_DIR, dir))) {
-        const text = readFileSync(file, 'utf8');
+    // The manifest's main entry is among them, so an empty reading of the configuration cannot pass.
+    expect(entries).toContain(join(PACKAGE_DIR, 'src', 'index.ts'));
 
-        // Import, re-export and dynamic import all reach the same module, so
-        // the check is for the specifier rather than for one syntax.
-        if (text.includes(`'${scope}`) || text.includes(`"${scope}`)) {
-          offenders.push(file.slice(PACKAGE_DIR.length + 1));
-        }
-      }
+    for (const entry of entries) {
+      const core = (await bundledSpecifiers(entry)).filter((specifier) => specifier === scope || specifier.startsWith(`${scope}/`));
+
+      if (core.length > 0) crossing[relative(PACKAGE_DIR, entry)] = core;
     }
 
-    expect(offenders).toEqual([]);
+    expect(crossing).toEqual({});
   });
 
   test('the manifest declares no dependency on any workspace package', () => {
@@ -90,13 +99,17 @@ describe('package independence', () => {
     expect(ranges.filter(range => range.startsWith('workspace:'))).toEqual([]);
   });
 
-  test('the guard itself can fail, proved against a known-bad specifier', () => {
-    // An always-green guard cannot tell "no violations" from "check broken"; this runs
-    // the same predicate as the test above against text it must catch.
-    const bad = `import { thing } from '${scope}/obs';`;
-    expect(bad.includes(`'${scope}`)).toBe(true);
-    const good = "import { Sandbox } from '@cloudflare/sandbox';";
-    expect(good.includes(`'${scope}`)).toBe(false);
+  test('the graph reading can fail: an entry re-exporting the core reaches it', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}independence-`));
+
+    try {
+      writeFileSync(join(scratch, 'reexport.ts'), `export { tolerate } from '${scope}/obs';\n`);
+      writeFileSync(join(scratch, 'entry.ts'), "export * from './reexport';\n");
+
+      expect(await bundledSpecifiers(join(scratch, 'entry.ts'))).toContain(`${scope}/obs`);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 });
 
