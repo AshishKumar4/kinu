@@ -382,14 +382,17 @@ describe('a workspace whose host cannot compile node programs', () => {
   test('a port without a listener refuses rather than advertising a working preview', async () => {
     const box = fakeBox();
     box.ports = {
-      expose: async () => { throw new Error('No process is listening on workspace port 8789'); },
+      expose: async () => { throw new Error('nothing is serving port 8789 — start the server, then expose it'); },
       unexpose: async () => ({ ok: true }),
       list: async () => [],
     };
     const provider = blockedProvider(box);
     expect(await provider.tools.exposePort.execute(8789)).toMatchObject({ reason: 'unsupported' });
     const direct = await provider.exposePort(8789);
-    expect(direct.supported).toBe(false);
+    expect(direct).toMatchObject({
+      supported: false,
+      reason: expect.stringContaining('workspace port 8789 has no server listening'),
+    });
   });
 
   test('an exposure failure that is not an empty port still travels as io', async () => {
