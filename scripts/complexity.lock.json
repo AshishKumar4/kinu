@@ -1,9 +1,9 @@
 {
-  "measuredAt": "2026-09-26",
-  "files": 2756,
-  "functions": 68061,
+  "measuredAt": "2026-09-28",
+  "files": 2807,
+  "functions": 69267,
   "ceiling": 87,
-  "line": 30,
+  "line": 29,
   "inventory": [
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
@@ -14,16 +14,8 @@
       "complexity": 58
     },
     {
-      "key": "packages/core/src/mcts/engine.ts#runMCTS>fiber",
-      "complexity": 58
-    },
-    {
       "key": "packages/devbox/bench/worker.ts#fetch",
       "complexity": 48
-    },
-    {
-      "key": "scripts/literature-citations.ts#auditProse",
-      "complexity": 46
     },
     {
       "key": "scripts/silent-drop.ts#auditFile>walk",
@@ -38,10 +30,6 @@
       "complexity": 43
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
-      "complexity": 42
-    },
-    {
       "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
       "complexity": 42
     },
@@ -54,16 +42,16 @@
       "complexity": 42
     },
     {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "complexity": 41
+    },
+    {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
       "complexity": 41
     },
     {
       "key": "scripts/bench-pilot.ts#validatePilotReport",
       "complexity": 41
-    },
-    {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
-      "complexity": 40
     },
     {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
@@ -86,15 +74,15 @@
       "complexity": 38
     },
     {
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
+      "complexity": 37
+    },
+    {
       "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
       "complexity": 37
     },
     {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison",
-      "complexity": 37
-    },
-    {
-      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive",
       "complexity": 37
     },
     {
@@ -111,10 +99,6 @@
     },
     {
       "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
-      "complexity": 36
-    },
-    {
-      "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage",
       "complexity": 36
     },
     {
@@ -182,10 +166,6 @@
       "complexity": 32
     },
     {
-      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 32
-    },
-    {
       "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>attachChainOnce",
       "complexity": 32
     },
@@ -215,10 +195,6 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
-      "complexity": 31
-    },
-    {
-      "key": "packages/cf-backend/src/gallery.tsx#workspacePageRpc",
       "complexity": 31
     },
     {
@@ -278,14 +254,6 @@
       "complexity": 30
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
-      "complexity": 30
-    },
-    {
-      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
-      "complexity": 30
-    },
-    {
       "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
       "complexity": 30
     },
@@ -302,15 +270,7 @@
       "complexity": 30
     },
     {
-      "key": "packages/core/src/memory/hybrid-search.ts#hybridSearch>map#4",
-      "complexity": 30
-    },
-    {
-      "key": "packages/core/src/orchestrator/terminal-roster.ts#declareTerminalRoster",
-      "complexity": 30
-    },
-    {
-      "key": "packages/core/src/providers/util.ts#readProviderFailure",
+      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 30
     },
     {
@@ -320,6 +280,70 @@
     {
       "key": "scripts/shell-words.ts#readScript",
       "complexity": 30
+    },
+    {
+      "key": "packages/cf-backend/src/components/ProfileCatalogSettings.tsx#ProfileCatalogSettings",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/changes/ChangesPanel.tsx#ChangesPanel",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cf-backend/src/pages/DeployPage.tsx#DeployPage",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cf-backend/tests/helpers/actor-harness.ts#chatSessionTurns>admit",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding>useKeyboard",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/feedback/png.ts#sanitizePng",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive>gen",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/session/transcript.ts#SessionTranscriptReader.materializeEntry",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/slates/capability-graph.ts#riskOf",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/web/hero-canvas.ts#createCanvasRenderer>render",
+      "complexity": 29
+    },
+    {
+      "key": "scripts/bench-devbox-fixture.ts#measureLiveC3",
+      "complexity": 29
+    },
+    {
+      "key": "scripts/ladder.ts#claims",
+      "complexity": 29
+    },
+    {
+      "key": "tests/first-run/agent-tab.first-run.ts#describe>liveTest>run",
+      "complexity": 29
+    },
+    {
+      "key": "tests/first-run/workspace-settings.first-run.ts#describe>liveTest>run",
+      "complexity": 29
     }
   ]
 }

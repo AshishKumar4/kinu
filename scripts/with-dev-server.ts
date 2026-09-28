@@ -7,7 +7,7 @@
  *
  * This is how a suite that drives `KINU_ORIGIN` runs before a deploy with no
  * second code path: `bun scripts/with-dev-server.ts bun test --timeout=0
- * scripts/product-flows.test.ts`, the same file `scripts/product-flows-tier.sh`
+ * tests/browser/product-flows.test.ts`, the same file `scripts/product-flows-tier.sh`
  * points at the deployment. `KINU_EVAL_LIVE=1` is the consent the test preload
  * requires before it lets a suite read `KINU_ORIGIN` at all
  * (scripts/test-scratch-home.ts).

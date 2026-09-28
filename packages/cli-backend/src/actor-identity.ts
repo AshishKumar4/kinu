@@ -4,20 +4,15 @@
  */
 import { resolve } from 'node:path';
 import type { Database } from 'bun:sqlite';
-import * as v from 'valibot';
 import {
-  ActorReferenceSchema, SubordinateIdentityStore, readMission, WorkspaceActorDirectory, bindActorHandle, explorationActorKey,
-  type ActorHandle, type ActorReference, type CreateWorkspaceActor, type SqlExec, type SqlExecutor,
+  WorkspaceActorDirectory, bindActorHandle, explorationActorKey,
+  type ActorHandle, type ActorReference, type CreateWorkspaceActor, type SqlExecutor,
   type WorkspaceActor, type NodeIdentity,
 } from '@kinu.run/core';
-import type { AgentRuntime } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 
 interface LocalActorScope {
   readonly directory: WorkspaceActorDirectory;
-  readonly workspaceName: string;
-  readonly ownerUserId: string;
-  readonly rootDbPath: string;
   readonly path: readonly string[];
 }
 
@@ -38,38 +33,6 @@ export type LocalActorConfig =
    */
   | { readonly facet: string; readonly actorBinding: LocalActorBinding; readonly actor?: ActorHandle };
 
-export const LocalActorProcessBootstrapSchema = v.strictObject({
-  reference: ActorReferenceSchema, parent: ActorReferenceSchema, rootDbPath: v.string(),
-  parentStoragePath: v.array(v.string()), name: v.string(), storageKey: v.string(),
-});
-
-type LocalActorProcessBootstrap = v.InferOutput<typeof LocalActorProcessBootstrapSchema>;
-
-/**
- * Binding for a local actor in another OS process. `rootDbPath` is the workspace's one database;
- * the process opens it itself (WAL) since a `bun:sqlite` handle cannot cross processes.
- */
-export function localActorProcessBootstrap(parent: ActorHandle, binding: LocalActorBinding): LocalActorProcessBootstrap {
-  const scope = scopeFor(parent);
-  const child = bindings.get(binding);
-
-  if (!child || child.directory !== scope.directory || binding.reference.parentActorId !== parent.actorId) throw new KinuError('denied', 'The process bootstrap has a different parent.');
-  scope.directory.validate(binding.reference, child.path);
-
-  return { reference: binding.reference, parent: { actorId: parent.actorId, workspaceId: parent.workspaceId, parentActorId: parent.parentActorId },
-    rootDbPath: scope.rootDbPath, parentStoragePath: [...scope.path], name: binding.name, storageKey: binding.storageKey };
-}
-
-export function localActorMission(rt: AgentRuntime, exec: SqlExec): string | null {
-  if (rt.actor.parentActorId === null) return readMission(rt.storage.sql);
-  // One workspace database holds every child's descriptor; the handle selects whose.
-  const identity = new SubordinateIdentityStore(exec, rt.actor).read();
-
-  if (!identity) throw new KinuError('missing', 'The subordinate has no mission identity.');
-
-  return identity.mission;
-}
-
 const actors = new WeakMap<ActorHandle, LocalActorScope>();
 
 const bindings = new WeakMap<LocalActorBinding, LocalActorScope>();
@@ -83,8 +46,8 @@ export function requireLocalDatabasePath(db: Database, path: string): void {
 }
 
 /** Open only. Root birth registers the main actor before calling this function. */
-export function openLocalRootActor(db: Database, sql: SqlExecutor): ActorHandle {
-  const rows = sql<{ id: string; name: string; owner_user_id: string }>`SELECT id, name, owner_user_id FROM workspace_identity`;
+export function openLocalRootActor(sql: SqlExecutor): ActorHandle {
+  const rows = sql<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`;
   const identity = rows[0];
 
   if (!identity) throw new KinuError('missing', 'The local workspace has no durable identity.');
@@ -92,7 +55,7 @@ export function openLocalRootActor(db: Database, sql: SqlExecutor): ActorHandle 
   if (rows.length !== 1) throw new KinuError('denied', 'The database has more than one workspace identity.');
   const directory = new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id });
   const actor = directory.main();
-  actors.set(actor, { directory, workspaceName: identity.name, ownerUserId: identity.owner_user_id, path: [], rootDbPath: databasePath(db.filename) });
+  actors.set(actor, { directory, path: [] });
 
   return actor;
 }
@@ -103,14 +66,7 @@ export function localActorDirectory(root: ActorHandle) {
 
   if (root.parentActorId !== null) throw new KinuError('denied', 'Only the local root owns the actor directory.');
 
-  return { directory: scope.directory, rootDbPath: scope.rootDbPath };
-}
-
-/** Owner and name from `workspace_identity`, the only place the pair exists. */
-export function localActorOwner(actor: ActorHandle) {
-  const scope = scopeFor(actor);
-
-  return { ownerUserId: scope.ownerUserId, workspaceName: scope.workspaceName };
+  return { directory: scope.directory };
 }
 
 function scopeFor(actor: ActorHandle): LocalActorScope {
@@ -181,7 +137,7 @@ export function openLocalActor(parent: ActorHandle, name: string): LocalActorBin
 /** The one caller wanting a handle without a binding; others use `registerLocalActor` + `bindLocalActor`. */
 export function registerLocalNode(parent: ActorHandle, node: NodeIdentity): ActorHandle {
   const scope = scopeFor(parent);
-  const entry = scope.directory.apply(parent, scope.path, { action: 'register', name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'head', lifetime: 'task' });
+  const entry = scope.directory.apply(parent, scope.path, { action: 'register', name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'run', lifetime: 'task' });
   const actor = scope.directory.open(entry.reference.actorId);
   actors.set(actor, { ...scope, path: scope.directory.storagePath(entry.reference) });
 

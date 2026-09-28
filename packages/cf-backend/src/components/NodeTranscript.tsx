@@ -14,7 +14,7 @@ import {
 } from "@kinu.run/core";
 import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, CodeBlock } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { cleanNodeLabel, findForkNode } from "@kinu.run/core";
+import { cleanNodeLabel, findForkNode } from "@kinu.run/core/swarm-view";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import type { SeekCursor } from "@kinu.run/core";
@@ -34,9 +34,14 @@ export function statusDot(status: string): string {
 
   if (status === "completed" || status === "terminal") return "p-dot-success";
 
-  if (status === "errored" || status === "failed" || status === "aborted") return "p-dot-danger";
+  if (status === "errored" || status === "failed") return "p-dot-danger";
 
   return "p-dot-neutral";
+}
+
+/** An aborted head was stopped, by its owner or with its search; the Agents panel says the same. */
+function statusWord(status: string): string {
+  return status === "aborted" ? "stopped" : status;
 }
 
 const TASK_CLAMP = 240;
@@ -220,7 +225,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
     <div className="min-h-0 flex-1 flex flex-col">
       <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b p-border">
         <span className={`size-1.5 rounded-full shrink-0 ${statusDot(view.status)} ${live ? "p-dot-pulse" : ""}`} />
-        <span className="p-t-status uppercase tracking-normal p-text-3 shrink-0">{view.status}</span>
+        <span className="p-t-status uppercase tracking-normal p-text-3 shrink-0">{statusWord(view.status)}</span>
         <div className="h-3 w-px bg-[var(--c-border)] shrink-0" />
         <SearchPath view={view} onSelect={onSelect} />
       </div>
@@ -287,14 +292,15 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
 
 const TRANSCRIPT_FALLBACK_MS = 4_000;
 
-export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas, running = false }: {
+export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas, running }: {
   runId: string | null;
   nodeId: string | null;
   rpc: Rpc;
   headActivity: ReadonlyMap<string, number>;
   headDeltas: HeadDeltas;
-  /** Seed only: once loaded, the journal's own status decides the cadence. */
-  running?: boolean;
+  /** Seed only: once loaded, the journal's own status decides the cadence. Required, so every reader arms the
+   *  fallback re-read after a missed `head_activity` frame: a branch chip has one node and cannot recover by hand. */
+  running: boolean;
 }) {
   const load = useCallback(
     () => runId === null || nodeId === null

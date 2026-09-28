@@ -12,8 +12,6 @@ export const FEEDBACK_MAX_NOTE_CHARS = 4000;
 
 export const FEEDBACK_MAX_ROUTE_CHARS = 512;
 
-export const FEEDBACK_MAX_USER_AGENT_CHARS = 512;
-
 /** The screenshot bytes are also checked against this type. */
 export const FEEDBACK_SCREENSHOT_TYPE = 'image/png';
 
@@ -48,8 +46,5 @@ export interface FeedbackRecord {
   route: string;
   workspace: string | null;
   objectKey: string | null;
-  contentType: string | null;
   bytes: number | null;
-  /** From the request header, not the body. */
-  userAgent: string | null;
 }

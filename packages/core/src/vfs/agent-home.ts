@@ -116,8 +116,7 @@ function ensureIdentityTable(sql: SqlDatabase): void {
   sql.exec(
     `CREATE TABLE IF NOT EXISTS ${IDENTITY_TABLE} (
        agent_name TEXT PRIMARY KEY,
-       uid        INTEGER NOT NULL UNIQUE,
-       gid        INTEGER NOT NULL
+       uid        INTEGER NOT NULL UNIQUE
      )`,
   );
 }
@@ -131,8 +130,8 @@ export function agentIdentity(sql: SqlDatabase, agentName: string): AgentIdentit
   ensureIdentityTable(sql);
   // `WHERE true` is required: SQLite cannot parse an INSERT..SELECT upsert without it.
   sql.exec(
-    `INSERT INTO ${IDENTITY_TABLE} (agent_name, uid, gid)
-     SELECT ?, next.uid, next.uid
+    `INSERT INTO ${IDENTITY_TABLE} (agent_name, uid)
+     SELECT ?, next.uid
        FROM (SELECT COALESCE(MAX(uid), ?) + 1 AS uid FROM ${IDENTITY_TABLE}) AS next
       WHERE true
      ON CONFLICT(agent_name) DO NOTHING`,
@@ -148,9 +147,9 @@ export function agentIdentity(sql: SqlDatabase, agentName: string): AgentIdentit
 
 /** Reads only; never allocates. */
 function allocatedAgentIdentity(sql: SqlDatabase, agentName: string): AgentIdentity | null {
-  const [row] = [...sql.exec(`SELECT uid, gid FROM ${IDENTITY_TABLE} WHERE agent_name = ?`, agentName)];
+  const [row] = [...sql.exec(`SELECT uid FROM ${IDENTITY_TABLE} WHERE agent_name = ?`, agentName)];
 
-  return row ? { uid: Number(row.uid), gid: Number(row.gid) } : null;
+  return row ? { uid: Number(row.uid), gid: Number(row.uid) } : null;
 }
 
 /** A home's lifecycle, as `SqliteVFS.as(CRED_KERNEL)`. */
@@ -159,6 +158,7 @@ export interface HomeRootVfs {
   chown(path: string, uid: number | null, gid: number | null): void;
   chmod(path: string, mode: number): void;
   exists(path: string): boolean;
+  stat(path: string): { readonly uid: number; readonly gid: number; readonly mode: number };
   removeRecursive(path: string): number;
 }
 
@@ -185,14 +185,15 @@ function agentHomeLayout(agentName: string, identity: AgentIdentity): readonly A
   ];
 }
 
-/**
- * Host-side create, chown, then chmod: only uid 0 may chown. Idempotent.
- */
+/** Host-side: only uid 0 may chown. Runs every wake, so writes only what moved. */
 export function provisionAgentHome(root: HomeRootVfs, agentName: string, identity: AgentIdentity): string {
   for (const dir of agentHomeLayout(agentName, identity)) {
-    root.mkdir(dir.path, { recursive: true });
-    root.chown(dir.path, dir.uid, dir.gid);
-    root.chmod(dir.path, dir.mode);
+    if (!root.exists(dir.path)) root.mkdir(dir.path, { recursive: true });
+    const held = root.stat(dir.path);
+
+    if (held.uid !== dir.uid || held.gid !== dir.gid) root.chown(dir.path, dir.uid, dir.gid);
+
+    if ((held.mode & 0o7777) !== dir.mode) root.chmod(dir.path, dir.mode);
   }
 
   return agentHome(agentName);
@@ -301,8 +302,8 @@ function soulPresentName(kernel: SoulVfs, name: string): boolean {
 
 function writeUnverifiedNote(sql: SqlDatabase): void {
   try {
-    const [id] = [...sql.exec(`SELECT workspace_id FROM workspace_actors WHERE kind = 'main' AND deleted_at IS NULL LIMIT 1`)];
-    const workspace = v.parse(v.object({ workspace_id: v.string() }), id).workspace_id;
+    const [id] = [...sql.exec(`SELECT id FROM workspace_identity LIMIT 1`)];
+    const workspace = v.parse(v.object({ id: v.string() }), id).id;
     sql.exec(
       `INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at) VALUES (?, 'soul.unverified_moved', 'An older SOUL.md was moved to SOUL.md.unverified and is no longer read; set SOUL.md to adopt it.', 0, ?)`,
       workspace, Date.now(),

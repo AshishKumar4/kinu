@@ -41,7 +41,7 @@ import {
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, persistMeasuredPromptTokens, snapshotCompletedTurn,
   type CompactionTriggerState, type RunEndClassification, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
-import type { SessionTranscript, PreparedConversationEntry } from '../session/transcript';
+import { answerParts, type SessionTranscript, type PreparedConversationEntry } from '../session/transcript';
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
@@ -92,11 +92,9 @@ const NO_STRANDED_DELIVERY_GRACE = 0;
 
 /** The run end is classified once by `runTurn`, so the roster and the run row cannot disagree. */
 interface CommittedTurn {
-  readonly messageId: string;
   readonly turn: CompletedTurn;
   readonly owed: readonly OwedEffect[];
-  /** Null for a turn with no durable identity: it runs unledgered. */
-  readonly transition: TerminalTransition | null;
+  readonly transition: TerminalTransition;
 }
 
 /** Reported rather than thrown, because the signal settle after it must run either way. */
@@ -216,7 +214,6 @@ export interface OwedTerminalEffectsInput {
   /** Decided before the commit; null when none is owed. */
   readonly owedReport: OwedReport | null;
   readonly completed: boolean;
-  readonly startedAt: number;
   readonly trialContext: readonly ModelMessage[];
   /** A cold replay has no live toolset to ask. */
   readonly reachableTools: readonly string[];
@@ -229,11 +226,20 @@ export interface OwedTerminalEffectsInput {
   readonly taskReminder: { readonly text: string } | null;
 }
 
+async function answerMetadata(
+  ports: ChatSessionPorts, turnId: string, texts: () => Promise<readonly string[]>, ending: string,
+): Promise<JsonObject | null> {
+  const metadata: JsonObject = { ...await ports.answerMetadata?.(turnId, texts), ...(ending === 'incomplete' && { [TURN_END_METADATA_KEY]: ending }) };
+
+  return Object.keys(metadata).length === 0 ? null : metadata;
+}
+
 /** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
   prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
+  answerMetadata?(turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
   owedReport?(ending: TaskTurnEnding, assistantText: string, narration: () => Promise<readonly string[]>): Promise<OwedReport | null>;
   /** Asked per call: the bodies close over stores built after this session. */
@@ -583,6 +589,11 @@ export class ChatSession {
     this.actorSession.stop();
   }
 
+  /** Only a running turn keyed under `prefix`. */
+  stopIfRunning(prefix: string): void {
+    if (this.runningAnnouncement?.startsWith(prefix) === true) this.stop();
+  }
+
   /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */
   async revertTo(entryId: string): Promise<void> {
     await this.actorSession.revertConversation(this.sessionId, entryId, () => {
@@ -622,7 +633,7 @@ export class ChatSession {
     this.emit({
       type: 'background',
       event: 'events_reclaimed',
-      message: `${reclaimed.length} event delivery/ies were bound to a turn a previous process did not finish — re-queued`,
+      message: `${reclaimed.length} event delivery/ies were bound to a turn a previous process did not finish: re-queued`,
     });
   }
 
@@ -1006,10 +1017,12 @@ export class ChatSession {
     const finalText = execution.claim === null ? execution.finalTextReference
       : await this.actorSession.recordTranscriptText(execution.claim, 'answer', fullText, execution.outputReferences);
 
+    const metadata = await answerMetadata(this.ports, lease.turnId, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), end.reason);
+
     const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
       id: this.messageId, parentId: this.actorSession.landedSteers.at(-1)?.id ?? lease.turnId,
       turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
-      ...(end.reason === 'incomplete' && { metadata: { [TURN_END_METADATA_KEY]: end.reason } }),
+      ...(metadata !== null && { metadata }),
     }) : null;
 
     const owedReport = await this.ports.owedReport?.(
@@ -1019,6 +1032,7 @@ export class ChatSession {
     // One commit — see {@link commitTurn}.
     const commit = this.commitTurn({
       item,
+      turnId: lease.turnId,
       event: eventName,
       startedAt,
       assistantText: fullText,
@@ -1115,6 +1129,7 @@ export class ChatSession {
    */
   private commitTurn(input: {
     readonly item: QueueItem;
+    readonly turnId: string;
     readonly event: string | undefined;
     readonly startedAt: number;
     readonly assistantText: string;
@@ -1143,7 +1158,7 @@ export class ChatSession {
     try {
       // One row per steer: the walk-back pivot matches individual messages. A harness turn's row carries its
       // provenance; the `programmatic:` prefix only keys idempotency.
-      const turnId = this.turnId ?? crypto.randomUUID();
+      const { turnId } = input;
       // Minted at admission: the roster, frozen before the write, keys on it.
       const messageId = this.messageId;
 
@@ -1183,7 +1198,6 @@ export class ChatSession {
         owedReport: input.owedReport,
         completed: runError === null,
         taskReminder,
-        startedAt: input.startedAt,
         trialContext: input.trialContext,
         answeredDeliveries: this.answeredDeliveries(item),
         outputContinuation,
@@ -1191,10 +1205,7 @@ export class ChatSession {
         overflowRetry: input.overflowRetry,
       });
 
-      // A response with no durable identity runs without a ledger key.
-      const transition: TerminalTransition | null = this.turnId === null
-        ? null
-        : { turnId, messageId };
+      const transition: TerminalTransition = { turnId, messageId };
 
       this.transaction(() => {
         this.persist(input.preparedAssistant);
@@ -1208,7 +1219,7 @@ export class ChatSession {
         this.ports.terminal().record(transition, owed);
       });
 
-      return { committed: { messageId, turn, owed, transition } };
+      return { committed: { turn, owed, transition } };
     } catch (cause) {
       // Classified at the boundary that caught it.
       return {

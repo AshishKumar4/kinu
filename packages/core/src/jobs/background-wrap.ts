@@ -5,7 +5,6 @@
  */
 
 import type { ToolExecutionOptions, ToolSet } from 'ai';
-import { combineAbortSignals } from '@kinu.run/agent-utils';
 import { DEVICE_REQUEST_OPTION, SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from './threshold';
 import { DeviceRequestOwnership } from './device-ownership';
 import type { BackgroundJobRunner } from './runner';
@@ -50,7 +49,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
         const ownership = new DeviceRequestOwnership();
         const mode = deps.mode();
         const turnSignal = options.abortSignal;
-        const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
+        const abortSignal = turnSignal ? AbortSignal.any([turnSignal, controller.signal]) : controller.signal;
         const untrack = deps.trackController?.(controller);
         // Policy is read per call: on cf one runner serves both surfaces.
         let run: Promise<unknown>;

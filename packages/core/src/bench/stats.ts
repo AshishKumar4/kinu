@@ -226,7 +226,7 @@ export function summarizeRepeats(outcome: PairedOutcome): TaskRepeatSummary {
   if (repeats === 0) throw new Error(`task ${outcome.taskId} has no attempts`);
 
   if (outcome.b.length !== repeats) {
-    throw new Error(`task ${outcome.taskId} ran ${repeats} baseline attempts but ${outcome.b.length} candidate attempts — a paired design cannot compare unequal repeats`);
+    throw new Error(`task ${outcome.taskId} ran ${repeats} baseline attempts but ${outcome.b.length} candidate attempts: a paired design cannot compare unequal repeats`);
   }
 
   const passesA = outcome.a.filter(Boolean).length;
@@ -255,7 +255,7 @@ export function pairedBinaryComparison(
 
   for (const s of summaries) {
     if (s.repeats !== repeats) {
-      throw new Error(`task ${s.taskId} ran ${s.repeats} repeats but the split ran ${repeats} — a split with ragged repeats has no single pass^k`);
+      throw new Error(`task ${s.taskId} ran ${s.repeats} repeats but the split ran ${repeats}: a split with ragged repeats has no single pass^k`);
     }
   }
 
@@ -308,21 +308,21 @@ export function pairedBinaryComparison(
 
   let verdict: string;
 
-  if (pairs === 0) verdict = 'no pairs ran — nothing to conclude';
-  else if (discordant === 0) verdict = `variants never disagreed on ${pairs} tasks — this corpus cannot separate them`;
+  if (pairs === 0) verdict = 'no pairs ran: nothing to conclude';
+  else if (discordant === 0) verdict = `variants never disagreed on ${pairs} tasks: this corpus cannot separate them`;
   else if (!canReachSignificance) {
     verdict = `UNDECIDABLE: ${discordant} of ${pairs} task(s) differed between the arms, and the smallest p `
-      + `that many differing pairs can produce is ${floor.toFixed(4)} > alpha ${alpha} — no outcome here `
+      + `that many differing pairs can produce is ${floor.toFixed(4)} > alpha ${alpha}: no outcome here `
       + `could have established an effect. It needs at least ${minimumPairsForSignificance(alpha)} `
       + 'DIFFERING pairs, which more tasks make possible but do not guarantee';
   }
   else if (significant && resolvable) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) and above the design's resolution (${fmtPp(mde)})`;
-  else if (significant) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) but below the design's 80%-power threshold of ${fmtPp(mde)} — suggestive, not established; ${pairsNeededForObserved} pairs would settle it`;
+  else if (significant) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) but below the design's 80%-power threshold of ${fmtPp(mde)}: suggestive, not established; ${pairsNeededForObserved} pairs would settle it`;
   else verdict = `no detectable difference (p=${pValue.toFixed(4)}); this design resolves ${fmtPp(mde)}, so effects below that are invisible`;
 
-  if (smallSample) verdict += ` [only ${discordant} discordant pairs — the p-value is exact, the ${fmtPp(mde)} threshold is a normal approximation and loose here]`;
+  if (smallSample) verdict += ` [only ${discordant} discordant pairs: the p-value is exact, the ${fmtPp(mde)} threshold is a normal approximation and loose here]`;
 
-  if (repeats > 1) verdict += ` [${repeats} repeats × ${pairs} tasks = ${pairs * repeats} attempts per variant, but still ${pairs} independent pairs — repeats buy precision within a task, never more tasks]`;
+  if (repeats > 1) verdict += ` [${repeats} repeats × ${pairs} tasks = ${pairs * repeats} attempts per variant, but still ${pairs} independent pairs: repeats buy precision within a task, never more tasks]`;
 
   return {
     pairs, repeats, attemptsPerVariant: pairs * repeats,
@@ -387,17 +387,17 @@ export function computeGain(
 
   let verdict: string;
 
-  if (tasks === 0) verdict = 'no tasks ran — no gain measured';
+  if (tasks === 0) verdict = 'no tasks ran: no gain measured';
   else if (!canReach) {
     verdict = `UNDECIDABLE: ${pairsWithDifference} of ${tasks} task(s) differed between the arms, and `
       + `${pairsWithDifference === 0
         ? 'a contrast where no task differed measured nothing at all'
         : `the smallest p that many differing pairs can produce is ${floor.toFixed(4)} > alpha ${alpha}`}`
-      + `. The observed gain ${fmtPp(gain)} is not evidence of an effect in either direction — `
+      + `. The observed gain ${fmtPp(gain)} is not evidence of an effect in either direction: `
       + `${minimumPairsForSignificance(alpha)} differing pairs are the minimum.`;
-  } else if (ci.lo <= 0 && ci.hi >= 0) verdict = `gain ${fmtPp(gain)} — interval spans zero; the evolution state showed no measurable contribution`;
+  } else if (ci.lo <= 0 && ci.hi >= 0) verdict = `gain ${fmtPp(gain)}: interval spans zero; the evolution state showed no measurable contribution`;
   else if (gain > 0) verdict = `gain ${fmtPp(gain)}${normalizedGain === null ? '' : ` (${(normalizedGain * 100).toFixed(1)}% of headroom)`}`;
-  else verdict = `gain ${fmtPp(gain)} — the stateful arm did WORSE than a fresh v0 agent`;
+  else verdict = `gain ${fmtPp(gain)}: the stateful arm did WORSE than a fresh v0 agent`;
 
   return {
     statefulReward, statelessReward, gain, normalizedGain, ci, pValue, tasks,

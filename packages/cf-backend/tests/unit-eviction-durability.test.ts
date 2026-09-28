@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
-  BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PendingSendStore, PROGRAMMATIC_MESSAGE_ID_PREFIX, SEARCH_FIBER_NAME,
+  BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PendingSendStore, PROGRAMMATIC_MESSAGE_ID_PREFIX,
   type AdvisorRecoverySnapshot, type JsonValue,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
@@ -273,28 +273,6 @@ describe('the post-turn lanes', () => {
     expect(result).toMatchObject({ snapshot: { redrive: null } });
   });
 
-  test('an interrupted search is recorded for the next turn rather than re-run', async () => {
-    const harness = orchestratorHarness();
-    const agent = harness.agent;
-
-    const result = await recover(agent, interrupted(SEARCH_FIBER_NAME, { budget: 3 }));
-
-    expect(result).toEqual({
-      status: 'completed', snapshot: { lane: 'mcts', recorded: true, redrive: 'memory-note' },
-    });
-
-    // The audit row lands in this object's SQLite; the MEMORY.md line goes through the workspace filesystem
-    // (another Durable Object when hosted), so it rides the carrier.
-    const events = harness.db.prepare<{ type: string; message: string }, []>(
-      "SELECT type, message FROM evolution_events WHERE type = 'fiber_recovered'",
-    ).all();
-
-    expect(events).toHaveLength(1);
-    expect(events[0].message).toContain('mcts');
-
-    await agent.harnessJoinDetachedFibers();
-    expect(await agent.getMemoryContent()).toContain('Fiber "mcts" was interrupted');
-  });
 });
 
 describe('a fiber nobody defined a recovery for', () => {

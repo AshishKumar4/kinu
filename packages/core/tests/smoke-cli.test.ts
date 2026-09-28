@@ -4,9 +4,8 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, createMockSession } from './helpers';
+import { createTestRuntime } from './helpers';
 import { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from '../src/scaffold/bootstrap';
-import { runMCTS } from '../src/mcts/engine';
 
 const LLM_RESPONSES = { Summarize: '- approach A worked\n- clean separation' };
 
@@ -56,39 +55,5 @@ describe('CLI smoke test', () => {
 
     const code = await rt.identity.scaffold.read();
     expect(code).toBe(INITIAL_SCAFFOLD_SOURCE);
-  });
-
-  test('full MCTS cycle creates correct DB tables and rows', async () => {
-    const { rt, db } = createTestRuntime({ llmResponses: LLM_RESPONSES });
-
-    const session = createMockSession();
-
-    const result = await runMCTS(rt, session, 'Improve error handling', {
-      budget: 2,
-      branches: 2,
-    });
-
-    expect(result.converged).toBe(true);
-
-    const nodeCount = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM search_nodes').get();
-
-    if (!nodeCount) throw new Error('expected search node count');
-    expect(nodeCount.c).toBe(5); // 1 root + 2 iterations × 2 branches
-
-    const svCount = db.query<{ c: number }, []>(
-      "SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='scaffold_versions'",
-    ).get();
-
-    if (!svCount) throw new Error('expected scaffold table count');
-    expect(svCount.c).toBe(1);
-
-    const cols = db.query<{ name: string }, []>(
-      "SELECT name FROM pragma_table_info('crafted_tools')",
-    ).all().map((r) => r.name);
-
-    expect(cols).toContain('score');
-
-    const memContent = await rt.memory.read('memory/MEMORY.md');
-    expect(memContent).toContain('Successful approach');
   });
 });

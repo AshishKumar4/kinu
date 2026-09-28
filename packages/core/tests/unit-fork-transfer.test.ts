@@ -295,9 +295,13 @@ describe('fork transfer receiver', () => {
 
     if (begin?.kind !== 'begin') throw new Error('expected a begin frame');
     const writer = new ForkTargetWriter(tgt.sql, OWNER);
-    await drain(new ForkTransferReceiver(writer, sinkFor(tgt)), frames);
+    const receiver = new ForkTransferReceiver(writer, sinkFor(tgt));
+    await drain(receiver, frames.slice(0, -1));
 
+    expect(frames.at(-1)?.kind).toBe('commit');
     expect(writer.staged).toEqual(begin.counts);
+    await drain(receiver, frames.slice(-1));
+    expect(writer.published).not.toBeNull();
   });
 
   test('a target mid-transfer holds staged rows and is still not a fork', async () => {
@@ -595,28 +599,12 @@ describe('fork transfer receiver', () => {
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM fork_lineage`[0]?.c).toBe(1);
   });
 
-  test('the receiver retains no file ranges', async () => {
-    const src = await source({ files: [
-      { path: 'memory/a.md', content: 'a'.repeat(100) },
-      { path: 'memory/b.md', content: 'b'.repeat(100) },
-    ] });
-
-    const tgt = fresh();
-    const frames = framesFor(await snapshotOf(src, 'm3'), { fileBytes: 10 });
-    const receiver = receiverFor(tgt);
-
-    for (const frame of frames) {
-      await receiver.accept(frame);
-      expect(receiver.stagingBytes).toBe(0);
-    }
-  });
-
   /**
    * One 256 MiB fork end to end, measured two ways: seam counters and a GC-forced retained-heap
    * delta (`Bun.gc(true)` before each sample). The buffering control proves both turn red.
    */
   async function streamHugeFork(sink: ForkFileSink): Promise<{
-    peakRead: number; peakFrameBytes: number; peakRetained: number;
+    peakRead: number; peakFrameBytes: number;
     peakRetainedHeapDelta: number; published: boolean;
   }> {
     let peakRead = 0;
@@ -649,7 +637,6 @@ describe('fork transfer receiver', () => {
     const writer = new ForkTargetWriter(tgt.sql, OWNER);
     const receiver = new ForkTransferReceiver(writer, sink);
 
-    let peakRetained = 0;
     let peakFrameBytes = 0;
     let published = false;
     Bun.gc(true);
@@ -683,10 +670,9 @@ describe('fork transfer receiver', () => {
 
       const outcome = await receiver.accept(frame);
       published = outcome.status === 'published';
-      peakRetained = Math.max(peakRetained, receiver.stagingBytes);
     }
 
-    return { peakRead, peakFrameBytes, peakRetained, peakRetainedHeapDelta, published };
+    return { peakRead, peakFrameBytes, peakRetainedHeapDelta, published };
   }
 
   test('a 256 MiB logical file crosses end to end without either side holding it', async () => {
@@ -746,7 +732,6 @@ describe('fork transfer receiver', () => {
     expect(peakWrite).toBe(HUGE_FRAME);
     // The whole-file check reads staging back one bounded range at a time.
     expect(peakReadBack).toBe(FORK_FRAME_BYTES);
-    expect(run.peakRetained).toBe(0);
     // The buffering control drives this measurement past 192 MiB, so this bound can fail.
     expect(run.peakRetainedHeapDelta).toBeLessThan(64 * 1024 * 1024);
     expect(run.published).toBe(true);
@@ -980,7 +965,6 @@ describe('fork transfer receiver', () => {
 
     const tgt = fresh();
     const receiver = receiverFor(tgt);
-    let peak = 0;
     let frames = 0;
 
     for await (const frame of forkTransferFrames({
@@ -988,13 +972,10 @@ describe('fork transfer receiver', () => {
       untilMessageId: 'm99', transferId: 'tx-long', frameBytes: 1024 * 1024,
     })) {
       await receiver.accept(frame);
-      peak = Math.max(peak, receiver.stagingBytes);
       frames += 1;
     }
 
     expect(frames).toBeGreaterThan(100);
-    expect(peak).toBe(0);
-    expect(receiver.stagingBytes).toBe(0);
     expect(tgt.sql<{ c: number }>`
       SELECT COUNT(*) AS c FROM conversation_entries WHERE role != 'system'`[0]?.c).toBe(100);
     expect(await tgt.vfs.readFile('memory/large.md', { encoding: 'utf8' })).toHaveLength(8 * 1024 * 1024);

@@ -3,7 +3,9 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModel } from 'ai';
+import { Effect } from 'effect';
 import { synthesizeToolFallback } from './utils/evidence-window';
+import { KinuError, settleSync } from './obs/index';
 import type { LLM } from './types/primitives';
 import type { ModelCallSpend } from './events/model-call';
 import { generateReported, streamTextReported } from './providers/model-invocation';
@@ -59,7 +61,7 @@ export function createCompletionLLM(opts: {
 
   return {
     stream() {
-      throw new Error(`createCompletionLLM(${opts.spec}) has no streaming path`);
+      return settleSync(Effect.fail(new KinuError('unsupported', `createCompletionLLM(${opts.spec}) has no streaming path`)));
     },
     // `spec` is what the catalog prices; the row keeps the `modelId` the provider says served it beside it.
     complete: async (prompt) => (await generateReported(
@@ -86,7 +88,7 @@ export const CHARS_PER_TOKEN = 4;
 
 /** Conservative blended fallback (~$3 / 1M tokens) for the character seam and unpriced models;
  *  `ModelInfo.cost` is the real rate. */
-export const BLENDED_USD_PER_1K_TOKENS = 0.003;
+const BLENDED_USD_PER_1K_TOKENS = 0.003;
 
 export function estimateTokens(chars: number): number {
   return Math.ceil(chars / CHARS_PER_TOKEN);

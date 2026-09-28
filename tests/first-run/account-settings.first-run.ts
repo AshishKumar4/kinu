@@ -20,7 +20,7 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
-import { EVAL_DEPLOYMENT_ORIGIN, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
+import { deploymentPublicOrigin, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { webHeaders, type PublicSessionPlan } from '../../evals/src/session';
 import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
@@ -121,15 +121,15 @@ describe(SUITE, () => {
           detail: `${stamped.detail}; then ${after.detail}`,
         });
 
-        // The deployment's public origin is configured, not the address this
-        // row reached it by (`CLI_PUBLIC_ORIGIN`, which tests pin to this constant).
+        // The deployment's public origin is configured (`CLI_PUBLIC_ORIGIN`), not the address this row reached it by.
         const cli = await call(plan, { schema: CliSetupSchema, method: 'GET', path: '/cli' });
+        const origin = deploymentPublicOrigin(plan.origin);
 
         subgoals.push({
           what: 'cli-lines-name-the-deployment',
-          reached: cli.value !== null && cli.value.publicOrigin === EVAL_DEPLOYMENT_ORIGIN
-            && cli.value.installCommand.includes(EVAL_DEPLOYMENT_ORIGIN) && cli.value.authCommand.includes(EVAL_DEPLOYMENT_ORIGIN),
-          detail: cli.detail,
+          reached: cli.value !== null && cli.value.publicOrigin === origin
+            && cli.value.installCommand.includes(origin) && cli.value.authCommand.includes(origin),
+          detail: `expected ${origin}; ${cli.detail}`,
         });
 
         return subgoals;

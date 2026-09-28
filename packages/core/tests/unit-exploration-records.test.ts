@@ -81,7 +81,6 @@ function write(over?: Partial<ExplorationWrite>): ExplorationWrite {
     depth: 5,
     branches: 3,
     floor: FLOOR,
-    costUsd: null,
     costTokens: 4_096,
     at: 1_700_000_000_000,
     ...over,
@@ -99,7 +98,7 @@ describe('the seal gates the write, checked in the writer and not assumed of the
 
   test('a re-derived floor publishes under its own key while the breached floor stays sealed', () => {
     const { sql, actor } = store();
-    sealRecords(sql, actor, { identity: CHEAPER, breach: BREACH, at: 0 });
+    sealRecords(sql, actor, { identity: CHEAPER, breach: BREACH });
     expect(recordExploration(sql, actor, { publication: OPEN, write: write() }))
       .toEqual({ kind: 'refused', cause: 'sealed' });
     expect(recordExploration(sql, actor, { publication: OPEN, write: write({ floor: CORRECTED }) }).kind)
@@ -310,7 +309,6 @@ describe('a row reads back as what was written', () => {
     // NULL means the run reported nothing, never zero.
     expect(row?.measured).toBeNull();
     expect(row?.costTokens).toBeNull();
-    expect(row?.costUsd).toBeNull();
   });
 
   test('the raw quantities a value was derived from come back as numbers', () => {

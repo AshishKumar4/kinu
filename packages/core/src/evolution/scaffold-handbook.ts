@@ -106,7 +106,7 @@ function noteAbove(lines: readonly string[], index: number): string | null {
   const paragraph = block.join(' ').replace(/\s+/g, ' ');
   const sentence = /^.*?[.!?](?=\s|$)/.exec(paragraph)?.[0] ?? paragraph;
 
-  return sentence.length > 160 ? `${sentence.slice(0, 159)}…` : sentence;
+  return sentence.length > 160 ? `${sentence.slice(0, 157)}...` : sentence;
 }
 
 function declarationKind(star: string, fn: string, cls: string): ScaffoldSite['kind'] {
@@ -178,8 +178,8 @@ function renderSite(site: ScaffoldSite): string {
     ? site.bridgeCalls.map((name) => `host.${name}()`).join(', ')
     : 'reaches the host nowhere';
 
-  return `   ${site.name} (${kind}, line ${site.line}) → ${calls}` +
-    (site.note ? ` — ${site.note}` : '');
+  return `   ${site.name} (${kind}, line ${site.line}) -> ${calls}` +
+    (site.note ? `: ${site.note}` : '');
 }
 
 /** Byte-stable for a given scaffold source. */
@@ -191,9 +191,9 @@ export function renderScaffoldHandbook(scaffoldSource: string): string {
 
     const sites = layer.subjects.length > 0
       ? `   L2 ${layerSites(layer.subjects)}`
-      : `   L2 no deterministic slice — ${firstSentence(layer.unmeasuredBecause ?? 'unstated')}`;
+      : `   L2 no deterministic slice: ${firstSentence(layer.unmeasuredBecause ?? 'unstated')}`;
 
-    return `L1 ${layer.id} [${scored}] — ${layer.owns}\n${sites}`;
+    return `L1 ${layer.id} [${scored}]: ${layer.owns}\n${sites}`;
   });
 
   const sites = indexScaffoldSites(scaffoldSource);
@@ -203,15 +203,15 @@ export function renderScaffoldHandbook(scaffoldSource: string): string {
     : '  (no top-level declarations found)';
 
   return (
-    `Scaffold handbook — behaviour → implementation site.\n\n` +
+    `Scaffold handbook: behaviour -> implementation site.\n\n` +
     `Your loop runs on top of the host pipeline. That pipeline is decomposed into ` +
-    `LAYERS (L1) — the same decomposition the deterministic layer gate scores every ` +
-    `scaffold change against — each listed with the modules and exported symbols ` +
+    `LAYERS (L1): the same decomposition the deterministic layer gate scores every ` +
+    `scaffold change against: each listed with the modules and exported symbols ` +
     `behind it (L2). Navigate by behaviour: find the layer that owns what you want ` +
     `to change, then reach it through the \`host.*\` bridge. A layer marked NOT ` +
     `SCORED has no deterministic slice, so a change there is not caught by the gate.\n\n` +
     `${layers.join('\n')}\n\n` +
-    `L1 your live scaffold — the loop you are rewriting\n` +
+    `L1 your live scaffold: the loop you are rewriting\n` +
     `${scaffold}\n`
   );
 }

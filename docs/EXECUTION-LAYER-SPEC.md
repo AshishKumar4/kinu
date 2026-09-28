@@ -7,7 +7,7 @@
 
 ## One workspace, optional environments
 
-Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare, and over the local workspace on the CLI. The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
+Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare. On the CLI the workspace is the directory the agent was placed in, and Nimbus over `bun:sqlite` holds the agent's own state (docs/STORAGE.md, "Local and cloud construction"). The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
 
 | Namespace | Registered by | Filesystem relationship |
 |---|---|---|
@@ -388,9 +388,8 @@ added by `buildBuiltinTools`) and `release` is codemode-only (`TOOL_REACH`).
 A job's wake carries `kinuMode: job.workMode` (`core/src/jobs/runner.ts`), and
 `workModeForTurnMetadata` (`core/src/prompting/surface.ts`) reads it, so a
 wake cannot weaken Plan to build. Plan heads and subordinates report research
-to their parent. Both engines set `executionPolicy` to `judge-only` in Plan
-mode, spending no executor call (`core/src/mcts/engine.ts`,
-`core/src/strategy/swarm-scoring.ts`).
+to their parent. Swarm sets `executionPolicy` to `judge-only` in Plan
+mode, spending no executor call (`core/src/strategy/swarm-scoring.ts`).
 
 To add a provider: implement one `ExecutorProvider` at the external boundary.
 Declare only measured capabilities and use `unmeasuredCapabilities` for the

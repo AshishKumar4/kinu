@@ -3,7 +3,9 @@
  * the whole-content fingerprint, so an edit cannot land against lines changed outside the read window.
  */
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { settle } from '../obs/index';
 import { Fnv1a64 } from '../utils/fnv1a';
 import type { VFS, VfsRevision } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
@@ -24,18 +26,32 @@ export interface ScannedFile {
 }
 
 /** A file's whole text. `ignoreBOM` keeps the BOM so the fingerprint matches string-returning planes. */
-export async function readFileText(vfs: VFS, path: string, revision?: VfsRevision): Promise<string> {
-  if (revision !== undefined && !vfs.readFileAtRevision) throw makeVfsError('ENOTSUP', 'this file plane does not retain file revisions', path);
+export function readFileText(vfs: VFS, path: string, revision?: VfsRevision): Promise<string> {
+  return settle(fileText(vfs, path, revision));
+}
 
-  const raw = revision !== undefined && vfs.readFileAtRevision
-    ? await vfs.readFileAtRevision(path, revision)
-    : await vfs.readFile(path, { encoding: 'utf8' });
+function fileText(vfs: VFS, path: string, revision?: VfsRevision): Effect.Effect<string> {
+  const historical = vfs.readFileAtRevision;
 
-  const text = v.safeParse(v.string(), raw);
+  if (revision !== undefined && !historical) return Effect.die(makeVfsError('ENOTSUP', 'this file plane does not retain file revisions', path));
 
-  return text.success
-    ? text.output
-    : new TextDecoder('utf-8', { ignoreBOM: true }).decode(v.parse(v.instance(Uint8Array), raw));
+  return Effect.map(Effect.promise(() => (revision !== undefined && historical
+    ? historical.call(vfs, path, revision)
+    : vfs.readFile(path, { encoding: 'utf8' }))), (raw) => {
+    const text = v.safeParse(v.string(), raw);
+
+    return text.success
+      ? text.output
+      : new TextDecoder('utf-8', { ignoreBOM: true }).decode(v.parse(v.instance(Uint8Array), raw));
+  });
+}
+
+function rangedChunk(read: () => Promise<Uint8Array>, first: boolean): Effect.Effect<Uint8Array | null> {
+  return Effect.tryPromise({ try: read, catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => (first && isVfsError(failed.cause) && failed.cause.code === 'ENOTSUP'
+      ? Effect.succeed(null)
+      : Effect.die(failed.cause))),
+  );
 }
 
 /** A bounded prefix: text, bytes read, and the plane-reported total size (null if none). */
@@ -46,45 +62,39 @@ export interface FileHead {
 }
 
 /**
- * A file's leading `maxBytes` as text. Planes without a ranged read fall back to {@link readUnranged},
+ * A file's leading `maxBytes` as text. Planes without a ranged read fall back to {@link unrangedText},
  * which refuses over-budget files. `bytes` is what was read; `total` is the stat.
  */
-export async function readFileHead(vfs: VFS, path: string, maxBytes: number): Promise<FileHead> {
-  const stat = await vfs.stat(path);
-  const probed: VFS & Partial<VfsNativeReads> = vfs;
-  const ranged = probed.readRange;
+export function readFileHead(vfs: VFS, path: string, maxBytes: number): Promise<FileHead> {
+  return settle(Effect.gen(function* () {
+    const stat = yield* Effect.promise(() => vfs.stat(path));
+    const total = stat?.size ?? null;
+    const probed: VFS & Partial<VfsNativeReads> = vfs;
+    const ranged = probed.readRange;
 
-  if (ranged === undefined) {
-    const text = await readUnranged(vfs, path, stat?.size ?? null);
+    const whole = (text: string): FileHead => ({ text, bytes: new TextEncoder().encode(text).byteLength, total });
 
-    return { text, bytes: new TextEncoder().encode(text).byteLength, total: stat?.size ?? null };
-  }
+    if (ranged === undefined) return whole(yield* unrangedText(vfs, path, total));
 
-  const decode = new TextDecoder('utf-8', { ignoreBOM: true });
-  let at = 0;
-  let text = '';
+    const decode = new TextDecoder('utf-8', { ignoreBOM: true });
+    let at = 0;
+    let text = '';
 
-  while (at < maxBytes) {
-    let chunk: Uint8Array;
+    while (at < maxBytes) {
+      const offset = at;
+      const chunk = yield* rangedChunk(() => ranged.call(vfs, path, offset, Math.min(SCAN_CHUNK_BYTES, maxBytes - offset)), offset === 0);
 
-    try {
-      chunk = await ranged.call(vfs, path, at, Math.min(SCAN_CHUNK_BYTES, maxBytes - at));
-    } catch (cause) {
-      if (at === 0 && isVfsError(cause) && cause.code === 'ENOTSUP') {
-        const whole = await readUnranged(vfs, path, stat?.size ?? null);
+      if (chunk === null) return whole(yield* unrangedText(vfs, path, total));
 
-        return { text: whole, bytes: new TextEncoder().encode(whole).byteLength, total: stat?.size ?? null };
-      }
-
-      throw cause;
+      if (chunk.length === 0) break;
+      at += chunk.length;
+      text += decode.decode(chunk, { stream: true });
     }
 
-    if (chunk.length === 0) break;
-    at += chunk.length;
-    text += decode.decode(chunk, { stream: true });
-  }
+    const head: FileHead = { text: text + decode.decode(), bytes: at, total };
 
-  return { text: text + decode.decode(), bytes: at, total: stat?.size ?? null };
+    return head;
+  }));
 }
 
 /** Scan `path` for the window `opts` asks for plus the whole-file fingerprint. Errors propagate; nothing partial is returned. */
@@ -93,96 +103,98 @@ export async function scanFileWindow(
   path: string,
   opts: { offset?: number | undefined; limit?: number | undefined; maxChars: number },
 ): Promise<ScannedFile> {
-  const scan = beginScan(opts);
-  // A chunked scan is not atomic: re-stat after when the plane has a revision. Size and mtime do not detect rewrites.
-  const before = await vfs.stat(path);
-  const revision = before?.revision;
-  const historical = vfs.readFileAtRevision;
+  return settle(Effect.gen(function* () {
+    const scan = beginScan(opts);
+    // A chunked scan is not atomic: re-stat after when the plane has a revision. Size and mtime do not detect rewrites.
+    const before = yield* Effect.promise(() => vfs.stat(path));
+    const revision = before?.revision;
+    const historical = vfs.readFileAtRevision;
 
-  if (revision !== undefined && historical !== undefined) {
-    const pinned = await feedRanges(scan, vfs, async (file, offset, length) => {
-      const result = await historical.call(vfs, file, revision, { offset, length });
+    if (revision !== undefined && historical !== undefined) {
+      const pinned = yield* feedRanges(scan, vfs, async (file, offset, length) => {
+        const result = await historical.call(vfs, file, revision, { offset, length });
 
-      return v.is(v.string(), result) ? new TextEncoder().encode(result) : result;
-    }, path);
+        return v.is(v.string(), result) ? new TextEncoder().encode(result) : result;
+      }, path);
 
-    if (pinned) return scan.done(revision);
-  }
+      if (pinned) return scan.done(revision);
+    }
 
-  // Widening assignment, not a cast: the optional member has exactly this signature where present.
-  const probed: VFS & Partial<VfsNativeReads> = vfs;
-  const ranged = probed.readRange;
+    // Widening assignment, not a cast: the optional member has exactly this signature where present.
+    const probed: VFS & Partial<VfsNativeReads> = vfs;
+    const ranged = probed.readRange;
 
-  if (!ranged || !await feedRanges(scan, vfs, ranged, path)) {
-    scan.feed(await readUnranged(vfs, path, before?.size ?? null));
-  }
+    if (!ranged || !(yield* feedRanges(scan, vfs, ranged, path))) {
+      scan.feed(yield* unrangedText(vfs, path, before?.size ?? null));
+    }
 
-  if (before?.revision !== undefined && (await vfs.stat(path))?.revision !== before.revision) {
-    throw new FileRefusalError('stale',
-      `${path} changed while it was being read, so what came back would be part of one version and `
-      + `part of another. Read it again (action=read path=${path}).`);
-  }
+    const after = before?.revision === undefined ? undefined : (yield* Effect.promise(() => vfs.stat(path)))?.revision;
 
-  return scan.done(before?.revision);
+    if (before?.revision !== undefined && after !== before.revision) {
+      return yield* Effect.die(new FileRefusalError('stale',
+        `${path} changed while it was being read, so what came back would be part of one version and `
+        + `part of another. Read it again (action=read path=${path}).`));
+    }
+
+    return scan.done(before?.revision);
+  }));
 }
 
 /** Feed the file through the ranged read in chunks. `false`: the first window answered ENOTSUP (vfs/mounts.ts). */
-async function feedRanges(
+function feedRanges(
   scan: { feed(text: string): void },
   vfs: VFS,
   ranged: VfsNativeReads['readRange'],
   path: string,
-): Promise<boolean> {
-  // `ignoreBOM`: the mark belongs to the fingerprint.
-  const decode = new TextDecoder('utf-8', { ignoreBOM: true });
+): Effect.Effect<boolean> {
+  return Effect.gen(function* () {
+    // `ignoreBOM`: the mark belongs to the fingerprint.
+    const decode = new TextDecoder('utf-8', { ignoreBOM: true });
 
-  for (let at = 0; ; ) {
-    let chunk: Uint8Array;
+    for (let at = 0; ; ) {
+      const offset = at;
+      const chunk = yield* rangedChunk(() => ranged.call(vfs, path, offset, SCAN_CHUNK_BYTES), offset === 0);
 
-    try {
-      chunk = await ranged.call(vfs, path, at, SCAN_CHUNK_BYTES);
-    } catch (cause) {
-      if (at === 0 && isVfsError(cause) && cause.code === 'ENOTSUP') return false;
-      throw cause;
+      if (chunk === null) return false;
+
+      if (chunk.length === 0) break;
+      at += chunk.length;
+      scan.feed(decode.decode(chunk, { stream: true }));
     }
 
-    if (chunk.length === 0) break;
-    at += chunk.length;
-    scan.feed(decode.decode(chunk, { stream: true }));
-  }
+    scan.feed(decode.decode());
 
-  scan.feed(decode.decode());
-
-  return true;
+    return true;
+  });
 }
 
 /**
  * The whole file for a plane with no ranged read, only within the shared resident-text budget
  * (`vfs/mounts.ts`). The stat admits the read; over-budget results are still refused after it.
  */
-async function readUnranged(vfs: VFS, path: string, size: number | null): Promise<string> {
-  const refuse = (what: string): never => {
-    throw makeVfsError('EPERM',
-      `this file plane has no ranged read, so ${what} cannot be read within `
-      + `${String(RESIDENT_TEXT_MAX_BYTES)} — read or slice it with workspace.readFile inside eval`,
-      path);
-  };
+function unrangedText(vfs: VFS, path: string, size: number | null): Effect.Effect<string> {
+  const refuse = (what: string): Effect.Effect<never> => Effect.die(makeVfsError('EPERM',
+    `this file plane has no ranged read, so ${what} cannot be read within `
+    + `${String(RESIDENT_TEXT_MAX_BYTES)}: read or slice it with workspace.readFile inside eval`,
+    path));
 
-  if (size === null) {
-    // An unstattable path is usually missing; do not answer it with a ranged-read error.
-    if (!await vfs.exists(path)) throw makeVfsError('ENOENT', `no such file, open '${path}'`, path);
+  return Effect.gen(function* () {
+    if (size === null) {
+      // An unstattable path is usually missing; do not answer it with a ranged-read error.
+      if (!(yield* Effect.promise(() => vfs.exists(path)))) return yield* Effect.die(makeVfsError('ENOENT', `no such file, open '${path}'`, path));
 
-    return refuse('a file of unknown size');
-  }
+      return yield* refuse('a file of unknown size');
+    }
 
-  if (size > RESIDENT_TEXT_MAX_BYTES) return refuse(`${String(size)} bytes`);
-  const text = await readFileText(vfs, path);
+    if (size > RESIDENT_TEXT_MAX_BYTES) return yield* refuse(`${String(size)} bytes`);
+    const text = yield* fileText(vfs, path);
 
-  // Budget is in bytes. UTF-8 never uses fewer bytes than characters, so the length check only bounds the exact one.
-  if (text.length > RESIDENT_TEXT_MAX_BYTES) return refuse(`${String(text.length)} characters`);
-  const bytes = new TextEncoder().encode(text).byteLength;
+    // Budget is in bytes. UTF-8 never uses fewer bytes than characters, so the length check only bounds the exact one.
+    if (text.length > RESIDENT_TEXT_MAX_BYTES) return yield* refuse(`${String(text.length)} characters`);
+    const bytes = new TextEncoder().encode(text).byteLength;
 
-  return bytes > RESIDENT_TEXT_MAX_BYTES ? refuse(`${String(bytes)} bytes`) : text;
+    return bytes > RESIDENT_TEXT_MAX_BYTES ? yield* refuse(`${String(bytes)} bytes`) : text;
+  });
 }
 
 /**

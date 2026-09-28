@@ -156,6 +156,7 @@ function makeTeam() {
           elapsed_ms: 1,
         }),
         settle: () => false,
+        reclaim: () => null,
       },
       snapshot: () => [rosterEntry],
       list: async () => [rosterEntry],

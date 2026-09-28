@@ -15,7 +15,6 @@ import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hu
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
-import { recoveryBackoffMs } from '../src/utils/recovery-backoff';
 import { makeSql, makeExecRaw, makeSqlExec, storesFor } from './helpers';
 import { createTestRuntime, createTestActors, toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
@@ -193,7 +192,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     const okLog = logs.find((l) => l.e === 'bg_job_settled' && l.d?.startsWith(ok));
     expect(okLog?.d).toBe(`${ok} completed`);
     const badLog = logs.find((l) => l.e === 'bg_job_settled' && l.d?.startsWith(bad));
-    expect(badLog?.d).toBe(`${bad} failed — boom`);
+    expect(badLog?.d).toBe(`${bad} failed: boom`);
   });
 
   test('a skipped wake publishes a self-trusted retry event for the standard drain', async () => {
@@ -843,7 +842,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     const id = outcome.detached ? outcome.jobId : '';
     expect(store.get(id)?.status).toBe('running');
     expect(store.getInput(id)).toBe('{"code":"1+1"}');
-    expect(logs).toContainEqual({ e: 'bg_job_started', d: `heads → ${id}` });
+    expect(logs).toContainEqual({ e: 'bg_job_started', d: `heads -> ${id}` });
   });
 
   test('the threshold carries the session surface\'s detach policy', () => {
@@ -1203,15 +1202,6 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     const text = enqueued[0]?.text ?? '';
     expect(text).toMatch(/do not\s+re-spawn/i);
     expect(text).not.toMatch(/whether to retry/i);
-  });
-});
-
-describe('recoveryBackoffMs sanitizes counts the curve cannot use', () => {
-  test('negatives floor at the first term, fractions truncate, non-finite waits the ceiling', () => {
-    expect(recoveryBackoffMs(-1)).toBe(1_000);
-    expect(recoveryBackoffMs(1.9)).toBe(2_000);
-    expect(recoveryBackoffMs(Number.NaN)).toBe(60_000);
-    expect(recoveryBackoffMs(Number.POSITIVE_INFINITY)).toBe(60_000);
   });
 });
 

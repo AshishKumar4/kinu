@@ -11,7 +11,7 @@ import {
   initRunEventTables, initSearchTables, recordExploration,
   type ExplorationWrite, type ObjectiveIdentity,
 } from '@kinu.run/core';
-import { makeSql } from '@kinu.run/cli-backend';
+import { makeSql, stampSchemaGenesis } from '@kinu.run/cli-backend';
 import { scratchDir, createTestActorsOver } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
@@ -61,6 +61,7 @@ const PRIVATE_KEY = ['-----BEGIN ', 'PRIVATE KEY-----'].join('');
  */
 function seedInvestigationWorkspace(dbPath: string): void {
   const db = new Database(dbPath, { create: true });
+  stampSchemaGenesis(db);
   const execRaw = (sql: string) => { db.exec(sql); };
 
   initRunEventTables(execRaw);
@@ -115,11 +116,9 @@ function seedInvestigationWorkspace(dbPath: string): void {
   insertNode.run(actor.actorId, 'search-new-c2', 'search-new-c1', 'search-new', 'branch a.1', 2, 5200);
 
   const mcts = new MctsSearchStore(sql, actor);
-  mcts.begin({ rootId: 'search-old', task: 'investigate', engine: 'mcts', rootMsgId: 'm1', config: { budget: 1, branches: 1 }, budget: 1, now: 1000 });
+  mcts.begin({ rootId: 'search-old', task: 'investigate', config: { budget: 1, branches: 1 }, now: 1000 });
   mcts.converge('search-old', 0, 1500);
-  // iteration + remaining == budget (the mcts/engine.ts invariant), rendered as "iter=6/10 (4 left)".
-  mcts.begin({ rootId: 'search-new', task: 'investigate', engine: 'mcts', rootMsgId: 'm2', config: { budget: 10, branches: 3 }, budget: 10, now: 5000 });
-  mcts.checkpoint('search-new', 0, { iteration: 6, budget: 4, now: 5300 });
+  mcts.begin({ rootId: 'search-new', task: 'investigate', config: { budget: 10, branches: 3 }, now: 5000 });
 
   // A historical `fork(settle=<policy>): <task>` label; the bundle must still print it.
   const jobs = new BackgroundJobStore(sql, actor);
@@ -155,7 +154,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
         identity: CALLS, descriptor: null, artifact: 'solve()', value: 23,
         detail: '23 calls', measured: null, preset: 'optimise', label: null,
         rootId: 'search-new', configDigest: 'cfg-1', depth: 5, branches: 3,
-        floor: null, costUsd: null, costTokens: null, at: 20_000, ...over,
+        floor: null, costTokens: null, at: 20_000, ...over,
       },
     });
   };
@@ -225,8 +224,8 @@ describe('kinu debug — local backend', () => {
     expect(r.stdout).toContain('(1/2 settled)');
     expect(r.stdout).toContain('MCTS searches (2');
     expect(r.stdout).toContain('latest vs previous: 3 vs 1 nodes, depth 2 vs 0');
-    expect(r.stdout).toContain('iter=6/10 (4 left)');
-    expect(r.stdout).not.toContain('iter=6/4');
+    // Iterations are the tree's own expansions (2 below the root), not a stored counter.
+    expect(r.stdout).toContain('iter=2/10 (8 left)');
     expect(r.stdout).toMatch(/checkpointed \d+d(?: \d+h)? ago/);
     expect(r.stdout).toContain('iter=0/1 (1 left)');
     expect(r.stdout).toContain('took 2m');

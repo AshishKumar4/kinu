@@ -15,15 +15,9 @@ const CHECK_INTERVAL_MS = 24 * 60 * 60_000;
 
 const ServedVersionSchema = v.object({
   version: v.pipe(v.string(), v.trim(), v.nonEmpty()),
-  sha: v.optional(v.string()),
-  builtAt: v.optional(v.string()),
 });
 
-interface ServedVersion {
-  version: string;
-  sha?: string;
-  builtAt?: string;
-}
+type ServedVersion = v.InferOutput<typeof ServedVersionSchema>;
 
 type FetchVersion = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -52,14 +46,7 @@ export async function fetchServedVersion(
     if (!res.ok) return null;
     const parsed = v.safeParse(ServedVersionSchema, await tolerateAsync(() => res.json(), 'malformed-input'));
 
-    if (!parsed.success) return null;
-    const served: ServedVersion = { version: parsed.output.version };
-
-    if (parsed.output.sha !== undefined) served.sha = parsed.output.sha;
-
-    if (parsed.output.builtAt !== undefined) served.builtAt = parsed.output.builtAt;
-
-    return served;
+    return parsed.success ? parsed.output : null;
   } finally {
     clearTimeout(timer);
   }

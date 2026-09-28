@@ -10,8 +10,8 @@ import {
   NotePencilIcon, ArrowLeftIcon, DatabaseIcon,
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, revealMisrepresenting, timeAgo } from "@kinu.run/core";
-import type { AgentTaskTree, ChangelogEntry, MemoryEntry, OwnedPlan, PendingAction, PendingActionKind, PlanReview, WorkspaceWork } from "@kinu.run/core";
-import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
+import type { AgentTaskTree, ChangelogEntry, MemoryEntry, OwnedPlan, PendingAction, PendingActionKind, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
+import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -57,7 +57,7 @@ export interface WorkTabProps {
   planRpc: Rpc;
   planOwner?: string;
   workspacePlanArrival?: WorkspacePlanArrival | null;
-  onReviewActor?: (name: string) => void | Promise<void>;
+  onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   /** Polled by the hook so the tab badge and this queue are one read. */
   pendingActions: PendingAction[];
   backgroundJobs: BackgroundJob[];
@@ -66,13 +66,13 @@ export interface WorkTabProps {
   onChangelogSeen?: () => void;
   /** Re-read after a decision so decided rows leave on the click, not the next poll. */
   onRefreshQueue?: () => void;
-  isStreaming: boolean;
   rpc: Rpc;
   memory?: MemoryEntry[];
+  readMoves?: ReadMoves;
 }
 
 export function WorkTab({
-  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, isStreaming, rpc, memory = [],
+  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, rpc, memory = [], readMoves = {},
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
   const [hasPlans, setHasPlans] = useState(plan !== null);
@@ -87,33 +87,31 @@ export function WorkTab({
     [rpc],
   );
 
-  // The server never pushes the plan, so the tab revalidates until everything has settled.
-  const revalidate = useCallback((work: WorkspaceWork | null) => {
-    if (isStreaming) return 4000;
-
-    const stillOpen = (owned: { tasks: AgentTaskTree[] }) => owned.tasks.some((task) => !isClosedTree(task));
-    const open = (work?.plans ?? []).some(stillOpen) || (work?.tasks ?? []).some(stillOpen);
-
-    return open ? 4000 : null;
-  }, [isStreaming]);
-
-  const { resource: taskResource, reload: reloadTasks } = useAsyncResource(loadWork, revalidate);
+  const { resource: taskResource, reload: reloadTasks } = useAsyncResource(loadWork);
   const work = lastValue(taskResource);
+  const workMoves = readMoves.listWorkspaceWork ?? 0;
+  const workMoved = useRef(workMoves);
+
+  useEffect(() => {
+    if (workMoved.current === workMoves) return;
+    workMoved.current = workMoves;
+    reloadTasks();
+  }, [workMoves, reloadTasks]);
 
   const {
     view: changelog, seenAt: changelogSeenAt, seenError: changelogSeenError,
     resource: changelogResource, reload: reloadChangelog,
-  } = useChangelog(rpc, onChangelogSeen);
+  } = useChangelog(rpc, onChangelogSeen, readMoves.getEvolutionChangelog ?? 0);
 
   const taskRows = useMemo(() => {
-    const rows = (groups: readonly { owner: { name: string }; tasks: AgentTaskTree[] }[]) =>
-      groups.flatMap((owned) => owned.tasks.map((task) => ({ task, owner: owned.owner.name })));
+    const rows = (groups: readonly { owner: WorkspaceWorkOwner; tasks: AgentTaskTree[] }[]) =>
+      groups.flatMap((owned) => owned.tasks.map((task) => ({ task, owner: owned.owner })));
 
     return [...rows(work?.tasks ?? []), ...rows(work?.plans ?? [])];
   }, [work]);
 
   const openTasks = taskRows.filter(({ task }) => !isClosedTree(task));
-  const closedTasks = taskRows.filter(({ task }) => isClosedTree(task)).map(({ task }) => task);
+  const closedTasks = taskRows.filter(({ task }) => isClosedTree(task));
   const runningJobs = backgroundJobs.filter((job) => job.status === "running");
   const settledJobs = backgroundJobs.filter((job) => job.status !== "running");
 
@@ -181,8 +179,8 @@ export function WorkTab({
     <div className="space-y-6 animate-fade-in">
       <WorkPlans work={work} owner={planOwner ?? "main"} arrival={workspacePlanArrival} onPresence={setHasPlans} onNewPlan={onNewPlan} onOpenReview={openReview} />
       <NeedsYou pendingActions={pendingActions} rpc={rpc} onDecided={onRefreshQueue} onOpenSurface={onOpenSurface} onOpenReview={setReview} />
-      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} runningJobs={runningJobs} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} rpc={rpc} />
-      <WorkJournal journal={journal} filter={filter} onFilter={setFilter} view={changelog} seenAt={changelogSeenAt} seenError={changelogSeenError} resource={changelogResource} onReload={reloadChangelog} rpc={rpc} onRefreshJobs={onRefreshJobs} />
+      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} runningJobs={runningJobs} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
+      <WorkJournal journal={journal} filter={filter} onFilter={setFilter} view={changelog} seenAt={changelogSeenAt} seenError={changelogSeenError} resource={changelogResource} onReload={reloadChangelog} rpc={rpc} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} />
       <Learnings memory={memory} onOpenSurface={onOpenSurface} />
     </div>
   );
@@ -194,7 +192,7 @@ function WorkReview({ item, owner, rpc, planRpc, onReviewActor, resource, onRetr
   owner: string;
   rpc: Rpc;
   planRpc: Rpc;
-  onReviewActor?: (name: string) => void | Promise<void>;
+  onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
   onBack: () => void;
@@ -262,13 +260,13 @@ function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenReview 
   );
 }
 
-interface WorkTaskRow {
+export interface WorkTaskRow {
   task: AgentTaskTree;
-  owner: string;
+  owner: WorkspaceWorkOwner;
 }
 
 /** The read's tri-state gates only the work half, so a running job never waits behind the plan's spinner. */
-function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, onRefreshJobs, rpc }: {
+function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
   work: WorkspaceWork | null;
   taskRows: WorkTaskRow[];
   openTasks: WorkTaskRow[];
@@ -276,6 +274,7 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, on
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
   onRefreshJobs: () => void;
+  onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
   rpc: Rpc;
 }) {
   const nowEmpty = work !== null && openTasks.length === 0 && runningJobs.length === 0;
@@ -295,7 +294,7 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, on
             {taskRows.length > 0 && <PlanProgress tasks={taskRows.map(({ task }) => task)} />}
             {openTasks.length > 0 && (
               <div className="space-y-2">
-                {openTasks.map(({ task, owner }) => <TaskTree key={`${owner}:${task.id}`} task={task} owner={owner} />)}
+                {openTasks.map(({ task, owner }) => <TaskTree key={`${owner.actorId}:${task.id}`} task={task} owner={owner} onOpenOwner={onOpenOwner} />)}
               </div>
             )}
           </>
@@ -313,7 +312,7 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, on
 }
 
 /** Drawn while the digest read owes a retry too, so a broken read never blanks the tab; revalidation failures also show. */
-function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resource, onReload, rpc, onRefreshJobs }: {
+function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resource, onReload, rpc, onRefreshJobs, onOpenOwner }: {
   journal: JournalRow[];
   filter: JournalFilter;
   onFilter: (filter: JournalFilter) => void;
@@ -324,6 +323,7 @@ function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resou
   onReload: () => void;
   rpc: Rpc;
   onRefreshJobs: () => void;
+  onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
 }) {
   const visible = journal.filter((row) => row.chips.includes(filter));
 
@@ -360,7 +360,7 @@ function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resou
             {visible.map((row) => (
               <div key={row.key}>
                 {row.kind === "job" && <JobCard grouped job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
-                {row.kind === "task" && <TaskTree grouped task={row.task} />}
+                {row.kind === "task" && <TaskTree grouped task={row.task} owner={row.owner} onOpenOwner={onOpenOwner} />}
                 {row.kind === "self" && (
                   <ChangelogEntryCard grouped entry={row.entry} seenAt={seenAt}
                     rpc={rpc} onReverted={onReload} />
@@ -514,7 +514,7 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
         {actions.map((action) => (
           <label key={action.id}
             className="flex items-start gap-2 rounded-md px-2 py-1.5 p-elevated cursor-pointer">
-            <input type="checkbox" className="mt-0.5 shrink-0" checked={chosen.has(action.id)}
+            <input type="checkbox" className="mt-0.5 shrink-0 cursor-pointer accent-[var(--c-accent)] hover:brightness-110" checked={chosen.has(action.id)}
               onChange={() => flow.toggle(action.id, allIds)} disabled={state.busy} />
             <span className="min-w-0 flex-1">
               <code className="block p-t-code p-text break-all whitespace-pre-wrap">{revealMisrepresenting(action.detail ?? "")}</code>
@@ -594,21 +594,21 @@ function PendingRow(
 /** Membership is decided by the builder, never the renderer, so no chip drifts from the feed. */
 type JournalRow =
   | { key: string; at: number; chips: readonly JournalFilter[]; kind: "job"; job: BackgroundJob }
-  | { key: string; at: number; chips: readonly JournalFilter[]; kind: "task"; task: AgentTaskTree }
+  | { key: string; at: number; chips: readonly JournalFilter[]; kind: "task"; task: AgentTaskTree; owner: WorkspaceWorkOwner }
   | { key: string; at: number; chips: readonly JournalFilter[]; kind: "self"; entry: ChangelogEntry };
 
 /** Exported for its test: the ordering is the feature. Every row answers to `All`, a no-change self-review included, because the queue counts it as unseen. */
 export function buildJournal(
   jobs: readonly BackgroundJob[],
-  tasks: readonly AgentTaskTree[],
+  tasks: readonly WorkTaskRow[],
   entries: readonly ChangelogEntry[],
 ): JournalRow[] {
   const rows: JournalRow[] = [
     ...jobs.map((job): JournalRow => ({
       key: `job:${job.id}`, at: job.settledAt ?? job.createdAt, chips: ["all", "jobs"], kind: "job", job,
     })),
-    ...tasks.map((task): JournalRow => ({
-      key: `task:${task.id}`, at: task.updatedAt, chips: ["all", "self"], kind: "task", task,
+    ...tasks.map(({ task, owner }): JournalRow => ({
+      key: `task:${owner.actorId}:${task.id}`, at: task.updatedAt, chips: ["all", "self"], kind: "task", task, owner,
     })),
     ...entries.map((entry): JournalRow => ({
       key: `self:${entry.id}`, at: entry.at, chips: ["all", "self"], kind: "self", entry,

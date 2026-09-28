@@ -32,6 +32,7 @@ export const PAGE_ROWS = {
   userMcp: ['blueprint-fork'],
   workspace: ['snapshot-after-turn', 'approve-clears', 'enter-sends'],
   workspaceAgent: ['agent-tab', 'agent-chats-persist', 'agent-dismissed-chat'],
+  workspaceAgentPath: ['agent-nested-chat'],
   explore: ['exploration'],
   control: { unreachable: 'the operator console answers only an operator the admin gate admits (control-plane/admin-caller.ts), and the eval identity is not one' },
   agentSettings: ['workspace-settings'],

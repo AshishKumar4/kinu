@@ -47,8 +47,7 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
     vfs.writeFile(`${directory}/server.js`, 'first version');
     const first = await slates.commit(id);
     expect(first.slateId.value).toBe('notes');
-    const publication = await slates.publish(first.id, []);
-    await expect(slates.deploy(publication.id, 'source-only')).rejects.toMatchObject({ code: 'unsupported' });
+    await slates.publish(first.id, []);
     vfs.writeFile(`${directory}/server.js`, 'second version');
     const second = await slates.commit(id);
     expect(second.parentVersionId?.value).toBe(first.id.value);

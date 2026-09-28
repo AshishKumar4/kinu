@@ -4,14 +4,12 @@
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
 import { diagnostics } from '../obs/index';
-import { nowMs } from '../utils/date';
 
 export function initEffectTombstoneTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS effect_tombstones (
     actor_id    TEXT NOT NULL,
     scope       TEXT NOT NULL,
     key         TEXT NOT NULL,
-    recorded_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, scope, key)
   )`);
 }
@@ -32,13 +30,11 @@ export interface EffectKey {
   readonly key: string;
 }
 
-/** Idempotent; a second call keeps the first timestamp. */
-export function recordEffectDone(
-  sql: SqlExecutor, actor: ActorHandle, effect: EffectKey, now?: number,
-): void {
+/** Idempotent. */
+export function recordEffectDone(sql: SqlExecutor, actor: ActorHandle, effect: EffectKey): void {
   actor.assertCurrent();
-  void sql`INSERT INTO effect_tombstones (actor_id, scope, key, recorded_at)
-      VALUES (${actor.actorId}, ${effect.scope}, ${effect.key}, ${now ?? nowMs()})
+  void sql`INSERT INTO effect_tombstones (actor_id, scope, key)
+      VALUES (${actor.actorId}, ${effect.scope}, ${effect.key})
       ON CONFLICT(actor_id, scope, key) DO NOTHING`;
 }
 

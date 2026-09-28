@@ -47,9 +47,8 @@ function seedSearch(db: Database, actorId: string, run: {
   }
 
   db.query(`INSERT INTO mcts_search_runs
-    (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
-     judge_samples_realised, created_at, updated_at)
-    VALUES (?, ?, ?, 'mcts', 'm', ?, 0, 8, ?, 0, ?, ?, ?)`).run(
+    (actor_id, root_id, task, config_json, status, epoch, judge_samples_realised, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`).run(
     actorId, run.rootId, run.task,
     JSON.stringify(run.config ?? { budget: 8, branches: 3, maxDepth: 4, explorationWeight: 1.41, mode: 'build' }),
     run.status ?? 'converged', run.realised ?? null, run.at, run.at,
@@ -72,12 +71,8 @@ function seedSplit(db: Database, actorId: string, run: {
   }
 
   if (run.merged) {
-    db.query(`INSERT INTO head_merge_results
-      (actor_id, root_id, merged_narrative, selected_decisions_json, unresolved_questions_json,
-       recommendations_json, cost_head_count, cost_total_tokens, cost_total_wall_ms,
-       cost_max_depth, merged_at, merge_strategy)
-      VALUES (?, ?, 'merged', '[]', '[]', '[]', ?, 10, 10, 1, ?, ?)`)
-      .run(actorId, run.rootId, run.heads, run.at, run.strategy ?? 'synthesize');
+    db.query(`INSERT INTO head_merge_results (actor_id, root_id, merged_narrative) VALUES (?, ?, 'merged')`)
+      .run(actorId, run.rootId);
   }
 }
 
@@ -228,8 +223,7 @@ describe('readExplorationCanvas', () => {
       config: { budget: 12, branches: 3, maxDepth: 4, judgeSamples: 5, mode: 'build' },
       realised: 2,
     });
-    db.exec(`UPDATE search_nodes SET status = 'terminal', value = 0.71, evaluation_json = '{"score":0.71}'
-      WHERE id = 'swarm-1-b0'`);
+    db.exec(`UPDATE search_nodes SET status = 'terminal', value = 0.71 WHERE id = 'swarm-1-b0'`);
     seedSplit(db, actorId, {
       rootId: 'swarm-1', task: 'cut p99 latency', at: 1_400, heads: 3,
       strategy: 'best_of', rationale: 'optimise',
@@ -244,7 +238,6 @@ describe('readExplorationCanvas', () => {
       hasSearchTree: true,
       hasNodeTranscripts: true,
       branches: 3,
-      winnerScore: 0.71,
     });
     expect(entry.tree).toHaveLength(4);
     expect(entry.tree.every((row) => row.root_id === 'swarm-1')).toBe(true);
@@ -398,7 +391,6 @@ describe('Pareto canvas evidence', () => {
           aggregated: [],
           tokens: null,
         },
-        now: 1_000,
       });
     }
 

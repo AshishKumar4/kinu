@@ -6,7 +6,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import type { UIMessage } from "ai";
-import { threadLiveTail, type TurnLiveness, requestUrl } from "@kinu.run/core";
+import { threadLiveTail, type PanelAgent, type TurnLiveness, requestUrl } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };
@@ -21,7 +21,7 @@ import {
 } from "@phosphor-icons/react";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import { mcpPresetById, seededRandom } from "@kinu.run/core";
+import { mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT } from "@kinu.run/core";
 import type { ReasoningEffort } from "@kinu.run/core";
 import {
@@ -80,14 +80,14 @@ import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
-  BUILTIN_PROFILE_CATALOG, BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
-  CHARS_PER_TOKEN, DEVICE_TIERS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
+  BUILTIN_PROFILE_CATALOG,
+  CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema, mergeTranscript,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type AdvisorSeverity, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
-import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc, ToolInfo } from "@kinu.run/core";
+import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { buildTree, type MctsRow } from "@kinu.run/core";
 import { formatWorkspaceError, type AgentStatus, type ExecutorOutput, type WorkspaceErrors } from "@/hooks/use-kinu";
@@ -103,11 +103,11 @@ import type {
 import type { McpServerSummary, ModelMenuEntry, ModelTestResult, RosterCounts, RosterEntry, RosterFrame, RosterPage, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema, ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import * as v from "valibot";
-import { galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
-// Declared before the shell mounts so the app background attaches its stepping controls here only (scripts/app-background-ux.test.ts).
+// Declared before the shell mounts so the app background attaches its stepping controls here only (tests/browser/app-background-ux.test.ts).
 window.__kinuGalleryStepping = true;
 
 const squareButtonVariant = "square";
@@ -127,12 +127,12 @@ const STOCK_ROSTER = {
   entries: [
     { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
       ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
-      : "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
-    { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
-    { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
-    { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
+      : "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
+    { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
+    { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
+    { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5 },
     // First-run row: titled by its first prompt, so it has no title yet, only its slug.
-    { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3, archivedAt: null },
+    { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3 },
   ],
   total: 5,
 };
@@ -156,7 +156,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
     {
       id: "dev_1", label: "ashish-mbp", os: "darwin", hostname: "ashish-mbp.local",
       connected: true, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 90e3,
-      expiresAt: NOW + 50 * 864e5, lastIp: "192.0.2.2", lastAgent: "kinu-device",
+      expiresAt: NOW + 50 * 864e5,
       replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     },
@@ -202,19 +202,18 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   {
     id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
     transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
-    authUrl: null, error: null, presetId: null, createdAt: NOW - 3 * 864e5, updatedAt: NOW,
+    authUrl: null, error: null, presetId: null,
   },
   {
     id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
     transport: "sse", status: "authenticating", toolsCount: 0,
     allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
-    error: null, presetId: null, createdAt: NOW - 864e5, updatedAt: NOW,
+    error: null, presetId: null,
   },
   {
     id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.example/sse",
     transport: "sse", status: "failed", toolsCount: 0, allowedTools: null,
     authUrl: null, error: "The server refused the connection.", presetId: null,
-    createdAt: NOW - 2 * 864e5, updatedAt: NOW,
   },
 ];
 
@@ -231,13 +230,13 @@ if (mcpPresetVariant === "connected") {
     {
       id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
       transport: "streamable-http", status: "ready", toolsCount: 21, allowedTools: null,
-      authUrl: null, error: null, presetId: "github", createdAt: NOW - 864e5, updatedAt: NOW,
+      authUrl: null, error: null, presetId: "github",
     },
     {
       id: "srv-preset-cloudflare", name: "Cloudflare", serverUrl: "https://mcp.cloudflare.com/mcp",
       transport: "streamable-http", status: "authenticating", toolsCount: 0, allowedTools: null,
       authUrl: "https://mcp.cloudflare.com/authorize?srv-preset-cloudflare", error: null,
-      presetId: "cloudflare", createdAt: NOW - 3600e3, updatedAt: NOW,
+      presetId: "cloudflare",
     },
     ...GALLERY_UNCLAIMED_MCP,
   ];
@@ -313,8 +312,8 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
 async function settingsSectionsFixture(path: string): Promise<Response | null> {
   if (path === "/api/user/credentials") {
     return fixtureJson([
-      { key: "anthropic.bearer", kind: "bearer", createdAt: NOW - 864e5, updatedAt: NOW },
-      { key: "anthropic.bearer@work", kind: "bearer", createdAt: NOW - 36e5, updatedAt: NOW },
+      { key: "anthropic.bearer", kind: "bearer" },
+      { key: "anthropic.bearer@work", kind: "bearer" },
     ]);
   }
 
@@ -451,7 +450,6 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
       allowedTools: addBody.output.allowedTools ?? null,
       authUrl, error: null,
       presetId: preset?.id ?? null,
-      createdAt: NOW, updatedAt: NOW,
     }];
 
     return fixtureJson({ id, authUrl }, 201);
@@ -500,7 +498,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
       {
         id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
         connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
-        lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
+        replacedAt: null,
         revokedAt: revoked ? NOW : null, unstoppedAt: incident === "revoked" ? NOW : null,
         reuseDetectedAt: incident === "reused" ? NOW : null, wholeMachine: false,
         sandbox: {
@@ -511,7 +509,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
       ...(frame === "devices" ? [{
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
-        lastIp: "192.0.2.2", lastAgent: "kinu-device", replacedAt: null,
+        replacedAt: null,
         revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
       }] : []),
@@ -595,7 +593,7 @@ function deviceConnectFixture(path: string, method: string): Response | null {
       id: "dev-arrived", label: "Owner PC", os: "darwin", hostname: "owner-mac",
       connected: connectFixtureMode !== "stall",
       createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
-      lastIp: "192.0.2.7", lastAgent: "kinu-device", replacedAt: null,
+      replacedAt: null,
       revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     }]);
@@ -640,7 +638,7 @@ const EXTRA_WORKSPACE = new URLSearchParams(location.search).get("extraWorkspace
 const galleryRoster: RosterEntry[] = [
   ...GALLERY_ROSTER.entries,
   ...(EXTRA_WORKSPACE ? [{
-    name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5, archivedAt: null,
+    name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5,
   }] : []),
 ].map((entry) => {
   const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
@@ -1026,7 +1024,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
       displayName: "Checkout coupon bug", purpose: "Find why the SAVE20 coupon 500s and fix it.",
       soul: "# Checkout coupon bug\n\nI own the checkout coupon path. I read the migration before I guess.\n",
       createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 106,
-      craftedToolCount: 2, messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null, reasoningEffort: "medium",
+      messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null, reasoningEffort: "medium",
     },
     tools: { builtIn: [], crafted: [] },
     memoryContent: "",
@@ -1042,7 +1040,6 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
   },
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
-  getMctsConfig: { explorationConstant: 1.41, maxIterations: 12, branchBudget: 3 },
   getEvolutionChangelog: { entries: [], unseen: 0 },
 });
 
@@ -1333,6 +1330,17 @@ const GALLERY_SUBS: {
 
 let gallerySubSeq = 0;
 
+const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "panel";
+
+if (AGENTS_PANEL) {
+  const docs = {
+    name: "docs", actorId: galleryActorId("docs"), displayName: "Docs writer", role: "agent", nameOrigin: "user", createdBy: "user",
+    lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
+  };
+
+  GALLERY_SUBS.push(docs);
+}
+
 /** Derived from the name, so gate-stamped frames and the pane's snapshot id agree without a second fixture. */
 function galleryActorId(name: string): string {
   return `actor-${name}`;
@@ -1376,7 +1384,8 @@ packages/
 The same request either applies one valid coupon atomically or returns \`coupon_ineligible\` without changing the cart.`;
 
 /* `?plan=late-heading` (mid-document h1) and `?plan=annotated-heading` (anchor on the leading h1): the header must promote
-   neither. `?plan=read-only` is a settled plan. */
+   neither. `?plan=read-only` is a settled plan. `?plan=code-path` names a file and line inline, the text Plannotator's own
+   inline renderer turns into a hover preview that fetches `/api/doc`. */
 const GALLERY_PLAN_VARIANT = new URLSearchParams(location.search).get("plan");
 
 const GALLERY_PLAN_LATE_HEADING = `The guard runs after the discount lands, so an archived coupon still applies.
@@ -1401,9 +1410,29 @@ const GALLERY_PLAN_TITLE_NOTE: ReviewAnnotation = {
   author: "Owner",
 };
 
-const GALLERY_PLAN_CONTENT = GALLERY_PLAN_VARIANT === "late-heading"
-  ? GALLERY_PLAN_LATE_HEADING
-  : GALLERY_PLAN_MARKDOWN;
+const GALLERY_PLAN_CODE_PATH = `# Repair the \`applyCoupon\` eligibility guard
+
+Move the eligibility check in \`packages/core/src/checkout/apply-coupon.ts:42\` ahead of the cart update.
+
+[Reference](https://example.test/reference) [Jump](#details) [Local](/readme.md) [Unsafe](javascript:alert(1))
+
+4. First operation
+5. Second operation
+
+| Name | Value |
+| --- | --- |
+| Separator | alpha\\|beta |
+
+\`\`\`mermaid
+graph TD; A-->B
+\`\`\``;
+
+const GALLERY_PLAN_CONTENTS = new Map([
+  ["late-heading", GALLERY_PLAN_LATE_HEADING],
+  ["code-path", GALLERY_PLAN_CODE_PATH],
+]);
+
+const GALLERY_PLAN_CONTENT = GALLERY_PLAN_CONTENTS.get(GALLERY_PLAN_VARIANT ?? "") ?? GALLERY_PLAN_MARKDOWN;
 
 const GALLERY_PLAN_ANNOTATIONS: readonly ReviewAnnotation[] =
   GALLERY_PLAN_VARIANT === "annotated-heading" ? [GALLERY_PLAN_TITLE_NOTE] : [];
@@ -1422,7 +1451,6 @@ let galleryAgentPlan: PlanReview = {
   handoffAccepted: false,
   createdAt: NOW,
   updatedAt: NOW,
-  decidedAt: null,
 };
 
 /* The walk-back: two user turns, so there is a second message to revert to. `?transcript=revert` seeds it;
@@ -1470,7 +1498,7 @@ const SLATES_THREAD: UIMessage[] = [
   msg({ id: "sb-u2", role: "user", createdAt: NOW - 7 * 60e3, parts: [{ type: "text", text: "Keep release notes beside it." }] }),
   msg({ id: "sb-a2", role: "assistant", createdAt: NOW - 6 * 60e3, parts: [{ type: "text", text: "Started them.\n\nslate://notes" }] }),
   msg({ id: "sb-u3", role: "user", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Add when each coupon expires." }] }),
-  msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, parts: [{ type: "text", text: "Added an expiry column.\n\nslate://board" }] }),
+  msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, metadata: { [SLATES_CHANGED_METADATA_KEY]: ["board"] }, parts: [{ type: "text", text: "Added an expiry column." }] }),
 ];
 
 function seedFrameTranscript(transcript: string | null): void {
@@ -1487,36 +1515,84 @@ function galleryRevertConversation(entryId: string): void {
   galleryServerPush(JSON.stringify({ type: "cf_agent_chat_messages", messages: kept }));
 }
 
+type GalleryListing = { readonly kind: "held" } | { readonly kind: "listed"; readonly value: JsonValue };
+
+function galleryPortListing(executor: string | undefined): GalleryListing | null {
+  const flags = document.documentElement.dataset;
+
+  if (flags.listingHeld === "1") return { kind: "held" };
+
+  if (executor !== "sandbox") return null;
+
+  if (flags.sandboxStarting === "1") return { kind: "listed", value: { ports: [], pending: "the sandbox's container is still restoring" } };
+
+  // Arrives after first paint.
+  if (flags.previewArrived === "1") {
+    return { kind: "listed", value: { ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] } };
+  }
+
+  return null;
+}
+
+/** `&slates=3`: three slates, whose tabs overflow the strip. */
+function gallerySlates() {
+  return {
+    slates: ["Board", "Notes", "Tally"].slice(0, Number(new URLSearchParams(location.search).get("slates") ?? 0))
+      .map((title) => ({ id: title.toLowerCase(), title, bindings: [] })),
+    problems: [],
+  };
+}
+
 /* The reads the first-visit inspector policy decides on, in the shapes the page consumes (`listSlates` needs an array for `slates.map`). */
 const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   getWorkspaceSnapshot: () => {
     const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get("getWorkspaceSnapshot"));
 
-    return { ...snapshot, activePlan: galleryAgentPlan };
+    const status = v.parse(JsonObjectSchema, snapshot.status);
+
+    return {
+      ...snapshot, activePlan: galleryAgentPlan, slates: gallerySlates().slates,
+      status: HISTORY_ROWS > 0 ? { ...status, messageCount: seededGalleryChatRows() + HISTORY_ROWS } : status,
+    };
   },
-  // `&slates=3`: three slates, whose tabs overflow the strip.
-  listSlates: () => ({
-    slates: ["Board", "Notes", "Tally"].slice(0, Number(new URLSearchParams(location.search).get("slates") ?? 0))
-      .map((title) => ({ id: title.toLowerCase(), title, bindings: [] })),
-    problems: [],
-  }),
+  listSlates: gallerySlates,
   getActivePlanReview: () => galleryAgentPlan,
   // The Work tab draws this read, not `getActivePlanReview`. The owner is the workspace's name: `createMain({ name: this.name })` registers it, never "main".
+  // `dataset.workMoved`: a task written during an outage.
   listWorkspaceWork: () => ({
     plans: [{
-      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, retired: false },
+      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] },
       plan: galleryAgentPlan, tasks: [],
     }],
-    tasks: [],
+    tasks: document.documentElement.dataset.workMoved === "1" ? [{
+      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
+      tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+    }] : [],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
+  listWorkspaceAgents: () => (AGENTS_PANEL ? GALLERY_AGENTS : []),
+  // As the server does: the stopped worker settles aborted, which the panel reads as stopped, and the roster read moves.
+  stopSwarmWorker: (args?: unknown[]) => {
+    const [headId] = v.parse(v.tuple([v.string()]), args);
+    const at = GALLERY_AGENTS.findIndex((agent) => agent.open.kind === "node" && agent.open.nodeId === headId && agent.activity === "working");
+    const agent = GALLERY_AGENTS[at];
+
+    if (agent === undefined) return { stopped: false };
+    GALLERY_AGENTS[at] = { ...agent, activity: "stopped" };
+    queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents"] })); });
+
+    return { stopped: true };
+  },
   // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
   // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture.
   previewSlate: (args?: unknown[]) => ({
     ok: true, value: { url: new URL(v.parse(v.tuple([v.string()]), args)[0], SLATE_GALLERY_URL).href, port: 8789, inline: { height: 180 } },
   }),
-  listPendingConsents: () => [],
+  // `&consent=waiting`: a device command already waiting.
+  listPendingConsents: () => (new URLSearchParams(location.search).get("consent") === "waiting"
+    ? [{ consentId: "c-1", deviceLabel: "studio", method: "exec", command: "git push origin main", createdAt: 1 }]
+    : []),
   // The seed is the whole conversation, so the storage walk is exhausted at once.
   getChatHistoryPage: () => ({ status: "end", items: [] }),
   listFileCheckpoints: () => REVERT_LISTING,
@@ -1550,7 +1626,6 @@ function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
     feedback: feedback ?? null,
     handoffAccepted: true,
     updatedAt: Date.now(),
-    decidedAt: Date.now(),
   };
 
   return { value: { ok: true, plan: galleryAgentPlan, queued: true } };
@@ -1575,7 +1650,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     const name = `agent-${++gallerySubSeq}`;
 
     const entry = {
-      name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", createdBy: "user",
+      name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     };
 
@@ -1587,7 +1662,6 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       feedback: null,
       handoffAccepted: false,
       updatedAt: NOW,
-      decidedAt: null,
     };
 
     return { value: { name, displayName: "", subordinate: entry } };
@@ -1637,7 +1711,75 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
   };
 }
 
+new MutationObserver(() => {
+  galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getExposedPorts"] }));
+}).observe(document.documentElement, { attributes: true, attributeFilter: ["data-preview-arrived", "data-sandbox-starting"] });
+
+/* `&history=N&historyLatency=ms`: N older rows, paged; `&historyHold=1` waits for `gallery:release-page`. */
+const HISTORY_ROWS = Number(new URLSearchParams(location.search).get("history") ?? 0);
+
+const HISTORY_LATENCY_MS = Number(new URLSearchParams(location.search).get("historyLatency") ?? 250);
+
+const HISTORY_HELD = new URLSearchParams(location.search).get("historyHold") === "1";
+
+/** `&historyUneven=1`: pages alternate row heights. */
+const HISTORY_UNEVEN = new URLSearchParams(location.search).get("historyUneven") === "1";
+
+const HISTORY_PICTURE = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220"><rect width="480" height="220" fill="#3a3530"/><text x="24" y="120" fill="#e8dcc4" font-size="28">chart</text></svg>')}`;
+
+function historyRow(index: number): ChatHistoryEntry {
+  const id = `hist-${String(index).padStart(5, "0")}`;
+  const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
+
+  if (index % 2 === 0) return { id, role: "user", content: `Question ${index}: what changed in the pricing guard this time?`, createdAt };
+
+  const kind = index % 10;
+  let content = `Answer ${index}. The guard now reads the campaign before it writes the cart.`;
+
+  if (kind === 1 || (HISTORY_UNEVEN && Math.floor(index / 40) % 2 === 0)) content += "\n\n" + "A longer explanation that wraps across several lines of the column. ".repeat(6);
+  else if (kind === 3) content += "\n\n```ts\nexport function guard(cart: Cart) {\n  if (cart.coupon?.archived) throw new Error('archived');\n  return apply(cart);\n}\n```";
+  else if (kind === 5) content += `\n\n![chart ${index}](${HISTORY_PICTURE})`;
+  else if (kind === 7) content += "\n\nslate://board";
+
+  return { id, role: "assistant", content, createdAt };
+}
+
+async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
+  const request = v.parse(v.tuple([v.object({ cursor: v.optional(v.object({ after: v.string() })), limit: v.number() })]), args);
+  const { cursor, limit } = request[0];
+  const held = cursor?.after.startsWith("hist-") ? Number(cursor.after.slice(5)) : HISTORY_ROWS;
+  const from = Math.max(0, held - limit);
+  const items = Array.from({ length: held - from }, (_, offset) => historyRow(from + offset));
+  const settled = Promise.withResolvers<void>();
+
+  if (HISTORY_HELD) window.addEventListener("gallery:release-page", () => { settled.resolve(); }, { once: true });
+  else setTimeout(settled.resolve, HISTORY_LATENCY_MS);
+  await settled.promise;
+  const first = items[0];
+
+  const walked = items.length;
+
+  return from === 0 || first === undefined
+    ? { status: "end", items, walked }
+    : { status: "more", items, next: { after: first.id }, walked };
+}
+
+const GALLERY_AGENTS: PanelAgent[] = [
+  { key: galleryActorId("docs"), label: "Docs writer", category: "user", activity: "idle", parent: "Main", open: { kind: "chat", path: "docs" }, tab: true, input: true },
+  { key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "Main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true },
+  { key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "Coupon auditor", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true },
+  { key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "Main",
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false },
+  { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "Main",
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false },
+  { key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "Main",
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h3", owner: null }, tab: false, input: false },
+  { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "Main", open: { kind: "chat", path: "refiner" }, tab: false, input: false },
+];
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getChatHistoryPage" && HISTORY_ROWS > 0) return rpcResult(await galleryHistoryPage(args)).json<T>();
+
   const plan = galleryPlanRpc(method, args);
 
   if (plan) return rpcResult(v.parse(JsonValueSchema, plan.value)).json<T>();
@@ -1691,26 +1833,28 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult(null).json<T>();
   }
 
-  if (method === "getExposedPorts" && document.documentElement.dataset.listingHeld === "1") return new Promise<T>(() => {});
+  const listing = method === "getExposedPorts" ? galleryPortListing(v.parse(v.optional(v.string()), args?.[0])) : null;
 
-  if (method === "getExposedPorts" && document.documentElement.dataset.sandboxStarting === "1" && args?.[0] === "sandbox") {
-    return rpcResult({ ports: [], pending: "the sandbox's container is still restoring" }).json<T>();
-  }
+  if (listing?.kind === "held") return new Promise<T>(() => {});
 
-  // Arrives after first paint: once the gate sets the dataset flag, the next live refresh lists a new port.
-  if (method === "getExposedPorts" && document.documentElement.dataset.previewArrived === "1" && args?.[0] === "sandbox") {
-    return rpcResult({ ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] }).json<T>();
-  }
+  if (listing?.kind === "listed") return rpcResult(listing.value).json<T>();
 
   const page = WORKSPACE_PAGE_RPC.get(method);
 
   if (page !== undefined) return rpcResult(v.parse(JsonValueSchema, page(args))).json<T>();
+
+  return agentPageFallback<T>(method, args);
+};
+
+async function agentPageFallback<T>(method: string, args: unknown[] | undefined): Promise<T> {
   const agent = AGENT_RPC.get(method);
 
   if (agent !== undefined) return rpcResult(agent).json<T>();
 
+  if (EXPLORATION_READS.has(method)) return rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? []))).json<T>();
+
   return stubRpc<T>(method, args);
-};
+}
 
 /** A named-preset search. `prove` because its resolved axes are the least guessable from its name. */
 // `lean/Checkout/Coupon.lean` is invented along with the coupon table; the module does not exist. Enrolled in `CITATION_ILLUSTRATIVE`.
@@ -2121,7 +2265,6 @@ const MERGED_RUN: HeadRunView = {
   ],
   merge: {
     narrative: "Three real call sites left — apply-coupon.ts and both reads in pricing.ts — and the same ?? inferKind guard covers all of them. The cart serializer is already null-safe. The admin report could not be checked; that package is not in this sandbox. The API routes were still being walked when this merged, so they are unread.",
-    headCount: 5, totalTokens: 24_820,
   },
 };
 
@@ -2503,7 +2646,6 @@ function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
     action: row.action,
     observation: row.observation ?? "",
     code_used: row.code_used ?? null,
-    code_language: row.code_used ? "typescript" : null,
     visits: row.visits,
     value: row.value,
     own_score: row.own_score,
@@ -2511,8 +2653,6 @@ function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
     // `running` is a merged-head status the search_nodes CHECK constraint cannot hold.
     status: row.status === "running" ? "open" : row.status,
     msg_id: row.msg_id ?? null,
-    branch_agent_key: row.branch_agent_key ?? null,
-    evaluation_json: null,
     created_at: row.created_at ?? NOW,
   };
 }
@@ -2847,7 +2987,7 @@ function Shell(
             <div className="z-[2] -ml-[3px] w-[5px] shrink-0" />
             <div className="w-[430px] shrink-0 min-w-0">
               <WorkSurface
-                surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]}
+                surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}}
                 memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} headActivity={headActivity} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
                 backgroundJobs={backgroundJobs} onRefreshJobs={() => {}} pendingActions={pendingActions}
@@ -3338,7 +3478,6 @@ function RosterAuthorityFrame() {
     displayName: "Checkout coupon bug",
     createdAt: NOW - 7 * 864e5,
     lastVisited: NOW - 60e3,
-    archivedAt: null,
   };
 
   return (
@@ -3479,11 +3618,11 @@ function All() {
 }
 
 const SUBORDINATES: Parameters<typeof SubordinateTabs>[0]["subordinates"] = [
-  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", createdBy: "orchestrator", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
-  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", createdBy: "orchestrator", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
-  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
+  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
+  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", nameOrigin: "user", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
   // A one-click agent the titler has not reached: blank name, shown as "New agent".
-  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
+  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
 ];
 
 /* The open tab is the strip's hook, so a gate can compare strips. */
@@ -3530,9 +3669,9 @@ type GalleryRosterEntry = Parameters<typeof SubordinateTabs>[0]["subordinates"][
 
 const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
   // Distinctive: the gate asserts it never renders; subordination shows as hierarchy, not a badge.
-  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", nameOrigin: "user", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
   // Agent-created: keeps the confirmation path, unlike the user-created seed.
-  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", createdBy: "orchestrator", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
+  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
 ];
 
 const AGENTCHATS_ROWS = 40;
@@ -3616,7 +3755,7 @@ function AgentChatsScene() {
     const name = `agent-${++counter.current}`;
     missions.current[name] = AGENTCHATS_MISSION;
     setRoster((current) => [...current, {
-      name, actorId: galleryActorId(name), displayName: "", role: "agent", createdBy: "user",
+      name, actorId: galleryActorId(name), displayName: "", role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     }]);
     await navigate(`/workspace/checkout-fixes/agents/${name}`);
@@ -3966,30 +4105,10 @@ function MarksFrame() {
   );
 }
 
-/* At the width Column C gets. */
-/* Real docstrings from the registry, so length problems are visible; getToolDescriptions() lists only
-   BUILTIN_TOOLS. `exposure` is declared reach (TOOL_REACH); `wired` is whether this agent has it (`report` is false on an orchestrator). */
-function galleryTool(info: ToolInfo): ToolInfo { return info; }
-
-const BRAIN_TOOLS: ToolInfo[] = [
-  ...BUILTIN_TOOLS.map((name) => galleryTool({
-    name,
-    summary: BUILTIN_TOOL_SPECS[name].summary,
-    description: BUILTIN_TOOL_DESCRIPTIONS[name],
-    learned: false,
-    exposure: TOOL_REACH[name].codemode ? "both" : "native",
-    wired: name !== "report",
-    qualityScore: 1,
-    usageCount: 0,
-  })),
-  galleryTool({ name: "bisect_migration", summary: "Walk a migration's revisions to find the one that changed a column's shape.", description: "Walk a migration's revisions to find the one that changed a column's shape.", learned: true, exposure: "codemode", wired: true, qualityScore: 0.82, usageCount: 14 }),
-  galleryTool({ name: "coupon_replay", summary: "Replay a checkout against a coupon code and diff the response.", description: "Replay a checkout against a coupon code and diff the response.", learned: true, exposure: "codemode", wired: true, qualityScore: 0.61, usageCount: 3 }),
-];
-
 const BRAIN_STATUS = {
   name: "checkout-coupon-bug-9935d3", displayName: "Checkout coupon bug",
   purpose: "Find why the SAVE20 coupon 500s and fix it.", model: "anthropic/claude-opus-4",
-  scaffoldVersion: 7, searchNodeCount: 12, craftedToolCount: 2, messageCount: 48,
+  scaffoldVersion: 7, searchNodeCount: 12, messageCount: 48,
   soul: "# Checkout coupon bug", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
 } satisfies AgentStatus;
 
@@ -4054,24 +4173,24 @@ function ChatSlateFrame() {
 const AGENT_TASKS = [
   {
     id: "t1", parentId: null, title: "Reproduce the SAVE20 coupon 500", status: "done",
-    createdAt: NOW - 52e5, updatedAt: NOW - 44e5, note: null, subtasks: [],
+    updatedAt: NOW - 44e5, note: null, subtasks: [],
   },
   {
     id: "t2", parentId: null, title: "Patch the gateway timeout that swallows the coupon lookup",
-    status: "active", createdAt: NOW - 52e5, updatedAt: NOW - 8e5, note: null,
+    status: "active", updatedAt: NOW - 8e5, note: null,
     subtasks: [
-      { id: "t5", parentId: "t2", title: "Raise the upstream deadline to 60s", status: "done", createdAt: NOW - 30e5, updatedAt: NOW - 21e5, note: null },
-      { id: "t6", parentId: "t2", title: "Stop retrying a request the client already abandoned", status: "active", createdAt: NOW - 30e5, updatedAt: NOW - 6e5, note: "Client already bails at 8s — retrying past that is burn, not robustness." },
-      { id: "t7", parentId: "t2", title: "Check the same path in the checkout worker", status: "open", createdAt: NOW - 30e5, updatedAt: NOW - 30e5, note: null },
+      { id: "t5", parentId: "t2", title: "Raise the upstream deadline to 60s", status: "done", updatedAt: NOW - 21e5, note: null },
+      { id: "t6", parentId: "t2", title: "Stop retrying a request the client already abandoned", status: "active", updatedAt: NOW - 6e5, note: "Client already bails at 8s — retrying past that is burn, not robustness." },
+      { id: "t7", parentId: "t2", title: "Check the same path in the checkout worker", status: "open", updatedAt: NOW - 30e5, note: null },
     ],
   },
   {
     id: "t3", parentId: null, title: "Add a regression test for the expired-coupon branch",
-    status: "open", createdAt: NOW - 52e5, updatedAt: NOW - 52e5, note: null, subtasks: [],
+    status: "open", updatedAt: NOW - 52e5, note: null, subtasks: [],
   },
   {
     id: "t4", parentId: null, title: "Rewrite the coupon docs page", status: "dropped",
-    createdAt: NOW - 52e5, updatedAt: NOW - 40e5, note: null, subtasks: [],
+    updatedAt: NOW - 40e5, note: null, subtasks: [],
   },
 ];
 
@@ -4079,31 +4198,31 @@ const AGENT_TASKS = [
 const WORKSPACE_WORK = {
   plans: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false },
+      owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] },
       plan: {
         id: "plan-gateway", sessionId: "default", revision: 3,
         content: "# Gateway timeout repair\n\nPatch the gateway timeout, then prove the expired-coupon branch.",
         status: "pending", annotations: [], feedback: null, handoffAccepted: false,
-        createdAt: NOW - 53e5, updatedAt: NOW - 9e5, decidedAt: null,
+        createdAt: NOW - 53e5, updatedAt: NOW - 9e5,
       },
       tasks: AGENT_TASKS.filter((task) => task.id === "t2"),
     },
     {
-      owner: { actorId: "actor-courier", name: "courier", retired: false },
+      owner: { actorId: "actor-courier", name: "courier", title: "courier", retired: false, path: ["courier"] },
       plan: {
         id: "plan-courier", sessionId: "default", revision: 1,
         content: "# Courier rollout\n\nStage the rollout and verify the receipt.",
         status: "approved", annotations: [], feedback: null, handoffAccepted: true,
-        createdAt: NOW - 60e5, updatedAt: NOW - 50e5, decidedAt: NOW - 50e5,
+        createdAt: NOW - 60e5, updatedAt: NOW - 50e5,
       },
       tasks: [
-        { id: "t8", parentId: null, title: "Stage the rollout", status: "done", createdAt: NOW - 60e5, updatedAt: NOW - 55e5, note: null, subtasks: [] },
+        { id: "t8", parentId: null, title: "Stage the rollout", status: "done", updatedAt: NOW - 55e5, note: null, subtasks: [] },
       ],
     },
   ],
   tasks: [
     {
-      owner: { actorId: "actor-main", name: "main", retired: false }, plan: null,
+      owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id !== "t2"),
     },
   ],
@@ -4277,7 +4396,7 @@ function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
           mode,
           live: { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE] },
           blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
-            { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", kind: "blueprint", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
+            { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
           ] },
         }} />
     </div>
@@ -4326,7 +4445,7 @@ const settledOnlyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promis
   if (method === "listWorkspaceWork") return rpcResult({
     plans: [],
     tasks: [{
-      owner: { actorId: "actor-main", name: "main", retired: false }, plan: null,
+      owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id === "t1"),
     }],
   }).json<T>();
@@ -4373,7 +4492,7 @@ function WorkFrame() {
       <div className="w-[430px] min-h-screen border-x p-border">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={lane.memory} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={lane.memory} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={lane.jobs} onRefreshJobs={() => {}} pendingActions={lane.queue}
@@ -4406,7 +4525,7 @@ function ApprovalsFrame() {
       <div className="w-[720px] min-h-screen border-x p-border p-5 space-y-5">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={PARKED_ONLY}
@@ -4434,7 +4553,7 @@ function WorkEmptyFrame() {
       <div className="w-[720px] h-screen border-x p-border">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
@@ -4695,7 +4814,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
         )}
         <WorkSurface
           surface={surface} onSurface={setSurface}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={executors} executorOutputs={executorOutputs}
           onExecute={runCommand} lastActiveExecutor="workspace"
@@ -4933,7 +5052,7 @@ const ACTIVITY_PRODUCERS: ProducerSpend[] = [
     usage: { input: 288_004, output: 31_902 }, usd: 0.86, unpricedCalls: 0,
   },
   {
-    source: "mcts", calls: 28, callsWithoutUsage: 0,
+    source: "swarm", calls: 28, callsWithoutUsage: 0,
     usage: { input: 96_210, output: 12_004, neurons: 12_986 },
     unpricedCalls: 28,
   },
@@ -4984,6 +5103,8 @@ const ACTIVITY_LATEST = {
   stepIndex: 7,
   usage: { input: 148_204, output: 1_842, cacheRead: 131_072, reasoning: 604, neurons: 18_005 },
   context: ACTIVITY_CONTEXT,
+  modelId: "gpt-5.5",
+  route: { kind: "device", id: "dev-studio", name: "studio" },
 } satisfies NonNullable<ActivitySnapshot["latest"]>;
 
 const ACTIVITY_CACHE_HIT = {
@@ -5382,10 +5503,9 @@ const OUTAGE: WorkspaceErrors = { snapshot: LOST, memoryContent: LOST };
 
 /** One rung of the snapshot ladder; any two rungs rendering the same is the defect. */
 function AgentPanel(
-  { label, snapshot, tools, memoryContent, errors }: {
+  { label, snapshot, memoryContent, errors }: {
     label: string;
     snapshot: AsyncResource<AgentStatus>;
-    tools: ToolInfo[];
     memoryContent: string;
     errors: WorkspaceErrors;
   },
@@ -5402,7 +5522,7 @@ function AgentPanel(
              action: banner.retry === null ? undefined : { label: banner.retry, onClick: () => {} } }]
         : []} />
       <AgentSurface
-        snapshot={snapshot} tools={tools} memory={[]} memoryContent={memoryContent}
+        snapshot={snapshot} memory={[]} memoryContent={memoryContent}
         onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={evolutionRpc}
       />
     </section>
@@ -5416,22 +5536,22 @@ function AgentFrame() {
         <AgentPanel
           label="Loaded — everything current"
           snapshot={{ status: "ready", value: BRAIN_STATUS }}
-          tools={BRAIN_TOOLS} memoryContent={BRAIN_MEMORY} errors={{}}
+          memoryContent={BRAIN_MEMORY} errors={{}}
         />
         <AgentPanel
           label="Loaded, then the connection dropped — last known data, one reason"
           snapshot={{ status: "error", message: LOST, last: BRAIN_STATUS }}
-          tools={BRAIN_TOOLS} memoryContent={BRAIN_MEMORY} errors={OUTAGE}
+          memoryContent={BRAIN_MEMORY} errors={OUTAGE}
         />
         <AgentPanel
           label="Nothing loaded yet — the snapshot is still coming"
           snapshot={{ status: "loading" }}
-          tools={[]} memoryContent="" errors={{}}
+          memoryContent="" errors={{}}
         />
         <AgentPanel
           label="Nothing loaded — the snapshot failed"
           snapshot={{ status: "error", message: LOST, last: null }}
-          tools={[]} memoryContent="" errors={OUTAGE}
+          memoryContent="" errors={OUTAGE}
         />
       </div>
     </div>
@@ -5788,7 +5908,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
   return {
     id, label, os: "linux", hostname: label, connected: true,
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
-    lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
+    replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox,
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current",
   };
@@ -6086,6 +6206,12 @@ function GalleryNavigator() {
 }
 
 /** Both app routes as App.tsx keys them, so creating an agent can navigate. */
+function nodeQuery(): string {
+  const node = new URLSearchParams(location.search).get("node");
+
+  return node === null ? "" : `?node=${encodeURIComponent(node)}`;
+}
+
 function workspacePageFrame(): MountedFrame {
   serveGalleryRpc(workspacePageRpc);
 
@@ -6093,7 +6219,7 @@ function workspacePageFrame(): MountedFrame {
   scheduleDeviceNotice(new URLSearchParams(location.search).get("devices"));
 
   return {
-    entries: [`/workspace/${WORKSPACE_PAGE_NAME}`],
+    entries: [`/workspace/${WORKSPACE_PAGE_NAME}${nodeQuery()}`],
     node: (
       <>
         <GalleryNavigator />

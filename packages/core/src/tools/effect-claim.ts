@@ -5,7 +5,8 @@
 
 import type { ToolSet } from 'ai';
 import { argumentDigest } from '../safety/argument-digest';
-import { KinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settle } from '../obs/index';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { parseJsonValue, projectJsonValue, type JsonValue } from '../utils/json';
@@ -81,62 +82,79 @@ export interface EffectClaimDeps {
   readonly actor: ActorHandle;
   /** Read at call time: a toolset is built once and used across many turns. */
   readonly turnId: () => string;
+  readonly durable: (callId: string, signal?: AbortSignal) => Promise<void>;
 }
 
 /** Wraps every `claimed` tool; `safe` tools pass through untouched. Anything not proven safe is claimed. */
 export function withEffectClaims(
   tools: ToolSet,
   deps: EffectClaimDeps,
-  options?: { readonly safe?: ReadonlySet<string> },
+  opts?: { readonly safe?: ReadonlySet<string> },
 ): ToolSet {
   // Built by assignment so the compiler checks every entry; `fromEntries` would need an unchecked cast.
   const claimed: ToolSet = {};
 
   for (const [name, entry] of Object.entries(tools)) {
-    claimed[name] = replayPolicyFor(name) === 'safe' || options?.safe?.has(name) === true
-      ? entry
-      : withEffectClaim(name, entry, deps);
+    const execute = entry.execute;
+
+    if (replayPolicyFor(name) === 'safe' || opts?.safe?.has(name) === true || !execute) {
+      claimed[name] = entry;
+      continue;
+    }
+
+    claimed[name] = {
+      ...entry,
+      execute: async (input, options) => {
+        const key: ToolEffectKey = {
+          turnId: deps.turnId(),
+          callId: options.toolCallId,
+          digest: argumentDigest({ tool: name, args: projectJsonValue({ value: input }) }),
+        };
+
+        // A program's own call streams no part.
+        if (options.messages.length > 0) await deps.durable(options.toolCallId, options.abortSignal);
+        const claim = claimToolEffect(deps.sql, deps.actor, key);
+
+        if (claim.kind === 'settled') return claim.result;
+
+        if (claim.kind === 'indeterminate') return settle(Effect.fail(new KinuError('denied', indeterminateEffectMessage(name, key.callId))));
+        const output = await execute(input, options);
+        // Durable before published: the row must exist before the caller reads this value.
+        settleToolEffect(
+          deps.sql, deps.actor, key, JSON.stringify(projectJsonValue({ value: output })),
+        );
+
+        return output;
+      },
+    };
   }
 
   return claimed;
 }
 
-function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaimDeps): ToolSet[string] {
-  const execute = entry.execute;
-
-  if (!execute) return entry;
-
-  return {
-    ...entry,
-    execute: async (input, options) => {
-      const key: ToolEffectKey = {
-        turnId: deps.turnId(),
-        callId: options.toolCallId,
-        digest: argumentDigest({ tool: name, args: projectJsonValue({ value: input }) }),
-      };
-
-      const claim = claimToolEffect(deps.sql, deps.actor, key);
-
-      if (claim.kind === 'settled') return claim.result;
-
-      if (claim.kind === 'indeterminate') throw indeterminateEffect(name, key);
-      const output = await execute(input, options);
-      // Durable before published: the row must exist before the caller reads this value.
-      settleToolEffect(
-        deps.sql, deps.actor, key, JSON.stringify(projectJsonValue({ value: output })),
-      );
-
-      return output;
-    },
-  };
+function indeterminateEffectMessage(name: string, callId: string): string {
+  return `${name} was already started once in this turn and its outcome was never recorded, `
+    + `so it may or may not have taken effect. It is not being run again. Check the state `
+    + `it would have changed before calling it once more; the call is ${callId}.`;
 }
 
-/** `denied`: a replay could repeat an effect, so the harness declined. */
-function indeterminateEffect(name: string, key: ToolEffectKey): KinuError {
-  return new KinuError(
-    'denied',
-    `${name} was already started once in this turn and its outcome was never recorded, `
-    + `so it may or may not have taken effect. It is not being run again. Check the state `
-    + `it would have changed before calling it once more; the call is ${key.callId}.`,
-  );
+export type LostToolCall =
+  | { readonly state: 'settled'; readonly result: JsonValue }
+  | { readonly state: 'claimed'; readonly refusal: string };
+
+/** Per turn (providers reuse call ids); an `<assignment>#<k>` round claims as its assignment. */
+export function lostToolCall(
+  sql: SqlExecutor, actor: ActorHandle, turnId: string, call: { readonly toolCallId: string; readonly toolName: string },
+): LostToolCall | null {
+  actor.assertCurrent();
+  const [claimTurn = turnId] = turnId.split('#');
+
+  const row = sql<{ result_json: string | null }>`SELECT result_json FROM tool_effect_claims
+    WHERE actor_id=${actor.actorId} AND turn_id IN (${turnId}, ${claimTurn}) AND normalized_call_id=${call.toolCallId} LIMIT 1`[0];
+
+  if (row === undefined) return null;
+
+  return row.result_json === null
+    ? { state: 'claimed', refusal: indeterminateEffectMessage(call.toolName, call.toolCallId) }
+    : { state: 'settled', result: parseJsonValue(row.result_json) };
 }

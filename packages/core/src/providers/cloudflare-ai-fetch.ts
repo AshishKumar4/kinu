@@ -1,6 +1,6 @@
 // Shared wire path to the user's Cloudflare AI endpoint (workers-ai, my-gateway, /api/user/ai/v1 proxy).
 import type { AuthResolution, AuthResolver, ProviderWaitInfo } from './types';
-import { asFetchFunction } from './fetch-shim';
+import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { diagnostics, tolerate, toKinuError } from '../obs/index';
 import { repairSseCachedUsage } from './stream-usage-repair';
@@ -60,16 +60,7 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
     const originalUrl = input instanceof Request ? input.url : input.toString();
 
     const send = async (resolved: AuthResolution) => {
-      // Copied by shape, not `new Headers(init?.headers)`: some lib combinations reject the iterable HeadersInit arm.
-      const headers = new Headers();
-      const incoming = init?.headers;
-
-      if (incoming !== undefined) {
-        if (incoming instanceof Headers) for (const [key, value] of incoming) headers.set(key, value);
-        else if (Symbol.iterator in incoming) {
-          for (const [key, value] of incoming) headers.set(key, value);
-        } else for (const [key, value] of Object.entries(incoming)) headers.set(key, value);
-      }
+      const headers = copyHeaders(init?.headers);
 
       for (const [key, value] of Object.entries(resolved.headers)) headers.set(key, value);
 
@@ -127,9 +118,9 @@ export async function mapGatewayError(res: Response, modelId: string, gatewayId:
   let friendly: string | null = null;
 
   if (code === 2008 || /invalid provider/i.test(message ?? '')) {
-    friendly = `${gateway} cannot route "${modelId}" — the unified endpoint only accepts "{provider}/{model}" ids for providers it supports (got provider "${author}").`;
+    friendly = `${gateway} cannot route "${modelId}": the unified endpoint only accepts "{provider}/{model}" ids for providers it supports (got provider "${author}").`;
   } else if (code === 2021 || /invalid user credentials/i.test(message ?? '') || /insufficient.*(credit|balance)/i.test(message ?? '')) {
-    friendly = `${gateway} has no working credentials for "${author}" — add a ${author} key under AI Gateway → Provider Keys (BYOK), or load Unified Billing credits in your Cloudflare account.`;
+    friendly = `${gateway} has no working credentials for "${author}": add a ${author} key under AI Gateway -> Provider Keys (BYOK), or load Unified Billing credits in your Cloudflare account.`;
   } else if (res.status === 401) {
     // Still 401 after the forced-refresh retry, and no gateway code claimed it.
     friendly = DEAD_CLOUDFLARE_LOGIN;

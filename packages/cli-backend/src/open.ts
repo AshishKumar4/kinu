@@ -9,6 +9,7 @@ import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
 import type { LocalActorConfig } from './actor-identity';
 import { KinuError } from '@kinu.run/core/obs';
+import { requireSchemaGenesis } from './schema-genesis';
 
 export interface WorkspaceInfo {
   id: string;
@@ -16,9 +17,7 @@ export interface WorkspaceInfo {
   purpose: string;
   soul: string;
   scaffoldVersion: number;
-  craftedToolCount: number;
   searchNodeCount: number;
-  taskCount: number;
   memorySize: number;
   createdAt: number;
 }
@@ -55,6 +54,7 @@ export async function openWorkspaceCLI(
     initActorStateSchema(makeWorkspaceSchemaSql(db));
     identity = { id: config.actorBinding.reference.actorId, name: config.actorBinding.name, created_at: config.actorBinding.createdAt };
   } else {
+    requireSchemaGenesis(db, dbPath);
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const stored = sql<OpenedWorkspaceIdentity>`SELECT id, name, created_at FROM workspace_identity LIMIT 1`[0];
 
@@ -73,14 +73,9 @@ export async function openWorkspaceCLI(
   // The live version, scoped to `rt.actor`: a facet opens as its own actor, and
   // the scaffold pointer is per-actor.
   const scaffoldVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? 0;
-  // Unscoped on purpose: `crafted_tools` is one catalog per workspace.
-  const craftedToolCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c ?? 0;
 
   const searchNodeCount = sql<{ c: number }>`
     SELECT COUNT(*) as c FROM search_nodes WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
-
-  const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history
-    WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
 
   const memorySize = await memoryBytes(rt.agentStateVfs ?? rt.storage.vfs);
 
@@ -92,9 +87,7 @@ export async function openWorkspaceCLI(
       purpose: summarizeSoul(soul),
       soul,
       scaffoldVersion,
-      craftedToolCount,
       searchNodeCount,
-      taskCount,
       memorySize,
       createdAt: identity.created_at,
     },

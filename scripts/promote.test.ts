@@ -4,9 +4,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
-  adoptDownloads, adoptTarball, artifactDigest, downloadsServed, imagesStagingNeverRan, planRollback, readDownloads, verifyServing,
+  adoptDownloads, adoptTarball, artifactDigest, downloadsServed, imagesStagingNeverRan, planRollback, readDownloads, resetCrossed, verifyServing,
   type Promotion, type Verified,
 } from './promote';
+import type { Reset } from './reset';
 
 /** A build's dist, as Vite and the release scripts leave it. */
 function dist(files: Readonly<Record<string, string>>): string {
@@ -231,5 +232,23 @@ describe('a rollback', () => {
     expect(planRollback(left, 'v3', 'now')?.target).toEqual(promotion('v1'));
     expect(planRollback([...left, promotion('v4')], 'v4', 'now')?.target).toEqual(promotion('v3'));
     expect(planRollback(HISTORY, 'v1', 'now')).toBeUndefined();
+  });
+
+  const reset = (at: string): Reset => ({
+    environment: 'production', worker: 'kinu', tag: `reset-${at}`, at, placeholderVersion: 'p', classes: [], applications: [],
+  });
+
+  test('refuses by name to cross a reset a later promotion carries, or one a red promotion left unrecorded', () => {
+    const wiped = { ...promotion('v3'), reset: reset('2026-09-27T00:00:00.000Z') };
+    const history = [promotion('v1'), promotion('v2'), wiped];
+    const plan = planRollback(history, 'v3', 'now');
+
+    expect(plan === undefined ? undefined : resetCrossed(plan.history, plan.target, undefined)?.tag).toBe('reset-2026-09-27T00:00:00.000Z');
+
+    const unrecorded = planRollback(HISTORY, 'v4-red', 'now');
+
+    expect(unrecorded === undefined ? undefined : resetCrossed(unrecorded.history, unrecorded.target, reset('2026-09-27T00:00:00.000Z'))?.tag)
+      .toBe('reset-2026-09-27T00:00:00.000Z');
+    expect(unrecorded === undefined ? 'none' : resetCrossed(unrecorded.history, unrecorded.target, reset('2026-09-25T00:00:00.000Z'))).toBeUndefined();
   });
 });

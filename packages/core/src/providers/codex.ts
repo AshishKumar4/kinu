@@ -11,7 +11,8 @@ import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
 import { OAuthTokenError } from './oauth-token-error';
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
-import { classify, diagnostics, KinuError, renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { classify, diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { knownReasoningEfforts, type ReasoningEffort } from './reasoning-effort';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
@@ -83,49 +84,48 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
     async isAvailable(deps) { return deps.hasCredential(CODEX_CRED_KEY); },
     unavailableReason() {
-      return 'No Codex OAuth credential — connect ChatGPT via the device-code flow.';
+      return 'No Codex OAuth credential: connect ChatGPT via the device-code flow.';
     },
     async listModels(deps) {
-      const auth = await deps.getAuth(CODEX_CRED_KEY);
+      return settle(Effect.gen(function* () {
+        const auth = yield* Effect.promise(() => deps.getAuth(CODEX_CRED_KEY));
 
-      if (!auth) {
-        modelCache = null;
+        if (!auth) {
+          modelCache = null;
 
-        return cloneModelInfos(FALLBACK_MODELS);
-      }
+          return cloneModelInfos(FALLBACK_MODELS);
+        }
 
-      const authKey = authCacheKey(auth);
+        const authKey = authCacheKey(auth);
 
-      if (modelCache && modelCache.authKey === authKey && Date.now() - modelCache.at < CODEX_MODELS_TTL_MS) {
-        return cloneModelInfos(modelCache.models);
-      }
+        if (modelCache && modelCache.authKey === authKey && Date.now() - modelCache.at < CODEX_MODELS_TTL_MS) {
+          return cloneModelInfos(modelCache.models);
+        }
 
-      const stale = (failure: { readonly reason: string; readonly cause?: unknown }): StaleModelList => {
-        diagnostics.event('codex.models_fallback', {
-          error: failure.cause === undefined ? failure.reason : renderThrownChain({ cause: failure.cause }),
-        });
+        const stale = (failure: { readonly reason: string; readonly cause?: unknown }): StaleModelList => {
+          diagnostics.event('codex.models_fallback', {
+            error: failure.cause === undefined ? failure.reason : renderThrownChain({ cause: failure.cause }),
+          });
 
-        return new StaleModelList(cloneModelInfos(FALLBACK_MODELS), { ...failure, reason: `Codex models could not be read: ${failure.reason}` });
-      };
+          return new StaleModelList(cloneModelInfos(FALLBACK_MODELS), { ...failure, reason: `Codex models could not be read: ${failure.reason}` });
+        };
 
-      let res: Response;
+        const res = yield* Effect.tryPromise({
+          try: () => (opts.egress ?? deps.fetch ?? fetch)(`${baseURL.replace(/\/+$/, '')}/models?client_version=1.0.0`, { headers: auth.headers }),
+          catch: (cause) => ({ cause }),
+        }).pipe(Effect.catch((failed) => Effect.fail(stale({ reason: 'chatgpt.com could not be reached', cause: failed.cause }))));
 
-      try {
-        res = await (opts.egress ?? deps.fetch ?? fetch)(`${baseURL.replace(/\/+$/, '')}/models?client_version=1.0.0`, { headers: auth.headers });
-      } catch (cause) {
-        throw stale({ reason: 'chatgpt.com could not be reached', cause });
-      }
+        if (networkRefused(res)) return yield* Effect.fail(stale({ reason: NETWORK_REFUSED }));
 
-      if (networkRefused(res)) throw stale({ reason: NETWORK_REFUSED });
+        if (!res.ok) return yield* Effect.fail(stale({ reason: `chatgpt.com answered HTTP ${String(res.status)}` }));
+        const body: unknown = yield* Effect.promise(() => res.json());
+        const models = parseCodexModels({ body });
 
-      if (!res.ok) throw stale({ reason: `chatgpt.com answered HTTP ${String(res.status)}` });
-      const body: unknown = await res.json();
-      const models = parseCodexModels({ body });
+        if (models.length === 0) return yield* Effect.fail(stale({ reason: 'chatgpt.com listed no models' }));
+        modelCache = { at: Date.now(), authKey, models };
 
-      if (models.length === 0) throw stale({ reason: 'chatgpt.com listed no models' });
-      modelCache = { at: Date.now(), authKey, models };
-
-      return cloneModelInfos(models);
+        return cloneModelInfos(models);
+      }));
     },
 
     createModel(modelId, deps): LanguageModel {
@@ -304,16 +304,17 @@ export function normalizeCodexResponsesRequest(init: RequestInit | undefined): R
 
   if (!serializedBody.success) return init;
 
-  let decoded: JsonValue;
+  return settleSync(Effect.map(decodedBody(serializedBody.output), (decoded) => (decoded === null ? init : withInstructions(init, decoded))));
+}
 
-  try {
-    decoded = v.parse(JsonValueSchema, JSON.parse(serializedBody.output));
-  } catch (error) {
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
+function decodedBody(text: string): Effect.Effect<JsonValue | null> {
+  return Effect.try({ try: (): JsonValue => v.parse(JsonValueSchema, JSON.parse(text)), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catchIf((failed) => classify(failed) === 'malformed-input', () => Effect.succeed(null)),
+    Effect.catch((failed) => Effect.die(failed.cause)),
+  );
+}
 
-    return init;
-  }
-
+function withInstructions(init: RequestInit, decoded: JsonValue): RequestInit {
   const parsedBody = v.safeParse(JsonObjectSchema, decoded);
 
   if (!parsedBody.success) return init;

@@ -9,7 +9,8 @@ import {
 } from '../events/hub/types';
 import type { ReportToolDeps } from './builtins';
 import type { JsonValue } from '../utils/json';
-import { KinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settle } from '../obs/index';
 
 /** One handoff field: entries trimmed, blanks dropped; all four lists share one budget. */
 function handoffField(purpose: string) {
@@ -39,7 +40,7 @@ export const ReportToolInputSchema = ReportBodySchema.extend(ReportHandoffFields
 export type ReportToolInput = z.infer<typeof ReportToolInputSchema>;
 
 /** The handoff a report carries. The budget spans all fields; over budget is refused, not truncated. */
-function handoffOf(args: ReportToolInput): SubordinateReportHandoff {
+function handoffOf(args: ReportToolInput): Effect.Effect<SubordinateReportHandoff, KinuError> {
   const handoff: { -readonly [Field in SubordinateReportHandoffField]?: string[] } = {};
   let charged = 0;
 
@@ -53,14 +54,14 @@ function handoffOf(args: ReportToolInput): SubordinateReportHandoff {
   }
 
   if (charged > SUBORDINATE_REPORT_HANDOFF_MAX_CHARS) {
-    throw new KinuError(
+    return Effect.fail(new KinuError(
       'bad_input',
-      `report handoff fields hold ${charged} characters, over the ${SUBORDINATE_REPORT_HANDOFF_MAX_CHARS}-character budget they share — `
+      `report handoff fields hold ${charged} characters, over the ${SUBORDINATE_REPORT_HANDOFF_MAX_CHARS}-character budget they share: `
       + 'keep each entry to one line and put the detail in `content` or a workspace path.',
-    );
+    ));
   }
 
-  return handoff;
+  return Effect.succeed(handoff);
 }
 
 /** A successfully delivered report returns the publisher's domain response unchanged. */
@@ -70,14 +71,16 @@ export type ReportToolResult = JsonValue | undefined;
  * Dispatch one report, parsed by {@link ReportToolInputSchema} at its entry. A `bodyOnly` destination takes no
  * handoff, and an empty handoff is omitted rather than sent as `{}`.
  */
-export async function dispatchReport(deps: ReportToolDeps, args: ReportToolInput): Promise<ReportToolResult> {
-  const delivery: Parameters<ReportToolDeps['report']>[0] = { status: args.status, content: args.content };
+export function dispatchReport(deps: ReportToolDeps, args: ReportToolInput): Promise<ReportToolResult> {
+  return settle(Effect.gen(function* () {
+    const delivery: Parameters<ReportToolDeps['report']>[0] = { status: args.status, content: args.content };
 
-  if (!deps.bodyOnly) {
-    const handoff = handoffOf(args);
+    if (!deps.bodyOnly) {
+      const handoff = yield* handoffOf(args);
 
-    if (Object.keys(handoff).length > 0) delivery.handoff = handoff;
-  }
+      if (Object.keys(handoff).length > 0) delivery.handoff = handoff;
+    }
 
-  return await deps.report(delivery);
+    return yield* Effect.promise(() => deps.report(delivery));
+  }));
 }

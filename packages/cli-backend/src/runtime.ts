@@ -21,10 +21,10 @@ import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL, WORKSPACE_ROOT, WORKSPACE_SOUL_DDL,
-  createParentExecutor, createParentWorkspaceVfs,
-  type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
+  answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
+  type ParentWorkspaceHandle, type ParentRpcWrite,
   DefaultExecutionRouter, createInlineExecutor,
-  withMountTable, standardMounts, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
+  withMountTable, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
   withApprovalGatedShell, createShellSession, shellCwd, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
@@ -49,7 +49,7 @@ import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { MemoryStore } from '@kinu.run/agent-utils';
-import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils';
+import { CraftStore } from '@kinu.run/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
@@ -57,7 +57,6 @@ import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-
 import { createCwdPlaneVFS } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
-import { BRANCH_CREDENTIAL_ENV, createBranchSpawner } from './branch-process';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
   createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV,
@@ -72,8 +71,9 @@ import type { FileCheckpoints } from '@kinu.run/core';
 import { diagnostics, KinuError, renderCauseChain, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 import * as v from 'valibot';
+import { stampSchemaGenesis } from './schema-genesis';
 
-const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV];
+const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV];
 
 interface CLIRuntimeOptions {
   dbPath: string;
@@ -117,7 +117,7 @@ export interface CLIRuntime extends AgentRuntime {
    */
   profiles?: LocalProfileAuthority;
   /**
-   * Override seam for measurement harnesses (`tests/live/harness.ts`); `null`
+   * Override seam for harnesses (`tests/live-model/harness.ts`); `null`
    * withholds resolution so an unrouted lane says so rather than inventing a model.
    */
   setProfileResolver?(resolve: (() => Promise<ResolvedTurnProfile>) | null): void;
@@ -246,11 +246,12 @@ export function createCLIRuntime(
       agentId = crypto.randomUUID();
       agentName = config.agentName ?? 'agent';
       void sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
+      stampSchemaGenesis(db);
       initWorkspaceActorTable(execRaw);
       new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
     }
 
-    actor = openLocalRootActor(db, sql);
+    actor = openLocalRootActor(sql);
   }
 
   // After the branch binds an actor: an unscoped sweep would resume a sibling's lane.
@@ -342,15 +343,6 @@ export function createCLIRuntime(
     fiber: createSqlFiber(sql, actor),
   };
 
-  // `:memory:` is SQLite's in-memory sentinel, not a path.
-  const rootDbPath = config.dbPath === ':memory:' ? null : config.dbPath;
-
-  const { spawn: spawnBranch, abort: abortBranch } = createBranchSpawner(rootDbPath, {
-    parent: actor, llm: config.llm,
-    providerCredentials: config.providerCredentials,
-    oauthConfigPath: config.oauthConfigPath,
-  });
-
   const storage = inlineWorkspaceStorage(db);
 
   const workspace = createWorkspaceFilesystem({
@@ -369,9 +361,8 @@ export function createCLIRuntime(
   memoryStore.ensureSchema();
   const memory = adaptMemory(memoryStore, agentStateVfs);
 
-  const craftStoreImpl = new AgentUtilsCraftStore(sql);
-  craftStoreImpl.ensureSchema();
-  const craftStore = craftStoreView(craftStoreImpl);
+  const craftStore = new CraftStore(sql);
+  craftStore.ensureSchema();
   let approvalChannel: RequestShellApproval | null = null;
   let approvalDeferrals: DeferredApprovalChannel | null = null;
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
@@ -437,7 +428,6 @@ export function createCLIRuntime(
   let childContext: ChildContextResolver | null = null;
 
   const agentVfs = withMountTable(fileVfs, [
-    ...standardMounts((name) => executionRouter.getProvider(name)),
     sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
     // `/context`: this actor's own working history, keyed on its own id.
@@ -484,8 +474,6 @@ export function createCLIRuntime(
     memory,
     craftStore,
     modelLanes,
-    spawnBranch,
-    abortBranch,
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
@@ -587,7 +575,9 @@ export async function buildLocalActorRuntime(
   const binding = bindLocalActorReference(parent.actor, bound.reference);
   adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
 
-  if (binding.kind === 'head' && swarmSeat === true) {
+  const run = binding.kind === 'run';
+
+  if (run && swarmSeat === true) {
     if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
 
     return await parent.nodeRuntime(
@@ -596,7 +586,7 @@ export async function buildLocalActorRuntime(
     );
   }
 
-  if (binding.kind === 'head') {
+  if (run) {
     const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {
       parentRuntime: parent, actorBinding: binding, actor: bound.handle,
     };
@@ -628,7 +618,7 @@ async function buildCLIHeadRuntime(
   const { parentRuntime: parent } = opts;
   const sql = parent.storage.sql;
 
-  if (opts.actorBinding.kind !== 'head') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
+  if (opts.actorBinding.kind !== 'run') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
   const physicalName = headAgentName(actor.storageKey);
 
@@ -668,45 +658,27 @@ async function buildCLIHeadRuntime(
   executionRouter.register(createInlineExecutor(inlineOptions));
 
   const parentVfs = parent.storage.vfs;
-  const ok = <T>(value: T): ParentRpcResult<T> => ({ ok: true, value });
-
-  const fail = <T>(input: { path: string; error: unknown }): ParentRpcResult<T> => {
-    const parsed = v.safeParse(v.object({ code: v.optional(v.string()) }), input.error);
-
-    return {
-      ok: false,
-      error: {
-        code: parsed.success && parsed.output.code === 'ENOENT' ? 'ENOENT' : 'EIO',
-        message: input.error instanceof Error ? input.error.message : String(input.error),
-        path: input.path,
-      },
-    };
-  };
-
-  const attempt = async <T>(path: string, fn: () => Promise<T>): Promise<ParentRpcResult<T>> => {
-    try { return ok(await fn()); } catch (error) { return fail<T>({ path, error }); }
-  };
 
   const parentHandle: ParentWorkspaceHandle = {
-    read: (path) => attempt(path, async () => {
+    read: (path) => answerParentRpc(path, async () => {
       const content = await parentVfs.readFile(path);
 
       return content instanceof Uint8Array ? content : new TextEncoder().encode(content);
     }),
-    write: (input: ParentRpcWrite) => attempt(input.path, async () => {
+    write: (input: ParentRpcWrite) => answerParentRpc(input.path, async () => {
       if (input.kind === 'file') await parentVfs.writeFile(input.path, input.data);
       else await parentVfs.mkdir(input.path, { recursive: input.recursive });
 
       return null;
     }),
-    list: (path) => attempt(path, () => parentVfs.readdir(path)),
-    stat: (path) => attempt(path, () => parentVfs.stat(path)),
-    delete: (path) => attempt(path, async () => {
+    list: (path) => answerParentRpc(path, () => parentVfs.readdir(path)),
+    stat: (path) => answerParentRpc(path, () => parentVfs.stat(path)),
+    delete: (path) => answerParentRpc(path, async () => {
       await parentVfs.unlink(path);
 
       return null;
     }),
-    exec: (command) => attempt('', async () => {
+    exec: (command) => answerParentRpc('', async () => {
       if (!parent.shell) throw new Error('the parent workspace has no shell');
 
       return parent.shell.exec(command);
@@ -722,7 +694,6 @@ async function buildCLIHeadRuntime(
 
   // `/context` is this head's own history, not the parent's.
   const agentVfs = withMountTable(vfs, [
-    ...standardMounts((name) => executionRouter.getProvider(name)),
     sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
     contextMount({
@@ -741,7 +712,6 @@ async function buildCLIHeadRuntime(
     workspaceIsMachine: parent.workspaceIsMachine,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     memory: parent.memory, craftStore: parent.craftStore,
-    spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
     executionRouter, shell,
   };
 
@@ -770,22 +740,17 @@ async function buildCLIHeadRuntime(
  *  for the command, short enough that an orphaned grandchild's pipe is ignored. */
 const EXITED_COMMAND_DRAIN_MS = 250;
 
-const shellOptionsSchema = v.object({
-  stdin: v.optional(v.string()),
-  signal: v.optional(v.instance(AbortSignal)),
-});
-
 export function createHostShell(cwd: string, source: NodeJS.ProcessEnv = process.env): Shell {
   const env = unsandboxedCommandEnvironment(source, new Set([...HARNESS_CREDENTIAL_ENV, ...dotenvLoadedNames(process.cwd(), source)]));
 
   return {
     exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
       const { promise, resolve } = Promise.withResolvers<ShellExecResult>();
-      const stdinText = v.safeParse(v.string(), stdinOrOptions);
-      const options = v.safeParse(shellOptionsSchema, stdinOrOptions);
-      const optionsStdin = options.success ? options.output.stdin : undefined;
-      const stdin = stdinText.success ? stdinText.output : optionsStdin;
-      const signal = options.success ? options.output.signal : undefined;
+
+      const { stdin, signal }: { stdin?: string; signal?: AbortSignal } = v.is(v.string(), stdinOrOptions)
+        ? { stdin: stdinOrOptions }
+        : stdinOrOptions ?? {};
+
       const outputId = nanoid(10);
       let settled = false;
 

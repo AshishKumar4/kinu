@@ -53,7 +53,7 @@ function headInput(id: string, rootId: string, task: string, spawnedAt: number):
     id, parentId: null, rootId, depth: 1, task, rationale: task,
     mode: 'build', inheritedContext: [], mergeStrategy: 'synthesize',
     budget: { spawnedAt, maxDepth: 2 },
-    loop: defaultLoopOrigin('head'),
+    loop: defaultLoopOrigin('run'),
   };
 }
 
@@ -360,55 +360,31 @@ describe('two actors, one database: the head journal', () => {
     w.close();
   });
 
-  test('evidence and the cached merge settle under their own owner', () => {
+  test('the cached merge settles under its own owner', () => {
     const w = world();
     const a = new HeadJournal(w.sql, w.a);
     const b = new HeadJournal(w.sql, w.b);
     a.insertSpawn(headInput('h0', 'root-1', 'A branch', 100));
     b.insertSpawn(headInput('h0', 'root-1', 'B branch', 100));
-    a.insertEvidence('h0', { id: 'e1', kind: 'fact', body: 'from a' });
-    b.insertEvidence('h0', { id: 'e1', kind: 'fact', body: 'from b' });
-    expect(a.readEvidence('h0').map((e) => e.body)).toEqual(['from a']);
-    expect(b.readEvidence('h0').map((e) => e.body)).toEqual(['from b']);
 
-    a.cacheMerge('root-1', {
-      mergedNarrative: 'a merged', selectedDecisions: [], unresolvedQuestions: [],
-      recommendations: [], blindSpots: [], evidenceAggregate: [], headIds: [], headScores: [],
-      fileChanges: [], grounded: false,
-      costSummary: { headCount: 1, headsWithFindings: 0, totalTokens: undefined, totalWallClockMs: 0, maxDepth: 1 },
-    }, 'synthesize');
+    a.cacheMerge('root-1', 'a merged');
 
-    expect(a.readCachedMerge('root-1')?.mergedNarrative).toBe('a merged');
-    expect(b.readCachedMerge('root-1')).toBeNull();
+    expect(a.readRun('root-1')?.merge?.narrative).toBe('a merged');
+    expect(b.readRun('root-1')?.merge).toBeNull();
     expect(a.findResumableRun('A branch')).toBeNull();
     w.close();
   });
 });
 
 describe('two actors, one database: the search ledger', () => {
-  test('one task, two searches — neither re-enters the other', () => {
-    const w = world();
-    const a = new MctsSearchStore(w.sql, w.a);
-    const b = new MctsSearchStore(w.sql, w.b);
-    const config = { budget: 4, branches: 2 };
-    a.begin({ rootId: 'search-a', task: 'pick a backfill approach', engine: 'mcts', rootMsgId: 'm1', config, budget: 4, now: 1_000 });
-    b.begin({ rootId: 'search-b', task: 'pick a backfill approach', engine: 'mcts', rootMsgId: 'm2', config, budget: 4, now: 1_001 });
-
-    expect(a.findResumable('pick a backfill approach')?.rootId).toBe('search-a');
-    expect(b.findResumable('pick a backfill approach')?.rootId).toBe('search-b');
-    expect(a.get('search-b')).toBeNull();
-    expect(a.list(10).map((r) => r.rootId)).toEqual(['search-a']);
-    w.close();
-  });
-
   test('the same task, two swarms — the newest-wins rule stays inside one owner', () => {
     const w = world();
     const a = new MctsSearchStore(w.sql, w.a);
     const b = new MctsSearchStore(w.sql, w.b);
     const config = { budget: 3, branches: 3 };
-    a.begin({ rootId: 'swarm-a1', task: 'explore', engine: 'swarm', rootMsgId: null, config, budget: 3, now: 1_000 });
-    a.begin({ rootId: 'swarm-a2', task: 'explore', engine: 'swarm', rootMsgId: null, config, budget: 3, now: 2_000 });
-    b.begin({ rootId: 'swarm-b1', task: 'explore', engine: 'swarm', rootMsgId: null, config, budget: 3, now: 3_000 });
+    a.begin({ rootId: 'swarm-a1', task: 'explore', config, now: 1_000 });
+    a.begin({ rootId: 'swarm-a2', task: 'explore', config, now: 2_000 });
+    b.begin({ rootId: 'swarm-b1', task: 'explore', config, now: 3_000 });
 
     expect(a.findRunningSwarms('explore').map((r) => r.rootId)).toEqual(['swarm-a2', 'swarm-a1']);
     expect(b.findRunningSwarms('explore').map((r) => r.rootId)).toEqual(['swarm-b1']);
@@ -422,7 +398,7 @@ describe('two actors, one database: the search ledger', () => {
     const a = new MctsSearchStore(w.sql, w.a);
     const b = new MctsSearchStore(w.sql, w.b);
     const config = { budget: 2, branches: 2 };
-    b.begin({ rootId: 'search-b', task: 'x', engine: 'mcts', rootMsgId: 'm', config, budget: 2, now: 1_000 });
+    b.begin({ rootId: 'search-b', task: 'x', config, now: 1_000 });
 
     expect(a.reclaim('search-b')).toBeNull();
     a.converge('search-b', 0, 2_000);
@@ -438,8 +414,8 @@ describe('two actors, one database: the search ledger', () => {
     const a = new MctsSearchStore(w.sql, w.a);
     const b = new MctsSearchStore(w.sql, w.b);
     const config = { budget: 2, branches: 2 };
-    a.begin({ rootId: 'swarm-a', task: 'x', engine: 'swarm', rootMsgId: null, config, budget: 2, now: 1_000 });
-    b.begin({ rootId: 'swarm-b', task: 'x', engine: 'swarm', rootMsgId: null, config, budget: 2, now: 1_000 });
+    a.begin({ rootId: 'swarm-a', task: 'x', config, now: 1_000 });
+    b.begin({ rootId: 'swarm-b', task: 'x', config, now: 1_000 });
 
     expect(a.closeUnclaimed(new Set(), 5_000)).toEqual(['swarm-a']);
     expect(b.get('swarm-b')?.status).toBe('running');
@@ -457,8 +433,7 @@ describe('a fresh child actor', () => {
     journalA.recordSplit('root-a', 'a split', 100);
     journalA.insertSpawn(headInput('a-h0', 'root-a', 'A0', 100));
     new MctsSearchStore(w.sql, w.a).begin({
-      rootId: 'search-a', task: 't', engine: 'mcts', rootMsgId: 'm',
-      config: { budget: 1, branches: 1 }, budget: 1, now: 1_000,
+      rootId: 'search-a', task: 't', config: { budget: 1, branches: 1 }, now: 1_000,
     });
 
     const child = w.actors.sibling('fresh');
@@ -487,8 +462,11 @@ describe('a fresh child actor', () => {
     const ledger = new MctsSearchStore(w.sql, w.b);
     facts.upsert('k', 'v');
 
-    // The stores captured `actorId` at construction; this is the drift `assertCurrent` catches.
-    void w.sql`UPDATE workspace_actors SET retiring_at = ${Date.now()} WHERE actor_id = ${w.b.actorId}`;
+    // The stores captured `actorId` at construction; this is the drift `assertCurrent` catches, in the same run.
+    w.actors.directory.apply(w.a, [], {
+      action: 'retire', name: 'sibling',
+      reference: { actorId: w.b.actorId, workspaceId: w.b.workspaceId, parentActorId: w.b.parentActorId },
+    });
 
     expect(() => facts.recall('k')).toThrow(/no longer present/);
     expect(() => taskList.count()).toThrow(/no longer present/);

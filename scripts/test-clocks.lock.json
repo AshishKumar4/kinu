@@ -1,6 +1,6 @@
 {
-  "measuredAt": "2026-09-26",
-  "total": 194,
+  "measuredAt": "2026-09-28",
+  "total": 186,
   "files": {
     "packages/cf-backend/tests/helpers/actor-harness.ts": {
       "lap-poll": 1
@@ -68,17 +68,11 @@
       "sleep": 1
     },
     "packages/cf-backend/tests/workerd/two-turn-probe.ts": {
-      "sleep": 11,
-      "clock-compare": 9
+      "clock-compare": 9,
+      "sleep": 11
     },
     "packages/cf-backend/tests/workerd/worker.ts": {
       "sleep": 3
-    },
-    "packages/cli-backend/tests/branch-rpc.test.ts": {
-      "sleep": 2
-    },
-    "packages/cli-backend/tests/branch-worker.test.ts": {
-      "sleep": 1
     },
     "packages/cli-backend/tests/chat-session-parity.ts": {
       "clock-compare": 1,
@@ -91,8 +85,8 @@
       "sleep": 1
     },
     "packages/cli-backend/tests/local-session.test.ts": {
-      "sleep": 8,
-      "clock-compare": 1
+      "clock-compare": 1,
+      "sleep": 8
     },
     "packages/cli-backend/tests/loop-admission.test.ts": {
       "clock-compare": 1,
@@ -102,8 +96,8 @@
       "clock-compare": 1
     },
     "packages/cli-backend/tests/runtime-shell.test.ts": {
-      "sleep": 1,
-      "clock-compare": 3
+      "clock-compare": 3,
+      "sleep": 1
     },
     "packages/cli-backend/tests/terminal-transition.test.ts": {
       "sleep": 2
@@ -135,8 +129,8 @@
       "sleep": 9
     },
     "packages/cli/tests/exec-process-lifecycle.test.ts": {
-      "sleep": 2,
-      "clock-compare": 1
+      "clock-compare": 1,
+      "sleep": 2
     },
     "packages/cli/tests/fixtures/pty-connect-card.tsx": {
       "sleep": 2
@@ -164,8 +158,8 @@
       "sleep": 1
     },
     "packages/cli/tests/tui-product-onboarding.test.tsx": {
-      "sleep": 2,
-      "lap-poll": 1
+      "lap-poll": 1,
+      "sleep": 2
     },
     "packages/cli/tests/tui-product-shell.test.tsx": {
       "sleep": 3
@@ -183,9 +177,6 @@
     },
     "packages/core/tests/unit-temporary-agents.test.ts": {
       "lap-poll": 1
-    },
-    "packages/devbox/bench/publication-meter.test.ts": {
-      "sleep": 5
     },
     "packages/devbox/tests/decisions.test.ts": {
       "sleep": 2
@@ -215,14 +206,14 @@
     "scripts/bench.test.ts": {
       "sleep": 2
     },
-    "scripts/computed-style.test.ts": {
-      "lap-poll": 1,
-      "sleep": 1
-    },
     "scripts/devbox-e2e.test.ts": {
       "clock-compare": 1
     },
-    "scripts/public-pages.test.ts": {
+    "tests/browser/computed-style.test.ts": {
+      "lap-poll": 1,
+      "sleep": 1
+    },
+    "tests/browser/public-pages.test.ts": {
       "sleep": 4
     },
     "tests/first-run/background-settle.first-run.ts": {

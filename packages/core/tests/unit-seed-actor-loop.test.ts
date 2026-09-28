@@ -92,9 +92,7 @@ async function parentAtV1(fx: Fixture): Promise<AgentRuntime> {
 
 describe('seedActorLoop', () => {
   test('per-kind defaults are the ones the design settled on', () => {
-    expect(defaultLoopOrigin('head')).toEqual({ kind: 'inherit' });
-    expect(defaultLoopOrigin('head')).toEqual({ kind: 'inherit' });
-    expect(defaultLoopOrigin('branch')).toEqual({ kind: 'inherit' });
+    expect(defaultLoopOrigin('run')).toEqual({ kind: 'inherit' });
     expect(defaultLoopOrigin('subordinate')).toEqual({ kind: 'builtin' });
     expect(defaultLoopOrigin('main')).toEqual({ kind: 'builtin' });
   });
@@ -112,10 +110,10 @@ describe('seedActorLoop', () => {
   test('inherit copies the parent CURRENT version bytes as the child v1 and records the lineage', async () => {
     const fx = build();
     const parent = await parentAtV1(fx);
-    const child = fx.directory.create({ parent: fx.main, name: 'exp:head-1', creationId: 'c2', kind: 'head', lifetime: 'task' });
+    const child = fx.directory.create({ parent: fx.main, name: 'exp:head-1', creationId: 'c2', kind: 'run', lifetime: 'task' });
     const rt = fx.actorRuntime(child, 'head-1');
 
-    const seeded = await seedActorLoop(rt, parent, defaultLoopOrigin('head'));
+    const seeded = await seedActorLoop(rt, parent, defaultLoopOrigin('run'));
     expect(seeded.version).toBe(1);
     expect(getCurrentScaffoldVersion(fx.sql, child)).toBe(1);
     expect(await rt.identity.scaffold.read()).toBe(PARENT_V1);
@@ -134,9 +132,9 @@ describe('seedActorLoop', () => {
   test('a later parent promotion does not move a child that already inherited', async () => {
     const fx = build();
     const parent = await parentAtV1(fx);
-    const child = fx.directory.create({ parent: fx.main, name: 'exp:node-1', creationId: 'c3', kind: 'head', lifetime: 'task' });
+    const child = fx.directory.create({ parent: fx.main, name: 'exp:node-1', creationId: 'c3', kind: 'run', lifetime: 'task' });
     const rt = fx.actorRuntime(child, 'node-1');
-    await seedActorLoop(rt, parent, defaultLoopOrigin('head'));
+    await seedActorLoop(rt, parent, defaultLoopOrigin('run'));
 
     const parentVfs = parent.agentStateVfs ?? parent.storage.vfs;
     await parentVfs.writeFile(`${parent.identity.scaffold.path}.v2`, PARENT_V2);
@@ -154,7 +152,7 @@ describe('seedActorLoop', () => {
   test('seeding is once-only: a re-acquired actor keeps the pointer it evolved', async () => {
     const fx = build();
     const parent = await parentAtV1(fx);
-    const child = fx.directory.create({ parent: fx.main, name: 'exp:head-2', creationId: 'c4', kind: 'head', lifetime: 'task' });
+    const child = fx.directory.create({ parent: fx.main, name: 'exp:head-2', creationId: 'c4', kind: 'run', lifetime: 'task' });
     const rt = fx.actorRuntime(child, 'head-2');
     await seedActorLoop(rt, parent, { kind: 'inherit' });
 
@@ -177,13 +175,13 @@ describe('seedActorLoop', () => {
   test('a named version the parent retains is copied; one it does not is refused', async () => {
     const fx = build();
     const parent = await parentAtV1(fx);
-    const named = fx.directory.create({ parent: fx.main, name: 'exp:head-3', creationId: 'c5', kind: 'head', lifetime: 'task' });
+    const named = fx.directory.create({ parent: fx.main, name: 'exp:head-3', creationId: 'c5', kind: 'run', lifetime: 'task' });
     const namedRt = fx.actorRuntime(named, 'head-3');
     const seeded = await seedActorLoop(namedRt, parent, { kind: 'version', version: 1 });
     expect(seeded.version).toBe(1);
     expect(await namedRt.identity.scaffold.read()).toBe(PARENT_V1);
 
-    const missing = fx.directory.create({ parent: fx.main, name: 'exp:head-4', creationId: 'c6', kind: 'head', lifetime: 'task' });
+    const missing = fx.directory.create({ parent: fx.main, name: 'exp:head-4', creationId: 'c6', kind: 'run', lifetime: 'task' });
     const missingRt = fx.actorRuntime(missing, 'head-4');
     await expect(seedActorLoop(missingRt, parent, { kind: 'version', version: 9 }))
       .rejects.toThrow(/retains no version 9/);
@@ -192,7 +190,7 @@ describe('seedActorLoop', () => {
 
   test('inheriting with no parent runtime is refused rather than silently starting fresh', async () => {
     const fx = build();
-    const child = fx.directory.create({ parent: fx.main, name: 'exp:head-5', creationId: 'c7', kind: 'head', lifetime: 'task' });
+    const child = fx.directory.create({ parent: fx.main, name: 'exp:head-5', creationId: 'c7', kind: 'run', lifetime: 'task' });
     const rt = fx.actorRuntime(child, 'head-5');
     await expect(seedActorLoop(rt, null, { kind: 'inherit' })).rejects.toThrow(/needs the parent actor/);
     expect(getCurrentScaffoldVersion(fx.sql, child)).toBeNull();

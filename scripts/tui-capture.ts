@@ -195,7 +195,7 @@ const TAKES_SET: AlternateTakeSet = {
   turnId: 'turn-9',
   sessionId: 'sess-1',
   task: 'Decide how to fix the flaky retry test without masking real races.',
-  source: 'mcts',
+  source: 'branch',
   winnerNodeId: 'node-b',
   chosenNodeId: null,
   candidates: [
@@ -204,7 +204,6 @@ const TAKES_SET: AlternateTakeSet = {
     { nodeId: 'node-c', text: 'Split the test: transport retries covered separately from handler logic.', score: 0.84, visits: 9, depth: 3 },
   ],
   createdAt: 1755700000000,
-  pickedAt: null,
 };
 
 const TREE_NODES: readonly AgentSearchNode[] = [

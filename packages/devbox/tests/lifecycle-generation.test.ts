@@ -216,7 +216,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect(incidents(rows)).toEqual([
       expect.objectContaining({
         stage: 'attach',
-        reason: expect.stringContaining('[transient → retry]'),
+        reason: expect.stringContaining('[transient -> retry]'),
       }),
     ]);
     expect((await box.devboxState()).restoration).toBe('unstarted');
@@ -261,7 +261,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect(incidents(rows)).toEqual([
       expect.objectContaining({
         stage: 'attach',
-        reason: expect.stringContaining('[transient → retry]'),
+        reason: expect.stringContaining('[transient -> retry]'),
       }),
     ]);
     expect(armed(container)).toBe(1);
@@ -464,6 +464,144 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
   });
 });
 
+// Staging, 2026-09-27 and 09-28: a first-run workspace was torn down (`discardState`, then
+// `destroy`) while its box's own startup still waited on the platform. The container the platform
+// granted about 20 s later was restored and watched, and ran with no workspace for hours.
+describe('a destroyed box starts nothing of its own until it is asked again', () => {
+  const stamps = (container: FakeSandbox): number =>
+    container.execs.filter(command => command.includes(STAMP_COMMAND)).length;
+
+  test('a start in flight when the box is torn down leaves no container and nothing armed', async () => {
+    const { box, container } = harness(TestBox);
+    const granted = gate();
+    container.containerStartGate = granted;
+    const startup = box.devboxStartup();
+    await granted.reached;
+
+    // The product's teardown; the platform grants the container once the destroy is under way.
+    await box.discardState();
+    const destroying = box.destroy();
+    granted.release();
+    await Promise.all([startup, destroying]);
+
+    expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback), stamps: stamps(container) })
+      .toEqual({ running: false, rows: [], stamps: 0 });
+  });
+
+  test('a beat past its running check when the box is torn down leaves nothing running', async () => {
+    const { box, container } = harness(TestBox);
+    await box.devboxStartup();
+    const reading = gate();
+    container.stateReadGate = reading;
+    // The beat saw the container running and issued its first command. The SDK is still reading
+    // its own state when the teardown lands, and then finds the container gone.
+    const beat = box.devboxHeartbeat();
+    await reading.reached;
+    await box.discardState();
+    await box.destroy();
+    reading.release();
+    await beat;
+
+    expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
+      .toEqual({ running: false, rows: [] });
+  });
+
+  // Review, 2026-09-28: a start already past the refusal ran on after the destroy, which had not
+  // waited for it, so the container it launched stayed up with nothing watching it.
+  test('a start past the refusal when the box is torn down leaves nothing running once destroy returns', async () => {
+    const { box, container } = harness(TestBox);
+    await box.devboxStartup();
+    await container.stop();
+    const granted = gate();
+    container.containerStartGate = granted;
+    const starting = box.start();
+    await granted.reached;
+    const destroying = box.destroy();
+    granted.release();
+    await destroying;
+    await Promise.allSettled([starting]);
+
+    expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
+      .toEqual({ running: false, rows: [] });
+  });
+
+  test('a beat whose command is starting a container when the box is torn down leaves nothing running', async () => {
+    const { box, container } = harness(TestBox);
+    await box.devboxStartup();
+    const reading = gate();
+    container.stateReadGate = reading;
+    const beat = box.devboxHeartbeat();
+    await reading.reached;
+    // The container stops under the beat, so its command starts one, and the teardown lands
+    // inside that start.
+    await container.stop();
+    const granted = gate();
+    container.containerStartGate = granted;
+    reading.release();
+    await granted.reached;
+    const destroying = box.destroy();
+    granted.release();
+    await destroying;
+    await beat;
+
+    expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
+      .toEqual({ running: false, rows: [] });
+  });
+
+  // Review, 2026-09-28: a file write queued on its path before the teardown got the path after it,
+  // and its readiness check reopened the box and started a container.
+  test('a request that waited for its lane through the teardown is refused, and starts nothing', async () => {
+    const { box, container } = harness(TestBox);
+    await box.devboxStartup();
+    const writing = gate();
+    container.writeGate = writing;
+    const first = box.writeFile('/workspace/notes.md', 'before the teardown');
+    await writing.reached;
+    const queued = box.writeFile('/workspace/notes.md', 'queued behind it');
+    await box.discardState();
+    await box.destroy();
+    writing.release();
+    await Promise.allSettled([first]);
+
+    await expect(queued).rejects.toThrow('destroyed after this request arrived');
+    expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
+      .toEqual({ running: false, rows: [] });
+  });
+
+  test('a startup row the platform delivers after the teardown starts nothing', async () => {
+    const { box, container } = harness(TestBox);
+    container.startFaultBeforeRunning = failure('CONTAINER_UNAVAILABLE');
+    await box.devboxStartup();
+    expect(armed(container)).toBe(1);
+
+    await box.discardState();
+    await box.destroy();
+    const starts = container.containerStarts;
+    // The SDK's alarm pass reads every due row before it runs the first, so a row it read before
+    // the teardown deleted it is still delivered.
+    await box.devboxStartup();
+
+    // Only the refusal's incident delivery is left: it never reaches a container.
+    expect({ starts: container.containerStarts, running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
+      .toEqual({ starts, running: false, rows: ['devboxIncidents'] });
+  });
+
+  test('the next caller opens it again, and a host that asks for a start gets one', async () => {
+    const { box, container } = harness(TestBox);
+    await box.devboxStartup();
+    await box.discardState();
+    await box.destroy();
+
+    expect(await box.resolveReadiness()).toEqual({ kind: 'restored' });
+    await box.destroy();
+    await box.kickStartup();
+    await box.devboxStartup();
+
+    expect({ running: container.running.running, ready: (await box.devboxState()).ready })
+      .toEqual({ running: true, ready: true });
+  });
+});
+
 describe('a failed restored service is never exposed and never reported ready', () => {
   test('an answering listener is exposed with its persisted token, and the box is ready', async () => {
     const harnessed = harness(TestBox);
@@ -542,7 +680,7 @@ describe('a failed restored service is never exposed and never reported ready', 
     await expect(box.exec('ls')).rejects.toMatchObject(
       { message: expect.stringContaining('no attached work directory') });
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('permanent → refuse') });
+      { message: expect.stringContaining('permanent -> refuse') });
   });
 
   test('a stop on a box whose attach was refused stops the container with nothing to commit', async () => {
@@ -556,7 +694,7 @@ describe('a failed restored service is never exposed and never reported ready', 
 
     expect(outcome.kind).toBe('skipped');
     expect(outcome.reason).toContain('nothing is attached to commit');
-    expect(outcome.reason).toContain('permanent → refuse');
+    expect(outcome.reason).toContain('permanent -> refuse');
     expect(container.stops).toBe(stopsBefore + 1);
     expect(container.running.running).toBe(false);
   });
@@ -629,7 +767,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
       expect(armed(container)).toBe(0);
       expect(ladder(rows)?.stage).toBe('replace');
       await expect(box.exec('ls')).rejects.toMatchObject(
-        { message: expect.stringContaining('transient → refuse') });
+        { message: expect.stringContaining('transient -> refuse') });
     });
 
   test('storage exhaustion refuses at once: it repeats no work and moves no ladder', async () => {
@@ -641,7 +779,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
       .toEqual({ armed: 0, destroys: 0 });
     expect(ladder(rows)?.stage).toBeUndefined();
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('exhausted → refuse') });
+      { message: expect.stringContaining('exhausted -> refuse') });
   });
 
   test('permanent configuration refuses at once, without spending the ladder', async () => {
@@ -680,7 +818,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
       expect(container.execs.filter(command => command.includes(STAMP_COMMAND))).toEqual([]);
       expect(rows.has('devbox:last-attach')).toBe(false);
       await expect(box.exec('ls')).rejects.toMatchObject(
-        { message: expect.stringContaining('unreadable → refuse') });
+        { message: expect.stringContaining('unreadable -> refuse') });
     });
 
   test('an attach that lands deletes the row, so the next failure starts fresh', async () => {
@@ -828,7 +966,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     await expect(box.exec('ls')).rejects.toMatchObject(
       { message: expect.stringContaining('A startup is armed') });
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('stale-owner → retry') });
+      { message: expect.stringContaining('stale-owner -> retry') });
     expect({ armed: armed(container), stamps: stamps(container) }).toEqual({ armed: 1, stamps: 1 });
   });
 
@@ -842,7 +980,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     expect(armed(container)).toBe(0);
 
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('exhausted → refuse') });
+      { message: expect.stringContaining('exhausted -> refuse') });
     await expect(box.exec('ls')).rejects.toMatchObject(
       { message: expect.stringContaining('terminal: call attachNow()') });
     expect(stamps(container)).toBe(1);
@@ -1055,7 +1193,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       // Assert the rejection only after the clock moves: `expect(promise).rejects` blocks until
       // settlement, and nothing can advance the test-driven clock meanwhile.
       box.clock.advance(TIGHT_POLICY.attachBudgetMs);
-      await expect(attempt).rejects.toThrow('[abandoned → replace]');
+      await expect(attempt).rejects.toThrow('[abandoned -> replace]');
       expect(container.destroys).toBe(0);
       const state = await box.devboxState();
       expect(state.ready).toBe(false);

@@ -75,6 +75,29 @@ function fiberRows<Row extends object>(
   return sql.exec(query, ...bindings).toArray().map((row) => v.parse(schema, row));
 }
 
+/**
+ * A wait the suite plants inside code the harness runs (a loaded worker's eval): `globalThis[Symbol.for(HOLD)](name)`
+ * never settles, and the harness can name what is held. A reset drops them with the fibers.
+ */
+const held = new Set<string>();
+
+Object.assign(globalThis, {
+  [Symbol.for('kinu.test.hold')]: (name: string) => {
+    held.add(name);
+
+    return new Promise<never>(() => {});
+  },
+});
+
+export function harnessHolds(): readonly string[] {
+  return [...held];
+}
+
+/** Whether a `runFiber` body started so far is still running. */
+export function harnessFibersRunning(): boolean {
+  return harnessFiberBodies.size > 0;
+}
+
 /** Resolves when every `runFiber` body started so far has settled. */
 export async function joinHarnessFibers(): Promise<void> {
   while (harnessFiberBodies.size > 0) await Promise.all(harnessFiberBodies);
@@ -87,6 +110,7 @@ export async function joinHarnessFibers(): Promise<void> {
  */
 export function abandonHarnessFibers(): void {
   harnessFiberBodies.clear();
+  held.clear();
   harnessActiveFibers.clear();
 }
 
@@ -148,6 +172,52 @@ function facetOnlyStub(lookup: string, cls: { name: string }, name: string) {
 /** Marks the stub's Agent: a class built on the real `agents` runs fibers no harness join can see. */
 export const HARNESS_AGENT = Symbol('kinu.test.harness-agent');
 
+/** The services a capability `use` installs; the SDK's `bindLifecycleCapability`. */
+const lifecycleServices = new WeakMap<HarnessCapability, { ready(): Promise<void> }>();
+
+/** A lifecycle capability, as `use` receives one. */
+interface HarnessCapability { readonly capabilityId: string }
+
+/** What the lifecycle starts: the Agent's own `onStart`, a no-op on the base. */
+interface HarnessLifecycleHost { onStart(): void | Promise<void> }
+
+/** The SDK's start (`agents/dist/durable-object-lifecycle-D6nNQJJd.js:824-851`, `:775-778`): one `onStart` per
+ *  start, a throw leaves it unstarted, `ready()` returns at once mid-start. */
+class HarnessLifecycle {
+  #status: 'zero' | 'starting' | 'started' = 'zero';
+  #starting: Promise<void> | null = null;
+  readonly #host: HarnessLifecycleHost;
+  constructor(host: HarnessLifecycleHost) {
+    this.#host = host;
+  }
+  use(capability: HarnessCapability): this {
+    lifecycleServices.set(capability, {
+      ready: () => (this.#status === 'zero' ? this.start() : Promise.resolve()),
+    });
+
+    return this;
+  }
+  start(): Promise<void> {
+    if (this.#status === 'started') return Promise.resolve();
+
+    if (this.#starting !== null) return this.#starting;
+    this.#status = 'starting';
+    this.#starting = (async () => {
+      try {
+        await this.#host.onStart();
+        this.#status = 'started';
+      } catch (error) {
+        this.#status = 'zero';
+        throw error;
+      } finally {
+        this.#starting = null;
+      }
+    })();
+
+    return this.#starting;
+  }
+}
+
 /**
  * Stub the Agent SDK: the real `agents` dist imports workerd-only `cloudflare:*` modules.
  * bun keeps one mock per specifier (first registration wins); call before importing the module under test.
@@ -162,6 +232,15 @@ export function mockAgentsSdk(): void {
       /** The vendor base builds the one manager in its constructor (`agents/dist/src-5W6JNKVb.js:821`);
        *  since cloudflare/agents#1897 that is the only way a manager reaches storage. */
       readonly mcp = new FakeMCPClientManager();
+      readonly lifecycle = new HarnessLifecycle(this);
+      /** The SDK base's default: nothing to start. */
+      onStart(): void | Promise<void> {}
+      /** The SDK's alarm runs due schedule rows; workerd's is `tests/workerd/do-alarm.test.ts`. */
+      async alarm(): Promise<void> {}
+      /** `callable` below records nothing, so no method reads as callable. */
+      getCallableMethods(): Map<string, object> {
+        return new Map();
+      }
       constructor(ctx?: AgentContext, env?: Env) {
         this.ctx = ctx;
         this.env = env;
@@ -171,19 +250,19 @@ export function mockAgentsSdk(): void {
             configurable: true,
             value: ctx.id.name ?? ctx.id.toString(),
           });
-          Object.defineProperty(this, 'sql', {
-            configurable: true,
-            value: (strings: TemplateStringsArray, ...values: SqlValue[]) => {
-              const query = strings.reduce(
-                (text, part, index) => text + part + (index < values.length ? '?' : ''),
-                '',
-              );
-
-              return ctx.storage.sql.exec(query, ...values).toArray();
-            },
-          });
           this._ensureSchema();
         }
+      }
+      /** A prototype method, as the vendor's is (`agents/dist/src-5W6JNKVb.js:574`), so a subclass override runs. */
+      sql(strings: TemplateStringsArray, ...values: SqlValue[]) {
+        if (!this.ctx) throw new Error('harness Agent: sql needs a ctx');
+
+        const query = strings.reduce(
+          (text, part, index) => text + part + (index < values.length ? '?' : ''),
+          '',
+        );
+
+        return this.ctx.storage.sql.exec(query, ...values).toArray();
       }
       /**
        * Mirrors the vendor's constructor-time migration (schedules table only): the actor activation
@@ -578,6 +657,21 @@ export function mockAgentsSdk(): void {
   // UserDO imports these at module load; the double records the manager's writable state
   // (server rows, live connections), a second truth beside `user_mcp_servers`.
   registerSynchronousMock('agents/mcp/client', () => ({ MCPClientManager: FakeMCPClientManager }));
+  registerSynchronousMock('agents/lifecycle', () => ({
+    LifecycleCapability: class {
+      readonly capabilityId: string;
+      constructor(capabilityId: string) {
+        this.capabilityId = capabilityId;
+      }
+      get lifecycle(): { ready(): Promise<void> } {
+        const services = lifecycleServices.get(this);
+
+        if (services === undefined) throw new Error('a lifecycle capability must be installed with Lifecycle.use() before use');
+
+        return services;
+      }
+    },
+  }));
   // `connectToServer` reads `authUrl` (queued by `queueMcpAuthUrl`) and `clientId` off the provider.
   registerSynchronousMock('agents/mcp/do-oauth-client-provider', () => ({
     DurableObjectOAuthClientProvider: class {

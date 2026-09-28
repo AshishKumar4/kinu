@@ -4,9 +4,9 @@ import * as v from 'valibot';
 import { testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
 import { createMockFetch, createTestActors, createTestSql, unobservedSpend } from '@kinu.run/test-utils';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-services';
+import type { CodexRelayHub } from '../src/egress/codex-egress-route';
+import { NO_RELAY_MACHINE } from './helpers/user-credentials';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
   resolveTurnProfile, RunEventRecorder, initRunEventTables, unpricedLedgerSink,
@@ -26,7 +26,7 @@ function resolved(model: LanguageModel): v.InferOutput<typeof ResolvedModelSchem
   return v.parse(ResolvedModelSchema, model);
 }
 
-interface FakeUserDO {
+interface FakeUserDO extends CodexRelayHub {
   getAuthHeaders(caller: UserCaller, key: string): Promise<CredentialHeaders | null>;
   getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null>;
   listCredentials(caller: UserCaller): Promise<Array<{ key: string; kind: 'bearer'; createdAt: number; updatedAt: number }>>;
@@ -34,6 +34,7 @@ interface FakeUserDO {
 
 function fakeUserDO(credentials: Readonly<Record<string, CredentialHeaders>> = {}): FakeUserDO {
   return {
+    ...NO_RELAY_MACHINE,
     async getAuthHeaders(_caller, key) { return credentials[key] ?? null; },
     async getCredentialBaseURL() { return null; },
     async listCredentials() {
@@ -57,22 +58,6 @@ const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe('OwnedModelServices', () => {
-  test('ActorAgent owns the one registry every mode resolves through', () => {
-    const source = (file: string) => readFileSync(join(import.meta.dir, '..', 'src', file), 'utf8');
-    const actor = source('actor-agent.ts');
-    const orchestrator = source('orchestrator.ts');
-    const hosting = source('exploration-hosting.ts');
-
-    expect(actor).toContain("appTitle: 'Kinu',\n    ownerRequired: true,");
-    expect(actor).toContain('return this.ownedModelServices.providerRegistry();');
-    expect(actor).toContain('this.ownedModelServices.invalidate();');
-    // No second registry: a hosted head runs in a claimed workspace, so there is no ownerless mode.
-    expect(hosting).not.toContain('createAgentProviderRegistry');
-    expect(hosting).not.toContain('ownerRequired');
-    expect(orchestrator).toContain('resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),');
-    expect(actor.match(/new OwnedModelServices\(/g)).toHaveLength(1);
-  });
-
   test('required owners fail with ActorAgent\'s established error', () => {
     const services = new OwnedModelServices({
       env: fakeEnv(),
@@ -86,7 +71,7 @@ describe('OwnedModelServices', () => {
     });
 
     expect(() => services.providerRegistry()).toThrow(
-      'Agent has no owner_user_id yet — Worker must call claimOwner before any model use.',
+      'Agent has no owner_user_id yet: Worker must call claimOwner before any model use.',
     );
   });
 

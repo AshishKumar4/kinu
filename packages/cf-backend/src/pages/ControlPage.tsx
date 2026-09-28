@@ -394,11 +394,7 @@ function FeedbackView(): ReactNode {
 function MetricsView(): ReactNode {
   const [hours, setHours] = useState(24);
 
-  // `refresh=1` makes the server re-query Analytics instead of returning its cached batch.
-  const { load, reload } = useControlRead(
-    (refresh?: boolean) => fetchMetrics(hours, undefined, refresh),
-    [hours],
-  );
+  const { load, reload } = useControlRead(() => fetchMetrics(hours), [hours]);
 
   return (
     <div className="space-y-3">

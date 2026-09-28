@@ -2,15 +2,14 @@ import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction 
 import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
-  branchHeadId, CHANGES_MOVED_EVENT, ORCHESTRATOR_AGENT_SLUG, SLATES_CHANGED_EVENT, hostedActorSocketPath,
-  type PendingAction, type PlanReview, type ReasoningEffort, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
+  branchHeadId, CHANGES_MOVED_EVENT, LIVE_READS, ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE, READS_CHANGED_EVENT, SLATES_CHANGED_EVENT,
+  hostedActorSocketPath, type LiveRead, type PendingAction, type PlanReview, type ReasoningEffort, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
 import { explorationForkTree } from "@kinu.run/core";
 import type {
-  ToolInfo,
   MemoryEntry,
   ForkNode,
   ExecutorCommandResult,
@@ -21,7 +20,7 @@ import type {
   SendLanding,
 } from "@kinu.run/core";
 import type { BackgroundJob, SubordinateRosterEntry } from "@kinu.run/core/protocol";
-import type { ExecutorInfo } from "@kinu.run/core";
+import type { ExecutorInfo, PanelAgent } from "@kinu.run/core";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "@kinu.run/core";
 import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
@@ -32,7 +31,6 @@ import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
   type ExposedPortList,
-  type PreviewPortState,
   type PinnedPreviewPort,
 } from "@kinu.run/core";
 import {
@@ -91,9 +89,7 @@ export type SendAdmission =
 
 type SendLandingResolvers = ReturnType<typeof Promise.withResolvers<SendLanding>>;
 
-type PreviewListing = Omit<PreviewPortState, "ports">;
-
-const NO_PREVIEW_LISTING: PreviewListing = { error: null, starting: [] };
+export type ReadMoves = Readonly<Partial<Record<LiveRead, number>>>;
 
 /** A call the actor refused takes the waiter with it; the refusal is the answer. */
 async function landingAfter(
@@ -150,7 +146,6 @@ export interface AgentStatus {
   createdAt: number;
   scaffoldVersion: number;
   searchNodeCount: number;
-  craftedToolCount: number;
   messageCount: number;
   model: string;
   /** The tier source the turn profile resolved. Set on agent panes, where the picker is read-only. */
@@ -180,7 +175,6 @@ export interface SubordinateSnapshot {
 
 export interface WorkspaceSnapshot {
   status: AgentStatus;
-  tools: ToolDescResult;
   memoryContent: string;
   slates: SlateSummary[];
   executors: ExecutorInfo[];
@@ -213,7 +207,6 @@ const MctsRowSchema = v.object({
   task: v.string(),
   observation: v.string(),
   code_used: v.optional(v.nullable(v.string())),
-  branch_agent_key: v.optional(v.nullable(v.string())),
   msg_id: v.optional(v.nullable(v.string())),
   created_at: v.optional(v.number()),
 });
@@ -255,8 +248,6 @@ const MctsProgressHeadSchema = v.object({
   })),
   merge: v.nullable(v.object({
     narrative: v.string(),
-    headCount: v.number(),
-    totalTokens: v.nullable(v.number()),
   })),
 });
 
@@ -276,8 +267,9 @@ const SubordinateRosterEntrySchema = v.object({
   actorId: v.nullable(v.string()),
   displayName: v.string(),
   role: v.string(),
-  nameOrigin: v.optional(v.picklist(["user", "auto"])),
-  createdBy: v.picklist(["orchestrator", "user"]),
+  nameOrigin: v.picklist(["user", "auto"]),
+  createdBy: v.picklist(["orchestrator", "user", "evolution"]),
+  lifetime: v.picklist(["durable", "task"]),
   status: v.picklist(["idle", "working", "awaiting_input", "dismissed"]),
   currentTask: v.nullable(v.string()),
   createdAt: v.number(),
@@ -344,7 +336,7 @@ const SocketMessageSchema = v.variant("type", [
     actorId: v.optional(v.string()),
   }),
   v.object({ type: v.literal("work_cancelled") }),
-  v.object({ type: v.literal("pending_actions_changed") }),
+  v.object({ type: v.literal(READS_CHANGED_EVENT), reads: v.array(v.picklist(LIVE_READS)) }),
   v.object({ type: v.literal(SLATES_CHANGED_EVENT), ids: v.array(v.string()) }),
   v.object({ type: v.literal(CHANGES_MOVED_EVENT) }),
   v.object({
@@ -446,8 +438,8 @@ export type LiveRefreshSource =
   | "presence"
   | "mcts"
   | "memoryContent"
-  | "tools"
   | "executors"
+  | "agents"
   | "slates"
   | "consents"
   | "consentResolution"
@@ -467,9 +459,9 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "pendingActions", label: "pending actions" },
   { source: "mcts", label: "MCTS" },
   { source: "memoryContent", label: "memory content" },
-  { source: "tools", label: "tools" },
   { source: "presence", label: "tab presence" },
   { source: "executors", label: "executors" },
+  { source: "agents", label: "the agents panel" },
   { source: "slates", label: "slates" },
   { source: "consents", label: "device consents" },
   { source: "consentResolution", label: "device consents" },
@@ -479,7 +471,6 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
 /** A landed snapshot is a fresh read of each of these, so it clears their failures. */
 const SNAPSHOT_SEEDED_SOURCES: readonly LiveRefreshSource[] = [
   "memoryContent",
-  "tools",
   "executors",
   "presence",
   "plan",
@@ -710,10 +701,6 @@ const RETRY_MAX_MS = 30_000;
 
 const MEMORY_SEARCH_DEBOUNCE_MS = 200;
 
-/** Exported so surfaces showing two of these reads side by side poll both on the same clock
- *  and cannot contradict each other. */
-export const LIVE_DATA_REFRESH_MS = 5_000;
-
 interface CallableAgent {
   call<T>(method: string, args: unknown[]): Promise<T>;
 }
@@ -773,7 +760,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   const isSubordinate = subordinate !== undefined;
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
-  const [tools, setTools] = useState<ToolInfo[]>([]);
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
   const [mctsTrees, setMctsTrees] = useState<ReadonlyMap<string, ForkNode>>(new Map());
   const [memoryContent, setMemoryContent] = useState<string>("");
@@ -844,13 +830,13 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const error = formatWorkspaceError(liveErrors, agentStatus !== null);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
+  const [workspaceAgents, setWorkspaceAgents] = useState<PanelAgent[] | null>(null);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
-  // Refreshed on every surface. Listing ports never provisions a sandbox: getExposedPorts returns []
-  // unless the executor is already active.
+  // Listing ports never provisions a sandbox: getExposedPorts returns [] unless the executor is already active.
   const [pinnedPorts, setPinnedPorts] = useState<PinnedPreviewPort[]>([]);
-  // One state, so a switch clears both.
-  const [previewListing, setPreviewListing] = useState<PreviewListing>(NO_PREVIEW_LISTING);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewStarting, setPreviewStarting] = useState<readonly string[]>([]);
   const exposedPortsRefreshGeneration = useRef(0);
   /** Held in a ref too: the socket handler's effect must not re-subscribe (its cleanup forgets the
    *  live head paint). Null on the workspace pane and until the load resolves it. */
@@ -871,6 +857,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const knownPlans = useRef(new Set<string>());
   const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
   const [changesMoved, setChangesMoved] = useState(0);
+  const [readMoves, setReadMoves] = useState<ReadMoves>({});
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
   /** A connect clears it. */
   const [unavailableDevices, setUnavailableDevices] = useState<UnavailableDevice[] | null>(null);
@@ -1093,8 +1080,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (isNewerDeployedBuild(baseline, live)) setNewerDeployedBuild(true);
   }, []);
 
-  const isConnected = connectionStatus === "connected";
-
   // A socket can replay a frame after reconnect; `pushSeq` is per root, so frames for different
   // roots cannot reject or replace each other.
   const mctsProgressState = useRef(createMctsProgressState<ForkNode>(actorKey));
@@ -1184,7 +1169,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       if (agent.readyState !== WebSocket.OPEN) return;
 
       if (!isSubordinate) {
-        agent.send(JSON.stringify({ type: "ping" }));
+        agent.send(PAGE_KEEPALIVE.ping);
 
         return;
       }
@@ -1250,6 +1235,10 @@ export function useKinu(target?: string | KinuActorAddress) {
     () => rpc<BackgroundJob[]>("listBackgroundJobs", subordinate === undefined ? [50] : [50, subordinate]),
     setBackgroundJobs,
   ), [refreshCurrentLiveResource, rpc, subordinate]);
+
+  const refreshPendingConsents = useCallback(() => refreshCurrentLiveResource(
+    "consents", () => rpc<PendingConsent[]>("listPendingConsents", []), setPendingConsents,
+  ), [refreshCurrentLiveResource, rpc]);
 
   // One call feeds the queue and the sidebar dot's unseen count so they cannot disagree.
   const refreshPendingActions = useCallback(() => refreshCurrentLiveResource(
@@ -1394,8 +1383,10 @@ export function useKinu(target?: string | KinuActorAddress) {
         } else if (msg.type === "work_cancelled") {
           forgetDeltas();
           await reread('background_jobs', refreshBackgroundJobs);
-        } else if (msg.type === "pending_actions_changed") {
-          await reread('pending_actions', refreshPendingActions);
+        } else if (msg.type === READS_CHANGED_EVENT) {
+          setReadMoves((moves) => Object.fromEntries([
+            ...Object.entries(moves), ...msg.reads.map((read) => [read, (moves[read] ?? 0) + 1]),
+          ]));
         } else if (msg.type === SLATES_CHANGED_EVENT) {
           setSlateReloads((previous) => {
             const next = new Map(previous);
@@ -1481,7 +1472,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       forgetDeltas();
     };
   }, [
-    agent, bumpHeadActivity, forgetDeltas, refreshBackgroundJobs, refreshSlates, refreshPendingActions,
+    agent, bumpHeadActivity, forgetDeltas, refreshBackgroundJobs, refreshSlates,
     retireDelta, setConsentResolutionError, setMctsTreeFromProgress, isSubordinate, writeRoster,
   ]);
 
@@ -1497,7 +1488,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const refreshExposedPorts = useCallback(async () => {
     const generation = ++exposedPortsRefreshGeneration.current;
 
-    const results = await Promise.all(["workspace", "sandbox", "device"].map(async (executor) => {
+    const results = await Promise.all(["workspace", "sandbox"].map(async (executor) => {
       try {
         const result = await rpc<ExposedPortList>("getExposedPorts", [executor]);
 
@@ -1510,14 +1501,11 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
     }));
 
-    await refreshCurrentLiveResource("slates", () => rpc<{ slates: SlateSummary[] }>("listSlates", []).then(list => list.slates), applySlates);
-
     if (generation !== exposedPortsRefreshGeneration.current) return;
     setPinnedPorts((previous) => {
       const next = reconcilePreviewPorts(previous, results);
-      setPreviewListing((before) => (before.error === next.error && before.starting.join() === next.starting.join()
-        ? before
-        : { error: next.error, starting: next.starting }));
+      setPreviewError(next.error);
+      setPreviewStarting((before) => (before.join() === next.starting.join() ? before : next.starting));
 
       if (next.error === null) {
         const ids = next.ports.map(port => `${port.executor}:${port.port}`);
@@ -1530,40 +1518,36 @@ export function useKinu(target?: string | KinuActorAddress) {
 
       return next.ports;
     });
-  }, [rpc, refreshCurrentLiveResource, applySlates]);
+  }, [rpc]);
+
+  const liveReads = useMemo((): Partial<Record<LiveRead, () => Promise<void>>> => ({
+    getExposedPorts: refreshExposedPorts,
+    getMemoryContent: () => refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
+    getExecutors: () => refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
+    listWorkspaceAgents: () => refreshCurrentLiveResource("agents", () => rpc<PanelAgent[]>("listWorkspaceAgents", []), setWorkspaceAgents),
+    listBackgroundJobs: refreshBackgroundJobs,
+    listPendingActions: refreshPendingActions,
+    getWorkspaceTabPresence: refreshTabPresence,
+    listSlates: refreshSlates,
+    getActivePlanReview: () => refreshCurrentLiveResource(
+      "plan",
+      () => rpc<unknown>("getActivePlanReview", []),
+      (plan) => setActivePlan(parseActivePlanReview({ value: plan })),
+    ),
+  }), [
+    refreshBackgroundJobs, refreshCurrentLiveResource, refreshExposedPorts, refreshPendingActions, refreshSlates,
+    refreshTabPresence, rpc,
+  ]);
 
   const liveRefreshTaskId = useRef(0);
   const liveRefreshTasks = useRef(new Map<number, Promise<void>>());
 
-  const refreshLiveData = useCallback((): void => {
+  const rereadLive = useCallback((reads: readonly LiveRead[], also: readonly (() => Promise<void>)[] = []): void => {
     const taskId = ++liveRefreshTaskId.current;
-    let task: Promise<void> | null = null;
-    task = (async () => {
+
+    const task = (async () => {
       try {
-        await Promise.all([
-          refreshExposedPorts(),
-          refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
-          refreshCurrentLiveResource(
-            "tools",
-            () => rpc<ToolDescResult>("getToolDescriptions", []),
-            (result) => setTools(mapToolDescriptions(result)),
-          ),
-          refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
-          refreshBackgroundJobs(),
-          refreshPendingActions(),
-          refreshTabPresence(),
-          refreshSlates(),
-          refreshCurrentLiveResource(
-            "consents",
-            () => rpc<PendingConsent[]>("listPendingConsents", []),
-            setPendingConsents,
-          ),
-          refreshCurrentLiveResource(
-            "plan",
-            () => rpc<unknown>("getActivePlanReview", []),
-            (plan) => setActivePlan(parseActivePlanReview({ value: plan })),
-          ),
-        ]);
+        await Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())]);
       } catch (cause) {
         diagnostics.failure('workspace.live_refresh_failed', toKinuError({
           doing: 'refreshing live workspace data',
@@ -1574,16 +1558,23 @@ export function useKinu(target?: string | KinuActorAddress) {
         liveRefreshTasks.current.delete(taskId);
       }
     })();
+
     liveRefreshTasks.current.set(taskId, task);
-  }, [
-    refreshBackgroundJobs,
-    refreshCurrentLiveResource,
-    refreshExposedPorts,
-    refreshSlates,
-    refreshPendingActions,
-    refreshTabPresence,
-    rpc,
-  ]);
+  }, [liveReads]);
+
+  const refreshLiveData = useCallback((): void => {
+    rereadLive(LIVE_READS, [refreshPendingConsents]);
+  }, [refreshPendingConsents, rereadLive]);
+
+  const lastMoves = useRef<ReadMoves>({});
+
+  useEffect(() => {
+    const moved = LIVE_READS.filter((read) => (readMoves[read] ?? 0) !== (lastMoves.current[read] ?? 0));
+
+    lastMoves.current = readMoves;
+
+    if (moved.length > 0) rereadLive(moved);
+  }, [readMoves, rereadLive]);
 
   const retryLoad = useCallback(() => {
     failureStreak.current = 0;
@@ -1630,14 +1621,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     }
   }, [isStreaming, isSubordinate, refreshLiveData]);
 
-  // Streaming adds only a faster (1s) timeline poll; the chat stream carries the conversation.
-  useEffect(() => {
-    if (!isConnected || isSubordinate) return;
-    const interval = setInterval(refreshLiveData, LIVE_DATA_REFRESH_MS);
-
-    return () => clearInterval(interval);
-  }, [isConnected, isSubordinate, refreshLiveData]);
-
   // One round trip: a second awaited RPC for the active plan makes a plan-gated composer paint in
   // build mode and jump. The exploration canvas is not seeded here; its surface fetches its own.
   async function loadAllData(
@@ -1649,7 +1632,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (!isCurrent()) return;
     setAgentStatus(snap.status);
 
-    if (isSourceCurrent("tools")) setTools(mapToolDescriptions(snap.tools));
 
     if (isSourceCurrent("memoryContent")) {
       setMemoryContent(snap.memoryContent);
@@ -1685,7 +1667,10 @@ export function useKinu(target?: string | KinuActorAddress) {
     setTurnClaim(snap.turnClaim);
 
     try {
-      await Promise.all([refreshExposedPorts(), refreshPendingActions(), refreshRoster()]);
+      await Promise.all([
+        refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshPendingConsents(),
+        ...(isSubordinate ? [] : [liveReads.listWorkspaceAgents?.()]),
+      ]);
     } catch (cause) {
       diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
         doing: 'refreshing live workspace data',
@@ -1715,7 +1700,6 @@ export function useKinu(target?: string | KinuActorAddress) {
       modelSource: actorSnapshot.model.source,
       reasoningEffort: actorSnapshot.reasoningEffort,
       searchNodeCount: 0,
-      craftedToolCount: 0,
       messageCount: actorSnapshot.messageCount,
       forkLineage: null,
     });
@@ -1739,7 +1723,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     setErrors({});
     setConsentResolutionErrors(new Map());
     setAgentStatus(null);
-    setTools([]);
     setMemory([]);
     setMemoryContent("");
     mctsProgressState.current =
@@ -1748,7 +1731,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     setExecutorOutputs(new Map());
     setLastActiveExecutor(null);
     setPinnedPorts([]);
-    setPreviewListing(NO_PREVIEW_LISTING);
+    setPreviewError(null);
+    setPreviewStarting([]);
     setBackgroundJobs([]);
     setSlates([]);
     setTabPresence(undefined);
@@ -2009,7 +1993,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     /** A pane may only report "none" for a read that came back; `agentStatus` alone cannot tell
      *  loading from failed. */
     snapshot,
-    tools,
     memory,
     memoryContent,
     mctsTrees,
@@ -2022,14 +2005,15 @@ export function useKinu(target?: string | KinuActorAddress) {
     setReasoningEffort,
     setDisplayName,
     executors,
+    workspaceAgents,
     executorOutputs,
     lastActiveExecutor,
     executeInExecutor,
     pinnedPorts,
     previewFocus, planFocus,
     workspacePlanArrival,
-    previewError: previewListing.error,
-    previewStarting: previewListing.starting,
+    previewError,
+    previewStarting,
     refreshExposedPorts,
     backgroundJobs,
     refreshBackgroundJobs,
@@ -2040,6 +2024,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     slates,
     slateReloads,
     changesMoved,
+    readMoves,
     pendingConsents,
     resolveConsent,
     unavailableDevices,
@@ -2148,19 +2133,6 @@ function parseSubordinateActivityEvent({ value }: { value: unknown }): Subordina
   const parsed = v.safeParse(SubordinateActivityEventSchema, value);
 
   return parsed.success ? parsed.output : null;
-}
-
-interface ToolDescResult {
-  builtIn: Array<{
-    name: string; summary: string; description: string;
-    exposure: ToolInfo["exposure"]; wired: boolean;
-  }>;
-}
-
-/** `exposure` and `wired` come from the orchestrator; neither is recomputed here. */
-function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
-  // Crafted tools are the evolution loop's concern and are not listed to the user.
-  return r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 }));
 }
 
 /** The heading format belongs to `memory/note.ts`; a note is not a search hit, so every note scores 1. */

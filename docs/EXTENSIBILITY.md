@@ -19,8 +19,7 @@ works at class level. `KinuExtension` works per turn and has its own document,
 ## Registration is not reachability
 
 An importable implementation is not automatically model-facing. Production
-reaches each exploration engine through its own path. Lifetime evolution calls
-`runMCTS` from `packages/core/src/evolution/engine.ts`. Branching work runs through
+reaches each exploration engine through its own path. Branching work runs through
 `HeadController`. `agents.swarm()` calls `runSwarm` and resolves a named preset
 before it spends anything.
 
@@ -55,14 +54,14 @@ credential.
 ## Adding a new actor kind
 
 `ActorAgent` (`cf-backend/src/actor-agent.ts`) is the base class. Extend
-it and supply its abstract members:
+it and supply its abstract members. Make your tables in your constructor: a native RPC
+can be an object's first event, and it runs no `onStart`.
 
 ```ts
 export class MyAgent extends ActorAgent {
   protected getOwnerUserId(): string | null { /* identity bootstrap */ }
   protected actorKind(): AgentKind { /* which kind you are, for the roster */ }
   protected workspaceBox(shellId: string): NimbusSandboxHandle { /* the box behind a shell id */ }
-  protected ensureSchema(): void { /* your tables */ }
   protected actorToolDeps(): ActorToolDeps { /* which gated tools you get */ }
   protected get engine(): EvolutionEngine { /* your evolution engine */ }
   protected notifyOwner(subject: string, body: string): void { /* … */ }
@@ -71,8 +70,7 @@ export class MyAgent extends ActorAgent {
   protected actorHandle(): ActorHandle { /* this actor's handle */ }
   actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult> { /* child directory operations */ }
   protected actorDirectoryStore(): WorkspaceActorDirectory { /* who belongs to this workspace */ }
-  protected explorationSeams(): ExplorationHostSeams { /* what an exploration runner needs */ }
-  protected subordinateSeams(): SubordinateHostSeams { /* what the subordinate rung needs */ }
+  protected hostedSeams(): HostedActorSeams { /* what every hosted actor's runner needs */ }
   protected hostedChatWire(name: string): ChatWire | null { /* a hosted actor's chat wire */ }
   protected owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] { /* what a settled turn owes */ }
   protected transcriptFor(actor: ActorHandle): SessionTranscript { /* an actor's own transcript */ }
@@ -105,11 +103,11 @@ allowlist decides any of this.
 `ActorToolDeps` has `team`, `peers`, `report` and `submitPlan`. `teamProfile()` returns `{ team }` while an actor has tree below
 it and `{}` at the depth cap, so the delegation budget stops recursion, not
 the class. The root builds a hosted subordinate's delegated-turn surface through
-`SubordinateHostSeams.taskProfile`
-(`packages/cf-backend/src/subordinate-hosting.ts`), which adds `report` because
+`HostedActorSeams.taskProfile`
+(`packages/cf-backend/src/hosted-actors.ts`), which adds `report` because
 a delegated task is parent-assigned. `submitPlan` appears only on a turn that
 belongs to the owner, in Plan mode. The narrowing keys on the turn, not on a
-class. `packages/cf-backend/src/exploration-hosting.ts` builds head and node
+class. The same module builds head and node
 surfaces over that actor's own runtime. An MCTS branch has no tool surface and
 acquires no execution plane, because it is built without one.
 
@@ -173,8 +171,7 @@ There is no strategy registry, and no tool field selects a search policy. A
 new engine needs a dispatcher, as the shipped ones have. The swarm dispatcher
 is the closed preset-and-validity system
 (`packages/core/src/strategy/swarm-presets.ts`), which resolves a named preset
-to a configuration before anything spends. The MCTS dispatcher is `runMCTS`,
-called directly by lifetime evolution. An engine with no dispatcher reaches
+to a configuration before anything spends. An engine with no dispatcher reaches
 only callers that import it.
 
 ## Replacing the inference loop
@@ -251,15 +248,15 @@ import { effortFor, generateReported } from '@kinu.run/core';
 // User-facing chat → medium (default): the turn loop, core/src/chat.ts
 streamText({ model, prompt, ...effortFor('chat') });
 
-// MCTS rollouts → low (many cheap samples): core/src/mcts/rollout.ts
-generateText({ model, prompt, ...effortFor('mcts_rollout') });
+// Memory compression → low (many cheap calls)
+generateText({ model, prompt, ...effortFor('memory_compress') });
 
 // Scaffold mutation → high (rare; must be good), reported as `reflection` spend
 generateReported({ model, prompt, ...effortFor('scaffold_mutation') }, { spend });
 ```
 
-`chat`, `judge`, `mcts_judge` and `head_merge` use medium. `reflection`,
-`mcts_rollout` and `memory_compress` use low. `scaffold_mutation` uses high.
+`chat`, `judge` and `head_merge` use medium. `reflection` and
+`memory_compress` use low. `scaffold_mutation` uses high.
 Effort is the cheapness lever on most paths, not an output-token cap.
 
 ## The agent's runtime surface
@@ -333,11 +330,11 @@ truncates useful "when to use" guidance.
   503 it honors a `Retry-After` of 60 s or less; a longer one ends the call as a
   spent allowance naming the reset time (`maxRetryDelayMs`, after oh-my-pi).
   Otherwise it waits a full-jitter draw under a ceiling that doubles from 2 s to
-  60 s. No elapsed time or attempt count ends the loop.
-  It stops on success, definitive failure or caller cancellation.
-  Non-replayable bodies pass through untouched. Do not cap attempts and count
-  on the SDK for the rest: `PROVIDER_SDK_RETRIES` is 2, and a cap under a
-  real cooldown turns a wait into a failed turn.
+  60 s. It retries at most the owner's count (`ProfileCatalog.retries`,
+  default 3), and not at all while the turn's fallback chain has an entry left:
+  that model hands over at once and cools down (`fallback-cooldown.ts`).
+  Non-replayable bodies pass through untouched. The SDK's own transport retry
+  takes the same count at the `streamText` call.
 - Requests wait out a provider host's declared cooldown. `ProviderPacer.admit`
   (`packages/core/src/providers/pacing.ts`) holds a caller until the cooldown a
   sibling declared has passed, so a `Retry-After` handed to one swarm node holds

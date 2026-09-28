@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { PROVIDER_SDK_RETRIES, withRateLimitRetry } from '../src/providers/rate-limit-retry';
+import { PROVIDER_RETRIES_HEADER, withRateLimitRetry } from '../src/providers/rate-limit-retry';
+import { DEFAULT_PROVIDER_RETRIES } from '../src/types/profile';
 import { ProviderPacer } from '../src/providers/pacing';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { describeProviderError, toProviderError } from '../src/providers/util';
@@ -79,10 +80,18 @@ describe('withRateLimitRetry', () => {
       },
     );
 
-    await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
+    await harness.wrapped('https://api.example.com/v1/chat', { body: '{}', headers: { [PROVIDER_RETRIES_HEADER]: '8' } });
 
     expect(harness.waits).toEqual([1_998, 3_996, 7_992, 15_984, 31_968, 59_940, 59_940, 59_940]);
     expect(harness.waits.every((wait) => wait <= 60_000)).toBe(true);
+  });
+
+  test('waits out at most the owner\u2019s retries, then fails with the limit instead of sleeping on', async () => {
+    const harness = retryHarness(Array.from({ length: 6 }, () => new Response('limited', { status: 429, headers: { 'Retry-After': '1' } })));
+
+    await expect(harness.wrapped('https://api.example.com/v1/chat', { body: '{}' })).rejects.toThrow('rate-limiting this account (HTTP 429)');
+    expect(harness.calls()).toBe(4);
+    expect(harness.waits).toEqual([1_000, 1_000, 1_000]);
   });
 
   test('continues through provider-mandated waits until success', async () => {
@@ -157,19 +166,6 @@ describe('withRateLimitRetry', () => {
     const generic = retryHarness([new Response('maintenance', { status: 503 })]);
     expect((await generic.wrapped('https://api.example.com/v1/chat', { body: '{}' })).status).toBe(503);
     expect(generic.calls()).toBe(1);
-  });
-
-  test('logs one concise provider-host warning per wait', async () => {
-    const harness = retryHarness([
-      new Response('limited', { status: 429, headers: { 'Retry-After': '2' } }),
-      new Response('ok'),
-    ]);
-
-    await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
-
-    expect(harness.warnings).toEqual([
-      '[kinu] api.example.com rate-limited — waiting 2s (attempt 1)',
-    ]);
   });
 
   /** Each provider's documented "allowance exhausted" 429 body: waiting cannot clear any of them. */
@@ -325,7 +321,7 @@ describe('withRateLimitRetry', () => {
     }), { pacer: new ProviderPacer({ sleep: async () => {} }), sleep: async () => {}, warn: () => {} });
 
     const model = createOpenAICompatible({ name: 'quota-probe', baseURL: 'https://api.example.com/v1', fetch: fetchImpl }).chatModel('m');
-    const failure = await rejectionOf(() => generateText({ model, prompt: 'hi', maxRetries: PROVIDER_SDK_RETRIES }));
+    const failure = await rejectionOf(() => generateText({ model, prompt: 'hi', maxRetries: DEFAULT_PROVIDER_RETRIES }));
 
     expect(requests).toBe(1);
     expect(toProviderError({ doing: 'calling the model', cause: failure }).code).toBe('budget');

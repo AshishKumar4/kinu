@@ -5,12 +5,11 @@ import { Database } from 'bun:sqlite';
 
 import {
   TERMINAL_EFFECT_RETRY_BASE_MS, TerminalEffectLedger, initTerminalEffectTable, shadowTrialTerminalEffect,
-  takesTerminalEffect, terminalEffect, turnRecordTerminalEffect,
+  terminalEffect, turnRecordTerminalEffect,
 } from '../src/orchestrator/terminal-effects';
-import { initAlternateTakesTable, latestAlternateTakeSet, unclaimedAlternateTakeIds } from '../src/mcts/takes';
 import { projectJsonValue, type CompletedTurn } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
-import { createTestActors, testActorHandle } from '@kinu.run/test-utils';
+import { testActorHandle } from '@kinu.run/test-utils';
 
 const TURN: CompletedTurn = {
   userMessage: 'name the parser', assistantResponse: 'the parser is sound',
@@ -90,37 +89,6 @@ describe('turnRecordTerminalEffect', () => {
   });
 });
 
-describe('takesTerminalEffect', () => {
-  test('a credited turn claims the takes it competed against; an uncredited one purges them', async () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    const execRaw = makeExecRaw(db);
-    initAlternateTakesTable(execRaw);
-    const actor = createTestActors(sql, execRaw).main;
-
-    const seed = (id: string) => sql`INSERT INTO alternate_takes
-      (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
-      VALUES (${actor.actorId}, ${id}, ${null}, ${null}, ${'pick'}, ${'mcts'}, ${'a'}, ${null},
-              ${JSON.stringify([{ nodeId: 'a', text: 'A', score: 0.9, visits: 1, depth: 1 }, { nodeId: 'b', text: 'B', score: 0.8, visits: 1, depth: 1 }])},
-              ${1}, ${null})`;
-
-    const effect = takesTerminalEffect({ sql, actor, sessionId: 's' });
-
-    seed('take-first');
-    expect(unclaimedAlternateTakeIds(sql, actor)).toEqual(['take-first']);
-    expect(await effect.run({ credited: 'msg-1', startedAt: 0, takeIds: ['take-first'] }, 'msg-1'))
-      .toEqual({ status: 'completed' });
-    expect(latestAlternateTakeSet(sql, actor)?.turnId).toBe('msg-1');
-    expect(unclaimedAlternateTakeIds(sql, actor)).toEqual([]);
-
-    seed('take-second');
-    expect(await effect.run({ credited: null, startedAt: 0, takeIds: ['take-second'] }, 'msg-2'))
-      .toEqual({ status: 'completed' });
-    expect(unclaimedAlternateTakeIds(sql, actor)).toEqual([]);
-    expect(latestAlternateTakeSet(sql, actor)?.id).toBe('take-first');
-  });
-});
-
 describe('a held owed outcome', () => {
   // `held` is a look, not a failed attempt: no attempt counted, re-arm at the base delay.
   test('keeps the attempt count and the base delay across repeated looks', async () => {
@@ -136,7 +104,7 @@ describe('a held owed outcome', () => {
 
         return { status: 'owed', held: true, detail: 'carrier live' };
       } }),
-      takes: terminalEffect({ input: v.object({}), run: () => {
+      craft_usage: terminalEffect({ input: v.object({}), run: () => {
         looks.failing += 1;
 
         return { status: 'owed', detail: 'undelivered' };
@@ -153,20 +121,20 @@ describe('a held owed outcome', () => {
 
     const run = await ledger.run('seq', [
       { name: 'branches', scope: '', input: {}, lane: 'detached' },
-      { name: 'takes', scope: '', input: {}, lane: 'detached' },
+      { name: 'craft_usage', scope: '', input: {}, lane: 'detached' },
     ]);
 
     await run.reported;
 
     for (const step of [1, 2, 3]) {
-      now = row('takes')?.next_attempt_at ?? now;
+      now = row('craft_usage')?.next_attempt_at ?? now;
       await ledger.replayOwed('seq');
       expect(looks).toEqual({ held: step + 1, failing: step + 1 });
       expect(row('branches')).toEqual({ attempts: 0, next_attempt_at: now + TERMINAL_EFFECT_RETRY_BASE_MS });
-      expect(row('takes')?.attempts).toBe(step + 1);
+      expect(row('craft_usage')?.attempts).toBe(step + 1);
     }
 
-    expect(row('takes')?.next_attempt_at).toBeGreaterThan(now + TERMINAL_EFFECT_RETRY_BASE_MS);
+    expect(row('craft_usage')?.next_attempt_at).toBeGreaterThan(now + TERMINAL_EFFECT_RETRY_BASE_MS);
     db.close();
   });
 });

@@ -23,6 +23,7 @@ import type {
 import type { DeployInputs, DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { ComplexityProbeDO } from './complexity/complexity-probe';
+import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
@@ -128,7 +129,7 @@ interface CodexEgressRecordsRpc extends Rpc.WorkerEntrypointBranded {
 }
 
 interface HireProbeRpc extends Rpc.DurableObjectBranded {
-  setup(workspace: string, model: string, script: 'answer' | 'throw' | 'park'): Promise<void>;
+  setup(workspace: string, model: string, script: import('./hire-shapes').ChildScript): Promise<void>;
   releaseChild(): Promise<void>;
   childSpoke(): Promise<void>;
   callerObserved(): Promise<void>;
@@ -170,6 +171,9 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
 interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
   claimAndEvict(workspace: string): Promise<string>;
   idThenNamed(workspace: string): Promise<AddressedAnswers>;
+  rpcFirst(workspace: string): Promise<{ before: number; spend: string; after: number }>;
+  destroyAfterFailedStart(workspace: string): Promise<{ evicted: string; spend: string; destroyed: string }>;
+  siblingStarts(): Promise<{ spend: string; starts: number }>;
 }
 
 interface AttributionProbeRpc extends Rpc.DurableObjectBranded {
@@ -314,6 +318,7 @@ declare global {
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       COMPLEXITY_PROBE: DurableObjectNamespace<ComplexityProbeDO>;
+      EFFECT_ATOMICITY_PROBE: DurableObjectNamespace<EffectAtomicityProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeRpc>;
       SLATE_SHARE_PROBE: DurableObjectNamespace<SlateShareProbeRpc>;

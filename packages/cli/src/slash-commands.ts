@@ -10,6 +10,7 @@ import { readAllAccountUsage } from './account-usage';
 import { plural, renderAccountSpendLines, renderSearchTreeLines } from './display';
 import { conversationMarkdown, lastAnswer } from './conversation-export';
 import { listLocalAgentNames } from './agent-list';
+import { ALWAYS_NAMES_EACH, PARKED_USAGE, parkedAnswer, renderParked, renderParkedDecision } from './parked-actions';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -58,7 +59,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/changelog', description: 'Review what the agent changed about itself; revert one by number', usage: '/changelog [revert <n>]', run: changelogCommand },
   { name: '/refine', description: 'Review fixes staged from corrected turns; approve or reject each', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]', run: refineCommand },
   { name: '/takes', description: 'Compare the latest alternate takes; pick one by number', usage: '/takes [n]', run: takesCommand },
-  { name: '/tree', description: 'Show the MCTS search tree', aliases: ['/mcts'], run: treeCommand },
+  { name: '/tree', description: 'Show the swarm search tree', aliases: ['/mcts'], run: treeCommand },
   { name: '/jobs', description: 'List background jobs', run: jobsCommand },
   { name: '/connect', description: 'Connect this computer so the agent can run commands on it', requires: 'consents', run: connectCommand },
   { name: '/stop', description: 'Stop the running turn', run: stopCommand },
@@ -72,6 +73,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/plan', description: 'Have the agent draft a plan, then approve it, send it back or dismiss it', usage: '/plan [<text>|show|approve [notes]|changes <feedback>|dismiss]', requires: 'plans', run: planCommand },
   { name: '/fork', description: 'Walk back: restart the conversation just before an earlier message', usage: '/fork [number]', run: forkCommand },
   { name: '/undo', description: 'Restore files to how they were n turns back, then offer to walk back the chat', usage: '/undo [n]', requires: 'checkpoints', run: undoCommand },
+  { name: '/parked', description: 'Approve or deny the commands the agent parked for you; none has run', usage: PARKED_USAGE, requires: 'localControls', run: parkedCommand },
   { name: '/approval', description: 'Show or set when shell commands need your approval', usage: '/approval strict|allow_all|deny_all', requires: 'localControls', run: approvalCommand },
   { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls', run: instructionsCommand },
   { name: '/always', description: 'Choose skills that are always active', usage: '/always <name...|none>', requires: 'localControls', run: alwaysCommand },
@@ -111,7 +113,6 @@ function instructionState(row: InstructionSourceRow): string {
   if (row.reason !== undefined) return `not readable: ${row.reason}`;
 
   switch (row.decision) {
-    case 'grandfathered': return 'carried over';
     case 'approved': return 'approved';
     case 'revoked': return 'refused';
     case 'none': return 'not decided';
@@ -463,10 +464,10 @@ async function treeCommand({ client }: SlashContext): Promise<SlashOutcome> {
   const nodes = await client.searchNodes();
 
   if (nodes.length === 0) {
-    return { kind: 'text', text: 'No MCTS nodes yet. Ask something that needs a search, or run kinu evolve <name> from a shell.' };
+    return { kind: 'text', text: 'No search nodes yet. Ask for a swarm to build one.' };
   }
 
-  return { kind: 'text', text: `MCTS Tree (${nodes.length} nodes):\n${renderSearchTreeLines(nodes).join('\n')}` };
+  return { kind: 'text', text: `Search tree (${nodes.length} nodes):\n${renderSearchTreeLines(nodes).join('\n')}` };
 }
 
 async function jobsCommand({ client }: SlashContext): Promise<SlashOutcome> {
@@ -599,6 +600,24 @@ function undoCommand({ client, command, arg }: SlashContext): SlashOutcome {
   if (!client.checkpoints) return { kind: 'unknown', command };
 
   return { kind: 'undo', ref: arg || undefined };
+}
+
+async function parkedCommand({ client, command, rest }: SlashContext): Promise<SlashOutcome> {
+  if (!client.localControls) return { kind: 'unknown', command };
+  const words = rest.filter((word) => word);
+  const parked = await client.localControls.listDeferredApprovals();
+
+  if (words.length === 0) return { kind: 'text', text: renderParked(parked) };
+  const [verb, ...named] = words;
+  const answer = parkedAnswer(verb);
+
+  if (answer === null || named.length === 0) return { kind: 'text', text: `Usage: ${PARKED_USAGE}` };
+
+  if (answer === 'always' && named.includes('all')) return { kind: 'text', text: ALWAYS_NAMES_EACH };
+  const ids = named.includes('all') ? parked.map((action) => action.id) : named;
+  const { decided } = await client.localControls.decideDeferredApprovals(ids, answer);
+
+  return { kind: 'text', text: renderParkedDecision({ answer, ids }, decided, parked) };
 }
 
 function approvalCommand({ client, command, arg }: SlashContext): SlashOutcome {
@@ -1137,8 +1156,6 @@ export function renderStatusLines(status: AgentClientStatus): string[] {
     row('Scaffold:', status.scaffoldVersion === undefined ? undefined : `v${status.scaffoldVersion}`),
     row('Messages:', status.messageCount),
     row('MCTS:', status.searchNodeCount === undefined ? undefined : `${status.searchNodeCount} nodes`),
-    row('Crafted:', status.craftedToolCount),
-    row('Tasks:', status.taskCount),
     row('Tools:', status.toolCount),
     row('Memory:', status.memorySize === undefined ? undefined : `${status.memorySize} B`),
     row('Database:', status.dbSize === undefined ? undefined : `${(status.dbSize / 1024).toFixed(1)} KB`),

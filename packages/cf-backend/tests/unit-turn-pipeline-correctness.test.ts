@@ -6,6 +6,7 @@ import {
 import {
   MergeOutputSchema, listQueuedShadowTrials, DEFAULT_WORKERS_AI_MODEL_SPEC, DYNAMIC_CONTEXT_OPEN_TAG,
   type ReasoningEffort, type ResolvedTurnProfile,
+  LiveWorkers,
 } from '@kinu.run/core';
 import {
   declareShadowCandidate, hostedExplorationHarness, hostedMainActor, improvementLanesRan,
@@ -18,8 +19,8 @@ import { answeringGateway, GATEWAY_MODEL } from './helpers/platform-gateway';
 import type { ScriptedAnswer } from './helpers/turn-harness';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { createHeadRuntime } from '../src/head-runtime';
-import type { ExplorationHostSeams } from '../src/exploration-hosting';
-import type { ModelMessage, ToolSet, UIMessage } from 'ai';
+import type { HostedActorSeams } from '../src/hosted-actors';
+import type { ModelMessage, ToolSet } from 'ai';
 import { jsonSchema, streamText, tool } from 'ai';
 import * as v from 'valibot';
 
@@ -52,7 +53,7 @@ const RoleResultSchema = v.object({ role: v.string() });
 
 
 /** Fails loud on any member access: a merge must never reach the exploration substrate. */
-const noExplorationHost: ExplorationHostSeams = new Proxy(Object.create(null), {
+const noExplorationHost: HostedActorSeams = new Proxy(Object.create(null), {
   get: (_target, key) => {
     throw new Error(`the head merge reached the exploration substrate: ${String(key)}`);
   },
@@ -338,8 +339,8 @@ describe('turn-pipeline correctness wiring', () => {
     await hostedMainActor(workspace);
     const rootFiles = workspaceFiles(workspace.agent);
     await rootFiles.writeFile('/home/main/shared-proof.md', 'registered workspace bytes');
-    const head = await hostedExplorationHarness(workspace, 'head', 'head-a1');
-    expect(head.actor.record.kind).toBe('head');
+    const head = await hostedExplorationHarness(workspace, 'head-a1');
+    expect(head.actor.record.kind).toBe('run');
     const headFiles = head.actor.runtime.storage.vfs;
     expect(await headFiles.readFile('/home/main/shared-proof.md', { encoding: 'utf8' }))
       .toBe('registered workspace bytes');
@@ -441,6 +442,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     const runtime = createHeadRuntime({
       host: noExplorationHost,
+      workers: new LiveWorkers(),
       models: {
         resolveModelWithEffort: (spec, effort) => {
           asked.push({ spec, effort });
@@ -529,52 +531,6 @@ describe('turn-pipeline correctness wiring', () => {
 
   // Core's `creditedTurnId` decides; this pins that the orchestrator honours it. A completed plan
   // turn is not an answer the captures competed against, so it purges them (as the CLI does).
-  describe('mid-turn captures are credited to the turn only when it answered', () => {
-    /** Seeds one unclaimed take set inside the turn's window, under this actor (claim and purge are `actor_id`-scoped). */
-    function settleOneTurn(mode: 'plan' | 'build'): ActorHarness<HarnessOrchestratorAgent> {
-      const harness = orchestratorHarness();
-      harness.db.prepare(
-        `INSERT INTO alternate_takes
-           (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
-            candidates, created_at, picked_at)
-         VALUES (?, 'take-1', NULL, NULL, 'pick a strategy', 'mcts', 'win', NULL, ?, ?, NULL)`,
-      ).run(
-        workspaceMainActor(harness.db).actorId,
-        JSON.stringify([
-          { nodeId: 'win', text: 'go with approach A', score: 0.9, visits: 3, depth: 1 },
-          { nodeId: 'alt', text: 'go with approach B', score: 0.86, visits: 2, depth: 1 },
-        ]),
-        Date.now() + 1_000,
-      );
-
-      // The roster reads the composer's mode off the driving message.
-      harness.agent.harnessDrivingUserMessage(`${mode} this`, { kinuMode: mode });
-
-      return harness;
-    }
-
-    const settled: UIMessage = {
-      id: 'a-1', role: 'assistant', parts: [{ type: 'text', text: 'the answer' }],
-    };
-
-    test('a completed build turn claims them', async () => {
-      const harness = settleOneTurn('build');
-      await chatSessionTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-build' });
-      expect(harness.db.query('SELECT turn_id, session_id FROM alternate_takes').get())
-        .toMatchObject({ turn_id: 'a-1', session_id: 'default' });
-    });
-
-    test('a completed PLAN turn purges them', async () => {
-      const harness = settleOneTurn('plan');
-      // Positive control for the absence below: the seeded row did land.
-      expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
-        .toMatchObject({ n: 1 });
-      await chatSessionTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-plan' });
-      expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
-        .toMatchObject({ n: 0 });
-    });
-  });
-
   // `onStart`'s sweep re-pends every open lease, so the settle must close a lease for every drain
   // path, and only once the answer is durable.
   describe('a settled turn closes the delivery leases it answered, and only those', () => {
@@ -584,9 +540,9 @@ describe('turn-pipeline correctness wiring', () => {
         `INSERT INTO agent_log
            (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
             trust, priority, payload_visibility, payload, received_at,
-            schema_version, dedupe_key, consumed_at)
+            dedupe_key, consumed_at)
          VALUES (?, 'ev-1', 'event', NULL, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
-                 'authenticated', 'normal', 'full', ?, 1, 1, NULL, NULL)`,
+                 'authenticated', 'normal', 'full', ?, 1, NULL, NULL)`,
       ).run(workspaceMainActor(harness.db).actorId, JSON.stringify({
         webhook_id: 'hook-1',
         http_method: 'POST',
@@ -651,9 +607,9 @@ describe('turn-pipeline correctness wiring', () => {
         `INSERT INTO agent_log
            (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
             trust, priority, payload_visibility, payload, received_at,
-            schema_version, dedupe_key, consumed_at)
+            dedupe_key, consumed_at)
          VALUES (?, 'ev-mail', 'event', NULL, 0, NULL, 'tr-2', 'email_inbound', 'email',
-                 'authenticated', 'normal', 'full', ?, 1, 1, NULL, NULL)`,
+                 'authenticated', 'normal', 'full', ?, 1, NULL, NULL)`,
       ).run(actorId, JSON.stringify({
         from: 'owner@example.com', to: 'agent@example.com', subject: 'the build', body_text: 'did it pass?',
         message_id: null, in_reply_to: null, references: null, attachments: [],
@@ -667,15 +623,21 @@ describe('turn-pipeline correctness wiring', () => {
       harness.db.run(`CREATE TRIGGER refuse_reply_record BEFORE INSERT ON agent_log
         WHEN NEW.kind = 'reply_attempt' BEGIN SELECT RAISE(ABORT, 'storage refused the reply record'); END`);
       const bound = await spliceDrain(harness);
+      const logger = createRecordingLogger();
+      const restore = tapDiagnostics(logger);
 
-      await chatSessionTurns(harness.agent).settle({ messageId: 'a-mail', text: 'the answer', requestId: 'req-mail' });
+      try {
+        await chatSessionTurns(harness.agent).settle({ messageId: 'a-mail', text: 'the answer', requestId: 'req-mail' });
+        await logger.until((lines) => lines.some((line) => line.event === 'turn.terminal_effect_failed'));
+      } finally {
+        restore();
+      }
 
-      const owed = () => harness.db.query<{ status: string; outcome: string | null }, [string]>(
-        'SELECT status, outcome FROM terminal_effects WHERE effect_key LIKE ?',
-      ).all(`%:event_reply:${bound}`);
-
-      await until(() => owed().some((row) => row.outcome !== null), 'the reply effect reported its outcome');
-      expect(owed()).toEqual([{ status: 'pending', outcome: expect.stringContaining('storage refused the reply record') }]);
+      expect(logger.emitted.filter((line) => line.event === 'turn.terminal_effect_failed').map((line) => line.cause))
+        .toEqual([expect.stringContaining('storage refused the reply record')]);
+      expect(harness.db.query<{ status: string }, [string]>(
+        'SELECT status FROM terminal_effects WHERE effect_key LIKE ?',
+      ).all(`%:event_reply:${bound}`)).toEqual([{ status: 'pending' }]);
     });
 
     test('a turn with no durable answer leaves the delivery recoverable', async () => {
@@ -729,9 +691,9 @@ describe('turn-pipeline correctness wiring', () => {
       `INSERT INTO agent_log
          (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
           trust, priority, payload_visibility, payload, received_at,
-          schema_version, dedupe_key, consumed_at)
+          dedupe_key, consumed_at)
        VALUES (?, 'ev-1', 'event', 'drain-1', 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
-               'authenticated', 'normal', 'full', ?, 1, 1, NULL, ?)`,
+               'authenticated', 'normal', 'full', ?, 1, NULL, ?)`,
     ).run(workspaceMainActor(harness.db).actorId, JSON.stringify({
       webhook_id: 'hook-1', http_method: 'POST', http_headers: {}, body: { text: 'a build finished' },
       delivery_id: 'delivery-1',
@@ -741,16 +703,25 @@ describe('turn-pipeline correctness wiring', () => {
     harness.agent.harnessDrivingUserMessage('the drain text', { kinuEvent: 'event_drain', drainTurnId: 'drain-1' });
     await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the drain text' }] });
     await chatSessionTurns(harness.agent).settle({ messageId: 'a-drain', text: 'the answer' });
-    // The alarm frame dispatches the owed reply.
-    await harness.agent.terminalRetryPass();
+    const logger = createRecordingLogger();
+    const restore = tapDiagnostics(logger);
+
+    try {
+      // The alarm frame dispatches the owed reply.
+      await harness.agent.terminalRetryPass();
+    } finally {
+      restore();
+    }
 
     const leased = () => harness.db.query<{ turn_id: string | null; consumed_at: number | null }, []>(
       "SELECT turn_id, consumed_at FROM agent_log WHERE id = 'ev-1'",
     ).get();
 
-    expect(harness.db.query<{ status: string; outcome: string | null }, []>(
-      "SELECT status, outcome FROM terminal_effects WHERE effect_key = 'v1:event_reply:drain-1'",
-    ).all()).toEqual([{ status: 'pending', outcome: expect.stringContaining('storage refused the lease close') }]);
+    expect(harness.db.query<{ status: string }, []>(
+      "SELECT status FROM terminal_effects WHERE effect_key = 'v1:event_reply:drain-1'",
+    ).all()).toEqual([{ status: 'pending' }]);
+    expect(logger.emitted.filter((line) => line.event === 'turn.terminal_effect_failed').map((line) => line.cause))
+      .toEqual([expect.stringContaining('storage refused the lease close')]);
     expect(leased()?.consumed_at).not.toBeNull();
 
     harness.db.run('DROP TRIGGER refuse_lease_close');

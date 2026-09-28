@@ -70,6 +70,7 @@
  * exits 0 is read as a pass by every human and every CI badge that sees it.
  */
 
+import { declaredSignInProviders } from '@kinu.run/core';
 import { assertMeasured, blocked, finding } from './gate-ratchet';
 import {
   type Deployment, type Observation, PROBE_LABEL, accessApplication, accessOrganization,
@@ -213,6 +214,21 @@ function unobservableRow(resource: Resource): Row {
 const routeHost = (pattern: string): string =>
   pattern.replace(/^\*\./u, '').replace(/\/.*$/u, '');
 
+/** The kinds of resource the edge serves a name for: each is asked over HTTPS. */
+export const EDGE_KINDS = ['custom-domain', 'zone-route'] as const satisfies readonly Resource['kind'][];
+
+/**
+ * Whether the edge serves a name for `resource` over HTTPS with a certificate that verifies. A custom domain and an
+ * exact route must reach THIS Worker; a wildcard route is asked whether ANYTHING answers under it, because a preview
+ * host with no live preview answers 404 on purpose.
+ */
+export async function observeEdge(resource: Resource & { readonly kind: (typeof EDGE_KINDS)[number] }): Promise<Observation> {
+  if (resource.kind === 'custom-domain') return servesWorker(resource.name);
+  const host = routeHost(resource.name);
+
+  return resource.name.startsWith('*.') ? edgeResponds(`${PROBE_LABEL}.${host}`) : servesWorker(host);
+}
+
 /** A container application, or the namespace its class's live binding names and the application holding it. */
 function observedContainer(resource: Resource, live: Deployment): Observation {
   if (resource.kind === 'container') return container(resource.name, /image (\S+)$/u.exec(resource.purpose)?.[1] ?? '');
@@ -283,18 +299,8 @@ async function observe(
     case 'binding':
       return observedRow(resource, bound(resource.binding ?? '', undefined));
     case 'custom-domain':
-      return observedRow(resource, await servesWorker(resource.name));
-    case 'zone-route': {
-      const host = routeHost(resource.name);
-
-      // A wildcard route is asked whether ANYTHING answers under it, because a
-      // preview host with no live preview answers 404 on purpose. An exact route
-      // claims one origin, so it is asked the stronger question the custom
-      // domain is asked: does this hostname reach THIS Worker.
-      return observedRow(resource, resource.name.startsWith('*.')
-        ? await edgeResponds(`${PROBE_LABEL}.${host}`)
-        : await servesWorker(host));
-    }
+    case 'zone-route':
+      return observedRow(resource, await observeEdge({ ...resource, kind: resource.kind }));
 
     case 'wildcard-dns':
       return observedRow(resource, await wildcardDns(routeHost(resource.name)));
@@ -391,6 +397,38 @@ export function supplyRows(
       detail: present
         ? `${inVars ? "declared in the Worker's `vars`" : 'set on the Worker'} (${supply.handling})`
         : `${supply.handling} — absent ⇒ ${supply.absent}`,
+    });
+  }
+
+  const declaration = worker.vars.get('SIGN_IN_PROVIDERS');
+
+  // Empty declares none; an absent key is an unwritten decision, and the monitor's probe cannot read it.
+  if (declaration === undefined) {
+    rows.push({
+      name: 'SIGN_IN_PROVIDERS',
+      verdict: 'absent',
+      required: true,
+      detail: 'config-var — absent ⇒ this environment never says which sign-in providers /login must offer',
+    });
+  }
+
+  // A provider the deployment declares must have both halves, or nobody signs in with it.
+  for (const provider of declaredSignInProviders(declaration ?? '')) {
+    const id = `${provider.toUpperCase()}_OAUTH_CLIENT_ID`;
+    const secret = `${provider.toUpperCase()}_OAUTH_CLIENT_SECRET`;
+
+    const missing = [
+      ...(worker.vars.get(id) ?? '').trim() === '' ? [`${id} (a var)`] : [],
+      ...held.has(secret) || !secretsReadable ? [] : [`${secret} (a secret)`],
+    ];
+
+    rows.push({
+      name: `sign-in provider ${provider}`,
+      verdict: missing.length === 0 ? 'present' : 'absent',
+      required: true,
+      detail: missing.length === 0
+        ? 'declared in SIGN_IN_PROVIDERS, with its client id and secret'
+        : `declared in SIGN_IN_PROVIDERS, but ${missing.join(' and ')} is missing — /login cannot offer it`,
     });
   }
 

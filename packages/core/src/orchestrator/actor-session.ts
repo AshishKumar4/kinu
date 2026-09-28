@@ -8,7 +8,7 @@ import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile
 import { promptCacheWarm, PromptCacheRouteSchema, type CachedRequest } from '../prompting/cache-breakpoints';
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
-import { KinuError, renderThrownChain, type TracedInvocation, type TurnTracing } from '../obs/index';
+import { KinuError, renderThrownChain, type TurnTrace, type TurnTracing } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
 import { describeLandedSteers, type AcceptedSteer, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
@@ -39,6 +39,7 @@ import { SessionHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
 import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
+import { lostToolCall } from '../tools/effect-claim';
 import type { MessageReference, MessagePartReference, PreparedMessage } from '../session/messages';
 
 /** A hosted actor shares workspace priorities, but delivers feedback to itself. */
@@ -127,6 +128,9 @@ interface ActiveTurn {
   /** Never cleared: a settled turn's claim still attributes its late work. */
   claim: ActorTurnClaim | null;
   claimSettled: boolean;
+  trace: TurnTrace | null;
+  startedAt: number;
+  ended: { readonly steps: number; readonly interrupted: boolean; readonly failure: Error | null } | null;
 }
 
 interface TurnTally {
@@ -161,6 +165,10 @@ export class ActorSession {
   private active: ActiveTurn | null = null;
   private mode: WorkMode = 'build';
   private restoration: Promise<void> = Promise.resolve();
+
+  get currentTurnId(): string | null {
+    return this.active?.lease.turnId ?? null;
+  }
 
   constructor(private readonly options: ActorSessionOptions) {
     this.actorId = options.runtime.actor.actorId;
@@ -418,7 +426,7 @@ export class ActorSession {
 
     this.active = {
       lease, abort, phase: 'preparing', profile: null, profileInputs: null,
-      claim: null, claimSettled: false,
+      claim: null, claimSettled: false, trace: null, startedAt: 0, ended: null,
     };
     this.mode = mode;
     this.landed.length = 0;
@@ -487,32 +495,41 @@ export class ActorSession {
     if (active.claim === null || active.claimSettled) return;
     this.options.claims.settle(active.claim, outcome);
     active.claimSettled = true;
+    const ended = active.ended;
+
+    active.trace?.settle(active.startedAt, (span) => {
+      span.setAttribute('kinu.turn.outcome', outcome);
+
+      if (ended === null) return;
+      span.setAttribute('kinu.turn.steps', ended.steps);
+      span.setAttribute('kinu.turn.interrupted', ended.interrupted);
+
+      if (ended.failure !== null && !ended.interrupted) span.fail(ended.failure);
+    });
+    active.trace = null;
   }
 
   /** Prepare, claim durably, then consume: `startActorTurn` runs nothing until the first `next()`, so a crash
    *  before the claim leaves a turn that provably did nothing. */
-  execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void | Promise<void>): Promise<ActorExecutionResult> {
-    const turns = this.options.turns;
+  async execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void | Promise<void>): Promise<ActorExecutionResult> {
+    const active = this.requireTurn(lease);
+    active.startedAt = Date.now();
+    const result = await this.run(lease, input, emit);
+    active.ended = { steps: result.steps, interrupted: result.interrupted, failure: result.failure };
 
-    if (turns === undefined) return this.run(lease, input, emit, undefined);
+    return result;
+  }
 
-    return turns().turn(async (trace, span) => {
-      span.setAttribute('kinu.turn.mode', this.mode);
-      const result = await this.run(lease, input, emit, trace);
-      span.setAttribute('kinu.turn.steps', result.steps);
-      span.setAttribute('kinu.turn.interrupted', result.interrupted);
+  private liveStream: SessionStream | null = null;
 
-      if (result.failure !== null && !result.interrupted) span.fail(result.failure);
-
-      return result;
-    });
+  durableCall(callId: string, signal?: AbortSignal): Promise<void> {
+    return this.liveStream?.durable(callId, signal) ?? Promise.resolve();
   }
 
   private async run(
     lease: ActorTurnLease,
     input: ActorExecutionInput,
     emit: (event: ChatEvent) => void | Promise<void>,
-    trace: TracedInvocation | undefined,
   ): Promise<ActorExecutionResult> {
     const active = this.requireTurn(lease);
 
@@ -529,6 +546,10 @@ export class ActorSession {
       program = prepared.program;
       const claim = await this.admitClaim(lease, program, prepared.selection, input);
       active.claim = claim;
+
+      active.trace = this.options.turns?.().admitted({ turnId: claim.turnId, epoch: claim.epoch }, active.startedAt, (span) => {
+        span.setAttribute('kinu.turn.mode', this.mode);
+      }) ?? null;
       tally.admittedMessages = prepared.messages;
 
       if (profile.tier.replaced !== null) {
@@ -537,10 +558,10 @@ export class ActorSession {
 
       durableOutput = new SessionStream(this.canonical, lease.turnId, claim.epoch);
       const stream = durableOutput;
-      const events = this.turnEvents({ lease, active, profile, input, trace, program, claim, stream, tally });
+      this.liveStream = stream;
+      const events = this.turnEvents({ lease, active, profile, input, program, claim, stream, tally });
 
       for await (const event of events) {
-        this.requireTurn(lease);
         await stream.observe(event);
         this.tallyEvent(tally, event, active.abort.signal);
         await emit(event);
@@ -553,6 +574,7 @@ export class ActorSession {
       await emit({ type: 'error', message: renderThrownChain({ cause }) });
     } finally {
       active.phase = 'settling';
+      this.liveStream = null;
       await this.settleOutput(active, durableOutput);
     }
 
@@ -576,6 +598,11 @@ export class ActorSession {
     lease: ActorTurnLease, program: ActorTurnProgram, context: ContextSelection, input: ActorExecutionInput,
   ): Promise<ActorTurnClaim> {
     const previous = this.options.claims.read(lease.turnId);
+
+    // A step whose run reset the workspace, resumed on the same build, would reset it again: closed, not re-issued.
+    if (previous?.status === 'admitted' && sameBuildOf(previous.program.build, this.options.installedBuild) !== 'no') {
+      await this.options.claims.closePoisoned(lease.turnId, previous.epoch);
+    }
 
     const claim = await this.options.claims.admit({
       runId: lease.runId,
@@ -604,7 +631,6 @@ export class ActorSession {
     readonly active: ActiveTurn;
     readonly profile: ResolvedTurnProfile;
     readonly input: ActorExecutionInput;
-    readonly trace: TracedInvocation | undefined;
     readonly program: ActorTurnProgram;
     readonly claim: ActorTurnClaim;
     readonly stream: SessionStream;
@@ -629,7 +655,8 @@ export class ActorSession {
       assertActive: input.assertActive,
       scaffoldStreamOptions: input.scaffoldStreamOptions,
       chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
-        measureContext: true, trace: turn.trace,
+        lostToolCall: (call) => lostToolCall(this.runtime.storage.sql, this.runtime.actor, lease.turnId, call),
+        measureContext: true, ...(active.trace !== null && { trace: active.trace }),
         persistStreamPart: part => stream.nativePart(part),
         persistStep: messages => stream.nativeStep(messages),
         dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
@@ -687,7 +714,7 @@ export class ActorSession {
         this.orchestrator.acc.recordStep({
           text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
           response: { messages: event.responseMessages, modelId: event.modelId }, usage: event.usage,
-          request: event.request, context: event.context, account: event.account, fallback: event.fallback,
+          request: event.request, context: event.context, account: event.account, egress: event.egress, fallback: event.fallback,
         });
         break;
       case 'error': {
@@ -767,7 +794,6 @@ export class ActorSession {
   async recordTranscriptText(claim: ActorTurnClaim, purpose: 'answer' | 'report', text: string, output: readonly MessageReference[]): Promise<MessagePartReference | null> {
     if (text === '') return null;
     const streamed = await this.lastText(output);
-    this.canonical.assertClaimEpoch(claim.turnId, claim.epoch);
 
     if (streamed?.text === text) return streamed.reference;
     const id = `${claim.turnId}:${claim.epoch}:display-${purpose}`;

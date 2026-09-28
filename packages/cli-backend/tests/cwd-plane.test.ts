@@ -19,12 +19,11 @@ import {
 import { createHeadRuntime } from './actor-fixture';
 import { registerLocalActor } from '../src/actor-identity';
 import { openWorkspaceCLI } from '../src/open';
-import { BRANCH_CREDENTIAL_ENV } from '../src/branch-process';
 import { PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV } from '../src/model-resolver';
 
 /** Every name the harness reads a credential from, as the declaring modules name them. */
 const HARNESS_CREDENTIAL_NAMES: readonly string[] = [
-  ...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV,
+  ...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV,
 ];
 
 const DevicePlanSchema = v.object({ env: v.record(v.string(), v.string()) });

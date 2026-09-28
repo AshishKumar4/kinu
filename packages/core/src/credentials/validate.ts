@@ -1,8 +1,9 @@
 // Rejects unknown shapes so a bad request can't write garbage into the credential store.
 import * as v from 'valibot';
-import { KinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settleSync } from '../obs/index';
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
-import { accountCredentialKey, MAIN_ACCOUNT, splitAccount } from './accounts';
+import { accountKey, MAIN_ACCOUNT, splitAccount } from './accounts';
 import type { Credential } from './store';
 
 const CredentialKindSchema = v.object({
@@ -12,6 +13,7 @@ const CredentialKindSchema = v.object({
 const BearerCredentialSchema = v.object({
   kind: v.literal('bearer'),
   token: v.pipe(v.string(), v.minLength(1)),
+  baseURL: v.optional(v.pipe(v.string(), v.url())),
 });
 
 const OAuthCredentialSchema = v.object({
@@ -29,58 +31,85 @@ const OpenAICompatCredentialSchema = v.object({
   extraHeaders: v.optional(v.record(v.string(), JsonValueSchema)),
 });
 
-export function validateCredential(input: { value: unknown }): Credential {
-  // Not `v.parse`: its message quotes the received value, which is the secret.
-  const part = <const TSchema extends v.GenericSchema>(schema: TSchema): v.InferOutput<TSchema> => {
-    const parsed = v.safeParse(schema, input.value);
+/** Bearer keys whose reader honours `baseURL`; any other refuses one. */
+const ENDPOINT_BEARER_KEYS: ReadonlySet<string> = new Set(['tavily']);
 
-    if (parsed.success) return parsed.output;
+export function validateCredential(input: { key: string; value: unknown }): Credential {
+  return settleSync(credentialOf(input));
+}
 
-    throw new KinuError('bad_input', `not a credential: ${parsed.issues
-      .map((issue) => `${v.getDotPath(issue) ?? 'the value'} must be ${issue.expected ?? 'valid'}`)
-      .join('; ')}`);
-  };
+/** Not `v.parse`: its message quotes the received value, which is the secret. */
+function part<const TSchema extends v.GenericSchema>(schema: TSchema, input: { value: unknown }): Effect.Effect<v.InferOutput<TSchema>, KinuError> {
+  const parsed = v.safeParse(schema, input.value);
 
-  const kind = part(CredentialKindSchema).kind;
+  if (parsed.success) return Effect.succeed(parsed.output);
 
-  if (kind === 'bearer') return part(BearerCredentialSchema);
+  return Effect.fail(new KinuError('bad_input', `not a credential: ${parsed.issues
+    .map((issue) => `${v.getDotPath(issue) ?? 'the value'} must be ${issue.expected ?? 'valid'}`)
+    .join('; ')}`));
+}
 
-  if (kind === 'oauth') {
-    const parsed = part(OAuthCredentialSchema);
-    const credential: Credential = { kind: 'oauth', accessToken: parsed.accessToken };
+function credentialOf(input: { key: string; value: unknown }): Effect.Effect<Credential, KinuError> {
+  return Effect.gen(function* () {
+    const kind = (yield* part(CredentialKindSchema, input)).kind;
 
-    if (parsed.refreshToken) credential.refreshToken = parsed.refreshToken;
+    if (kind === 'bearer') {
+      const parsed = yield* part(BearerCredentialSchema, input);
 
-    if (parsed.expiresAt !== undefined) credential.expiresAt = parsed.expiresAt;
+      if (parsed.baseURL === undefined) return { kind: 'bearer', token: parsed.token };
 
-    if (parsed.metadata !== undefined) credential.metadata = parsed.metadata;
+      if (!ENDPOINT_BEARER_KEYS.has(input.key)) {
+        return yield* Effect.fail(new KinuError('bad_input', `${input.key} takes no baseURL: only ${[...ENDPOINT_BEARER_KEYS].join(', ')} sends its token to one`));
+      }
 
-    return credential;
-  }
+      return parsed;
+    }
 
-  const parsed = part(OpenAICompatCredentialSchema);
+    if (kind === 'oauth') {
+      const parsed = yield* part(OAuthCredentialSchema, input);
+      const credential: Credential = { kind: 'oauth', accessToken: parsed.accessToken };
 
-  const extraHeaders = parsed.extraHeaders === undefined
-    ? undefined
-    : Object.fromEntries(Object.entries(parsed.extraHeaders).filter((entry): entry is [string, string] =>
-      v.is(v.string(), entry[1])));
+      if (parsed.refreshToken) credential.refreshToken = parsed.refreshToken;
 
-  return {
-    kind: 'openai-compat',
-    baseURL: parsed.baseURL,
-    apiKey: parsed.apiKey,
-    extraHeaders,
-  };
+      if (parsed.expiresAt !== undefined) credential.expiresAt = parsed.expiresAt;
+
+      if (parsed.metadata !== undefined) credential.metadata = parsed.metadata;
+
+      return credential;
+    }
+
+    const parsed = yield* part(OpenAICompatCredentialSchema, input);
+
+    const extraHeaders = parsed.extraHeaders === undefined
+      ? undefined
+      : Object.fromEntries(Object.entries(parsed.extraHeaders).filter((entry): entry is [string, string] =>
+        v.is(v.string(), entry[1])));
+
+    return {
+      kind: 'openai-compat',
+      baseURL: parsed.baseURL,
+      apiKey: parsed.apiKey,
+      extraHeaders,
+    };
+  });
 }
 
 export function validateCredentialKey(key: string): void {
+  return settleSync(validKey(key));
+}
+
+function validKey(key: string): Effect.Effect<void, KinuError> {
   const { base, account } = splitAccount(key);
 
   if (!/^[a-zA-Z0-9._-]{1,128}$/.test(base)) {
-    throw new KinuError('bad_input', 'Invalid credential key. Use alphanumerics, dot, underscore and dash only (max 128 chars).');
+    return Effect.fail(new KinuError('bad_input', 'Invalid credential key. Use alphanumerics, dot, underscore and dash only (max 128 chars).'));
   }
 
-  if (account !== null && accountCredentialKey(base, account) !== key) {
-    throw new KinuError('bad_input', `Invalid credential key: the account named ${MAIN_ACCOUNT} is the bare key ${base}.`);
-  }
+  if (account === null) return Effect.void;
+
+  return Effect.flatMap(accountKey(base, account), (named) => (
+    named === key
+      ? Effect.void
+      : Effect.fail(new KinuError('bad_input', `Invalid credential key: the account named ${MAIN_ACCOUNT} is the bare key ${base}.`))
+  ));
 }

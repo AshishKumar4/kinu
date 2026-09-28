@@ -20,7 +20,7 @@ import type { LLMProviderConfig, VFS, VfsNativeReads } from '@kinu.run/core';
 import { inWorkMode } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
-  initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
+  initAlternateTakesTable, recordBranchTakeSet, MAX_CONCURRENT_DETACHED_JOBS,
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox,
   backgroundJobNotice,
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID,
@@ -43,7 +43,6 @@ import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } 
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { discoverAgentsMd } from '../src/agents-md';
 import { nodeSeatFactory } from './actor-fixture';
-import { CAPTURED_DURING_THE_TURN } from './terminal-workspace';
 import * as v from 'valibot';
 
 const resolverRest = {
@@ -913,6 +912,35 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(text).not.toContain('OFFLINE');
   });
 
+  // Issue #36: a local workspace has neither mount, so nothing the model reads may offer one.
+  test('cli-local offers no /pc or /sandbox in its prompt or its tool schemas', async () => {
+    const base = fakeModel('ok');
+    let sent = '';
+
+    const model = new TestLanguageModelV2({
+      provider: base.provider,
+      modelId: base.modelId,
+      doGenerate: base.doGenerate,
+      doStream: async (options) => {
+        sent = JSON.stringify({ prompt: options.prompt, tools: options.tools });
+
+        return base.doStream(options);
+      },
+    });
+
+    const { session } = setup('ok', model);
+    await session.send('hi', { id: crypto.randomUUID() });
+
+    // The project's own AGENTS.md is the user's text, and it may name anything.
+    // The block as the prompt opens and closes it, newlines escaped by JSON; prose may name the tag inline.
+    const start = sent.indexOf('<workspace_instructions>\\n');
+    const end = sent.indexOf('\\n</workspace_instructions>', start);
+    const ours = start === -1 || end === -1 ? sent : sent.slice(0, start) + sent.slice(end);
+
+    expect(ours).toContain('Relative paths resolve at the workspace root');
+    expect(ours.match(/\/pc\b|\/sandbox\b|sandbox:\/\//gu)).toBeNull();
+  });
+
   test('head-inherited context drops file-part data URLs, keeps the reference', () => {
     const serialized = serializeContentForHeads([
       { type: 'file', data: 'data:image/png;base64,AAAA', mediaType: 'image/png', filename: 'square.png' },
@@ -1455,8 +1483,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     if (!parked) throw new Error('unattended command was not queued');
 
     expect(first.exitCode).not.toBe(0);
-    expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
-    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN — queued for owner approval');
+    expect(first.stderr).toContain(`NOT RUN: queued for owner approval (${parked.id})`);
+    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN: queued for owner approval');
     expect(await session.listDeferredApprovals()).toHaveLength(2);
     const sandboxAction = (await session.listDeferredApprovals()).find((action) => action.executor === 'sandbox');
 
@@ -1502,7 +1530,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       const first = await shell.exec('rm -rf build');
       const parked = present((await session.listDeferredApprovals())[0], 'the parked delete');
 
-      expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
+      expect(first.stderr).toContain(`NOT RUN: queued for owner approval (${parked.id})`);
       expect(existsSync(join(project, 'build'))).toBe(true);
       expect(await session.decideDeferredApprovals([parked.id], 'always')).toEqual({ decided: [parked.id] });
 
@@ -2370,43 +2398,22 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job'));
   });
 
-  test('recoverBackgroundJobs re-drives an orphaned agents job whose row names the fork action', async () => {
-    const { db, rt, session } = setup('resumed fork answer');
+  test('recoverBackgroundJobs fails an orphaned agents job whose row names an action the tool no longer has', async () => {
+    const { db, rt, session } = setup();
 
-    // A legacy `'fork'` row is history, so it is translated onto the ephemeral-node action rather than refused.
-    const input = JSON.stringify({
-      action: 'fork', task: 'finish the interrupted exploration',
-      forks: [
-        { task: 'read it', rationale: 'ground it' },
-        { task: 'test it', rationale: 'check it' },
-      ],
-    });
-
-    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-a', 'agents', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f4', 'bg:agents', '{"phase":"running","jobId":"bgjob-a","kind":"agents"}', 1)`);
-
-    const stderrLines: string[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => { stderrLines.push(args.map(String).join(' ')); };
-
-    try {
-      await session.recoverBackgroundJobs();
-      await waitFor(() => jobStatus(db, 'bgjob-a') === 'completed');
-    } finally {
-      console.error = originalError;
+    for (const [id, fiber, action] of [['bgjob-fork', 'f4', 'fork'], ['bgjob-probe', 'f5', 'probe']] as const) {
+      const input = JSON.stringify({ action, task: 'finish the interrupted exploration' });
+      db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', '${id}', 'agents', 'build', 'running', '${input}', 1)`);
+      db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', '${fiber}', 'bg:agents', '{"phase":"running","jobId":"${id}","kind":"agents"}', 1)`);
     }
 
-    const settled = v.parse(
-      v.object({ preset: v.literal('ideate'), report: v.object({ expansions: v.number() }) }),
-      JSON.parse(jobResult(db, 'bgjob-a')),
-    );
+    await session.recoverBackgroundJobs();
+    // Recovered in row order, so the fork row is settled by the time the probe row is.
+    await waitFor(() => jobStatus(db, 'bgjob-probe') === 'failed');
 
-    expect(settled.report.expansions).toBeGreaterThan(0);
-    expect(jobResult(db, 'bgjob-a')).toContain('resumed fork answer');
-
-    const dropped = stderrLines.filter((line) => line.includes('agents.resume.fields_dropped'));
-    expect(dropped).toHaveLength(1);
-    expect(dropped[0]).toContain('forks');
+    // `fork` is refused exactly as an action the tool never had.
+    expect({ status: jobStatus(db, 'bgjob-fork'), error: jobError(db, 'bgjob-fork') })
+      .toEqual({ status: 'failed', error: jobError(db, 'bgjob-probe') });
   });
 
   test('end() waits for a detached job to settle instead of closing the database under it', async () => {
@@ -2798,14 +2805,13 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     ).get()?.c === 1);
 
     const row = db.query<{
-      outcome: string; source: string; turn_id: string; session_id: string; followup: string;
+      outcome: string; source: string; turn_id: string; followup: string;
     }, []>(`SELECT * FROM turn_outcomes`).get();
 
     if (!row) throw new Error('turn outcome row is missing');
     expect(row.outcome).toBe('corrected');
     expect(row.source).toBe('classifier');
     expect(row.followup).toContain('STAGING');
-    expect(row.session_id).toBe('default');
 
     const firstAssistant = (await transcript(rt)).find((entry) => entry.role === 'assistant');
 
@@ -3989,7 +3995,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
       name: 'local_helper', description: 'a locally crafted helper',
-      code: 'async () => 1', params: null, scope: 'local',
+      code: 'async () => 1',
     });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                         VALUES (${rt.actor.actorId}, 'editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
@@ -4011,7 +4017,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
   test('revert by id forgets the fact for real; a crafted tool is informational and has no revert', async () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
-      name: 'kept_tool', description: 'stays', code: 'async () => 2', params: null, scope: 'local',
+      name: 'kept_tool', description: 'stays', code: 'async () => 2',
     });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                         VALUES (${rt.actor.actorId}, 'stale', '"value"', 1.0, NULL, ${Date.now()})`;
@@ -4036,130 +4042,30 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
 });
 
 describe('LocalAgentSession — Alternate Takes parity', () => {
-  function seedTakes(rt: ReturnType<typeof createCLIRuntime>) {
-    initSearchTables(rt.storage.execRaw);
+  /** A steer branch's take set on the turn that answered: the live answer first, the branch's second. */
+  async function answeredWithTakes(session: ReturnType<typeof setup>['session'], rt: ReturnType<typeof createCLIRuntime>) {
     initAlternateTakesTable(rt.storage.execRaw);
-    // Takes join through `search_nodes` owned by this actor (mcts/record-node.ts:111); another owner is unreachable.
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
-                        VALUES (${rt.actor.actorId}, 'win', 'win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
-                        VALUES (${rt.actor.actorId}, 'win', 'alt', 'pick a strategy', 'B', 'go with approach B', 0.86, 2, 1, 'open')`;
-    // Production captures mid-turn; a stamp no turn's start can pass keeps the scoped claim from purging the seed as stale.
-    captureAlternateTakes(rt.storage.sql, rt.actor, { rootId: 'win', task: 'pick a strategy', winnerId: 'win', epsilon: 0.1, now: CAPTURED_DURING_THE_TURN });
-    void rt.storage.sql`UPDATE search_nodes SET status = 'terminal' WHERE id = 'win'`;
-    void rt.storage.sql`UPDATE search_nodes SET status = 'pruned' WHERE id = 'alt'`;
+    await session.send('solve it', { id: crypto.randomUUID() });
+    const turnId = present((await transcript(rt)).filter((entry) => entry.role === 'assistant').at(-1), 'the last assistant entry').id;
+
+    const set = present(recordBranchTakeSet(rt.storage.sql, rt.actor, {
+      task: 'pick a strategy', turnId, sessionId: 'default', liveText: 'go with approach A', branchText: 'go with approach B',
+    }), 'the take set');
+
+    return { set, win: set.candidates[0].nodeId, alt: set.candidates[1].nodeId };
   }
 
-  test('takes captured mid-turn are claimed for the turn at turn end', async () => {
-    const { session, rt } = setup('answered with A');
-    seedTakes(rt);
-    await session.send('solve it', { id: crypto.randomUUID() });
-
-    const turnId = present((await transcript(rt)).filter((entry) => entry.role === 'assistant').at(-1), 'the last assistant entry').id;
-
-    expect(session.latestAlternateTakes()).toMatchObject({ turnId, sessionId: 'default', chosenNodeId: null });
-    await session.end();
-  });
-
-  test('an errored turn purges its unclaimed takes instead of claiming them', async () => {
-    // An errored turn has no durable answer, so its captured takes are purged, matching cf.
-    const erroringModel = new TestLanguageModelV2({
-      provider: 'fake', modelId: 'fake-model',
-      doStream: async () => ({
-        stream: new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: 'stream-start', warnings: [] });
-            controller.error(new Error('provider exploded'));
-          },
-        }),
-        response: { headers: {} },
-      }),
-    });
-
-    const { session, rt, events } = setup('unused', erroringModel);
-    seedTakes(rt);
-
-    await session.send('solve it', { id: crypto.randomUUID() });
-
-    expect(events.some((e) => e.type === 'error')).toBe(true);
-    const turnEnd = events.find((event) => event.type === 'turn-end');
-
-    if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
-    expect(turnEnd.turn.hadError).toBe(true);
-    expect(session.latestAlternateTakes()).toBeNull();
-    await session.end();
-  });
-
-  // Core's `creditedTurnId` reads whether the turn ended; `acc.hadError` is set by any failed tool result and would
-  // purge takes of a turn that recovered.
-  test('a turn that answered despite a failing tool call still claims its takes', async () => {
-    let step = 0;
-    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
-
-    const failingToolModel = new TestLanguageModelV2({
-      provider: 'fake', modelId: 'fake-model',
-      doStream: async () => {
-        step += 1;
-
-        return {
-          stream: new ReadableStream({
-            start(controller) {
-              controller.enqueue({ type: 'stream-start', warnings: [] });
-
-              if (step === 1) {
-                controller.enqueue({
-                  type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
-                  input: JSON.stringify({ action: 'save', content: 'note' }),
-                });
-                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
-              } else {
-                controller.enqueue({ type: 'text-start', id: '0' });
-                controller.enqueue({ type: 'text-delta', id: '0', delta: 'answered with A' });
-                controller.enqueue({ type: 'text-end', id: '0' });
-                controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
-              }
-
-              controller.close();
-            },
-          }),
-          response: { headers: {} },
-        };
-      },
-    });
-
-    const { session, rt, events } = setup('unused', failingToolModel);
-    rt.memory.append = async () => { throw new Error('disk full'); };
-
-    seedTakes(rt);
-
-    await session.send('solve it', { id: crypto.randomUUID() });
-
-    const turnEnd = events.find((event) => event.type === 'turn-end');
-
-    if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
-    expect(turnEnd.turn.hadError).toBe(true);
-
-    const turnId = present((await transcript(rt)).filter((entry) => entry.role === 'assistant').at(-1), 'the last assistant entry').id;
-
-    expect(session.latestAlternateTakes()).toMatchObject({ turnId, sessionId: 'default' });
-    await session.end();
-  });
-
-  test('picking a sibling writes the take_pick ledger row, re-points, and queues the continuation', async () => {
+  test('picking the branch writes the take_pick ledger row and queues the continuation', async () => {
     const { session, rt, events } = setup('answered with A');
-    seedTakes(rt);
-    await session.send('solve it', { id: crypto.randomUUID() });
-    const set = present(session.latestAlternateTakes(), 'the alternate takes set');
+    const { set, alt } = await answeredWithTakes(session, rt);
 
-    const result = await session.pickAlternateTake(set.id, 'alt');
+    const result = await session.pickAlternateTake(set.id, alt);
     expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true, continuationQueued: true });
 
     const row = rt.storage.sql<{ outcome: string; source: string; followup: string | null; turn_id: string }>`
       SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0];
 
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'go with approach B', turn_id: set.turnId });
-    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0].status).toBe('terminal');
-    expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0].status).toBe('pruned');
 
     await waitFor(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'));
     const continuation = present(turnStarts(events).find((s) => s.event === 'take_pick'), 'the take_pick continuation turn');
@@ -4169,13 +4075,11 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     await session.end();
   });
 
-  test('confirming the answered winner records acceptance and queues nothing', async () => {
+  test('confirming the answered take records acceptance and queues nothing', async () => {
     const { session, rt, events } = setup('answered with A');
-    seedTakes(rt);
-    await session.send('solve it', { id: crypto.randomUUID() });
-    const set = present(session.latestAlternateTakes(), 'the alternate takes set');
+    const { set, win } = await answeredWithTakes(session, rt);
 
-    const result = await session.pickAlternateTake(set.id, 'win');
+    const result = await session.pickAlternateTake(set.id, win);
     expect(result).toMatchObject({ outcome: 'accepted', changedAnswer: false, continuationQueued: false });
     expect(rt.storage.sql<{ source: string }>`SELECT source FROM turn_outcomes`[0].source).toBe('take_pick');
     expect(turnStarts(events).every((s) => s.kind === 'user')).toBe(true);
@@ -4400,67 +4304,6 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     // The live turn's call and the branch head's: a fork of a budgeted turn cannot spend outside its budget.
     expect(session.budget.snapshot('q3').map((mission) => mission.calls)).toEqual([2]);
     await session.end();
-  });
-});
-
-describe('LocalAgentSession — the lifetime search', () => {
-  /** The branch lane's two calls: exploring one approach, and reflecting on the traces. */
-  const isBranchCall = (body: string): boolean =>
-    body.includes('You are an expert agent exploring one approach') || body.includes('Task: Given my purpose');
-
-  test("a lifetime search's branch calls are billed once each", async () => {
-    // Branches run in their own processes against the configured endpoint, so the endpoint is a local server.
-    let branchCalls = 0;
-
-    const server = Bun.serve({
-      port: 0,
-      async fetch(request) {
-        if (isBranchCall(await request.text())) branchCalls += 1;
-
-        return Response.json({
-          id: 'cmpl-lifetime', object: 'chat.completion', created: 1, model: 'test-model',
-          choices: [{ index: 0, message: { role: 'assistant', content: 'Cache the token table.' }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
-        });
-      },
-    });
-
-    try {
-      const db = new Database(scratchPath('local-session-lifetime', 'agent.db'));
-      // Opened in the mode the CLI opens its database (openWorkspaceCLI): the branch processes open this file too.
-      db.exec('PRAGMA journal_mode = WAL');
-      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-
-      const rt = createCLIRuntime(db, {
-        dbPath: db.filename,
-        llm: {
-          name: 'workers-ai', baseURL: `http://127.0.0.1:${String(server.port)}/v1`,
-          headers: { Authorization: 'Bearer lifetime' }, model: 'test-model',
-        },
-      });
-
-      const events: SessionEvent[] = [];
-      const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: (event) => events.push(event) });
-      // Four windows closed in an earlier life, so this session's first window starts the search.
-      void rt.storage.sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${rt.actor.actorId}, 'closed_turn_windows', '4')`;
-
-      for (let turn = 1; turn <= 5; turn++) await session.send(`turn ${turn}`, { id: crypto.randomUUID() });
-      await waitFor(() => events.some((event) => event.type === 'evolution' && event.event === 'mcts_complete'));
-
-      // The search ran to its end rather than failing to start its branches.
-      expect(events.flatMap((event) => event.type === 'evolution' && event.event === 'mcts_complete' ? [event.message] : []))
-        .toEqual([expect.stringMatching(/^Evolution (explored|converged)/u)]);
-
-      // The search runs between turns, so its calls are filed under the workspace's own run.
-      const billed = session.getRunEvents(WORKSPACE_RUN_ID)
-        .filter((event) => event.type === 'model_call' && event.source === 'mcts');
-
-      expect(branchCalls).toBeGreaterThan(0);
-      expect(billed).toHaveLength(branchCalls);
-      await session.end();
-    } finally {
-      await server.stop(true);
-    }
   });
 });
 
@@ -5215,7 +5058,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // `preset` cannot be invented, so a call without one is refused before expanding, naming the field.
     const refusal = {
       success: false, reason: 'bad_input',
-      error: 'swarm needs `preset` — the shape of the search (no role catalog is wired here to take its default from). '
+      error: 'swarm needs `preset`: the shape of the search (no role catalog is wired here to take its default from). '
         + SWARM_PRESET_DOCTRINE.join(' '),
     };
 
@@ -5576,7 +5419,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
       id: 'h-fork', rootId: 'r1', parentId: null, depth: 0, mode: 'build',
       task: 'look at the parser', rationale: 'because', inheritedContext: [],
       budget: { maxDepth: 2, spawnedAt: Date.now() },
-      loop: defaultLoopOrigin('head'), mergeStrategy: 'synthesize', model: 'local/fork',
+      loop: defaultLoopOrigin('run'), mergeStrategy: 'synthesize', model: 'local/fork',
     });
 
     await head.run();

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { jsonSchema, tool } from 'ai';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
-import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
+import { scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
@@ -74,7 +74,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null,
     orchestration: {
-      engine: new EvolutionEngine(runtime, stores.history, { reportModelCall: unobservedSpend, enabled: false }), eventLog: new EventLog(eventSql, handle),
+      engine: new EvolutionEngine(runtime, stores.history, { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: () => {},
         enqueueTurn: async () => { throw new Error('this fixture must not enqueue another turn'); },
@@ -302,7 +302,8 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
   await expect(claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }] })).rejects.toThrow(KinuError);
   expect(() => claims.settle(stale, 'completed')).toThrow(KinuError);
   await claims.consume(live, { index: 0, messages: [{ role: 'user', content: 'live step' }] });
-  expect(claims.read('turn-fence')).toMatchObject({ epoch: 2, runId: 'run-new', consumedRevision: 1 });
+  expect(claims.read('turn-fence')).toMatchObject({ epoch: 2, runId: 'run-new' });
+  expect((await claims.consumedContext('turn-fence'))?.revision).toBe(1);
   claims.settle(live, 'completed');
   await expect(claims.consume(live, { index: 1, messages: [{ role: 'user', content: 'after settle' }] })).rejects.toThrow(KinuError);
 });

@@ -4,13 +4,11 @@
  */
 import * as v from 'valibot';
 
-import {
-  diffLines, MAX_LINES_PER_FILE, parseJsonValue, TUI_MARKS,
-  type DiffLine, type FileStatus,
-} from '@kinu.run/core';
+import { diffLines, MAX_LINES_PER_FILE, parseJsonValue, type DiffLine, type FileStatus } from '@kinu.run/core';
+import { TUI_MARKS } from '@kinu.run/core/tui';
 import { tolerate } from '@kinu.run/core/obs';
 
-import { clipText, terminalText } from '@kinu.run/core';
+import { clipText, terminalText } from '@kinu.run/core/tui';
 import { useTuiTheme } from './theme';
 
 /** The expanded tool-result line budget, shared with the card. */
@@ -188,11 +186,10 @@ function diffTrailer(omitted: number, truncated: boolean): string | null {
   return truncated ? `… diff ends at ${String(MAX_LINES_PER_FILE)} lines. The totals cover the full file.` : null;
 }
 
-export function FileDiffCard({ view, expanded, previewWidth, lineCap = EXPANDED_RESULT_LINES }: {
+export function FileDiffCard({ view, expanded, previewWidth }: {
   readonly view: FileEditDiffView;
   readonly expanded: boolean;
   readonly previewWidth: number;
-  readonly lineCap?: number;
 }) {
   const { well } = useTuiTheme().colors;
   const inkFor = { add: well.success, del: well.danger, ctx: well.muted, hunk: well.muted } as const;
@@ -203,7 +200,7 @@ export function FileDiffCard({ view, expanded, previewWidth, lineCap = EXPANDED_
   let drawn = 0;
 
   for (const hunk of shown) {
-    const room = Math.min(hunk.length, lineCap - drawn);
+    const room = Math.min(hunk.length, EXPANDED_RESULT_LINES - drawn);
 
     if (hunk.length === 0) continue;
 

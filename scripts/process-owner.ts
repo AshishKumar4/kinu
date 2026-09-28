@@ -86,6 +86,12 @@ export interface ReapedRoots {
 export function reapAbandonedRoots(parent: string, keep: string): ReapedRoots {
   const reaped: string[] = [];
   const unremovable: string[] = [];
+  let commandLines: readonly string[] | undefined;
+
+  // A browser outlives its SIGKILLed launcher until the pipe's close reaches it, and a root removed under it was
+  // written again with no owner record, so no later sweep could judge it (test-chrome, 2026-09-27).
+  const inUse = (root: string): boolean => (commandLines ??= readdirSync('/proc').flatMap((pid) =>
+    /^\d+$/u.test(pid) ? [procFile(pid, 'cmdline') ?? ''] : [])).some((line) => line.includes(`${root}/`));
 
   for (const name of readdirSync(parent)) {
     const path = join(parent, name);
@@ -98,7 +104,7 @@ export function reapAbandonedRoots(parent: string, keep: string): ReapedRoots {
     const text = tolerate(() => readFileSync(join(path, OWNER_RECORD), 'utf8'), 'enoent');
     const recorded = text === undefined ? undefined : v.safeParse(v.pipe(v.string(), v.parseJson(), ProcessOwnerSchema), text);
 
-    if (!recorded?.success || ownerAlive(recorded.output)) continue;
+    if (!recorded?.success || ownerAlive(recorded.output) || inUse(path)) continue;
 
     // A racing peer may remove it between the read and the rm; `force` covers that.
     const removed = tolerate(() => {

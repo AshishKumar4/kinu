@@ -12,6 +12,8 @@
     "./workspace-birth": "./src/workspace-birth.ts",
     "./obs": "./src/obs/index.ts",
     "./protocol": "./src/protocol.ts",
+    "./tui": "./src/tui/index.ts",
+    "./swarm-view": "./src/read-models/swarm-view.ts",
     "./slates": "./src/slates/index.ts",
     "./control-plane": "./src/control-plane/index.ts",
     "./control-plane/store": "./src/control-plane/store.ts",
@@ -34,6 +36,7 @@
     "@nimbus-sh/fabric": "0.7.1",
     "acorn": "^8.17.0",
     "ai": "6.0.214",
+    "effect": "4.0.0-rc.117",
     "valibot": "^1.4.1",
     "zod": "^4.3.6"
   },

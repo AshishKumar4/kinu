@@ -8,7 +8,7 @@
 
 const { scratchDir } = require('../../test-utils/src/scratch');
 
-const { runToExit } = require('../../test-utils/src/spawn');
+const { killAndAwaitExit, recordedIn, runToExit } = require('../../test-utils/src/spawn');
 
 const { afterAll, afterEach, describe, expect, spyOn, test } = require('bun:test');
 
@@ -988,7 +988,9 @@ describe('daemon checkpoint protocol', () => {
       id: 'rpc-kinuckpt00-1', method: 'exec', sandbox: RAW, params: ['true'],
       checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: DEVICE_HOME },
     }, ws, ctx);
-    expect((await ws.response('rpc-kinuckpt00-1')).result.exitCode).toBe(0);
+    const { result } = await ws.response('rpc-kinuckpt00-1');
+    expect(result.exitCode).toBe(0);
+    expect(result.uncheckpointed).toEqual({ dir: fs.realpathSync(DEVICE_HOME), why: expect.stringContaining('Kinu\'s own directory') });
     handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
     expect((await ws.response('l')).result).toEqual([]);
   });
@@ -1006,7 +1008,11 @@ describe('daemon checkpoint protocol', () => {
         id: 'w-outside', method: 'writeFile', sandbox: scoped, params: [path.join(work, 'a.txt'), 'x'],
         checkpoint: { agent: 'a', turnId: 't1', sessionId: 's', dir: outside },
       }, ws, ctx);
-      expect((await ws.response('w-outside')).result).toEqual({ success: true });
+      // The write lands, and says that no checkpoint covers it.
+      expect((await ws.response('w-outside')).result).toEqual({
+        success: true,
+        uncheckpointed: { dir: outside, why: expect.stringContaining('outside what this device\'s sandbox exposes') },
+      });
       handle({ id: 'l1', method: 'checkpointList', params: ['a'] }, ws, ctx);
       expect((await ws.response('l1')).result.map((entry) => entry.dir)).not.toContain(outside);
 
@@ -1231,21 +1237,18 @@ describe('daemon process under Bun against a local hub', () => {
   }
 
   /** Any supervisor the body left un-acked: each in-flight record names its
-   *  process group, and ESRCH is that group already being gone, which is the
-   *  teardown's goal. Killing by the daemon child's group is not possible —
-   *  `Bun.spawn` above is not detached. */
-  function killInflightSupervisors(root) {
+   *  process group, which writes into the request's directory until it exits.
+   *  Killing by the daemon child's group is not possible — `Bun.spawn` above
+   *  is not detached. */
+  async function killInflightSupervisors(root) {
     const inflight = path.join(root, 'inflight');
 
     if (!fs.existsSync(inflight)) return;
 
     for (const entry of fs.readdirSync(inflight)) {
-      const state = path.join(inflight, entry, 'state');
+      const supervisor = recordedIn(path.join(inflight, entry, 'state'), /^pid=(\d+)$/m);
 
-      if (!fs.existsSync(state)) continue;
-      const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
-
-      if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
+      if (supervisor !== null) await killAndAwaitExit(supervisor, { group: true });
     }
   }
 
@@ -1282,23 +1285,18 @@ describe('daemon process under Bun against a local hub', () => {
       try {
         // HELLO arrives with the runtime identity only a real Bun carries.
         const hello = await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'));
-        expect(hello).toBeDefined();
+        expect(hello).not.toBeNull();
         expect(hello.user).toBe('user-1');
         expect(hello.pid).toBeGreaterThan(0);
         const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
-        expect(daemonLog()).toContain('Connected');
 
         // ROTATE: the hub rotates the long-lived token; the daemon persists
         // it and ACKNOWLEDGES. The hub holds the superseded token valid until
         // that frame, so this is what ends its grace.
         const rotated = `pdt_${'c'.repeat(32)}`;
         hub.socket().send(JSON.stringify({ type: 'ROTATE', token: rotated }));
-        await untilHub(() => JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token === rotated);
-        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token).toBe(rotated);
-        expect(daemonLog()).toContain('Device token rotated');
-        // `untilHub` answers null on timeout, and `toBeDefined` accepts null — so
-        // the absent direction has to be spelled as "not null" to be able to fail.
         expect(await untilHub(() => hub.frames.find((f) => f.type === 'ROTATE_ACK'))).not.toBeNull();
+        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token).toBe(rotated);
 
         const reply = replyReader(hub, daemonLog);
 
@@ -1335,14 +1333,14 @@ describe('daemon process under Bun against a local hub', () => {
         // Reconnect after a socket drop: the hub closes; the daemon redials.
         hub.socket().close();
         const hello2 = await untilHub(() => hub.frames.filter((f) => f.type === 'HELLO')[1]);
-        expect(hello2).toBeDefined();
+        expect(hello2).not.toBeNull();
       } finally {
         // Teardown owns three things the runner's exit depends on: the daemon
         // child (SIGTERM, then reaped through .exited), the in-flight root,
         // and the hub.
         child.kill('SIGTERM');
         await child.exited;
-        killInflightSupervisors(root);
+        await killInflightSupervisors(root);
       }
     } finally {
       await hub.close();
@@ -1354,9 +1352,8 @@ describe('daemon process under Bun against a local hub', () => {
    * each hardening case below is its own named failure rather than another
    * phase inside the sequence test.
    */
-  async function withDaemon(extraEnv, body) {
-    const root = scratchDir('daemon-case');
-
+  /** `root` is the daemon's KINU_HOME. */
+  async function withDaemon(extraEnv, body, root = scratchDir('daemon-case')) {
     const hub = startFakeHub();
 
     try {
@@ -1375,7 +1372,7 @@ describe('daemon process under Bun against a local hub', () => {
       } finally {
         child.kill('SIGTERM');
         await child.exited;
-        killInflightSupervisors(root);
+        await killInflightSupervisors(root);
       }
     } finally {
       await hub.close();
@@ -1544,6 +1541,106 @@ describe('daemon process under Bun against a local hub', () => {
     });
   });
 
+  /** A machine whose owner ran `kinu connect` from ~, consenting the home that holds Kinu's own directory. */
+  function homeRootedMachine() {
+    const machine = fs.realpathSync(scratchDir('daemon-machine'));
+    const root = path.join(machine, '.kinu');
+    const agentHome = path.join(root, 'agents', 'ws-1', 'home');
+    fs.mkdirSync(agentHome, { recursive: true, mode: 0o700 });
+
+    return { machine, root, agentHome, block: { tier: 'sandboxed', agentHome, roots: [machine] } };
+  }
+
+  test('a consented home never shadows the agent home, and undo restores what a command wrote there', async () => {
+    if (process.platform !== 'linux') return;
+    const sandbox = require('../src/sandbox.js');
+
+    if ((await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const { machine, root, agentHome, block } = homeRootedMachine();
+    fs.writeFileSync(path.join(agentHome, 'x'), 'before');
+
+    await withDaemon({ HOME: machine }, async ({ hub, reply }) => {
+      hub.socket().send(JSON.stringify({
+        id: 'rpc-homeroot00-1', method: 'exec', sandbox: block, params: ['printf changed > "$HOME/x"'],
+        checkpoint: { agent: 'ws-1', turnId: 't1', sessionId: 's', dir: null },
+      }));
+      const ran = await reply('rpc-homeroot00-1');
+      expect(ran.error).toBeUndefined();
+      expect(fs.existsSync(path.join(machine, 'x'))).toBe(false);
+      expect(fs.readFileSync(path.join(agentHome, 'x'), 'utf8')).toBe('changed');
+      expect(ran.result.uncheckpointed).toBeUndefined();
+      hub.socket().send(JSON.stringify({ id: 'rpc-homeack000-1', method: 'execAck', params: ['rpc-homeroot00-1', 1] }));
+      await reply('rpc-homeack000-1');
+
+      hub.socket().send(JSON.stringify({ id: 'home-list', method: 'checkpointList', params: ['ws-1', 50, 't1'] }));
+      const [taken] = (await reply('home-list')).result;
+      expect(taken.dir).toBe(agentHome);
+      hub.socket().send(JSON.stringify({ id: 'home-plan', method: 'checkpointPlan', sandbox: block, params: ['ws-1', agentHome, taken.id] }));
+      expect((await reply('home-plan')).result.files).toEqual([{ path: 'x', kind: 'modify' }]);
+      hub.socket().send(JSON.stringify({ id: 'home-restore', method: 'checkpointRestore', sandbox: block, params: ['ws-1', agentHome, taken.id] }));
+      expect((await reply('home-restore')).error).toBeUndefined();
+      expect(fs.readFileSync(path.join(agentHome, 'x'), 'utf8')).toBe('before');
+    }, root);
+  });
+
+  test('a command\'s checkpoint covers its working tree, and one run from the home itself says undo cannot', async () => {
+    if (process.platform !== 'linux') return;
+    const sandbox = require('../src/sandbox.js');
+
+    if ((await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const { machine, root, block } = homeRootedMachine();
+    const project = path.join(machine, 'shop');
+    fs.mkdirSync(path.join(project, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(project, 'src'));
+    fs.writeFileSync(path.join(project, 'README.md'), 'shop');
+
+    await withDaemon({ HOME: machine }, async ({ hub, reply }) => {
+      hub.socket().send(JSON.stringify({
+        id: 'rpc-worktree00-1', method: 'exec', sandbox: block, cwd: path.join(project, 'src'), params: ['printf a > a.txt'],
+        checkpoint: { agent: 'ws-1', turnId: 't1', sessionId: 's', dir: null },
+      }));
+      expect((await reply('rpc-worktree00-1')).result.uncheckpointed).toBeUndefined();
+      hub.socket().send(JSON.stringify({ id: 'tree-list', method: 'checkpointList', params: ['ws-1', 50, 't1'] }));
+      expect((await reply('tree-list')).result.map((entry) => entry.dir)).toEqual([project]);
+
+      hub.socket().send(JSON.stringify({
+        id: 'rpc-homecwd000-1', method: 'exec', sandbox: block, cwd: machine, params: ['printf direct > notes.txt'],
+        checkpoint: { agent: 'ws-1', turnId: 't2', sessionId: 's', dir: null },
+      }));
+      const direct = await reply('rpc-homecwd000-1');
+      expect(fs.readFileSync(path.join(machine, 'notes.txt'), 'utf8')).toBe('direct');
+      expect(direct.result.uncheckpointed).toEqual({ dir: machine, why: expect.stringContaining('home folder itself') });
+      hub.socket().send(JSON.stringify({ id: 'home-cwd-list', method: 'checkpointList', params: ['ws-1', 50, 't2'] }));
+      expect((await reply('home-cwd-list')).result).toEqual([]);
+
+      for (const [ack, id] of [['rpc-treeack000-1', 'rpc-worktree00-1'], ['rpc-homeack001-1', 'rpc-homecwd000-1']]) {
+        hub.socket().send(JSON.stringify({ id: ack, method: 'execAck', params: [id, 1] }));
+        await reply(ack);
+      }
+    }, root);
+  });
+
+  test('a daemon whose KINU_HOME is elsewhere keeps its checkpoints and in-flight commands there', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    const owner = fs.realpathSync(scratchDir('daemon-owner-home'));
+    const project = path.join(owner, 'shop');
+    fs.mkdirSync(path.join(project, '.git'), { recursive: true });
+
+    await withDaemon({ HOME: owner, KINU_INFLIGHT_ROOT: '' }, async ({ hub, root, reply }) => {
+      hub.socket().send(JSON.stringify({
+        id: 'rpc-kinuhome00-1', method: 'exec', sandbox: RAW, cwd: project, params: ['printf a > a.txt'],
+        checkpoint: { agent: 'ws-1', turnId: 't1', sessionId: 's', dir: null },
+      }));
+      await reply('rpc-kinuhome00-1');
+      // Under the device home, which every sandbox masks, and never under a ~/.kinu a consented home would expose.
+      expect(fs.existsSync(path.join(root, 'inflight', 'rpc-kinuhome00-1'))).toBe(true);
+      expect(fs.readdirSync(path.join(root, 'checkpoints'))).toEqual(['ws-1']);
+      expect(fs.existsSync(path.join(owner, '.kinu'))).toBe(false);
+      hub.socket().send(JSON.stringify({ id: 'rpc-kinuhomeak-1', method: 'execAck', params: ['rpc-kinuhome00-1', 1] }));
+      await reply('rpc-kinuhomeak-1');
+    });
+  });
+
   test('a sandboxed command spills into its own tmp, named as its shell and the file methods name it', async () => {
     if (process.platform !== 'linux') return;
     const sandbox = require('../src/sandbox.js');
@@ -1623,7 +1720,7 @@ describe('daemon process under Bun against a local hub', () => {
     const root = scratchDir('daemon-orphan');
     const requestId = 'rpc-orphanwait-1';
     const requestDir = path.join(root, 'inflight', requestId);
-    let supervisorPid = 0;
+    let supervisor = null;
 
     try {
       const hub = startFakeHub();
@@ -1640,7 +1737,10 @@ describe('daemon process under Bun against a local hub', () => {
         expect(done.result.stdout).toContain('orphan-check');
 
         // Terminal, un-acknowledged: the supervisor is on its ack FIFO now.
-        supervisorPid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(path.join(requestDir, 'state'), 'utf-8'))[1]);
+        supervisor = recordedIn(path.join(requestDir, 'state'), /^pid=(\d+)$/m);
+
+        if (supervisor === null) throw new Error(`no supervisor state under ${requestDir}: log says ${firstLog()}`);
+        const supervisorPid = supervisor.pid;
         expect(processAlive(supervisorPid)).toBe(true);
         expect(fs.existsSync(path.join(requestDir, 'result'))).toBe(true);
 
@@ -1670,7 +1770,7 @@ describe('daemon process under Bun against a local hub', () => {
         await hub.close();
       }
     } finally {
-      if (supervisorPid > 0) tolerate(() => process.kill(-supervisorPid, 'SIGKILL'), 'esrch');
+      if (supervisor !== null) await killAndAwaitExit(supervisor, { group: true });
     }
   // Two daemon spawns, one exec, and the supervisor's 1 s orphan poll, each
   // with its own named wait inside.

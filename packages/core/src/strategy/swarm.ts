@@ -77,7 +77,7 @@ export type SwarmPresetRow = SwarmPresetPoint;
 /**
  * `resolve(preset) → SwarmConfig` (*Presets*). No `custom` row: `config` is the override.
  * `novelty: 0.4` is Rainbow Teaming's τ=0.6 similarity ceiling converted to a distance floor.
- * `threshold: 0.8` is `craftExtractionThreshold`, the existing publication bar.
+ * `threshold: 0.8` is the middle of the pass band.
  */
 export const SWARM_PRESET_POINTS = {
   ideate: {
@@ -282,7 +282,7 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
 
   // The two width modes are exclusive: `nodes.length` is the width.
   if (input.nodes && input.branches !== undefined) {
-    return badInput('`nodes` assigns the first level node by node, so its length is the branch count — '
+    return badInput('`nodes` assigns the first level node by node, so its length is the branch count: '
       + `you named ${String(input.nodes.length)} node(s) and \`branches: ${String(input.branches)}\` as `
       + 'well, and one of the two would be ignored. Drop `branches` to keep your own assignments, or '
       + 'drop `nodes` to let the engine hand out that many diversity angles.');
@@ -310,7 +310,7 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
   for (const [index, spec] of (input.models ?? []).entries()) {
     if (spec.trim().length === 0) {
       return badInput(`\`models\` entry ${String(index + 1)} is empty, and an empty string names no `
-        + 'model to route this node to — the run would silently fall back to a default the call never '
+        + 'model to route this node to: the run would silently fall back to a default the call never '
         + 'chose. Name a spec the resolver recognises, such as a `<provider>/<modelId>` route.');
     }
   }
@@ -329,7 +329,7 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
     }
   } else {
     if (input.config) {
-      return badInput(`preset "${input.preset}" is a tested path and takes no \`config\` — validity runs on `
+      return badInput(`preset "${input.preset}" is a tested path and takes no \`config\`: validity runs on `
         + 'the resolved composition, so a preset that accepted axes could be refused, and a refusable '
         + `preset is not a tested path. Use preset:"custom" with from:"${input.preset}" and a \`label\`, `
         + 'which records the run as the composition it is.');
@@ -384,7 +384,7 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
       + `missing ${missing.join(', ')}. `
       + (base
         ? `\`config\` overrides \`from\`'s row, so state only what differs from "${String(baseName)}".`
-        : 'With no `from` there is no row to inherit from, so `config` must name every axis — or name a '
+        : 'With no `from` there is no row to inherit from, so `config` must name every axis, or name a '
           + 'base with `from` and override the rest.'));
   }
 
@@ -482,12 +482,11 @@ function instrumentFreeAlternative(resolved: ResolvedSwarm): string {
   const row = SWARM_PRESET_POINTS[resolved.preset];
 
   return 'If nothing here can be measured by running code, DROP `objective` and this same call '
-    + `works as it stands: {action:"swarm", preset:"${resolved.preset}", task:"…"} runs a judged `
+    + `works as it stands: {action:"swarm", preset:"${resolved.preset}", task:"..."} runs a judged `
     + `sweep of ${String(row.branches)}, ranked, with no instrument and no other field required.`;
 }
 
-/** Shared by {@link swarmValidity} and `runSwarm` so an in-process caller cannot bypass it. */
-export function judgeMarginalisationRefusal(config: SwarmConfig): SwarmRefusal | null {
+function judgeMarginalisationRefusal(config: SwarmConfig): SwarmRefusal | null {
   if (!isTreeAdvance(config.advance.kind)) return null;
 
   if (config.score.kind !== 'judge') return null;
@@ -495,22 +494,21 @@ export function judgeMarginalisationRefusal(config: SwarmConfig): SwarmRefusal |
   if (config.score.samples >= JUDGE_MARGINALISATION_MIN) return null;
 
   return badInput(`a judged scalar is a noisy scorer and a tree amplifies scorer noise, so score:"judge" `
-    + `down a tree needs samples ≥ ${String(JUDGE_MARGINALISATION_MIN)} and this composition has `
+    + `down a tree needs samples at least ${String(JUDGE_MARGINALISATION_MIN)} and this composition has `
     + `${String(config.score.samples)}: at fixed node expansions a marginalised WEAKER judge beats an `
     + 'unmarginalised stronger one, 30.0% against 28.5%. Raise `samples`, and note the binding cap is '
-    + '`maxEvalLLMCalls` rather than the request — a code-bearing branch realises '
-    + 'min(samples, maxEvalLLMCalls − 1), so raising this alone silently does nothing.');
+    + '`maxEvalLLMCalls` rather than the request: a code-bearing branch realises '
+    + 'min(samples, maxEvalLLMCalls - 1), so raising this alone silently does nothing.');
 }
 
-/** Shared by both entry points for the same reason as {@link judgeMarginalisationRefusal}. */
-export function archiveRegionRefusal(
+function archiveRegionRefusal(
   config: SwarmConfig, caps: ResolvedSwarmCaps,
 ): SwarmRefusal | null {
   if (config.advance.kind !== 'archive') return null;
 
   if (config.score.kind !== 'verify') {
     return badInput(`an archive keys every cell by the objective's identity and orders each cell by the `
-      + `objective's own direction, and score:"${config.score.kind}" measures neither — so nothing this `
+      + `objective's own direction, and score:"${config.score.kind}" measures neither, so nothing this `
       + 'run produced could be binned or ranked, and the coverage it reported would be over a store it '
       + 'never wrote. Use score:"verify" with an `objective`, or advance:"none" for a flat run.');
   }
@@ -521,7 +519,7 @@ export function archiveRegionRefusal(
     // A distance floor; published filters are similarity ceilings (convert as 1 − x).
     return badInput(`\`novelty\` is the DISTANCE a candidate must put between itself and every occupant of `
       + `its cell, in [0,1] where 0 admits everything and 1 admits only an answer sharing no vocabulary `
-      + `at all — and this composition states ${String(novelty)}, which no distance can satisfy or fail. `
+      + `at all, and this composition states ${String(novelty)}, which no distance can satisfy or fail. `
       + 'Note the direction before transcribing one: a filter quoted as a similarity ceiling is one MINUS '
       + 'that number here. State a threshold inside [0,1].');
   }
@@ -529,7 +527,7 @@ export function archiveRegionRefusal(
   if (caps.depth && caps.depth.value > 1) {
     return badInput(`advance:"archive" bins its candidates into cells at the settle barrier, so during the `
       + `run there is no archive to select a second level FROM and depth ${String(caps.depth.value)} `
-      + 'cannot be run — it is refused rather than silently flattened, because a cap accepted and ignored '
+      + 'cannot be run: it is refused rather than silently flattened, because a cap accepted and ignored '
       + 'is a lie about what the run did. Pass depth:1 and carry:"elites", which is what makes the next '
       + "run start from this one's occupants.");
   }
@@ -549,8 +547,8 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
   if (tree && config.score.kind === 'none') {
     return badInput(`advance:"${advance}" selects on value and score:"none" supplies none, so this `
       + 'composition is a breadth-first enumerator whose winner is row order: at zero signal a 42-node '
-      + 'tree agrees with the genuinely best node 0% of the time. Give it a signal — score:"verify" with '
-      + 'an `objective`, or score:"judge" with enough `samples` — or use advance:"none" and get honest '
+      + 'tree agrees with the genuinely best node 0% of the time. Give it a signal: score:"verify" with '
+      + 'an `objective`, or score:"judge" with enough `samples`, or use advance:"none" and get honest '
       + 'parallel sampling.');
   }
 
@@ -561,7 +559,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
   if (tree && objective?.kind === 'witness' && objective.proxy === undefined) {
     return badInput('a disproof or a certificate is a binary signal and a tree cannot climb one: until the '
       + 'first success every candidate scores the same and the search is a breadth-first enumerator. Add '
-      + '`proxy` naming a scalar that improves as you approach — largest n verified, instances covered — '
+      + '`proxy` naming a scalar that improves as you approach, largest n verified, instances covered, '
       + 'or use advance:"none" and accept that this is parallel sampling, which for a witness hunt is '
       + 'honest and often correct.');
   }
@@ -569,14 +567,14 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
   if (advance === 'pareto') {
     if (!objective) {
       return badInput('advance:"pareto" reports a frontier, and a frontier needs several axes to be a '
-        + 'frontier at all: supply an `objective` of kind "instanced" (one metric across ≥2 instances) or '
-        + '"vector" (≥2 metrics, each with its own unit and direction).');
+        + 'frontier at all: supply an `objective` of kind "instanced" (one metric across at least 2 instances) or '
+        + '"vector" (at least 2 metrics, each with its own unit and direction).');
     }
 
     if (objective.kind !== 'instanced' && objective.kind !== 'vector') {
       return badInput(`advance:"pareto" with an objective of kind "${objective.kind}" gives a front of size one, `
-        + 'which is an argmax reported as a frontier. Use kind:"instanced" for one metric across ≥2 '
-        + 'instances (GEPA\'s front), or kind:"vector" for ≥2 metrics each keeping its own unit and '
+        + 'which is an argmax reported as a frontier. Use kind:"instanced" for one metric across at least 2 '
+        + 'instances (GEPA\'s front), or kind:"vector" for at least 2 metrics each keeping its own unit and '
         + 'direction (a score dict).');
     }
   }
@@ -591,7 +589,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
     return badInput('score:"verify" measures something and this composition did not say what. Supply '
       + '`objective` with a `metric`, a `unit`, a `direction`, a `target`, and `verify` as '
       + `{kind, spec} naming one of the registered instruments: ${VERIFIER_KINDS.join(', ')}. `
-      + 'Or set score:{kind:"none"} in `config` for a flat run with no value signal — and note '
+      + 'Or set score:{kind:"none"} in `config` for a flat run with no value signal, and note '
       + 'that a NAMED preset needs neither: it falls back to a judged sweep on its own.');
   }
 
@@ -617,7 +615,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
 
         return badInput(`verify.kind:"${registered}" ${doc.summary}, and its \`spec\` is the whole `
           + `problem statement rather than a pointer at one: it needs ${doc.specFields.join(', ')}, and `
-          + `${shortfall}. Send every field in one call — they are checked together, so adding them one `
+          + `${shortfall}. Send every field in one call: they are checked together, so adding them one `
           + `at a time costs a round trip each. ${instrumentFreeAlternative(resolved)}`);
       }
     }
@@ -628,12 +626,12 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
     return badInput('an archive needs a descriptor to bin elites into, and the descriptor is WITNESSED '
       + 'by the objective\'s own instrument rather than claimed by a node: supply `key`, naming one of '
       + 'the quantities that verifier reports beside its value. A key that can only say "distinct idea" '
-      + 'is a task with no coverage objective — that task wants preset:"ideate".');
+      + 'is a task with no coverage objective: that task wants preset:"ideate".');
   }
 
   if (resolved.key && advance !== 'archive') {
     return badInput(`\`key\` is the descriptor an archive bins elites into, and advance:"${advance}" `
-      + 'keeps no archive, so this run would accept a coverage key and report no coverage — which is a '
+      + 'keeps no archive, so this run would accept a coverage key and report no coverage, which is a '
       + 'silent lie about what it did rather than a harmless extra. Drop `key`, or use '
       + 'advance:"archive" if coverage is what you want.');
   }
@@ -656,7 +654,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
 
   if (advance === 'none' && caps.depth && caps.depth.value > 1) {
     return badInput(`advance:"none" has no selection step, so there is no second level to reach and `
-      + `depth ${String(caps.depth.value)} cannot be run — it is refused rather than silently flattened, `
+      + `depth ${String(caps.depth.value)} cannot be run: it is refused rather than silently flattened, `
       + 'because a cap accepted and ignored is a lie about what the run did. Pass depth:1, or choose a '
       + 'tree selector such as advance:"uct".');
   }
@@ -668,7 +666,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
     ].join(' and ');
 
     return badInput(`${named} is pruning policy for a tree selector, and advance:"${advance}" does not `
-      + `prune — it would be accepted and ignored, which is why it is refused. Drop ${named}, or use one of `
+      + `prune: it would be accepted and ignored, which is why it is refused. Drop ${named}, or use one of `
       + `${SWARM_TREE_ADVANCES.join('/')}.`);
   }
 
@@ -757,7 +755,7 @@ export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitratio
 
   if (!caps.depth) {
     return refused('depth-exhausted',
-      'nothing states how deep this search may go — neither the call nor a preset row behind it — so '
+      'nothing states how deep this search may go, neither the call nor a preset row behind it, so '
       + 'there is no cap a branch could be granted inside. This is an absent depth rather than an '
       + 'exhausted one.');
   }
@@ -784,7 +782,7 @@ export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitratio
       + `results rather than its conversation, and ${String(widening.length)} of these `
       + `${String(width)} branches ask for context:"inherit". A node may narrow the search's inheritance `
       + 'and never widen it, so this is refused rather than one of two conflicting policies being '
-      + 'honoured quietly. Propose the same branches with context:"fresh" — they still receive your '
+      + 'honoured quietly. Propose the same branches with context:"fresh": they still receive your '
       + 'report, your candidate and their own focus, which is everything except your transcript.');
   }
 

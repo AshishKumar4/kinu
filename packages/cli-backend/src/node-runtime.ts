@@ -1,4 +1,4 @@
-import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, createShellSession, shellCwd, observeWrites, skillsMount, withApprovalGatedShell, withMountTable, standardMounts, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
+import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, createShellSession, shellCwd, observeWrites, skillsMount, withApprovalGatedShell, withMountTable, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, VFS, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
@@ -23,8 +23,6 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
     // A node reading the parent's claim ledger would present the parent's turns as its own history.
     const stores = createAgentStores(() => origin.storage.sql, () => actor, (write) => origin.storage.transactionSync(write), async () => {
-      requireLocalActorWorkspace(origin.actor, actor);
-
       if (node.isolation === 'private-home') return { vfs, artifactDirectory: agentArtifactDirectory(node.home) };
 
       if (!deps.origin.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
@@ -39,10 +37,10 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
     let vfs = origin.storage.vfs;
     let shell = origin.shell;
     let router = origin.executionRouter;
+    let release: (() => void) | undefined;
 
     if (node.isolation === 'private-home') {
       const plane = await deps.workspace.asAgent({ cred: node.cred, home: node.home, tmp: node.tmp });
-      requireLocalActorWorkspace(origin.actor, actor);
 
       // A private home is a plane of the in-SQLite workspace, never the user's directory.
       const shellSession = createShellSession({
@@ -54,13 +52,12 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       const files = observer ? observeWrites(plane.vfs, observer) : plane.vfs;
 
       const mounted = withMountTable(files, [
-        ...standardMounts((name) => ownRouter.getProvider(name)),
         sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
         skillsMount((): VFS => vfs),
         ownContext,
       ]);
 
-      deps.workspace.mountTable(mounted, node.cred);
+      release = deps.workspace.mountTable(mounted, node.cred);
       vfs = mounted;
       ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs, shell, filesOwner: 'agent' }));
 
@@ -91,13 +88,12 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       get judgeModel() { return origin.judgeModel; },
       get fastLlm() { return origin.fastLlm; },
       get advisorLlm() { return origin.advisorLlm; },
-      spawnBranch: origin.spawnBranch,
-      abortBranch: origin.abortBranch,
       executionRouter: router,
       shell,
       checkpoints: origin.checkpoints,
       setShellApprovalChannel: origin.setShellApprovalChannel,
       setTurnFileLedgerProvider: origin.setTurnFileLedgerProvider,
+      ...(release !== undefined && { release }),
     };
   };
 }

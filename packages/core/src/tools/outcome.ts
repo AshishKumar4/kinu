@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { Effect } from 'effect';
 import * as v from 'valibot';
-import { KinuError, renderThrownChain, classifyErrorCode } from '../obs/index';
+import { KinuError, renderThrownChain, classifyErrorCode, settle } from '../obs/index';
 import { FileRefusalError } from '../types/file-edits';
 import { BindingFailureSchema, ToolFailureValueSchema, type BindingFailure, type ToolOutcome } from '../types/tool-outcome';
 import type { JsonValue } from '../utils/json';
@@ -36,14 +37,10 @@ export function failedToolOutcome(input: Parameters<typeof renderThrownChain>[0]
 }
 
 /** A namespace call returns typed operation refusals for authored code to handle. */
-export async function branchableToolCall<Result>(call: () => Promise<Result>) {
-  try {
-    return await call();
-  } catch (cause) {
-    const outcome = failedToolOutcome({ cause });
-
-    return { ...outcome, error: renderThrownChain({ cause }) };
-  }
+export function branchableToolCall<Result>(call: () => Promise<Result>) {
+  return settle(Effect.tryPromise({ try: call, catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => Effect.succeed({ ...failedToolOutcome(failed), error: renderThrownChain(failed) })),
+  ));
 }
 
 interface ProgramInvocation {
@@ -111,29 +108,33 @@ export async function withCodemodeProgram<Result extends { result?: unknown; log
   if (program.getStore() !== undefined) return invoke();
   const active: ProgramInvocation = { failures: [], pending: [] };
 
-  return program.run(active, async () => {
-    let result: Result;
+  const settled = Effect.promise(() => Promise.all(active.pending));
 
-    try {
-      result = await invoke();
-    } catch (cause) {
-      await Promise.all(active.pending);
+  return program.run(active, () => settle(Effect.gen(function* () {
+    const result = yield* Effect.tryPromise({ try: invoke, catch: (cause) => ({ cause }) }).pipe(
+      Effect.catch((failed) => Effect.flatMap(settled, () => {
+        const cause = failed.cause;
 
-      if (active.failures.length === 0) throw cause;
-      const propagated = v.safeParse(ToolFailureValueSchema, cause);
-      const outcome = propagated.success ? propagated.output : failedToolOutcome({ cause });
-      throw new CodemodeProgramError({ ...outcome, failures: active.failures },
-        JSON.stringify({ ...outcome, error: renderThrownChain({ cause }), failures: active.failures }), { cause });
-    }
+        if (active.failures.length === 0) return Effect.die(cause);
+        const propagated = v.safeParse(ToolFailureValueSchema, cause);
+        const outcome = propagated.success ? propagated.output : failedToolOutcome({ cause });
 
-    await Promise.all(active.pending);
+        return Effect.die(new CodemodeProgramError({ ...outcome, failures: active.failures },
+          JSON.stringify({ ...outcome, error: renderThrownChain({ cause }), failures: active.failures }), { cause }));
+      })),
+    );
+
+    yield* settled;
     const propagated = v.safeParse(ToolFailureValueSchema, result.result);
 
     if (propagated.success && active.failures.some((failure) => failure.reason === propagated.output.reason && failure.error === propagated.output.error)) {
       const outcome = { ...propagated.output, failures: active.failures };
-      throw new CodemodeProgramError(outcome, JSON.stringify({ ...result, ...outcome }));
+
+      return yield* Effect.die(new CodemodeProgramError(outcome, JSON.stringify({ ...result, ...outcome })));
     }
 
-    return active.failures.length === 0 ? result : { ...result, failures: active.failures };
-  });
+    const answered: Result & { failures?: BindingFailure[] } = active.failures.length === 0 ? result : { ...result, failures: active.failures };
+
+    return answered;
+  })));
 }

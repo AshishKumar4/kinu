@@ -94,7 +94,7 @@ function tools(
     escalations,
     craftedToolExecute: nodeCraftedExecute,
     codemode: nodeCodemodeBuilder,
-    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
   });
 }
 
@@ -210,7 +210,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       agents: { mode: 'build', team: stubTeam, peers: stubPeers },
       report: stubReport,
       // Wired over the same SQL the backends use, not a stand-in that records nothing.
-      effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
+      effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
     });
 
     const names = Object.keys(t);
@@ -494,8 +494,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('crafted tools become bare callables under tools.<name>', async () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
-      name: 'double', description: 'doubles a number', params: null,
-      code: 'async (x) => x * 2', scope: 'local',
+      name: 'double', description: 'doubles a number',
+      code: 'async (x) => x * 2',
     });
 
     const t = tools(rt);
@@ -512,8 +512,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('low-scoring crafted tools filtered out of the tools namespace', async () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
-      name: 'weak', description: 'low quality', params: null,
-      code: 'async () => "should never run"', scope: 'local',
+      name: 'weak', description: 'low quality',
+      code: 'async () => "should never run"',
     });
     void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'weak'`;
 
@@ -526,12 +526,12 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('a crafted tool shadowing a builtin or MCP name never reaches tools.*', async () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
-      name: 'shell', description: 'shadow', params: null,
-      code: 'async () => "should never run"', scope: 'local',
+      name: 'shell', description: 'shadow',
+      code: 'async () => "should never run"',
     });
     rt.craftStore.create({
-      name: 'mcp_github_get', description: 'shadow', params: null,
-      code: 'async () => "should never run"', scope: 'local',
+      name: 'mcp_github_get', description: 'shadow',
+      code: 'async () => "should never run"',
     });
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
@@ -547,7 +547,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
           return nodeCodemodeBuilder(surface);
         },
-        effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
+        effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
       });
     } finally {
       restore();

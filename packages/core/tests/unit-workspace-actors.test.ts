@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestSql } from '@kinu.run/test-utils';
 import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
-import { actorScaffoldPath, initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
+import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/identity/program-state';
 
@@ -147,24 +147,39 @@ describe('one workspace actor directory', () => {
     expect(current.directory.resolveChild(replacement, 'reader')).toBeNull();
   });
 
-  test('a stored node row loads as a head — the fold retires the write path, not the row', () => {
-    // No API writes 'node' anymore; raw SQL stands in for a row stored before the fold.
+  test('a workspace stores one identity: a second row is refused, even under its own id', () => {
+    const { sql } = workspace('workspace', 'owner');
+
+    expect(() => sql`INSERT INTO workspace_identity (id, name, owner_user_id) VALUES ('other', 'other', 'owner')`).toThrow('constraint failed');
+    expect(() => sql`INSERT INTO workspace_identity (id, name, owner_user_id) VALUES ('workspace', 'again', 'owner')`).toThrow('constraint failed');
+    expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM workspace_identity`[0]?.n).toBe(1);
+  });
+
+  test.each(['node', 'head', 'branch'])('an actor of kind %s cannot be stored or registered', (kind) => {
     const { directory, sql } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
     const actorId = crypto.randomUUID();
-    const now = Date.now();
-    void sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, lifetime, created_at, creation_id)
-      VALUES (${actorId}, 'workspace', ${main.actorId}, 'exp:node-before-the-fold', ${actorId}, 'node', 'task', ${now}, 'c-fold')`;
-    // Read back as what it behaviorally was: a head with its own scaffold under its own storage key.
-    const read = directory.describe(directory.open(actorId));
-    expect(read.kind).toBe('head');
-    expect(read.name).toBe('exp:node-before-the-fold');
-    expect(directory.retained(actorId)?.kind).toBe('head');
-    expect(directory.list().map((actor) => actor.kind)).toContain('head');
-    expect(actorScaffoldPath(read)).toBe(`.kinu/agents/${encodeURIComponent(actorId)}/scaffold/agent.js`);
-    expect(actorScaffoldPath(read)).not.toBe('scaffold/agent.js');
-    // The write path is closed: bad_input proves the directory schema rejects 'node'.
-    expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-new', name: 'exp:node-new', kind: 'node', lifetime: 'task' }))))
+
+    expect(() => sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, lifetime, created_at, creation_id)
+      VALUES (${actorId}, ${main.actorId}, ${`exp:${kind}`}, ${actorId}, ${kind}, 'task', ${Date.now()}, 'c-old')`).toThrow('CHECK constraint failed');
+    expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-new', name: `exp:${kind}-new`, kind, lifetime: 'task' }))))
       .toThrow(expect.objectContaining({ code: 'bad_input' }));
   });
+
+  test('a run actor creates only run actors, and a subordinate names no tool profile', () => {
+    const { directory } = workspace('workspace', 'owner');
+    const main = directory.createMain({ name: 'main' });
+
+    expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-hire', name: 'reader', kind: 'subordinate', toolProfile: 'toolless', lifetime: 'durable' }))))
+      .toThrow(expect.objectContaining({ code: 'bad_input' }));
+
+    const head = directory.apply(main, [], { action: 'register', creationId: 'c-head', name: 'exp:head-1', kind: 'run', lifetime: 'task' });
+    const headCaller = directory.open(head.reference.actorId);
+    const headPath = directory.storagePath(head.reference);
+
+    expect(() => directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-hire2', name: 'reader', kind: 'subordinate', lifetime: 'durable' }))
+      .toThrow(expect.objectContaining({ code: 'denied' }));
+    expect(directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-head2', name: 'exp:head-2', kind: 'run', lifetime: 'task' }).kind).toBe('run');
+  });
+
 });

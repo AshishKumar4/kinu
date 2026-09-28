@@ -93,6 +93,7 @@ export default function App() {
             <Route path={APP_ROUTES.devices} element={<ErrorBoundary label="devices"><DevicesPage /></ErrorBoundary>} />
             <Route path={APP_ROUTES.workspace} element={<ErrorBoundary label="workspace"><KeyedWorkspace /></ErrorBoundary>} />
             <Route path={APP_ROUTES.workspaceAgent} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.workspaceAgentPath} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
             <Route path={APP_ROUTES.explore} element={
               <ErrorBoundary label="mcts-explorer">
                 <Suspense fallback={<LazyFallback />}>

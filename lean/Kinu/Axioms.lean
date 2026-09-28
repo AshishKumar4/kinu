@@ -96,16 +96,6 @@ import Kinu
 #print axioms Kinu.MCTS.Backpropagation.sum_invariant
 #print axioms Kinu.MCTS.Backpropagation.backprop_preserves_ids
 
-/-! ## Kinu/MCTS/Convergence.lean -/
-
-#print axioms Kinu.MCTS.Convergence.backprop_accumulates_the_evaluations_through_a_node
-#print axioms Kinu.MCTS.Convergence.the_winner_has_the_greatest_value
-#print axioms Kinu.MCTS.Convergence.a_bounded_rising_reward_stabilizes
-#print axioms Kinu.MCTS.Convergence.the_winner_carries_the_best_reward
-#print axioms Kinu.MCTS.Convergence.the_search_expands_its_best_candidate_and_converges_on_it
-#print axioms Kinu.MCTS.Convergence.an_ancestor_is_never_a_rival
-#print axioms Kinu.MCTS.Convergence.a_converged_winner_is_undisputed_and_acceptable
-
 /-! ## Kinu/MCTS/StorageIsolation.lean -/
 
 #print axioms Kinu.MCTS.StorageIsolation.init_isolated
@@ -334,7 +324,7 @@ import Kinu
 #print axioms Kinu.Exploration.Publication.the_three_withholdings_are_distinct
 #print axioms Kinu.Exploration.Publication.discriminating_run_succeeds
 #print axioms Kinu.Exploration.Publication.surface_enumeration_is_total
-#print axioms Kinu.Exploration.Publication.surface_enumeration_has_six
+#print axioms Kinu.Exploration.Publication.surface_enumeration_has_five
 #print axioms Kinu.Exploration.Publication.admits_ignores_surface
 #print axioms Kinu.Exploration.Publication.admits_iff_not_sealed
 #print axioms Kinu.Exploration.Publication.every_surface_is_writable

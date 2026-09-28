@@ -4,6 +4,7 @@
  */
 
 import type { ToolSet } from 'ai';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { VFS } from '../types/primitives';
 import { nanoid } from '../utils/nanoid';
@@ -11,7 +12,7 @@ import { admissionBytes } from '../llm';
 import { headEnd, tailStart } from '../utils/text';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
 import { assertJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
-import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
+import { diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
 import { successfulToolOutcome } from './outcome';
 
 export const TOOL_OUTPUT_DIR = SPILL_DIRS.toolOutput;
@@ -36,41 +37,53 @@ export interface ClampToolResultOptions {
 type Offload = { readonly path: string } | { readonly failure: KinuError };
 
 /** The marker promises a path only after the write resolves. */
-async function offload(vfs: VFS, text: string): Promise<Offload> {
+function offload(vfs: VFS, text: string): Effect.Effect<Offload> {
   const path = `${TOOL_OUTPUT_DIR}/${nanoid(10)}.log`;
 
-  try {
-    await vfs.mkdir(TOOL_OUTPUT_DIR, { recursive: true });
-    await vfs.writeFile(path, text);
-  } catch (cause) {
-    const failure = toKinuError({ doing: 'saving the full tool result to the workspace', cause, otherwise: 'io' });
-    diagnostics.failure('clamp.offload_failed', failure);
+  return Effect.tryPromise({
+    try: async () => {
+      await vfs.mkdir(TOOL_OUTPUT_DIR, { recursive: true });
+      await vfs.writeFile(path, text);
+    },
+    catch: (cause) => toKinuError({ doing: 'saving the full tool result to the workspace', cause, otherwise: 'io' }),
+  }).pipe(Effect.match({
+    onFailure: (failure): Offload => {
+      diagnostics.failure('clamp.offload_failed', failure);
 
-    return { failure };
-  }
-
-  // Relative on purpose: a leading slash would name the filesystem root.
-  return { path };
+      return { failure };
+    },
+    // Relative on purpose: a leading slash would name the filesystem root.
+    onSuccess: (): Offload => ({ path }),
+  }));
 }
 
 /** Charged against the same cap as the output it replaces. */
 function truncationMarker(saved: Offload | null): string {
   return saved === null || 'failure' in saved
-    ? '[truncated; the full result was not saved — rerun with a filter (grep/head/tail)]'
+    ? '[truncated; the full result was not saved: rerun with a filter (grep/head/tail)]'
     : `[truncated; use ranged reads to read the full result at ${saved.path}]`;
 }
 
-export async function clampToolResult(
+export function clampToolResult(
   text: string,
   opts: ClampToolResultOptions = {},
 ): Promise<string> {
+  return settle(clampedText(text, opts));
+}
+
+function clampedText(text: string, opts: ClampToolResultOptions): Effect.Effect<string> {
   if (text.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) {
     opts.budget?.admit(text.length);
 
-    return text;
+    return Effect.succeed(text);
   }
 
-  const saved = opts.vfs ? await offload(opts.vfs, text) : null;
+  const vfs = opts.vfs;
+
+  return Effect.map(vfs ? offload(vfs, text) : Effect.succeed(null), (saved) => clampedAround(text, saved, opts));
+}
+
+function clampedAround(text: string, saved: Offload | null, opts: ClampToolResultOptions): string {
   const marker = truncationMarker(saved);
   const room = DEFAULT_TOOL_RESULT_MAX_CHARS - marker.length - MARKER_FENCE_CHARS;
   const headLen = Math.floor(room * HEAD_FRACTION);
@@ -93,25 +106,25 @@ export async function clampToolResult(
 }
 
 /** Within budget the original value passes through untouched. */
-export async function clampSerializedToolResult(
+export function clampSerializedToolResult(
   input: { output: unknown },
   opts: ClampToolResultOptions = {},
 ): Promise<JsonValue | undefined> {
-  const output = normalizeToolOutput(input);
+  return settle(Effect.flatMap(normalizedToolOutput(input), (output): Effect.Effect<JsonValue | undefined> => {
+    if (output == null) return Effect.succeed(output);
+    const text = v.safeParse(v.string(), output);
 
-  if (output == null) return output;
-  const text = v.safeParse(v.string(), output);
+    if (text.success) return clampedText(text.output, opts);
+    const serialized = JSON.stringify(output);
 
-  if (text.success) return clampToolResult(text.output, opts);
-  const serialized = JSON.stringify(output);
+    if (serialized.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) {
+      opts.budget?.admit(serialized.length);
 
-  if (serialized.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) {
-    opts.budget?.admit(serialized.length);
+      return Effect.succeed(output);
+    }
 
-    return output;
-  }
-
-  return clampToolResult(serialized, opts);
+    return clampedText(serialized, opts);
+  }));
 }
 
 export function withClampedToolResult(
@@ -147,24 +160,27 @@ export function withClampedToolResults(
   );
 }
 
-function normalizeToolOutput(input: { output: unknown }): JsonValue | undefined {
-  if (input.output === undefined) return undefined;
+function normalizedToolOutput(input: { output: unknown }): Effect.Effect<JsonValue | undefined> {
+  if (input.output === undefined) return Effect.succeed(undefined);
   const value = { value: input.output };
 
-  try {
-    assertJsonValue(value);
+  return Effect.try({
+    try: (): JsonValue => {
+      assertJsonValue(value);
 
-    return value.value;
-  } catch (error) {
+      return value.value;
+    },
+    catch: (cause) => ({ cause }),
+  }).pipe(Effect.catch((failed) => Effect.try({
     // Cycles/BigInt defeat re-serialization; `String()` would yield "[object Object]", so the reason replaces it.
-    try {
+    try: () => {
       const serialized = JSON.stringify(input.output);
 
-      if (serialized !== undefined) return parseJsonValue(serialized);
-    } catch (serializeFailure) {
-      return `unserializable tool output: ${renderThrownChain({ cause: serializeFailure })}`;
-    }
-
-    return `unserializable tool output: ${renderThrownChain({ cause: error })}`;
-  }
+      return serialized === undefined ? { reserialized: false as const } : { reserialized: true as const, json: parseJsonValue(serialized) };
+    },
+    catch: (cause) => ({ cause }),
+  }).pipe(Effect.match({
+    onSuccess: (again): JsonValue => (again.reserialized ? again.json : `unserializable tool output: ${renderThrownChain(failed)}`),
+    onFailure: (serializeFailure): JsonValue => `unserializable tool output: ${renderThrownChain(serializeFailure)}`,
+  }))));
 }

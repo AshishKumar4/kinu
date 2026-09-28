@@ -10,7 +10,6 @@ import { initScaffoldTables } from '../src/scaffold/schemas';
 import { readScaffoldVersion } from '../src/scaffold/shadow';
 import { runScaffold, SCAFFOLD_HOST_TYPES, type ScaffoldEvent } from '../src/scaffold/executor';
 import { createEvalExecutor, createTestRuntime } from './helpers';
-import { unobservedSpend } from '@kinu.run/test-utils';
 
 const CONTRACT_PROPOSAL = `\
 async function* run(rt, task) {
@@ -46,7 +45,7 @@ describe('buildScaffoldProposalPrompt — documents the real sandbox contract', 
       'be terser',
     );
 
-    expect(withBridge).toContain('run (generator, line 1) → host.llmStream()');
+    expect(withBridge).toContain('run (generator, line 1) -> host.llmStream()');
   });
 });
 
@@ -102,7 +101,7 @@ test('a prose-wrapped typescript fence stores only the scaffold source', async (
   initScaffoldTables(rt.storage.execRaw);
   rt.executor = createEvalExecutor();
   await rt.identity.scaffold.write(CONTRACT_PROPOSAL);
-  const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, lifetimeEvolutionInterval: 1000 });
+  const engine = new EvolutionEngine(rt, stores.history, { lifetimeEvolutionInterval: 1000 });
   recordLesson(rt.storage.sql, rt.actor, {
     turnIds: ['t1'],
     text: 'The loop re-read the same file.',

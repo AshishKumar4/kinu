@@ -17,6 +17,8 @@ export interface DrainBatch {
   readonly mode: WorkMode | null;
 }
 
+export type InternalEventTest = (event: KinuEvent) => boolean;
+
 function delegatedEventMode(event: KinuEvent): WorkMode | null {
   if (event.variant !== 'peer_agent' && event.variant !== 'subordinate_report') return null;
 
@@ -39,16 +41,17 @@ function oneLine(value: string): string {
 
 /**
  * Self-emitted/internal rows never wake a turn (anti-self-wake loop); `subordinate_task` rows belong
- * to `drainAssignments`. Shared with `EventLog.nextPendingDrainAt` so the wake fold cannot drift.
+ * to `drainAssignments`; `internal` ones to a lane. Shared with `EventLog.nextPendingDrainAt` so the wake fold cannot drift.
  */
-export function wakesADrain(event: KinuEvent): boolean {
+export function wakesADrain(event: KinuEvent, internal?: InternalEventTest): boolean {
   return event.ingress !== 'self_emit'
     && event.variant !== 'internal'
-    && event.variant !== 'subordinate_task';
+    && event.variant !== 'subordinate_task'
+    && internal?.(event) !== true;
 }
 
-export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
-  const pending = events.filter(wakesADrain);
+export function buildDrainBatch(events: KinuEvent[], internal?: InternalEventTest): DrainBatch | null {
+  const pending = events.filter((event) => wakesADrain(event, internal));
 
   if (pending.length === 0) return null;
   // Plan and Build never share a turn: take the oldest event's mode group; the rest drain next.
@@ -63,10 +66,9 @@ export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
       && e.variant === 'peer_agent'
       && e.payload.reply_expected
     )
-      ? ` [the sender awaits your answer — answer it with agents({action:'msg', event_id:'${e.id}', message:...})]`
+      ? ` [the sender awaits your answer: answer it with agents({action:'msg', event_id:'${e.id}', message:...})]`
       : '';
 
-    // One line per event: sender-controlled bodies are folded so they cannot fake extra entries.
     return `- [${r.variant}] from ${oneLine(r.triggered_by)}: ${oneLine(r.brief)}${replyHint}`;
   });
 

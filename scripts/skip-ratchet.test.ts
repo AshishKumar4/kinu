@@ -19,13 +19,13 @@ import {
  *  self-closing, a skipped one carries a `<skipped />` child. */
 const REPORT = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="bun test" tests="3" assertions="4" failures="0" skipped="2" time="0.15">
-  <testsuite name="tests/a.test.ts" file="tests/a.test.ts" tests="3" failures="0" skipped="2">
-    <testsuite name="Suite A" file="tests/a.test.ts" line="1" tests="3" failures="0" skipped="2">
-      <testcase name="runs" classname="Suite A" time="0.001" file="tests/a.test.ts" line="5" assertions="4" />
-      <testcase name="skips one" classname="Suite A" time="0" file="tests/a.test.ts" line="9" assertions="0">
+  <testsuite name="tests/live-model/a.test.ts" file="tests/live-model/a.test.ts" tests="3" failures="0" skipped="2">
+    <testsuite name="Suite A" file="tests/live-model/a.test.ts" line="1" tests="3" failures="0" skipped="2">
+      <testcase name="runs" classname="Suite A" time="0.001" file="tests/live-model/a.test.ts" line="5" assertions="4" />
+      <testcase name="skips one" classname="Suite A" time="0" file="tests/live-model/a.test.ts" line="9" assertions="0">
         <skipped />
       </testcase>
-      <testcase name="skips two &amp; more" classname="Suite A" time="0" file="tests/a.test.ts" line="12" assertions="0">
+      <testcase name="skips two &amp; more" classname="Suite A" time="0" file="tests/live-model/a.test.ts" line="12" assertions="0">
         <skipped />
       </testcase>
     </testsuite>
@@ -61,7 +61,7 @@ describe('parseJUnit', () => {
     expect(report.total).toBe(3);
     expect(report.skipped).toHaveLength(2);
     expect(report.failed).toEqual([]);
-    expect([...report.files]).toEqual(['tests/a.test.ts']);
+    expect([...report.files]).toEqual(['tests/live-model/a.test.ts']);
   });
 
   test('keys a skip by file, suite and name — never by line', () => {
@@ -69,8 +69,8 @@ describe('parseJUnit', () => {
     // ratchet would fire on every unrelated edit and be turned off within a day.
     const report = parseJUnit(REPORT);
     expect(report.skipped.map((s) => s.key)).toEqual([
-      'tests/a.test.ts › Suite A › skips one',
-      'tests/a.test.ts › Suite A › skips two & more',
+      'tests/live-model/a.test.ts › Suite A › skips one',
+      'tests/live-model/a.test.ts › Suite A › skips two & more',
     ]);
   });
 
@@ -137,8 +137,8 @@ describe('parseJUnit', () => {
 
   test('bun keys still carry file, suite and name — the fallback did not displace them', () => {
     expect(parseJUnit(REPORT).skipped.map((s) => s.key)).toEqual([
-      'tests/a.test.ts › Suite A › skips one',
-      'tests/a.test.ts › Suite A › skips two & more',
+      'tests/live-model/a.test.ts › Suite A › skips one',
+      'tests/live-model/a.test.ts › Suite A › skips two & more',
     ]);
   });
 
@@ -169,7 +169,7 @@ describe('mergeReports', () => {
     expect(merged.total).toBe(6);
     expect(merged.skipped.length).toBe(4);
     expect([...merged.files].sort()).toEqual([
-      'tests/a.test.ts', 'tests/evals/behaviour.eval.ts',
+      'tests/evals/behaviour.eval.ts', 'tests/live-model/a.test.ts',
     ]);
   });
 });
@@ -179,28 +179,28 @@ describe('reconcileSkips', () => {
 
   test('a skip absent from the lock is new debt', () => {
     const verdict = reconcileSkips(report, [
-      { key: 'tests/a.test.ts › Suite A › skips one', reason: 'declared' },
+      { key: 'tests/live-model/a.test.ts › Suite A › skips one', reason: 'declared' },
     ]);
 
-    expect(verdict.added).toEqual(['tests/a.test.ts › Suite A › skips two & more']);
+    expect(verdict.added).toEqual(['tests/live-model/a.test.ts › Suite A › skips two & more']);
     expect(verdict.stale).toEqual([]);
   });
 
   test('a locked skip that now runs is stale — the ratchet only tightens', () => {
     const verdict = reconcileSkips(report, [
-      { key: 'tests/a.test.ts › Suite A › skips one', reason: 'declared' },
-      { key: 'tests/a.test.ts › Suite A › skips two & more', reason: 'declared' },
-      { key: 'tests/a.test.ts › Suite A › runs', reason: 'was skipping' },
+      { key: 'tests/live-model/a.test.ts › Suite A › skips one', reason: 'declared' },
+      { key: 'tests/live-model/a.test.ts › Suite A › skips two & more', reason: 'declared' },
+      { key: 'tests/live-model/a.test.ts › Suite A › runs', reason: 'was skipping' },
     ]);
 
     expect(verdict.added).toEqual([]);
-    expect(verdict.stale).toEqual(['tests/a.test.ts › Suite A › runs']);
+    expect(verdict.stale).toEqual(['tests/live-model/a.test.ts › Suite A › runs']);
   });
 
   test('a fully declared skip set reconciles clean', () => {
     const verdict = reconcileSkips(report, [
-      { key: 'tests/a.test.ts › Suite A › skips one', reason: 'declared' },
-      { key: 'tests/a.test.ts › Suite A › skips two & more', reason: 'declared' },
+      { key: 'tests/live-model/a.test.ts › Suite A › skips one', reason: 'declared' },
+      { key: 'tests/live-model/a.test.ts › Suite A › skips two & more', reason: 'declared' },
     ]);
 
     expect(verdict).toEqual({ added: [], stale: [] });
@@ -224,8 +224,8 @@ describe('reconcileSkips', () => {
   // cannot fail: if the whole arm stopped skipping, the entry is stale.
   test('a family entry nothing matched is stale, not silently satisfied', () => {
     const verdict = reconcileSkips(parseJUnit(REPORT), [
-      { key: 'tests/a.test.ts › Suite A › skips one', reason: 'declared' },
-      { key: 'tests/a.test.ts › Suite A › skips two & more', reason: 'declared' },
+      { key: 'tests/live-model/a.test.ts › Suite A › skips one', reason: 'declared' },
+      { key: 'tests/live-model/a.test.ts › Suite A › skips two & more', reason: 'declared' },
       { key: 'tests/evals/behaviour.eval.ts › Agent behaviour', reason: 'gone', family: true },
     ]);
 
@@ -281,6 +281,13 @@ describe('unmatchedTargets', () => {
   </testsuite>
 </testsuites>`;
 
+  const FIRST_RUN_REPORT = `<?xml version="1.0"?>
+<testsuites name="bun test" tests="1" failures="0" skipped="0">
+  <testsuite name="tests/first-run/turn-settlement.test.ts" file="tests/first-run/turn-settlement.test.ts" tests="1">
+    <testcase name="settles" classname="turn settlement" file="tests/first-run/turn-settlement.test.ts" line="1" />
+  </testsuite>
+</testsuites>`;
+
   const BENCH_EXTERNAL_REPORT = `<?xml version="1.0"?>
 <testsuites name="bun test" tests="1" failures="0" skipped="0">
   <testsuite name="scripts/bench-external.test.ts" file="scripts/bench-external.test.ts" tests="1">
@@ -292,12 +299,12 @@ describe('unmatchedTargets', () => {
   // or the bench rig, which is exactly why each is its own target.
   test('a report from the root suites alone leaves every other target unmatched', () => {
     expect(unmatchedTargets(parseJUnit(REPORT))).toEqual([
-      './packages/core/tests/e2e/', './scripts/bench-external.test.ts',
+      './tests/first-run/', './packages/core/tests/e2e/', './scripts/bench-external.test.ts',
     ]);
   });
 
   test('every target reporting satisfies every target', () => {
-    const merged = mergeReports([REPORT, CORE_E2E_REPORT, BENCH_EXTERNAL_REPORT].map((xml) => parseJUnit(xml)));
+    const merged = mergeReports([REPORT, FIRST_RUN_REPORT, CORE_E2E_REPORT, BENCH_EXTERNAL_REPORT].map((xml) => parseJUnit(xml)));
 
     expect(unmatchedTargets(merged)).toEqual([]);
   });
@@ -372,8 +379,8 @@ describe('skipDebt', () => {
 describe('the target set is the executed set', () => {
   const cloudReport = (): TestReport => parseJUnit(`<?xml version="1.0"?>
 <testsuites name="bun test" tests="1" failures="0" skipped="0">
-  <testsuite name="tests/live/live-smoke.test.ts" file="tests/live/live-smoke.test.ts" tests="1">
-    <testcase name="reaches the deployment" classname="Live Smoke" file="tests/live/live-smoke.test.ts" line="4" />
+  <testsuite name="tests/live-model/live-smoke.test.ts" file="tests/live-model/live-smoke.test.ts" tests="1">
+    <testcase name="reaches the deployment" classname="Live Smoke" file="tests/live-model/live-smoke.test.ts" line="4" />
   </testsuite>
 </testsuites>`);
 
@@ -381,19 +388,19 @@ describe('the target set is the executed set', () => {
     // `bun run test:live:cloud` runs one file ON PURPOSE; the default list would
     // demand reports from targets that run never starts.
     const missing = unmatchedTargets(cloudReport(), SKIP_RATCHET_TARGETS);
-    expect(missing).toEqual(['./packages/core/tests/e2e/', './scripts/bench-external.test.ts']);
+    expect(missing).toEqual(['./tests/first-run/', './packages/core/tests/e2e/', './scripts/bench-external.test.ts']);
   });
 
   test('naming the target that ran clears it without weakening anything', () => {
-    expect(unmatchedTargets(cloudReport(), ['./tests/live/live-smoke.test.ts'])).toEqual([]);
+    expect(unmatchedTargets(cloudReport(), ['./tests/live-model/live-smoke.test.ts'])).toEqual([]);
   });
 
   test('a named target the run did not produce is still refused', () => {
     // The other direction, and the one that keeps `--target` from being an
     // escape hatch: a caller may narrow the CLAIM, never the proof. A target
     // named and absent from the report is a crash, not a decision.
-    expect(unmatchedTargets(cloudReport(), ['./tests/live/live-smoke.test.ts', './tests/live/exploration.test.ts']))
-      .toEqual(['./tests/live/exploration.test.ts']);
+    expect(unmatchedTargets(cloudReport(), ['./tests/live-model/live-smoke.test.ts', './tests/live-model/exploration.test.ts']))
+      .toEqual(['./tests/live-model/exploration.test.ts']);
   });
 
   test('a file bun cannot select cannot answer for a bun directory target', () => {
@@ -401,8 +408,8 @@ describe('the target set is the executed set', () => {
     // that collected nothing could otherwise look complete on its strength.
     const vitestOnly = parseJUnit(`<?xml version="1.0"?>
 <testsuites name="vitest" tests="1" failures="0" skipped="0">
-  <testsuite name="tests/live/planning.eval.ts" tests="1">
-    <testcase name="plans" classname="tests/live/planning.eval.ts" />
+  <testsuite name="tests/live-model/planning.eval.ts" tests="1">
+    <testcase name="plans" classname="tests/live-model/planning.eval.ts" />
   </testsuite>
 </testsuites>`);
 

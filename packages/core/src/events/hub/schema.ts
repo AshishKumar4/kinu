@@ -4,16 +4,14 @@
  */
 
 import type { SqlExec } from '../../types/primitives';
+import { initEvolutionHelperTable } from '../../identity/evolution-helpers';
 
 const AGENT_LOG_DDL = `
 CREATE TABLE IF NOT EXISTS agent_log (
   actor_id            TEXT    NOT NULL,
   id                  TEXT    NOT NULL,
   kind                TEXT    NOT NULL
-                              CHECK(kind IN (
-                                'event', 'phase', 'step', 'tool_call',
-                                'tool_result', 'reactor_decision', 'reply_attempt'
-                              )),
+                              CHECK(kind IN ('event', 'reply_attempt')),
   turn_id             TEXT,
   step_idx            INTEGER,
   parent_id           TEXT,
@@ -25,7 +23,6 @@ CREATE TABLE IF NOT EXISTS agent_log (
   payload_visibility  TEXT    CHECK(payload_visibility IS NULL OR payload_visibility IN ('full', 'redact', 'hash', 'hmac', 'opaque_handle')),
   payload             TEXT    NOT NULL DEFAULT 'null',
   received_at         INTEGER NOT NULL,
-  schema_version      INTEGER NOT NULL DEFAULT 1,
   dedupe_key          TEXT,
   consumed_at         INTEGER,
   PRIMARY KEY (actor_id, id)
@@ -39,14 +36,6 @@ const INDEXES: ReadonlyArray<string> = [
   `CREATE INDEX IF NOT EXISTS idx_agent_log_events_consumed
    ON agent_log (actor_id, consumed_at)
    WHERE kind = 'event' AND consumed_at IS NOT NULL`,
-
-  `CREATE INDEX IF NOT EXISTS idx_agent_log_phase_current
-   ON agent_log (actor_id, turn_id, id DESC)
-   WHERE kind = 'phase'`,
-
-  `CREATE INDEX IF NOT EXISTS idx_agent_log_steps_per_turn
-   ON agent_log (actor_id, turn_id, step_idx)
-   WHERE kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision')`,
 
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_log_dedupe
    ON agent_log (actor_id, dedupe_key)
@@ -67,40 +56,18 @@ const INDEXES: ReadonlyArray<string> = [
    ON agent_log (actor_id, received_at DESC)`,
 ];
 
-const VIEWS: ReadonlyArray<string> = [
-  `CREATE VIEW IF NOT EXISTS events_v AS
-   SELECT actor_id, id, turn_id, parent_id AS caused_by, trace_id, ingress, variant, trust,
-          priority, payload_visibility, payload, received_at, schema_version, dedupe_key
-   FROM agent_log
-   WHERE kind = 'event'`,
-
-  `CREATE VIEW IF NOT EXISTS run_event_v AS
-   SELECT actor_id, id, turn_id, step_idx, kind, parent_id, payload, received_at
-   FROM agent_log
-   WHERE kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision')
-   ORDER BY actor_id, turn_id, step_idx, id`,
-
-  `CREATE VIEW IF NOT EXISTS turn_phase_log_v AS
-   SELECT actor_id, id, turn_id, payload, received_at
-   FROM agent_log
-   WHERE kind = 'phase'
-   ORDER BY actor_id, received_at`,
-];
-
 const REPLY_CHANNELS_DDL = `
 CREATE TABLE IF NOT EXISTS reply_channels (
   actor_id            TEXT    NOT NULL,
   id                  TEXT    NOT NULL,
   event_id            TEXT    NOT NULL,
   kind                TEXT    NOT NULL
-                              CHECK(kind IN ('ws_session', 'http_pending', 'peer_back', 'mcp_pending', 'email_thread', 'none')),
+                              CHECK(kind IN ('peer_back', 'email_thread')),
   holder_addr         TEXT    NOT NULL DEFAULT '',
   ttl_expires_at      INTEGER NOT NULL,
-  payload_policy      TEXT    NOT NULL DEFAULT 'full',
   state               TEXT    NOT NULL DEFAULT 'open'
                               CHECK(state IN ('open', 'replied', 'expired', 'aborted')),
   reply_payload       TEXT,
-  attempt_count       INTEGER NOT NULL DEFAULT 0,
   created_at          INTEGER NOT NULL,
   updated_at          INTEGER NOT NULL,
   PRIMARY KEY (actor_id, id)
@@ -154,11 +121,11 @@ export function initEventsHubTables(sql: SqlExec): void {
 
   for (const ix of INDEXES) sql.exec(ix);
 
-  for (const view of VIEWS) sql.exec(view);
   sql.exec(REPLY_CHANNELS_DDL);
 
   for (const ix of REPLY_CHANNELS_INDEXES) sql.exec(ix);
   sql.exec(TRIGGERS_DDL);
 
   for (const ix of TRIGGERS_INDEXES) sql.exec(ix);
+  initEvolutionHelperTable(sql);
 }

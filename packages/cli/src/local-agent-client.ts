@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, ModelTestResult } from '@kinu.run/core';
+import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
 import { applyWorkspaceTitle, getChatHistoryPage, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
@@ -33,7 +33,7 @@ import {
   suggestAgentIdentityFromMission,
   type SuggestAgentIdentityOptions,
 } from './agent-create';
-import { inspectLocalSubordinate } from './local-inspection';
+import { inspectLocalSubordinate, readLocalWorkspaceWork } from './local-inspection';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
 import {
@@ -467,8 +467,6 @@ export class LocalAgentClient implements AgentClient {
       tierId: tier.id,
       scaffoldVersion: info.scaffoldVersion,
       searchNodeCount: info.searchNodeCount,
-      craftedToolCount: info.craftedToolCount,
-      taskCount: info.taskCount,
       memorySize: info.memorySize,
       dbSize: statSync(this.deps.dbPath).size,
       toolCount: this.session.toolNames().length,
@@ -486,8 +484,8 @@ export class LocalAgentClient implements AgentClient {
     };
   }
 
-  async changelog(limit?: number): Promise<AgentChangelogView> {
-    const view = this.session.getEvolutionChangelog(limit);
+  async changelog(): Promise<AgentChangelogView> {
+    const view = this.session.getEvolutionChangelog();
     this.session.markChangelogSeen();
 
     return { entries: view.entries, unseenCount: view.unseenCount };
@@ -497,8 +495,8 @@ export class LocalAgentClient implements AgentClient {
     return this.session.revertChangelogEntry(id);
   }
 
-  async refinements(limit?: number): Promise<AgentRefinementView> {
-    return this.session.listRefinements(limit);
+  async refinements(): Promise<AgentRefinementView> {
+    return this.session.listRefinements();
   }
 
   async requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView> {
@@ -527,6 +525,10 @@ export class LocalAgentClient implements AgentClient {
 
   async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
     return inspectLocalSubordinate(this.agentName, request);
+  }
+
+  async workspaceWork(): Promise<WorkspaceWork> {
+    return readLocalWorkspaceWork(this.agentName);
   }
 
   async readMemory(): Promise<string> {

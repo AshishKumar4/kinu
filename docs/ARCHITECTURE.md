@@ -89,9 +89,9 @@ full-loop actor needs: the Cloudflare runtime assembly, the `BackendHost`, the
 shared `AgentOrchestrator`, `ExtensionHost` plus compaction, prompt, model, and
 tool caches, and the ports `ChatSession` calls. A subclass supplies the abstract
 members (`getOwnerUserId`, `actorHandle`, `actorDirectory`, `actorKind`,
-`workspaceBox`, `ensureSchema`, `actorToolDeps`, `engine`, `notifyOwner`,
-`delegationBudget`, `actorHost`, `actorDirectoryStore`, `explorationSeams`,
-`subordinateSeams`, `hostedChatWire`, `owedTerminalEffects`, `ownMission`,
+`workspaceBox`, `actorToolDeps`, `engine`, `notifyOwner`,
+`delegationBudget`, `actorHost`, `actorDirectoryStore`, `hostedSeams`,
+`hostedChatWire`, `owedTerminalEffects`, `ownMission`,
 `persistAutoTitle`, `promptIdentity`, `transcriptFor`) and may override three
 hooks (`workspaceName`, `extraCodemodeProviders`, `isClientRpcMethodDenied`).
 One subclass exists: the orchestrator. Every other actor is a logical row the
@@ -440,15 +440,14 @@ The other three belong to the `EvolutionEngine`
   the CraftStore.
 - Session level: `onSessionReflection()` consolidates patterns and can call
   `maybeEvolveScaffold()` to propose a new `agent.js`.
-- Lifetime: `onLifetimeEvolution()` runs replay eval, craft consolidation, and
-  a full `runMCTS()`.
+- Lifetime: `onLifetimeEvolution()` runs craft consolidation.
 
 Hosted actors tick the step clock only: they record no turn into the evolution
 window.
 
-MCTS branch rewards are execution-grounded on both backends. One scorer
+Swarm node rewards are execution-grounded on both backends. One scorer
 (`packages/core/src/mcts/evaluation.ts`) lets the execution outcome dominate the
-judge for hosted branches and CLI child-process branches alike. Checks run
+judge. Checks run
 before a scaffold mutation takes effect: the misevolution gate
 (`safety/misevolution.ts`) rejects harmful edits by fixed criteria, the
 shadow veto (`scaffold/shadow.ts`, `maxRegressions: 1`, `minDecisiveTrials: 5`,
@@ -457,7 +456,7 @@ Monte-Carlo-derived) rejects regressions, and the DGM-style archive
 re-branching by clade-metaproductivity (what a lineage went on to produce).
 Every self-modification surfaces as a human-readable card through the evolution
 changelog (`evolution/changelog.ts`). See [EVOLUTION.md](./EVOLUTION.md) and
-[MCTS.md](./MCTS.md).
+[EXPLORATION.md](./EXPLORATION.md).
 
 ## Package structure
 
@@ -517,7 +516,6 @@ local process. Both drive the same core `ChatSession`.
 | Executor | codemode over the Worker Loader (`KinuSandboxExecutor`) | Bun subprocess sandbox, in-process fallback |
 | LLM | Workers AI binding or AI Gateway | AI Gateway via AI SDK |
 | Swarm nodes | Hosted `node` actors acquired from the one `ActorHost`, seated per run | `LocalAgentSession` node runtime with a credentialed home when the local VFS supports principals |
-| MCTS branches | Hosted `branch` actors: one model call per `explore`/`generateReflection` | `child_process.fork` (`packages/cli-backend/src/branch-process.ts`) |
 | Subordinates | Hosted `subordinate` actors (`host.acquire` + `host.run`, report lane) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
 
 The full contract and the three extension points (`ModelProvider`,
@@ -555,8 +553,10 @@ Two policies apply to every provider:
 - Every model fetch waits out rate limits of a minute or less.
   `withRateLimitRetry` (`rate-limit-retry.ts`) wraps all four fetch paths: the
   shared `createAuthedFetch`, Workers AI, AI Gateway, and codex. A rate-limited
-  request follows the provider's `Retry-After` until success, another failure,
-  or caller cancel; elapsed time and attempt count never end it. A `Retry-After`
+  request follows the provider's `Retry-After` at most the owner's retry count
+  (`ProfileCatalog.retries`, default 3), and none while a fallback chain entry
+  is left: that model hands over at once and cools down (`fallback-cooldown.ts`,
+  oh-my-pi's `cooldown-expiry`). A `Retry-After`
   (seconds or HTTP date) above 60 s (`maxRetryDelayMs`, after oh-my-pi) ends the
   call at once as a spent allowance (`budget`) naming the reset time, and a
   sibling that meets that declared cooldown in the pacer ends the same way; the
@@ -570,9 +570,8 @@ Two policies apply to every provider:
   declared. Waits are declared before they are taken, so siblings join one
   cooldown. The pacer counts no requests: Workers bounds connections per
   invocation, and an isolate-wide count hung the requests queued on it (1101s
-  on kinu.run, 2026-09-23). The AI SDK transport retry stays at
-  its default of 2, stated as `PROVIDER_SDK_RETRIES` so a vendor update cannot
-  move it silently.
+  on kinu.run, 2026-09-23). The AI SDK transport retry takes the same count,
+  stated at the `streamText` call so a vendor update cannot move it.
 
 Reasoning effort is set by the user. `/effort` in chat or
 `kinu effort <name> [level]` stores `reasoning_effort` in the workspace

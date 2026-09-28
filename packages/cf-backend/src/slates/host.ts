@@ -50,6 +50,7 @@ export interface SlateHostDeps extends ResidentSlateDeps {
   ownerUserId?(): string | null;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
+  previewed?(slate: string): void;
 }
 
 interface ViewerAdmission {
@@ -231,7 +232,6 @@ export class SlateHost {
       request: this.live.openRequest({
         share: share.id,
         viewer: subject,
-        slate: share.slate,
         path: input.pathname,
       }),
     };
@@ -506,7 +506,9 @@ export class SlateHost {
 
           if (slate.workspaceId.value !== this.deps.workspace) throw new KinuError('denied', 'Slate belongs to another workspace');
 
-          return { ok: true, value: projectJsonValue({ value: { slate: slate.toData(), versions: this.store.listVersions(id).map((version) => version.toData()) } }) };
+          const page = this.store.versionPage(id, operation.after);
+
+          return { ok: true, value: projectJsonValue({ value: { slate: slate.toData(), versions: page.versions.map((version) => version.toData()), next: page.next } }) };
         }
 
         case 'commit': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).commit(new SlateId(operation.id))).toData() }) };
@@ -590,6 +592,8 @@ export class SlateHost {
 
       if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL: ' + preview.unavailable);
 
+      this.deps.previewed?.(id);
+
       return { ok: true, value: { url: preview.url, port: app.port, inline: { height: project.slate.inline.height } } };
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' preview', cause, otherwise: 'io' })) };
@@ -615,7 +619,7 @@ export class SlateHost {
     return running.app;
   }
 
-  /** Ends processes, the durable application and the authored tree; committed versions stay. */
+  /** Ends processes, the durable application, the authored tree and its storage; committed versions stay. */
   async remove(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     try {
       const session = await this.deps.session();
@@ -633,6 +637,7 @@ export class SlateHost {
       session.vfs.withTransaction(() => {
         if (vfs.exists(root)) vfs.removeRecursive(root);
         forgetSlateFiles(this.deps.ctx.storage.sql, new SlateId(id));
+        this.state.forget(id);
       });
       await this.deps.forgetPicture?.(id);
 

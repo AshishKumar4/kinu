@@ -8,7 +8,7 @@ import { diagnostics, tolerate } from '@kinu.run/core/obs';
 import type { WSMessage } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
 import {
-  type AccessTokenScope, type AgentRpcAccess, type AgentRpcMethod, DEV_IDENTITY_HEADER, normalizeAccessTokenScopes,
+  type AccessTokenScope, type AgentRpcAccess, type AgentRpcMethod, DEV_IDENTITY_HEADER, HOSTED_ACTOR_ID_HEADER, normalizeAccessTokenScopes,
   requiredRpcAccess, rpcAccessScope,
 } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -107,6 +107,7 @@ export function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Heade
   }
 
   next.delete(SESSION_BEARER_HEADER);
+  next.delete(HOSTED_ACTOR_ID_HEADER);
 
   if (identity.sessionTokenHash) {
     next.set(SESSION_BEARER_HEADER, identity.sessionTokenHash);
@@ -160,17 +161,13 @@ const RpcFrameSchema = v.object({
   args: v.array(v.unknown()),
 });
 
-export interface RpcFrame {
-  readonly id: string;
-  readonly method: string;
-  readonly args: readonly unknown[];
-}
+export type RpcFrame = v.InferOutput<typeof RpcFrameSchema>;
 
 export function rpcFrameOf(message: WSMessage): RpcFrame | null {
   if (!v.is(v.string(), message)) return null;
   const frame = v.safeParse(RpcFrameSchema, tolerate(() => JSON.parse(message), 'malformed-input'));
 
-  return frame.success ? { id: frame.output.id, method: frame.output.method, args: frame.output.args } : null;
+  return frame.success ? frame.output : null;
 }
 
 interface RpcDenial {

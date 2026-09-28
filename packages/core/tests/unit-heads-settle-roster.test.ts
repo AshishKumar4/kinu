@@ -11,28 +11,13 @@ import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { listForkRuns } from '../src/read-models/fork-runs';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
-import type { HeadInput, MergeResult } from '../src/heads/index';
+import type { HeadInput } from '../src/heads/index';
 import type { SqlExecutor } from '../src/types/primitives';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 const RUN = 'root-merge-1';
 
-const MERGE: MergeResult = {
-  mergedNarrative: 'Three real call sites left, and one guard covers all of them.',
-  selectedDecisions: [],
-  unresolvedQuestions: [],
-  recommendations: [],
-  blindSpots: [],
-  evidenceAggregate: [],
-  headIds: ['h0', 'h1', 'h2', 'h3', 'h4'],
-  headScores: [],
-  fileChanges: [],
-  grounded: false,
-  costSummary: {
-    headCount: 5, headsWithFindings: 3, totalTokens: 24_820,
-    totalWallClockMs: 14_200, maxDepth: 1,
-  },
-};
+const MERGE = 'Three real call sites left, and one guard covers all of them.';
 
 function spawn(id: string): HeadInput {
   return {
@@ -40,7 +25,7 @@ function spawn(id: string): HeadInput {
     task: `walk ${id}`, mode: 'build', rationale: 'one call site each',
     inheritedContext: [], budget: { maxDepth: 1, spawnedAt: 1_000 },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('head'),
+    loop: defaultLoopOrigin('run'),
   };
 }
 
@@ -97,7 +82,7 @@ describe('a run that settles closes every head it did not hear from', () => {
 
   test('the merge terminalizes it, and the run has no running head left', () => {
     const { sql, journal, actor } = seeded();
-    journal.cacheMerge(RUN, MERGE, 'synthesize');
+    journal.cacheMerge(RUN, MERGE);
 
     expect(statuses(sql, actor.actorId)).toEqual({
       h0: 'completed', h1: 'completed', h2: 'errored', h3: 'completed', h4: 'aborted',
@@ -109,7 +94,7 @@ describe('a run that settles closes every head it did not hear from', () => {
 
   test('the closed head says why, in the settle transition’s own words', () => {
     const { sql, journal, actor } = seeded();
-    journal.cacheMerge(RUN, MERGE, 'synthesize');
+    journal.cacheMerge(RUN, MERGE);
 
     const [row] = sql<{ status: string; error_message: string | null; completed_at: number | null }>`
       SELECT status, error_message, completed_at FROM head_journal
@@ -125,7 +110,7 @@ describe('a run that settles closes every head it did not hear from', () => {
     const before = sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_journal
       WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0].n;
 
-    journal.cacheMerge(RUN, MERGE, 'synthesize');
+    journal.cacheMerge(RUN, MERGE);
     const view = present(journal.readRun(RUN), 'the settled run');
     expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_journal
       WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0].n)
@@ -137,14 +122,14 @@ describe('a run that settles closes every head it did not hear from', () => {
 
   test('settling twice is the same settlement', () => {
     const { sql, journal, actor } = seeded();
-    journal.cacheMerge(RUN, MERGE, 'synthesize');
+    journal.cacheMerge(RUN, MERGE);
     const first = statuses(sql, actor.actorId);
 
     const closedAt = sql<{ completed_at: number | null }>`
       SELECT completed_at FROM head_journal
       WHERE actor_id = ${actor.actorId} AND id = 'h0'`[0].completed_at;
 
-    journal.cacheMerge(RUN, MERGE, 'synthesize');
+    journal.cacheMerge(RUN, MERGE);
 
     expect(statuses(sql, actor.actorId)).toEqual(first);
     // Unfinished rows only, so a re-settle cannot rewrite a real report's time.
@@ -161,7 +146,7 @@ describe('a run that settles closes every head it did not hear from', () => {
     // children merge; closing it would report a live run as settled.
     const { sql, journal, actor } = seeded();
     journal.insertSpawn({ ...spawn(RUN), depth: 0, parentId: null });
-    journal.cacheMerge(RUN, MERGE, 'synthesize');
+    journal.cacheMerge(RUN, MERGE);
     expect(statuses(sql, actor.actorId)[RUN]).toBe('running');
     expect(listForkRuns(sql, actor).items[0].status).toBe('running');
   });

@@ -33,11 +33,12 @@ import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import {
-  BLIND_SPOTS, bannedKeys, bridgesOf, CATEGORIES, type Category, type CensusInputs, checkRatchet,
+  bannedKeys, bridgesOf, CATEGORIES, type Category, type CensusInputs, checkRatchet,
   classNonPublicMembers, type Finding, gateTests, isCensusFile, lockText, measureFile, mergeFindings,
   noFindings, nonPublicMembers, productUnitsOf, ratchetCounts, ratchetKey, runnerClaims, runCensus,
 } from './test-census';
 import { failedPlanted, parseLock, type Plant } from './census-plants';
+import { judgeRequirements, type Predates } from './test-requirements';
 import { isParseable, isRunnableSuite, isTestFile, trackedFiles } from './sources';
 
 /* ── The seam ──────────────────────────────────────────────────────────── */
@@ -98,12 +99,17 @@ export class ProbeHarness extends Orchestrator {
 /** Inputs built once over a synthetic one-module tree, so a classifier is
  *  measured against a module a reader can hold in their head. */
 function probeInputs(): CensusInputs {
-  const sources = new Map([[MODULE, MODULE_TEXT]]);
+  const sources = new Map([
+    [MODULE, MODULE_TEXT],
+    ['packages/probe/src/card.tsx', `export const Card = () => <section className={'Product shell'}><h1>The chosen title</h1><p>One shared member</p><p>Any convenient wording</p><p>Untitled workspace</p></section>;`],
+  ]);
+
   const bridges = bridgesOf(HELPER, HELPER_TEXT, classNonPublicMembers(sources));
 
   return {
     gateTests: new Set([GATE_TEST]),
     sources,
+    readModule: (file) => sources.get(file),
     nonPublic: nonPublicMembers(sources),
     generators: new Map([['prompt-golden.json', 'scripts/prompt-golden.ts']]),
     bridges: new Map(bridges.map((bridge) => [bridge.name, bridge])),
@@ -356,6 +362,108 @@ describe('source_text', () => {
         await expect(agent.beforeTurn({})).rejects.toMatchObject({ code: 'denied' });
       });
     `)).toEqual(['expect(<source text>).toContain']);
+  });
+
+  test('RED: a walker handed a product root through its parameters, and a loop over roots held in an array', () => {
+    // unit-broadcast-wiring's shape: `sourceFiles(root)` walks `join(REPO, root)`, the walk reads through its own
+    // parameter, and no single literal names a product path.
+    expect(found('source_text', `
+      import { readdirSync, readFileSync } from 'node:fs';
+      import { join, resolve } from 'node:path';
+      const REPO = resolve(import.meta.dir, '../../..');
+      function sourceFiles(root) {
+        const out = [];
+        const walk = (dir) => { for (const entry of readdirSync(dir)) out.push(join(dir, entry)); };
+        walk(join(REPO, root));
+        return out;
+      }
+      test('every producer has a reader', () => {
+        expect(sourceFiles('packages/probe/src').map((file) => readFileSync(file, 'utf8'))).toHaveLength(1);
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).toHaveLength']);
+
+    expect(found('source_text', `
+      import { readdirSync } from 'node:fs';
+      import { join } from 'node:path';
+      const ROOTS = [join(import.meta.dir, '..', 'src')];
+      test('each root lists its modules', () => {
+        for (const dir of ROOTS) expect(readdirSync(dir)).toContain('budget.ts');
+      });
+    `)).toEqual(['reads a source file']);
+  });
+
+  test('SILENT: a parameter of the same name, handed a directory the test made', () => {
+    expect(found('source_text', `
+      import { readdirSync } from 'node:fs';
+      import { scratchDir } from '@kinu.run/test-utils';
+      import { join } from 'node:path';
+      const productList = (dir) => readdirSync(dir);
+      const scratchList = (dir) => readdirSync(dir);
+      test('only one of them reads the module tree', () => {
+        expect(productList(join(import.meta.dir, '..', 'src'))).toContain('budget.ts');
+        expect(scratchList(scratchDir('probe'))).toEqual([]);
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).toContain']);
+  });
+
+  test('reduce binds the source element, not its scratch accumulator', () => {
+    const imports = `import { readdirSync } from 'node:fs';
+      import { scratchDir } from '@kinu.run/test-utils';
+      import { join } from 'node:path';
+      const ROOTS = [join(import.meta.dir, '..', 'src')];`;
+
+    expect(found('source_text', `${imports}
+      test('walks product roots', () => {
+        ROOTS.reduce((files, dir) => files.concat(readdirSync(dir)), []);
+      });
+    `)).toEqual(['reads a source file']);
+    expect(found('source_text', `${imports}
+      test('keeps scratch contents', () => {
+        ROOTS.reduce((scratch, dir) => { readdirSync(scratch); return scratch; }, scratchDir('probe'));
+      });
+    `)).toEqual([]);
+  });
+
+  test('a destructured parameter does not shift a later product-path argument', () => {
+    expect(found('source_text', `
+      import { readdirSync } from 'node:fs';
+      import { join } from 'node:path';
+      const list = ({ recursive }, dir) => readdirSync(dir, { recursive });
+      test('lists product modules', () => {
+        expect(list({ recursive: true }, join(import.meta.dir, '..', 'src'))).toContain('budget.ts');
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).toContain']);
+  });
+
+  test('a destructured scratch parameter shadows an outer product root', () => {
+    expect(found('source_text', `
+      import { readdirSync } from 'node:fs';
+      import { scratchDir } from '@kinu.run/test-utils';
+      import { join } from 'node:path';
+      const root = join(import.meta.dir, '..', 'src');
+      const list = ({ root }) => readdirSync(root);
+      test('an empty scratch directory', () => {
+        expect(list({ root: scratchDir('probe') })).toEqual([]);
+      });
+    `)).toEqual([]);
+  });
+
+  test('same-named arrays in separate tests keep their own path bindings', () => {
+    const findings = found('source_text', `
+      import { readdirSync } from 'node:fs';
+      import { scratchDir } from '@kinu.run/test-utils';
+      import { join } from 'node:path';
+      test('product roots', () => {
+        const roots = [join(import.meta.dir, '..', 'src')];
+        roots.forEach((dir) => readdirSync(dir));
+      });
+      test('scratch roots', () => {
+        const roots = [scratchDir('probe')];
+        roots.forEach((dir) => readdirSync(dir));
+      });
+    `);
+
+    expect(findings).toEqual(['reads a source file']);
   });
 
   test('SILENT: a workspace file read inside the system under test', () => {
@@ -678,6 +786,69 @@ describeCategory('tautology_suspect', [
     expected: [],
   },
   {
+    name: 'RED: rendered text is checked against the product constant that supplied it',
+    source: `
+      import { PROMPT_BUDGET } from '../src/budget';
+      test('the dialog states the budget', async () => {
+        const text = await page.$eval('[data-limit]', element => element.textContent);
+        expect(text).toContain(String(PROMPT_BUDGET));
+      });
+    `,
+    expected: ['expected side copies a product constant'],
+  },
+  {
+    name: 'SILENT: a non-rendering boundary check is outside the rendered-text rule',
+    source: `
+      import { clampToBudget, PROMPT_BUDGET } from '../src/budget';
+      test('a prompt is cut at the budget', () => {
+        expect(clampToBudget('x'.repeat(5000))).toHaveLength(PROMPT_BUDGET);
+      });
+    `,
+    expected: [],
+  },
+  {
+    name: 'SILENT: an imported constant sizes the input, not the expected side',
+    source: `
+      import { clampToBudget, PROMPT_BUDGET } from '../src/budget';
+      test('a prompt past the budget is cut to it', () => {
+        expect(clampToBudget('x'.repeat(PROMPT_BUDGET + 904))).toHaveLength(4096);
+      });
+    `,
+    expected: [],
+  },
+  {
+    name: 'SILENT: a local parameter shadows the imported constant',
+    source: `
+      import { MARKER } from '../src/budget';
+      test.each(['required'])('a fixture field is rendered', async (MARKER) => {
+        const text = await page.$eval('[data-message]', element => element.textContent);
+        expect(text).toContain(MARKER);
+      });
+    `,
+    expected: [],
+  },
+  {
+    name: 'SILENT: an object key is not a read of the imported constant',
+    source: `
+      import { PROMPT_BUDGET } from '../src/budget';
+      test('the wire names the budget field', () => {
+        expect(readWire()).toEqual({ PROMPT_BUDGET: 4096 });
+      });
+    `,
+    expected: [],
+  },
+  {
+    name: 'SILENT: a product key selects the field whose independently stated value is checked',
+    source: `
+      import { MARKER } from '../src/budget';
+      test('the selected field records the operation', () => {
+        expect(readWire()).toMatchObject({ [MARKER]: 'recorded' });
+        expect(readWire()).toHaveProperty(MARKER, 'recorded');
+      });
+    `,
+    expected: [],
+  },
+  {
     name: 'SILENT: toThrow carrying the message it expects',
     source: `
       import { clampToBudget } from '../src/budget';
@@ -688,6 +859,248 @@ describeCategory('tautology_suspect', [
     expected: [],
   },
 ]);
+
+test('RED: a product literal reaches an expected side through a renamed package export', () => {
+  const barrel = 'packages/probe/src/index.ts';
+  const sources = new Map([[MODULE, MODULE_TEXT], [barrel, "export { MARKER as BUDGET_MARKER } from './budget';\n"]]);
+
+  const measured = measureFile(PROBE, `
+    import { BUDGET_MARKER as label } from '@kinu.run/probe';
+    test('the budget marker is rendered', async () => {
+      const text = await page.$eval('[data-marker]', element => element.innerText);
+      expect(text).toContain(label);
+    });
+  `, { ...inputs, sources, tracked: new Set([...inputs.tracked, barrel]) });
+
+  expect(measured.findings.tautology_suspect.map((finding) => finding.what)).toEqual(['expected side copies a product constant']);
+});
+
+test('rendered text follows an imported observer field without treating its geometry as text', () => {
+  const observer = 'packages/probe/tests/helpers/observe.ts';
+
+  const sources = new Map([...inputs.sources, [observer, `
+    export async function observe(page) {
+      const limitsStated = await page.$eval('[data-limits]', element => element?.textContent?.match(/\\d+/g).map(Number));
+      const width = await page.$eval('[data-limits]', element => element.getBoundingClientRect().width);
+      return { limitsStated, width };
+    }
+  `]]);
+
+  const measured = measureFile(PROBE, `
+    import { PROMPT_BUDGET } from '../src/budget';
+    import { observe } from './helpers/observe';
+    test('reads the dialog', async () => {
+      const seen = await observe(page);
+      expect(seen?.limitsStated).toEqual([PROMPT_BUDGET]);
+      expect(seen.width).toBe(PROMPT_BUDGET);
+    });
+  `, { ...inputs, sources, tracked: new Set([...inputs.tracked, observer]) });
+
+  expect(measured.findings.tautology_suspect.map((finding) => finding.what)).toEqual(['expected side copies a product constant']);
+});
+
+for (const fixture of [
+  {
+    name: 'a stored observer result remains text through a verdict wrapper without tainting sibling state',
+    observer: 'packages/probe/tests/helpers/observe-stored.ts',
+    module: `export const observe = async page => ({ limitsStated: await page.$eval('[data-limits]', element => element.textContent) });`,
+    source: `
+      import { PROMPT_BUDGET } from '../src/budget';
+      import { observe } from './helpers/observe-stored';
+      const state = { rendered: null, stored: null };
+      beforeAll(async () => {
+        state.rendered = await attempt('rendered', () => observe(page));
+        state.stored = { limitsStated: await storage.read() };
+      });
+      test('the rendered limits', () => {
+        const row = verdictOf(state.rendered, 'rendered');
+        expect(row.limitsStated).toEqual([PROMPT_BUDGET]);
+      });
+      test('the storage limits', () => {
+        const row = verdictOf(state.stored, 'stored');
+        expect(row.limitsStated).toEqual([PROMPT_BUDGET]);
+      });
+    `,
+    expected: ['the rendered limits'],
+  },
+  {
+    name: 'a local function can shadow a scalar DOM-text observer',
+    observer: 'packages/probe/tests/helpers/title.ts',
+    module: `export const readTitle = page => page.$eval('h1', node => node.textContent);`,
+    source: `
+      import { MARKER } from '../src/budget';
+      import { readTitle } from './helpers/title';
+      test('the rendered title', async () => { expect(await readTitle(page)).toContain(MARKER); });
+      test('a non-rendering local reader', () => {
+        const readTitle = () => storage.read();
+        expect(readTitle()).toBe(MARKER);
+      });
+    `,
+    expected: ['the rendered title'],
+  },
+]) {
+  test(fixture.name, () => {
+    const sources = new Map([...inputs.sources, [fixture.observer, fixture.module]]);
+
+    const measured = measureFile(PROBE, fixture.source, {
+      ...inputs, sources, tracked: new Set([...inputs.tracked, fixture.observer]),
+    });
+
+    expect(measured.findings.tautology_suspect.map((finding) => finding.test)).toEqual(fixture.expected);
+  });
+}
+
+describeCategory('copy_pin', [
+  {
+    name: 'RED: exact rendered prose, including a local expected constant',
+    source: `const COPY = 'One shared member'; test('grant', () => { const text = dialog.textContent; expect(text).toBe(COPY); });`,
+    expected: ['rendered copy has no named requirement'],
+  },
+  {
+    name: 'RED: optional-chained DOM observations still pin product copy',
+    source: `test('title', () => { expect(document.body?.textContent).toBe('One shared member'); });`,
+    expected: ['rendered copy has no named requirement'],
+  },
+  {
+    name: 'SILENT: a protocol string is not rendered copy',
+    source: `test('wire', () => { expect(response.message).toBe('One shared member'); });`,
+    expected: [],
+  },
+  {
+    name: 'SILENT: fixture text matching a class expression is not product wording',
+    source: `test('name', () => { expect(document.body.textContent).toBe('Product shell'); });`,
+    expected: [],
+  },
+]);
+
+describeCategory('css_value', [
+  {
+    name: 'RED: a computed style pinned to a literal',
+    source: `test('spacing', () => { const space = getComputedStyle(panel).padding; expect(space).toBe('16px'); });`,
+    expected: ['rendered CSS value has no named requirement'],
+  },
+  {
+    name: 'RED: a geometry threshold with no contract',
+    source: `test('height', () => { expect(panel.getBoundingClientRect().height).toBeGreaterThan(600); });`,
+    expected: ['rendered CSS value has no named requirement'],
+  },
+  {
+    name: 'SILENT: geometry compared with another observation',
+    source: `test('inside', () => { expect(control.getBoundingClientRect().bottom).toBeLessThanOrEqual(panel.getBoundingClientRect().bottom); });`,
+    expected: [],
+  },
+  {
+    name: 'SILENT: browser selector arguments are not expected CSS values',
+    source: `test('inside', async () => { const edge = await page.$eval('.box', el => el.getBoundingClientRect().bottom); expect(control.getBoundingClientRect().bottom).toBeLessThanOrEqual(edge); });`,
+    expected: [],
+  },
+  {
+    name: 'SILENT: visibility is a condition, not a CSS value pin',
+    source: `test('visible', () => { const visible = getComputedStyle(panel).display !== 'none'; expect(visible).toBe(true); });`,
+    expected: [],
+  },
+]);
+
+describe('the named-requirement registry', () => {
+  const contrast = {
+    kind: 'css', values: { minimum: 4.5 },
+    authority: { kind: 'spec', standard: 'WCAG 2.2', clause: '1.4.3', reference: 'https://www.w3.org/TR/WCAG22/#contrast-minimum' },
+  };
+
+  const RULING = '269ff163c7df4fa1e6ed6c3e4ebcce83ad1c8f74';
+
+  const caption = {
+    kind: 'copy', value: 'Untitled',
+    authority: { kind: 'owner', recordedOn: '2026-09-15', reference: RULING, requirement: 'The fallback title names an untitled workspace.' },
+  };
+
+  const judge = (registry: Parameters<typeof judgeRequirements>[0]['registry'], reads: Readonly<Record<string, readonly string[]>>, predates: Predates = () => true) =>
+    judgeRequirements({ registry, reads: new Map(Object.entries(reads)), predates });
+
+  test('a requirement is read through an aliased import and local binding, not an unrelated object', () => {
+    const measured = measureFile(PROBE, `
+      import { TEST_REQUIREMENTS as requirements } from '../../../scripts/test-requirements';
+      const title = requirements.untitledWorkspace.value;
+      test('title', () => { expect(document.body.textContent).toBe(title); });
+      test('unrelated', () => {
+        const requirements = { untitledWorkspace: { value: 'Any convenient wording' } };
+        expect(document.body.textContent).toBe(requirements.untitledWorkspace.value);
+      });
+    `, { ...inputs, tracked: new Set([...inputs.tracked, 'scripts/test-requirements.ts']) });
+
+    expect([...measured.requirements]).toEqual(['untitledWorkspace']);
+    expect(measured.findings.copy_pin.map((finding) => finding.test)).toEqual(['unrelated']);
+  });
+
+  test('a cited but unread requirement is rejected, and an unknown use is named', () => {
+    expect(judge({ contrast }, {})).toEqual({ invalid: [], unread: ['contrast'], unknown: [] });
+    expect(judge({ contrast }, { contrast: [PROBE], madeUp: [PROBE] })).toEqual({ invalid: [], unread: [], unknown: ['madeUp'] });
+  });
+
+  test('one named CSS bound does not excuse another literal in the assertion', () => {
+    const measured = measureFile(PROBE, `
+      import { TEST_REQUIREMENTS } from '../../../scripts/test-requirements';
+      test('legitimate', () => {
+        expect(contrast(rgba(getComputedStyle(panel).color), rgba(getComputedStyle(panel).backgroundColor)))
+          .toBeGreaterThanOrEqual(TEST_REQUIREMENTS.wcagTextContrast.values.normal);
+      });
+      test('extra pin', () => {
+        expect([panel.getBoundingClientRect().width, panel.getBoundingClientRect().height])
+          .toEqual([TEST_REQUIREMENTS.wcagTextContrast.values.normal, 600]);
+      });
+    `, { ...inputs, tracked: new Set([...inputs.tracked, 'scripts/test-requirements.ts']) });
+
+    expect(measured.findings.css_value.map((finding) => finding.test)).toEqual(['extra pin']);
+    expect([...measured.requirements]).toEqual(['wcagTextContrast']);
+  });
+
+  test('an owner ruling cites a commit before each test that reads it, never free text or the test\'s own commit', () => {
+    const reader = 'scripts/a.test.ts';
+    const late = 'scripts/b.test.ts';
+
+    expect(judge({ caption }, { caption: [reader, late] }, (sha, name, file) => sha === RULING && name === 'caption' && file === reader).invalid)
+      .toEqual([expect.stringMatching(new RegExp(`^caption\\.authority\\.reference: .*${late}`, 'u'))]);
+    expect(judge({ caption: { ...caption, authority: { ...caption.authority, reference: 'owner said so' } } }, { caption: [reader] }).invalid)
+      .toEqual([expect.stringMatching(/^caption\.authority\.reference: /u)]);
+  });
+
+  test('a named requirement does not excuse another literal in the assertion', () => {
+    const measured = measureFile(PROBE, `
+      import { TEST_REQUIREMENTS } from '../../../scripts/test-requirements';
+      test('extra pin', () => {
+        expect([document.body.textContent, heading.textContent])
+          .toEqual([TEST_REQUIREMENTS.untitledWorkspace.value, 'One shared member']);
+      });
+    `, { ...inputs, tracked: new Set([...inputs.tracked, 'scripts/test-requirements.ts']) });
+
+    expect(measured.findings.copy_pin.map((finding) => finding.test)).toEqual(['extra pin']);
+  });
+
+  test('a test-needs-it note supplies no authority', () => {
+    const rejected = judge({ padding: { kind: 'css', values: { minimum: 8 }, authority: { reason: 'the test needs it' } } }, { padding: [PROBE] });
+
+    expect(rejected.invalid.some((problem) => problem.startsWith('padding.authority.kind:'))).toBe(true);
+  });
+
+  test('an owner requirement carries a dated ruling', () => {
+    const copy = { kind: 'copy', value: 'Untitled', authority: { kind: 'owner', reference: RULING, requirement: 'Never show a slug as its title.' } };
+    expect(judge({ copy }, { copy: [PROBE] }).invalid.some((problem) => problem.startsWith('copy.authority.recordedOn:'))).toBe(true);
+    expect(judge({ copy: { ...copy, authority: { ...copy.authority, recordedOn: '2026-09-15' } } }, { copy: [PROBE] }))
+      .toEqual({ invalid: [], unread: [], unknown: [] });
+  });
+});
+
+test('a style-bearing observer does not taint a same-named field returned by another observer', () => {
+  const measured = measureFile(PROBE, `
+    function dimensions() { return { value: getComputedStyle(panel).padding }; }
+    function title() { return { value: panel.textContent }; }
+    test('copy', () => { expect(title().value).toBe('The chosen title'); });
+    test('style', () => { expect(dimensions().value).toBe('16px'); });
+  `, inputs);
+
+  expect(measured.findings.copy_pin.map((finding) => finding.test)).toEqual(['copy']);
+  expect(measured.findings.css_value.map((finding) => finding.test)).toEqual(['style']);
+});
 
 describe('assertion_free and silent_skip', () => {
   test('RED: a test with no assertion at all', () => {
@@ -1086,13 +1499,6 @@ describe('this repository', () => {
       .toEqual({ banned: [], added: [], grown: [], stale: [], unproven: [] });
   });
 
-  test('it prints its blind spots on the success path', () => {
-    expect(BLIND_SPOTS.length).toBeGreaterThan(5);
-    // The rejected heuristic is recorded, because its absence is itself a blind
-    // spot: a test that hard-codes a source string without reading the file is
-    // invisible to the surviving rule.
-    expect(BLIND_SPOTS.join('\n')).toContain('REJECTED HEURISTIC');
-  });
 });
 
 describe('the runner table is resolved, never listed', () => {

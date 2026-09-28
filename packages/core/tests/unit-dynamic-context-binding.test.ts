@@ -66,7 +66,7 @@ function collect(o: Fixture, over: Overrides = {}, stores: AgentStores = o.store
 
 test('a workspace craft is not advertised without an installed callable reader', () => {
   const o = setup();
-  o.rt.craftStore.create({ name: 'secret_echo', description: 'Echo from the workspace', code: '(input) => input', params: null, scope: 'local' });
+  o.rt.craftStore.create({ name: 'secret_echo', description: 'Echo from the workspace', code: '(input) => input' });
 
   expect(collect(o).craftedTools ?? []).toEqual([]);
 });
@@ -124,7 +124,7 @@ describe('the four store-backed planes are the reading actor\'s own', () => {
       task: 'sibling branch', rationale: 'sibling branch', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
       budget: { spawnedAt: 1, maxDepth: 2 },
-      loop: defaultLoopOrigin('head'),
+      loop: defaultLoopOrigin('run'),
     });
 
     const ctx = collect(o);

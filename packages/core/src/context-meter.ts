@@ -7,7 +7,8 @@ import { asSchema, type ModelMessage, type SystemModelMessage, type ToolSet } fr
 import * as v from 'valibot';
 import { CHARS_PER_TOKEN } from './llm';
 import { JsonObjectSchema } from './utils/json';
-import { diagnostics, renderThrownChain } from './obs/index';
+import { Effect } from 'effect';
+import { diagnostics, renderThrownChain, settleSync } from './obs/index';
 import { DYNAMIC_CONTEXT_OPEN_TAG, splitPromptSections } from './utils/prompt-sections';
 
 /** Coarse on purpose: the four things an operator can act on. */
@@ -40,14 +41,19 @@ function systemText(system: SystemText): string {
   return text.success ? text.output : v.parse(v.object({ content: v.string() }), system).content;
 }
 
+/** Frozen messages and a turn's schemas are measured once. */
+const MEASURED = new WeakMap<object, number>();
+
 /** Structured content is measured as the JSON the provider tokenizes; unguarded so it never reads as zero. */
 function messageChars(message: ModelMessage): number {
-  const content = message.content;
-  const text = v.safeParse(v.string(), content);
+  const held = MEASURED.get(message);
 
-  if (text.success) return text.output.length;
+  if (held !== undefined) return held;
+  const text = v.safeParse(v.string(), message.content);
+  const chars = text.success ? text.output.length : JSON.stringify(message.content)?.length ?? 0;
+  MEASURED.set(message, chars);
 
-  return JSON.stringify(content)?.length ?? 0;
+  return chars;
 }
 
 /** Live-state blocks ride as user messages but are not conversation. */
@@ -60,20 +66,36 @@ function isEphemeral(message: ModelMessage): boolean {
 }
 
 /** Counted as the JSON Schema the provider is sent. */
-function toolChars(name: string, def: ToolDefsLike[string]): number {
-  if (!def) return 0;
-  let schema = 0;
+function toolChars(name: string, def: ToolDefsLike[string]): Effect.Effect<number, never> {
+  if (!def) return Effect.succeed(0);
 
-  try {
-    const sent = def.inputSchema === undefined ? undefined : v.safeParse(JsonObjectSchema, asSchema(def.inputSchema).jsonSchema);
+  return Effect.map(schemaChars(def), (schema) => name.length + (def.description?.length ?? 0) + schema);
+}
 
-    if (sent?.success === false) diagnostics.event('context_meter.schema_unmeasurable', { error: 'its JSON Schema is not ready synchronously' });
-    schema = sent?.success === true ? JSON.stringify(sent.output).length : 0;
-  } catch (error) {
-    diagnostics.event('context_meter.schema_unmeasurable', { error: renderThrownChain({ cause: error }) });
-  }
+function schemaChars(def: NonNullable<ToolDefsLike[string]>): Effect.Effect<number, never> {
+  const held = def.inputSchema === undefined ? undefined : MEASURED.get(def.inputSchema);
 
-  return name.length + (def.description?.length ?? 0) + schema;
+  if (held !== undefined) return Effect.succeed(held);
+
+  return Effect.try({
+    try: () => {
+      const sent = def.inputSchema === undefined ? undefined : v.safeParse(JsonObjectSchema, asSchema(def.inputSchema).jsonSchema);
+
+      if (sent?.success === false) diagnostics.event('context_meter.schema_unmeasurable', { error: 'its JSON Schema is not ready synchronously' });
+
+      if (sent?.success !== true) return 0;
+      const chars = JSON.stringify(sent.output).length;
+
+      if (def.inputSchema !== undefined) MEASURED.set(def.inputSchema, chars);
+
+      return chars;
+    },
+    catch: (cause) => ({ cause }),
+  }).pipe(Effect.catch((thrown) => {
+    diagnostics.event('context_meter.schema_unmeasurable', { error: renderThrownChain(thrown) });
+
+    return Effect.succeed(0);
+  }));
 }
 
 /** Segments come out in wire order: system sections, tools, then message planes. */
@@ -82,17 +104,24 @@ export function measureContext(input: {
   tools?: ToolDefsLike | undefined;
   messages: readonly ModelMessage[];
 }): ContextComposition {
+  return settleSync(Effect.map(toolSegments(input.tools ?? {}), (toolRows) => composition(input, toolRows)));
+}
+
+function toolSegments(tools: ToolDefsLike): Effect.Effect<ContextSegment[], never> {
+  return Effect.map(
+    Effect.all(Object.entries(tools).map(([name, def]) => Effect.map(toolChars(name, def), (chars): ContextSegment => ({ plane: 'tools', label: name, chars, items: 1 })))),
+    (rows) => rows.filter((row) => row.chars > 0),
+  );
+}
+
+function composition(input: Parameters<typeof measureContext>[0], toolRows: readonly ContextSegment[]): ContextComposition {
   const segments: ContextSegment[] = [];
 
   for (const section of splitPromptSections(systemText(input.system))) {
     segments.push({ plane: 'system', label: section.title, chars: section.chars, items: 1 });
   }
 
-  for (const [name, def] of Object.entries(input.tools ?? {})) {
-    const chars = toolChars(name, def);
-
-    if (chars > 0) segments.push({ plane: 'tools', label: name, chars, items: 1 });
-  }
+  segments.push(...toolRows);
 
   // Fold per role: a per-message row would be unbounded.
   const roles = new Map<string, { chars: number; items: number }>();

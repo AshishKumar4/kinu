@@ -10,9 +10,9 @@ import { diagnostics, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
-  isForeignAgentNamespacePath, hostedActorRoute,
+  isForeignAgentNamespacePath, hostedActorRoute, HOSTED_ACTOR_ID_HEADER,
 } from "@kinu.run/core";
-import { serveReleaseArtifact } from "@kinu.run/core";
+import { releaseArtifact, releaseArtifactHead } from "@kinu.run/core";
 import { DEPLOY_PAGE_PATH, RELEASE_ARTIFACT_NAME } from "@kinu.run/core/deploy";
 import { servePreviewRequest } from "./preview-proxy";
 import { mcpAgentResolver, mcpRoutes } from "./mcp-server";
@@ -175,8 +175,7 @@ export default {
 
     if (upgrade) return upgrade;
 
-    // Preview hosts serve only previews: no session is ever minted there (core preview/preview-origin.ts).
-    const response = isPreviewHostRequest(url, env) ? await routePreviewHost(request, env) : await worker.fetch(request, env, ctx);
+    const response = await worker.fetch(request, env, ctx);
 
     return withTransportSecurity(response, url, env);
   },
@@ -257,17 +256,24 @@ function withTransportSecurity(response: Response, url: URL, env: Env): Response
   });
 }
 
-/** Share hosts are checked first so neither parser sees the other's input. */
-async function routePreviewHost(request: Request, env: Env): Promise<Response> {
-  const share = await handleSlateShareHostRequest(request, env);
+/** Preview hosts serve only previews: no session is minted there. Share labels first, so neither parser sees the other's. */
+const previewHost = new Hono<FamilyEnv<Env, object>>({ getPath: rawPath });
 
-  if (share) return containPreviewResponse(share);
-  const nimbus = await handleNimbusPreviewHostRequest(request, env);
+previewHost.use('*', async (c, next) => {
+  const share = await handleSlateShareHostRequest(c.req.raw, c.env);
 
-  if (nimbus) return containPreviewResponse(nimbus);
+  return share === null ? await next() : containPreviewResponse(share);
+});
 
-  return servePreviewRequest(request, env);
-}
+previewHost.use('*', async (c, next) => {
+  const nimbus = await handleNimbusPreviewHostRequest(c.req.raw, c.env);
+
+  return nimbus === null ? await next() : containPreviewResponse(nimbus);
+});
+
+previewHost.all('*', async (c) => await servePreviewRequest(c.req.raw, c.env));
+
+previewHost.onError(routeError);
 
 /** Every other code is a workspace failure: 500. */
 const HOSTED_ACTOR_ROUTE_STATUS: Partial<Readonly<Record<ErrorCode, number>>> = {
@@ -293,6 +299,10 @@ function mount<Bindings extends object, Variables extends object>(
 
 const appShell = async (c: Context<WorkerEnv>): Promise<Response> => serveApp(c.req.raw, c.env);
 
+worker.use('*', async (c, next) => (isPreviewHostRequest(new URL(c.req.url), c.env)
+  ? await previewHost.fetch(c.req.raw, c.env, c.executionCtx)
+  : await next()));
+
 worker.all('/api/*', beneath<WorkerEnv>('/api', async (c) => api.fetch(c.req.raw, c.env, c.executionCtx)));
 
 mount(pcRoutes);
@@ -307,7 +317,8 @@ mount(landingRoutes);
 mount(cliPageRoutes);
 
 // Public: release artifacts, and the deploy door's OAuth return, which its state cookie authorizes.
-worker.get(RELEASE_ARTIFACT_PATH, async (c) => serveReleaseArtifact(c.req.raw, c.env.RELEASES_BUCKET, rawParam(c, 'artifact')));
+// Hono runs HEAD through the GET route.
+worker.get(RELEASE_ARTIFACT_PATH, async (c) => await (c.req.method === 'HEAD' ? releaseArtifactHead : releaseArtifact)(c.env.RELEASES_BUCKET, rawParam(c, 'artifact')));
 
 worker.all(RELEASE_ARTIFACT_PATH, async () => err(405, 'Method not allowed.'));
 
@@ -382,9 +393,8 @@ worker.all('/agents/*', async (c, next) => {
   observeWorkspaceUse(c.env, identity, agentName, { retain: c.executionCtx });
 
   const routed = c.get('request');
-  const reqWithId = new Request(routed, { headers: appendIdentityHeaders(routed.headers, identity) });
+  const headers = appendIdentityHeaders(routed.headers, identity);
 
-  // Routed unchanged; only refuse names this workspace does not host.
   const hosted = hostedActorRoute(c.req.path);
 
   if (hosted) {
@@ -394,9 +404,11 @@ worker.all('/agents/*', async (c, next) => {
     if ('reason' in target) {
       return Response.json(target, { status: HOSTED_ACTOR_ROUTE_STATUS[target.reason] ?? 500 });
     }
+
+    headers.set(HOSTED_ACTOR_ID_HEADER, target.actorId);
   }
 
-  return (await routeAgentRequest(reqWithId, c.env)) ?? next();
+  return (await routeAgentRequest(new Request(routed, { headers }), c.env)) ?? next();
 });
 
 worker.notFound(appShell);

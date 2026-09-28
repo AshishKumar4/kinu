@@ -8,11 +8,13 @@ import { openWorkspaceMainActor, recoveryBackoffMs } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
-  hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness, tapDiagnostics, until,
+  catalogTurn, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
+  runDelegatedTask, tapDiagnostics, until,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { present } from '@kinu.run/test-utils';
+import { answeringGateway } from './helpers/platform-gateway';
 
 /** Journal, job registry and search ledger are actor-private: seeds must carry the owner the agent resolves. */
 function harnessActorId(db: Database): string {
@@ -82,6 +84,64 @@ function breakScheduleWrites(agent: HarnessOrchestratorAgent): void {
     value: async (): Promise<never> => { throw new Error('storage write failed'); },
   });
 }
+
+describe('a refiner answer stored with no waiter', () => {
+  test('arms the Kinu wake at once, and the tick routes it so the workspace owes nothing after', async () => {
+    // After an eviction the answer used to wait for the owner's next message.
+    const workspace = orchestratorHarness();
+    const now = Date.now();
+    const { requests } = await workspace.agent.listRefinements(1);
+    expect(requests).toEqual([]);
+
+    const actorId = harnessActorId(workspace.db);
+    workspace.db.prepare(`INSERT INTO refinement_requests
+      (actor_id, id, trigger, scope, stage, claim, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
+      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
+    workspace.db.prepare(`INSERT INTO evolution_helpers
+      (actor_id, name, lane_request_id, answer_status, answer, created_at)
+      VALUES (?, 'ask-refiner-x1', 'refine-1', 'completed', ?, ?)`)
+      .run(actorId, 'Nothing to change.\n\n{"scope":"workspace","summary":"nothing","edits":[]}', now);
+
+    await workspace.agent.activateActor();
+    await until(() => held(workspace.db, `SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '${KINU_TIMER_CALLBACK}'`) > 0,
+      'the stored answer armed the Kinu wake');
+
+    await workspace.agent._kinuTimerTick();
+    await joinHarnessFibers();
+
+    expect((await workspace.agent.listRefinements(1)).requests[0]?.stage).not.toBe('requested');
+  });
+
+  test('an answer relayed after activation pulls the Kinu wake to now, and the tick routes it', async () => {
+    const workspace = gatewayWorkspace(answeringGateway('Nothing to change.\n\n{"scope":"workspace","summary":"nothing","edits":[]}'));
+    await workspace.agent.activateActor();
+    const actorId = harnessActorId(workspace.db);
+    const now = Date.now();
+    workspace.db.prepare(`INSERT INTO refinement_requests
+      (actor_id, id, trigger, scope, stage, claim, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
+      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
+
+    const refiner = await hostedSubordinateHarness(workspace, {
+      name: 'ask-refiner-x1', displayName: 'Refiner', nameOrigin: 'auto', mission: 'propose refinements',
+    });
+
+    workspace.db.prepare(`INSERT INTO actor_subordinates (actor_id, name, created_by, status, current_task, created_at, dismissed_at,
+      lifetime, task_event_id, actor_reference, birth_request, delete_requested)
+      VALUES (?, 'ask-refiner-x1', 'evolution', 'working', 'review', ?, NULL, 'task', 'evt-1', NULL, NULL, 0)`).run(actorId, now);
+    workspace.db.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
+      VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
+    const wakes = `SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '${KINU_TIMER_CALLBACK}'`;
+    expect(held(workspace.db, wakes)).toBe(0);
+
+    await runDelegatedTask(workspace, refiner.actor.handle.actorId, 'Review the recent turns.');
+    expect(held(workspace.db, `SELECT COUNT(*) AS held FROM evolution_helpers WHERE answer_status = 'completed'`)).toBe(1);
+    await until(() => held(workspace.db, wakes) > 0, 'the relayed answer armed the Kinu wake');
+
+    await workspace.agent._kinuTimerTick();
+    await joinHarnessFibers();
+    expect((await workspace.agent.listRefinements(1)).requests[0]?.stage).not.toBe('requested');
+  });
+});
 
 describe('the workspace keeps exactly one wake row', () => {
   test('the stale sweep spares the Kinu wake and still drops a dead continuation', async () => {
@@ -194,6 +254,30 @@ describe('the workspace keeps exactly one wake row', () => {
 
     await agent.terminalRetryPass();
     expect(held(db, seededFibers)).toBe(0);
+  });
+
+  test('a quiet turn keeps the wake a truncated sweep still needs', async () => {
+    // Unfinished maintenance is found only by running a pass, so a turn settling over it must not take its wake.
+    const workspace = gatewayWorkspace(answeringGateway('done'));
+    const { agent, db } = workspace;
+    await agent.listSchedules();
+    db.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
+      id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, snapshot TEXT, created_at INTEGER NOT NULL)`);
+
+    const insert = db.prepare(`INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)`);
+    const expired = Date.now() - 25 * 60 * 60 * 1000;
+
+    for (let i = 0; i < 4096 + 40; i++) insert.run(`fiber-${i}`, 'bg:stale', expired);
+
+    await agent.activateActor();
+    await until(() => wakeArmed(db), 'the truncated fiber sweep armed the maintenance wake');
+
+    await catalogTurn(agent, 'a turn over an unfinished sweep');
+    await joinHarnessFibers();
+
+    expect(wakeArmed(db)).toBe(true);
+    await agent.terminalRetryPass();
+    expect(held(db, `SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'fiber-%'`)).toBe(0);
   });
 
   test('a hired child shares the workspace wake, and its backlog drains through it', async () => {
@@ -365,9 +449,9 @@ describe('the workspace keeps exactly one wake row', () => {
     const insertRun = (root: string, createdAt: number): void => {
       db.prepare(
         `INSERT INTO mcts_search_runs
-           (actor_id, root_id, root_msg_id, task, engine, status, config_json, budget, created_at, updated_at)
-         VALUES (?, ?, ?, 'search the space', 'swarm', 'running', '{}', 4, ?, ?)`,
-      ).run(actorId, root, `msg-${root}`, createdAt, createdAt);
+           (actor_id, root_id, task, status, config_json, created_at, updated_at)
+         VALUES (?, ?, 'search the space', 'running', '{}', ?, ?)`,
+      ).run(actorId, root, createdAt, createdAt);
     };
 
     const status = (root: string): string => present(db
@@ -633,6 +717,18 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.terminalRetryPass();
 
     expect(await agent.listSchedules()).toEqual([]);
+  });
+
+  test('a turn that settles with nothing owed leaves no wake armed', async () => {
+    // Rest: the turn-open arm and the terminal sequence's pre-attempt arm both go once nothing is owed, so no wake
+    // follows the turn only to find nothing (S4, kinu-logs/onstart/DESIGN.md).
+    const workspace = gatewayWorkspace(answeringGateway('done'));
+    await workspace.agent.activateActor();
+
+    await catalogTurn(workspace.agent, 'a turn with nothing after it');
+    await joinHarnessFibers();
+
+    expect(await workspace.agent.listSchedules()).toEqual([]);
   });
 
   test('a tick that cannot re-arm fails, so the runtime redelivers it', async () => {

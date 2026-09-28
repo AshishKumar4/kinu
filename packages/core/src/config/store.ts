@@ -1,4 +1,6 @@
 // AgentConfigStore: typed accessors over the `actor_config` key/value table.
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
@@ -57,13 +59,6 @@ export const AGENT_CONFIG_KEYS = {
   closedTurnWindows: 'closed_turn_windows',
   /** See DEFAULT_GEPA_EVAL_BUDGET. */
   gepaEvalBudget: 'gepa_eval_budget',
-  /** Unset = engine defaults (DEFAULT_CONFIG.mcts). */
-  mctsExplorationWeight: 'mcts_c',
-  mctsBudget: 'mcts_iterations',
-  mctsMaxDepth: 'mcts_depth',
-  mctsBranches: 'mcts_branches',
-  mctsJudgeSamples: 'mcts_judge_samples',
-  mctsMaxEvalLLMCalls: 'mcts_eval_llm_calls',
   /** 'false' silences owner emails; defaults on. */
   emailNotifications: 'email_notifications',
   /** Lazy Vectorize backfill of chunks indexed before embeddings existed; cursor pages across boots. */
@@ -155,22 +150,8 @@ export interface AgentConfigStore {
   getGepaEvalBudget(): number;
   /** Clamped, not rejected: the bounds are cost policy. */
   setGepaEvalBudget(n: number): void;
-  /** Only explicitly set, valid knobs, so unset ones keep engine defaults. */
-  getMctsOverrides(): MctsOverrides;
-  /** Undefined fields are left untouched. */
-  setMctsOverrides(overrides: MctsOverrides): void;
   getEmailNotificationsEnabled(): boolean;
   setEmailNotificationsEnabled(enabled: boolean): void;
-}
-
-export interface MctsOverrides {
-  explorationWeight?: number;
-  budget?: number;
-  maxDepth?: number;
-  branches?: number;
-  /** Median-aggregated. */
-  judgeSamples?: number;
-  maxEvalLLMCalls?: number;
 }
 
 /** Default auto-GEPA cadence: one pass per this many turns of new traces. */
@@ -185,12 +166,10 @@ export function clampGepaEvalBudget(n: number): number {
 }
 
 /** Rejects rather than clamps: an out-of-range probability is a caller bug. */
-function unitInterval(key: string, value: number): number {
-  if (!Number.isFinite(value) || value < 0 || value > 1) {
-    throw new Error(`invalid ${key}: ${value} (expected a fraction between 0 and 1)`);
-  }
-
-  return value;
+function unitInterval(key: string, value: number): Effect.Effect<number> {
+  return !Number.isFinite(value) || value < 0 || value > 1
+    ? Effect.die(new Error(`invalid ${key}: ${value} (expected a fraction between 0 and 1)`))
+    : Effect.succeed(value);
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
@@ -220,10 +199,8 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     void sql`DELETE FROM actor_config WHERE actor_id = ${actorId} AND key = ${key}`;
   };
 
-  const setValid = (key: string, value: string, valid: boolean, what: string): void => {
-    if (!valid) throw new Error(`Invalid ${what}: ${value}`);
-    set(key, value);
-  };
+  const setValid = (key: string, value: string, valid: boolean, what: string): Effect.Effect<void> =>
+    valid ? Effect.sync(() => set(key, value)) : Effect.die(new Error(`Invalid ${what}: ${value}`));
 
   const unitIntervalOr = (key: string, fallback: number): number => {
     const stored = get(key);
@@ -293,9 +270,9 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
     getProviderAccounts: storedProviderAccounts,
     setProviderAccount(provider, account) {
-      if (!isProviderScope(provider)) throw new Error(`Invalid provider id: ${provider}`);
+      if (!isProviderScope(provider)) return settleSync(Effect.die(new Error(`Invalid provider id: ${provider}`)));
 
-      if (account !== null && !isAccountName(account)) throw new Error(`Invalid account name: ${account}`);
+      if (account !== null && !isAccountName(account)) return settleSync(Effect.die(new Error(`Invalid account name: ${account}`)));
       const next = { ...storedProviderAccounts(), [provider]: account };
       const pairs = Object.entries(next).flatMap(([id, name]) => (name === null ? [] : [`${id}=${name}`])).sort();
 
@@ -308,8 +285,9 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return isReasoningEffort(effort) ? effort : null;
     },
     setReasoningEffort(effort) {
-      if (effort === null) remove(AGENT_CONFIG_KEYS.reasoningEffort);
-      else setValid(AGENT_CONFIG_KEYS.reasoningEffort, effort, isReasoningEffort(effort), 'reasoning effort');
+      if (effort === null) return remove(AGENT_CONFIG_KEYS.reasoningEffort);
+
+      return settleSync(setValid(AGENT_CONFIG_KEYS.reasoningEffort, effort, isReasoningEffort(effort), 'reasoning effort'));
     },
     getCacheRetention() {
       const value = get(AGENT_CONFIG_KEYS.cacheRetention);
@@ -317,7 +295,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return isCacheRetention(value) ? value : DEFAULT_CACHE_RETENTION;
     },
     setCacheRetention(retention) {
-      setValid(AGENT_CONFIG_KEYS.cacheRetention, retention, isCacheRetention(retention), 'cache retention');
+      return settleSync(setValid(AGENT_CONFIG_KEYS.cacheRetention, retention, isCacheRetention(retention), 'cache retention'));
     },
     getDisplayName() { return get(AGENT_CONFIG_KEYS.displayName); },
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },
@@ -347,15 +325,17 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return stored !== null && isTierId(stored) ? stored : null;
     },
     setAssignedTier(tier) {
-      if (tier === null) remove(AGENT_CONFIG_KEYS.assignedTier);
-      else setValid(AGENT_CONFIG_KEYS.assignedTier, tier, isTierId(tier), 'assigned tier');
+      if (tier === null) return remove(AGENT_CONFIG_KEYS.assignedTier);
+
+      return settleSync(setValid(AGENT_CONFIG_KEYS.assignedTier, tier, isTierId(tier), 'assigned tier'));
     },
     getRoleChangePolicy(): 'allow' | 'approval' | 'locked' {
       return parseRoleChangePolicy(get(AGENT_CONFIG_KEYS.roleChangePolicy));
     },
     setRoleChangePolicy(policy) {
       const valid = policy === 'allow' || policy === 'approval' || policy === 'locked';
-      setValid(AGENT_CONFIG_KEYS.roleChangePolicy, policy, valid, 'role change policy');
+
+      return settleSync(setValid(AGENT_CONFIG_KEYS.roleChangePolicy, policy, valid, 'role change policy'));
     },
     getShellApprovalMode(): ShellApprovalMode {
       const v = get(AGENT_CONFIG_KEYS.shellApprovalMode);
@@ -364,7 +344,8 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     setShellApprovalMode(mode) {
       const valid = mode === 'strict' || mode === 'allow_all' || mode === 'deny_all';
-      setValid(AGENT_CONFIG_KEYS.shellApprovalMode, mode, valid, 'shell approval mode');
+
+      return settleSync(setValid(AGENT_CONFIG_KEYS.shellApprovalMode, mode, valid, 'shell approval mode'));
     },
     getShellApprovalGrants: storedGrants,
     grantShellApproval(grants) { writeGrants([...storedGrants(), ...grants]); },
@@ -386,9 +367,9 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       set(AGENT_CONFIG_KEYS.autoPromoteScaffold, enabled ? 'true' : 'false');
     },
     getShadowSampleRate() { return unitIntervalOr(AGENT_CONFIG_KEYS.shadowSampleRate, 0.25); },
-    setShadowSampleRate(rate) { set(AGENT_CONFIG_KEYS.shadowSampleRate, String(unitInterval('shadow_sample_rate', rate))); },
+    setShadowSampleRate(rate) { return settleSync(Effect.map(unitInterval('shadow_sample_rate', rate), (valid) => set(AGENT_CONFIG_KEYS.shadowSampleRate, String(valid)))); },
     getScaffoldExploreShare() { return unitIntervalOr(AGENT_CONFIG_KEYS.scaffoldExploreShare, 0.2); },
-    setScaffoldExploreShare(share) { set(AGENT_CONFIG_KEYS.scaffoldExploreShare, String(unitInterval('scaffold_explore_share', share))); },
+    setScaffoldExploreShare(share) { return settleSync(Effect.map(unitInterval('scaffold_explore_share', share), (valid) => set(AGENT_CONFIG_KEYS.scaffoldExploreShare, String(valid)))); },
     getAdvisorEnabled() { return get(AGENT_CONFIG_KEYS.advisorEnabled) === 'true'; },
     setAdvisorEnabled(enabled) { set(AGENT_CONFIG_KEYS.advisorEnabled, String(enabled)); },
     getAdvisorMinSeverity() {
@@ -397,7 +378,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return isAdvisorSeverity(stored) ? stored : DEFAULT_ADVISOR_MIN_SEVERITY;
     },
     setAdvisorMinSeverity(severity) {
-      setValid(AGENT_CONFIG_KEYS.advisorMinSeverity, severity, isAdvisorSeverity(severity), 'advisor severity');
+      return settleSync(setValid(AGENT_CONFIG_KEYS.advisorMinSeverity, severity, isAdvisorSeverity(severity), 'advisor severity'));
     },
     getAlwaysActiveSkills() {
       const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
@@ -452,61 +433,6 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     countIsolateGeneration() {
       return increment(AGENT_CONFIG_KEYS.isolateGen);
-    },
-    getMctsOverrides() {
-      const positive = (key: string): number | undefined => {
-        const raw = get(key);
-
-        if (raw == null) return undefined;
-        const n = Number(raw);
-
-        return Number.isFinite(n) && n > 0 ? n : undefined;
-      };
-
-      const out: MctsOverrides = {};
-      const w = positive(AGENT_CONFIG_KEYS.mctsExplorationWeight);
-      const budget = positive(AGENT_CONFIG_KEYS.mctsBudget);
-      const maxDepth = positive(AGENT_CONFIG_KEYS.mctsMaxDepth);
-      const branches = positive(AGENT_CONFIG_KEYS.mctsBranches);
-      const judgeSamples = positive(AGENT_CONFIG_KEYS.mctsJudgeSamples);
-      const maxEvalLLMCalls = positive(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls);
-
-      if (w !== undefined) out.explorationWeight = w;
-
-      if (budget !== undefined) out.budget = Math.floor(budget);
-
-      if (maxDepth !== undefined) out.maxDepth = Math.floor(maxDepth);
-
-      if (branches !== undefined) out.branches = Math.floor(branches);
-
-      if (judgeSamples !== undefined) out.judgeSamples = Math.floor(judgeSamples);
-
-      if (maxEvalLLMCalls !== undefined) out.maxEvalLLMCalls = Math.floor(maxEvalLLMCalls);
-
-      return out;
-    },
-    setMctsOverrides(overrides) {
-      // Validate all before writing, so a rejected call changes nothing.
-      const pending: Array<{ key: string; value: string }> = [];
-
-      const check = (key: string, value: number | undefined, integer: boolean) => {
-        if (value === undefined) return;
-
-        if (!Number.isFinite(value) || value <= 0) throw new Error(`invalid MCTS setting for ${key}: ${value}`);
-        const stored = integer ? Math.floor(value) : value;
-
-        if (stored <= 0) throw new Error(`invalid MCTS setting for ${key}: ${value}`);
-        pending.push({ key, value: String(stored) });
-      };
-
-      check(AGENT_CONFIG_KEYS.mctsExplorationWeight, overrides.explorationWeight, false);
-      check(AGENT_CONFIG_KEYS.mctsBudget, overrides.budget, true);
-      check(AGENT_CONFIG_KEYS.mctsMaxDepth, overrides.maxDepth, true);
-      check(AGENT_CONFIG_KEYS.mctsBranches, overrides.branches, true);
-      check(AGENT_CONFIG_KEYS.mctsJudgeSamples, overrides.judgeSamples, true);
-      check(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls, overrides.maxEvalLLMCalls, true);
-
-      for (const { key, value } of pending) set(key, value);
     },
     getEmailNotificationsEnabled() {
       return get(AGENT_CONFIG_KEYS.emailNotifications) !== 'false';

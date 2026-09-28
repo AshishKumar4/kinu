@@ -32,7 +32,6 @@ import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import { FLOW_SLATE, SLATE_ASK, WRITE_FILE_ASK } from './flows-script';
 
-/** Where a row runs and who it runs as. */
 export interface FlowTarget {
   readonly browser: Browser;
   readonly origin: string;
@@ -399,7 +398,7 @@ interface FrameLedger {
   stop(): Promise<void>;
 }
 
-async function frameLedger(page: Page): Promise<FrameLedger> {
+export async function frameLedger(page: Page): Promise<FrameLedger> {
   const cdp = await page.createCDPSession();
 
   await cdp.send('Network.enable');
@@ -470,7 +469,7 @@ async function frameLedger(page: Page): Promise<FrameLedger> {
 /** Resolves once every one of `methods` has been answered and the page has
  *  nothing unanswered across a painted frame: an answer that sets off a
  *  further ask (the roster read after the snapshot) keeps the wait going. */
-async function settledAfter(page: Page, ledger: FrameLedger, ...methods: readonly string[]): Promise<void> {
+export async function settledAfter(page: Page, ledger: FrameLedger, ...methods: readonly string[]): Promise<void> {
   do {
     await ledger.quietAfter(...methods);
     await painted(page);
@@ -484,6 +483,45 @@ export async function painted(page: Page): Promise<void> {
   }));
 }
 
+/** Observes the page's function timers without adding or advancing one: replay completion may leave a
+ *  throttled render queued. String timers retain the browser's own semantics. */
+const RECORD_PAGE_TASKS = `(() => {
+  const schedule = window.setTimeout.bind(window);
+  const cancel = window.clearTimeout.bind(window);
+  const pending = new Map();
+  window.__pageTasks = pending;
+  window.setTimeout = function (handler, delay, ...args) {
+    if (typeof handler !== 'function') return schedule(handler, delay, ...args);
+    let finish;
+    const done = new Promise(resolve => { finish = resolve; });
+    const id = schedule(function () {
+      try { Reflect.apply(handler, window, args); }
+      finally { pending.delete(id); finish(); }
+    }, delay);
+    pending.set(id, { done, finish });
+    return id;
+  };
+  window.clearTimeout = function (id) {
+    const key = Number(id);
+    const held = pending.get(key);
+    cancel(id);
+    pending.delete(key);
+    held?.finish();
+  };
+})()`;
+
+export async function recordRenderTasks(page: Page): Promise<void> {
+  await page.evaluateOnNewDocument(RECORD_PAGE_TASKS);
+}
+
+/** Wait for already-queued work and its paint, never for the value the assertion expects. */
+export async function rendered(page: Page): Promise<void> {
+  await waitOn(page, 'the page\'s queued render callbacks', page.evaluate(`
+    Promise.all([...window.__pageTasks.values()].map(task => task.done))
+  `));
+  await painted(page);
+}
+
 /** The composer of `agent`'s own pane, live: the pane that sends to that agent's chat. */
 function agentComposer(workspace: string, agent: string): string {
   return `document.querySelector(${JSON.stringify(`[data-agent-pane="${workspace}/agents/${agent}"] textarea:not([disabled])`)}) !== null`;
@@ -495,6 +533,9 @@ export interface AgentPresence {
   readonly tab: string | null;
   readonly sidebar: string | null;
 }
+
+/** The sidebar's workspace list has its answer: it stops reading busy. */
+const SIDEBAR_LISTED = `document.querySelector('aside ul[aria-busy="false"]') !== null`;
 
 const AgentPresenceSchema = v.object({ tab: v.nullable(v.string()), sidebar: v.nullable(v.string()) });
 
@@ -581,6 +622,9 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     // Back to the workspace, the way a person returns: its own page, not the agent's.
     await back.goto(`${target.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'load' });
     await settledAfter(back, ledger, 'getWorkspaceSnapshot', 'getChatHistoryPage');
+    // The sidebar's workspaces arrive over HTTP once the roster socket opens, which the ledger does not see.
+    await until(back, "the sidebar's workspace list", SIDEBAR_LISTED);
+    await painted(back);
 
     const after = await agentPresence(back, workspace, agent);
 
@@ -653,13 +697,11 @@ export async function reachesHome(target: FlowTarget): Promise<WelcomeVerdict> {
   }
 }
 
-/** The answers the chat column has drawn: every rendered reply block's text. */
 const ANSWERS = `[...document.querySelectorAll('#chat .prose-chat')]
   .filter((block) => block.getClientRects().length > 0)
   .map((block) => (block.textContent ?? '').trim())
   .filter((text) => text.length > 0)`;
 
-/** The text of the warnings the page shows. */
 const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning')]
   .map((notice) => (notice.textContent ?? '').trim()).filter((text) => text !== '').join(' | ')`;
 
@@ -690,6 +732,7 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
   let workspace: string | null = null;
 
   try {
+    await recordRenderTasks(page);
     await page.goto(`${target.origin}/`, { waitUntil: 'load' });
     await until(page, "the home page's mission field", `document.querySelector('#workspace-mission:not([disabled])') !== null`);
 
@@ -708,6 +751,7 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
     const typed = v.parse(v.string(), await mission.evaluate((box) => (box instanceof HTMLTextAreaElement ? box.value : '')));
 
     if (typed !== MISSION) throw new Error(`the mission field holds ${JSON.stringify(typed)}, not the words typed into it`);
+    ledger.restart();
     await page.evaluate(`(() => {
       const create = [...document.querySelectorAll('button[type="submit"]')]
         .find((b) => (b.textContent ?? '').trim() === 'Create workspace');
@@ -729,11 +773,12 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
 
     const answers = v.parse(v.array(v.string()), await page.evaluate(ANSWERS));
 
-    // #21: the inspector opened once a "hello" turn ended, with nothing asking
-    // the person for anything. Read it after the page has re-read what waits
-    // on the person (every 5 s while connected).
-    ledger.restart();
-    await settledAfter(page, ledger, 'listPendingActions');
+    // #21: a hello turn must not open an inspector. The initial snapshot and turn-triggered refreshes
+    // supply its state; an idle page no longer polls listPendingActions.
+    do {
+      await waitOn(page, 'the workspace snapshot and its outstanding reads', settledAfter(page, ledger, 'getWorkspaceSnapshot'));
+      await rendered(page);
+    } while (!ledger.quiet());
 
     const inspectorWidth = v.parse(v.number(), await page.evaluate(INSPECTOR_WIDTH));
 
@@ -1020,7 +1065,6 @@ export async function slateShowsItsPreview(target: FlowTarget): Promise<SlatePre
   }
 }
 
-/** The entry names the Drive list shows. */
 const DRIVE_LISTED = `[...document.querySelectorAll('[data-drive-entry]')].map((row) => row.getAttribute('data-drive-entry') ?? '')`;
 
 /** Counts, on `window`, every listing of the Drive's root the page's own fetch

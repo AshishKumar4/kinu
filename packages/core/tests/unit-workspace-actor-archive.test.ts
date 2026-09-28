@@ -73,9 +73,9 @@ async function seedActorState({ ws, actor, text, runId, version }: SeededActorSt
   });
   void ws.sql`INSERT INTO actor_turn_claims (
       actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version,
-      program_digest, program_build, status, outcome, consumed_revision, claimed_at, settled_at)
+      program_digest, program_build, outcome, claimed_at)
     VALUES (${actor.actorId}, ${`turn-${runId}`}, ${runId}, 1, 'build', 'scaffold', ${version},
-      ${`digest-${version}`}, NULL, 'admitted', NULL, NULL, ${now}, NULL)`;
+      ${`digest-${version}`}, NULL, NULL, ${now})`;
   void ws.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${actor.actorId}, ${version}, ${now}, ${`seeded for ${runId}`}, 'current')`;
 }
@@ -84,7 +84,7 @@ describe('a workspace snapshot covers every actor', () => {
   test('export and restore return every actor conversation, claim and loop pointer', async () => {
     const ws = workspace();
     const hire = ws.directory.create({ parent: ws.main, name: 'alpha', creationId: 'c1', kind: 'subordinate', lifetime: 'durable' });
-    const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c2', kind: 'head', lifetime: 'task' });
+    const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c2', kind: 'run', lifetime: 'task' });
     await seedActorState({ ws, actor: ws.main, text: 'the main actor said this', runId: 'run-main', version: 4 });
     await seedActorState({ ws, actor: hire, text: 'alpha said this', runId: 'run-alpha', version: 1 });
     await seedActorState({ ws, actor: head, text: 'the head said this', runId: 'run-head', version: 7 });
@@ -138,7 +138,7 @@ describe('a workspace snapshot covers every actor', () => {
 
   test('an archive that lost one actor is refused even when its row total agrees', async () => {
     const ws = workspace();
-    const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c4', kind: 'head', lifetime: 'task' });
+    const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c4', kind: 'run', lifetime: 'task' });
     await seedActorState({ ws, actor: ws.main, text: 'main', runId: 'run-main', version: 1 });
     await seedActorState({ ws, actor: head, text: 'head', runId: 'run-head', version: 1 });
 

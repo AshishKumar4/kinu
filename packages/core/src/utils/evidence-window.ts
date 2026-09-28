@@ -3,7 +3,8 @@
 
 import type { ToolSet, TypedToolResult } from 'ai';
 import * as v from 'valibot';
-import { renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settleSync } from '../obs/index';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
 
 export { EVIDENCE_BUDGETS } from '../types/evidence';
@@ -13,8 +14,6 @@ const HEAD_FRACTION = 0.5;
 
 /** Keeps both ends and names what was dropped; text within budget passes through byte-identical. */
 export function evidenceWindow(text: string, maxChars: number): string {
-  if (maxChars <= 0) throw new Error(`evidence budget must be positive, got ${maxChars}`);
-
   if (text.length <= maxChars) return text;
   const headLen = Math.floor(maxChars * HEAD_FRACTION);
   const tailLen = maxChars - headLen;
@@ -31,10 +30,9 @@ export function renderToolResult(raw: TypedToolResult<ToolSet>['output']): strin
 
   if (raw == null) return '';
 
-  try { return JSON.stringify(raw) ?? String(raw); }
-  catch (error) {
-    return `unserializable value: ${renderThrownChain({ cause: error })}`;
-  }
+  return settleSync(Effect.try({ try: () => JSON.stringify(raw) ?? String(raw), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => Effect.succeed(`unserializable value: ${renderThrownChain(failed)}`)),
+  ));
 }
 
 /** Turn text when a turn ends on tool calls with no prose; shared by streaming and generateText paths. */

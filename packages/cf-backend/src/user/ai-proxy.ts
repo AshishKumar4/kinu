@@ -1,4 +1,4 @@
-/** OpenAI-compatible proxy for CLI clients: `@cf/...` via Workers AI (the platform gateway under `DEV_USER_EMAIL`), `{author}/{model}` via the user's gateway. */
+/** OpenAI-compatible proxy for CLI clients: `@cf/...` via Workers AI (direct under `WORKERS_AI_VIA_BINDING`), `{author}/{model}` via the user's gateway. */
 import { Hono } from 'hono';
 import { createUserDOAuthResolver, type UserCredentialClient } from '../providers/agent-registry';
 import type { OwnerCapabilityEnv, ProviderEnv } from '@kinu.run/core';
@@ -21,7 +21,7 @@ const ChatCompletionRouteSchema = v.object({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
 });
 
-/** The eval identity's direct transport calls `run` on the same binding the gateway path uses. */
+/** The deployment's direct transport calls `run` on the same binding the gateway path uses. */
 export interface UserAIProxyEnv<Id> extends AvailableModelsEnv<Id>, OwnerCapabilityEnv {
   AI?: NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createDirectWorkersAIFetch>[0]>;
 }
@@ -67,10 +67,10 @@ async function proxyChatCompletion<Id>(
   const workersAI = model.startsWith('@cf/');
 
   if (!workersAI && !model.includes('/')) {
-    return errorResponse(400, `Cannot route model "${model}" — use "@cf/{model}" (Workers AI) or "{provider}/{model}" (your AI Gateway).`);
+    return errorResponse(400, `Cannot route model "${model}": use "@cf/{model}" (Workers AI) or "{provider}/{model}" (your AI Gateway).`);
   }
 
-  if (workersAI && env.DEV_USER_EMAIL) {
+  if (workersAI && env.WORKERS_AI_VIA_BINDING === 'on') {
     if (!env.AI) return errorResponse(503, 'Workers AI binding unavailable.');
 
     return createDirectWorkersAIFetch(env.AI)(request.url, {

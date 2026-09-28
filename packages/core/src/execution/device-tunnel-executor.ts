@@ -5,11 +5,11 @@
 
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
-import type { VFS, VfsEntryStat } from '../types/primitives';
+import type { VFS, VfsEntryStat, VfsWriteReport } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { makeVfsError } from '../vfs/errno';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { commandResult, type CommandResult } from './exec-result';
+import { commandResult, uncheckpointedSentence, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
@@ -58,28 +58,28 @@ function deviceFailure(input: { doing: string; cause: unknown }): KinuError {
 
 /** Abort before the frame went out: nothing was sent, so nothing is running. */
 const EXEC_NOT_STARTED =
-  'device exec stopped before the command was sent — nothing ran on the device';
+  'device exec stopped before the command was sent: nothing ran on the device';
 
 /** The daemon's owned process group is gone; a `setsid`-escaped process is outside its authority. */
 const EXEC_TERMINATED =
-  'device exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run';
+  'device exec stopped: the device confirmed its owned command process group terminated; separately sessioned processes may still run';
 
 /** No active command entry on the daemon; backgrounded or escaped work may remain. */
 const EXEC_NOTHING_RUNNING =
-  'device exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run';
+  'device exec stopped: no active command control entry remained on the device; backgrounded or separately sessioned processes may still run';
 
 /** The daemon has no cancellation method; the user must update it. */
 const EXEC_CANCEL_UNSUPPORTED =
-  'device exec aborted — this machine runs an older Kinu daemon that cannot stop a command, '
+  'device exec aborted: this machine runs an older Kinu daemon that cannot stop a command, '
   + 'so the command may still be running. Ask the user to update the daemon on that machine.';
 
 /** The device left mid-cancellation, so nothing confirmed the kill. */
 const EXEC_CANCEL_UNCONFIRMED =
-  'device exec aborted — the device disconnected before it confirmed the command stopped';
+  'device exec aborted: the device disconnected before it confirmed the command stopped';
 
 /** Kill refused, no answer within the deadline, or an answer about another command. */
 const execCancelFailed = (reason: string): string =>
-  `device exec aborted — the device could not stop the command, which may still be running: ${reason}`;
+  `device exec aborted: the device could not stop the command, which may still be running: ${reason}`;
 
 /** Stops a running command and reports what that achieved; answers instead of throwing (abort path).
  *  Only an answer naming this request confirms anything. */
@@ -118,7 +118,7 @@ export interface DeviceExecOptions {
  *  Tool calls gate on neither: the hub answers. */
 export interface DeviceTransport {
   rpc(method: string, params: JsonValue[], opts?: DeviceExecOptions): Promise<JsonValue | undefined>;
-  /** Cached snapshot; may lag the hub by the cache TTL. */
+  /** The last answer: it moves only on a refresh or a device call's outcome. */
   status(): DeviceStatus;
   refreshStatus(): Promise<DeviceStatus>;
 }
@@ -131,7 +131,10 @@ const DeviceExecResultSchema = v.object({
   stdout: v.string(),
   stderr: v.string(),
   exitCode: v.number(),
+  uncheckpointed: v.optional(v.object({ dir: v.string(), why: v.string() })),
 });
+
+const WriteReportSchema = v.object({ uncheckpointed: v.object({ dir: v.string(), why: v.string() }) });
 
 const DeviceListResultSchema = v.array(JsonValueSchema);
 
@@ -226,7 +229,7 @@ export function createDeviceTunnelExecutor(
     if (s.registered) {
       return {
         configured: true, available: false, active: false, status: 'disconnected',
-        reason: 'Device registered but offline — the user can reconnect it with `kinu connect`.',
+        reason: 'Device registered but offline: the user can reconnect it with `kinu connect`.',
         ...identity,
       };
     }
@@ -358,9 +361,10 @@ export function createDeviceTunnelExecutor(
 
           if (target.kind === 'refusal') return target.refusal;
           const view = target.view;
-          await view.writeFile(path, content);
+          const report = await view.writeFileWithReport(path, content);
+          const written = `Written ${content.length} bytes to ${path}`;
 
-          return `Written ${content.length} bytes to ${path}`;
+          return report ? `${written}\n${uncheckpointedSentence(report.uncheckpointed, 'this write')}` : written;
         } catch (err) {
           if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
@@ -506,7 +510,7 @@ function resolveForCall(
 
   if (fleet === undefined) {
     return refuse(new KinuError('unavailable',
-      `the device list is not known here yet, so "${named}" cannot be matched — retry, or call without a device`));
+      `the device list is not known here yet, so "${named}" cannot be matched: retry, or call without a device`));
   }
 
   const entry = deviceByName(fleet, named);
@@ -514,7 +518,7 @@ function resolveForCall(
   if (entry) return { kind: 'target', deviceId: entry.id };
 
   return refuse(new KinuError('unavailable',
-    `no connected machine is named "${named}" — connected: ${live.map((d) => d.name).join(', ') || 'none'}`));
+    `no connected machine is named "${named}": connected: ${live.map((d) => d.name).join(', ') || 'none'}`));
 }
 
 /** Per-machine file view for one call, or the refusal naming why there is none. */
@@ -550,7 +554,7 @@ const ALWAYS_CONSENTED: DeviceFileConsent = {
 
 const AGENT_TMP_PATHS = ['/tmp', '/var/tmp'] as const;
 
-export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
+export type DeviceVFS = VFS & Required<Pick<VFS, 'writeFileWithReport'>> & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
 
 /**
  * The machine's filesystem in its own absolute paths. The daemon resolves root and path before the sink; this client
@@ -567,7 +571,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     if (explicit) return trimmed(explicit);
     throw makeVfsError(
       'EACCES',
-      'this device reported no consented directory, so the base tier reaches nothing on it — '
+      'this device reported no consented directory, so the base tier reaches nothing on it: '
       + 'run `kinu connect` on the machine, in the directory this workspace should see',
       '/',
     );
@@ -596,7 +600,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     if (!(path === root || path.startsWith(`${root}/`))) {
       throw makeVfsError(
         'EACCES',
-        `'${path}' is outside the consented device directory '${root}' — the agent sees the folder the owner `
+        `'${path}' is outside the consented device directory '${root}': the agent sees the folder the owner `
         + `consented${scope === 'sandboxed' ? ' and its own /tmp' : ''}, and nothing else. `
         + `Ask the owner to consent that directory, ${op} '${path}'`,
         path,
@@ -651,6 +655,28 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     return bytes;
   };
 
+  const writeFileWithReport = async (path: string, data: string | Uint8Array): Promise<VfsWriteReport | null> => {
+    const root = await guard(path, 'open');
+    let result: JsonValue | undefined;
+
+    if (v.is(v.string(), data)) {
+      result = await transport.rpc('writeFile', [path, data, { root }], target);
+    } else {
+      const text = asLosslessText(data);
+      result = text !== null
+        ? await transport.rpc('writeFile', [path, text, { root }], target)
+        : await transport.rpc('writeFile', [path, bytesToBase64(data), { encoding: 'base64', root }], target);
+    }
+
+    const ok = result === 'ok'
+      || (result !== undefined && isJsonObject(result) && result.success === true);
+
+    if (!ok) throw new Error(`writeFile failed on the device: ${JSON.stringify(result)}`);
+    const report = v.safeParse(WriteReportSchema, result);
+
+    return report.success ? report.output : null;
+  };
+
   return {
     homeDir: openingDir,
     async readFile(path, opts) {
@@ -668,23 +694,10 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     },
 
     async writeFile(path, data) {
-      const root = await guard(path, 'open');
-      let result: JsonValue | undefined;
-
-      if (v.is(v.string(), data)) {
-        result = await transport.rpc('writeFile', [path, data, { root }], target);
-      } else {
-        const text = asLosslessText(data);
-        result = text !== null
-          ? await transport.rpc('writeFile', [path, text, { root }], target)
-          : await transport.rpc('writeFile', [path, bytesToBase64(data), { encoding: 'base64', root }], target);
-      }
-
-      const ok = result === 'ok'
-        || (result !== undefined && isJsonObject(result) && result.success === true);
-
-      if (!ok) throw new Error(`writeFile failed on the device: ${JSON.stringify(result)}`);
+      await writeFileWithReport(path, data);
     },
+
+    writeFileWithReport,
 
     async readdir(path) {
       const root = await guard(path, 'scandir');
@@ -756,8 +769,8 @@ function noSuchDevice(fleet: readonly DeviceFleetEntry[] | undefined, first: str
   const segments = connectedDevices(fleet).map((d) => deviceMountSegment(d, fleet)).join(', ');
 
   const reason = first === ''
-    ? `several machines are connected — each is mounted at /pc/<name>: ${segments}`
-    : `no connected machine is named "${first}" — connected: ${segments}`;
+    ? `several machines are connected: each is mounted at /pc/<name>: ${segments}`
+    : `no connected machine is named "${first}": connected: ${segments}`;
 
   return makeVfsError('ENXIO', reason, `/pc${first === '' ? '' : `/${first}`}`);
 }
@@ -822,6 +835,9 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     },
     async writeFile(path, data) {
       await dispatch(path, (view, native) => view.writeFile(native, data));
+    },
+    async writeFileWithReport(path, data) {
+      return dispatch(path, (view, native) => view.writeFileWithReport(native, data));
     },
     async readdir(path) {
       if (isFleetRoot(path)) return routes().map((route) => route.segment);

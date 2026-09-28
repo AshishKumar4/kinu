@@ -13,7 +13,7 @@ import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset, type AssetFetcher,
 } from '@kinu.run/core';
 import { RELEASE_ARTIFACT_NAME, RELEASE_MANIFEST_PATH } from '@kinu.run/core/deploy';
-import { err, escapeHtml, json, publicText, safeJson } from '@kinu.run/core';
+import { err, escapeHtml, json, safeJson } from '@kinu.run/core';
 import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE, type WebhookRouteEnv } from '@kinu.run/core';
@@ -630,7 +630,7 @@ async function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): 
     const error = authoredRefusal({ doing: 'approving this sign-in', cause });
     diagnostics.failure('cli.approval_failed', error);
 
-    return html('Connect the Kinu CLI', `<p>${escapeHtml(publicText(error))}</p>`, 400);
+    return html('Connect the Kinu CLI', `<p>${escapeHtml(renderThrownChain({ cause: error }))}</p>`, 400);
   }
 }
 
@@ -716,7 +716,7 @@ need tar
 need mktemp
 
 # Permission probes (test -r/-w) pass even without a controlling terminal,
-# so actually open /dev/tty — the redirect itself must work or the
+# so actually open /dev/tty: the redirect itself must work or the
 # interactive steps would die with "/dev/tty: No such device or address".
 has_tty() {
   ( exec </dev/tty >/dev/tty ) 2>/dev/null
@@ -771,7 +771,7 @@ run_connect_if_requested() {
 # swap: the staged build already answered --version there.
 download_cli() {
   # </dev/null: under curl|bash our stdin is the unread remainder of this
-  # script — a child that reads stdin would consume it mid-execution.
+  # script: a child that reads stdin would consume it mid-execution.
   KINU_HOME="$KINU_HOME" KINU_ORIGIN="$KINU_ORIGIN" KINU_REFRESH_CLI=1 KINU_REFRESH_ONLY=1 "$BIN_PATH" </dev/null \\
     || die "Kinu CLI download failed."
 }
@@ -952,8 +952,8 @@ provide_bun() {
   kinu_resolve_bun || die "Bun $KINU_BUN_VERSION was installed to $KINU_MANAGED_BUN but did not run."
 }
 
-# The one lock every writer of the CLI tree takes — this launcher, 'kinu
-# update' and its detached child — as a directory: mkdir creates it atomically
+# The one lock every writer of the CLI tree takes (this launcher, 'kinu
+# update' and its detached child), as a directory: mkdir creates it atomically
 # or refuses. The holder's pid is inside, so a lock a dead process left is
 # taken over rather than waited on. Released on every exit, die included.
 CLI_LOCK="$CLI_ROOT/.lock"
@@ -978,7 +978,7 @@ take_cli_lock() {
 # holds, and the public half is pinned into this launcher: a download is
 # verified against the checksum the signature covers, never against a
 # checksum the origin chooses for itself (a hostile or compromised deploy
-# could otherwise hand every machine bytes to run — SECURITY-devices C1).
+# could otherwise hand every machine bytes to run: SECURITY-devices C1).
 # The downloads start together and need no Bun; nothing downloaded is unpacked
 # or run until the signature and the signed checksum for it verify, so a
 # release the pinned key did not sign still lands nothing. The signed checksums
@@ -1044,7 +1044,7 @@ fetch_verified() {
 # place: an interrupted download or a build that cannot launch leaves the
 # installed CLI as it was. The tree it replaced stays as prev for one launch
 # (see below). The staging directories are removed on every exit, die
-# included — a RETURN trap never fired on one.
+# included: a RETURN trap never fired on one.
 refresh_cli() {
   mkdir -p "$CLI_ROOT"
   tmp="$(mktemp -d)"
@@ -1074,7 +1074,7 @@ refresh_cli() {
 # The swap, written so a kill at any line leaves a runnable tree. The
 # last-known-good prev is kept until the new current is in place: prev goes to
 # prev.old, current to prev, the proven tree to current, and only then does
-# prev.old go. Between the second and third lines there is no current — and
+# prev.old go. Between the second and third lines there is no current, and
 # recover_current below finds the proven next-* on the next launch, or prev.
 adopt_tree() {
   proven="$1"

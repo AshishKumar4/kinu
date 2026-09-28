@@ -10,7 +10,7 @@ import { cloudProxyBaseURL } from '@kinu.run/core';
 import { LIVE_MODEL_ENV } from '../src/ambient-env';
 import {
   EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, EVAL_SERVICE_ACCOUNT, EVAL_SERVICE_EMAIL, EVAL_STAGING_ORIGIN,
-  EVAL_WORKSPACE_PREFIX, evalModelEndpointVerdict, evalTargetVerdict, evalWorkspaceName,
+  EVAL_WORKSPACE_PREFIX, deploymentPublicOrigin, evalModelEndpointVerdict, evalTargetVerdict, evalWorkspaceName,
   refusedEvalEndpoint, resolveEvalIdentity,
 } from '../src/eval-identity';
 
@@ -92,6 +92,23 @@ describe('the eval target allowlist — a declared deployment, or a loopback, no
     expect(verdict.kind).toBe('refused');
 
     if (verdict.kind === 'refused') expect(verdict.reason).toContain(EVAL_IDENTITY_ENV.origin);
+  });
+});
+
+describe('the public origin a run expects is the one its target is configured with', () => {
+  test('a run on each deployment expects that deployment\'s own CLI_PUBLIC_ORIGIN, and a dev server production\'s', () => {
+    const [production] = DEPLOYMENTS;
+
+    for (const deployment of DEPLOYMENTS) {
+      const origin = deployment.vars.CLI_PUBLIC_ORIGIN;
+
+      expect(deploymentPublicOrigin(origin)).toBe(origin);
+      expect(deploymentPublicOrigin(`${origin}/`)).toBe(origin);
+    }
+
+    // `vite dev` serves the top-level configuration, so its public origin is production's.
+    expect(deploymentPublicOrigin('http://localhost:5173')).toBe(production?.vars.CLI_PUBLIC_ORIGIN);
+    expect(() => deploymentPublicOrigin(FOREIGN_ORIGIN)).toThrow(`${FOREIGN_ORIGIN} is not an eval target`);
   });
 });
 

@@ -50,6 +50,7 @@ export function workerEnv(reached: Partial<Env> = {}): Env {
     ASSETS: unreachableFetcher('ASSETS'),
     AI_GATEWAY_URL: 'https://gateway.invalid/unreachable',
     PREVIEW_HOST_SUFFIX: '',
+    SIGN_IN_PROVIDERS: '',
     ...reached,
   };
 }
@@ -184,6 +185,9 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
     revokeBrowserSession: refuse('revokeBrowserSession'),
     getAuthHeaders: refuse('getAuthHeaders'),
     getCredentialBaseURL: refuse('getCredentialBaseURL'),
+    codexRelayDevice: refuse('codexRelayDevice'),
+    relayCodex: refuse('relayCodex'),
+    cancelCodexRelay: refuse('cancelCodexRelay'),
     listCredentials: refuse('listCredentials'),
     setCredential: refuse('setCredential'),
     deleteCredential: refuse('deleteCredential'),
@@ -289,6 +293,9 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     dismissUnrevokedGrant: refuse('dismissUnrevokedGrant'),
     getAuthHeaders: refuse('getAuthHeaders'),
     getCredentialBaseURL: refuse('getCredentialBaseURL'),
+    codexRelayDevice: refuse('codexRelayDevice'),
+    relayCodex: refuse('relayCodex'),
+    cancelCodexRelay: refuse('cancelCodexRelay'),
     getCodexStatus: refuse('getCodexStatus'),
     disconnectCodex: refuse('disconnectCodex'),
     startCodexDeviceFlow: refuse('startCodexDeviceFlow'),

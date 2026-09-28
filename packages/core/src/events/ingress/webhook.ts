@@ -5,10 +5,11 @@
 
 import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
-import type { ReplyChannelStore } from '../hub/reply-channel';
 import type { TriggerRegistry } from '../hub/triggers';
 import { spillEventContent } from '../hub/content-spill';
-import { classify } from '../../obs/index';
+import { Effect } from 'effect';
+import { settleSync } from '../../obs/index';
+import { safeJsonParse } from '../../utils/json';
 import type { SqlExec, VFS } from '../../types/primitives';
 import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto';
 import {
@@ -58,7 +59,6 @@ export type WebhookDeliveryResult = {
 export interface WebhookIngressDeps {
   triggers: TriggerRegistry;
   log: EventLog;
-  replies: ReplyChannelStore;
   vfs: VFS;
   secrets: SecretStore;
   sql: SqlExec;
@@ -120,17 +120,18 @@ export async function registerDurableWebhook(
     rate_limit_per_min,
   }, now);
 
-  if (secret !== null) {
-    try {
-      secrets.put(secret_id, trigger_id, secret, now);
-    } catch (cause) {
+  const registered: RegisteredWebhook = { trigger_id, secret_id, auth_mode: opts.auth_mode, secret };
+
+  if (secret === null) return registered;
+
+  return settleSync(Effect.try({ try: () => secrets.put(secret_id, trigger_id, secret, now), catch: (cause) => ({ cause }) }).pipe(
+    Effect.tapError(() => Effect.sync(() => {
       registry.revoke(trigger_id, now);
       secrets.deleteByTrigger(trigger_id);
-      throw new Error(`webhook "${opts.label}" was not created: its secret could not be stored`, { cause });
-    }
-  }
-
-  return { trigger_id, secret_id, auth_mode: opts.auth_mode, secret };
+    })),
+    Effect.catch((failed) => Effect.die(new Error(`webhook "${opts.label}" was not created: its secret could not be stored`, { cause: failed.cause }))),
+    Effect.as(registered),
+  ));
 }
 
 /** Only HMAC yields a `claim` (the signed artifact), making the signature single-use. */
@@ -238,15 +239,8 @@ export async function acceptWebhookDelivery(
     return { status: 'rejected', http_status: 429, reason: `rate limit exceeded (${rate.limit}/min)` };
   }
 
-  let parsedBody: unknown;
-
-  try {
-    parsedBody = receivedCT.includes('json') ? JSON.parse(opts.body_text) : opts.body_text;
-  } catch (error) {
-    // Unparseable JSON is kept as raw text; other failures propagate.
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
-    parsedBody = opts.body_text;
-  }
+  // Unparseable JSON is kept as raw text; other failures propagate.
+  const parsedBody: unknown = receivedCT.includes('json') ? safeJsonParse(opts.body_text) : opts.body_text;
 
   // Spend the claim before anything durable: freshness alone admits a replay across a dedupe
   // bucket boundary. A held claim answers as a duplicate, never a rejection.
@@ -257,14 +251,6 @@ export async function acceptWebhookDelivery(
   }
 
   const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
-
-  // No `ttl_ms_override`: the `http_pending` TTL lives in reply-channel.ts.
-  deps.replies.open({
-    event_id: 'pending',
-    kind: 'http_pending',
-    holder_addr: `delivery:${delivery_id}`,
-    payload_policy: 'redact',
-  }, opts.now);
 
   // Spill after the auth and rate gates so a rejected delivery never writes a file.
   const bodySerialized = JSON.stringify(parsedBody) ?? String(parsedBody);

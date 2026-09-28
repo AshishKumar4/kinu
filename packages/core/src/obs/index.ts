@@ -13,7 +13,10 @@ export {
   type InvocationKind,
   type SpanActor,
   type TracedInvocation,
+  type TurnIdentity,
+  type TurnTrace,
   type TurnTracing,
+  type TurnUnitTimer,
 } from './agent-tracing';
 
 export {
@@ -46,6 +49,8 @@ export {
   type ErrorCode,
   type Refusal,
 } from './error';
+
+export { attempt, settle, settleSync, toWire, type Wire } from './effect';
 
 export {
   createCompositeLogger,

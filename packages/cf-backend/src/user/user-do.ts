@@ -3,7 +3,9 @@
  * Every privileged method takes a `UserCaller` first and gates on `requireTier` before anything else.
  */
 import { Agent, type AgentContext } from "agents";
-import { USER_DO_RPC_SURFACE, sealRpcSurface } from "../rpc-surface";
+import { Effect } from "effect";
+import { USER_DO_RPC_SURFACE, USER_DO_STARTED_RPC, sealRpcSurface } from "../rpc-surface";
+import { ActivationGate, startBeforeRpc } from "../activation-gate";
 import { parseCliTokenUserId } from "../cli/auth-store";
 import {
   getActiveAccessTokenScopes,
@@ -33,6 +35,7 @@ import {
   DEVICE_PTY_EXIT,
   DEVICE_PTY_MAX_AXIS,
   NO_DEVICE_CONNECTED, SEVERAL_DEVICES_CONNECTED,
+  codexEgressAllowed,
   isDeviceUnknownMethodError,
   isWorkspaceName,
   ORCHESTRATOR_AGENT_SLUG,
@@ -75,10 +78,10 @@ import {
   diagnostics,
   KinuError,
   renderThrownChain,
+  settle,
   tolerate,
   toKinuError,
 } from '@kinu.run/core/obs';
-import { publicText } from '@kinu.run/core';
 import * as v from 'valibot';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
@@ -454,16 +457,14 @@ export interface WorkspaceEntry {
   displayName: string;
   createdAt: number;
   lastVisited: number;
-  archivedAt: number | null;
 }
 
-/** `title` is cached at share time. `createdAt` is absent on the write side. */
+/** `createdAt` is absent on the write side. */
 export interface SharedBlueprintReceipt {
   ownerUserId: string;
   ownerEmail: string;
   workspace: string;
   shareId: string;
-  title: string;
   createdAt?: number;
 }
 
@@ -521,14 +522,11 @@ const StoredProfileCatalogRowSchema: v.GenericSchema<StoredProfileCatalogRow> = 
 export interface CredentialSummary {
   key: string;
   kind: 'bearer' | 'oauth' | 'openai-compat';
-  createdAt: number;
-  updatedAt: number;
 }
 
 /** What one OAuth refresh established; see `UserDO.refreshOAuthCredential`. */
 type OAuthRefresh = OAuthCredential | 'revoked' | { readonly failed: KinuError };
 
-/** A login and the revision it was read at. */
 interface HeldLogin {
   readonly cred: OAuthCredential;
   readonly revision: number;
@@ -633,16 +631,19 @@ export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, USER_DO_RPC_SURFACE);
+    const gate = new ActivationGate();
+    this.lifecycle.use(gate);
+    startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
+    // Every event, a native RPC included, reaches whole tables: native RPCs run no `onStart`.
+    this.initTables();
   }
 
   /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key. */
   override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
     return new DurableObjectOAuthClientProvider(this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl);
   }
-
-  private _initialized = false;
 
   private readonly restoreUserMcp = retireActivationRestore(this.mcp);
 
@@ -655,18 +656,15 @@ export class UserDO extends Agent<Env> {
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
 
-  /** Once per activation. Claims live in isolate memory, so any claim in storage at activation start
-   * was abandoned; the activation boundary is the expiry. */
-  private ensureInit(): void {
-    if (this._initialized) return;
+  /** Once per activation, from the constructor. Claims live in isolate memory, so any claim in storage
+   * at activation start was abandoned; the activation boundary is the expiry. */
+  private initTables(): void {
     initUserTables(this.ctx.storage.sql);
     initAccessTokenTable(this.ctx.storage.sql);
     this._inflight.releaseAbandonedClaims();
-    this._initialized = true;
   }
 
   private sqlx<T extends SqlRow = SqlRow>(query: string, ...bindings: SqlStorageValue[]): T[] {
-    this.ensureInit();
 
     return this.ctx.storage.sql.exec<T>(query, ...bindings).toArray();
   }
@@ -676,7 +674,6 @@ export class UserDO extends Agent<Env> {
    * Also reopens the analytics window, since the 250-point budget is per invocation.
    */
   private requireTier(caller: UserCaller, capability: WorkspaceCapability): Promise<ResolvedCaller> {
-    this.ensureInit();
     openAnalyticsWindow(this.env);
 
     return requireTier(this.ctx.storage.sql, this.env, { caller }, capability);
@@ -691,7 +688,6 @@ export class UserDO extends Agent<Env> {
    * The only ungated method (it bootstraps identity), so it opens the analytics window itself.
    */
   async ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
-    this.ensureInit();
     openAnalyticsWindow(this.env);
     validateWorkspaceName(workspaceName);
 
@@ -773,7 +769,7 @@ export class UserDO extends Agent<Env> {
   private rosterCount(): number {
     return this.sqlx<{ n: number }>(
       `SELECT COUNT(*) AS n FROM user_workspaces
-       WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0`,
+       WHERE delete_pending = 0 AND create_pending = 0`,
     )[0].n;
   }
 
@@ -938,12 +934,12 @@ export class UserDO extends Agent<Env> {
     const parsed = v.parse(WorkspaceOverviewSchema, overview);
 
     const changed = this.sqlx(
-      `INSERT INTO workspace_overviews (name, overview, activity, decisions, changed_at) VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO workspace_overviews (name, overview, activity, decisions) VALUES (?, ?, ?, ?)
        ON CONFLICT (name) DO UPDATE SET overview = excluded.overview, activity = excluded.activity,
-         decisions = excluded.decisions, changed_at = excluded.changed_at
+         decisions = excluded.decisions
        WHERE workspace_overviews.overview <> excluded.overview
        RETURNING name`,
-      name, JSON.stringify(parsed), parsed.activity, parsed.decisionsWaiting, Date.now(),
+      name, JSON.stringify(parsed), parsed.activity, parsed.decisionsWaiting,
     );
 
     if (changed.length > 0) this.rosterChanged(name);
@@ -955,7 +951,7 @@ export class UserDO extends Agent<Env> {
 
     return this.sqlx<{ name: string; display_name: string; created_at: number }>(
       `SELECT name, display_name, created_at FROM user_workspaces
-       WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0
+       WHERE delete_pending = 0 AND create_pending = 0
        ORDER BY last_visited DESC`,
     ).map((r) => ({ name: r.name, displayName: r.display_name, createdAt: r.created_at }));
   }
@@ -976,10 +972,9 @@ export class UserDO extends Agent<Env> {
     const existing = this.sqlx<{
       display_name: string;
       created_at: number;
-      archived_at: number | null;
       create_pending: number;
     }>(
-      `SELECT display_name, created_at, archived_at, create_pending
+      `SELECT display_name, created_at, create_pending
        FROM user_workspaces WHERE name = ?`,
       name,
     )[0];
@@ -990,7 +985,7 @@ export class UserDO extends Agent<Env> {
       // Return the row's own timestamp: keeps the answer stable across retries and lets a
       // rollback match the row it actually inserted.
       this.sqlx(
-        `UPDATE user_workspaces SET last_visited = ?, archived_at = NULL WHERE name = ?`,
+        `UPDATE user_workspaces SET last_visited = ? WHERE name = ?`,
         now, name,
       );
       this.rosterChanged(name);
@@ -1002,7 +997,6 @@ export class UserDO extends Agent<Env> {
           displayName: existing.display_name,
           createdAt: existing.created_at,
           lastVisited: now,
-          archivedAt: null,
         },
       };
     }
@@ -1023,7 +1017,7 @@ export class UserDO extends Agent<Env> {
 
     return {
       status: 'created',
-      entry: { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null },
+      entry: { name, displayName: title, createdAt: now, lastVisited: now },
     };
   }
 
@@ -1042,11 +1036,10 @@ export class UserDO extends Agent<Env> {
       display_name: string;
       created_at: number;
       last_visited: number;
-      archived_at: number | null;
       create_pending: number;
       fork_lease_expires_at: number | null;
     }>(
-      `SELECT name, display_name, created_at, last_visited, archived_at,
+      `SELECT name, display_name, created_at, last_visited,
               create_pending, fork_lease_expires_at
        FROM user_workspaces WHERE name = ?`,
       name,
@@ -1065,7 +1058,6 @@ export class UserDO extends Agent<Env> {
           displayName: existing.display_name,
           createdAt: existing.created_at,
           lastVisited: existing.last_visited,
-          archivedAt: existing.archived_at,
         },
         reserved: false,
       };
@@ -1082,7 +1074,7 @@ export class UserDO extends Agent<Env> {
     );
 
     return {
-      entry: { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null },
+      entry: { name, displayName: title, createdAt: now, lastVisited: now },
       reserved: true,
     };
   }
@@ -1376,7 +1368,7 @@ export class UserDO extends Agent<Env> {
     // Pending rows are not openable; every open, including `ensureWorkspaceCapability`, goes through here.
     const row = this.sqlx(
       `SELECT 1 AS x FROM user_workspaces
-       WHERE name = ? AND archived_at IS NULL AND delete_pending = 0
+       WHERE name = ? AND delete_pending = 0
          AND create_pending = 0`,
       name,
     )[0];
@@ -1467,7 +1459,7 @@ export class UserDO extends Agent<Env> {
   private async pushSessionSocketRevocation(tokenHash: string): Promise<void> {
     const workspaces = this.sqlx<{ name: string }>(
       `SELECT name FROM user_workspaces
-       WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0`,
+       WHERE delete_pending = 0 AND create_pending = 0`,
     ).map((row) => row.name);
 
     const settled = await Promise.allSettled(workspaces.map((name) => this.env.OrchestratorAgent
@@ -1615,15 +1607,14 @@ export class UserDO extends Agent<Env> {
    */
   private async retireCliAuthority(): Promise<void> {
     this.sqlx(
-      `INSERT INTO user_auth_generation (id, generation, updated_at) VALUES (1, 1, ?)
-       ON CONFLICT(id) DO UPDATE SET generation = generation + 1, updated_at = excluded.updated_at`,
-      Date.now(),
+      `INSERT INTO user_auth_generation (id, generation) VALUES (1, 1)
+       ON CONFLICT(id) DO UPDATE SET generation = generation + 1`,
     );
     const generation = this.authGeneration();
 
     const workspaces = this.sqlx<{ name: string }>(
       `SELECT name FROM user_workspaces
-       WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0`,
+       WHERE delete_pending = 0 AND create_pending = 0`,
     ).map((row) => row.name);
 
     const settled = await Promise.allSettled(workspaces.map((name) => this.env.OrchestratorAgent
@@ -1730,15 +1721,14 @@ export class UserDO extends Agent<Env> {
     const expiresAt = now + CLI_AGENT_CONNECT_TICKET_TTL_MS;
     this.sqlx(
       `INSERT INTO cli_agent_connect_tickets
-         (ticket_hash, user_id, agent_class, agent_name, cli_token_hash, capabilities, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (ticket_hash, user_id, agent_class, agent_name, cli_token_hash, capabilities, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       await sha256Hex(ticket),
       input.userId,
       input.agentClass,
       input.agentName,
       input.cliTokenHash,
       JSON.stringify(capabilities),
-      now,
       expiresAt,
     );
 
@@ -1896,12 +1886,10 @@ export class UserDO extends Agent<Env> {
     }
 
     this.sqlx(
-      `UPDATE user_devices SET connected_at = ?, last_seen_at = ?, last_ip = ?, last_agent = ? WHERE id = ?`,
-      now, now,
-      request.headers.get('cf-connecting-ip') ?? request.headers.get('x-forwarded-for'),
-      (request.headers.get('user-agent') ?? '').slice(0, 200) || null,
-      verified.deviceId,
+      `UPDATE user_devices SET last_seen_at = ? WHERE id = ?`,
+      now, verified.deviceId,
     );
+    await this.devicesMoved();
     server.send(JSON.stringify({
       type: DEVICE_TOKEN_ROTATION,
       token: await this.rotateDeviceToken(verified.deviceId, verified.tokenWasCurrent === true),
@@ -1929,7 +1917,7 @@ export class UserDO extends Agent<Env> {
       attached = this._terminals.attach(session, server);
     } catch (cause) {
       // Unknown or taken session is expected (shell ended or object evicted); the pane opens a new one.
-      return new Response(publicText(authoredRefusal({ doing: 'attaching a terminal pane', cause })), { status: 409 });
+      return new Response(renderThrownChain({ cause: authoredRefusal({ doing: 'attaching a terminal pane', cause }) }), { status: 409 });
     }
 
     server.send(JSON.stringify({ type: 'ready' }));
@@ -2003,7 +1991,6 @@ export class UserDO extends Agent<Env> {
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
-      this.ensureInit();
       this._terminals.fromPane(terminal.session, terminal.device, message);
 
       return;
@@ -2012,7 +1999,6 @@ export class UserDO extends Agent<Env> {
     const deviceId = deviceIdFromSocket(ws);
 
     if (!deviceId) return this.lifecycle.webSocketMessage(ws, message);
-    this.ensureInit();
     let data: string;
 
     if (isTextWebSocketMessage(message)) {
@@ -2037,6 +2023,7 @@ export class UserDO extends Agent<Env> {
 
     if (hello.success) {
       this.recordDeviceHello(deviceId, hello.output);
+      await this.devicesMoved();
       const frame = await this.deviceUpdateFrame(hello.output);
 
       if (frame !== null) {
@@ -2167,16 +2154,14 @@ export class UserDO extends Agent<Env> {
 
     // Per-boot fact like the sandbox verdict: silence overwrites, so an older CLI reads as itself.
     this.sqlx(
-      `INSERT INTO user_device_builds (device_id, version, update_check, reported_at)
-         VALUES (?, ?, ?, ?)
+      `INSERT INTO user_device_builds (device_id, version, update_check)
+         VALUES (?, ?, ?)
          ON CONFLICT(device_id) DO UPDATE SET
            version = excluded.version,
-           update_check = excluded.update_check,
-           reported_at = excluded.reported_at`,
+           update_check = excluded.update_check`,
       deviceId,
       hello.version ?? null,
       hello.updateCheck === false ? 0 : 1,
-      Date.now(),
     );
   }
 
@@ -2224,7 +2209,6 @@ export class UserDO extends Agent<Env> {
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
-      this.ensureInit();
       this.closeDeviceTerminal(terminal.session, terminal.device);
 
       return;
@@ -2233,7 +2217,6 @@ export class UserDO extends Agent<Env> {
     const deviceId = deviceIdFromSocket(ws);
 
     if (!deviceId) return this.lifecycle.webSocketClose(ws, code, reason, wasClean);
-    this.ensureInit();
     this._devices.handleClose(deviceId, ws);
 
     // The daemon hangs up its shells when the socket drops, so tell the panes.
@@ -2241,10 +2224,7 @@ export class UserDO extends Agent<Env> {
       this._terminals.endPane(session, NO_DEVICE_CONNECTED);
     }
 
-    // A replacing socket may already be live — only then keep connected_at.
-    if (!this._devices.isConnected(deviceId)) {
-      this.sqlx(`UPDATE user_devices SET connected_at = NULL WHERE id = ?`, deviceId);
-    }
+    await this.devicesMoved();
   }
 
   override async webSocketError(...call: Parameters<NonNullable<Agent<Env>['webSocketError']>>): Promise<void> {
@@ -2270,6 +2250,7 @@ export class UserDO extends Agent<Env> {
     );
 
     if (replaced !== null) await this.revokeDevice(caller, replaced);
+    else await this.devicesMoved();
 
     return { deviceId, token };
   }
@@ -2300,6 +2281,7 @@ export class UserDO extends Agent<Env> {
 
     if (!row) return { ok: false };
     this.sqlx(`UPDATE user_devices SET label = ? WHERE id = ?`, trimmed, deviceId);
+    await this.devicesMoved();
 
     return { ok: true };
   }
@@ -2348,11 +2330,10 @@ export class UserDO extends Agent<Env> {
     const expiresAt = now + DEVICE_CONNECT_TICKET_TTL_MS;
     this.sqlx(
       `INSERT INTO device_connect_tickets
-         (ticket_hash, device_id, created_at, expires_at, token_was_current)
-       VALUES (?, ?, ?, ?, ?)`,
+         (ticket_hash, device_id, expires_at, token_was_current)
+       VALUES (?, ?, ?, ?)`,
       await sha256Hex(ticket),
       verified.deviceId,
-      now,
       expiresAt,
       verified.current === true ? 1 : 0,
     );
@@ -2444,9 +2425,8 @@ export class UserDO extends Agent<Env> {
 
       await stub.announceDeviceUnavailable(this.registeredOfflineDevices());
       this.sqlx(
-        `INSERT INTO device_notice_pending (agent_name, announced_at) VALUES (?, ?)
-         ON CONFLICT (agent_name) DO UPDATE SET announced_at = excluded.announced_at`,
-        workspaceOrAgent, Date.now(),
+        `INSERT INTO device_notice_pending (agent_name) VALUES (?) ON CONFLICT (agent_name) DO NOTHING`,
+        workspaceOrAgent,
       );
     } catch (error) {
       diagnostics.event('device.unavailable_announce_unreachable', {
@@ -2553,7 +2533,6 @@ export class UserDO extends Agent<Env> {
         throw new KinuError('bad_input', 'A background job id must name a job.');
       }
 
-      this.ensureInit();
       this._inflight.insert({
         requestId,
         deviceId,
@@ -2569,6 +2548,31 @@ export class UserDO extends Agent<Env> {
     if (stopping) this.recordToolPathCancellation(params, result);
 
     return result === undefined ? undefined : JSON.stringify(result);
+  }
+
+  async codexRelayDevice(caller: UserCaller): Promise<{ readonly id: string; readonly label: string } | null> {
+    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
+    const deviceId = this._devices.relayDevice();
+
+    return deviceId === null || !this.isActiveDevice(deviceId) ? null : { id: deviceId, label: this.deviceLabel(deviceId) };
+  }
+
+  async relayCodex(caller: UserCaller, deviceId: string, callId: string, request: Request): Promise<Response> {
+    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
+    const allowed = codexEgressAllowed({ method: request.method, url: request.url });
+    const body = allowed && request.body !== null ? await request.text() : null;
+
+    // No await from here to the send.
+    if (!allowed) return settle(Effect.fail(new KinuError('denied', `the Codex relay does not carry ${request.method} ${new URL(request.url).pathname}`)));
+
+    if (!this.isActiveDevice(deviceId)) return settle(Effect.fail(new KinuError('unavailable', NO_DEVICE_CONNECTED)));
+
+    return settle(Effect.promise(() => this._devices.relay(deviceId, callId, { method: request.method, url: request.url, headers: [...request.headers], body })));
+  }
+
+  async cancelCodexRelay(caller: UserCaller, callId: string): Promise<void> {
+    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
+    this._devices.cancelRelay(callId);
   }
 
   /** `agentHome` is empty only under the raw tier. */
@@ -2596,7 +2600,6 @@ export class UserDO extends Agent<Env> {
 
     if (!requestId.success) return;
     const answer = parseDeviceCancelAnswer(requestId.output, result);
-    this.ensureInit();
     this._inflight.settleUnclaimed(requestId.output, answer.cancelled);
   }
 
@@ -2765,7 +2768,7 @@ export class UserDO extends Agent<Env> {
   }
 
   private sandboxRefusal(deviceId: string, sandbox: DeviceSandboxStatus, cause: string): string {
-    return `${SANDBOX_UNAVAILABLE}: ${this.deviceLabel(deviceId)} cannot run commands — `
+    return `${SANDBOX_UNAVAILABLE}: ${this.deviceLabel(deviceId)} cannot run commands: `
       + `its Kinu daemon could not start a sandbox (${cause}), and Kinu never runs a command `
       + `unsandboxed unless the owner asked for that. ${sandboxReasonFix(sandbox.reason)} `
       + 'The owner can also turn Sandbox off for this device on the Devices page, '
@@ -2789,6 +2792,7 @@ export class UserDO extends Agent<Env> {
 
     if (!row) return { ok: false };
     this.sqlx(`UPDATE user_devices SET tier = ? WHERE id = ?`, tier, deviceId);
+    await this.devicesMoved();
 
     return { ok: true };
   }
@@ -2866,7 +2870,10 @@ export class UserDO extends Agent<Env> {
 
     if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
 
-    if (decision === 'always') this.setDeviceBinding(agentName, deviceId, 'allow', action);
+    if (decision === 'always') {
+      this.setDeviceBinding(agentName, deviceId, 'allow', action);
+      await this.devicesMoved();
+    }
 
     return { allowed: true };
   }
@@ -2903,6 +2910,7 @@ export class UserDO extends Agent<Env> {
 
     if (!agentName || !deviceId) return { ok: false };
     this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
+    await this.devicesMoved();
 
     return { ok: true };
   }
@@ -2932,7 +2940,7 @@ export class UserDO extends Agent<Env> {
   async listDevices(caller: UserCaller): Promise<Array<{
     id: string; label: string; os: string | null; hostname: string | null;
     connected: boolean; createdAt: number; lastSeenAt: number | null; expiresAt: number | null;
-    lastIp: string | null; lastAgent: string | null; replacedAt: number | null;
+    replacedAt: number | null;
     revokedAt: number | null; unstoppedAt: number | null; reuseDetectedAt: number | null;
     wholeMachine: boolean;
     /** No home or roots here: those are per workspace, and this is the account's device registry. */
@@ -2947,11 +2955,11 @@ export class UserDO extends Agent<Env> {
     return this.sqlx<SandboxColumns & {
       id: string; label: string; os: string | null; hostname: string | null;
       created_at: number; last_seen_at: number | null; expires_at: number | null;
-      last_ip: string | null; last_agent: string | null; replaced_at: number | null;
+      replaced_at: number | null;
       revoked_at: number | null; unstopped_at: number | null; reuse_detected_at: number | null;
       tier: string | null; version: string | null; update_check: number | null; consented_root: string | null;
     }>(`SELECT d.id, d.label, d.os, d.hostname, d.created_at, d.last_seen_at, d.expires_at,
-               d.last_ip, d.last_agent, d.replaced_at, d.revoked_at, d.unstopped_at, x.reuse_detected_at,
+               d.replaced_at, d.revoked_at, d.unstopped_at, x.reuse_detected_at,
                d.consented_root,
                d.tier, d.sandbox_capability, d.sandbox_reason, d.sandbox_detail, d.sandbox_gpu,
                b.version, b.update_check
@@ -2966,7 +2974,7 @@ export class UserDO extends Agent<Env> {
         id: r.id, label: r.label, os: r.os, hostname: r.hostname,
         connected: r.revoked_at === null && this._devices.isConnected(r.id),
         createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at,
-        lastIp: r.last_ip, lastAgent: r.last_agent, replacedAt: r.replaced_at,
+        replacedAt: r.replaced_at,
         revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at, reuseDetectedAt: r.reuse_detected_at,
         wholeMachine: r.consented_root === '/',
         sandbox: { tier: parseDeviceTier(r.tier), ...readSandboxColumns(r) },
@@ -2976,10 +2984,44 @@ export class UserDO extends Agent<Env> {
       }));
   }
 
+  async watchDeviceStatus(caller: UserCaller, watching: boolean): Promise<void> {
+    const resolved = await this.requireTier(caller, 'device.rpc');
+
+    if (resolved.kind !== 'workspace') return;
+
+    if (watching) this.sqlx(`INSERT OR IGNORE INTO device_status_watchers (agent_name) VALUES (?)`, resolved.workspace);
+    else this.sqlx(`DELETE FROM device_status_watchers WHERE agent_name = ?`, resolved.workspace);
+  }
+
+  /** A watcher with no page open, or unreachable, drops. */
+  private async devicesMoved(): Promise<void> {
+    const watchers = this.sqlx<{ agent_name: string }>(`SELECT agent_name FROM device_status_watchers`);
+
+    await Promise.all(watchers.map(async ({ agent_name }) => {
+      let watching = false;
+
+      try {
+        const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agent_name));
+        watching = (await workspace.devicesMoved()).watching;
+      } catch (cause) {
+        diagnostics.event('device.watcher_unreachable', { workspace: agent_name, error: renderThrownChain({ cause }) });
+      }
+
+      if (!watching) this.sqlx(`DELETE FROM device_status_watchers WHERE agent_name = ?`, agent_name);
+    }));
+  }
+
   /**
    * Toolchain is probed on status read, not in the HELLO handler: the reply arrives on that socket,
    * so awaiting it there would deadlock. Kept separate from `listDevices` to avoid a device round-trip.
    */
+  /** Null once removed; asks no machine anything. */
+  async deviceName(caller: UserCaller, deviceId: string): Promise<string | null> {
+    await this.requireTier(caller, 'device.rpc');
+
+    return this.sqlx<{ label: string }>(`SELECT label FROM user_devices WHERE id = ?`, deviceId)[0]?.label ?? null;
+  }
+
   async deviceRuntimeStatus(caller: UserCaller): Promise<DeviceStatus> {
     const resolved = await this.requireTier(caller, 'device.rpc');
     const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;
@@ -3063,7 +3105,12 @@ export class UserDO extends Agent<Env> {
     const task = this.sweepAndRevokeDevice(deviceId);
     this._revoking.set(deviceId, task);
 
-    try { return await task; } finally { this._revoking.delete(deviceId); }
+    try {
+      const revoked = await task;
+      await this.devicesMoved();
+
+      return revoked;
+    } finally { this._revoking.delete(deviceId); }
   }
 
   private readonly _revoking = new Map<string, Promise<{ ok: boolean; unstoppedCommands: number }>>();
@@ -3075,8 +3122,7 @@ export class UserDO extends Agent<Env> {
     // Close admission before the first cancellation await; a device RPC resuming after its consent
     // await rechecks this durable state before send.
     this.sqlx(
-      `UPDATE user_devices SET revoked_at = ?, connected_at = NULL
-        WHERE id = ? AND revoked_at IS NULL`,
+      `UPDATE user_devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
       now, deviceId,
     );
     // Revocation takes the claim from any in-flight sweep; a displaced sweep keeps reporting what it
@@ -3186,7 +3232,6 @@ export class UserDO extends Agent<Env> {
   }
 
   private experienceLibrary() {
-    this.ensureInit();
 
     return createExperienceLibrary(this.ctx.storage.sql);
   }
@@ -3228,14 +3273,7 @@ export class UserDO extends Agent<Env> {
   }
 
   private credentialSummaries(_resolved: ResolvedCaller): CredentialSummary[] {
-    return this.sqlx<{ key: string; kind: CredentialSummary['kind']; created_at: number; updated_at: number }>(
-      `SELECT key, kind, created_at, updated_at FROM user_credentials ORDER BY key`,
-    ).map((r) => ({
-        key: r.key,
-        kind: r.kind,
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-      }));
+    return this.sqlx<{ key: string; kind: CredentialSummary['kind'] }>(`SELECT key, kind FROM user_credentials ORDER BY key`);
   }
 
   /** Model-inference credentials survive tainting (headers attach in trusted DO code, never in LLM
@@ -3252,7 +3290,7 @@ export class UserDO extends Agent<Env> {
       throw new KinuError('bad_input', `${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
     }
 
-    const cred = validateCredential({ value: credentialJson });
+    const cred = validateCredential({ key, value: credentialJson });
 
     if (subscriptionIssuer(key) !== null && cred.kind === 'oauth' && !cred.refreshToken) {
       throw new KinuError('bad_input', `${key} requires an OAuth refresh token.`);
@@ -3370,7 +3408,7 @@ export class UserDO extends Agent<Env> {
 
     if (decoded === undefined) throw new KinuError('bad_input', `the stored credential ${key} did not decode as JSON`);
 
-    return { cred: validateCredential({ value: decoded }), revision };
+    return { cred: validateCredential({ key, value: decoded }), revision };
   }
 
   /** Writes nothing, so {@link commitCredential} can be paired with a fence read in one turn. */
@@ -3391,11 +3429,10 @@ export class UserDO extends Agent<Env> {
       return false;
     }
 
-    const now = Date.now();
     this.sqlx(
-      `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, value = excluded.value, updated_at = excluded.updated_at`,
-      input.key, input.kind, input.sealed, now, now,
+      `INSERT INTO user_credentials (key, kind, value) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, value = excluded.value`,
+      input.key, input.kind, input.sealed,
     );
     this.bumpCredentialRevision(input.key);
     this.bumpCredentialsRevision();
@@ -3425,9 +3462,9 @@ export class UserDO extends Agent<Env> {
 
   private bumpCredentialRevision(key: string): void {
     this.sqlx(
-      `INSERT INTO user_credential_revisions (key, revision, updated_at) VALUES (?, 1, ?)
-       ON CONFLICT(key) DO UPDATE SET revision = revision + 1, updated_at = excluded.updated_at`,
-      key, Date.now(),
+      `INSERT INTO user_credential_revisions (key, revision) VALUES (?, 1)
+       ON CONFLICT(key) DO UPDATE SET revision = revision + 1`,
+      key,
     );
   }
 
@@ -3636,6 +3673,8 @@ export class UserDO extends Agent<Env> {
 
     if (cred?.kind === 'openai-compat') return cred.baseURL;
 
+    if (cred?.kind === 'bearer' && cred.baseURL !== undefined) return cred.baseURL;
+
     if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred?.kind === 'oauth') {
       if (!isCloudflareCredentialUsable(cred)) return null;
       const accountId = accountIdFromCloudflareCredential(cred);
@@ -3646,7 +3685,6 @@ export class UserDO extends Agent<Env> {
     return null;
   }
 
-  /** Headers ready to inject into a fetch. */
   async getAuthHeaders(caller: UserCaller, key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null> {
     await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
@@ -3764,7 +3802,7 @@ export class UserDO extends Agent<Env> {
       const error = authoredRefusal({ doing: 'listing your Cloudflare AI Gateways', cause });
       diagnostics.failure('user.ai_gateways_unread', error);
 
-      return { connected: true, selectedId, gateways: [], error: publicText(error) };
+      return { connected: true, selectedId, gateways: [], error: renderThrownChain({ cause: error }) };
     }
   }
 
@@ -3900,17 +3938,16 @@ export class UserDO extends Agent<Env> {
     // The generation rises in the write itself so two racing starts cannot get the same number.
     this.sqlx(
       `INSERT INTO codex_device_flow
-         (id, device_auth_id, user_code, poll_interval, portal_url, started_at, generation, settled_at)
-       VALUES (1, ?, ?, ?, ?, ?, 1, NULL)
+         (id, device_auth_id, user_code, poll_interval, portal_url, generation, settled_at)
+       VALUES (1, ?, ?, ?, ?, 1, NULL)
        ON CONFLICT(id) DO UPDATE SET
          device_auth_id = excluded.device_auth_id,
          user_code      = excluded.user_code,
          poll_interval  = excluded.poll_interval,
          portal_url     = excluded.portal_url,
-         started_at     = excluded.started_at,
          generation     = generation + 1,
          settled_at     = NULL`,
-      result.deviceAuthId, result.userCode, result.pollIntervalSec, result.portalURL, Date.now(),
+      result.deviceAuthId, result.userCode, result.pollIntervalSec, result.portalURL,
     );
 
     return result;
@@ -3924,7 +3961,7 @@ export class UserDO extends Agent<Env> {
        WHERE id = 1 AND settled_at IS NULL`,
     )[0];
 
-    if (!row) return { connected: false, error: 'No device flow in progress — call startCodexDeviceFlow first.' };
+    if (!row) return { connected: false, error: 'No device flow in progress: call startCodexDeviceFlow first.' };
     // Both fences must be read before the provider wait.
     const generation = row.generation;
     const revision = this.credentialRevision(CODEX_CRED_KEY);
@@ -3946,7 +3983,7 @@ export class UserDO extends Agent<Env> {
 
         return {
           connected: false,
-          error: 'That Codex sign-in was superseded before it completed — start the connection again.',
+          error: 'That Codex sign-in was superseded before it completed: start the connection again.',
         };
       }
 
@@ -3955,7 +3992,7 @@ export class UserDO extends Agent<Env> {
       const error = authoredRefusal({ doing: 'checking the Codex sign-in', cause });
       diagnostics.failure('user.codex_poll_failed', error);
 
-      return { connected: false, error: publicText(error) };
+      return { connected: false, error: renderThrownChain({ cause: error }) };
     }
   }
 
@@ -4039,9 +4076,8 @@ export class UserDO extends Agent<Env> {
     }
 
     this.sqlx(
-      `INSERT INTO user_config (key, value, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      key, value, Date.now(),
+      `INSERT INTO user_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      key, value,
     );
   }
 
@@ -4156,7 +4192,7 @@ export class UserDO extends Agent<Env> {
       parsed = validateProfileCatalog({ value: catalog });
     } catch (cause) {
       // The refusal names the offending path; it is all the owner is shown.
-      return { ok: false, kind: 'malformed', reason: publicText(authoredRefusal({ doing: 'reading the profile catalog', cause })) };
+      return { ok: false, kind: 'malformed', reason: renderThrownChain({ cause: authoredRefusal({ doing: 'reading the profile catalog', cause }) }) };
     }
 
     // No await from here to the write: DO input gates make the CAS atomic.
@@ -4173,9 +4209,9 @@ export class UserDO extends Agent<Env> {
 
     const nextVersion = current.version + 1;
     this.sqlx(
-      `INSERT INTO user_config (key, value, updated_at, version) VALUES (?, ?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, version = excluded.version`,
-      PROFILE_CATALOG_CONFIG_KEY, JSON.stringify(parsed), Date.now(), nextVersion,
+      `INSERT INTO user_config (key, value, version) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, version = excluded.version`,
+      PROFILE_CATALOG_CONFIG_KEY, JSON.stringify(parsed), nextVersion,
     );
 
     return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
@@ -4188,10 +4224,10 @@ export class UserDO extends Agent<Env> {
   async sharesReceived_add(caller: UserCaller, row: SharedBlueprintReceipt): Promise<void> {
     await this.requireTier(caller, 'shares');
     this.sqlx(
-      `INSERT INTO user_shares_received (owner_user_id, owner_email, workspace, share_id, title)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (owner_user_id, workspace, share_id) DO UPDATE SET title = excluded.title, owner_email = excluded.owner_email`,
-      row.ownerUserId, row.ownerEmail, row.workspace, row.shareId, row.title,
+      `INSERT INTO user_shares_received (owner_user_id, owner_email, workspace, share_id)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (owner_user_id, workspace, share_id) DO UPDATE SET owner_email = excluded.owner_email`,
+      row.ownerUserId, row.ownerEmail, row.workspace, row.shareId,
     );
   }
 
@@ -4204,12 +4240,12 @@ export class UserDO extends Agent<Env> {
   async sharesReceived_list(caller: UserCaller): Promise<SharedBlueprintReceipt[]> {
     await this.requireTier(caller, 'shares');
 
-    return this.sqlx<{ owner_user_id: string; owner_email: string; workspace: string; share_id: string; title: string; created_at: number }>(
-      `SELECT owner_user_id, owner_email, workspace, share_id, title, created_at
+    return this.sqlx<{ owner_user_id: string; owner_email: string; workspace: string; share_id: string; created_at: number }>(
+      `SELECT owner_user_id, owner_email, workspace, share_id, created_at
        FROM user_shares_received ORDER BY created_at DESC, share_id`,
     ).map((row) => ({
       ownerUserId: row.owner_user_id, ownerEmail: row.owner_email, workspace: row.workspace,
-      shareId: row.share_id, title: row.title, createdAt: row.created_at,
+      shareId: row.share_id, createdAt: row.created_at,
     }));
   }
 
@@ -4401,9 +4437,9 @@ export class UserDO extends Agent<Env> {
     }
 
     await this.destroy();
-    // The isolate abort is a tick away; a request in that tick meets emptied storage, so reset the
-    // latch to re-run schema init and answer as the empty account.
-    this._initialized = false;
+    // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
+    // again, empty, and answers as the new account.
+    this.initTables();
 
     return { ok: true, workspaces: workspaces.length };
   }
@@ -4411,7 +4447,6 @@ export class UserDO extends Agent<Env> {
   /** The SDK's manager, with activation restore retired (see {@link retireActivationRestore}).
    *  Its config is `user_mcp_servers`; the SDK rows are derived from it. */
   private userMcp(): MCPClientManager {
-    this.ensureInit();
 
     return this.mcp;
   }
@@ -4588,10 +4623,8 @@ export class UserDO extends Agent<Env> {
     const rows = this.sqlx<{
       id: string; name: string; server_url: string; transport: McpTransport;
       allowed_tools: string | null; preset_id: McpPresetId | null;
-      created_at: number; updated_at: number;
     }>(
-      `SELECT s.id, s.name, s.server_url, s.transport, s.allowed_tools,
-              p.preset_id, s.created_at, s.updated_at
+      `SELECT s.id, s.name, s.server_url, s.transport, s.allowed_tools, p.preset_id
          FROM user_mcp_servers s
          LEFT JOIN user_mcp_server_presets p ON p.server_id = s.id
         ORDER BY s.name`,
@@ -4640,8 +4673,6 @@ export class UserDO extends Agent<Env> {
         presetId: r.preset_id,
         authUrl,
         allowedTools: allowed,
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
       };
     });
   }
@@ -4684,7 +4715,6 @@ export class UserDO extends Agent<Env> {
       : null;
 
     const id = nanoid(8);
-    const now = Date.now();
     const headersJson = cfg.headers ? JSON.stringify(cfg.headers) : null;
     const allowedJson = cfg.allowedTools ? JSON.stringify(cfg.allowedTools) : null;
     // Seal before the transaction: sealing awaits, and every written value must be in hand first.
@@ -4692,10 +4722,10 @@ export class UserDO extends Agent<Env> {
     this.claimMcpServerName(cfg.name, id, () => {
       this.ctx.storage.sql.exec(
         `INSERT INTO user_mcp_servers
-           (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, name, server_url, transport, headers, allowed_tools)
+         VALUES (?, ?, ?, ?, ?, ?)`,
         id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
-        sealedHeaders, allowedJson, now, now,
+        sealedHeaders, allowedJson,
       );
 
       // The preset tag lives in its own table; `user_mcp_servers` keeps its shipped shape.
@@ -4830,8 +4860,6 @@ export class UserDO extends Agent<Env> {
 
     // Everything above is validated and sealed; nothing below may await.
     if (sets.length === 0) return;
-    const now = Date.now();
-    sets.push('updated_at = ?'); args.push(now);
     args.push(id);
 
     const write = (): void => {
@@ -4856,7 +4884,6 @@ export class UserDO extends Agent<Env> {
   /** Claim `name` for `serverId` and run `write` atomically; the transaction is the check and holds
    *  without the UNIQUE index (see `schema.ts`). `write` must not await. */
   private claimMcpServerName(name: string, serverId: string, write: () => void): void {
-    this.ensureInit();
 
     try {
       this.ctx.storage.transactionSync(() => {
@@ -4971,7 +4998,7 @@ export class UserDO extends Agent<Env> {
         return {
           server: r.name,
           reason: `not connected when this turn opened, so its tools are absent from this turn. They are `
-            + `installed by the next turn once the connection completes — a turn's tool set is fixed `
+            + `installed by the next turn once the connection completes: a turn's tool set is fixed `
             + `when the turn opens.`,
         };
       }), ...refused];
@@ -5081,7 +5108,7 @@ export class UserDO extends Agent<Env> {
       const error = toKinuError({ doing: 'completing an MCP sign-in', cause, otherwise: 'unavailable' });
       diagnostics.failure('mcp.oauth_callback_failed', error);
 
-      return { ok: false, serverId: null, error: publicText(error) };
+      return { ok: false, serverId: null, error: renderThrownChain({ cause: error }) };
     }
   }
 

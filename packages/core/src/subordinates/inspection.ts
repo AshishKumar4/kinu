@@ -11,7 +11,8 @@ import { JsonObjectSchema } from '../utils/json';
 import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { SubordinateRosterEntrySchema, SubordinateRosterStore } from './roster';
+import { SubordinateRosterEntrySchema, SubordinateRosterStore, subordinateTitle } from './roster';
+import { createAgentConfigStore } from '../config/store';
 import { DELEGATION_MAX_DEPTH } from './depth';
 import { PlanReviewStore, PlanReviewSchema } from '../plans/review';
 import { readPlanTasks, AgentTaskTreeSchema } from '../tools/task-store';
@@ -30,6 +31,8 @@ const EventQuerySchema = v.strictObject({
   limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(RUN_EVENT_LIMIT_MAX))),
 });
 
+const ActorIdSchema = v.optional(v.pipe(v.string(), v.nonEmpty()));
+
 export const WorkspacePlanReferenceSchema = v.strictObject({
   path: PathSchema, id: v.pipe(v.string(), v.nonEmpty()),
   revision: v.pipe(v.number(), v.integer(), v.minValue(1)),
@@ -41,10 +44,10 @@ export const SubordinateInspectionRequestSchema = v.variant('view', [
   v.strictObject({ path: PathSchema, view: v.literal('plans'), page: PageRequestSchema }),
   v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('plan') }),
   v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('planTasks') }),
-  v.strictObject({ path: PathSchema, view: v.literal('children'), page: PageRequestSchema }),
-  v.strictObject({ path: PathSchema, view: v.literal('history'), page: PageRequestSchema }),
-  v.strictObject({ path: PathSchema, view: v.literal('runs'), page: PageRequestSchema }),
-  v.strictObject({ path: PathSchema, view: v.literal('events'), runId: v.pipe(v.string(), v.nonEmpty()), query: EventQuerySchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('children'), page: PageRequestSchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('history'), page: PageRequestSchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('runs'), page: PageRequestSchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('events'), runId: v.pipe(v.string(), v.nonEmpty()), query: EventQuerySchema, actor: ActorIdSchema }),
 ]);
 
 export type SubordinateInspectionRequest = v.InferOutput<typeof SubordinateInspectionRequestSchema>;
@@ -60,6 +63,12 @@ const SummarySchema = v.object({
   usage: UsageSchema, turnsWithoutUsage: v.number(),
 });
 
+const ChildSchema = v.object({
+  ...SubordinateRosterEntrySchema.entries, displayName: v.string(), nameOrigin: v.picklist(['user', 'auto']), role: v.string(),
+});
+
+export type SubordinateChild = v.InferOutput<typeof ChildSchema>;
+
 const EventPageSchema: v.GenericSchema<Page<RunEvent, number>> = v.variant('status', [
   v.object({ status: v.literal('more'), items: v.array(RunEventSchema), next: IndexSchema }),
   v.object({ status: v.literal('end'), items: v.array(RunEventSchema) }),
@@ -69,7 +78,7 @@ export const SubordinateInspectionResultSchema = v.variant('view', [
   v.object({ view: v.literal('plans'), path: PathSchema, page: pageSchema(PlanReviewSchema) }),
   v.object({ view: v.literal('plan'), path: PathSchema, plan: PlanReviewSchema }),
   v.object({ view: v.literal('planTasks'), path: PathSchema, tasks: v.array(AgentTaskTreeSchema) }),
-  v.object({ view: v.literal('children'), path: PathSchema, page: pageSchema(SubordinateRosterEntrySchema) }),
+  v.object({ view: v.literal('children'), path: PathSchema, page: pageSchema(ChildSchema) }),
   v.object({ view: v.literal('history'), path: PathSchema, page: pageSchema(HistorySchema) }),
   v.object({ view: v.literal('runs'), path: PathSchema, page: pageSchema(SummarySchema) }),
   v.object({ view: v.literal('events'), path: PathSchema, runId: v.string(), page: EventPageSchema }),
@@ -114,16 +123,21 @@ export async function readSubordinateInspection(
 
       if (request.view === 'plan') return { view: 'plan', path, plan };
 
-      if (!tableExists(sql, 'plan_task_links')) return missingSubordinateHistory(path);
+      if (!tableExists(sql, 'agent_tasks')) return missingSubordinateHistory(path);
 
       return { view: 'planTasks', path, tasks: readPlanTasks(sql, actor, plan) };
     }
 
     case 'children': {
       if (!tableExists(sql, 'actor_subordinates')) return missingSubordinateHistory(path);
-      const roster = new SubordinateRosterStore(raw, actor);
+      const page = new SubordinateRosterStore(raw, actor).listPage(request.page);
 
-      return { view: 'children', path, page: roster.listPage(request.page) };
+      const items = page.items.map((entry) => ({
+        ...entry,
+        ...subordinateTitle(entry, entry.actorReference === null ? null : createAgentConfigStore(sql, entry.actorReference.actorId, actor.assertCurrent)),
+      }));
+
+      return { view: 'children', path, page: { ...page, items } };
     }
 
     case 'history':

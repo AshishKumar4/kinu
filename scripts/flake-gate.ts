@@ -25,13 +25,15 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
+import { stripGitContext } from '../packages/test-utils/src/git';
 import { runUnderDeadline } from './deadline';
 import { finding } from './gate-ratchet';
 import { GATE_DEADLINE_SECONDS, LADDER, TIERS, claims, narrowedTo, sharedBrowserModules, tierRun, type Gate } from './ladder';
 import { discoverArgv } from './python-suites';
 import { parseJUnit } from './skip-ratchet';
+import { parse, walk } from './syntax';
 import { writtenSkips } from './test-census';
-import { ANTI_SLOP_RULES, isAntiSlopRuleSuite, isFirstRunSuite, isPythonSuite, isRunnableSuite, trackedFiles } from './sources';
+import { ANTI_SLOP_RULES, isAntiSlopRuleSuite, isFirstRunSuite, isParseable, isPythonSuite, isRunnableSuite, trackedFiles } from './sources';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -90,9 +92,49 @@ export function stagedTestFiles(repository: Repository = { cwd: root, env: proce
   const [changed = new Set<string>(), ...others] = ['HEAD', ...heads]
     .map((parent) => new Set(git(repository, ['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z', parent]).split('\0')));
 
+  const moved = movedUnchanged(repository);
+
   return [...changed]
-    .filter((file) => others.every((other) => other.has(file)))
+    .filter((file) => others.every((other) => other.has(file)) && !moved.has(file))
     .filter((file) => isRunnableSuite(file) || isPythonSuite(file) || isFirstRunSuite(file));
+}
+
+/** A module's text with every import specifier blanked, read from its syntax tree: what a move rewrites. Any other
+ *  file (a Python suite) is compared whole. */
+function withoutSpecifiers(file: string, text: string): string {
+  if (!isParseable(file)) return text;
+  const spans: { start: number; end: number }[] = [];
+
+  walk(parse(file, text).root, (node) => {
+    const { raw } = node;
+
+    if (raw.type !== 'ImportDeclaration' && raw.type !== 'ExportAllDeclaration' && raw.type !== 'ImportExpression'
+      && raw.type !== 'ExportNamedDeclaration') return;
+
+    if (raw.source !== null && raw.source.type === 'Literal') spans.push({ start: raw.source.start, end: raw.source.end });
+  });
+
+  return spans.sort((a, b) => b.start - a.start).reduce((blanked, { start, end }) => `${blanked.slice(0, start)}''${blanked.slice(end)}`, text);
+}
+
+/**
+ * Files the index renames from HEAD whose text equals the source's but for rewritten import specifiers: the same
+ * tests, so their flakiness is the source's, already measured. Any other edit, one assertion included, repeats it.
+ */
+export function movedUnchanged(repository: Repository = { cwd: root, env: process.env }): ReadonlySet<string> {
+  const fields = git(repository, ['diff', '--cached', '-M', '--name-status', '-z', '--diff-filter=R', 'HEAD']).split('\0');
+  const moved = new Set<string>();
+
+  for (let at = 0; at + 2 < fields.length; at += 3) {
+    const from = fields[at + 1] ?? '';
+    const to = fields[at + 2] ?? '';
+    const before = git(repository, ['show', `HEAD:${from}`]);
+    const after = git(repository, ['show', `:${to}`]);
+
+    if (withoutSpecifiers(from, before) === withoutSpecifiers(to, after)) moved.add(to);
+  }
+
+  return moved;
 }
 
 /** Each row's `claims()` over one tracked list, worked out once: `planFor` asks it of every row for every file. */
@@ -221,6 +263,22 @@ function slots(size: number): <T>(work: () => Promise<T>) => Promise<T> {
   };
 }
 
+/** Bun's implicit spawn env is its startup snapshot (ADR L10), so the test must start without hook context too.
+ *  The parent keeps that context: stagedTestFiles must still read the index the committing hook names. */
+function testEnvironment() {
+  const env: Record<string, string> = {};
+
+  for (const name of Object.keys(process.env)) {
+    const value = process.env[name];
+
+    if (value !== undefined) env[name] = value;
+  }
+
+  stripGitContext(env);
+
+  return env;
+}
+
 /** One run of a planned suite, under its row's deadline, with its JUnit report read where it writes one. */
 async function runOnce(plan: Extract<Plan, { kind: 'repeat' }>, run: number, scratch: string): Promise<RunOutcome> {
   const report = join(scratch, `${plan.file.replaceAll('/', '_')}.${String(run)}.xml`);
@@ -230,7 +288,7 @@ async function runOnce(plan: Extract<Plan, { kind: 'repeat' }>, run: number, scr
 
   const outcome = await runUnderDeadline({
     argv: spawned, cwd: root, seconds: plan.row.deadline?.seconds ?? GATE_DEADLINE_SECONDS,
-    label: `${plan.file} run ${String(run)}`, stdio: 'pipe',
+    label: `${plan.file} run ${String(run)}`, stdio: 'pipe', env: testEnvironment(),
   });
 
   const xml = junit ? tolerate(() => readFileSync(report, 'utf8'), 'enoent') : undefined;
@@ -277,6 +335,8 @@ const BLIND_SPOTS = [
   'a file runs apart from its row\'s siblings, so a leak between them (a module mock, a global) is not provoked '
     + 'here; a row that runs its files in fresh globals (`--isolate`) cannot have one',
   'the working tree is run, not the staged content: the hook\'s own stated imprecision',
+  'a moved test whose only edits are its import specifiers is not repeated: a rewritten import that now resolves to '
+    + 'a different module is run once by the CI tier, not repeated here',
 ] as const;
 
 /** The line naming one repeated suite's verdict; `written` are the skips its file declares unconditionally. */
@@ -411,7 +471,7 @@ export async function sweepRun(batch: SweepBatch, seed: number, scratch: string,
 
   const outcome = await runUnderDeadline({
     argv: spawned, cwd: root, seconds: batch.row.deadline?.seconds ?? GATE_DEADLINE_SECONDS,
-    label: `${batch.row.label} under seed ${String(seed)}`, stdio: 'pipe',
+    label: `${batch.row.label} under seed ${String(seed)}`, stdio: 'pipe', env: testEnvironment(),
   });
 
   const xml = junit ? tolerate(() => readFileSync(report, 'utf8'), 'enoent') : undefined;
@@ -515,6 +575,7 @@ async function main(): Promise<number> {
 
   if (staged.length === 0) {
     console.log('flake-gate: this commit changes no test file, so there is nothing to repeat');
+    console.log(`  blind: ${BLIND_SPOTS[BLIND_SPOTS.length - 1] ?? ''}`);
 
     return 0;
   }

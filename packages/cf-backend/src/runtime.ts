@@ -4,7 +4,7 @@
  */
 
 import type {
-  AgentRuntime, ActorHandle, BranchHandle,
+  AgentRuntime, ActorHandle,
   VFS as CoreVFS, LLM, Schedule, Identity,
   SqlExecutor, SqlValue, RawSqlExec,
   FiberCtx, ExecutionRouter,
@@ -35,13 +35,14 @@ import {
   type FixedTierSource,
   type VectorStore,
 } from "@kinu.run/core";
-import type { DeviceFileScope, SandboxHandle } from "@kinu.run/core";
-import { withHostedNodeExecution, REAL_CLOCK, WORKSPACE_ROOT } from '@kinu.run/core';
-import type { HostedNodeHome } from '@kinu.run/core';
+import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
+import { withHostedNodeExecution, WORKSPACE_ROOT } from '@kinu.run/core';
+import type { ActorReference, HostedNodeHome } from '@kinu.run/core';
+import { mountActorFiles } from './workspace-host';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
-import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { kinuEgressParams } from "./egress/configure";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox, openSandbox } from "./sandbox-exec-lane";
@@ -49,7 +50,7 @@ import { previewHostSuffix } from "@kinu.run/core";
 import { SANDBOX_TRANSPORT, sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
-import { CraftStore as AgentUtilsCraftStore, craftStoreView } from "@kinu.run/agent-utils/stores";
+import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
 import { createRuntimeExecutor } from "./codemode-sandbox";
 import type { Agent } from "agents";
 import {
@@ -206,10 +207,12 @@ export interface CFRuntimeHooks {
   deferrals?: () => DeferredApprovalChannel | undefined;
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
+  liveReadsMoved?: (reads: readonly LiveRead[]) => void;
   /** Where non-turn model seams (judge, fast tier, reflection, embedder) report cost; turn spend arrives
      *  as `step_finish`. */
   reportModelCall: ModelCallSink;
   resolveProfile?: () => Promise<ResolvedTurnProfile>;
+  currentTurn?: (actor: ActorReference) => string | null;
   /** The actor's uid on both planes, or neither: split credentials measured `EACCES` on its own home
      *  and could write a sibling's. */
   workspaceExecution?: HostedNodeHome;
@@ -220,11 +223,6 @@ export interface CFRuntimeHooks {
     /** Null until the `context_edit` run-event variant exists; not a stub. */
     events(): ContextEventRecorder | null;
     readonly children: ChildContextResolver;
-  };
-  /** Omitted leaves `spawnBranch`/`abortBranch` refusing, since `AgentRuntime` requires them. */
-  branches?: {
-    spawn(branchId: string): Promise<BranchHandle>;
-    abort(branchId: string): Promise<void>;
   };
 }
 
@@ -269,12 +267,10 @@ export function createCFRuntime(
   initActorTables(execRaw, sql);
   const memoryConfig = actor.actor.config;
 
-  const craftStoreImpl = new AgentUtilsCraftStore(sql);
-  craftStoreImpl.ensureSchema();
+  const craftStore = new AgentUtilsCraftStore(sql);
+  craftStore.ensureSchema();
 
   const memory = adaptMemory(memoryStore, originVfs, vectorStore, memoryConfig);
-
-  const craftStore = craftStoreView(craftStoreImpl);
 
   const envForExec = env;
 
@@ -285,7 +281,7 @@ export function createCFRuntime(
   const executor = createRuntimeExecutor(envForExec.LOADER);
 
   const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
-    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall,
+    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,
   });
 
   // The one required lane: `AgentRuntime.llm` is not optional.
@@ -365,8 +361,7 @@ export function createCFRuntime(
   }
 
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
-  // The shell this actor runs as serves its file tool's mount points.
-  workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred);
+  const unmount = mountActorFiles(workspaceBox, agentFileVfs, { rootActor: actor.rootActor, cred: hooks.workspaceExecution?.cred });
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     shellSession,
@@ -403,11 +398,13 @@ export function createCFRuntime(
         }));
       },
       // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
-      env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null);
+      env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null,
+      () => hooks.liveReadsMoved?.(['getExposedPorts']));
 
       sandboxHandle = handle;
       // No restore wrapper: KinuSandbox.onStart restores inside blockConcurrencyWhile.
-      executionRouter.register(createSandboxExecutor(handle, previewSuffix));
+      executionRouter.register(createSandboxExecutor(handle, previewSuffix,
+        () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions', 'getExposedPorts'])));
       diagnostics.event('sandbox.executor_registered', {
         sandboxId,
         transport: SANDBOX_TRANSPORT,
@@ -434,7 +431,7 @@ export function createCFRuntime(
     agentName: actor.workspaceName,
     cliCwd: cliCwdForDevice,
     checkpointMeta: () => access.getCheckpointMetaForDevice?.() ?? null,
-    clock: REAL_CLOCK,
+    onStatusChanged: () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions']),
   };
 
   const deviceTransport = createHubDeviceTransport(deviceTransportOptions);
@@ -521,8 +518,6 @@ export function createCFRuntime(
     get judgeModel() { return profileLane('judge'); },
     get fastLlm() { return profileLane('fast'); },
     get advisorLlm() { return profileLane('advisor'); },
-    spawnBranch: (branchId) => requireBranches(hooks).spawn(branchId),
-    abortBranch: (branchId) => requireBranches(hooks).abort(branchId),
     executionRouter,
     shell,
     localVfs: baseWorkspaceVfs,
@@ -530,6 +525,8 @@ export function createCFRuntime(
     vectorStore,
     sandboxHandle,
   };
+
+  if (unmount !== undefined) runtime.release = unmount;
 
   return runtime;
 }
@@ -575,13 +572,11 @@ function buildVectorStore(
 
 /** Resolved at call time so a newly connected provider applies without redeploy; not via
  * `OwnedModelServices`, which memoizes under one fixed title. */
-function actorProviderRegistry(
-  agent: AgentHost,
-  env: Env,
-  actor: ActorRuntimeIdentity,
-  title: string,
-): AgentProviderRegistry {
+function actorProviderRegistry(lane: Pick<ProfileLaneOptions, 'agent' | 'env' | 'actor' | 'currentTurn'>, title: string): AgentProviderRegistry {
+  const { agent, env, actor, currentTurn } = lane;
+
   return createAgentProviderRegistry({
+    ...(currentTurn !== undefined && { currentTurn }),
     env,
     ownerUserId: actor.ownerUserId(),
     userDO: userCredentialSourceFor(env, actor),
@@ -598,11 +593,12 @@ export interface ProfileLaneOptions {
   readonly resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined;
   readonly source: FixedTierSource;
   readonly report: ModelCallSink;
+  readonly currentTurn: ((reference: ActorReference) => string | null) | undefined;
 }
 
 /** Only a completed call reports: a thrown seam was not billed. */
 function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
-  const { agent, env, actor, resolveProfile, source, report } = options;
+  const { actor, resolveProfile, source, report } = options;
 
   if (!resolveProfile) return undefined;
 
@@ -611,7 +607,7 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
     llm: route => ({
       async *stream() { yield ""; },
       async complete(prompt: string): Promise<string> {
-        const registry = actorProviderRegistry(agent, env, actor, `Kinu (${source})`);
+        const registry = actorProviderRegistry(options, `Kinu (${source})`);
 
         const providerOptions = reasoningEffortOptions(
           route.reasoningEffort,
@@ -659,15 +655,5 @@ function createIdentity(
     // `.vN` files are canonical; reads resolve pointer-first so a stale live view is healed.
     scaffold: createScaffoldSurface({ vfs, sql, actor, path: scaffoldPath }),
   };
-}
-
-function requireBranches(hooks: CFRuntimeHooks): NonNullable<CFRuntimeHooks['branches']> {
-  const branches = hooks.branches;
-
-  if (!branches) {
-    throw new KinuError('missing', 'This actor runtime was built without a branch host, so it cannot run MCTS rollouts.');
-  }
-
-  return branches;
 }
 

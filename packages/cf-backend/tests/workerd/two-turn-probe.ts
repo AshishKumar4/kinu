@@ -22,6 +22,7 @@ import {
   type RecordingLogger,
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
+import { TERMINAL_RETRY_CALLBACK } from '../../src/actor-agent';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { SqlMeter, type OperationCost } from './sql-meter';
 import type {
@@ -87,7 +88,7 @@ function meterInPlace(sql: SqlStorage) {
   return { meter, unmetered };
 }
 
-const ScheduleRowsSchema = v.array(v.looseObject({ id: v.string() }));
+const ScheduleRowsSchema = v.array(v.looseObject({ id: v.string(), callback: v.string() }));
 
 /** What still runs in the object, by name, and its schedule rows as read now. */
 export interface SettleState {
@@ -175,6 +176,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
     if (alarm !== null && alarm <= Date.now()) busy.push('an alarm due');
     const schedules = v.parse(ScheduleRowsSchema, this.unmetered('SELECT * FROM cf_agents_schedules ORDER BY id').toArray());
+    // A held retry row is recovery still under way: its next lap fires on the clock, not on anything the measured
+    // operation does (2026-09-26: one fired inside the window in some runs and not others).
+    const retrying = schedules.filter((row) => row.callback === TERMINAL_RETRY_CALLBACK).length;
+
+    if (retrying > 0) busy.push(`${String(retrying)} terminal retry row(s)`);
 
     return { busy, schedules: JSON.stringify(schedules) };
   }
@@ -374,11 +380,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
           id: textColumn(row.id), kind: textColumn(row.kind), turnId: row.turn_id === null ? null : textColumn(row.turn_id),
           variant: row.variant === null ? null : textColumn(row.variant), consumed: row.consumed_at !== null, payload: textColumn(row.payload),
         })),
-      terminalEffects: sql.exec('SELECT sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, outcome, attempts, settled_at FROM terminal_effects ORDER BY rowid').toArray()
+      terminalEffects: sql.exec('SELECT sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts FROM terminal_effects ORDER BY rowid').toArray()
         .map((row) => ({
           sequenceId: textColumn(row.sequence_id), effectKey: textColumn(row.effect_key), effectName: textColumn(row.effect_name), scope: textColumn(row.scope),
           seq: Number(row.seq), input: textColumn(row.input_json), lane: textColumn(row.lane), status: textColumn(row.status),
-          outcome: row.outcome === null ? null : textColumn(row.outcome), attempts: Number(row.attempts), settled: row.settled_at !== null,
+          attempts: Number(row.attempts),
         })),
       runEvents: sql.exec("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'step_finish', 'tool_call_end', 'run_end') ORDER BY rowid").toArray()
         .map((row) => ({ runId: textColumn(row.run_id), type: textColumn(row.type), payload: textColumn(row.payload) })),
@@ -386,14 +392,13 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
   /** `consumed_at = 0` is older than any grace, so the next wake's unbindStale must re-pend it. */
   async seedStaleDrainEvent(marker: string): Promise<void> {
-    this.ensureSchema();
     this.actorState.storage.sql.exec(
       `INSERT INTO agent_log
          (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
           trust, priority, payload_visibility, payload, received_at,
-          schema_version, dedupe_key, consumed_at)
+          dedupe_key, consumed_at)
        VALUES (?, ?, 'event', 'evt-seeded-dead', 0, NULL, 'tr-seeded', 'webhook_bearer', 'webhook',
-               'authenticated', 'normal', 'full', ?, 1, 1, NULL, 0)`,
+               'authenticated', 'normal', 'full', ?, 1, NULL, 0)`,
       this.actorHandle().actorId,
       `ev-seeded-${marker}`,
       JSON.stringify({
@@ -838,6 +843,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       await awaitSleepTimeSettled(recording, i + 1);
     }
 
+    // The twentieth turn's tail (its detached task, keepAlive hold, fiber and retry tick) outlasts its sleep-time
+    // signal by an amount that follows wall time; opened before it settles, the meter counted part of it (2026-09-26).
+    await awaitSettled(target);
     await target.meterBegin();
     const queued = await target.runTaskFromMcp('long:500');
 

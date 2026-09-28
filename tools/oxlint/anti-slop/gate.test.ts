@@ -7,12 +7,16 @@ import { isParseable, isRunnableSuite, readRepositoryFile, trackedFiles } from "
 import { declaredName, importBindings, literalString, parse, walk, type SyntaxNode } from "../../../scripts/syntax.ts";
 
 const expectedRules = [
+  "anti-slop/effect-entry-awaits",
+  "anti-slop/effect-restricted-api",
+  "anti-slop/effect-run-in-adapter",
   "anti-slop/no-ambient-git-in-tests",
   "anti-slop/no-chained-type-assertions",
   "anti-slop/no-conditional-empty-object-spread",
   "anti-slop/no-copy-rpc-stub",
   "anti-slop/no-bare-error-in-durable-object",
   "anti-slop/no-ddl-in-catch",
+  "anti-slop/no-effect-swallow",
   "anti-slop/no-elapsed-work-deadline",
   "anti-slop/no-empty-catch",
   "anti-slop/no-known-value-widening",

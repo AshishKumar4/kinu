@@ -10,7 +10,6 @@ import {
 import type { ChangelogEntryKind, DiffLine } from "@kinu.run/core";
 import * as v from "valibot";
 import type { Rpc } from "@kinu.run/core";
-import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
@@ -45,14 +44,11 @@ const KIND_ICON = {
   refinement: ArrowsClockwiseIcon,
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 
-/** The needs-you queue polls the same ledger at this cadence; a slower read lets it announce a self-change the journal has not fetched. */
-export const CHANGELOG_REVALIDATE_MS = LIVE_DATA_REFRESH_MS;
-
-/** A digest has no settled state: a self-change can land on an idle workspace at any time. */
-export const changelogRevalidate = (): number => CHANGELOG_REVALIDATE_MS;
+/** The Supervise page holds no workspace socket, so it re-reads the ledger on a clock. */
+export const changelogRevalidate = (): number => 5_000;
 
 /** Showing the digest marks it seen; `onSeen` zeroes the tab badge upstream. */
-export function useChangelog(rpc: Rpc, onSeen?: () => void) {
+export function useChangelog(rpc: Rpc, onSeen?: () => void, moved = 0) {
   const load = useCallback(async (): Promise<ChangelogView> => {
     const view = await rpc<ChangelogView>("getEvolutionChangelog", [{ limit: 30 }]);
     // Enrichment only: a failed or misshapen tool list leaves the entries as their rows hold them.
@@ -78,8 +74,15 @@ export function useChangelog(rpc: Rpc, onSeen?: () => void) {
     return { ...view, entries: withToolDetails(view.entries, tools) };
   }, [rpc]);
 
-  const { resource, reload } = useAsyncResource(load, changelogRevalidate);
+  const { resource, reload } = useAsyncResource(load);
   const view = lastValue(resource);
+  const readMoved = useRef(moved);
+
+  useEffect(() => {
+    if (readMoved.current === moved) return;
+    readMoved.current = moved;
+    reload();
+  }, [moved, reload]);
 
   // Freshness is judged against the marker pinned on first read; later reads return a marker newer than every entry.
   const openedSeenAt = useRef<number | null>(null);
@@ -277,7 +280,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   const headline = (
     <div className="min-w-0 flex-1">
       <div className="flex items-center gap-2">
-        <span className="p-row-text p-text flex-1" title={entry.summary}>{entry.summary}</span>
+        <span className="p-row-text p-text flex-1 decoration-[var(--c-border-strong)] underline-offset-4 group-hover/expander:underline" title={entry.summary}>{entry.summary}</span>
         {fresh && !kept && <span className="shrink-0 size-1.5 rounded-full bg-[var(--c-accent)]" />}
       </div>
       <div className="mt-1 p-meta p-text-3">{timeAgo(entry.at)}</div>
@@ -291,7 +294,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
         {hasDetails ? (
           <button
             type="button"
-            className="min-w-0 rounded-md text-left"
+            className="group/expander min-w-0 cursor-pointer rounded-md text-left"
             aria-expanded={expanded}
             aria-controls={detailsId}
             onClick={() => setExpanded((previous) => !previous)}

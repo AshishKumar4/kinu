@@ -12,10 +12,10 @@ import * as v from 'valibot';
 export function createNodeCraftedExecute(): CraftedToolExecute {
   return (tool) => {
     let compiled: ((arg: JsonValue) => Promise<JsonValue | undefined>) | null = null;
-    let compiledFor = '';
 
+    // Core memoizes one executor per (name, code), so a body compiles once per executor.
     const ensure = () => {
-      if (compiled && compiledFor === tool.code) return compiled;
+      if (compiled) return compiled;
       // An expression evaluating to an async function; upsertCraftedTool compiled it once already.
       const fn = v.parse(v.function_(), runInThisContext('(' + tool.code + ')'));
       compiled = async (arg) => {
@@ -23,8 +23,6 @@ export function createNodeCraftedExecute(): CraftedToolExecute {
 
         return result === undefined ? undefined : decodeJsonValue({ value: result });
       };
-
-      compiledFor = tool.code;
 
       return compiled;
     };

@@ -53,11 +53,15 @@ export const VAR_POLICY = {
   CLI_PUBLIC_ORIGIN: 'derived',
   CLI_APPROVAL_ORIGIN: 'derived',
   CLOUDFLARE_OAUTH_CLIENT_ID: 'ours',
+  // Each deployment declares the providers it configures; a self-host from this flow configures none.
+  SIGN_IN_PROVIDERS: 'derived',
   CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD: 'carried',
   CLOUDFLARE_AI_GATEWAY_ID: 'carried',
   CLOUDFLARE_ACCOUNT_ID: 'derived',
   CONTROL_PLANE_ADMINS: 'derived',
   DEV_USER_EMAIL: 'ours',
+  // kinu.run's inference on its own account; a self-host routes each user's Workers AI through that user's credential.
+  WORKERS_AI_VIA_BINDING: 'ours',
   OPS_ALERT_EMAIL: 'ours',
   EMAIL_DOMAIN: 'ours',
   CONTROL_PLANE_ACCESS_TEAM_DOMAIN: 'ours',

@@ -16,6 +16,10 @@ const SPAN_ATTR_ACTOR = 'kinu.actor';
 
 const SPAN_ATTR_ACTOR_KIND = 'kinu.actor_kind';
 
+const SPAN_ATTR_TURN = 'kinu.turn';
+
+const SPAN_ATTR_TURN_EPOCH = 'kinu.turn.epoch';
+
 /** Prefixes the root span name: one work unit from two entry points is two measurements. */
 export type InvocationKind = 'fetch' | 'alarm' | 'rpc' | 'websocket';
 
@@ -30,8 +34,24 @@ export interface TracedInvocation {
   span<T>(name: string, fn: (span: ScopedSpan) => T): T;
 }
 
+export interface TurnIdentity {
+  readonly turnId: string;
+  readonly epoch: number;
+}
+
+export interface TurnUnitTimer {
+  end(stamp?: (span: ScopedSpan) => void): void;
+}
+
+export interface TurnTrace {
+  begin(name: string): TurnUnitTimer;
+  atStep(step: number): void;
+  settle(startedAt: number, stamp: (span: ScopedSpan) => void): void;
+}
+
 export interface TurnTracing {
-  turn<T>(fn: (turn: TracedInvocation, span: ScopedSpan) => T): T;
+  admitted(turn: TurnIdentity, startedAt: number, stamp: (span: ScopedSpan) => void): TurnTrace;
+  recovered(turn: TurnIdentity, outcome: string): void;
 }
 
 export interface AgentTracing {
@@ -46,10 +66,17 @@ export interface AgentTracing {
 
 interface RootScope {
   readonly root: string;
-  readonly unit: 'invocation' | 'turn';
   readonly label: string;
   readonly actor: SpanActor;
   readonly stamp: (span: ScopedSpan) => void;
+}
+
+function refuseEscaped(name: string, label: string, unit: 'invocation' | 'turn'): never {
+  throw new KinuError(
+    'unsupported',
+    `span ${JSON.stringify(name)} was opened after ${label} settled: the work escaped its ${unit}, `
+      + 'so the span would claim coverage of time nothing measured',
+  );
 }
 
 /** `isolateGen` is read once here, never per span, so one invocation cannot straddle two gens. */
@@ -81,13 +108,7 @@ export function createAgentTracing(deps: {
 
     const handle: TracedInvocation = {
       span<U>(childName: string, childFn: (span: ScopedSpan) => U): U {
-        if (!live) {
-          throw new KinuError(
-            'unsupported',
-            `span ${JSON.stringify(childName)} was opened after ${scope.label} settled — the work escaped `
-              + `its ${scope.unit}, so the span would claim coverage of time nothing measured`,
-          );
-        }
+        if (!live) refuseEscaped(childName, scope.label, 'invocation');
 
         return open(childName, childFn);
       },
@@ -124,13 +145,64 @@ export function createAgentTracing(deps: {
       const ordinal = invocations;
 
       return scoped({
-        root: `${kind}.${name}`, unit: 'invocation', label: `${kind} invocation ${String(ordinal)}`, actor: deps.actor,
+        root: `${kind}.${name}`, label: `${kind} invocation ${String(ordinal)}`, actor: deps.actor,
         stamp: (span) => { span.setAttribute(SPAN_ATTR_INVOCATION, ordinal); },
       }, fn);
     },
     turns(actor: SpanActor): TurnTracing {
+      const actorId = analyticsDigest(actor.id);
+
+      const record = (name: string, turn: TurnIdentity, startedAt: number, stamp: (span: ScopedSpan) => void): void => {
+        const endedAt = Date.now();
+
+        deps.tracer.span(name, attributes, (span) => {
+          span.setAttribute(SPAN_ATTR_ACTOR, actorId);
+          span.setAttribute(SPAN_ATTR_ACTOR_KIND, actor.kind);
+          span.setAttribute(SPAN_ATTR_TURN, analyticsDigest(turn.turnId));
+          span.setAttribute(SPAN_ATTR_TURN_EPOCH, turn.epoch);
+          span.setAttribute('kinu.started_at_ms', startedAt);
+          span.setAttribute('kinu.duration_ms', Math.max(0, endedAt - startedAt));
+          stamp(span);
+        });
+      };
+
       return {
-        turn: (fn) => scoped({ root: 'turn', unit: 'turn', label: 'the turn', actor, stamp: () => {} }, fn),
+        admitted(turn, startedAt, stamp) {
+          record('turn.admitted', turn, startedAt, stamp);
+          let live = true;
+          let step: number | null = null;
+
+          return {
+            begin(name) {
+              if (!live) refuseEscaped(name, 'the turn', 'turn');
+
+              const startedAtUnit = Date.now();
+              const atStep = step;
+
+              return {
+                end(unitStamp) {
+                  record(name, turn, startedAtUnit, (span) => {
+                    if (atStep !== null) span.setAttribute('kinu.step', atStep);
+                    unitStamp?.(span);
+                  });
+                },
+              };
+            },
+            atStep(next) {
+              step = next;
+            },
+            settle(settleStartedAt, settleStamp) {
+              live = false;
+              record('turn.settled', turn, settleStartedAt, settleStamp);
+            },
+          };
+        },
+        recovered(turn, outcome) {
+          record('turn.settled', turn, Date.now(), (span) => {
+            span.setAttribute('kinu.turn.outcome', outcome);
+            span.setAttribute('kinu.turn.recovered', true);
+          });
+        },
       };
     },
   };

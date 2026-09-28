@@ -1,7 +1,7 @@
 /** Read-only: the agent re-reads this plan every step, so an owner edit would swap it under a running turn. */
 import { Badge } from "@cloudflare/kumo";
 import { CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon } from "@phosphor-icons/react";
-import type { AgentTask, AgentTaskTree, TaskStatus } from "@kinu.run/core";
+import type { AgentTask, AgentTaskTree, TaskStatus, WorkspaceWorkOwner } from "@kinu.run/core";
 
 const STATUS_META = {
   open: { icon: CircleDashedIcon, tone: "p-text-3", label: "Open", weight: "regular", text: "p-text-2" },
@@ -18,7 +18,25 @@ export function isClosedTree(task: AgentTaskTree): boolean {
   return isSettled(task.status) && task.subtasks.every((sub) => isSettled(sub.status));
 }
 
-function TaskRow({ task, depth, owner }: { task: AgentTask; depth: number; owner?: string }) {
+interface TaskOwnership {
+  owner?: WorkspaceWorkOwner;
+  onOpenOwner?: ((name: string, actorId: string) => void | Promise<void>) | undefined;
+}
+
+function OwnerMark({ owner, onOpenOwner }: TaskOwnership) {
+  if (owner === undefined) return null;
+
+  const path = owner.path ?? [];
+
+  if (onOpenOwner === undefined || path.length === 0) return <span className="p-meta p-text-3"> · {owner.title}</span>;
+
+  return (
+    <> · <button type="button" className="p-meta p-accent hover:underline" aria-label={`Open ${owner.title}'s conversation`}
+      onClick={() => void onOpenOwner(path.join("/"), owner.actorId)}>{owner.title}</button></>
+  );
+}
+
+function TaskRow({ task, depth, owner, onOpenOwner }: { task: AgentTask; depth: number } & TaskOwnership) {
   const meta = STATUS_META[task.status];
   const Icon = meta.icon;
 
@@ -35,18 +53,18 @@ function TaskRow({ task, depth, owner }: { task: AgentTask; depth: number; owner
       <code className="p-annotation p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
       <span className={`p-row-text min-w-0 break-words ${meta.text}`}>
         {task.title}
-        {owner && <span className="p-meta p-text-3"> · {owner}</span>}
+        <OwnerMark owner={owner} onOpenOwner={onOpenOwner} />
         {task.note && <span className="block p-meta p-text-3 mt-0.5">{task.note}</span>}
       </span>
     </div>
   );
 }
 
-export function TaskTree({ task, grouped = false, owner }: { task: AgentTaskTree; grouped?: boolean; owner?: string }) {
+export function TaskTree({ task, grouped = false, owner, onOpenOwner }: { task: AgentTaskTree; grouped?: boolean } & TaskOwnership) {
   return (
     <div className={grouped ? "px-3 py-2" : "p-group px-3 py-2"}>
-      <TaskRow task={task} depth={0} owner={owner} />
-      {task.subtasks.map((sub) => <TaskRow key={sub.id} task={sub} depth={1} owner={owner} />)}
+      <TaskRow task={task} depth={0} owner={owner} onOpenOwner={onOpenOwner} />
+      {task.subtasks.map((sub) => <TaskRow key={sub.id} task={sub} depth={1} owner={owner} onOpenOwner={onOpenOwner} />)}
     </div>
   );
 }

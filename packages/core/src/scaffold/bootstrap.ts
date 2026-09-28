@@ -17,7 +17,7 @@ import { readScaffoldFileText } from './surface';
 import { nowMs } from '../utils/date';
 
 export const INITIAL_SCAFFOLD_SOURCE = `\
-// scaffold/agent.js — v0 (initial bootstrap)
+// scaffold/agent.js: v0 (initial bootstrap)
 //
 // This is the agent's mutable agentic loop. It runs inside the codemode
 // sandbox and talks to the host ONLY through the \`host.*\` bridge (the live
@@ -26,7 +26,7 @@ export const INITIAL_SCAFFOLD_SOURCE = `\
 // The default loop delegates to host.defaultInference(), which runs the
 // agent's standard inference (full tools + multi-step) and streams the
 // response to the user. An evolved scaffold can replace this delegation with
-// its own strategy (MCTS, branching heads, reflection passes, …) while still
+// its own strategy (MCTS, branching heads, reflection passes, ...) while still
 // reaching the model + tools via host.llmStream / host.callTool.
 
 async function* run(rt, task) {

@@ -7,10 +7,9 @@
 
 import {
   parseMarkdownFrontmatter,
-  stringifyMarkdownFrontmatter,
   MarkdownFrontmatterError,
 } from '../utils/markdown-frontmatter';
-import type { ParsedSkill, SkillParseResult, SkillSource } from './types';
+import type { SkillParseResult, SkillSource } from './types';
 import * as v from 'valibot';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
@@ -86,21 +85,6 @@ export function parseSkillFile(
     ok: true,
     skill: { name, description, allowed_tools, user_invocable, body: doc.body, ext, source },
   };
-}
-
-export function stringifySkillFile(skill: ParsedSkill): string {
-  const fm: JsonObject = {
-    name: skill.name,
-    description: skill.description,
-  };
-
-  if (skill.allowed_tools.length > 0) fm['allowed-tools'] = skill.allowed_tools;
-
-  if (!skill.user_invocable) fm['user-invocable'] = false;
-
-  for (const [key, value] of Object.entries(skill.ext)) fm[key] = value;
-
-  return stringifyMarkdownFrontmatter({ frontmatter: fm, body: skill.body });
 }
 
 /** Why `name` is not a legal skill name, or null. Shared by the parser and discovery. */

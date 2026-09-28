@@ -1,24 +1,30 @@
 // OpenAI-compatible fetch over the direct Workers AI binding. `Ai.run` stores its options on the shared binding and
 // rereads them after awaiting upstream, so a concurrent call can pick this call's return shape: accept every shape.
-import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import { JsonObjectSchema, jsonObjectElements, readJsonObjectText, type JsonObject } from '../utils/json';
 import { asFetchFunction } from './fetch-shim';
 import { toolCallIdFor } from './tool-call-id';
 import { withRateLimitRetry, type RateLimitRetryOptions } from './rate-limit-retry';
-import { diagnostics, renderCauseChain, toKinuError, tolerate } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, diagnostics, renderCauseChain, settle, toKinuError, tolerate } from '../obs/index';
 import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
 import { createCachedUsageRepair } from './stream-usage-repair';
 import { watchSseTerminal } from './sse-terminal';
-import { REAL_CLOCK } from '../types/clock';
 
-/** Only the fields this adapter reads; everything else travels through untouched. */
-const ChatCompletionRequestSchema = v.looseObject({
+/** The routed fields; a validating parse of the rest copied the transcript. */
+const ChatCompletionRouteSchema = v.object({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
   stream: v.optional(v.boolean(), false),
-  messages: v.optional(v.array(JsonObjectSchema)),
 });
 
-type ChatCompletionRequest = v.InferOutput<typeof ChatCompletionRequestSchema>;
+type ChatCompletionRoute = v.InferOutput<typeof ChatCompletionRouteSchema>;
+
+/** SDK record, or proxy `Headers`. */
+function sessionAffinity(headers: RequestInit['headers']): string | undefined {
+  if (v.is(v.instance(Headers), headers)) return headers.get('x-session-affinity') ?? undefined;
+
+  return v.parse(v.optional(v.record(v.string(), v.string())), headers)?.['x-session-affinity'];
+}
 
 /** `response` and `tool_calls` are nullable because a usage-only streamed delta sets neither. */
 const NativeOutputSchema = v.looseObject({
@@ -70,57 +76,69 @@ export function createDirectWorkersAIFetch(
   binding: DirectWorkersAIRunner,
   retry: RateLimitRetryOptions = {},
 ): typeof globalThis.fetch {
-  return withRateLimitRetry(directWorkersAIFetch(binding), retry);
+  return withRateLimitRetry(asFetchFunction(async (input, init) => {
+    const request = input instanceof Request ? input : null;
+    const text = request === null ? init?.body : await request.text();
+    const started = v.is(v.string(), text) ? startRun(binding, text, request, init) : null;
+
+    if (started === null) return errorResponse(400, 'the request body is not JSON object text');
+
+    if (started === 'unlisted') return settle(Effect.fail(new KinuError('bad_input', 'the request `messages` is not a list of objects')));
+    const { route, running } = started;
+    const startedAt = Date.now();
+
+    return settle(Effect.tryPromise({ try: () => running, catch: (cause) => ({ cause }) }).pipe(
+      Effect.matchEffect({
+        onSuccess: (answer) => Effect.promise(() => (route.stream
+          ? streamedResponse(answer, route.model, startedAt)
+          : completedResponse(answer, route.model))),
+        onFailure: (failed) => {
+          const failure = toKinuError({ doing: `Workers AI binding inference for ${route.model}`, cause: failed.cause, otherwise: 'io' });
+
+          // A cancelled call is the caller's decision, not a provider failure.
+          if (failure.code === 'cancelled') return Effect.die(failed.cause);
+          diagnostics.failure('workers_ai.direct_call_failed', failure, { model: route.model });
+
+          return Effect.succeed(errorResponse(502, renderCauseChain(failure)));
+        },
+      }),
+    ));
+  }), retry);
 }
 
-function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis.fetch {
-  return asFetchFunction(async (input, init) => {
-    // Narrowed to a string URL: workers-types `Request` rejects a `string | URL` union.
-    const request = input instanceof Request ? input : new Request(input instanceof URL ? input.href : input, init);
-    const body = v.parse(JsonObjectSchema, JSON.parse(await request.text()));
-    const route = v.parse(ChatCompletionRequestSchema, body);
+/** Parsed here: the fetch's frame lives until the model answers. */
+function startRun(
+  binding: DirectWorkersAIRunner, text: string, request: Request | null, init: RequestInit | undefined,
+): { readonly route: ChatCompletionRoute; readonly running: Promise<Response | ReadableStream<Uint8Array> | JsonObject> } | 'unlisted' | null {
+  const body = readJsonObjectText(text);
 
-    const options: DirectWorkersAIRunOptions = {
-      signal: request.signal,
-      returnRawResponse: true,
-    };
+  if (body === null) return null;
+  const route = v.parse(ChatCompletionRouteSchema, { model: body.model, stream: body.stream });
+  const messages = jsonObjectElements(body.messages);
 
-    const affinity = request.headers.get('x-session-affinity');
+  if (body.messages !== undefined && messages === null) return 'unlisted';
+  const signal = request?.signal ?? init?.signal;
 
-    if (affinity) options.extraHeaders = { 'x-session-affinity': affinity };
+  const options: DirectWorkersAIRunOptions = {
+    ...(signal !== null && signal !== undefined && { signal }),
+    returnRawResponse: true,
+  };
 
-    const startedAt = Date.now();
-    let answer: Response | ReadableStream<Uint8Array> | JsonObject;
+  const affinity = sessionAffinity(request?.headers ?? init?.headers);
 
-    try {
-      answer = await binding.run(route.model, bindingInputs(body, route), options);
-    } catch (caught) {
-      const failure = toKinuError({
-        doing: `Workers AI binding inference for ${route.model}`,
-        cause: caught,
-        otherwise: 'io',
-      });
+  if (affinity) options.extraHeaders = { 'x-session-affinity': affinity };
+  const inputs = bindingInputs(body, route, messages);
 
-      // A cancelled call is the caller's decision, not a provider failure.
-      if (failure.code === 'cancelled') throw caught;
-      diagnostics.failure('workers_ai.direct_call_failed', failure, { model: route.model });
-
-      return errorResponse(502, renderCauseChain(failure));
-    }
-
-    return route.stream
-      ? streamedResponse(answer, route.model, startedAt)
-      : completedResponse(answer, route.model);
-  });
+  return { route, running: Promise.resolve().then(() => binding.run(route.model, inputs, options)) };
 }
 
 /** Tool-call ids are forwarded as-is: the upstream pairs on equality and re-keying would split pairs.
  *  Null `content` becomes `''` because the binding's message schema rejects null (AiError on tool-only turns). */
-function bindingInputs(body: JsonObject, route: ChatCompletionRequest): JsonObject {
+function bindingInputs(body: JsonObject, route: ChatCompletionRoute, messages: readonly JsonObject[] | null): JsonObject {
   const inputs: JsonObject = { ...body, stream: route.stream };
   delete inputs.model;
 
-  if (route.messages) inputs.messages = route.messages.map(withoutNullContent);
+  if (messages !== null) inputs.messages = messages.map(withoutNullContent);
 
   // The SDK only requests stream usage via `includeUsage`, which workers-ai.ts does not set; without this no tokens are reported.
   if (route.stream && inputs.stream_options === undefined) {
@@ -134,7 +152,6 @@ function withoutNullContent(message: JsonObject): JsonObject {
   return message.content === null ? { ...message, content: '' } : message;
 }
 
-/** A request that asked for a whole completion. */
 async function completedResponse(
   answer: Response | ReadableStream<Uint8Array> | JsonObject,
   model: string,
@@ -151,7 +168,6 @@ async function completedResponse(
   return openAICompletion(v.parse(JsonObjectSchema, JSON.parse(text)), model);
 }
 
-/** A request that asked to stream. */
 async function streamedResponse(
   answer: Response | ReadableStream<Uint8Array> | JsonObject,
   model: string,
@@ -218,7 +234,7 @@ async function sseResponse(
   reader.releaseLock();
 
   return new Response(
-    watchSseTerminal(body, REAL_CLOCK, first.value).pipeThrough(openAIChunkTransform(model)),
+    watchSseTerminal(body, first.value).pipeThrough(openAIChunkTransform(model)),
     { headers: { 'content-type': 'text/event-stream' } },
   );
 }

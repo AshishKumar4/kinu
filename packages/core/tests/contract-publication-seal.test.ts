@@ -1,6 +1,5 @@
 // The publication seal over every surface, not one table: the gate is total over
-// PUBLICATION_SURFACES, so a per-surface exception goes red. Which of the settle path's writes
-// are publication is the publication-egress gate's classification (scripts/publication-egress.ts).
+// PUBLICATION_SURFACES, so a per-surface exception goes red.
 // Not asserted: that each live writer calls the gate.
 // Specified by docs/EXPLORATION.md — "The publication seal" and "The records
 // store".

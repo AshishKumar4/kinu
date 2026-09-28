@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { stepCountIs, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
-import { createTestRuntime, present, unobservedSpend } from '@kinu.run/test-utils';
+import { createTestRuntime, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
@@ -53,7 +53,7 @@ function newTurn(): AgentOrchestrator {
   initEventsHubTables(sql);
 
   return new AgentOrchestrator({
-    host, engine: new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, enabled: false }),
+    host, engine: new EvolutionEngine(rt, stores.history, { enabled: false }),
     eventLog: new EventLog(sql, rt.actor),
   });
 }
@@ -523,7 +523,7 @@ describe('execution-recovery detection (the failure ledger\'s second reader)', (
     expect(recovery.tool).toBe('shell');
     expect(recovery.failures).toBe(CONSECUTIVE_FAILURES_BEFORE_STEER);
     expect(recovery.failedArgs).toContain('npm test');
-    expect(recovery.failedArgs.length).toBeLessThanOrEqual(201);
+    expect(recovery.failedArgs.length).toBeLessThanOrEqual(203);
     expect(recovery.succeededArgs).toContain('bun test');
     expect(recovery.failedSignature.startsWith('shell')).toBe(true);
     expect(clean(steering, { command: 'bun lint' })).toBeNull();

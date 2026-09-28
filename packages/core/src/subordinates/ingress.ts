@@ -1,5 +1,5 @@
 /** Report ingress for durable and task-lifetime children: a live waiter consumes its answer;
- *  every other admitted report enters the parent event rail. */
+ *  every other admitted report enters the parent event rail, except an evolution helper's. */
 
 import type { EventLog } from '../events/hub/log';
 import type { VFS } from '../types/primitives';
@@ -13,6 +13,7 @@ import {
   type SubordinateReportOrigin,
 } from './support';
 import type { SubordinateRosterStore } from './roster';
+import { temporaryRunSettles } from './temporary';
 import type { TemporaryAgentPort } from '../types/subordinates';
 
 export interface SubordinateEventInput {
@@ -50,6 +51,7 @@ export interface SubordinateIngressDeps {
   transaction<T>(body: () => T): T;
   announce(report: AdmittedSubordinateReport): void;
   onAdmitted(): void;
+  onEvolutionAnswer(): void;
   temporary?: TemporaryAgentPort;
 }
 
@@ -70,16 +72,32 @@ export async function receiveSubordinateEvent(
     return { id: '', disposition: 'not_awaited' };
   }
 
-  // Before the dismissal check: a blocked waiter still wants the answer. The handoff rides as
-    // trailing sections because the waiter receives one string.
+  // Before the dismissal check: a blocked waiter still wants the answer, handoff as trailing text.
+  const answer = normalizeReportContent(input.content)
+    + (input.handoff ? renderSubordinateHandoff(input.handoff) : '');
+
   if (deps.temporary?.settle({
     name: input.fromSubordinate,
     taskEventId: subordinate.taskEventId,
     status: input.status,
-    content: normalizeReportContent(input.content)
-      + (input.handoff ? renderSubordinateHandoff(input.handoff) : ''),
+    content: answer,
     origin: input.origin,
   })) {
+    return { id: '', disposition: 'admitted' };
+  }
+
+  // A rail row would wake the parent in the helper's mode, with the lane's proposal in its context.
+  if (subordinate.createdBy === 'evolution') {
+    if (subordinate.status === 'dismissed' || !temporaryRunSettles(input)) {
+      return { id: '', disposition: 'not_awaited' };
+    }
+
+    deps.transaction(() => {
+      deps.roster.helpers.storeAnswer(input.fromSubordinate, input.status === 'blocked' ? 'blocked' : 'completed', answer);
+      deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now);
+    });
+    deps.onEvolutionAnswer();
+
     return { id: '', disposition: 'admitted' };
   }
 

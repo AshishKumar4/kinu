@@ -4,10 +4,8 @@ import { describe, test, expect } from 'bun:test';
 import { diversityAngle, siblingAngles, diversityDirective } from '../src/mcts/diversity';
 import {
   explorePrompt,
-  reflectionPrompt,
   type ExplorePromptInput,
 } from '../src/mcts/explore-prompt';
-import { EVIDENCE_BUDGETS } from '../src/utils/evidence-window';
 
 describe('diversity angles', () => {
   test('single branch gets no siblings and an empty directive', () => {
@@ -102,29 +100,5 @@ describe('explorePrompt — the one question every substrate asks', () => {
     expect(prompt.system).toContain('read-only planning approach');
     expect(prompt.system).not.toContain('code block');
     expect(prompt.user).toContain('Do not implement it');
-  });
-});
-
-describe('reflectionPrompt', () => {
-  test('names the attempt it is reflecting on', () => {
-    const prompt = reflectionPrompt('fix the parser', 'tried a regex, it looped');
-    expect(prompt).toContain('Task: fix the parser');
-    expect(prompt).toContain('Attempt: tried a regex, it looped');
-    expect(prompt).toContain('One sentence.');
-  });
-
-  test('a substrate with no trace table gets no empty Attempt heading', () => {
-    const prompt = reflectionPrompt('fix the parser', '');
-    expect(prompt).not.toContain('Attempt:');
-    expect(prompt).toContain('Task: fix the parser');
-  });
-
-  test('a long attempt is bounded at both ends, not truncated to its opening', () => {
-    // A head-only clamp would hide how the attempt ended.
-    const attempt = `START${'x'.repeat(EVIDENCE_BUDGETS.reflection * 2)}FAILED HERE`;
-    const prompt = reflectionPrompt('t', attempt);
-    expect(prompt).toContain('START');
-    expect(prompt).toContain('FAILED HERE');
-    expect(prompt.length).toBeLessThan(attempt.length);
   });
 });

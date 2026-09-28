@@ -152,6 +152,20 @@ export function evalTargetVerdict(origin: string): EvalTargetVerdict {
   };
 }
 
+/**
+ * The public origin the deployment serving `target` is configured with (`CLI_PUBLIC_ORIGIN`), which is what it tells a
+ * person to type: a deployment's own origin, since each wrangler environment names itself, and production's for a
+ * loopback dev server, which serves the top-level configuration. A run takes it from the one origin it targets, so a
+ * staging run expects staging and a production run production.
+ */
+export function deploymentPublicOrigin(target: string): string {
+  const verdict = evalTargetVerdict(target);
+
+  if (verdict.kind === 'refused') throw new Error(verdict.reason);
+
+  return verdict.why === 'deployment' ? verdict.origin : EVAL_DEPLOYMENT_ORIGIN;
+}
+
 export type EvalModelEndpointVerdict =
   | { readonly kind: 'checked'; readonly target: EvalTargetVerdict }
   /** Fronts a model and no Kinu deployment, so there is no target to rule on. */
@@ -228,7 +242,7 @@ export function resolveEvalIdentity(env: EnvSource = ambientByName(Object.values
     return {
       kind: 'absent',
       reason: `no eval credential. Sign the isolated ${EVAL_SERVICE_ACCOUNT} session into ${origin} `
-        + `or export ${EVAL_IDENTITY_ENV.token} — a person's signed-in session is never borrowed, `
+        + `or export ${EVAL_IDENTITY_ENV.token}: a person's signed-in session is never borrowed, `
         + 'so without it every live suite skips.',
     };
   }

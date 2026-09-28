@@ -7,7 +7,8 @@
  * memory-limit resets (`do.isolate.oom_reported`), and the storage-reset string (`do.storage.bytes`).
  */
 
-import { diagnostics, renderCauseChain, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, renderCauseChain, settle, toKinuError } from '../obs/index';
 
 /** Which platform failure a call hit; `null` means none. */
 export type DOTransientClass =
@@ -59,7 +60,6 @@ export function classifyTransientDO(input: { cause: unknown }): DOTransientClass
   return null;
 }
 
-/** Total attempts. */
 const MAX_ATTEMPTS = 3;
 
 /** Full-jitter exponential backoff, in the SDK's shape; short because callers are on the request path. */
@@ -68,21 +68,22 @@ const BASE_DELAY_MS = 60;
 /** Run an idempotent cross-DO call, retrying only the platform transients above; other errors and
  *  exhausted transients throw unchanged. `operation` names the call in the retry log. */
 export async function retryTransientDO<T>(operation: string, call: () => Promise<T>): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await call();
-    } catch (err) {
-      const transient = classifyTransientDO({ cause: err });
+  return settle(retried(operation, call, 1));
+}
 
-      if (transient === null || attempt >= MAX_ATTEMPTS) throw err;
-      diagnostics.failure('do_rpc.transient_retry', toKinuError({
-        doing: `an idempotent Durable Object call (${operation})`,
-        cause: err,
-        otherwise: 'io',
-      }), { operation, transient, attempt, attempts: MAX_ATTEMPTS });
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, Math.floor(Math.random() * 2 ** attempt * BASE_DELAY_MS));
-      await promise;
-    }
-  }
+function retried<T>(operation: string, call: () => Promise<T>, attempt: number): Effect.Effect<T> {
+  return Effect.tryPromise({ try: call, catch: (cause) => ({ cause }) }).pipe(Effect.catch((failed) => {
+    const transient = classifyTransientDO(failed);
+
+    if (transient === null || attempt >= MAX_ATTEMPTS) return Effect.die(failed.cause);
+    diagnostics.failure('do_rpc.transient_retry', toKinuError({
+      doing: `an idempotent Durable Object call (${operation})`,
+      cause: failed.cause,
+      otherwise: 'io',
+    }), { operation, transient, attempt, attempts: MAX_ATTEMPTS });
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, Math.floor(Math.random() * 2 ** attempt * BASE_DELAY_MS));
+
+    return Effect.flatMap(Effect.promise(() => promise), () => retried(operation, call, attempt + 1));
+  }));
 }

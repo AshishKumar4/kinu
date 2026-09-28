@@ -74,6 +74,7 @@ export const EMBEDDER_SOURCE = 'packages/cf-backend/src/runtime.ts';
 const WorkerSchema = v.object({
   name: v.optional(v.string()),
   account_id: v.optional(v.string()),
+  compatibility_date: v.optional(v.string()),
   routes: v.optional(v.array(v.object({
     pattern: v.string(),
     custom_domain: v.optional(v.boolean()),
@@ -132,7 +133,7 @@ interface NamedContainer extends Container {
 }
 
 /** What one environment deploys, each container under its application's name. */
-type DeployedConfig = Omit<WorkerConfig, 'containers'> & { readonly containers?: readonly NamedContainer[] };
+export type DeployedConfig = Omit<WorkerConfig, 'containers'> & { readonly containers?: readonly NamedContainer[] };
 
 /**
  * The application a container runs under, named as Wrangler names it (config validation, wrangler 4.129): its own
@@ -172,9 +173,9 @@ function environmentConfig(config: v.InferOutput<typeof WranglerConfigSchema>, e
     throw new Error(`${WRANGLER_CONFIG} env.staging names no routes of its own, so it would inherit production's`);
   }
 
-  const { name, account_id: accountId, assets, migrations, triggers } = production;
+  const { name, account_id: accountId, compatibility_date: compatibilityDate, assets, migrations, triggers } = production;
 
-  const inherited = Object.fromEntries(Object.entries({ account_id: accountId, assets, migrations, triggers })
+  const inherited = Object.fromEntries(Object.entries({ account_id: accountId, compatibility_date: compatibilityDate, assets, migrations, triggers })
     .filter(([, value]) => value !== undefined));
 
   return named({ ...inherited, name: `${name ?? 'worker'}-staging`, ...staging });
@@ -1251,17 +1252,22 @@ function draftsFor(
   return drafts;
 }
 
+/** What wrangler.jsonc deploys for `environment`, read as Wrangler reads it. */
+export function deployedConfig(environment: InfraEnvironment, configPath = WRANGLER_CONFIG): DeployedConfig {
+  return environmentConfig(parseJsonc(
+    readFileSync(isAbsolute(configPath) ? configPath : join(REPO, configPath), 'utf8'),
+    WranglerConfigSchema,
+    configPath,
+  ), environment);
+}
+
 /** The whole inventory of the Worker wrangler.jsonc declares for `environment`. */
 export function deriveInfrastructure(
   environment: InfraEnvironment = 'production',
   configPath = WRANGLER_CONFIG,
   geometry = vectorizeGeometry(),
 ): Infrastructure {
-  const config = environmentConfig(parseJsonc(
-    readFileSync(isAbsolute(configPath) ? configPath : join(REPO, configPath), 'utf8'),
-    WranglerConfigSchema,
-    configPath,
-  ), environment);
+  const config = deployedConfig(environment, configPath);
 
   const worker = workerRow(config);
   const optionality = new Map(envFields().map((field) => [field.name, field.optional]));

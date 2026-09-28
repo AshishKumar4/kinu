@@ -12,7 +12,7 @@ import {
   type DeviceFrame, type FakeDaemon, type TestUserDO,
 } from './helpers/user-do';
 import type { UserCaller } from '@kinu.run/core';
-import { createHubDeviceTransport, REAL_CLOCK } from '@kinu.run/core';
+import { createHubDeviceTransport } from '@kinu.run/core';
 
 const WORKSPACE = 'workspace-a';
 
@@ -152,7 +152,6 @@ describe('two daemons connected at once', () => {
       caller: async () => fleet.workspace,
       agentName: WORKSPACE,
       cliCwd: () => null,
-      clock: REAL_CLOCK,
     });
 
     await expect(transport.rpc('exec', ['make'])).rejects.toMatchObject({ code: 'bad_input' });
@@ -291,7 +290,7 @@ describe('what the model is told', () => {
     const status = await fleet.userDO.deviceRuntimeStatus(fleet.workspace);
 
     // Refusal names the roster's connected machines in roster order, taken from the snapshot.
-    const expected = `name the machine this command runs on — connected: ${
+    const expected = `name the machine this command runs on: connected: ${
       connectedDevices(status.devices).map((d) => `${d.name} (${d.os})`).join(', ')
     }. Pass it as device: "<name>".`;
 

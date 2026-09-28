@@ -35,7 +35,7 @@ import {
   listBackgroundJobs, retryBackgroundJob, type BackgroundJobControl,
 } from '../src/read-models/background-jobs';
 import {
-  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getShellApprovalMode,
+  getAlwaysActiveSkills, getEvolutionConfig, getShellApprovalMode,
   setAlwaysActiveSkills, setEvolutionConfig, setModel, setReasoningEffort, setShellApprovalMode,
 } from '../src/read-models/config-plane';
 import { getEvolutionChangelog, markChangelogSeen } from '../src/read-models/evolution-views';
@@ -325,9 +325,11 @@ describe('agent status', () => {
     const recorded = transcript.read('a');
 
     if (recorded === null) throw new Error('the seeded user entry must be in the transcript');
+    // The tool row is walked but not shown: a reader sizing unread history counts both.
     expect(await getChatHistoryPage(transcript)).toEqual({
       status: 'end',
       items: [{ id: 'a', role: 'user', content: 'hello', createdAt: recorded.recordedAt }],
+      walked: 2,
     });
     w.db.close();
   });
@@ -355,6 +357,28 @@ describe('agent status', () => {
       content: '9 head(s) across 1 fork run(s)…', createdAt: recorded.recordedAt,
       metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
     }]);
+    w.db.close();
+  });
+
+  // 2026-09-26: a chat reserves the height of what it has not read, sized from the stored count; a page says how
+  // many entries it spanned, tool rows included, and never counts the row it only peeked to know there is more.
+  test('a page reports the entries it spanned, up to its oldest shown row', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    const toolRow = { role: 'tool' as const, content: [{ type: 'tool-result' as const, toolCallId: 'c', toolName: 'probe', output: { type: 'text' as const, value: 'x' } }] };
+
+    await history.record(CHAT_SESSION_ID, { id: 'u1', parentId: null, origin: 'input', message: { role: 'user', content: 'one' } });
+    await history.record(CHAT_SESSION_ID, { id: 't1', parentId: 'u1', origin: 'output', message: toolRow });
+    await history.record(CHAT_SESSION_ID, { id: 'a1', parentId: 't1', origin: 'output', message: { role: 'assistant', content: 'two' } });
+    await history.record(CHAT_SESSION_ID, { id: 't2', parentId: 'a1', origin: 'output', message: toolRow });
+    await history.record(CHAT_SESSION_ID, { id: 'u2', parentId: 't2', origin: 'input', message: { role: 'user', content: 'three' } });
+
+    // Newest first: u2, t2, a1 (the page's two rows), then the peeked t1, u1.
+    const page = await getChatHistoryPage(transcript, { limit: 2 });
+
+    expect(page).toMatchObject({ status: 'more', walked: 3 });
+    expect(page.items.map((entry) => entry.id)).toEqual(['a1', 'u2']);
+    expect(await getChatHistoryPage(transcript, { limit: 9 })).toMatchObject({ status: 'end', walked: 5 });
     w.db.close();
   });
 
@@ -456,14 +480,14 @@ describe('agent status', () => {
     const sql = makeSql(db);
     // This UPDATE stands in for a real usage history on the crafted_tools row.
     await rt.craftStore.create({
-      name: 'summarize', description: 'sum', params: null, code: 'x', scope: 'local',
+      name: 'summarize', description: 'sum', code: 'x',
     });
     void sql`UPDATE crafted_tools SET score = 0.9, uses = 7 WHERE name = 'summarize'`;
 
     const list = getToolList(sql, rt.craftStore);
     expect(list.builtIn.length).toBeGreaterThan(0);
     expect(list.crafted).toEqual([
-      { name: 'summarize', description: 'sum', scope: 'local', qualityScore: 0.9, usageCount: 7 },
+      { name: 'summarize', description: 'sum', qualityScore: 0.9, usageCount: 7 },
     ]);
     // An unscored tool reads as the neutral prior, never as zero.
     void sql`UPDATE crafted_tools SET score = 0.5, uses = 0 WHERE name = 'summarize'`;
@@ -565,7 +589,7 @@ describe('executor file plane', () => {
     await rt.storage.vfs.writeFile('big', 'z'.repeat(512 * 1024 + 10));
 
     expect(await readExecutorFile(r, 'workspace', 'dir')).toEqual({ error: 'path is a directory' });
-    expect(await readExecutorFile(r, 'workspace', 'bin')).toEqual({ error: 'binary file — not previewable' });
+    expect(await readExecutorFile(r, 'workspace', 'bin')).toEqual({ error: 'binary file, not previewable' });
     // A plane without ranged read (seven base VFS methods) refuses an over-budget preview and names
     // the download.
     const refused = await readExecutorFile(r, 'workspace', 'big');
@@ -737,19 +761,8 @@ describe('config plane', () => {
     expect(config.getModel()).toBe('openai/gpt-5.1');
     expect(invalidations).toBe(1);
 
-    // The provider's own message is the CAUSE, not spliced into the wrapper.
-    expect(() => setModel(deps, 'nonsense')).toThrow('setModel(nonsense) failed');
-
-    const failure = (() => {
-      try {
-        setModel(deps, 'nonsense');
-
-        return null;
-      } catch (error) { return error; }
-    })();
-
-    expect(failure instanceof Error && failure.cause instanceof Error ? failure.cause.message : null)
-      .toBe('unknown provider: nonsense');
+    // The provider's own message reaches the caller unwrapped.
+    expect(() => setModel(deps, 'nonsense')).toThrow('unknown provider: nonsense');
     // A rejected spec neither stores nor invalidates.
     expect(config.getModel()).toBe('openai/gpt-5.1');
     expect(invalidations).toBe(1);
@@ -779,14 +792,6 @@ describe('config plane', () => {
     db.close();
   });
 
-  test('the MCTS view is stored overrides over engine defaults', () => {
-    const { db, config } = workspace();
-    const defaults = getMctsConfig(config);
-    config.setMctsOverrides({ budget: 3 });
-    expect(getMctsConfig(config)).toEqual({ ...defaults, maxIterations: 3 });
-    db.close();
-  });
-
   test('an evolution write answers with the EFFECTIVE config, clamps included', () => {
     const { db, config } = workspace();
     const effective = setEvolutionConfig(config, { autoPromoteScaffold: true, gepaEvalBudget: 1_000_000 });
@@ -800,8 +805,8 @@ describe('config plane', () => {
 describe('changelog view', () => {
   test('unseen counts against the stored watermark, and marking seen zeroes it', () => {
     const { db, sql, actor, config } = workspace();
-    void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
-      VALUES ('summarize', 'sum', NULL, 'x', 'local', ${Date.now()}, ${Date.now()})`;
+    void sql`INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
+      VALUES ('summarize', 'sum', 'x', ${Date.now()}, ${Date.now()})`;
 
     expect(getEvolutionChangelog(sql, actor).entries).toHaveLength(1);
     expect(getEvolutionChangelog(sql, actor).unseenCount).toBe(1);

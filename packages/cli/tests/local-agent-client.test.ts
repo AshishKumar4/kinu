@@ -131,7 +131,7 @@ function setup(model: LanguageModel, profileAuthority: CliProfileSource = async 
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
-    craftedToolCount: 0, searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
+    searchNodeCount: 0, memorySize: 0, createdAt: Date.now(),
   };
 
   const client = new LocalAgentClient({
@@ -166,7 +166,7 @@ function openPersistentClient(
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
-    craftedToolCount: 0, searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
+    searchNodeCount: 0, memorySize: 0, createdAt: Date.now(),
   };
 
   return new LocalAgentClient({
@@ -628,7 +628,7 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
     await client.connect();
     const { executeSlashCommand } = await import('../src/slash-commands');
 
-    rt.craftStore.create({ params: null, name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1', scope: 'local' });
+    rt.craftStore.create({ name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1' });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                    VALUES (${rt.actor.actorId}, 'favorite_shell', '"fish"', 1.0, NULL, ${Date.now() - 1000})`;
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
@@ -679,30 +679,24 @@ describe('/takes — Alternate Takes over a real local client', () => {
     client.subscribe((event) => events.push(event));
     await client.connect();
     const { executeSlashCommand } = await import('../src/slash-commands');
-    const { initSearchTables, initAlternateTakesTable, captureAlternateTakes } = await import('@kinu.run/core');
+    const { initAlternateTakesTable, recordBranchTakeSet } = await import('@kinu.run/core');
 
     const empty = await executeSlashCommand(client, '/takes');
 
     if (empty.kind !== 'text') throw new Error(`expected text outcome, got ${empty.kind}`);
     expect(empty.text).toContain('No alternate takes yet');
 
-    initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
-        VALUES (${rt.actor.actorId}, 'r', 'win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
-        VALUES (${rt.actor.actorId}, 'r', 'alt', 'choose a plan', 'B', 'plan B instead', 0.84, 2, 1, 'open')`;
-    // Seeded before send(), so stamped past any turn's start: the claim purges unclaimed captures older than its turn.
-    captureAlternateTakes(rt.storage.sql, rt.actor, {
-      rootId: 'r', task: 'choose a plan', winnerId: 'win', epsilon: 0.1, now: Number.MAX_SAFE_INTEGER,
-    });
     await client.send('solve it');
+    // A steer branch's take set on the turn that answered.
+    recordBranchTakeSet(rt.storage.sql, rt.actor, {
+      task: 'choose a plan', turnId: 'turn-answered', sessionId: 'default', liveText: 'plan A wins', branchText: 'plan B instead',
+    });
 
     const set = await client.latestTakes();
 
-    if (set === null || set.turnId === null) throw new Error('expected alternate takes bound to the just-run turn');
-    expect(set.turnId.length).toBeGreaterThan(0);
-    expect(set.candidates.map((c) => c.nodeId)).toEqual(['win', 'alt']);
+    if (set === null || set.turnId === null) throw new Error('expected alternate takes bound to a turn');
+    expect(set.candidates.map((c) => c.text)).toEqual(['plan A wins', 'plan B instead']);
 
     const listing = await executeSlashCommand(client, '/takes');
 
@@ -719,10 +713,6 @@ describe('/takes — Alternate Takes over a real local client', () => {
 
     if (row === undefined) throw new Error('expected a take_pick outcome row');
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', turn_id: set.turnId });
-    const altNode = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0];
-
-    if (altNode === undefined) throw new Error('expected the sibling take node');
-    expect(altNode.status).toBe('terminal');
 
     const deadline = Date.now() + 2000;
 

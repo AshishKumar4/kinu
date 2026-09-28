@@ -24,6 +24,18 @@ async function meterRuntime(entry: string): Promise<Miniflare> {
   } }] });
 }
 
+/** Sends one request and requires its status. No deadline: workerd itself ends a worker that hangs,
+ *  answering 500 with the hang named (measured 2026-09-28 on this Miniflare: a stalled stream in 2 ms),
+ *  and that answer is what the failure prints. */
+async function answered(runtime: Miniflare, status: number, url: string, init?: Parameters<Miniflare['dispatchFetch']>[1]): Promise<void> {
+  const response = await runtime.dispatchFetch(url, init);
+  const body = await response.text();
+
+  if (response.status !== status) {
+    throw new Error(`${init?.method ?? 'GET'} ${url} answered ${String(response.status)}, not ${String(status)}: ${body}`);
+  }
+}
+
 test('the R2 transport meter preserves streaming bodies and includes a failed PUT before its retry', async () => {
   const root = mkdtempSync(join(tmpdir(), DEVBOX_SCRATCH_PREFIX));
   scratch.push(root);
@@ -68,8 +80,8 @@ test('the R2 transport meter preserves streaming bodies and includes a failed PU
   const runtime = await meterRuntime(entry);
 
   try {
-    expect((await runtime.dispatchFetch('https://meter.invalid/?fail', { method: 'PUT', body: 'hello', headers: { 'content-length': '5' }, signal: AbortSignal.timeout(2000) })).status).toBe(502);
-    expect((await runtime.dispatchFetch('https://meter.invalid/', { method: 'PUT', body: 'hello', headers: { 'content-length': '5' }, signal: AbortSignal.timeout(2000) })).status).toBe(200);
+    await answered(runtime, 502, 'https://meter.invalid/?fail', { method: 'PUT', body: 'hello', headers: { 'content-length': '5' } });
+    await answered(runtime, 200, 'https://meter.invalid/', { method: 'PUT', body: 'hello', headers: { 'content-length': '5' } });
     const result = await (await runtime.dispatchFetch('https://meter.invalid/')).json();
     expect(result).toMatchObject({ body: 'hello', totals: { objectsPut: 2, bytesPut: 10, errors: [] } });
   } finally {
@@ -131,7 +143,6 @@ test('the installed SDK R2 proxy publishes single PUTs and multipart with the me
       const send = async (path: string, method: string, bytes?: Uint8Array) => {
         const response = await runtime.dispatchFetch(`http://r2.internal/BUCKET/${path}${mode}`, {
           method, body: bytes, headers: bytes === undefined ? {} : { 'content-length': String(bytes.byteLength), 'x-probe-length': String(bytes.byteLength) },
-          signal: AbortSignal.timeout(2000),
         });
 
         if (!response.ok) throw new Error(`SDK proxy ${response.status}: ${await response.text()}`);
@@ -205,9 +216,9 @@ test('the bench proxy flushes an under-threshold operation on success and failur
   const runtime = await meterRuntime(entry);
 
   try {
-    expect((await runtime.dispatchFetch('https://meter.invalid/', { method: 'PUT', body: 'hello', signal: AbortSignal.timeout(2000) })).status).toBe(200);
+    await answered(runtime, 200, 'https://meter.invalid/', { method: 'PUT', body: 'hello' });
     expect(await (await runtime.dispatchFetch('https://meter.invalid/')).json()).toMatchObject({ put: 1 });
-    expect((await runtime.dispatchFetch('https://meter.invalid/?fail', { method: 'PUT', body: 'hello', signal: AbortSignal.timeout(2000) })).status).toBe(502);
+    await answered(runtime, 502, 'https://meter.invalid/?fail', { method: 'PUT', body: 'hello' });
     expect(await (await runtime.dispatchFetch('https://meter.invalid/')).json()).toMatchObject({ put: 2 });
   } finally {
     await runtime.dispose();

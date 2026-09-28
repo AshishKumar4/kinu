@@ -7,7 +7,8 @@ import { authCacheKey, cloneModelInfos, settleModelList, StaleModelList } from '
 import { listModelsDevProviderModels } from './models-dev';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from './cloudflare-oauth';
 import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
-import { toKinuError } from "../obs/index";
+import { Effect } from 'effect';
+import { settle, toKinuError } from "../obs/index";
 import * as v from 'valibot';
 
 export const MY_GATEWAY_PROVIDER_ID = 'my-gateway';
@@ -54,47 +55,52 @@ export function createMyGatewayProvider(): ModelProvider {
       'Connect Cloudflare and select an AI Gateway in User settings to use your own gateway (BYOK provider keys or Unified Billing credits).',
 
     async listModels(deps): Promise<ModelInfo[]> {
-      const auth = await deps.getAuth(CLOUDFLARE_AI_GATEWAY_CRED_KEY);
+      return settle(Effect.gen(function* () {
+        const auth = yield* Effect.promise(() => deps.getAuth(CLOUDFLARE_AI_GATEWAY_CRED_KEY));
 
-      if (!auth?.baseURL) return [];
-      const cacheKey = authCacheKey(auth);
-      const cached = catalogCache.get(cacheKey);
+        const baseURL = auth?.baseURL;
 
-      if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cloneModelInfos(cached.models);
+        if (auth === null || !baseURL) return [];
+        const cacheKey = authCacheKey(auth);
+        const cached = catalogCache.get(cacheKey);
 
-      const discovered = await servableProviderSlugs(auth.baseURL, auth.headers, deps);
+        if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cloneModelInfos(cached.models);
 
-      if (!discovered.authoritative) {
-        // A 429/5xx said nothing about which providers are served: keep the last catalog shown, else fail loudly.
-        if (cached) return cloneModelInfos(cached.models);
-        throw toKinuError({
-          doing: `reading your AI Gateway's servable providers (${discovered.reason})`,
-          cause: new Error(discovered.reason),
-          otherwise: 'unavailable',
-        });
-      }
+        const discovered = yield* Effect.promise(() => servableProviderSlugs(baseURL, auth.headers, deps));
 
-      const models: ModelInfo[] = [];
-      const stale: StaleModelList[] = [];
+        if (!discovered.authoritative) {
+          // A 429/5xx said nothing about which providers are served: keep the last catalog, else fail loudly.
+          if (cached) return cloneModelInfos(cached.models);
 
-      for (const slug of discovered.slugs) {
-        const catalogId = GATEWAY_SLUG_TO_CATALOG.get(slug);
+          return yield* Effect.fail(toKinuError({
+            doing: `reading your AI Gateway's servable providers (${discovered.reason})`,
+            cause: new Error(discovered.reason),
+            otherwise: 'unavailable',
+          }));
+        }
 
-        if (!catalogId) continue; // slug the OpenAI-compat surface can't serve
+        const models: ModelInfo[] = [];
+        const stale: StaleModelList[] = [];
 
-        const listed = await settleModelList(listModelsDevProviderModels(catalogId, deps));
+        for (const slug of discovered.slugs) {
+          const catalogId = GATEWAY_SLUG_TO_CATALOG.get(slug);
 
-        if (listed.stale !== null) stale.push(listed.stale);
+          if (!catalogId) continue; // slug the OpenAI-compat surface can't serve
 
-        for (const model of listed.models) models.push({ ...model, id: `${catalogId}/${model.id}` });
-      }
+          const listed = yield* Effect.promise(() => settleModelList(listModelsDevProviderModels(catalogId, deps)));
 
-      const [first] = stale;
+          if (listed.stale !== null) stale.push(listed.stale);
 
-      if (first !== undefined) throw new StaleModelList(models, { reason: first.reason, cause: first.cause });
-      catalogCache.set(cacheKey, { at: Date.now(), models });
+          for (const model of listed.models) models.push({ ...model, id: `${catalogId}/${model.id}` });
+        }
 
-      return cloneModelInfos(models);
+        const [first] = stale;
+
+        if (first !== undefined) return yield* Effect.fail(new StaleModelList(models, { reason: first.reason, cause: first.cause }));
+        catalogCache.set(cacheKey, { at: Date.now(), models });
+
+        return cloneModelInfos(models);
+      }));
     },
 
     createModel(modelId, deps): LanguageModel {

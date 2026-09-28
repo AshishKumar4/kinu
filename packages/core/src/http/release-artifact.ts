@@ -26,19 +26,17 @@ function metadata(object: ReleaseArtifactObject): Headers {
   });
 }
 
-export async function serveReleaseArtifact(
-  request: Request,
-  store: ReleaseArtifactStore | undefined,
-  key: string,
-): Promise<Response> {
-  if (store === undefined) return err(404, 'This deployment publishes no worker release artifacts.');
+const NO_ARTIFACTS = 'This deployment publishes no worker release artifacts.';
 
-  if (request.method === 'HEAD') {
-    const head = await store.head(key);
+export async function releaseArtifactHead(store: ReleaseArtifactStore | undefined, key: string): Promise<Response> {
+  if (store === undefined) return err(404, NO_ARTIFACTS);
+  const head = await store.head(key);
 
-    return head === null ? err(404, 'No such release artifact.') : new Response(null, { headers: metadata(head) });
-  }
+  return head === null ? err(404, 'No such release artifact.') : new Response(null, { headers: metadata(head) });
+}
 
+export async function releaseArtifact(store: ReleaseArtifactStore | undefined, key: string): Promise<Response> {
+  if (store === undefined) return err(404, NO_ARTIFACTS);
   const object = await store.get(key);
 
   if (object === null || object.body === null || object.body === undefined) {

@@ -46,7 +46,7 @@ export interface RosterFrame {
   counts: RosterCounts;
 }
 
-const ACTIVE = 'w.archived_at IS NULL AND w.delete_pending = 0 AND w.create_pending = 0';
+const ACTIVE = 'w.delete_pending = 0 AND w.create_pending = 0';
 
 const FROM = `FROM user_workspaces w
   LEFT JOIN workspace_overviews o ON o.name = w.name`;
@@ -57,14 +57,13 @@ const BUCKET = `CASE WHEN ${DECISIONS} > 0 THEN 'needs' WHEN o.activity IS NULL 
   WHEN o.activity = 'working' THEN 'working' ELSE 'idle' END`;
 
 const ENTRY = `SELECT w.name, w.display_name AS displayName, w.created_at AS createdAt, w.last_visited AS lastVisited,
-  w.archived_at AS archivedAt, o.overview, COALESCE(o.decisions, 0) AS decisions`;
+  o.overview, COALESCE(o.decisions, 0) AS decisions`;
 
 const RosterRowSchema = v.object({
   name: v.string(),
   displayName: v.string(),
   createdAt: v.number(),
   lastVisited: v.number(),
-  archivedAt: v.nullable(v.number()),
   overview: v.nullable(v.string()),
   decisions: v.number(),
 });
@@ -100,20 +99,12 @@ function decodeRosterCursor(cursor?: string | null): { v: number; n: string } | 
   return parsed.output;
 }
 
-function clampRosterLimit(limit?: number): number {
-  if (limit === undefined) return WORKSPACE_LIST_LIMIT;
-
-  if (!Number.isSafeInteger(limit) || limit < 1) throw new KinuError('bad_input', 'Workspace roster limit must be a positive integer.');
-
-  return Math.min(limit, WORKSPACE_LIST_LIMIT);
-}
-
 /** A tile a later schema cannot read shows as none until the workspace pushes again. */
 function rosterEntry(row: RosterRow): RosterEntry {
   const stored = row.overview === null ? null : v.safeParse(WorkspaceOverviewSchema, JSON.parse(row.overview));
 
   return {
-    name: row.name, displayName: row.displayName, createdAt: row.createdAt, lastVisited: row.lastVisited, archivedAt: row.archivedAt,
+    name: row.name, displayName: row.displayName, createdAt: row.createdAt, lastVisited: row.lastVisited,
     overview: stored?.success === true ? { ...stored.output, decisionsWaiting: row.decisions } : null,
     decisions: row.decisions,
   };
@@ -170,7 +161,7 @@ function pageRows(sql: SqlExec, query: RosterQuery, cursor: { v: number; n: stri
 
 /** A chunk short of matches reads on past its last row. */
 export function rosterPage(sql: SqlExec, query: RosterQuery = {}): RosterPage {
-  const limit = clampRosterLimit(query.limit);
+  const limit = Math.min(query.limit ?? WORKSPACE_LIST_LIMIT, WORKSPACE_LIST_LIMIT);
   const entries: RosterEntry[] = [];
   let cursor = decodeRosterCursor(query.cursor);
   let more = false;

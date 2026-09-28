@@ -17,7 +17,6 @@ export const SPEND_SOURCES = [
   'fast',
   'reflection',
   'head',
-  'mcts',
   'swarm',
   'platform',
   'advisor',
@@ -37,7 +36,6 @@ export const SPEND_SOURCE_LABEL = {
   fast: 'Fast tier',
   reflection: 'Evolution',
   head: 'Exploration heads',
-  mcts: 'MCTS rollouts',
   swarm: 'Swarm expansions',
   platform: 'Platform AI',
   advisor: 'Advisor',
@@ -47,20 +45,18 @@ export const SPEND_SOURCE_LABEL = {
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 export const SPEND_SOURCE_DETAIL = {
-  agent: 'every step of every turn — chat, wake, reactor drain — of the main agent and every agent it hired',
+  agent: 'every step of every turn (chat, wake, reactor drain) of the main agent and every agent it hired',
   scaffold: 'an evolved scaffold driving its own inference loop',
   compaction: 'folding history when the context window fills',
-  judge: 'grading this agent’s own work: ensemble, replay, branch scores, merge narrative',
+  judge: 'grading this agent\'s own work: ensemble, replay, branch scores, merge narrative',
   fast: 'the mechanical tier: outcome classification, extraction, titles, summaries',
-  reflection: 'the evolution engine’s own reasoning, and GEPA',
+  reflection: 'the evolution engine\'s own reasoning, and GEPA',
   head: 'exploration heads, one loop per fork',
-  mcts: 'rollout branches and their reflections',
   swarm: 'the expansion candidates of a configured search, and the measurements that '
-    + 'score them — distinct from `mcts` because a swarm names its own axes and is '
-    + 'scored by the objective\'s verifier rather than by a judge',
-  platform: 'Workers AI utility bindings: memory embeddings and HTML→markdown '
+    + 'score them by the objective\'s verifier',
+  platform: 'Workers AI utility bindings: memory embeddings and HTML->markdown '
     + 'repair. Neither returns a usage field of any kind, so these are counted '
-    + 'and never measured — which is what the coverage fraction below is made of',
+    + 'and never measured, which is what the coverage fraction below is made of',
   advisor: 'the turn reviewer: one call after a turn ends, when it is switched on',
   slate: 'an authored slate\'s `ai` binding: one call per `shell`, at the tier the binding or the call named',
   warming: 'keeping an idle prompt-cache prefix alive: one zero-output replay of the last request, '

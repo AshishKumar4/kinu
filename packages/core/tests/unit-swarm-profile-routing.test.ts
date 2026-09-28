@@ -196,14 +196,11 @@ function seedInterruptedRun(input: {
   new MctsSearchStore(sql, input.rt.actor).begin({
     rootId,
     task: input.task,
-    engine: 'swarm',
-    rootMsgId: null,
     config: { budget: 4, branches: 1, profile: frozenSnapshot(input.roleId) },
-    budget: 4,
     now: Date.now(),
   });
   insertSearchNode(sql, input.rt.actor, {
-    nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
+    nodeId: rootId, parentNodeId: null, rootId,
     task: input.task, action: '', observation: input.task,
     codeUsed: null, depth: 0, msgId: null,
   });
@@ -233,7 +230,7 @@ describe('a delegated tier routes the model its nodes run', () => {
 
     const [row] = h.rt.storage.sql<{ root_id: string }>`
       SELECT root_id FROM mcts_search_runs
-      WHERE actor_id = ${h.rt.actor.actorId} AND engine = 'swarm' LIMIT 1`;
+      WHERE actor_id = ${h.rt.actor.actorId} LIMIT 1`;
 
     expect(row).toBeDefined();
 

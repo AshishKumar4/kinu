@@ -130,12 +130,11 @@ export function stageImport(
   entry: ExperienceEntry,
   now = nowMs(),
 ): ImportOutcome {
-  const staged = parseExperiencePayload(JSON.stringify(entry.payload));
-
-  if (!staged || staged.kind !== entry.kind) {
+  // The library decoded the payload; only the pairing with `kind` is left to refuse.
+  if (entry.payload.kind !== entry.kind) {
     return {
       ok: false,
-      reason: `payload for ${entry.kind} "${entry.key}" does not parse as ${entry.kind} experience — refusing a row lists would skip`,
+      reason: `payload for ${entry.kind} "${entry.key}" does not parse as ${entry.kind} experience: refusing a row lists would skip`,
     };
   }
 
@@ -164,7 +163,7 @@ export function stageImport(
     return {
       ok: false,
       reason: existing.status === 'corroborated'
-        ? `already imported and corroborated here — it is part of this workspace already`
+        ? `already imported and corroborated here: it is part of this workspace already`
         : `already imported this turn and waiting on the outcome that would corroborate it`,
     };
   }
@@ -189,13 +188,10 @@ export function stageImport(
 
 /** Call only for graded turns: binding to an ungraded turn would discard the evidence. */
 export function bindPendingImports(sql: SqlExecutor, actor: ActorHandle, turnId: string): void {
-  const pending = listImportedExperience(sql, actor, { status: 'provisional', limit: 200 })
-    .filter((row) => row.turnIds.length === 0);
-
-  for (const row of pending) {
-    void sql`UPDATE imported_experience SET turn_ids = ${JSON.stringify([turnId])}
-      WHERE actor_id = ${actor.actorId} AND id = ${row.id}`;
-  }
+  actor.assertCurrent();
+  // `stageImport` writes `'[]'`, so an unbound row is exactly that literal.
+  void sql`UPDATE imported_experience SET turn_ids = ${JSON.stringify([turnId])}
+    WHERE actor_id = ${actor.actorId} AND status = 'provisional' AND turn_ids = '[]'`;
 }
 
 export interface ImportSettlement {
@@ -252,7 +248,6 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
       const accepted = await upsertCraftedTool(rt, {
         name: row.payload.name,
         description: row.payload.description,
-        params: row.payload.params,
         code: row.payload.code,
         score: row.payload.score,
       });

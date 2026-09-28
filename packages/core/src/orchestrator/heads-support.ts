@@ -77,7 +77,7 @@ export function inheritedContextOmissionNote(total: number, kept: number): Seria
   return [{
     id: 'ctx-omitted',
     role: 'system',
-    content: `(${total - kept} earlier messages omitted from inherited context — durable state lives in the workspace files)`,
+    content: `(${total - kept} earlier messages omitted from inherited context: durable state lives in the workspace files)`,
     createdAt: -1,
   }];
 }

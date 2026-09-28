@@ -133,14 +133,6 @@ describe('every named preset resolves to a tuple validity accepts', () => {
     expect(legal(callFor('redteam')).config.carry).toEqual({ kind: 'elites' });
   });
 
-  test('the artifacts bar is the pass-band midpoint this repository already publishes at', () => {
-    // `craftExtractionThreshold` 0.80 is the pass-band midpoint, already the bar for publishing
-    // an artifact derived from a search winner.
-    const carry = legal(callFor('research')).config.carry;
-    expect(carry.kind === 'artifacts' ? carry.threshold : null)
-      .toBe(DEFAULT_CONFIG.mcts.craftExtractionThreshold);
-  });
-
   test('a preset row is a POINT — every row declares its config, so nothing guards one', () => {
     for (const preset of NAMED_SWARM_PRESETS) {
       expect(SWARM_PRESET_POINTS[preset].config).toBeDefined();
@@ -318,7 +310,7 @@ describe('`{preset, task}` is a complete call on every row', () => {
 
     if (!kindRefusal) throw new Error('an unregistered kind must be refused');
     expect(kindRefusal.error).toContain('exec-ratio');
-    expect(kindRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"…"}');
+    expect(kindRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"..."}');
 
     // An empty spec is refused once, naming every field.
     const empty = resolveSwarm({
@@ -335,7 +327,7 @@ describe('`{preset, task}` is a complete call on every row', () => {
       expect(specRefusal.error).toContain(field);
     }
 
-    expect(specRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"…"}');
+    expect(specRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"..."}');
   });
 
   test('the documented spec fields are exactly the fields the registry binds', () => {

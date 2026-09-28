@@ -26,6 +26,8 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase, type FirstRunSession,
 } from './first-run';
 import { SWARM_ASK as ASK } from './asks';
+import { openBrowser, signedInPage } from './browser';
+import type { TestChrome } from '../../scripts/test-chrome';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 
 const SUITE = 'First-run · exploration';
@@ -41,6 +43,38 @@ function wordsOf(text: string): string[] {
 const ASKED = new Set(wordsOf(ASK));
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
+
+const PanelAgentSchema = v.looseObject({
+  key: v.string(), category: v.string(), activity: v.string(), tab: v.boolean(),
+  open: v.looseObject({ kind: v.string() }),
+});
+
+interface OpenedWorker {
+  readonly counter: string;
+  readonly stream: string;
+  readonly composer: boolean;
+  readonly stop: boolean;
+}
+
+async function openWorkerFromPanel(browser: TestChrome, plan: { origin: string; identity: Parameters<typeof signedInPage>[1] }, workspace: string, key: string): Promise<OpenedWorker> {
+  const page = await signedInPage(browser.browser, plan.identity);
+  await page.goto(`${plan.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-agents-counter]');
+  const counter = await page.$eval('[data-agents-counter]', (button) => button.getAttribute('aria-label') ?? '');
+  await page.click('[data-agents-counter]');
+  await page.waitForSelector(`[data-agent-row="${key}"]`);
+  await page.click(`[data-agent-row="${key}"]`);
+  const pane = `[data-agent-pane="node/${key}"]`;
+  await page.waitForFunction((selector: string) => (document.querySelector(selector)?.textContent ?? '').includes('Task'), {}, pane);
+
+  const drawn = await page.$eval(pane, (node) => ({
+    stream: node.textContent ?? '',
+    composer: node.querySelector('textarea') !== null,
+    stop: node.querySelector('[data-view-only]') !== null,
+  }));
+
+  return { ...drawn, counter };
+}
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -78,6 +112,38 @@ async function swarmWakeClosed(session: FirstRunSession, socket: PublicSocket, j
 
   for (let next = socket.turnClosed(); !(await closed()); next = socket.turnClosed()) {
     if (!(await next)) return;
+  }
+}
+
+/** The Agents panel lists every node, one opens in the chat column read-only, and the counter is the roster's. */
+async function panelSubgoal({ socket, opened }: { socket: PublicSocket; opened: boolean }, plan: Parameters<typeof openWorkerFromPanel>[1], workspace: string, nodes: number): Promise<EvalSubgoal> {
+  if (!opened) return { what: 'panel-opens-a-worker-read-only', reached: false, detail: 'the workspace socket never opened' };
+  const listed = await ask(socket, 'listWorkspaceAgents', []);
+  const agents = listed.ok ? v.safeParse(v.array(PanelAgentSchema), listed.value) : null;
+  const rows = agents?.success === true ? agents.output : [];
+  const workers = rows.filter((agent) => agent.category === 'swarm');
+  const hidden = rows.filter((agent) => ['working', 'waiting'].includes(agent.activity) && !agent.tab).length;
+  const worker = workers[0];
+  let browser: TestChrome | null = null;
+
+  try {
+    browser = await openBrowser();
+    const drawn = worker === undefined ? null : await openWorkerFromPanel(browser, plan, workspace, worker.key);
+
+    if (drawn === null) {
+      return { what: 'panel-opens-a-worker-read-only', reached: false, detail: `the panel listed ${String(workers.length)} swarm worker(s) for ${String(nodes)} node(s)` };
+    }
+
+    const counted = Number(/(\d+) active/u.exec(drawn.counter)?.[1] ?? 0);
+
+    return {
+      what: 'panel-opens-a-worker-read-only',
+      reached: workers.length === nodes && !drawn.composer && drawn.stop && drawn.stream.includes('Task') && counted === hidden,
+      detail: `${String(workers.length)} worker(s) listed; ${worker?.key ?? ''} drew ${String(drawn.stream.length)} chars, `
+        + `composer ${String(drawn.composer)}, view-only bar ${String(drawn.stop)}; counter "${drawn.counter}" against ${String(hidden)} hidden active`,
+    };
+  } finally {
+    await browser?.close();
   }
 }
 
@@ -141,6 +207,8 @@ describe(SUITE, () => {
               ? `${String(heads.length)} node(s) took steps and reported; the run is ${entry?.run.status ?? 'absent'}`
               : `${String(unsettled.length)} of ${String(heads.length)} node(s) unsettled: ${unsettled.map((head) => `${head.id.slice(0, 8)} ${head.status}`).join(', ')}`,
           });
+
+          subgoals.push(await panelSubgoal({ socket, opened }, plan, session.workspace, heads.length));
 
           const reply = (await session.history()).filter((row) => row.role === 'assistant').at(-1)?.text.toLowerCase() ?? '';
           const named = [...new Set(heads.flatMap((head) => wordsOf(head.summary ?? '')))].filter((word) => !ASKED.has(word));

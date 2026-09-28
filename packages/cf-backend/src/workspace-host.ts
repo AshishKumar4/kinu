@@ -15,7 +15,8 @@ import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/cor
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SUPERVISOR_OPS, type SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import type { ObjectNamespace } from '@kinu.run/core';
+import type { MountedVfs, ObjectNamespace } from '@kinu.run/core';
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
 import { clearPortCapability, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
@@ -81,6 +82,7 @@ export interface HostedWorkspaceDeps<Id> {
   /** Supplied by the actor: the URL names the workspace and is signed with a user-plane-derived key. */
   previewUrl: (port: number, capability: string) => Promise<WorkspacePreviewUrl>;
   onFilesChanged?: (paths: readonly string[]) => void;
+  onPortsChanged?: () => void;
   /** Asked before a preview request is routed and by the launch journal after a reset. A refusal says why
      *  the slate cannot serve. */
   ensureSlate?(owner: string): Promise<Refusal | null>;
@@ -124,7 +126,7 @@ function servesOp(envelope: WireSupervisorEnvelope): envelope is SupervisorOpEnv
 
 export interface HostedWorkspace {
   readonly bundle: WorkspaceBundle;
-  /** Cached by `shellId`: a named shell holds its own cwd and exported variables. */
+  /** A stateless view: the named shell's cwd and exported variables live in the runtime, keyed by `shellId`. */
   box(shellId: string): NimbusSandboxHandle;
   /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a
      *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. */
@@ -232,7 +234,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
   if (deps.onFilesChanged) bundle.onFilesChanged(deps.onFilesChanged);
 
   // One registry per isolate: a port is a live listener in this isolate's memory.
-  const portRegistry = new PortRegistry();
+  const portRegistry = deps.onPortsChanged ? new ObservedPortRegistry(deps.onPortsChanged) : new PortRegistry();
   let composing: Promise<HostComposition> | undefined;
 
   // This object's alarm slot is the SDK scheduler's, so tasks run on a timer plus waitUntil. Timers die with
@@ -343,7 +345,6 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
   };
 
   const files = workspaceBoxFiles(async () => (await bundle.session()).vfs);
-  const boxes = new Map<string, NimbusSandboxHandle>();
 
   return {
     bundle,
@@ -354,20 +355,10 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
       return (await runtime()).supervisorOp(envelope);
     },
-    box(shellId) {
-      const held = boxes.get(shellId);
-
-      if (held) return held;
-
-      const built = workspaceBox({
-        runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
-        mountTable: (plane, cred) => { bundle.mountTable(plane, cred); },
-      });
-
-      boxes.set(shellId, built);
-
-      return built;
-    },
+    box: (shellId) => workspaceBox({
+      runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
+      mountTable: (plane, cred) => bundle.mountTable(plane, cred),
+    }),
     facetManager: async () => (await compose()).facets,
     ports: async () => (await compose()).ports,
     terminal: async () => {
@@ -444,6 +435,34 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
   };
 }
 
+/** Nimbus mutates listeners only through these three. */
+class ObservedPortRegistry extends PortRegistry {
+  constructor(private readonly moved: () => void) {
+    super();
+  }
+
+  override register(port: number, pid: number): void {
+    super.register(port, pid);
+    this.moved();
+  }
+
+  override unregister(port: number): boolean {
+    const removed = super.unregister(port);
+
+    if (removed) this.moved();
+
+    return removed;
+  }
+
+  override unregisterByPid(pid: number): number {
+    const removed = super.unregisterByPid(pid);
+
+    if (removed > 0) this.moved();
+
+    return removed;
+  }
+}
+
 async function json(result: Promise<unknown>): Promise<JsonValue | undefined> {
   const value = await result;
 
@@ -516,4 +535,13 @@ function workspaceBox(deps: {
     },
     mountTable: deps.mountTable,
   };
+}
+
+/** An actor with no uid of its own (a branch) has no shell, so it must not take the session user's table. */
+export function mountActorFiles(
+  box: Pick<NimbusSandboxHandle, 'mountTable'>, files: MountedVfs, owner: { readonly rootActor: boolean; readonly cred: VfsCred | undefined },
+): (() => void) | undefined {
+  if (!owner.rootActor && owner.cred === undefined) return undefined;
+
+  return box.mountTable?.(files, owner.cred);
 }

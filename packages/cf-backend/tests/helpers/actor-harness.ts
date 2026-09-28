@@ -37,7 +37,7 @@ import {
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
-  type AgentRuntime, type DynamicContext,
+  type AgentRuntime, type DynamicContext, type LLM,
   type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type RoleCatalog, type ResolvedTurnProfile, type SqlValue,
   type TierAssignments,
@@ -48,10 +48,10 @@ import {
   type SleepTimeUpdate,
   type EgressSecretBinding,
 } from '@kinu.run/core';
-import { HARNESS_AGENT, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
+import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
-import { GATEWAY_MODEL, platformGatewayEnv, type StubbedAiBinding } from './platform-gateway';
+import { GATEWAY_MODEL, openingOf, platformGatewayEnv, type RecordedGatewayRun, type StubbedAiBinding } from './platform-gateway';
 import {
   TerminalEffectInterrupt,
   type TerminalEffectFault, type TerminalEffectName, type TerminalEffectPhase,
@@ -77,6 +77,39 @@ const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
 };
 
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
+  /** Work the object still owes: maintenance, untimed owed arms (turn claims, queued deliveries), a due timed ledger, a
+   *  detached task, or a hosted actor's reaction waiting to be drained (the object's wake folds only the root's). */
+  harnessWorkRemains(now = Date.now()): boolean {
+    const due = this.nextOwedAt();
+
+    const host = this.actorHost();
+
+    const reactionOwed = host.list().some((reference) =>
+      (new EventLog(this.boundExec(), host.bindStores(reference).handle).nextPendingDrainAt(now) ?? Infinity) <= now);
+
+    return this.maintenanceUnfinished || this.owedUntimedWork() || (due !== null && due <= now) || this._backgroundTasks.size > 0
+      || reactionOwed;
+  }
+
+  /** Turns running now, the root's and every hosted actor's. */
+  harnessTurnsInFlight(): number {
+    const host = this.actorHost();
+    const hosted = host.list().filter((reference) => host.hosted(reference)?.session.inFlight === true).length;
+
+    return hosted + (this._inFlight || this.actorSession.inFlight ? 1 : 0);
+  }
+
+  /** Actors whose turn waits inside a task hire: a task helper of theirs is still working. */
+  harnessTurnsWaitingOnDelegates(): number {
+    return this.boundSql<{ n: number }>`
+      SELECT COUNT(DISTINCT actor_id) AS n FROM actor_subordinates WHERE lifetime = 'task' AND status != 'dismissed'`[0]?.n ?? 0;
+  }
+
+  /** The scripted gateway's calls still waiting on the script, when this object runs on one. */
+  harnessUnansweredModelCalls(): readonly RecordedGatewayRun[] {
+    return [...activationWorlds.get(this.ctx)?.aiGateway?.unanswered ?? []];
+  }
+
   modelFactory?: () => LanguageModel;
   override getModel(): LanguageModel {
     return this.modelFactory?.() ?? super.getModel();
@@ -103,6 +136,24 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     else await chatSessionTurns(this).settle({ messageId: 'a live turn', text: 'done' });
   }
   get harnessChatLoop(): ChatSession { return this.chatLoop; }
+  /** The `reads_changed` flushes this object owes; a test runs them where production's macrotask would end. */
+  readonly harnessOwedLiveReads: (() => void)[] = [];
+  protected override deferLiveReads(flush: () => void): void { this.harnessOwedLiveReads.push(flush); }
+  /** Records the text of every statement this object runs from now on, in order. */
+  harnessRecordQueries(): string[] {
+    const queries: string[] = [];
+    const sql = this.ctx.storage.sql;
+    const exec = sql.exec.bind(sql);
+
+    sql.exec = (query, ...bindings) => {
+      queries.push(query);
+
+      return exec(query, ...bindings);
+    };
+
+    return queries;
+  }
+  harnessBear(ownerUserId: string): void { this.bearWorkspace(this.name, ownerUserId); }
   /** The conversation a stated turn is admitted over. Applies only while the actor
    *  holds no working history of its own. */
   async harnessSeedHistory(messages: readonly ModelMessage[]): Promise<void> {
@@ -196,10 +247,17 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     Object.assign(this.env, bindings);
   }
 
+  /** The provider revision every later resolution reads, as the account's settings changing would move it. */
+  harnessProviderRevision(revision: string): void {
+    this._providerRevision = revision;
+  }
+  private _providerRevision = HARNESS_PROVIDER_SNAPSHOT.revision;
+
   protected override async profileInputs() {
     const overlay = this._catalogOverlay;
+    const revision = this._providerRevision;
 
-    if (overlay === null) return { envelope: HARNESS_PROFILE_ENVELOPE, provider: HARNESS_PROVIDER_SNAPSHOT };
+    if (overlay === null) return { envelope: HARNESS_PROFILE_ENVELOPE, provider: { ...HARNESS_PROVIDER_SNAPSHOT, revision } };
 
     // Merged over the builtins, digest recomputed. Overlay tier models join the
     // provider snapshot: a tier naming an unlisted model is refused before routing.
@@ -210,8 +268,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return {
       envelope: { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) },
-      provider: overlay.availableModels === undefined ? HARNESS_PROVIDER_SNAPSHOT : {
+      provider: overlay.availableModels === undefined ? { ...HARNESS_PROVIDER_SNAPSHOT, revision } : {
         ...HARNESS_PROVIDER_SNAPSHOT,
+        revision,
         availableModels: [...new Set([...HARNESS_PROVIDER_SNAPSHOT.availableModels, ...overlay.availableModels])],
       },
     };
@@ -411,7 +470,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return {
       spawnHead: async (input: HeadInput) => {
         // The `exp:`-marked name `hostHead` registers; a head has no database of its own.
-        await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, kind: 'head', lifetime: 'task' });
+        await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, kind: 'run', lifetime: 'task' });
 
         return {
           id: input.id,
@@ -525,6 +584,37 @@ export function nextTurn(): Promise<void> {
 }
 
 /**
+ * Runs the object's wake until `holds()`. Detached work is observed by its effect, the way an operator would see it,
+ * and a condition that never holds fails by name rather than hanging the suite: `failure` is thrown once the object has
+ * nothing left to run (no owed work, no fiber in flight), or once every running turn waits either on the suite (a
+ * scripted model call not yet answered, a planted hold) or on a task helper of its own, so nothing else could move it.
+ * No lap count.
+ */
+export async function driveUntil(
+  workspace: ActorHarness<HarnessOrchestratorAgent>, failure: string, holds: () => boolean,
+): Promise<void> {
+  while (!holds()) {
+    await workspace.agent.terminalRetryPass();
+    await nextTurn();
+
+    if (holds()) return;
+
+    if (!workspace.agent.harnessWorkRemains() && !harnessFibersRunning()) throw new Error(failure);
+
+    const suiteHeld = [
+      ...workspace.agent.harnessUnansweredModelCalls().map((run) => `model call ${JSON.stringify(openingOf(run).slice(0, 80))}`),
+      ...harnessHolds().map((name) => `hold ${JSON.stringify(name)}`),
+    ];
+
+    const running = workspace.agent.harnessTurnsInFlight();
+
+    if (running > 0 && suiteHeld.length > 0 && suiteHeld.length + workspace.agent.harnessTurnsWaitingOnDelegates() >= running) {
+      throw new Error(`${failure}: every running turn waits on the suite or on its own hire (${suiteHeld.join(', ')})`);
+    }
+  }
+}
+
+/**
  * Yields to the event loop, joining fibers each lap, until `holds()` reads true in what the object
  * stored. Detached work is observed by its effect, the way an operator would see it; a condition
  * that never holds fails by name after 1000 laps rather than hanging.
@@ -620,6 +710,11 @@ export async function catalogTurn(agent: HarnessOrchestratorAgent, text: string)
   await agent.harnessChatLoop.pumpPromise;
 }
 
+/** The main actor's profile-routed side lane (reflection), the path its judge and advisor calls take too. */
+export function sideLane(agent: HarnessOrchestratorAgent): LLM {
+  return agent.observeRuntime().llm;
+}
+
 /** The main actor's event log over the object's stored rows: `publish` is the one writer ingress admits events through. */
 export function eventsOver(db: Database): EventLog {
   return new EventLog(makeSqlExec(db), workspaceMainActor(db));
@@ -687,7 +782,7 @@ export function tapDiagnostics(logger: Logger): () => void {
   };
 }
 
-/** Replace, not update: `workspace_identity` has no primary key and `onStart` seeds its own row after its first await. */
+/** Replace, not update: `onStart` seeds its own row after its first await. */
 export function seedMission(db: Database, mission: string): void {
   db.prepare('DELETE FROM workspace_identity').run();
   db.prepare(
@@ -1127,7 +1222,7 @@ export interface ActorHarness<T> {
 
 /** The Durable Object state every fixture here constructs; shared with
  *  `helpers/hosted-workspace.ts` so the platform surface cannot drift. */
-export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
+export function makeCtx(db: Database, id = 'harness-actor', objectName = id): AgentContext {
   const canonicalSql = makeSqlExec(db);
 
   const sqlExec = (query: string, ...bindings: SqlValue[]) => {
@@ -1174,17 +1269,19 @@ export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
           `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
         ).all();
 
-        for (const { name } of tables) db.exec(`DROP TABLE "${name}"`);
+        // IF EXISTS: dropping an FTS table drops its shadow tables with it.
+        for (const { name } of tables) db.exec(`DROP TABLE IF EXISTS "${name}"`);
         kv.clear();
       },
       setAlarm: async () => {},
       getAlarm: async () => null,
       deleteAlarm: async () => {},
     },
-    id: { toString: () => id, name: id },
+    id: { toString: () => id, name: objectName },
     waitUntil: () => {},
     blockConcurrencyWhile: <Result>(fn: () => Promise<Result>): Promise<Result> => fn(),
     getWebSockets: () => [],
+    setWebSocketAutoResponse: () => {},
     abort: () => {},
     // The script's exports, whose supervisor entrypoint the hosted runtime requires.
     exports: SCRIPT_EXPORTS,
@@ -1434,14 +1531,18 @@ interface ActorInstantiation {
   readonly world?: HarnessActorWorld;
   readonly parentNamespace?: HarnessParentNamespace;
   readonly env?: Env;
+  /** `ctx.id.name`; a Nimbus sibling's starts with `nbf:`. */
+  readonly objectName?: string;
 }
 
 function instantiate<T extends WorkspaceHostTarget>(
   Actor: new (ctx: AgentContext, env: Env) => T,
-  { db, parent, userPlane, world, parentNamespace, env }: ActorInstantiation,
+  { db, parent, userPlane, world, parentNamespace, env, objectName }: ActorInstantiation,
 ): ActorHarness<T> {
   const builtEnv = env ?? makeEnv(parent, userPlane, world, parentNamespace);
-  const ctx = makeCtx(db);
+  // The platform fixes the name before the constructor runs, and the constructor records it.
+  const name = objectName ?? world?.workspace ?? 'harness-parent';
+  const ctx = makeCtx(db, 'harness-actor', name);
 
   if (world !== undefined) activationWorlds.set(ctx, world);
   const agent = new Actor(ctx, builtEnv);
@@ -1461,7 +1562,7 @@ function instantiate<T extends WorkspaceHostTarget>(
     });
   }
 
-  Object.defineProperty(agent, 'name', { value: world?.workspace ?? 'harness-parent', configurable: true });
+  Object.defineProperty(agent, 'name', { value: name, configurable: true });
 
   return {
     agent,
@@ -1473,11 +1574,16 @@ function instantiate<T extends WorkspaceHostTarget>(
   };
 }
 
-/** The actor's schema half of an activation. Schema is in place synchronously on
- *  return; the async boot's promise is dropped (a failed boot classifies inside `onStart`). */
-function ensureActorSchema(agent: InstanceType<typeof OrchestratorAgent>): void {
-  const gate: unknown = OrchestratorAgent.prototype.onStart.call(agent);
-  void gate;
+/** Starts the activation as the SDK's first fetch would. Its synchronous part has run on return; the async
+ *  boot's promise is dropped (a failed boot classifies inside `onStart`). */
+/** The SDK's own start, as a request would trigger it; a failed start is the caller's to read, never unhandled. */
+function startActivation(agent: InstanceType<typeof OrchestratorAgent>): Promise<void> {
+  const started = agent.lifecycle.start();
+  // Settling observes it, so a start nobody reads is not an unhandled rejection.
+  const observed: unknown = Promise.allSettled([started]);
+  void observed;
+
+  return started;
 }
 
 
@@ -1494,10 +1600,10 @@ export function orchestratorHarness(
   },
 ): ActorHarness<HarnessOrchestratorAgent> {
   const harness = instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), userPlane, world, env });
-  ensureActorSchema(harness.agent);
-  harness.db.prepare(
-    'UPDATE workspace_identity SET owner_user_id = ? WHERE id = ?',
-  ).run(world?.ownerUserId ?? 'harness-owner', 'harness-actor');
+  // Born as a first claim bears it, then started.
+  harness.agent.harnessBear(world?.ownerUserId ?? 'harness-owner');
+  const started: unknown = startActivation(harness.agent);
+  void started;
   // Without the capability this root cannot reach its title registry, so every settle
   // would owe an auto title forever.
   harness.agent.harnessHoldsCapability('harness-capability');
@@ -1515,12 +1621,15 @@ export function orchestratorHarness(
   return harness;
 }
 
-/** A half-born workspace: constructed, but `ensureSchema` never ran, so
- *  `workspace_identity` is absent and owner reads throw. */
-export function halfBornOrchestratorHarness(
+/** Constructed, and nothing else: no start ran, no owner claimed it. What a native RPC meets when it is an
+ *  object's first event. */
+export function unstartedOrchestratorHarness(
   world?: HarnessActorWorld,
+  objectName?: string,
+  /** Storage a prior activation left; absent, a new object. */
+  db: Database = new Database(':memory:'),
 ): ActorHarness<HarnessOrchestratorAgent> {
-  return instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), world });
+  return instantiate(HarnessOrchestratorAgent, { db, world, ...(objectName !== undefined && { objectName }) });
 }
 
 /** A fresh actor instance over surviving storage: the isolate reset, with every
@@ -1537,7 +1646,7 @@ export async function reactivateOrchestratorHarness(
     readonly env?: Env;
     readonly beforeStart?: (agent: HarnessOrchestratorAgent) => void;
   },
-): Promise<ActorHarness<HarnessOrchestratorAgent>> {
+): Promise<ActorHarness<HarnessOrchestratorAgent> & { readonly started: Promise<void> }> {
   // Durable state the prior activation left, written through the stores before `onStart` runs the recovery.
   const config = workspaceMainActor(db).config;
 
@@ -1545,15 +1654,15 @@ export async function reactivateOrchestratorHarness(
     const [key, update] = opts.sleepTimeAnswer;
     config.setSleepTimeComputeEnabled(true);
     db.prepare(
-      'INSERT INTO sleep_time_updates (effect_key, update_json, created_at) VALUES (?, ?, ?) ON CONFLICT(effect_key) DO NOTHING',
-    ).run(key, JSON.stringify(update), Date.now());
+      'INSERT INTO sleep_time_updates (effect_key, update_json) VALUES (?, ?) ON CONFLICT(effect_key) DO NOTHING',
+    ).run(key, JSON.stringify(update));
   } else {
     config.setSleepTimeComputeEnabled(false);
   }
 
   const harness = instantiate(HarnessOrchestratorAgent, { db, userPlane, world: opts?.world, env: opts?.env });
   opts?.beforeStart?.(harness.agent);
-  ensureActorSchema(harness.agent);
+  const started = startActivation(harness.agent);
 
   if (opts?.world?.freshScaffold !== true) harness.agent.declareScaffoldPresent();
 
@@ -1561,7 +1670,7 @@ export async function reactivateOrchestratorHarness(
   // once no fiber body is left.
   for (let tick = 0; tick < 8; tick++) await joinHarnessFibers();
 
-  return harness;
+  return { ...harness, started };
 }
 
 
@@ -1597,11 +1706,10 @@ export async function hostedSubordinateHarness(
 
 export async function hostedExplorationHarness(
   workspace: ActorHarness<HarnessOrchestratorAgent>,
-  kind: 'head' | 'branch',
   id: string,
 ): Promise<HostedActorHarness> {
   const entry = await workspace.agent.actorDirectory({
-    action: 'register', creationId: id, name: `exp:${id}`, kind, lifetime: 'task',
+    action: 'register', creationId: id, name: `exp:${id}`, kind: 'run', lifetime: 'task',
   });
 
   const actor = await workspace.agent.observeActorHost().acquire(entry.reference);

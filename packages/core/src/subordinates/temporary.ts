@@ -21,7 +21,7 @@ export {
   type TemporaryRunRefusal, type TemporaryRunRequest,
 } from '../types/subordinates';
 
-/** How long a roster row lives; a column because task and durable rows are indistinguishable by state. */
+/** How long a roster row lives; state cannot tell the two apart. */
 export const SUBORDINATE_LIFETIMES = ['durable', 'task'] as const;
 
 export type SubordinateLifetime = (typeof SUBORDINATE_LIFETIMES)[number];
@@ -59,7 +59,6 @@ const TASK_ENDING_REPORT = {
     + 'produced; its transcript holds what it had done.',
 } as const satisfies Record<TaskTurnEnding, string | null>;
 
-/** The report a child's settled turn owes its caller. */
 export interface OwedReport {
   readonly status: SubordinateReportStatus;
   readonly content: string;
@@ -126,7 +125,7 @@ function renderTemporaryTaskBrief(input: {
 
   if (input.contextRefs && input.contextRefs.length > 0) {
     parts.push(
-      'Material for this question, by workspace path — read it yourself, in ranges when it is '
+      'Material for this question, by workspace path: read it yourself, in ranges when it is '
       + `large: ${input.contextRefs.join(', ')}.`,
     );
   }
@@ -140,14 +139,14 @@ function renderTemporaryTaskBrief(input: {
   return parts.join('\n\n');
 }
 
-/** Task-lifetime policy over the shared roster: it adds only the in-memory waiter and never stores the answer. */
+/** Task-lifetime policy over the shared roster. */
 export function createTemporaryAgentPort(deps: {
   roster: SubordinateRosterStore;
   runtime: SubordinateRuntime;
   createName(role: string): string;
   now(): number;
+  whileWaiting?<T>(waited: Promise<T>): Promise<T>;
 }): TemporaryAgentPort {
-  // A task-lifetime agent receives one assignment. Its name exists before the assignment RPC can report.
   const waiters = new Map<string, (answer: TemporarySettlement) => void>();
 
   const registerWaiter = (name: string, signal?: AbortSignal) => {
@@ -220,13 +219,12 @@ export function createTemporaryAgentPort(deps: {
         reason,
       });
 
-      /** Archive the row and retire the actor; history is always kept. */
-      const release = async (): Promise<void> => {
+      const release = async (interrupt: boolean): Promise<void> => {
         const actor = deps.roster.requireExisting(name).actorReference;
 
         if (!actor) throw new KinuError('missing', 'The temporary actor has no confirmed identity.');
         deps.roster.dismiss(name, deps.now());
-        await deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor);
+        await deps.runtime.dismiss(name, { keepHistory: true, interrupt }, actor);
       };
 
       const creationId = crypto.randomUUID();
@@ -240,10 +238,12 @@ export function createTemporaryAgentPort(deps: {
       if (inherited) assignment.inheritedContext = inherited;
 
       if (deps.roster.get(name)) return failure('denied', 'The generated actor name is already in use.', 'none');
+
+      if (request.lane) deps.roster.helpers.record(name, request.lane, startedAt);
       deps.roster.create({
         name, actorReference: null, deleteRequested: false,
         birth: { creationId, assignment, seed: { name, displayName: codenameFor(name), nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME } },
-        createdBy: 'orchestrator', status: 'working', currentTask: task, createdAt: startedAt,
+        createdBy: request.lane ? 'evolution' : 'orchestrator', status: 'working', currentTask: task, createdAt: startedAt,
         dismissedAt: null, lifetime: TEMPORARY_LIFETIME, taskEventId: null,
       });
       // A child can report before its assignment acknowledgement returns.
@@ -258,8 +258,14 @@ export function createTemporaryAgentPort(deps: {
         return failure(error.code, renderCauseChain(error));
       }
 
-      const settlement = await waiter.promise;
-      await release();
+      // Released inside the wait, before the caller takes its slot back.
+      const answered = waiter.promise.then(async (settled) => {
+        await release(settled === 'cancelled');
+
+        return settled;
+      });
+
+      const settlement = await (deps.whileWaiting?.(answered) ?? answered);
 
       if (settlement === 'cancelled') {
         return failure('cancelled', 'the caller cancelled this hire before the agent answered.');
@@ -277,6 +283,8 @@ export function createTemporaryAgentPort(deps: {
         elapsed_ms: deps.now() - startedAt,
       };
     },
+
+    reclaim: (request) => deps.roster.helpers.answerFor(request),
   };
 }
 

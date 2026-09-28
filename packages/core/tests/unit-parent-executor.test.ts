@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { createParentExecutor, type ParentWorkspaceHandle } from '../src/execution/parent';
+import { answerParentRpc, createParentExecutor, type ParentWorkspaceHandle } from '../src/execution/parent';
+import { makeVfsError } from '../src/vfs/errno';
 
 function parentHandle(calls: string[]): ParentWorkspaceHandle {
   return {
@@ -73,5 +74,24 @@ describe('parent executor input validation', () => {
     expect(calls).toEqual([]);
     await parent.tools.readdir.execute(undefined);
     expect(calls).toEqual(['list:.']);
+  });
+});
+
+describe('answerParentRpc: the one answer both hosts give a fork', () => {
+  test('a VFS failure keeps its errno, its path and the rendered cause chain', async () => {
+    const answer = await answerParentRpc('notes', () => Promise.reject(makeVfsError('EISDIR', 'is a directory', 'notes')));
+
+    expect(answer).toEqual({ ok: false, error: { code: 'EISDIR', message: 'EISDIR: is a directory', path: 'notes' } });
+  });
+
+  test('any other failure is EIO with its whole chain, not only its outermost message', async () => {
+    const failure = new Error('the shell refused', { cause: new Error('no such binary') });
+    const answer = await answerParentRpc('', () => Promise.reject(failure));
+
+    expect(answer).toEqual({ ok: false, error: { code: 'EIO', message: 'the shell refused: no such binary', path: '' } });
+  });
+
+  test('a success is the value', async () => {
+    expect(await answerParentRpc('a.txt', async () => new Uint8Array([104, 105]))).toEqual({ ok: true, value: new Uint8Array([104, 105]) });
   });
 });

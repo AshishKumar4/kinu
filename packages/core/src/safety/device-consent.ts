@@ -25,7 +25,7 @@ export const DEVICE_CONSENT_UNANSWERED =
 export const DEVICE_CONNECT_DISCLOSURE: readonly string[] = [
   'Kinu installs a small daemon here and links this machine to your account.',
   'A workspace you approve runs in a sandbox: its own home plus folders you pick. Everything else stays invisible to it.',
-  'The daemon only dials out. Revoke it any time under Account settings → Devices.',
+  'The daemon only dials out. Revoke it any time under Account settings > Devices.',
 ];
 
 export interface DeviceActionSummary {
@@ -132,17 +132,16 @@ function toPending(r: ConsentRow): PendingConsentRow {
   return pending;
 }
 
-/** Rows in `device_consent_requests`. Every read sweeps lapsed rows first, so a dead activation's prompt reads expired. */
+/** Rows in `device_consent_requests`. A read skips lapsed rows, so a dead activation's prompt reads expired;
+ *  `insert` sweeps them, so the table holds at most the asks raised since the last lapse. */
 export class DeviceConsentStore {
   constructor(private readonly sql: SqlExecutor) {}
   /** Oldest first, in raise order, so asks within one clock tick keep their order. */
   live(now: number): PendingConsentRow[] {
-    void this.sql`DELETE FROM device_consent_requests WHERE expires_at <= ${now}`;
-
     return this.sql<ConsentRow>`
       SELECT consent_id, device_id, device_label, method, command,
              workspace_name, created_at, expires_at
-      FROM device_consent_requests ORDER BY created_at ASC, rowid ASC`.map(toPending);
+      FROM device_consent_requests WHERE expires_at > ${now} ORDER BY created_at ASC, rowid ASC`.map(toPending);
   }
 
   /** Only caller is the card's own timer; a same-tick answer already won the row through `take`. */
@@ -152,6 +151,7 @@ export class DeviceConsentStore {
 
   /** Callers mint the id first, so the row exists under the key the announce names. */
   insert(row: PendingConsentRow): void {
+    void this.sql`DELETE FROM device_consent_requests WHERE expires_at <= ${row.createdAt}`;
     void this.sql`INSERT INTO device_consent_requests
       (consent_id, device_id, device_label, method, command, workspace_name, created_at, expires_at)
       VALUES (${row.consentId}, ${row.deviceId}, ${row.deviceLabel}, ${row.method},

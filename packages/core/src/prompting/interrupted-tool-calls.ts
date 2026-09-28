@@ -1,14 +1,13 @@
 /**
- * Every assistant `tool-call` needs a `tool-result` before the next user/system
- * message or prompt end, else `streamText` throws `AI_MissingToolResultsError`
- * client-side on every later turn. Repairs ride the request; stored history is
- * never rewritten.
+ * A `tool-call` needs a `tool-result` before the next message, else `streamText` throws
+ * `AI_MissingToolResultsError` on every later turn. Repairs ride the request, never stored history.
  */
 
 import type { ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
+import * as v from 'valibot';
+import type { LostToolCall } from '../tools/effect-claim';
 
-/** "Unknown" is the only defensible claim: the interrupt may land before, during,
- * or after execution, and the next turn must not confidently repeat a side effect. */
+/** For a call nothing claimed: the interrupt may land before, during or after it. */
 export const INTERRUPTED_TOOL_RESULT =
   'The turn was interrupted before this tool call returned. Whether it ran is unknown. '
   + 'Check the current state before issuing it again.';
@@ -20,6 +19,7 @@ export const INTERRUPTED_TOOL_RESULT =
  */
 export function settleUnpairedToolCalls(
   messages: readonly ModelMessage[],
+  lost?: (call: { readonly toolCallId: string; readonly toolName: string }) => LostToolCall | null,
 ): ModelMessage[] | undefined {
   const settled: ModelMessage[] = [];
   const pending = new Map<string, string>();
@@ -41,7 +41,7 @@ export function settleUnpairedToolCalls(
     }
 
     if (pending.size === 0 || messages[index + 1]?.role === 'tool') continue;
-    settled.push(interruptedResults(pending));
+    settled.push(interruptedResults(pending, lost));
     synthesized += pending.size;
     pending.clear();
   }
@@ -49,13 +49,24 @@ export function settleUnpairedToolCalls(
   return synthesized > 0 ? settled : undefined;
 }
 
-function interruptedResults(pending: ReadonlyMap<string, string>): ToolModelMessage {
+function interruptedResults(
+  pending: ReadonlyMap<string, string>,
+  lost: ((call: { readonly toolCallId: string; readonly toolName: string }) => LostToolCall | null) | undefined,
+): ToolModelMessage {
   const content = [...pending].map(([toolCallId, toolName]): ToolResultPart => ({
     type: 'tool-result',
     toolCallId,
     toolName,
-    output: { type: 'error-text', value: INTERRUPTED_TOOL_RESULT },
+    output: lostOutput(lost?.({ toolCallId, toolName }) ?? null),
   }));
 
   return { role: 'tool', content };
+}
+
+function lostOutput(call: LostToolCall | null): ToolResultPart['output'] {
+  if (call === null) return { type: 'error-text', value: INTERRUPTED_TOOL_RESULT };
+
+  if (call.state === 'claimed') return { type: 'error-text', value: call.refusal };
+
+  return v.is(v.string(), call.result) ? { type: 'text', value: call.result } : { type: 'json', value: call.result };
 }

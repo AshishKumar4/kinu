@@ -61,6 +61,10 @@ export interface DeviceFleetEntry {
 export type DeviceFleet = readonly DeviceFleetEntry[];
 
 /** Every machine in the fleet that is live right now, fleet order preserved. */
+export function sameDeviceStatus(a: DeviceStatus, b: DeviceStatus): boolean {
+  return JSON.stringify({ ...a, devices: a.devices ?? [] }) === JSON.stringify({ ...b, devices: b.devices ?? [] });
+}
+
 export function connectedDevices(fleet: DeviceFleet | undefined): DeviceFleetEntry[] {
   return (fleet ?? []).filter((device) => device.connected);
 }
@@ -72,7 +76,7 @@ export function deviceFleetAsk(fleet: DeviceFleet | undefined): string {
   if (live.length === 0) return NO_DEVICE_CONNECTED;
   const names = live.map((device) => `${device.name}${device.os ? ` (${device.os})` : ''}`).join(', ');
 
-  return `name the machine this command runs on — connected: ${names}. Pass it as device: "<name>".`;
+  return `name the machine this command runs on: connected: ${names}. Pass it as device: "<name>".`;
 }
 
 /** A connected device by name, or null when none or several live machines match. */

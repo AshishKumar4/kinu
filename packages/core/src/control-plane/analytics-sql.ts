@@ -42,22 +42,9 @@ export function analyticsMissingSettings(env: AnalyticsSqlEnv): readonly string[
   return missing;
 }
 
-const BATCH_TTL_MS = 30_000;
-
 export type AnalyticsQuerySet = ReadonlyMap<string, string>;
 
 export type AnalyticsPanels = Record<string, AnalyticsResult>;
-
-interface CachedBatch {
-  readonly at: number;
-  readonly result: Promise<AnalyticsPanels>;
-}
-
-// Isolate-level is safe: account-wide aggregates only, nothing per-user. Stores the promise so
-// concurrent loads share one round trip.
-const batches = new Map<string, CachedBatch>();
-
-const BATCH_CACHE_MAX = 64;
 
 async function runAnalyticsSql(env: AnalyticsSqlEnv, sql: string): Promise<AnalyticsResult> {
   const missing = analyticsMissingSettings(env);
@@ -139,42 +126,10 @@ function apiErrorReason(status: number, body: string): string {
     : `analytics API ${String(status)}`;
 }
 
-export async function runAnalyticsBatch(
-  env: AnalyticsSqlEnv,
-  queries: AnalyticsQuerySet,
-  now: number = Date.now(),
-): Promise<AnalyticsPanels> {
-  const named = [...queries.entries()].sort(([a], [b]) => a.localeCompare(b));
-  const key = named.map(([name, sql]) => `${name}\u0000${sql}`).join('\u0001');
-  const cached = batches.get(key);
+export async function runAnalyticsBatch(env: AnalyticsSqlEnv, queries: AnalyticsQuerySet): Promise<AnalyticsPanels> {
+  const answers = await Promise.all(
+    [...queries].map(async ([name, sql]) => [name, await runAnalyticsSql(env, sql)] as const),
+  );
 
-  if (cached && now - cached.at < BATCH_TTL_MS) return cached.result;
-
-  // Eviction inside the fill: an outer `.catch` would either swallow or leave an unhandled rejection.
-  const result = (async (): Promise<AnalyticsPanels> => {
-    try {
-      const answers = await Promise.all(
-        named.map(async ([name, sql]) => [name, await runAnalyticsSql(env, sql)] as const),
-      );
-
-      return Object.fromEntries(answers);
-    } catch (cause) {
-      // Never cache a rejected fill.
-      batches.delete(key);
-      throw toKinuError({
-        doing: 'filling a control-plane analytics batch',
-        cause,
-        otherwise: 'unavailable',
-      });
-    }
-  })();
-
-  if (batches.size >= BATCH_CACHE_MAX) batches.clear();
-  batches.set(key, { at: now, result });
-
-  return result;
-}
-
-export function clearAnalyticsCache(): void {
-  batches.clear();
+  return Object.fromEntries(answers);
 }

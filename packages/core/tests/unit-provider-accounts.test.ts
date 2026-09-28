@@ -21,6 +21,7 @@ import {
   providerProxyBaseURL,
   storedAccounts,
   specWithoutAccount,
+  validateCredential,
   validateCredentialKey,
   type AuthResolution,
   type ModelProvider,
@@ -50,6 +51,18 @@ describe('account specs', () => {
     expect(specWithoutAccount('anthropic/claude-x')).toBe('anthropic/claude-x');
     expect(specWithoutAccount('@cf/meta/llama-4')).toBe('@cf/meta/llama-4');
   });
+});
+
+// Batch 6b P2: a model key with a baseURL was honoured by one reader and ignored by others; only search takes one.
+test('a bearer credential names an endpoint only as the search credential', () => {
+  const routed = { kind: 'bearer', token: 't', baseURL: 'https://proxy.example.net/v1' } as const;
+
+  expect(validateCredential({ key: 'tavily', value: routed })).toEqual(routed);
+
+  for (const key of ['openai.bearer', 'anthropic.bearer', 'openrouter.bearer', 'anthropic.bearer@work']) {
+    expect(() => validateCredential({ key, value: routed })).toThrow('takes no baseURL');
+    expect(validateCredential({ key, value: { kind: 'bearer', token: 't' } })).toEqual({ kind: 'bearer', token: 't' });
+  }
 });
 
 describe('account credential keys', () => {

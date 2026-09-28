@@ -79,6 +79,8 @@ export {
   type HeadInferenceDeps, type HeadWorkspaceLayout,
 } from './head-inference';
 
+export { spawnSeatedHead, type HeadSeat, type SeatedHeadDeps } from './seated-head';
+
 export {
   buildHeadToolSet,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,

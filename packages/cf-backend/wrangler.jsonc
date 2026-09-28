@@ -173,7 +173,7 @@
   "containers": [
     {
       "class_name": "KinuSandbox",
-      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:d04e2beefa5eaf5486c2c8903eb444ce1499bc7d4e439967b5d48c2c39b14174",
+      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:43bb41963d6539b33388d9cc5559d2392dd0bef06bfeaf033ab1fbae12518eb7",
       "max_instances": 10,
       "instance_type": {
         "vcpu": 2,
@@ -200,17 +200,10 @@
   // own — they live inside `OrchestratorAgent`, carry no binding and sit in
   // no tag, because they are reached by name rather than through one.
   //
-  // What an operator does before deploying this configuration: delete the
-  // deployed Worker whose migration history ends at tag `v3` (its Durable
-  // Object namespaces, and every object in them, go with it), or deploy under a
-  // fresh Worker name. Wrangler does not enforce that step. Read from
-  // node_modules/wrangler (`getMigrationsToUpload`, 2026-09-05): when the
-  // deployed Worker's last tag is missing from this list, wrangler warns and
-  // uploads every step here against that tag, and what the platform answers to
-  // a class declared new a second time is not measured here. Re-using `v3` as
-  // this list's last tag would be worse: wrangler would find it, send no
-  // migration at all, and the deploy would land on that Worker's storage
-  // with a schema that carries no path from it.
+  // A reset (`bun run deploy --reset`, scripts/reset.ts) leaves a `reset-…`
+  // tag this list lacks. Wrangler then warns and uploads every step here
+  // (`getMigrationsToUpload`, read 2026-09-05), so the upload after a reset
+  // starts from `v1`.
   "migrations": [
     {
       "tag": "v1",
@@ -309,7 +302,14 @@
     // test debris out of the workspace list. Pinned as EVAL_SERVICE_EMAIL in
     // packages/test-utils/src/eval-identity.ts.
     "DEV_USER_EMAIL": "eval-service@kinu.run",
+    // Workers AI through this Worker's own AI binding, for every user; the eval
+    // identity's email above decides nothing about it.
+    "WORKERS_AI_VIA_BINDING": "on",
     "CLOUDFLARE_OAUTH_CLIENT_ID": "edb106782fc08e60480306cf39411d90",
+    // The sign-in providers this deployment must offer. The monitor's login probe
+    // fails when one is not configured or not on /login, and infra-verify refuses
+    // one whose client id or secret is missing, so a lost secret is red twice.
+    "SIGN_IN_PROVIDERS": "cloudflare",
     // Scopes default to CLOUDFLARE_WORKERS_AI_SCOPES (lib/cloudflare-oauth.ts);
     // set CLOUDFLARE_OAUTH_SCOPES here only to override that one source.
     "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
@@ -386,8 +386,8 @@
   // embeddings, HTML→markdown, and the `ai-gateway` provider's chat transport
   // (providers/gateway-binding-fetch.ts) — binding calls are pre-authenticated
   // in-account, which is why that provider needs no API token. A signed-in
-  // user's own chat calls deliberately do NOT ride this binding: they carry that
-  // user's Cloudflare OAuth credential so the usage bills to their account.
+  // user's own chat calls ride it only under WORKERS_AI_VIA_BINDING=on; without
+  // it they carry that user's Cloudflare OAuth credential and bill to them.
   "ai": { "binding": "AI" },
   // Browser Rendering: the headless browser that photographs a slate after it renders.
   "browser": { "binding": "BROWSER" },
@@ -517,12 +517,14 @@
         ]
       },
       // The images production runs, by the same digests: a staging measured on
-      // other bytes measures another product. Fewer instances.
+      // other bytes measures another product. The sandbox takes production's
+      // instance count: at 3, the first-run tier's sandbox cases refused each
+      // other's cold starts (docs/DEVBOX-DECISIONS.md P7).
       "containers": [
         {
           "class_name": "KinuSandbox",
-          "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:d04e2beefa5eaf5486c2c8903eb444ce1499bc7d4e439967b5d48c2c39b14174",
-          "max_instances": 3,
+          "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:43bb41963d6539b33388d9cc5559d2392dd0bef06bfeaf033ab1fbae12518eb7",
+          "max_instances": 10,
           "instance_type": {
             "vcpu": 2,
             "memory_mib": 6144,
@@ -580,7 +582,9 @@
         "CLI_PUBLIC_ORIGIN": "https://staging.kinu.run",
         "CLI_APPROVAL_ORIGIN": "https://staging.kinu.run",
         "DEV_USER_EMAIL": "eval-service@kinu.run",
+        "WORKERS_AI_VIA_BINDING": "on",
         "CLOUDFLARE_OAUTH_CLIENT_ID": "",
+        "SIGN_IN_PROVIDERS": "",
         "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
         "CLOUDFLARE_AI_GATEWAY_ID": "default",
         "EMAIL_DOMAIN": "",

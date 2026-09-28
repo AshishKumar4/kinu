@@ -34,7 +34,7 @@ const TOOL_CLAIM: ToolEffectKey = {
 };
 
 const SEQUENCE = [
-  'takes', 'event_reply', 'turn_record', 'auto_title',
+  'craft_usage', 'event_reply', 'turn_record', 'auto_title',
 ] as const satisfies readonly TerminalEffectName[];
 
 /** Last, so a cut on an inline effect leaves an exact suffix. */
@@ -79,10 +79,8 @@ interface EffectView {
   readonly seq: number;
   readonly status: string;
   readonly input: string;
-  readonly outcome: string | null;
   readonly attempts: number;
   readonly due: boolean;
-  readonly settled: boolean;
 }
 
 /** Digest omitted: a wrong one shows up as a second row. */
@@ -112,10 +110,8 @@ interface EffectLedgerRow {
   seq: number;
   status: string;
   input_json: string;
-  outcome: string | null;
   attempts: number;
   next_attempt_at: number;
-  settled_at: number | null;
 }
 
 /** The database outlives every process. */
@@ -252,8 +248,8 @@ class Plane {
 
   snapshot(): Snapshot {
     const rows = this.sql<EffectLedgerRow>`
-      SELECT sequence_id, effect_key, effect_name, scope, seq, status, input_json, outcome,
-             attempts, next_attempt_at, settled_at
+      SELECT sequence_id, effect_key, effect_name, scope, seq, status, input_json,
+             attempts, next_attempt_at
       FROM terminal_effects ORDER BY sequence_id, seq, effect_key`;
 
     const runs: Record<string, number> = {};
@@ -280,10 +276,8 @@ class Plane {
         seq: row.seq,
         status: row.status,
         input: row.input_json,
-        outcome: row.outcome,
         attempts: row.attempts,
         due: row.next_attempt_at <= this.clock,
-        settled: row.settled_at !== null,
       })),
       claims: this.sql<{ turn_id: string; normalized_call_id: string; result_json: string | null }>`
         SELECT turn_id, normalized_call_id, result_json FROM tool_effect_claims
@@ -459,7 +453,7 @@ test('an unsupported recorded roster remains inspectable and owed after reopenin
 
 test('an unreadable recorded effect input is retained instead of dropping its obligation', async () => {
   await conform(async (plane) => {
-    plane.process().record(TRANSITION, [{ name: 'takes', scope: 'answer', lane: 'inline', input: { answer: 42 } }]);
+    plane.process().record(TRANSITION, [{ name: 'craft_usage', scope: 'answer', lane: 'inline', input: { answer: 42 } }]);
     plane.restart();
     await plane.process().resumeAll();
     plane.advance(PAST_BACKOFF_MS);
@@ -468,7 +462,7 @@ test('an unreadable recorded effect input is retained instead of dropping its ob
 
     const owed = plane.process().ledger.owed(plane.process().sequenceId(TRANSITION));
     expect(owed).toHaveLength(1);
-    expect(owed[0]).toMatchObject({ rawName: 'takes', input: '{"answer":42}', attempts: 2 });
+    expect(owed[0]).toMatchObject({ rawName: 'craft_usage', input: '{"answer":42}', attempts: 2 });
     expect(plane.process().incomplete()).toEqual([TRANSITION]);
     expect(plane.runOrder()).toEqual([]);
   });
@@ -497,8 +491,13 @@ const EVERY_OUTPUT: Record<string, string> = Object.fromEntries(
 
 let restoreDiagnostics: (() => void) | null = null;
 
+const logs = createRecordingLogger();
+
+const logged = (event: string, effect: string): (string | null)[] =>
+  logs.emitted.filter((line) => line.event === event && line.fields.effect === effect).map((line) => line.cause);
+
 beforeAll(() => {
-  restoreDiagnostics = setDiagnosticsSink(createRecordingLogger());
+  restoreDiagnostics = setDiagnosticsSink(logs);
 });
 
 afterAll(() => {
@@ -544,12 +543,12 @@ describe('terminal transition conformance across two adapters', () => {
 
       const cut = plane.snapshot();
       expect(dispositions(cut)).toEqual({
-        [K('takes')]: 'completed',
+        [K('craft_usage')]: 'completed',
         [K('event_reply')]: 'completed',
         [K('turn_record')]: 'pending',
         [K('auto_title')]: 'pending',
       });
-      expect(cut.runs).toEqual({ [K('takes')]: 1, [K('event_reply')]: 1 });
+      expect(cut.runs).toEqual({ [K('craft_usage')]: 1, [K('event_reply')]: 1 });
       expect(claimState(cut)[TERMINAL_CLAIM_CALL]).toBeNull();
 
       plane.interruptAt(null);
@@ -595,6 +594,7 @@ describe('terminal transition conformance across two adapters', () => {
 
   test('an owed effect holds the transition open until a later pass closes it', async () => {
     const snap = await conform(async (plane) => {
+      const failedBefore = logged('turn.terminal_effect_failed', K(HELD)).length;
       plane.hold(HELD);
       await plane.settle(() => roster(SEQUENCE));
       await plane.join();
@@ -602,13 +602,12 @@ describe('terminal transition conformance across two adapters', () => {
       const held = plane.snapshot();
       // Owed, not failed: the row gates the close.
       expect(dispositions(held)).toEqual({
-        [K('takes')]: 'completed',
+        [K('craft_usage')]: 'completed',
         [K('event_reply')]: 'pending',
         [K('turn_record')]: 'completed',
         [K('auto_title')]: 'completed',
       });
-      expect(held.effects.find((row) => row.key === K(HELD))?.outcome)
-        .toBe('owed: the reply channel this answer owes is still open');
+      expect(logged('turn.terminal_effect_failed', K(HELD))).toHaveLength(failedBefore);
       expect(claimState(held)).toEqual({
         [TERMINAL_CLAIM_CALL]: null,
         [TOOL_CLAIM.callId]: null,
@@ -678,15 +677,15 @@ describe('terminal transition conformance across two adapters', () => {
 
     // Nothing pruned: a blocked row is work a deploy still owes.
     expect(dispositions(snap)).toEqual({
-      [K('takes')]: 'completed',
+      [K('craft_usage')]: 'completed',
       [K('event_reply')]: 'completed',
       [K('turn_record')]: 'completed',
       [K('auto_title')]: 'completed',
       [K(UNIMPLEMENTED)]: 'blocked',
     });
     const blocked = snap.effects.find((row) => row.key === K(UNIMPLEMENTED));
-    expect(blocked?.outcome)
-      .toBe(`effect "${UNIMPLEMENTED}" is not implemented by this actor`);
+    expect(logged('turn.terminal_effect_blocked', K(UNIMPLEMENTED)))
+      .toContainEqual(expect.stringContaining(`effect "${UNIMPLEMENTED}" is not implemented by this actor`));
     // Still blocked: converging to success would erase the evidence.
     expect(blocked?.attempts).toBe(2);
     expect(claimState(snap)).toEqual({
@@ -730,7 +729,7 @@ describe('terminal transition conformance across two adapters', () => {
       circular.self = circular;
 
       const declared = (): readonly OwedEffect[] => [
-        { name: 'takes', scope: TRANSITION.messageId, lane: 'inline', input: { answer: 'a' } },
+        { name: 'craft_usage', scope: TRANSITION.messageId, lane: 'inline', input: { answer: 'a' } },
         {
           name: 'turn_record', scope: TRANSITION.messageId, lane: 'inline',
           input: circular,

@@ -1211,10 +1211,11 @@ export default {
         }
 
         case 'POST /destroy': {
-          // The identity itself is gone — disk, boot id, mounts — while the
-          // rows and the store stay: the next drive provisions a fresh
-          // instance and restores the committed generation onto it. See
-          // `destroyContainerForBench`.
+          // The identity itself is gone (disk, boot id, mounts) and its
+          // schedule rows with it, while the store stays: the next drive
+          // (`/create` or `/wake`) reopens the box, provisions a fresh
+          // instance and restores the committed generation onto it (D36).
+          // See `destroyContainerForBench`.
           const destroyed = await box.destroyContainerForBench();
 
           return json({ payload: { ok: true, strategy, box: name, destroyed, ms: Date.now() - started } });

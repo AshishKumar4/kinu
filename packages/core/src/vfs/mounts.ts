@@ -63,7 +63,7 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 }
 
 function absentError(mount: VfsMount, path: string): Error {
-	return makeVfsError('ENXIO', `/${mount.name} — ${mount.absentReason()}`, path);
+	return makeVfsError('ENXIO', `/${mount.name}: ${mount.absentReason()}`, path);
 }
 
 /** Native mutations the composite plane forwards where the routed tree has them. */
@@ -112,7 +112,7 @@ export async function readBoundedWithVfsOps(
 		throw makeVfsError(
 			'EPERM',
 			`this file plane has no ranged read, so ${size === null ? 'a file of unknown size' : `${String(size)} bytes`}`
-			+ ` cannot be previewed within ${String(limit)} — download it instead`,
+			+ ` cannot be previewed within ${String(limit)}: download it instead`,
 			path,
 		);
 	}
@@ -259,7 +259,7 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 	if (sourceStat.isDir) {
 		throw makeVfsError(
 			'EPERM',
-			'a directory cannot be renamed here — this plane has no native rename, and only a file\'s bytes can be carried',
+			'a directory cannot be renamed here: this plane has no native rename, and only a file\'s bytes can be carried',
 			from.path,
 		);
 	}
@@ -321,6 +321,7 @@ function siblingPath(path: string, purpose: string, nonce: string): string {
 export interface VfsMountRouting {
 	mountOf(path: string): string | null;
 	mountPoints(): readonly string[];
+	liveMounts(): readonly { readonly name: string; readonly readOnly: boolean; readonly files: VFS }[];
 	/** The user's writable mount roots, connected or not. */
 	userRoots(): readonly string[];
 }
@@ -435,6 +436,11 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 	const table: MountedVfs = {
 		mountOf: (path) => mountNamed(path)?.name ?? null,
 		mountPoints,
+		liveMounts: () => [...byName.values()].flatMap((m) => {
+			const files = m.files();
+
+			return files === null ? [] : [{ name: m.name, readOnly: m.readOnly === true, files }];
+		}),
 		userRoots: () => userRoots,
 		readFile(path, opts) {
 			return delegate(path, (files, native) => files.readFile(native, opts));
@@ -448,6 +454,14 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		},
 		writeFile(path, data) {
 			return mutate(path, 'written', (files, native) => files.writeFile(native, data));
+		},
+		writeFileWithReport(path, data) {
+			return mutate(path, 'written', async (files, native) => {
+				if (files.writeFileWithReport) return files.writeFileWithReport(native, data);
+				await files.writeFile(native, data);
+
+				return null;
+			});
 		},
 		writeFileIfRevision(path, data, expectedRevision) {
 			return mutate(path, 'written', (files, native) => {
@@ -551,7 +565,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 			if (!st) throw makeVfsError('ENOENT', 'no such file or directory', oldPath);
 
 			if (st.isDir) {
-				throw makeVfsError('EPERM', 'a directory cannot be renamed here — this route has no native rename, and only a file\'s bytes can be carried', oldPath);
+				throw makeVfsError('EPERM', 'a directory cannot be renamed here: this route has no native rename, and only a file\'s bytes can be carried', oldPath);
 			}
 
 			await carryFileWithVfsOps(

@@ -1,8 +1,14 @@
-/** One turn is one span tree: the turn, its model call, each tool run, and a delegation under the tool that made it. */
+/**
+ * One turn is a set of spans joined by `kinu.turn`: admitted, one per model step, each tool run and
+ * delegation, and settled. None stays open across an await: on Workers a span still open when the
+ * object starts another invocation is force-closed with its attributes dropped (11 of 59 turns on
+ * staging, 2026-09-26), and a detached turn's work straddles alarms and messages.
+ */
 import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import { createTestRuntime, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { hostedSeatsOver } from './helpers-actor-host';
+import { recoverActorTurns } from '../src/state/actor-host';
 import {
   createAgentsTool, profileCatalogDigest, resolveTurnProfile, ROOT_DELEGATION_BUDGET,
   type ProfileCatalog, type SubordinateHandoff, type SubordinateRosterEntry, type TeamToolDeps,
@@ -55,7 +61,7 @@ function team() {
   return { messages, deps };
 }
 
-test('a turn with a model call, a tool call and a delegation records one tree, with the actor on every span and no text', async () => {
+test('a turn records admitted, each step, tool run and delegation, and settled, each closed where it opens, joined by the turn, with no text', async () => {
   const { rt, testSql } = createTestRuntime();
   const tracer = createRecordingTracer();
   const tracing = createAgentTracing({ tracer, isolateGen: 3, selfPath: [], actor: { id: rt.actor.actorId, kind: 'main' } });
@@ -106,6 +112,8 @@ test('a turn with a model call, a tool call and a delegation records one tree, w
 
       expect(result.failure).toBeNull();
       expect(messages).toEqual([MESSAGE]);
+      // As the chat loop does once the answer is durable.
+      actor.session.settleTurnClaim(lease, 'completed');
     } finally {
       actor.session.finishTurn(lease);
     }
@@ -115,23 +123,36 @@ test('a turn with a model call, a tool call and a delegation records one tree, w
   }
 
   const spans = tracer.opened;
-  const tree = spans.map((span) => [span.name, span.parent === null ? null : spans[span.parent]?.name]);
 
-  expect(tree).toEqual([
-    ['turn', null],
-    ['turn.model_call', 'turn'],
-    ['turn.tool_call', 'turn.model_call'],
-    ['turn.tool_call', 'turn.model_call'],
-    ['turn.delegation', 'turn.tool_call'],
+  expect(spans.map((span) => span.name)).toEqual([
+    'turn.admitted',
+    'turn.tool_call', 'turn.step',
+    'turn.delegation', 'turn.tool_call', 'turn.step',
+    'turn.step',
+    'turn.settled',
   ]);
 
-  const toolNames = spans.filter((span) => span.name === 'turn.tool_call').map((span) => span.attributes.get('gen_ai.tool.name'));
-  expect(toolNames).toEqual(['file', 'agents']);
-  expect(spans[4]?.attributes.get('kinu.delegation.action')).toBe('msg');
-  expect(spans[1]?.attributes.get('kinu.model.steps')).toBe(3);
+  // Opened and closed in one callback: nothing is left open for another invocation's start to force-close.
+  expect(spans.filter((span) => span.openAcrossAwait).map((span) => span.name)).toEqual([]);
 
-  // The hosted actor, not the object's root, owns every span of its turn.
+  const attribute = (name: string, key: string) => spans.filter((span) => span.name === name).map((span) => span.attributes.get(key));
+
+  expect(attribute('turn.step', 'kinu.step')).toEqual([0, 1, 2]);
+  expect(attribute('turn.step', 'gen_ai.response.finish_reasons')).toEqual(['tool-calls', 'tool-calls', 'stop']);
+  expect(attribute('turn.step', 'gen_ai.usage.output_tokens')).toEqual([1, 1, 1]);
+  expect(attribute('turn.tool_call', 'gen_ai.tool.name')).toEqual(['file', 'agents']);
+  expect(attribute('turn.tool_call', 'kinu.step')).toEqual([0, 1]);
+  expect(attribute('turn.delegation', 'kinu.delegation.action')).toEqual(['msg']);
+  expect(attribute('turn.delegation', 'kinu.step')).toEqual([1]);
+  expect(attribute('turn.settled', 'kinu.turn.steps')).toEqual([3]);
+  expect(attribute('turn.settled', 'kinu.turn.outcome')).toEqual(['completed']);
+
   for (const span of spans) {
+    // The join: one digested turn id and its epoch on every span, since no span is another's parent.
+    expect(span.attributes.get('kinu.turn')).toBe(analyticsDigest('turn-trace'));
+    expect(span.attributes.get('kinu.turn.epoch')).toBe(1);
+    expect(span.attributes.get('kinu.duration_ms')).toBeGreaterThanOrEqual(0);
+    // The hosted actor, not the object's root, owns every span of its turn.
     expect(span.attributes.get('kinu.actor')).toBe(analyticsDigest(actor.handle.actorId));
     expect(span.attributes.get('kinu.actor_kind')).toBe('subordinate');
     expect(span.attributes.has(SPAN_ATTR_ERROR)).toBe(false);
@@ -139,7 +160,41 @@ test('a turn with a model call, a tool call and a delegation records one tree, w
 
   const values = spans.flatMap((span) => [...span.attributes.values()]).map(String);
 
-  for (const text of [TASK, FILE_TEXT, MESSAGE, ANSWER, 'launch codes', 'researcher', 'plan.txt', 'Plan.']) {
+  for (const text of [TASK, FILE_TEXT, MESSAGE, ANSWER, 'launch codes', 'researcher', 'plan.txt', 'Plan.', 'turn-trace']) {
     expect(values.filter((value) => value.includes(text))).toEqual([]);
+  }
+});
+
+test('a turn a dead process left admitted is recorded settled when recovery closes it, once', async () => {
+  const { rt, testSql } = createTestRuntime();
+  const tracer = createRecordingTracer();
+  const tracing = createAgentTracing({ tracer, isolateGen: 3, selfPath: [], actor: { id: rt.actor.actorId, kind: 'main' } });
+  const seats = hostedSeatsOver({ rt, db: testSql.db, tracing });
+  const { actor } = await seats.seat('planner', 'subordinate');
+
+  try {
+    const admitted = await actor.stores.claims.admit({
+      runId: 'run-dead', turnId: 'turn-dead', workMode: 'build',
+      context: actor.stores.history.context.selected() ?? actor.stores.history.context.initialize(),
+      program: { kind: 'builtin', version: 0, digest: null, build: 'test-build' },
+    });
+
+    // The process that admitted it died before its first request was recorded.
+    testSql.db.exec("DELETE FROM actor_requests WHERE turn_id = 'turn-dead'");
+
+    expect(await recoverActorTurns(seats.host)).toMatchObject({ failed: ['turn-dead'] });
+    expect(await recoverActorTurns(seats.host)).toMatchObject({ failed: [] });
+
+    expect(tracer.opened.map((span) => span.name)).toEqual(['turn.settled']);
+    const [settled] = tracer.opened;
+    expect(Object.fromEntries(settled?.attributes ?? [])).toMatchObject({
+      'kinu.turn': analyticsDigest('turn-dead'), 'kinu.turn.epoch': admitted.epoch,
+      'kinu.turn.outcome': 'error', 'kinu.turn.recovered': true,
+      'kinu.actor': analyticsDigest(actor.handle.actorId), 'kinu.actor_kind': 'subordinate',
+    });
+    expect(settled?.openAcrossAwait).toBe(false);
+  } finally {
+    seats.host.releaseAll();
+    testSql.close();
   }
 });

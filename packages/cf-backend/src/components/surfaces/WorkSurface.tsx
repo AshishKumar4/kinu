@@ -8,28 +8,29 @@ import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { HeadDeltas } from "@kinu.run/core";
 import { tabCls, tabStripH } from "@/components/ui/form";
-import type { AgentStatus, ExecutorOutput } from "@/hooks/use-kinu";
+import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
-import type { ToolInfo, MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
+import { Loader } from "@cloudflare/kumo";
+import type { MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { Loader } from "@cloudflare/kumo";
 import { AgentSurface } from "./AgentSurface";
 import { ExplorationSurface } from "./ExplorationSurface";
 import { WorkTab } from "./WorkTab";
 import { EnvironmentSurface } from "./EnvironmentSurface";
 import { FilesSurface } from "./FilesSurface";
 import { ActivitySurface } from "./ActivitySurface";
+import { AgentsSurface } from "./AgentsSurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
 import {
-  ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, surfaceHasContent,
-  type SlateSurfaceKind, type SurfaceKind,
+  ACTIVITY_SURFACE, AGENTS_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, surfaceHasContent,
+  type PanelAgent, type SlateSurfaceKind, type SurfaceKind,
 } from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { useWheelScrollsSideways } from "@/hooks/use-wheel-scrolls-sideways";
@@ -56,8 +57,9 @@ export interface WorkSurfaceProps {
   changesFocus?: ChangesFocus | null;
   planOwner?: string;
   workspacePlanArrival?: WorkspacePlanArrival | null;
-  onReviewActor?: (name: string) => void | Promise<void>;
+  onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   onSurface: (s: SurfaceKind) => void;
+  agents?: { readonly list: readonly PanelAgent[]; readonly shown: string | null; readonly open: (agent: PanelAgent) => void };
   pinnedPorts: PinnedPort[];
   previewError: string | null;
   previewStarting?: readonly string[];
@@ -65,7 +67,6 @@ export interface WorkSurfaceProps {
   plan: PlanReview | null;
   planRpc?: Rpc;
   snapshot: AsyncResource<AgentStatus>;
-  tools: ToolInfo[];
   memory: MemoryEntry[];
   memoryContent: string;
   onRetryLoad: () => void;
@@ -88,6 +89,7 @@ export interface WorkSurfaceProps {
   slates?: readonly SlateSummary[];
   slateReloads?: ReadonlyMap<string, number>;
   changesMoved?: number;
+  readMoves?: ReadMoves;
   /** Absent in fixture frames, which keeps every tab visible: unknown is not empty. */
   tabPresence?: TabPresence;
   /** The workspace's presence read has not answered: no tab is marked until it has or the reader picks one. */
@@ -132,8 +134,7 @@ function OpenSlatePanel(props: WorkSurfaceProps & { readonly slate: string; read
 
 const LISTING_STRIP = "shrink-0 border-t p-border px-3 py-2";
 
-/** A failed listing wins over a starting one. */
-function ListingStatus({ error, starting, onRetry }: { error: string | null; starting: readonly string[]; onRetry: () => void }) {
+function ListingStatus({ error, starting = [], onRetry }: { error: string | null; starting?: readonly string[]; onRetry: () => void }) {
   if (error) return <LoadFailure what="preview listings" message={error} onRetry={onRetry} className={LISTING_STRIP} />;
 
   if (starting.length === 0) return null;
@@ -290,8 +291,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
               onOpenSurface={focus.navigate}
               onChangelogSeen={props.onChangelogSeen}
               memory={props.memory}
-              isStreaming={props.isStreaming}
               rpc={props.rpc}
+              readMoves={props.readMoves}
             />
           </ErrorBoundary>
         </div>
@@ -311,7 +312,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           )}
           {surface === "Agent" && (
             <AgentSurface
-              snapshot={props.snapshot} tools={props.tools}
+              snapshot={props.snapshot}
               memory={props.memory} memoryContent={props.memoryContent}
               onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
               rpc={props.rpc}
@@ -329,7 +330,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             />
           )}
           {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
-          {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}
+          <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} agents={props.agents} />
           {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
         </ErrorBoundary>
       </div>
@@ -338,8 +339,14 @@ export function WorkSurface(props: WorkSurfaceProps) {
           active={surface === "Changes"} moved={props.changesMoved} turnLive={props.isStreaming} onOpenFile={openChangedFile}
           onCount={setChangeCount} />
       </div>
-      <ListingStatus error={props.previewError} starting={props.previewStarting ?? []} onRetry={props.onRefreshPorts} />
+      <ListingStatus error={props.previewError} starting={props.previewStarting} onRetry={props.onRefreshPorts} />
       {connecting && <ConnectDeviceDialog onClose={closeConnect} />}
     </div>
   );
+}
+
+function SideSurface({ shown, rpc, isStreaming, agents }: Pick<WorkSurfaceProps, "rpc" | "isStreaming" | "agents"> & { shown: SurfaceKind | null }) {
+  if (shown === ACTIVITY_SURFACE) return <ActivitySurface rpc={rpc} isStreaming={isStreaming} />;
+
+  return shown === AGENTS_SURFACE ? <AgentsSurface panel={agents} /> : null;
 }

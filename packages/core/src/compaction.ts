@@ -3,7 +3,7 @@
 import { EVIDENCE_BUDGETS, evidenceWindow } from './utils/evidence-window';
 
 /** First line of every stored summary; `stripCheckpointPreamble` recovers the body for iterative updates. */
-export const CONTEXT_CHECKPOINT_PREFIX = '[CONTEXT CHECKPOINT — reference only]';
+export const CONTEXT_CHECKPOINT_PREFIX = '[CONTEXT CHECKPOINT: reference only]';
 
 const CHECKPOINT_PREAMBLE =
   `${CONTEXT_CHECKPOINT_PREFIX}\n` +
@@ -37,7 +37,7 @@ export interface CompactionSummaryPromptInput {
 const SECTION_SPEC = `Write the summary with exactly these sections:
 
 ## Active Task
-The user's most recent request, copied verbatim — never paraphrased.
+The user's most recent request, copied verbatim, never paraphrased.
 
 ## Completed
 Work already finished, with its concrete outcomes.
@@ -49,7 +49,7 @@ What was being worked on at the compaction point, and its exact state.
 Decisions made, approaches chosen or rejected (and why), and constraints the user imposed.
 
 ## Files & Paths Touched
-Every file, directory, URL, or resource read or modified — exact paths, line numbers, and error strings where known.
+Every file, directory, URL, or resource read or modified: exact paths, line numbers, and error strings where known.
 
 ## Resolved Questions
 Questions that were asked and answered, WITH their answers, so they are never asked again.
@@ -58,14 +58,14 @@ Questions that were asked and answered, WITH their answers, so they are never as
 Anything the user asked for that has not been delivered yet.
 
 ## Remaining Work
-Concrete steps still required to finish the active task. This is a record for the successor, not an instruction list — the successor decides what to do next.`;
+Concrete steps still required to finish the active task. This is a record for the successor, not an instruction list; the successor decides what to do next.`;
 
 function rules(budgetTokens: number): string {
   return `Rules:
 - Be concrete: "edited src/auth.ts:42 to add token refresh", never "made some changes".
-- Target ~${budgetTokens} tokens. Spend them on recall — prefer keeping a borderline detail over dropping it.
+- Target ~${budgetTokens} tokens. Spend them on recall: prefer keeping a borderline detail over dropping it.
 - Only include information explicitly present in the conversation. Never invent paths, commands, or details.
-- If credentials, tokens, or other secrets appeared, note THAT they were present and where — do NOT preserve their values.
+- If credentials, tokens, or other secrets appeared, note THAT they were present and where; do NOT preserve their values.
 - Write only the summary body, starting with "## Active Task".`;
 }
 
@@ -85,7 +85,7 @@ export function buildCompactionSummaryPrompt(input: CompactionSummaryPromptInput
   const { transcript, previousSummary, budgetTokens } = input;
 
   if (previousSummary?.trim()) {
-    return `You are updating a structured handoff summary of an agent conversation. A previous summary exists; new turns have occurred and must be incorporated. A successor agent will continue the work with ONLY this summary plus the most recent messages — anything you drop is lost.
+    return `You are updating a structured handoff summary of an agent conversation. A previous summary exists; new turns have occurred and must be incorporated. A successor agent will continue the work with ONLY this summary plus the most recent messages: anything you drop is lost.
 
 PREVIOUS SUMMARY:
 ${previousSummary.trim()}
@@ -94,7 +94,7 @@ NEW TURNS TO INCORPORATE:
 ${transcript}
 
 ${activeTaskBlock(input.latestUserAsk)}Update the summary in place, keeping its section structure:
-- Move items between sections as their state changed (In Progress → Completed, Pending User Asks → Resolved Questions).
+- Move items between sections as their state changed (In Progress to Completed, Pending User Asks to Resolved Questions).
 - PRESERVE still-relevant information from the previous summary; drop an item only when it is clearly obsolete.
 - Merge new files, decisions, and answers into the existing sections.
 
@@ -103,7 +103,7 @@ ${SECTION_SPEC}
 ${rules(budgetTokens)}`;
   }
 
-  return `You are compacting an agent conversation into a structured handoff summary. A successor agent will continue the work with ONLY this summary plus the most recent messages — anything you omit is lost.
+  return `You are compacting an agent conversation into a structured handoff summary. A successor agent will continue the work with ONLY this summary plus the most recent messages: anything you omit is lost.
 
 CONVERSATION TO SUMMARIZE:
 ${transcript}

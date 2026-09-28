@@ -105,11 +105,10 @@ export interface FloorBreach {
 
 /**
  * Every surface through which a search's output reaches another run; the seal is stated over
- * this set, and `scripts/publication-egress.ts` classifies the settle path's writes against it.
+ * this set.
  */
 export const PUBLICATION_SURFACES = [
-  'records', 'experience_library', 'craft', 'memory', 'task_history',
-  'scaffold_versions',
+  'records', 'experience_library', 'craft', 'memory', 'scaffold_versions',
 ] as const;
 
 export type PublicationSurface = (typeof PUBLICATION_SURFACES)[number];
@@ -256,7 +255,6 @@ export interface ExplorationRecord {
   readonly floorValue: number | null;
   readonly floorProof: string | null;
   /** NULL when unreported: absent is not zero. */
-  readonly costUsd: number | null;
   readonly costTokens: number | null;
   readonly firstRecordedAt: number;
   /** How many times this cell's best has moved since this row was written. */

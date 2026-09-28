@@ -8,8 +8,7 @@ import {
 } from '../obs/error';
 import type { AgentRuntime } from '../types/agent-runtime';
 import {
-  archiveRegionRefusal, isTreeAdvance, judgeMarginalisationRefusal,
-  SWARM_TREE_ADVANCES,
+  isTreeAdvance, SWARM_TREE_ADVANCES,
 } from './swarm';
 import type { ResolvedSwarm } from './swarm';
 import type {
@@ -93,43 +92,13 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
 
   if (!depth) {
     return badInput('neither this call nor its base states `depth`, so nothing says how deep the '
-      + 'search may go — and no default exists to inherit, because a composition with no `from` has '
+      + 'search may go, and no default exists to inherit, because a composition with no `from` has '
       + 'no preset row behind it. Pass `depth`, or name a base with `from`.');
   }
 
   if (!caps.branches) {
     return badInput('neither this call nor its base states `branches`, so nothing says how many '
       + 'candidates an expansion produces. Pass `branches`, or name a base with `from`.');
-  }
-
-  // Judged scoring reaches the `mcts/evaluation.ts` ensemble. The marginalisation refusal is repeated
-  // from `swarmValidity` because this is also the in-process entry point.
-  const marginalisation = judgeMarginalisationRefusal(config);
-
-  if (marginalisation) return marginalisation;
-
-  if (isTreeAdvance(config.advance.kind) && config.score.kind === 'none') {
-    // Also refused by `swarmValidity`; kept for in-process callers.
-    return badInput(`advance:"${config.advance.kind}" cannot select without a score.`);
-  }
-
-  if (config.advance.kind === 'pareto'
-    && PUBLISHING_CARRIES.some((carry) => carry === config.carry.kind)) {
-    // Also refused by `swarmValidity`; kept for in-process callers.
-    return badInput('advance:"pareto" keeps its durable frontier in node evidence and cannot '
-      + 'publish a vector through the scalar records store. Use carry:"none" or "reflections".');
-  }
-
-  // The archive's own region, via the predicate `swarmValidity` shares, so an in-process caller
-  // cannot run a shape the tool surface refuses.
-  const archive = archiveRegionRefusal(config, caps);
-
-  if (archive) return archive;
-
-  if (!resolved.key && config.advance.kind === 'archive') {
-    // Also refused by `swarmValidity`; kept for in-process callers and because the cell binds to `key`.
-    return badInput('advance:"archive" bins its elites by a descriptor and this call named none. '
-      + 'Supply `key`, naming a quantity the objective\'s own instrument reports.');
   }
 
   // Refuse compositions where a fan-in could never happen (*Accepted and ignored*).
@@ -140,7 +109,7 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
 
   if (config.expand === 'aggregate') {
     if (depth.value < 2) {
-      return badInput('expand:"aggregate" is fan-in — k parents consumed by one child — and a '
+      return badInput('expand:"aggregate" is fan-in, k parents consumed by one child, and a '
         + `fan-in needs a level to consume. depth:${String(depth.value)} runs one wave off the `
         + 'root, whose level is the root alone, so nothing would ever be aggregated. Raise `depth` '
         + 'past 1, or use expand:"sample" for one flat wave of independent candidates.');
@@ -320,7 +289,7 @@ if (kind === null) return unregisteredKindRefusalFor(measured.verify.kind);
 const ctx = measurementContext(rt);
 
 if (!ctx) {
-  return unavailable('this workspace has no shell, so nothing can run a measurement in it — a '
+  return unavailable('this workspace has no shell, so nothing can run a measurement in it: a '
     + 'verifier is given a filesystem and a shell and this actor was wired neither. The call is '
     + 'well-formed; the instrument is absent.');
 }
@@ -329,7 +298,7 @@ const instrumentFault = await preflightVerifier(kind, ctx);
 
 if (instrumentFault !== null) {
   return unavailable(`the "${kind}" instrument cannot run in this workspace's shell, so no `
-    + `score:"verify" search can start here — and no \`spec\` would change that: ${instrumentFault}. `
+    + `score:"verify" search can start here, and no \`spec\` would change that: ${instrumentFault}. `
     + 'That is the instrument breaking rather than a candidate failing. Either take an objective '
     + 'this workspace can measure, or DROP `objective` and re-issue the same preset: without one '
     + 'a named preset runs a judged sweep at its own width, which needs no instrument at all. '
@@ -411,7 +380,7 @@ if (normalisedScore({
 }) === null) {
   return badInput(`the target of ${String(measured.target)} ${measured.unit} is already met by `
     + `the workspace as found, which measures ${String(baseline)}. Every candidate would `
-    + 'saturate at 1.0 and the search would have no gradient — the baseline is measured rather '
+    + 'saturate at 1.0 and the search would have no gradient: the baseline is measured rather '
     + `than declared, so raise the target past ${String(baseline)}.`);
 }
 
@@ -422,7 +391,7 @@ if (archive) {
 
   if (cell.kind === 'unwitnessed') {
     return badInput(`advance:"archive" bins every candidate by \`key\`, and the descriptor has to be `
-      + `WITNESSED by the instrument rather than claimed by a node — but "${archive.key}" is not among `
+      + `WITNESSED by the instrument rather than claimed by a node, but "${archive.key}" is not among `
       + `the quantities kind:"${verifier.kind}" reports${cell.reported.length > 0
         ? `, which are: ${cell.reported.join(', ')}`
         : ' (it reports none at all)'}. Name one of those as \`key\`, or drop advance:"archive" for a `
@@ -590,7 +559,7 @@ export function resolveNodeModel(input: {
     if (!input.resolveModel) {
       return unsupported(
         `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, but no model `
-        + 'resolver is wired in this runner — so its nodes could only run the caller\'s own '
+        + 'resolver is wired in this runner, so its nodes could only run the caller\'s own '
         + 'model while the run records the tier\'s. Wire AgentsSwarmDeps.resolveModel on this '
         + 'backend.',
       );
@@ -630,7 +599,7 @@ export function resolveNodeModels(input: {
   if (!input.resolveModel) {
     return unsupported(
       'this search routes each node through `models`, but no model resolver is wired in '
-      + 'this runner — so its nodes could only run the caller\'s own model while the call '
+      + 'this runner, so its nodes could only run the caller\'s own model while the call '
       + 'names others. Wire AgentsSwarmDeps.resolveModel on this backend.',
     );
   }
@@ -643,7 +612,7 @@ export function resolveNodeModels(input: {
     } catch (error) {
       return refusalOf(new KinuError('bad_input',
         `\`models\` entry ${String(index + 1)} is ${JSON.stringify(spec)}, and this session `
-        + 'cannot build that model — so the node it would be assigned cannot run it. Name a '
+        + 'cannot build that model, so the node it would be assigned cannot run it. Name a '
         + 'spec this session resolves, or drop `models` to run every node on the one model '
         + 'the call resolved to.',
         { cause: error }));
@@ -678,7 +647,7 @@ export function refuseContendedRun(input: {
   return unavailable(`this workspace is already running a swarm for this task (${contended.rootId}, `
     + `iteration ${String(contended.iteration)}, ${String(contended.budget)} of its expansion budget `
     + 'left), and a second search over one task would pay twice for one answer and crown a winner '
-    + 'from whichever tree happened to finish. That run reports itself when it settles — its result '
+    + 'from whichever tree happened to finish. That run reports itself when it settles: its result '
     + 'arrives as a background wake, so wait for it rather than re-spawning. Cancel it first if you '
     + 'meant to start over.');
 }
@@ -711,7 +680,7 @@ export async function createRoot(input: {
 
   if (!reentry) {
     insertSearchNode(sql, actor, {
-      nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
+      nodeId: rootId, parentNodeId: null, rootId,
       task: resolved.task,
       // The run's name, else a composed configuration's label, else empty (the read model derives from the task).
       action: resolved.name ?? resolved.label ?? '',

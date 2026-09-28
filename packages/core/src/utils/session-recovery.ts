@@ -5,7 +5,8 @@
  */
 
 import * as v from "valibot";
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, renderThrownChain, settle, toKinuError } from '../obs/index';
 
 /** The agents SDK's verbatim timeout rejection. A fast rejection is proof of life. */
 const RPC_TIMEOUT_PATTERN = /^RPC call to .+ timed out after \d+ms$/;
@@ -35,7 +36,6 @@ export interface SessionRecoveryCallbacks {
 export interface SessionRecoveryOptions {
   now?: () => number;
   timeoutsToRedial?: number;
-  redialWindowMs?: number;
   minRedialIntervalMs?: number;
   maxRedialIntervalMs?: number;
 }
@@ -54,7 +54,6 @@ export function createSessionRecovery(
 ): SessionRecovery {
   const now = options.now ?? Date.now;
   const timeoutsToRedial = options.timeoutsToRedial ?? TIMEOUTS_TO_REDIAL;
-  const redialWindowMs = options.redialWindowMs ?? REDIAL_WINDOW_MS;
   const baseMinIntervalMs = options.minRedialIntervalMs ?? REDIAL_MIN_INTERVAL_MS;
   const maxRedialIntervalMs = options.maxRedialIntervalMs ?? REDIAL_MAX_INTERVAL_MS;
 
@@ -87,7 +86,7 @@ export function createSessionRecovery(
 
       const at = now();
 
-      if (timeoutStreak === 0 || at - streakStartMs > redialWindowMs) {
+      if (timeoutStreak === 0 || at - streakStartMs > REDIAL_WINDOW_MS) {
         streakStartMs = at;
         timeoutStreak = 1;
       } else {
@@ -132,18 +131,19 @@ function isTolerableHealthFailure(input: { cause: unknown }): boolean {
 
 /** The deployed build sha from the health endpoint, or null when none is stamped or the read failed tolerably. */
 export async function fetchDeployedBuildSha(): Promise<string | null> {
-  try {
-    const res = await fetch("/api/health", { signal: AbortSignal.timeout(HEALTH_READ_TIMEOUT_MS) });
+  return settle(Effect.tryPromise({ try: readHealthBuildSha, catch: (cause) => ({ cause }) }).pipe(
+    Effect.catchIf(isTolerableHealthFailure, () => Effect.succeed(null)),
+    Effect.catch((failed) => Effect.die(failed.cause)),
+  ));
+}
 
-    if (!res.ok) return null;
-    const parsed = v.safeParse(HealthBodySchema, await res.json());
+async function readHealthBuildSha(): Promise<string | null> {
+  const res = await fetch("/api/health", { signal: AbortSignal.timeout(HEALTH_READ_TIMEOUT_MS) });
 
-    return parsed.success ? parsed.output.build?.sha ?? null : null;
-  } catch (cause) {
-    if (!isTolerableHealthFailure({ cause })) throw cause;
+  if (!res.ok) return null;
+  const parsed = v.safeParse(HealthBodySchema, await res.json());
 
-    return null;
-  }
+  return parsed.success ? parsed.output.build?.sha ?? null : null;
 }
 
 let pageBuild: Promise<string | null> | null = null;

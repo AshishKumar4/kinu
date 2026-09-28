@@ -180,7 +180,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     const inFlight = this.probeState.storage.sql.exec<{ n: number }>(
       `SELECT COUNT(*) AS n FROM actor_turn_claims c JOIN workspace_actors a ON a.actor_id = c.actor_id
-       WHERE a.kind = 'subordinate' AND c.status = 'admitted'`).one().n;
+       WHERE a.kind = 'subordinate' AND c.outcome IS NULL`).one().n;
 
     diagnostics.event('probe.wake_returned', { delegatedTurnsInFlight: inFlight });
 
@@ -189,7 +189,8 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   /** The owner's Stop in an actor pane: the `cancel` frame reaches the hosted room's wire as this call. */
   async stopHosted(name: string): Promise<void> {
-    const wire = this.hostedChatWire(name);
+    const resolved = await this.resolveHostedActorRoute(name);
+    const wire = 'reason' in resolved ? null : this.hostedChatWire(resolved.actorId);
 
     if (wire === null) throw new Error(`no hosted chat wire for ${name}`);
     wire.interrupt();

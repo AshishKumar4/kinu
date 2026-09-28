@@ -1,7 +1,6 @@
-/** What an MCTS branch is asked and how its answer is read back, shared by every substrate so branches stay comparable. */
+/** What a swarm node is asked when it proposes one approach, so sibling proposals stay comparable. */
 
 import { diversityDirective } from './diversity';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import type { WorkMode } from '../types/turn';
 
 /** A crafted tool as a branch is told about it; a branch reasons, it does not call tools. */
@@ -49,17 +48,4 @@ export function explorePrompt({ mode, context, craftedTools, siblings, languages
       + `Propose ONE specific concrete approach. Include a code implementation if applicable.`
       + diversityDirective(siblings),
   };
-}
-
-/**
- * The failure post-mortem a branch writes about its own attempt. Lines for an empty
- * `attempt` or absent `outcome` are dropped rather than shown empty or guessed.
- */
-export function reflectionPrompt(task: string, attempt: string, outcome?: string): string {
-  const bounded = evidenceWindow(attempt, EVIDENCE_BUDGETS.reflection);
-
-  return `Task: ${evidenceWindow(task, EVIDENCE_BUDGETS.reflection)}\n`
-    + (bounded ? `Attempt: ${bounded}\n` : '')
-    + (outcome ? `Outcome: ${outcome}\n` : '')
-    + `\nWhat specifically went wrong? One sentence.`;
 }

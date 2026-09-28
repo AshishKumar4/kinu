@@ -78,7 +78,7 @@ function createTestCodemodeBuilder(
 
 /** An actor surface over `rt` whose sandbox is `codemode`. */
 function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'craftedToolExecute' | 'codemode'>) {
-  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' }, ...deps, history: storesFor(rt).history });
+  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() }, ...deps, history: storesFor(rt).history });
 }
 
 function requiredCraftedTool(tools: CraftedToolSet, name: string) {
@@ -98,7 +98,7 @@ describe('crafted-tool execution integration', () => {
       ['mcp_shadow', 'async () => 3'], ['empty', '   '], ['comment', '  // disabled'],
       ['retired', 'async () => 4'],
     ] as const) {
-      rt.craftStore.create({ name, code, description: '', params: null, scope: 'local' });
+      rt.craftStore.create({ name, code, description: '' });
     }
 
     void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'retired'`;
@@ -143,9 +143,7 @@ describe('crafted-tool execution integration', () => {
     rt.craftStore.create({
       name: 'double',
       description: 'doubles its arg',
-      params: null,
       code: 'async (n) => n * 2',
-      scope: 'local',
     });
 
     const tools = actorTools(rt, {
@@ -169,9 +167,7 @@ describe('crafted-tool execution integration', () => {
     rt.craftStore.create({
       name: 'exploder',
       description: 'always throws',
-      params: null,
       code: 'async () => { throw new Error("inner boom"); }',
-      scope: 'local',
     });
 
     const tools = actorTools(rt, {
@@ -192,8 +188,8 @@ describe('crafted-tool execution integration', () => {
   test('a tool that RETURNS normally is not stamped', async () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
-      name: 'quiet', description: 'fine', params: null,
-      code: 'async () => "ok"', scope: 'local',
+      name: 'quiet', description: 'fine',
+      code: 'async () => "ok"',
     });
 
     const tools = actorTools(rt, {
@@ -215,9 +211,7 @@ describe('crafted-tool execution integration', () => {
     rt.craftStore.create({
       name: 'identity',
       description: 'returns arg',
-      params: null,
       code: 'async (x) => x',
-      scope: 'local',
     });
 
     let factoryCalls = 0;
@@ -253,9 +247,7 @@ describe('crafted-tool execution integration', () => {
     rt.craftStore.create({
       name: 'noisy',
       description: 'noisy',
-      params: null,
       code: 'async () => "nope"',
-      scope: 'local',
     });
     void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'noisy'`;
 

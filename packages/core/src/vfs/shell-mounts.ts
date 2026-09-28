@@ -12,6 +12,7 @@ import { tolerateAsync } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
 import { makeVfsError } from './errno';
 import type { MountedVfs } from './mounts';
+import { procMountsPlane, type ProcMutations } from './mount-listing';
 
 export type ShellMountTable = (cred: Readonly<VfsCred>) => MountedVfs | null;
 
@@ -121,6 +122,12 @@ class MountRoutedBridge implements RuntimeFsBridge {
     private readonly cred: Readonly<VfsCred>,
   ) {}
 
+  private readonly procMutations: ProcMutations = {
+    writeFile: async (_path, data) => { await this.inner.writeFile('/proc/mounts', data); },
+    unlink: async () => { await this.inner.unlink('/proc/mounts'); },
+    mkdir: async () => { await this.inner.mkdir('/proc/mounts'); },
+  };
+
   get synchronous(): RuntimeFsBridge['synchronous'] {
     return this.inner.synchronous;
   }
@@ -131,6 +138,8 @@ class MountRoutedBridge implements RuntimeFsBridge {
 
     if (absolute === null) return null;
     const plane = this.plane();
+
+    if (absolute === '/proc/mounts') return { plane: procMountsPlane(plane, this.procMutations), mount: 'proc', path: absolute };
     const mount = plane?.mountOf(absolute) ?? null;
 
     return plane && mount !== null ? { plane, mount, path: absolute } : null;

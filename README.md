@@ -176,7 +176,7 @@ self-host as of 2026-09-13; it depends on model use, storage and containers.
 | Delegation | One `agents` tool: `swarm`, `hire`, `msg`, `list`, `dismiss`. A hired agent either stays or runs one task, as `task`, `researcher`, `planner`, `auditor` or `designer`. |
 | Crafted tools | The agent writes tools, scores them as it uses them, and finds them again with FTS5 search. |
 | A scaffold the agent can change | The agent loop is code the agent can rewrite. Structural checks validate a change before it runs. |
-| Evolution | Four timescales: step, turn, session, lifetime. An optional advisor reviews finished turns. `kinu evolve` searches over the scaffold itself. |
+| Evolution | Four timescales: step, turn, session, lifetime. An optional advisor reviews finished turns. |
 | Prompts as Markdown | Prompt text lives under `packages/core/src/prompts/`. The builder picks sections and fills their slots. Indexed sections evolve on their own. |
 | Triggers | Timers and webhooks wake cloud workspaces. Local timers need `kinu daemon` running. Email needs the mail domain set up; the last live check, on 2026-08-20, found that setup unfinished on `kinu.run` ([email setup](docs/EMAIL-INGRESS.md)). |
 | Web search | The `web` tool works with no keys. A Tavily key adds ranked search. |
@@ -222,7 +222,7 @@ over `bun:sqlite` and real processes. Both drive the same core `ChatSession`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/backend-dark.svg">
-  <img alt="Web, CLI and autonomous ingress reach the shared core. AgentRuntime and BackendHost connect it to Cloudflare or local services. Hosted hires and swarm nodes are logical actors in one workspace Durable Object; local hires and branch processes share their workspace database." src="docs/diagrams/backend.svg" width="900">
+  <img alt="Web, CLI and autonomous ingress reach the shared core. AgentRuntime and BackendHost connect it to Cloudflare or local services. Hosted hires and swarm nodes are logical actors in one workspace Durable Object; local hires share their workspace database." src="docs/diagrams/backend.svg" width="900">
 </picture>
 
 To add a backend, implement those two interfaces and wire in the services it
@@ -258,7 +258,6 @@ from the command registry, and [Configuration](docs/CONFIG.md) documents every
 | [Swarms](docs/EXPLORATION.md) | The six axes, the node contract, the publication seal, settle and merge-back |
 | [Extensibility](docs/EXTENSIBILITY.md) | The three extension points, worked through with real examples |
 | [Evolution](docs/EVOLUTION.md) | The four timescales, CraftStore lifecycle, scaffold mutation |
-| [MCTS](docs/MCTS.md) | UCT formula, branch isolation, convergence |
 | [Tools](docs/TOOLS.md) | The eight built-ins, the file plane, the `agents` surface, the codemode sandbox |
 | [Live UI](docs/LIVE-UI.md) | Slates: authoring, the one codemode operation, bindings, and the resident preview |
 | [Execution layer](docs/EXECUTION-LAYER-SPEC.md) | The four executors, mounts, device consent, what runs where |

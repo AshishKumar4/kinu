@@ -242,20 +242,16 @@ describe('durable plan review lifecycle', () => {
     expect(store.dismiss('plan-1', 1)).toMatchObject({ ok: false, plan: { status: 'approved' } });
   });
 
-  test('a sent-back plan whose revision turn already started cannot be dismissed; one still queued can', () => {
-    // A running revision turn may still submit a new plan, which would bring the hold back after the dismiss.
-    const { store } = setup();
-    store.submit('default', [{ start: 1, content: '# One' }]);
-    store.decide('plan-1', 1, 'request_changes', 'Say what happens to the audit trail.');
-    store.markHandoffAccepted('plan-1', 1);
+  test('a sent-back plan is dismissable whether its revision turn is queued or already running', () => {
+    for (const accepted of [false, true]) {
+      const { store } = setup();
+      store.submit('default', [{ start: 1, content: '# One' }]);
+      store.decide('plan-1', 1, 'request_changes', 'Say what happens to the audit trail.');
 
-    expect(store.dismiss('plan-1', 1)).toMatchObject({ ok: false, plan: { status: 'changes_requested' } });
+      if (accepted) store.markHandoffAccepted('plan-1', 1);
 
-    const queued = setup().store;
-    queued.submit('default', [{ start: 1, content: '# One' }]);
-    queued.decide('plan-1', 1, 'request_changes', 'Say what happens to the audit trail.');
-
-    expect(queued.dismiss('plan-1', 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+      expect(store.dismiss('plan-1', 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
+    }
   });
 });
 
@@ -300,7 +296,7 @@ describe('submit_plan native tool', () => {
               id: 'plan-1', sessionId: 'default', revision: 1, content: '# Plan',
               status: 'pending' as const, annotations: [], feedback: null,
               handoffAccepted: false,
-              createdAt: 1, updatedAt: 1, decidedAt: null,
+              createdAt: 1, updatedAt: 1,
             },
           };
         },

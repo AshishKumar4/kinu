@@ -2,7 +2,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw, createMockLLM, createTestRuntime } from './helpers';
-import { createTestActors, present, unobservedSpend } from '@kinu.run/test-utils';
+import { createTestActors, present } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
@@ -128,8 +128,8 @@ describe('listReplayEvals — the quality-panel data series', () => {
     actor: ActorHandle,
     row: { id: string; ranAt: number; meanScore: number; scaffoldVersion: number | null },
   ) {
-    void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES (${actor.actorId}, ${row.id}, ${row.ranAt}, 4, 2, 2, ${row.meanScore}, ${1 - row.meanScore}, ${row.scaffoldVersion}, ${'[]'})`;
+    void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, scaffold_version, details)
+        VALUES (${actor.actorId}, ${row.id}, ${row.ranAt}, 4, 2, 2, ${row.meanScore}, ${row.scaffoldVersion}, ${'[]'})`;
   }
 
   test('returns the series newest-first with the fields the panel renders', () => {
@@ -174,7 +174,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
 
-    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend,
+    const engine = new EvolutionEngine(rt, stores.history, {
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
 
@@ -199,7 +199,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
 
-    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend,
+    const engine = new EvolutionEngine(rt, stores.history, {
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
 
@@ -211,8 +211,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
 
     const replayEvents = events.filter((e) => e.type === 'replay_eval');
     expect(replayEvents).toHaveLength(1);
-    // The loss is reported with the interval it deserves at two instances.
-    expect(replayEvents[0].message).toContain('loss 0.20 (95% CI 0.02–0.78)');
+
     expect(listReplayEvals(rt.storage.sql, rt.actor)).toHaveLength(1);
   });
 
@@ -227,7 +226,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
 
-    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend,
+    const engine = new EvolutionEngine(rt, stores.history, {
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
 
@@ -240,7 +239,7 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
 
   test('no runner configured → replay skipped, returns null', async () => {
     const { rt, stores } = createTestRuntime();
-    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
+    const engine = new EvolutionEngine(rt, stores.history);
     seedOutcomes(rt.storage.sql, rt.actor);
     expect(await engine.runReplayEval()).toBeNull();
     expect(listReplayEvals(rt.storage.sql, rt.actor)).toHaveLength(0);

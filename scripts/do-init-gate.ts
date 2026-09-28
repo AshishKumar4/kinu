@@ -24,7 +24,7 @@ import { sandboxLineage } from './egress-interception';
 import { parseJsonc } from './jsonc';
 import {
   blockBodyOf, classMembers, declaredName, functionOf, identifierCalleeName, identifierText,
-  isAsync, isFunctionLike, memberCalleeName, parse, returnTypeOf, superClassName,
+  isAsync, isFunctionLike, memberCalleeName, methodKind, parse, returnTypeOf, superClassName,
   type Parsed, type SyntaxNode, walk,
 } from './syntax';
 
@@ -718,6 +718,190 @@ export function audit(sources: ReadonlyMap<string, string>): InitGateAudit {
   return { inspected, violations, classifier, arms };
 }
 
+/* ── Constructors ──────────────────────────────────────────────────────────
+   A Durable Object constructor runs before every event, a native RPC included,
+   and nothing bounds it: the platform cannot cancel it and every event waits.
+   So it is held to the synchronous `onStart` rule, structurally, with no list
+   of allowed writes: DDL and single statements pass because they are single
+   statements, and anything that holds, leaves the object, or scales with rows
+   is refused wherever the constructor reaches it through its own class. */
+
+/** Calls a constructor may not make, directly or through a same-class method:
+ *  each one holds the object open, leaves it, or schedules more work. */
+const CONSTRUCTOR_REFUSED_CALLS: readonly string[] = [
+  'blockConcurrencyWhile', 'fetch', 'schedule', 'scheduleEvery', 'keepAlive', 'keepAliveWhile', 'runFiber',
+  'setTimeout', 'setInterval', 'wait', 'queueMicrotask',
+];
+
+interface ClassDeclarationSite {
+  readonly file: string;
+  readonly parsed: Parsed;
+  readonly node: SyntaxNode;
+  readonly base: string | undefined;
+}
+
+export interface ConstructorAudit {
+  readonly inspected: readonly { file: string; owner: string }[];
+  readonly violations: readonly Violation[];
+}
+
+/** True for a SQL call: a `sql` tagged template or an `.exec(...)` on a storage handle. */
+function isSqlRead(node: SyntaxNode): boolean {
+  if (memberCalleeName(node) === 'exec') return true;
+
+  if (node.raw.type !== 'TaggedTemplateExpression') return false;
+  const { tag } = node.raw;
+
+  if (tag.type === 'Identifier') return tag.name === 'sql';
+
+  return tag.type === 'MemberExpression' && tag.property.type === 'Identifier' && tag.property.name === 'sql';
+}
+
+function containsSql(node: SyntaxNode): boolean {
+  let found = false;
+  walk(node, (child) => { found ||= isSqlRead(child); });
+
+  return found;
+}
+
+/** A `this.name(...)` call's method name. */
+function selfCalleeName(node: SyntaxNode): string | undefined {
+  const { raw } = node;
+
+  if (raw.type !== 'CallExpression' || raw.callee.type !== 'MemberExpression') return undefined;
+
+  return raw.callee.object.type === 'ThisExpression' ? memberCalleeName(node) : undefined;
+}
+
+/** A call whose receiver chain is rooted at `env` or `this.env`: a binding, which leaves the object. */
+function reachesBinding(node: SyntaxNode, text: string): boolean {
+  const { raw } = node;
+
+  if (raw.type !== 'CallExpression' || raw.callee.type !== 'MemberExpression') return false;
+  const receiver = text.slice(raw.callee.object.start, raw.callee.object.end).replace(/\s+/g, '');
+
+  return receiver === 'env' || receiver.startsWith('env.') || receiver === 'this.env' || receiver.startsWith('this.env.');
+}
+
+/**
+ * Every Durable Object constructor, and the methods of its own class chain it calls, under the synchronous start
+ * rule. `classes` names the governed classes: the wrangler-declared ones and every in-corpus ancestor of one.
+ */
+export function auditConstructors(sources: ReadonlyMap<string, string>, declared: readonly string[]): ConstructorAudit {
+  const sites = new Map<string, ClassDeclarationSite>();
+
+  for (const [file, text] of sources) {
+    if (!text.includes('constructor(')) continue;
+    const parsed = parse(file, text);
+    walk(parsed.root, (node) => {
+      const name = node.type === 'ClassDeclaration' ? declaredName(node) : undefined;
+
+      if (name !== undefined && !sites.has(name)) sites.set(name, { file, parsed, node, base: superClassName(node) });
+    });
+  }
+
+  const governed = new Set<string>();
+
+  for (const name of declared) {
+    for (let at: string | undefined = name; at !== undefined && sites.has(at) && !governed.has(at); at = sites.get(at)?.base) {
+      governed.add(at);
+    }
+  }
+
+  const methodOf = (owner: string, name: string): { site: ClassDeclarationSite; member: SyntaxNode } | undefined => {
+    for (let at: string | undefined = owner; at !== undefined; at = sites.get(at)?.base) {
+      const site = sites.get(at);
+
+      if (site === undefined) return undefined;
+
+      const member = classMembers(site.node).find((m) => m.type === 'MethodDefinition' && declaredName(m) === name
+        && methodKind(m) === 'method');
+
+      if (member !== undefined) return { site, member };
+    }
+
+    return undefined;
+  };
+
+  const inspected: { file: string; owner: string }[] = [];
+  const violations: Violation[] = [];
+
+  for (const owner of [...governed].sort()) {
+    const site = sites.get(owner);
+    const ctor = site === undefined ? undefined : classMembers(site.node).find((m) => methodKind(m) === 'constructor');
+
+    if (site === undefined || ctor === undefined) continue;
+    inspected.push({ file: site.file, owner });
+    const seen = new Set<string>(['constructor']);
+    const queue: { site: ClassDeclarationSite; member: SyntaxNode; name: string }[] = [{ site, member: ctor, name: 'constructor' }];
+
+    for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+      const { site: at, member, name: memberName } = next;
+      const text = sources.get(at.file) ?? '';
+      const body = blockBodyOf(functionOf(member) ?? member);
+      const line = at.parsed.lineAt(member.start);
+      const fail = (reason: string): void => void violations.push({ file: at.file, line, owner, member: memberName, reason });
+
+      if (body === undefined) continue;
+      const rowSources = new Set<string>();
+
+      const visit = (node: SyntaxNode, loop: SyntaxNode | undefined): void => {
+        for (const child of node.children) {
+          // A closure defined here runs later, on some event's own terms.
+          if (isFunctionLike(child)) continue;
+          const looping = LOOPS.includes(child.type) ? child : loop;
+          const called = memberCalleeName(child) ?? identifierCalleeName(child);
+
+          if (called !== undefined && CONSTRUCTOR_REFUSED_CALLS.includes(called)) {
+            fail(`calls \`${called}\` at line ${String(at.parsed.lineAt(child.start))} — a constructor holds every event on this object`);
+          }
+
+          if (reachesBinding(child, text)) {
+            fail(`calls a binding at line ${String(at.parsed.lineAt(child.start))} — a constructor may not leave the object`);
+          }
+
+          if (child.type === 'AwaitExpression') fail(`awaits at line ${String(at.parsed.lineAt(child.start))}`);
+
+          if (child.raw.type === 'VariableDeclarator' && child.raw.id.type === 'Identifier' && containsSql(child)) {
+            rowSources.add(child.raw.id.name);
+          }
+
+          if (looping !== undefined && child === looping) {
+            const header = looping.children.filter((part) => part.raw !== ('body' in looping.raw ? looping.raw.body : undefined));
+            const readsRows = header.some((part) => containsSql(part) || [...rowSources].some((row) => text.slice(part.start, part.end).includes(row)));
+
+            if (readsRows || containsSql(looping)) {
+              fail(`loops over table rows at line ${String(at.parsed.lineAt(looping.start))} — a constructor's work may not scale with its data`);
+            }
+          }
+
+          const self = selfCalleeName(child);
+
+          if (self !== undefined && !seen.has(self)) {
+            const found = methodOf(owner, self);
+
+            if (found !== undefined) {
+              seen.add(self);
+
+              if (isAsync(found.member)) {
+                fail(`calls \`this.${self}()\`, which is async — a promise the constructor starts and cannot hold`);
+              } else {
+                queue.push({ site: found.site, member: found.member, name: self });
+              }
+            }
+          }
+
+          visit(child, looping);
+        }
+      };
+
+      visit(body, undefined);
+    }
+  }
+
+  return { inspected, violations };
+}
+
 /** The containers start block's one call into the hook (the containers patch). */
 const START_HOOK_EDGE = 'callOnStart';
 
@@ -1048,7 +1232,9 @@ export function containerBlockSources(sources: ReadonlyMap<string, string>): Rea
 
 if (import.meta.main) {
   const sources = readSources();
-  const { inspected, violations, classifier, arms } = audit(sources);
+  const audited = audit(sources);
+  const { inspected, classifier, arms } = audited;
+  const violations = [...audited.violations];
   const blocks = auditBlockBodies(containerBlockSources(sources));
 
   // Denominator. A gate that finds nothing because it looked nowhere is the
@@ -1063,8 +1249,12 @@ if (import.meta.main) {
   // gate and does I/O we do not control; that is residual risk, not something
   // this gate can assert. Named, never silently dropped.
   const vendor = declared.filter((cls) => !ours.includes(cls));
+  const constructors = auditConstructors(sources, declared);
 
   const problems: string[] = [];
+
+  if (constructors.inspected.length === 0) problems.push('found 0 Durable Object constructors — the class scan is not matching');
+  violations.push(...constructors.violations);
 
   for (const found of blocks.violations) problems.push(`${found.file}:${found.line}: ${found.reason}`);
 
@@ -1138,7 +1328,8 @@ if (import.meta.main) {
       `do-init-gate: ok — ${inspected.length} governed hook(s) across `
       + `${new Set(inspected.map((i) => i.owner)).size} class(es) `
       + `(${counted('per-request')} per-request onStart, ${counted('container-start')} `
-      + `container-start onStart, ${counted('recovery')} SDK-awaited recovery); `
+      + `container-start onStart, ${counted('recovery')} SDK-awaited recovery), `
+      + `${String(constructors.inspected.length)} DO constructors with the same-class methods they call; `
       + `${ours.length}/${declared.length} wrangler-declared DO classes defined here and parsed`
       + (vendor.length > 0 ? `; not ours: ${vendor.join(', ')}` : '')
       + `; the SDK start blocks (${blocks.hookBlocks.join(', ')}) run the hook through \`${START_HOOK_EDGE}\`, which`
@@ -1167,6 +1358,8 @@ if (import.meta.main) {
       + ` (${arms?.file ?? '(unknown)'}:${arms?.line ?? 0}) CALLS past its own body: this gate proves it`
       + ' places direct container calls under the raced budget and finds a control-port proof.'
       + '\n  Indirect calls, runtime entry ordering, cancellation and data-size bounds need lifecycle tests.'
+      + ';\n  what a constructor reaches through getters, imported functions or other objects: it follows'
+      + ' `this.method()` calls within its own class chain only'
       + (vendor.length > 0
         ? `;\n  the startup of vendor DO classes this repo re-exports (${vendor.join(', ')})`
         : ''),

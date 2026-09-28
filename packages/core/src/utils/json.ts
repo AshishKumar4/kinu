@@ -1,5 +1,6 @@
+import { Effect } from 'effect';
 import * as v from 'valibot';
-import { classify, renderThrownChain } from '../obs/index';
+import { classify, renderThrownChain, settleSync } from '../obs/index';
 
 export type JsonPrimitive = string | number | boolean | null;
 
@@ -27,6 +28,13 @@ export function isJsonObject(value: JsonValue): value is JsonObject {
 export function isParsedJsonObject(value: JsonValue): value is JsonObject {
   return value !== null && !Array.isArray(value)
     && !v.is(StringSchema, value) && !v.is(NumberSchema, value) && !v.is(BooleanSchema, value);
+}
+
+/** No walk, no copy: JSON by construction. */
+export function readJsonObjectText(text: string): JsonObject | null {
+  const value: JsonValue = JSON.parse(text);
+
+  return isParsedJsonObject(value) ? value : null;
 }
 
 /** The elements of a parsed JSON array of objects; null when it is not one. */
@@ -58,26 +66,32 @@ const BoundaryArraySchema = v.array(v.unknown());
 
 const BoundaryObjectSchema = v.record(v.string(), v.unknown());
 
+/** `JSON.parse` output is JSON by construction: no walk. */
 export function parseJsonValue(text: string): JsonValue {
-  return v.parse(JsonValueSchema, JSON.parse(text));
+  const value: JsonValue = JSON.parse(text);
+
+  return value;
 }
+
+const ParsedObjectSchema = v.custom<JsonObject>((value) => !Array.isArray(value) && v.is(BoundaryObjectSchema, value), 'Invalid type: Expected Object');
+
+const ParsedArraySchema = v.custom<JsonValue[]>(Array.isArray, 'Invalid type: Expected Array');
 
 /** Text that is not JSON reads back as itself; any other failure throws. */
 export function safeJsonParse(text: string): JsonValue {
-  try { return parseJsonValue(text); }
-  catch (error) {
-    if (classify({ cause: error }) !== 'malformed-input') throw error;
-
-    return text;
-  }
+  return settleSync(Effect.try({ try: () => parseJsonValue(text), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catchIf((failed) => classify(failed) === 'malformed-input', () => Effect.succeed<JsonValue>(text)),
+    Effect.catch((failed) => Effect.die(failed.cause)),
+  ));
 }
 
+/** Checks the top level only; the members are JSON by construction. */
 export function parseJsonObject(text: string): JsonObject {
-  return v.parse(JsonObjectSchema, JSON.parse(text));
+  return v.parse(ParsedObjectSchema, parseJsonValue(text));
 }
 
 export function parseJsonArray(text: string): JsonValue[] {
-  return v.parse(JsonArraySchema, JSON.parse(text));
+  return v.parse(ParsedArraySchema, parseJsonValue(text));
 }
 
 export function decodeJsonValue(input: { value: unknown }): JsonValue {
@@ -92,35 +106,40 @@ export function assertJsonValue(
 
 /** Omits `undefined` properties, maps `undefined` array elements to `null`; unrepresentable values still throw. */
 export function projectJsonValue(input: { value: unknown }): JsonValue {
-  try {
-    assertJsonValue(input);
+  return settleSync(projected(input));
+}
 
-    return input.value;
-  } catch (validationError) {
-    const array = v.safeParse(BoundaryArraySchema, input.value);
+function projected(input: { value: unknown }): Effect.Effect<JsonValue> {
+  const checked = { value: input.value };
 
-    if (array.success) {
-      return array.output.map((value) =>
-        v.safeParse(UndefinedSchema, value).success
-          ? null
-          : projectJsonValue({ value }));
-    }
+  return Effect.try({ try: (): JsonValue => {
+    assertJsonValue(checked);
 
-    const object = v.safeParse(BoundaryObjectSchema, input.value);
+    return checked.value;
+  }, catch: (cause) => ({ cause }) }).pipe(
+    Effect.matchEffect({ onSuccess: Effect.succeed, onFailure: (failed): Effect.Effect<JsonValue> => {
+      const array = v.safeParse(BoundaryArraySchema, input.value);
 
-    if (object.success) {
-      const projected: JsonObject = {};
-
-      for (const [key, value] of Object.entries(object.output)) {
-        if (v.safeParse(UndefinedSchema, value).success) continue;
-        projected[key] = projectJsonValue({ value });
+      if (array.success) {
+        return Effect.forEach(array.output, (item) => (v.safeParse(UndefinedSchema, item).success ? Effect.succeed(null) : projected({ value: item })));
       }
 
-      return projected;
-    }
+      const object = v.safeParse(BoundaryObjectSchema, input.value);
 
-    throw validationError;
-  }
+      if (!object.success) return Effect.die(failed.cause);
+
+      return Effect.gen(function* () {
+        const result: JsonObject = {};
+
+        for (const [key, item] of Object.entries(object.output)) {
+          if (v.safeParse(UndefinedSchema, item).success) continue;
+          result[key] = yield* projected({ value: item });
+        }
+
+        return result;
+      });
+    } }),
+  );
 }
 
 /** One truncation limit so durable records of the same call agree. */
@@ -134,18 +153,21 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
   const text = v.safeParse(v.string(), input.value);
 
   if (text.success) {
-    return text.output.length > DIGEST_LIMIT ? text.output.slice(0, DIGEST_LIMIT) + '…' : text.output;
+    return text.output.length > DIGEST_LIMIT ? text.output.slice(0, DIGEST_LIMIT) + '...' : text.output;
   }
 
-  try {
-    const projected = projectJsonValue(input);
-    const serialized = JSON.stringify(projected);
+  return settleSync(Effect.try({
+    try: (): JsonValue => {
+      const json = projectJsonValue(input);
+      const serialized = JSON.stringify(json);
 
-    return serialized.length <= DIGEST_LIMIT ? projected : serialized.slice(0, DIGEST_LIMIT) + '…';
-  } catch (error) {
+      return serialized.length <= DIGEST_LIMIT ? json : serialized.slice(0, DIGEST_LIMIT) + '...';
+    },
+    catch: (cause) => ({ cause }),
+  }).pipe(
     // `String()` would give "[object Object]"; the reason takes its place.
-    return `unserializable digest input: ${renderThrownChain({ cause: error })}`.slice(0, DIGEST_LIMIT);
-  }
+    Effect.catch((failed) => Effect.succeed(`unserializable digest input: ${renderThrownChain(failed)}`.slice(0, DIGEST_LIMIT))),
+  ));
 }
 
 /** A valibot failure as one line, `path: message` per issue. */

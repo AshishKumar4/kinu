@@ -50,7 +50,7 @@ kinu_bun_compatible() {
 
 # Kinu's managed Bun first. It is an absolute path the installer controls, so
 # the launcher resolves the binary the installer verified whatever PATH the
-# user's next shell has — a PATH disagreement is what prints "Kinu CLI is ready."
+# user's next shell has: a PATH disagreement is what prints "Kinu CLI is ready."
 # and then "Bun is required."
 kinu_resolve_bun() {
   KINU_BUN=""

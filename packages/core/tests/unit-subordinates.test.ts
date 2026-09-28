@@ -12,11 +12,10 @@ import {
   initEventsHubTables,
   renderForLLM,
   spillEventContent,
-  SubordinateIdentityStore,
   SubordinateRosterStore,
   DELEGATION_MAX_DEPTH,
   ROOT_DELEGATION_BUDGET,
-  delegationBudgetAtDepth, delegationBudgetOf,
+  delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,
   deriveChildDelegationBudget,
@@ -36,7 +35,6 @@ import {
   type SerializedMessage,
   type SqlExec,
   type SubordinateDelivery,
-  type SubordinateIdentity,
   type SubordinateHandoff,
   type SubordinateReportOrigin,
   type SubordinateReportPayload,
@@ -48,6 +46,7 @@ import {
   WorkspaceActorDirectory, actorReferenceOf, recoverSubordinateLifecycles, type ActorReference,
   type ActorHandle,
   type AgentConfigStore,
+  initSubordinateRosterTable,
 } from '../src/index';
 import { CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
 import { codenameFor } from '../src/identity/naming';
@@ -57,6 +56,10 @@ import {
 } from './helpers';
 import type { z } from 'zod';
 import { dispatchReport, ReportToolInputSchema, type ReportToolResult } from '../src/tools/report-tool';
+
+/** A hire chain `depth` levels below the root. */
+const budgetAt = (depth: number) =>
+  Array.from({ length: depth }, () => 0).reduce((budget) => deriveChildDelegationBudget(budget), ROOT_DELEGATION_BUDGET);
 
 const NOW = 1_700_000_000_000;
 
@@ -72,12 +75,6 @@ function makeRosterStore(db: Database = new Database(':memory:')): SubordinateRo
   const { sql, actor } = makeWorld(db);
 
   return new SubordinateRosterStore(sql, actor);
-}
-
-function makeIdentityStore(db: Database = new Database(':memory:')): SubordinateIdentityStore {
-  const { sql, actor } = makeWorld(db);
-
-  return new SubordinateIdentityStore(sql, actor);
 }
 
 function reportPayload(event: KinuEvent | undefined): SubordinateReportPayload {
@@ -100,80 +97,6 @@ function reportPayload(event: KinuEvent | undefined): SubordinateReportPayload {
     kinu_mode: v.picklist(['build', 'plan']),
   }), event.payload);
 }
-
-const identityInput: SubordinateIdentity = {
-  name: 'researcher',
-  mission: 'Map the market.',
-  parentWorkspace: 'kinu-main',
-  ownerUserId: 'owner-123',
-  depth: 1,
-  lifetime: 'durable',
-};
-
-describe('subordinate identity', () => {
-  test('seed is immutable while allowing an identical parent retry', () => {
-    const identity = makeIdentityStore();
-    identity.ensureSchema();
-
-    identity.seed(identityInput);
-    identity.seed(identityInput);
-
-    expect(identity.read()).toEqual(identityInput);
-    expect(identity.ownerUserId()).toBe('owner-123');
-    expect(identity.workspaceName()).toBe('kinu-main');
-    expect(() => identity.seed({ ...identityInput, ownerUserId: 'attacker' }))
-      .toThrow('already initialized');
-    expect(identity.read()).toEqual(identityInput);
-  });
-
-  test('a retry cannot retarget the subordinate name or workspace', () => {
-    const identity = makeIdentityStore();
-    identity.ensureSchema();
-    identity.seed(identityInput);
-
-    expect(() => identity.seed({ ...identityInput, name: 'attacker' }))
-      .toThrow('already initialized');
-    expect(() => identity.seed({ ...identityInput, parentWorkspace: 'other-workspace' }))
-      .toThrow('already initialized');
-    expect(identity.read()).toEqual(identityInput);
-  });
-
-  // The cap is enforced from depth: a subordinate re-seeding itself shallower would get a fresh subtree.
-  test('depth is part of the immutable identity, not a settable field', () => {
-    const identity = makeIdentityStore();
-    identity.ensureSchema();
-    identity.seed({ ...identityInput, depth: 3, lifetime: 'durable' });
-
-    expect(() => identity.seed({ ...identityInput, depth: 1, lifetime: 'durable' }))
-      .toThrow('already initialized');
-    expect(identity.read()?.depth).toBe(3);
-  });
-
-  // A Durable Object is evicted routinely, so depth must be durable; a second store over the same
-  // database is exactly what a resumed facet does.
-  test('depth survives a resume: a fresh store over the same storage reads it back', () => {
-    const db = new Database(':memory:');
-    const first = makeIdentityStore(db);
-    first.ensureSchema();
-    first.seed({ ...identityInput, depth: 3, lifetime: 'durable' });
-    expect(first.delegationBudget()).toEqual({ depth: 3, maxDepth: 1 });
-
-    const resumed = makeIdentityStore(db);
-    resumed.ensureSchema();
-    expect(resumed.read()?.depth).toBe(3);
-    expect(resumed.delegationBudget()).toEqual({ depth: 3, maxDepth: 1 });
-  });
-
-  // Fail closed: an unseeded facet must not read as the root.
-  test('an unseeded facet reads as exhausted rather than as the root', () => {
-    const identity = makeIdentityStore();
-    identity.ensureSchema();
-    expect(identity.read()).toBeNull();
-    expect(identity.delegationBudget().maxDepth).toBe(0);
-    expect(delegationExhausted(identity.delegationBudget())).toBe(true);
-  });
-
-});
 
 describe('the child descriptor authority', () => {
   // S2: presentation fields live only in the child's actor_config and must survive a cold reopen.
@@ -207,20 +130,6 @@ describe('the child descriptor authority', () => {
     });
   });
 
-
-  // The identity row is immutable lineage: presentation changes never touch it.
-  test('identity stays immutable lineage while presentation changes around it', () => {
-    const db = new Database(':memory:');
-    const identity = makeIdentityStore(db);
-    identity.ensureSchema();
-    identity.seed(identityInput);
-    const config = makeConfig(db);
-    config.setDisplayNameOrigin('New Name', 'user');
-
-    expect(identity.read()).toEqual(identityInput);
-    expect(() => identity.seed({ ...identityInput, mission: 'different' }))
-      .toThrow('already initialized');
-  });
 });
 
 describe('the delegation depth cap', () => {
@@ -244,7 +153,7 @@ describe('the delegation depth cap', () => {
   });
 
   test('the refusal names the depth reached and classifies as a refusal, not a defect', () => {
-    const atCap = delegationBudgetAtDepth(4);
+    const atCap = budgetAt(4);
     const refusal = delegationDepthRefusal(atCap);
     expect(refusal.reason).toBe('denied');
     expect(CODE_IS_REFUSAL[refusal.reason]).toBe(true);
@@ -253,17 +162,8 @@ describe('the delegation depth cap', () => {
     expect(refusal.error).toContain('swarm');
   });
 
-  // Clamping means a stored depth can only make an actor more restricted.
-  test('a depth past the cap clamps to no room rather than to negative room', () => {
-    expect(delegationBudgetAtDepth(9)).toEqual({ depth: 9, maxDepth: 0 });
-  });
-
   test('a child derived at the cap clamps rather than going negative', () => {
-    expect(deriveChildDelegationBudget(delegationBudgetAtDepth(4))).toEqual({ depth: 5, maxDepth: 0 });
-  });
-
-  test('a stored negative depth reads as the root instead of inflating room', () => {
-    expect(delegationBudgetAtDepth(-2)).toEqual({ depth: 0, maxDepth: DELEGATION_MAX_DEPTH });
+    expect(deriveChildDelegationBudget(budgetAt(4))).toEqual({ depth: 5, maxDepth: 0 });
   });
 
   test('an actor\'s depth is walked off its directory row, and a missing parent ends the walk as a floor', () => {
@@ -330,6 +230,33 @@ describe('workspace subordinate roster', () => {
     roster.restore(beforeDismiss);
     expect(roster.get('researcher')).toEqual(beforeDismiss);
     expect(() => roster.requireExisting('missing')).toThrow('unknown subordinate');
+  });
+
+  test('a roster read works on tables the workspace object made at construction, before any store existed', () => {
+    const { sql, actor } = makeWorld();
+    initSubordinateRosterTable(sql);
+
+    // No `ensureSchema`: a read that reaches the object first finds only what the constructor made.
+    const roster = new SubordinateRosterStore(sql, actor);
+
+    expect(roster.list()).toEqual([]);
+  });
+
+  test('a durable hire whose turn ended reads idle, and keeps the assignment it may still answer', () => {
+    const roster = makeRosterStore();
+    roster.ensureSchema();
+    roster.create({ ...initialRosterEntry, name: 'hello', createdBy: 'user', status: 'idle', currentTask: null });
+
+    roster.assign('hello', 'Say hello to the team.');
+    roster.applyReport('hello', 'progress', 'report_tool', NOW);
+    expect(roster.requireActive('hello').status).toBe('working');
+
+    roster.applyReport('hello', 'progress', 'turn_end', NOW);
+    expect(roster.requireActive('hello')).toMatchObject({ status: 'idle', currentTask: 'Say hello to the team.' });
+
+    roster.assign('hello', 'And again.');
+    roster.applyReport('hello', 'blocked', 'turn_end', NOW);
+    expect(roster.requireActive('hello').status).toBe('awaiting_input');
   });
 });
 
@@ -1144,7 +1071,7 @@ describe('oversize subordinate reports stay reachable', () => {
     if (!path) throw new Error('expected spilled report path');
     expect(await vfs.readFile(path)).toBe(content);
 
-    expect(renderForLLM(event).brief).toEndWith(` — full report: ${path}`);
+    expect(renderForLLM(event).brief).toEndWith(`: full report: ${path}`);
     const batch = buildDrainBatch([event]);
 
     if (!batch) throw new Error('expected subordinate report drain batch');
@@ -1201,6 +1128,7 @@ function parentScene(): ParentScene {
         announced.push({ id: report.id, content: report.content });
       },
       onAdmitted: () => { seen.push('drain'); },
+      onEvolutionAnswer: () => { seen.push('evolution'); },
     },
   };
 }

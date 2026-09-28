@@ -2,10 +2,10 @@ import { BoxRenderable, CodeRenderable, MarkdownRenderable, TextRenderable, type
 import * as v from 'valibot';
 import { useCallback, useRef } from 'react';
 
-import { TUI_MARKS } from '@kinu.run/core';
+import { TUI_MARKS } from '@kinu.run/core/tui';
 
 import type { AgentClientStatus } from '../agent-client';
-import { clipText, terminalText } from '@kinu.run/core';
+import { clipText, terminalText } from '@kinu.run/core/tui';
 import { EXPANDED_RESULT_LINES, FileDiffCard, fileEditDiffView } from './diff-card';
 import { StatusView } from './help-view';
 import { useTuiTheme, type TuiThemeColors } from './theme';
@@ -261,7 +261,7 @@ function ToolResultRow({ message, call, previewWidth, expanded }: {
 
   // A file edit or write draws its change-set, not the result's JSON line.
   if (diff !== null) {
-    return <FileDiffCard view={diff} expanded={expanded} previewWidth={previewWidth} lineCap={EXPANDED_RESULT_LINES} />;
+    return <FileDiffCard view={diff} expanded={expanded} previewWidth={previewWidth} />;
   }
 
   const { success } = message;

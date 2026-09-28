@@ -355,7 +355,7 @@ export default defineConfig({
           compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
           workerLoaders: { LOADER: {} },
           modules: probeModules(twoTurnProbe),
-          bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' } },
           // Compat HTTP falls back to the
           // global fetch (owned-model-services passes no deps.fetch), which
@@ -379,7 +379,7 @@ export default defineConfig({
           compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
           workerLoaders: { LOADER: {} },
           modules: probeModules(hireProbe),
-          bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'HireAI' } },
           outboundService: hireOutbound,
           durableObjects: {
@@ -468,8 +468,8 @@ export default defineConfig({
           compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
           workerLoaders: { LOADER: {} },
           modules: probeModules(publicSurfaceProbe),
-          // `DEV_USER_EMAIL` selects the dev inference plane and the loopback identity.
-          bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          // `DEV_USER_EMAIL` is the loopback identity; `WORKERS_AI_VIA_BINDING` puts its inference on `AI`.
+          bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           // The CLI device sign-in and its rate limits live in AUTH_KV (cli-scoped-socket).
           kvNamespaces: ['AUTH_KV'],
           serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'SurfaceAI' } },
@@ -530,6 +530,7 @@ export default defineConfig({
           STREAM_LIFECYCLE: { className: 'StreamLifecycleDO', useSQLite: true },
           FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
           COMPLEXITY_PROBE: { className: 'ComplexityProbeDO', useSQLite: true },
+          EFFECT_ATOMICITY_PROBE: { className: 'EffectAtomicityProbeDO', useSQLite: true },
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },
           SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
           SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', scriptName: 'slate-share-probe', useSQLite: true },

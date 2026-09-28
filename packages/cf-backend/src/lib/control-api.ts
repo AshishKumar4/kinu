@@ -41,9 +41,7 @@ const ControlFeedbackRowSchema = v.object({
   route: v.string(),
   workspace: v.nullable(v.string()),
   objectKey: v.nullable(v.string()),
-  contentType: v.nullable(v.string()),
   bytes: v.nullable(v.number()),
-  userAgent: v.nullable(v.string()),
 });
 
 export type ControlFeedbackRow = v.InferOutput<typeof ControlFeedbackRowSchema>;
@@ -330,17 +328,10 @@ export function fetchAudit(
   return control(pageSchema(ControlAuditRowSchema), `/audit${pageQuery(cursor, limit)}`);
 }
 
-export function fetchMetrics(
-  hours: number,
-  workspace?: string,
-  /** Bypass the batch cache; the view's refresh button is the one caller. */
-  refresh?: boolean,
-): Promise<ControlAnswer<ControlMetrics>> {
+export function fetchMetrics(hours: number, workspace?: string): Promise<ControlAnswer<ControlMetrics>> {
   const params = new URLSearchParams({ hours: String(hours) });
 
   if (workspace !== undefined && workspace.length > 0) params.set('workspace', workspace);
-
-  if (refresh === true) params.set('refresh', '1');
 
   return control(ControlMetricsSchema, `/metrics?${params.toString()}`);
 }

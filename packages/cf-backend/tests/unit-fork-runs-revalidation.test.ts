@@ -10,7 +10,7 @@ import {
   hasActiveForkWork, selectForkRun, forkParamRows, unexplainedForkRoots,
 } from '../src/components/surfaces/fork-runs';
 import { explorationForkTree } from '@kinu.run/core';
-import { isCompeted, principalVariation, maxVisits } from '@kinu.run/core';
+import { isCompeted, principalVariation, maxVisits } from '@kinu.run/core/swarm-view';
 import { present } from '@kinu.run/test-utils';
 
 function summary(over: Partial<ForkRunSummary> = {}): ForkRunSummary {
@@ -41,7 +41,7 @@ function headRun(over: Partial<HeadRunView> = {}): HeadRunView {
         spawnedAt: 0, lastStepAt: null, decisions: [],
       },
     ],
-    merge: { narrative: 'X, with Y’s guard rail', headCount: 2, totalTokens: 18 },
+    merge: { narrative: 'X, with Y’s guard rail' },
     ...over,
   };
 }

@@ -2,7 +2,7 @@ diff --git a/packages/core/src/memory/hybrid-search.ts b/packages/core/src/memor
 index cb8e82756..69e3fe516 100644
 --- a/packages/core/src/memory/hybrid-search.ts
 +++ b/packages/core/src/memory/hybrid-search.ts
-@@ -319,8 +319,8 @@ export async function hybridSearch(
+@@ -203,8 +203,8 @@ function fused({ lexical, semantic, factArm, finalK, rrfK, rehydrate }: FuseInpu
        rrfScore: m.rrfScore,
        sources,
        label: f ? `fact: ${f.key}` : undefined,
@@ -11,5 +11,5 @@ index cb8e82756..69e3fe516 100644
 +      lexicalScore: s?.score,
 +      semanticScore: l?.score,
      };
-   }));
- }
+ 
+     return hit;

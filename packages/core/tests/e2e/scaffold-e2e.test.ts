@@ -42,8 +42,6 @@ function createScaffoldTestRuntime(llm: LLM) {
       },
     },
     craftStore: createMemoryCraftStore(db),
-    spawnBranch: async () => ({ explore: async () => ({ text: '' }), generateReflection: async () => ({ text: '' }), release: async () => {} }),
-    abortBranch: async () => {},
   };
 
   return { rt };

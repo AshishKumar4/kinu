@@ -17,8 +17,6 @@ export type InferenceStage =
   | 'chat'
   | 'judge'
   | 'reflection'
-  | 'mcts_rollout'
-  | 'mcts_judge'
   | 'scaffold_mutation' // Agent rewrites its own controller
   | 'head_merge'
   | 'memory_compress';
@@ -27,8 +25,6 @@ export const REASONING_EFFORT_FOR_STAGE = {
   chat: 'medium',
   judge: 'medium',
   reflection: 'low',
-  mcts_rollout: 'low',
-  mcts_judge: 'medium',
   scaffold_mutation: 'high',
   head_merge: 'medium',
   memory_compress: 'low',
@@ -43,7 +39,7 @@ export function workersAIEffortOption(
 }
 
 /** Levels Anthropic's `effort` accepts; others leave the model on its default rather than being refused. */
-const ANTHROPIC_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+export const ANTHROPIC_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 export function reasoningEffortOptions(
   effort: ReasoningEffort | null | undefined,

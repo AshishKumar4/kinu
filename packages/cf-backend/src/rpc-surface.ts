@@ -50,7 +50,7 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
   '_cf_unregisterFacetRun',
 ] as const;
 
-interface RpcSurfaceSubject {
+export interface RpcSurfaceSubject {
   readonly constructor: Function;
 }
 
@@ -86,7 +86,7 @@ export function sealRpcSurface(instance: RpcSurfaceSubject, surface: readonly st
   }
 }
 
-function inheritedDescriptor(instance: RpcSurfaceSubject, name: string): PropertyDescriptor | undefined {
+export function inheritedDescriptor(instance: RpcSurfaceSubject, name: string): PropertyDescriptor | undefined {
   for (let proto: object | null = Object.getPrototypeOf(instance);
        proto !== null && proto !== Object.prototype;
        proto = Object.getPrototypeOf(proto)) {
@@ -102,10 +102,13 @@ function inheritedDescriptor(instance: RpcSurfaceSubject, name: string): Propert
 
 /** The RPC counterpart of the `requireTier` gate: every entry gates itself on a `UserCaller`. */
 const USER_DO_METHODS = [
+  'cancelCodexRelay',
+  'codexRelayDevice',
   'completeOnboarding',
   'deleteAccount',
   'deleteCredential',
   'dismissUnrevokedGrant',
+  'deviceName',
   'deviceRpc',
   'deviceRuntimeStatus',
   'disconnectCodex',
@@ -150,6 +153,7 @@ const USER_DO_METHODS = [
   'registerBrowserSession',
   'registerDevice',
   'registerWorkspace',
+  'relayCodex',
   'releaseWorkspaceReservation',
   'removeWorkspace',
   'renameDevice',
@@ -194,6 +198,7 @@ const USER_DO_METHODS = [
   'verifyDeviceToken',
   'verifyCliSocketBearer',
   'verifySocketSession',
+  'watchDeviceStatus',
   'revokeAllCliTokens',
   'getCredentialsRevision',
   'sharesReceived_add',
@@ -216,6 +221,9 @@ const USER_DO_METHODS = [
 export type UserDoRpcMethod = (typeof USER_DO_METHODS)[number];
 
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
+
+/** `deleteAccount` must work when start throws. */
+export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((name) => name !== 'deleteAccount');
 
 /** Members every actor exposes; entries a facet reaches on its parent stub must be listed or nested
  * trees fail closed at depth 2. `protected` members stay unreachable. */
@@ -260,6 +268,7 @@ const ORCHESTRATOR_METHODS = [
   'shareBlueprintWith',
   'acceptEmailDelivery',
   'acceptSandboxLifecycleFailure',
+  'sandboxStopped',
   'acceptWebhookDelivery',
   'accountSpend',
   'announceDeviceAvailable',
@@ -269,6 +278,7 @@ const ORCHESTRATOR_METHODS = [
   'beginGenesisTurn',
   'claimOwner',
   'createDurableWebhook',
+  'devicesMoved',
   'getActorSnapshot',
   'getEmailIngress',
   'getRunEvents',
@@ -323,3 +333,12 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...Object.keys(AGENT_RPC_ACCESS),
   ...ORCHESTRATOR_METHODS,
 ];
+
+/** Never gated: `destroyAgent` must work when start throws. */
+const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'evalAbortActivation']);
+
+export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [
+  ...ACTOR_AGENT_RPC_SURFACE,
+  ...Object.keys(AGENT_RPC_ACCESS),
+  ...ORCHESTRATOR_METHODS,
+].filter((name) => !ORCHESTRATOR_STARTLESS.has(name));

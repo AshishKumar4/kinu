@@ -19,23 +19,19 @@ function str(input: JsonObject, key: string): string {
 export type ToolCallEffect = 'read' | 'mutate' | 'unknown';
 
 const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ['file', new Set(['write', 'edit', 'append', 'delete', 'move', 'copy'])],
+  ['file', new Set(['write', 'edit'])],
   ['tasks', new Set(['add', 'update'])],
-  ['memory', new Set(['save', 'set', 'delete', 'remember', 'forget'])],
-  ['agents', new Set(['swarm', 'fork', 'hire', 'msg', 'ask', 'send', 'reply', 'dismiss'])],
+  ['memory', new Set(['save', 'remember', 'forget'])],
+  ['agents', new Set(['swarm', 'hire', 'msg', 'dismiss'])],
   ['web', new Set(['fetch'])],
-  ['fact', new Set(['set', 'delete'])],
-  ['team', new Set(['spawn', 'assign', 'message'])],
-  ['peers', new Set(['send', 'reply', 'spawn_workspace'])],
 ]);
 
 const READING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['file', new Set(['read', 'list', 'stat', 'search'])],
   ['tasks', new Set(['list'])],
-  ['memory', new Set(['search', 'get', 'list', 'recall', 'conversations'])],
-  ['agents', new Set(['list', 'status'])],
+  ['memory', new Set(['search', 'recall', 'conversations'])],
+  ['agents', new Set(['list'])],
   ['web', new Set(['search'])],
-  ['fact', new Set(['get', 'list'])],
 ]);
 
 /** Only declared native operations are classified; shell and codemode programs have no effect receipt. */
@@ -53,10 +49,6 @@ export function toolCallEffect(toolName: string, input: JsonValue | undefined): 
 
   if (READING_ACTIONS.get(toolName)?.has(action) === true) return 'read';
 
-  if (toolName === 'web_fetch') return 'mutate';
-
-  if (toolName === 'web_search') return 'read';
-
   return 'unknown';
 }
 
@@ -64,7 +56,7 @@ export function toolCallEffect(toolName: string, input: JsonValue | undefined): 
 export function clip(value: string, max: number = MAX): string {
   const flat = value.replace(/\s+/g, " ").trim();
 
-  return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}…`;
+  return flat.length <= max ? flat : `${flat.slice(0, max - 3).trimEnd()}...`;
 }
 
 function quoted(value: string, max: number = MAX): string {
@@ -82,7 +74,7 @@ function actionOn(action: string, target?: string, body?: string): string {
   const head = words(action, target ? clip(target, 40) : undefined);
   const tail = body ? quoted(body, 48) : "";
 
-  return tail ? `${head} — ${tail}` : head;
+  return tail ? `${head}: ${tail}` : head;
 }
 
 /** The first line of an eval program that isn't blank or a comment. */
@@ -105,15 +97,7 @@ function codemodeIntent(code: string): string {
   return first.startsWith("//") ? clip(first.slice(2), 72) : "";
 }
 
-function summarizeThink(input: JsonObject): string {
-  const heads = Array.isArray(input.heads) ? input.heads.length : 0;
-  const label = heads > 0 ? `${heads} heads` : str(input, "strategy");
-  const task = quoted(str(input, "task"), 56);
-
-  return [label, task].filter(Boolean).join(": ");
-}
-
-/** Unified delegation tool. `fork` stays so stored timelines still render. */
+/** Unified delegation tool. */
 function summarizeAgents(input: JsonObject): string {
   const action = str(input, "action");
   const agent = str(input, "agent");
@@ -123,14 +107,6 @@ function summarizeAgents(input: JsonObject): string {
       const preset = str(input, "preset");
       const task = quoted(str(input, "task"), 56);
       const label = preset ? `swarm ${preset}` : "swarm";
-
-      return task ? `${label}: ${task}` : label;
-    }
-
-    case "fork": {
-      const forks = Array.isArray(input.forks) ? input.forks.length : 0;
-      const label = forks > 0 ? `${forks} forks` : "fork";
-      const task = quoted(str(input, "task"), 56);
 
       return task ? `${label}: ${task}` : label;
     }
@@ -149,11 +125,8 @@ function summarizeAgents(input: JsonObject): string {
       return agent
         ? actionOn(action, agent, str(input, "topic") || str(input, "message"))
         : actionOn(action, undefined, str(input, "message"));
-    // Stored history: the three verbs `msg` replaced still have to render.
-    case "ask":
-    case "send":  return actionOn(action, agent, str(input, "topic") || str(input, "message"));
-    case "reply": return actionOn(action, undefined, str(input, "message"));
-    default:      return actionOn(action, agent);
+    default:
+      return actionOn(action, agent);
   }
 }
 
@@ -192,31 +165,6 @@ function summarizeWeb(input: JsonObject): string {
   return query ? `${action} ${quoted(query, 56)}` : action;
 }
 
-function summarizeTeam(input: JsonObject): string {
-  const action = str(input, "action");
-  const name = str(input, "name");
-
-  switch (action) {
-    case "spawn":   return actionOn(action, name || str(input, "role"), name ? str(input, "role") : "");
-    case "assign":  return actionOn(action, name, str(input, "task"));
-    case "message": return actionOn(action, name, str(input, "content"));
-    default:        return actionOn(action, name);
-  }
-}
-
-function summarizePeers(input: JsonObject): string {
-  const action = str(input, "action");
-  const agent = str(input, "agent");
-
-  switch (action) {
-    case "ask":
-    case "send":            return actionOn(action, agent, str(input, "topic") || str(input, "message"));
-    case "reply":           return actionOn(action, undefined, str(input, "message"));
-    case "spawn_workspace": return actionOn(action, agent, str(input, "purpose"));
-    default:                return actionOn(action, agent);
-  }
-}
-
 function summarizeTasks(input: JsonObject): string {
   const action = str(input, "action");
 
@@ -244,17 +192,7 @@ const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
   memory: summarizeMemory,
   tasks: summarizeTasks,
   web: summarizeWeb,
-  // Removed/renamed tools keep summarizers so stored transcripts still render.
-  think: summarizeThink,
-  team: summarizeTeam,
-  peers: summarizePeers,
-  fact: (input) => actionOn(str(input, "action"), str(input, "key")),
-  experience: (input) =>
-    actionOn(str(input, "action"), str(input, "kind"), str(input, "query") || str(input, "key") || str(input, "id")),
-  web_search: (input) => quoted(str(input, "query")),
-  web_fetch: (input) => clip(str(input, "url")),
   report: (input) => actionOn(str(input, "status"), undefined, str(input, "content")),
-  skills: (input) => actionOn(str(input, "action"), str(input, "name")),
 } satisfies Record<string, ToolSummarizer>));
 
 /* What the call does, as opposed to what it was passed. Returns "" rather than guessing. */
@@ -311,8 +249,7 @@ export function describeCommand(command: string): string {
 }
 
 const FILE_VERBS = new Map(Object.entries({
-  read: "Read", write: "Wrote", edit: "Edited", append: "Appended to",
-  delete: "Deleted", list: "Listed", search: "Searched", move: "Moved", copy: "Copied",
+  read: "Read", write: "Wrote", edit: "Edited", list: "Listed", search: "Searched",
 }));
 
 const TASK_VERBS = new Map(Object.entries({
@@ -320,8 +257,7 @@ const TASK_VERBS = new Map(Object.entries({
 }));
 
 const MEMORY_VERBS = new Map(Object.entries({
-  save: "Saved to memory", search: "Searched memory", get: "Recalled",
-  set: "Recorded a fact", delete: "Forgot", list: "Listed memory",
+  save: "Saved to memory", search: "Searched memory",
 }));
 
 function basename(path: string): string {
@@ -350,13 +286,6 @@ function describeAgents(input: JsonObject): string {
       return preset ? `Ran a ${preset} search` : "Ran a search";
     }
 
-    // Stored history: the removed ephemeral rung still has to render.
-    case "fork": {
-      const forks = Array.isArray(input.forks) ? input.forks.length : 0;
-
-      return forks > 0 ? `Delegated to ${forks} parallel ${forks === 1 ? "fork" : "forks"}` : "Delegated to a fork";
-    }
-
     case "hire":
       if (str(input, "scope") === "workspace") return "Hired a workspace";
 
@@ -367,13 +296,8 @@ function describeAgents(input: JsonObject): string {
 
       return agent ? `Hired ${agent}` : "Hired a subordinate";
     case "msg":     return agent ? `Messaged ${agent}` : "Answered an agent message";
-    // Stored history: the three verbs `msg` replaced still have to render.
-    case "ask":     return agent ? `Asked ${agent}` : "Asked a subordinate";
-    case "send":    return agent ? `Messaged ${agent}` : "Messaged a subordinate";
-    case "reply":   return "Replied to a subordinate";
     case "dismiss": return agent ? `Dismissed ${agent}` : "Dismissed a subordinate";
     case "list":    return "Listed the roster";
-    case "status":  return agent ? `Checked on ${agent}` : "Checked the roster";
     default:        return "";
   }
 }
@@ -394,16 +318,7 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
   memory: (input) => MEMORY_VERBS.get(str(input, "action")) ?? "",
   tasks: (input) => TASK_VERBS.get(str(input, "action")) ?? "",
   web: describeWeb,
-  web_search: () => "Searched the web",
-  web_fetch: () => "Fetched a page",
   eval: (input) => codemodeIntent(str(input, "code")) || "Ran a tool program",
-  think: (input) => {
-    const heads = Array.isArray(input.heads) ? input.heads.length : 0;
-
-    return heads > 0 ? `Explored with ${heads} heads` : "Explored the problem";
-  },
-  skills: (input) => (str(input, "action") === "shell" ? "Ran a skill" : ""),
-
   report: (input) => (str(input, "status") ? `Reported ${str(input, "status")}` : "Reported back"),
 } satisfies Record<string, ToolDescriber>));
 

@@ -1,10 +1,10 @@
 import { stripVTControlCharacters } from 'node:util';
 import chalk from 'chalk';
 import type { Command } from 'commander';
-import { BUILTIN_TOOLS, clipText, describeToolCall, fmtUsd, quotaWindowText, summarizeToolCall, timeAgo, TUI_MARKS, usageTotal } from '@kinu.run/core';
+import { BUILTIN_TOOLS, describeProviderError, describeToolCall, fmtUsd, quotaWindowText, summarizeToolCall, timeAgo, usageTotal } from '@kinu.run/core';
+import { clipText, TUI_MARKS } from '@kinu.run/core/tui';
 import type { AccountSpend, SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
 import type { AgentSearchNode } from './agent-client';
-import { guideFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
 
 // Kinu design tokens; cf-backend index.css :root is the source of truth. Fixed hexes assume a dark terminal.
@@ -38,7 +38,7 @@ const ERR: Paint = chalk.hex(INK.danger);
 
 const MUTED: Paint = chalk.hex(INK.dim);
 
-export { BRAND, VERSION, DIM, ACCENT, OK, WARN, ERR, MUTED };
+export { VERSION, DIM, ACCENT, OK, WARN, ERR, MUTED };
 
 const BOX = { tl: '┌', bl: '└', v: '│' } as const;
 
@@ -167,9 +167,6 @@ interface AgentStatusInfo {
   createdAt: number;
   scaffoldVersion: number;
   searchNodeCount: number;
-  taskCount: number;
-  craftedToolCount: number;
-  memorySize: number;
 }
 
 export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: {
@@ -195,7 +192,6 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
 
   console.log(boxRow(L('Scaffold:'), `v${info.scaffoldVersion}`, w));
   console.log(boxRow(L('MCTS nodes:'), String(info.searchNodeCount), w));
-  console.log(boxRow(L('Tasks:'), String(info.taskCount), w));
 
   if (extra?.conversationCount !== undefined) {
     console.log(boxRow(L('Chats:'), String(extra.conversationCount), w));
@@ -203,8 +199,7 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
 
   console.log(DIM(`${BOX.v}${'─'.repeat(w - 3)}`));
 
-  console.log(boxRow(L('Tools:'), `${BUILTIN_TOOLS.length} built-in + ${info.craftedToolCount} crafted`, w));
-  console.log(boxRow(L('Memory:'), formatBytes(info.memorySize), w));
+  console.log(boxRow(L('Tools:'), `${BUILTIN_TOOLS.length} built-in`, w));
   console.log(boxEdge(BOX.bl, w));
   console.log('');
 }
@@ -333,7 +328,7 @@ export function printToolResult(result: string, outcome: ToolOutcome): void {
 
 const EVOLUTION_ICONS = new Map<string, string>([
   ['reflection', '◔'], ['craft_discovered', '✚'], ['consolidation', '⟳'],
-  ['scaffold_proposed', '✎'], ['mcts_started', '⌕'], ['mcts_complete', '✓'],
+  ['scaffold_proposed', '✎'],
 ]);
 
 export function printEvolutionEvent(type: string, message: string): void {
@@ -350,14 +345,11 @@ export function printError(message: string, hint?: string): void {
 
 /** Every command action funnels here, so no thrown value reaches a user unrendered. */
 export function printFailure(failure: { readonly cause: unknown }): void {
-  const { message, hint } = guideFailure(failure);
-  printError(message, hint);
+  printError(describeProviderError(failure));
 }
 
 export function formatFailure(failure: { readonly cause: unknown }): string {
-  const { message, hint } = guideFailure(failure);
-
-  return hint ? `${ERR('error')} ${message}\n${DIM('hint:')} ${hint}` : `${ERR('error')} ${message}`;
+  return `${ERR('error')} ${describeProviderError(failure)}`;
 }
 
 /** Guarantees a command registered without `.helpGroup()` is still listed. */

@@ -1,158 +1,7 @@
-/**
- * Behavioural scorers over `SqlExecutor`. They read through the production reader (`listForkRuns`),
- * and report a denominator separately from passes so a caller can assert it is non-zero.
- */
+/** Behavioural scorers over run events; each reports a denominator separately from passes. */
 import {
-  censusToolFailures, classifyToolFailure, listForkRuns, parseStoredRunEvent, STEER_BRANCH_RUN_ID_PREFIX,
-  tableExists,
-  type ActorHandle, type ForkRunSummary, type RunEvent, type SqlExecutor,
+  censusToolFailures, classifyToolFailure, parseStoredRunEvent, type ActorHandle, type RunEvent, type SqlExecutor,
 } from '@kinu.run/core';
-
-
-/** One run with a search tree as the reader sees it, plus the durable winner marks. */
-export interface SearchRunScore {
-  readonly id: string;
-  readonly branches: number;
-  readonly winnerScore: number | null;
-  /** `search_nodes` rows this root marked `terminal`; convergence leaves exactly one. */
-  readonly terminalNodes: number;
-  /**
-   * The `alternate_takes` winner for this search, or null. Reported, never asserted: a take is
-   * written only for a near-tied rival, and is joined back through `search_nodes` (no `root_id`).
-   */
-  readonly takeWinnerId: string | null;
-}
-
-export interface ExplorationScore {
-  readonly searchRuns: number;
-  readonly branchedRuns: number;
-  readonly rankedRuns: number;
-  readonly durablyRankedRuns: number;
-  readonly runs: readonly SearchRunScore[];
-}
-
-/**
- * Score every run with a search tree the Exploration reader can see. `limit` defaults to the whole
- * store: `listForkRuns` pages after merging, so transcript-only runs can push a tree off a short page.
- */
-export function scoreExploration(sql: SqlExecutor, actor: ActorHandle, limit = 1000): ExplorationScore {
-  const searched = listForkRuns(sql, actor, null, limit).items.filter((run) => run.hasSearchTree);
-
-  const runs = searched.map<SearchRunScore>((run) => {
-    const terminal = sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM search_nodes
-      WHERE actor_id = ${actor.actorId} AND root_id = ${run.id} AND status = 'terminal'`[0]?.n ?? 0;
-
-    const take = sql<{ winner_node_id: string }>`
-      SELECT t.winner_node_id FROM alternate_takes t
-      JOIN search_nodes n ON n.id = t.winner_node_id
-      WHERE n.actor_id = ${actor.actorId} AND t.actor_id = ${actor.actorId}
-        AND n.root_id = ${run.id}`[0];
-
-    return {
-      id: run.id,
-      branches: run.branches,
-      winnerScore: run.winnerScore,
-      terminalNodes: terminal,
-      takeWinnerId: take?.winner_node_id ?? null,
-    };
-  });
-
-  return {
-    searchRuns: runs.length,
-    branchedRuns: runs.filter((r) => r.branches > 1).length,
-    rankedRuns: runs.filter((r) => r.winnerScore !== null).length,
-    durablyRankedRuns: runs.filter((r) => r.terminalNodes === 1).length,
-    runs,
-  };
-}
-
-
-export type ExplorationHalf = 'tree' | 'transcripts';
-
-export interface SettleStoreScore {
-  readonly half: ExplorationHalf;
-  readonly store: string;
-  /**
-   * The table exists in this store. A query against a missing table throws, and counting it as
-   * zero roots would pass vacuously (`createWorkspace` has `search_nodes` but not `head_journal`).
-   */
-  readonly present: boolean;
-  readonly rootsWritten: number;
-  readonly rootsVisible: number;
-  /** The roots the reader cannot see. Empty is the only acceptable value. */
-  readonly invisibleRoots: readonly string[];
-}
-
-export interface SettleVisibilityScore {
-  readonly stores: readonly SettleStoreScore[];
-  readonly rootsWritten: number;
-  readonly invisibleRoots: readonly string[];
-}
-
-/**
- * For each half a run can write, does the Exploration reader return what was written?
- * Steer-as-Branch roots and NULL roots are excluded in SQL: the run list filters them by design.
- * `read` is injectable so the scorer's own tests can prove it goes red against a one-half reader.
- */
-export function scoreSettleVisibility(
-  sql: SqlExecutor,
-  actor: ActorHandle,
-  read: (sql: SqlExecutor, limit: number) => readonly ForkRunSummary[] =
-    (readSql, limit) => listForkRuns(readSql, actor, null, limit).items,
-): SettleVisibilityScore {
-  const notSteerBranch = `${STEER_BRANCH_RUN_ID_PREFIX}%`;
-  const transcriptsPresent = tableExists(sql, 'head_journal');
-  const treePresent = tableExists(sql, 'search_nodes');
-
-  const written = [
-    {
-      half: 'transcripts' as const,
-      store: 'head_journal',
-      present: transcriptsPresent,
-      roots: !transcriptsPresent ? [] : sql<{ root: string }>`
-        SELECT DISTINCT root_id AS root FROM head_journal
-        WHERE actor_id = ${actor.actorId}
-          AND root_id IS NOT NULL AND root_id NOT LIKE ${notSteerBranch}`.map((r) => r.root),
-    },
-    {
-      half: 'tree' as const,
-      store: 'search_nodes',
-      present: treePresent,
-      roots: !treePresent ? [] : sql<{ root: string }>`
-        SELECT DISTINCT root_id AS root FROM search_nodes
-        WHERE actor_id = ${actor.actorId}
-          AND root_id IS NOT NULL AND root_id NOT LIKE ${notSteerBranch}`.map((r) => r.root),
-    },
-  ];
-
-  const rootsWritten = written.reduce((total, half) => total + half.roots.length, 0);
-
-  // One oversized page, not a walk: a walk would hide a reader that skips a whole store.
-  const visible = new Set(
-    transcriptsPresent && treePresent ? read(sql, rootsWritten + 1).map((run) => run.id) : [],
-  );
-
-  const stores = written.map<SettleStoreScore>(({ half, store, present, roots }) => {
-    const invisibleRoots = roots.filter((root) => !visible.has(root));
-
-    return {
-      half,
-      store,
-      present,
-      rootsWritten: roots.length,
-      rootsVisible: roots.length - invisibleRoots.length,
-      invisibleRoots,
-    };
-  });
-
-  return {
-    stores,
-    rootsWritten,
-    invisibleRoots: stores.flatMap((store) => store.invisibleRoots),
-  };
-}
-
 
 /**
  * One scorer's reading of one trajectory, the shape run records and the comparator consume.
@@ -280,7 +129,7 @@ export const editLanding: BehaviourScorer = {
  */
 export const recoveryDurability: BehaviourScorer = {
   name: 'recovery_durability',
-  asserts: 'a broken failure streak stayed broken — the finding took',
+  asserts: 'a broken failure streak stayed broken: the finding took',
   score(sql, actor) {
     const findings = eventsOfType(sql, actor, 'execution_recovery')
       .flatMap((row) => row.recoveries);
@@ -311,7 +160,7 @@ export const recoveryDurability: BehaviourScorer = {
  */
 export const completionHonesty: BehaviourScorer = {
   name: 'completion_honesty',
-  asserts: 'the run finished on an honest claim — the gate found no work left',
+  asserts: 'the run finished on an honest claim: the gate found no work left',
   score(sql, actor) {
     const rows = eventsOfType(sql, actor, 'completion_gate');
     const forced = rows.filter((row) => row.converted === true).length;

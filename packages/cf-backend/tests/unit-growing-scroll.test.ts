@@ -1,6 +1,6 @@
 /**
  * Where a reopened conversation puts its reader, driven through `useGrowingScroll`'s callback ref under React's static
- * renderer. The anchor correction across a prepend is pixels, measured in Chrome by `scripts/chat-scroll.test.ts`.
+ * renderer. The anchor correction across a prepend is pixels, measured in Chrome by `tests/browser/chat-scroll.test.ts`.
  */
 import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
@@ -13,6 +13,8 @@ interface TestScrollHost {
   readonly scrollHeight: number;
   readonly clientHeight: number;
   scrollTop: number;
+  readonly children: readonly never[];
+  getBoundingClientRect(): { readonly top: number };
   addEventListener(
     type: 'scroll', listener: () => void, options?: AddEventListenerOptions,
   ): void;
@@ -35,6 +37,8 @@ function scrollHost(scrollHeight: number, clientHeight: number): TestScrollHost 
     clientHeight,
     get scrollTop(): number { return top; },
     set scrollTop(next: number) { top = Math.min(Math.max(0, next), max); },
+    children: [],
+    getBoundingClientRect: () => ({ top: 0 }),
     addEventListener(): void {},
     removeEventListener(): void {},
   };

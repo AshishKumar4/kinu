@@ -30,7 +30,7 @@ import {
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError, type AgentTracing } from '@kinu.run/core/obs';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
-import type { HostedNodeHome } from '@kinu.run/core';
+import type { HostedNodeHome, LiveRead } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
 export type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'>;
@@ -40,6 +40,7 @@ export interface WorkspaceHostSeams {
   readonly env: Env;
   readonly ctx: AgentContext;
   readonly agent: HostRootAgent;
+  currentTurn(reference: ActorReference): string | null;
   /** The root's own runtime: inheriting children read the retained program from it. */
   rootRuntime(): AgentRuntime;
   readonly sql: SqlExecutor;
@@ -61,6 +62,7 @@ export interface WorkspaceHostSeams {
     readonly workMode: WorkMode;
   }): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
   reportModelCall(report: ModelCallReport): void;
+  liveReadsMoved(reads: readonly LiveRead[]): void;
   readonly modelOperations: ModelOperationSink;
   pricing(spec?: string): ModelPricing | null;
   hostedModel(actor: ActorHandle): string | undefined;
@@ -91,20 +93,11 @@ export interface WorkspaceHostSeams {
   chosenWriteObserver(record: WorkspaceActor): WriteObserver | null;
 }
 
-/** An MCTS branch acquires no execution plane; a swarm node's home is in `head-`. */
-export type HostedActorHomeKind = 'head' | 'subordinate';
+/** A swarm node's home is in `head-`. */
+function hostedHomeName(record: WorkspaceActor): string {
+  const id = parseActorKey(record.storageKey).id;
 
-function hostedActorAgentName(kind: HostedActorHomeKind, id: string): string {
-  switch (kind) {
-    case 'head': return headAgentName(id);
-    case 'subordinate': return subordinateAgentName(id);
-  }
-}
-
-function hostedHomeKind(record: WorkspaceActor): HostedActorHomeKind | null {
-  if (record.kind === 'main' || record.kind === 'branch') return null;
-
-  return record.kind;
+  return record.kind === 'subordinate' ? subordinateAgentName(id) : headAgentName(id);
 }
 
 /** Kind-prefixed so a head's and a subordinate's shell state cannot collide on one id. */
@@ -122,12 +115,11 @@ export async function provisionHostedActorHome(
   seams: Pick<WorkspaceHostSeams, 'homeHost' | 'directory'>,
   record: WorkspaceActor,
   reference: ActorReference,
-  kind: HostedActorHomeKind,
 ): Promise<NodeWorkspace> {
   const path = seams.directory.storagePath(reference);
   const provision = facetHomeProvisioner(seams.homeHost(), () => { seams.directory.validate(reference, path); });
 
-  return await provision(hostedActorAgentName(kind, parseActorKey(record.storageKey).id));
+  return await provision(hostedHomeName(record));
 }
 
 /** Build the workspace's one actor host over the root's `Storage` (open-38). */
@@ -135,31 +127,27 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
   const runtimes = new WeakMap<ActorHandle, CFRuntime>();
   /** Per-activation round-trip saver; provisioning is idempotent, so never a source of truth. */
   const homes = new Map<string, Promise<HostedNodeHome>>();
-  /** Bumped per attempt so a failing provision only clears the entry it wrote. */
-  const homeGeneration = new Map<string, number>();
   let host: ActorHost | null = null;
 
   const homeFor = (record: WorkspaceActor, reference: ActorReference): Promise<HostedNodeHome> | null => {
-    const kind = hostedHomeKind(record);
-
-    if (kind === null) return null;
+    if (record.kind === 'main') return null;
     const held = homes.get(record.actorId);
 
     if (held) return held;
-    // Cleanup rethrows so the stored promise still rejects for the acquire awaiting it;
-    // the generation stamp keeps a failure from clearing a newer attempt's entry.
-    const generation = (homeGeneration.get(record.actorId) ?? 0) + 1;
-    homeGeneration.set(record.actorId, generation);
 
-    const provisioning = (async (): Promise<HostedNodeHome> => {
+    // Cleanup rethrows so the stored promise still rejects for the acquire awaiting it; the identity
+    // check keeps a failure from clearing a newer attempt's entry.
+    let provisioning: Promise<HostedNodeHome> | null = null;
+
+    provisioning = (async (): Promise<HostedNodeHome> => {
       try {
-        const home = await provisionHostedActorHome(seams, record, reference, kind);
+        const home = await provisionHostedActorHome(seams, record, reference);
 
         if (home.isolation !== 'private-home') throw new KinuError('denied', 'A hosted actor requires its own credential.');
 
         return { home: home.home, tmp: home.tmp, cred: home.cred };
       } catch (cause) {
-        if (homeGeneration.get(record.actorId) === generation) homes.delete(record.actorId);
+        if (homes.get(record.actorId) === provisioning) homes.delete(record.actorId);
         throw cause;
       }
     })();
@@ -202,6 +190,8 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
       const hooks: CFRuntimeHooks = {
         reportModelCall: (report) => { seams.reportModelCall(report); },
+        currentTurn: (reference) => seams.currentTurn(reference),
+        liveReadsMoved: (reads) => { seams.liveReadsMoved(reads); },
         slate: (operation) => seams.slate(bound.handle, operation),
         deferrals: () => seams.deferrals(),
         // The chat's authority: a self-resolved profile could differ from the turn's and make a search unreproducible.
@@ -296,7 +286,6 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         transaction: (body) => { seams.ctx.storage.transactionSync(body); },
         // Review model calls debit the mission the reviewed turn ran under.
         governor: budget,
-        reportModelCall: (report) => { seams.reportModelCall(report); },
       });
 
       const backendHost: BackendHost = {
@@ -340,11 +329,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
     /** Releases the home and state subtree on destroy only; an archived actor keeps its files. */
     discardBytes: async (record: WorkspaceActor): Promise<void> => {
-      const kind = hostedHomeKind(record);
-
-      if (kind !== null) {
-        await facetHomeReleaser(seams.homeHost())(hostedActorAgentName(kind, parseActorKey(record.storageKey).id));
-      }
+      if (record.kind !== 'main') await facetHomeReleaser(seams.homeHost())(hostedHomeName(record));
 
       homes.delete(record.actorId);
       const box = seams.workspaceBox(hostedActorShellId(record));

@@ -1,4 +1,3 @@
-// Shared provider internals: the auth-injecting fetch wrapper and catalog parse helpers.
 import type { LanguageModelV3Message } from '@ai-sdk/provider';
 import type { LanguageModelMiddleware } from 'ai';
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
@@ -6,14 +5,14 @@ import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { withCallAccount } from './quota';
 import { evidenceWindow } from '../utils/evidence-window';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
 import {
-  KinuError, classifyErrorCode, diagnostics, tolerate, type ErrorCode,
+  KinuError, classifyErrorCode, diagnostics, settle, tolerate, type ErrorCode,
 } from '../obs/index';
 
 export interface AuthedFetchOptions {
-  /** Credential key passed to the AuthResolver on every request. */
   credKey: string;
   /** Named in rate-limit wait notices. */
   provider: string;
@@ -27,7 +26,7 @@ export interface AuthedFetchOptions {
   mutate?: (ctx: { url: string; headers: Headers; auth: AuthResolution }) => string | void;
 }
 
-/** Auth-injecting fetch; auth is re-resolved per request so credential changes apply live. */
+/** Auth is re-resolved per request so credential changes apply live. */
 export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions): typeof globalThis.fetch {
   const waitListener = deps.onProviderWait;
 
@@ -89,7 +88,6 @@ function withoutItemIds(message: LanguageModelV3Message): LanguageModelV3Message
   };
 }
 
-/** Credential identity for keying catalog caches. */
 export function authCacheKey(auth: AuthResolution): string {
   return JSON.stringify([auth.headers, auth.baseURL ?? null]);
 }
@@ -104,24 +102,24 @@ export class StaleModelList extends KinuError {
   }
 }
 
-export async function settleModelList(
-  list: Promise<ModelInfo[]> | ModelInfo[],
-): Promise<{ readonly models: readonly ModelInfo[]; readonly stale: StaleModelList | null }> {
-  try {
-    return { models: await list, stale: null };
-  } catch (error) {
-    if (!(error instanceof StaleModelList)) throw error;
+type SettledModelList = { readonly models: readonly ModelInfo[]; readonly stale: StaleModelList | null };
 
-    return { models: error.models, stale: error };
-  }
+export async function settleModelList(list: Promise<ModelInfo[]> | ModelInfo[]): Promise<SettledModelList> {
+  return settle(modelList(list));
+}
+
+function modelList(list: Promise<ModelInfo[]> | ModelInfo[]): Effect.Effect<SettledModelList> {
+  return Effect.tryPromise({ try: async (): Promise<SettledModelList> => ({ models: await list, stale: null }), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => (failed.cause instanceof StaleModelList
+      ? Effect.succeed({ models: failed.cause.models, stale: failed.cause })
+      : Effect.die(failed.cause))),
+  );
 }
 
 export async function mapModelList(list: Promise<ModelInfo[]>, map: (models: readonly ModelInfo[]) => ModelInfo[]): Promise<ModelInfo[]> {
-  const { models, stale } = await settleModelList(list);
-
-  if (stale !== null) throw new StaleModelList(map(models), { reason: stale.reason, cause: stale.cause });
-
-  return map(models);
+  return settle(Effect.flatMap(modelList(list), ({ models, stale }) => (stale === null
+    ? Effect.succeed(map(models))
+    : Effect.fail(new StaleModelList(map(models), { reason: stale.reason, cause: stale.cause })))));
 }
 
 export function cloneModelInfos(models: readonly ModelInfo[] | undefined): ModelInfo[] {
@@ -186,32 +184,35 @@ export function providerFailureFacts(failure: { readonly cause: unknown }): Prov
     ?? { message: 'unknown provider error' };
 }
 
+function readErrorFailure(input: { readonly error: Error; readonly depth: number }): ProviderFailureFacts {
+  const { error, depth } = input;
+  const envelope = v.safeParse(ApiCallErrorSchema, error);
+  const status = envelope.success ? envelope.output.statusCode : undefined;
+  const body = envelope.success ? envelope.output.responseBody : undefined;
+
+  // The reason lives in the body; `||` because an empty message says nothing.
+  const parsed = body === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
+    ? undefined
+    : tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
+
+  const fromBody = parsed === undefined
+    ? null
+    : readProviderFailure({ cause: parsed, depth: depth + 1 });
+
+  return {
+    message: fromBody?.message ?? (error.message || error.name),
+    providerCode: fromBody?.providerCode,
+    status,
+  };
+}
+
 /** Null when nothing readable, so a caller keeps the reason it already had. */
 function readProviderFailure(
   input: { readonly cause: unknown; readonly depth: number },
 ): ProviderFailureFacts | null {
   const { cause: error, depth } = input;
 
-  if (error instanceof Error) {
-    const envelope = v.safeParse(ApiCallErrorSchema, error);
-    const status = envelope.success ? envelope.output.statusCode : undefined;
-    const body = envelope.success ? envelope.output.responseBody : undefined;
-
-    // The reason lives in the body; `||` because an empty message says nothing.
-    const parsed = body === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
-      ? undefined
-      : tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
-
-    const fromBody = parsed === undefined
-      ? null
-      : readProviderFailure({ cause: parsed, depth: depth + 1 });
-
-    return {
-      message: fromBody?.message ?? (error.message || error.name),
-      providerCode: fromBody?.providerCode,
-      status,
-    };
-  }
+  if (error instanceof Error) return readErrorFailure({ error, depth });
 
   const text = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), error);
 
@@ -283,7 +284,6 @@ function codeForStatus(status: number): ErrorCode | null {
 export function toProviderError(input: {
   doing: string;
   cause: unknown;
-  /** The provider the request was sent to, when the caller resolved one. */
   provider?: string;
 }): KinuError {
   const facts = providerFailureFacts({ cause: input.cause });
@@ -300,7 +300,6 @@ export function toProviderError(input: {
 
   if (input.provider !== undefined) tags.push(input.provider);
 
-  /** The fields the diagnostics record carries beside the error itself. */
   interface ProviderFailureFields {
     detail: string;
     status?: number;

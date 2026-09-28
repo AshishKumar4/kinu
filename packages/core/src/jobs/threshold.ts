@@ -30,13 +30,6 @@ export interface BackgroundHandle {
   readonly message: string;
 }
 
-/** Historical serialized shape; live refusals now stay foreground-owned. */
-export interface BackgroundRefusal {
-  readonly background: false;
-  readonly kind: string;
-  readonly message: string;
-}
-
 const BackgroundHandleSchema: v.GenericSchema<BackgroundHandle> = v.object({
   background: v.literal(true),
   jobId: v.string(),
@@ -126,7 +119,7 @@ export async function withBackgroundThreshold<T>(
     jobId: outcome.jobId,
     kind,
     message:
-      `Outran the ${Math.round(thresholdMs / 1000)}s foreground window; backgrounded — ` +
+      `Outran the ${Math.round(thresholdMs / 1000)}s foreground window; backgrounded: ` +
       `still running, not cancelled. The settled result will wake you.`,
   };
 }

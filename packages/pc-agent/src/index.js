@@ -171,6 +171,40 @@ const PTY_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, PTY_CLOSE_FRAME])
  */
 const PTY_BACKLOG_MAX_BYTES = 256 * 1024;
 
+/**
+ * The Codex relay. chatgpt.com refuses Kinu's cloud network, so while this
+ * machine is online the hub asks it to make each Codex call instead. One call
+ * is one correlated RPC that answers when the body ends; the head and each
+ * body chunk go back as uncorrelated frames naming the call, so an answer
+ * streams as chatgpt.com sends it. The names and the allow-list mirror core's
+ * DEVICE_RELAY (execution/device-relay.ts) and codexEgressAllowed
+ * (providers/codex.ts); cf-backend's pc-agent test holds them equal.
+ *
+ * The call carries the owner's access token in its headers. It lives in this
+ * request's memory only: nothing here logs a header or a body, and nothing is
+ * written to disk.
+ */
+const RELAY_METHOD = 'codexRelay';
+
+const RELAY_HEAD_FRAME = 'RELAY_HEAD';
+
+const RELAY_BODY_FRAME = 'RELAY_BODY';
+
+const RELAY_CANCEL_FRAME = 'RELAY_CANCEL';
+
+const RELAY_HOST = 'chatgpt.com';
+
+const RELAY_ROUTES = Object.freeze(['GET /backend-api/codex/models', 'POST /backend-api/codex/responses', 'GET /backend-api/wham/usage']);
+
+/** Hop-by-hop headers, plus the ones a relay must not carry from the cloud side. */
+const RELAY_DROPPED_HEADERS = new Set([
+  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding',
+  'upgrade', 'host', 'content-length', 'x-forwarded-for',
+]);
+
+/** In-flight relays by call id, so a RELAY_CANCEL can stop one. */
+const relays = new Map();
+
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
 
@@ -206,7 +240,7 @@ function rpc(ws, id, result, error) {
 // through both engines) so a machine's checkpoints are one format regardless
 // of which side wrote them:
 //
-//   ~/.kinu/checkpoints/<agent>/<sha256(dir)[:16]>/   — bare GIT_DIR
+//   <device home>/checkpoints/<agent>/<sha256(dir)[:16]>/ — bare GIT_DIR
 //     KINU_WORKDIR                                    — the target dir
 //     info/exclude                                       — default excludes
 //     refs/kinu/<ms13>-<seq>                          — one ref per snapshot
@@ -298,7 +332,7 @@ function reasonWithSkips(reason, unreadable) {
 }
 
 function createCheckpoints(opts = {}) {
-  const base = opts.base ?? path.join(os.homedir(), '.kinu', 'checkpoints');
+  const base = opts.base ?? path.join(DEVICE_HOME, 'checkpoints');
   const keep = Math.max(1, opts.keep ?? 50);
   const gitBin = opts.gitBin ?? 'git';
   let gitAvailable = null;
@@ -400,6 +434,7 @@ function createCheckpoints(opts = {}) {
     return { turnId: m[1] === '-' ? null : m[1], sessionId: m[2] === '-' ? null : m[2], reason: m[3] };
   };
 
+  /** Why `dir` is no work tree to snapshot, or null when it is one. */
   const snapshotSkipped = (dir) => {
     const abs = path.resolve(dir);
 
@@ -407,17 +442,17 @@ function createCheckpoints(opts = {}) {
     // meant: the filesystem root, the user's home, and the SHARED temp roots —
     // `workdirForPath` resolves a bare `/tmp/x.js` to `/tmp`, which holds every
     // process's and user's scratch, none of it this agent's to copy.
-    if (abs === path.parse(abs).root || abs === path.resolve(os.homedir())) return true;
+    if (abs === path.parse(abs).root || abs === path.resolve(os.homedir())) return 'it is the filesystem root or the owner\'s home folder itself';
 
-    if (UNSNAPSHOTTABLE.has(abs)) return true;
+    if (UNSNAPSHOTTABLE.has(abs)) return 'it is a temp directory every process shares';
 
     // Dependency-free spelling of the closed set: a vanished path is the one
     // expected statSync failure here; anything else must surface.
-    try { return !fs.statSync(abs).isDirectory(); }
+    try { return fs.statSync(abs).isDirectory() ? null : 'it is not a directory'; }
     catch (err) {
       if (!err || err.code !== 'ENOENT') throw err;
 
-      return true;
+      return 'it does not exist';
     }
   };
 
@@ -485,7 +520,7 @@ function createCheckpoints(opts = {}) {
   };
 
   const snapshot = async (agent, dir, turn, reason) => {
-    if (snapshotSkipped(dir)) return null;
+    if (snapshotSkipped(dir) !== null) return null;
     const abs = path.resolve(dir);
     const gitDir = storeDirFor(agent, abs);
     await initStore(gitDir, abs);
@@ -618,27 +653,38 @@ function createCheckpoints(opts = {}) {
     return { dir: abs, id, files, preRestoreId };
   };
 
-  /** Pre-mutation snapshot driven by the frame's checkpoint hint. Never
-   *  throws — a snapshot failure must not block the operation it precedes. */
+  /**
+   * The pre-mutation snapshot the frame's checkpoint hint asks for: `{ id }`
+   * once taken, `{ skipped }` saying why none could be, or null when none was
+   * asked or this turn's own already covers the directory. Never throws: a
+   * snapshot failure must not block the operation it precedes.
+   */
   const snapshotFor = async (hint, fallbackDir) => {
     try {
-      if (!hint || !(await probe())) return null;
+      if (!hint) return null;
+
+      if (!(await probe())) return { skipped: 'this machine has no git to take one with' };
       const dir = hintedDir(hint) ?? fallbackDir;
 
       if (!dir) return null;
       const abs = path.resolve(dir);
+      const skipped = snapshotSkipped(abs);
+
+      if (skipped !== null) return { skipped };
       const dedupeKey = `${sanitizeAgent(hint.agent)}|${abs}`;
       const turnId = hint.turnId ?? '';
       const turnKey = turnId === '' ? 'no-turn' : turnId;
 
       if (turnDone.get(dedupeKey) === turnKey) return null;
+      const id = await snapshot(hint.agent, abs, { turnId: hint.turnId, sessionId: hint.sessionId }, 'pre-mutation');
+      // Only once it is taken: a failed one leaves the turn's next command to try again.
       turnDone.set(dedupeKey, turnKey);
 
-      return await snapshot(hint.agent, abs, { turnId: hint.turnId, sessionId: hint.sessionId }, 'pre-mutation');
+      return { id };
     } catch (err) {
       log('checkpoint snapshot failed (non-blocking):', err.message);
 
-      return null;
+      return { skipped: `the snapshot failed: ${errorDetail(err)}` };
     }
   };
 
@@ -665,18 +711,15 @@ function createCheckpoints(opts = {}) {
     /** The pre-mutation snapshot the hint asks for, in store order: its id,
      *  or null when none was taken. */
     ensure(hint, fallbackDir) {
-      return inOrder(() => snapshotFor(hint, fallbackDir));
+      return inOrder(async () => (await snapshotFor(hint, fallbackDir))?.id ?? null);
     },
 
     /** `apply`, a frame's mutation, in store order and after the pre-mutation
-     *  snapshot its hint asks for: the snapshot never holds the mutation it
-     *  precedes, and no store operation runs while it lands. */
+     *  snapshot its hint asks for, which `apply` is handed as `snapshotFor`
+     *  answers it: the snapshot never holds the mutation it precedes, and no
+     *  store operation runs while it lands. */
     mutate(hint, fallbackDir, apply) {
-      return inOrder(async () => {
-        await snapshotFor(hint, fallbackDir);
-
-        return apply();
-      });
+      return inOrder(async () => apply(await snapshotFor(hint, fallbackDir)));
     },
 
     // `turnId` filters HERE, before the limit truncates, because retention is
@@ -812,7 +855,7 @@ function whichAll(names) {
 // from being selected accidentally; it cannot defend against a malicious
 // same-user command that already has equivalent local authority.
 const INFLIGHT_ROOT = path.resolve(
-  KINU_INFLIGHT_ROOT === undefined || KINU_INFLIGHT_ROOT === '' ? path.join(os.homedir(), '.kinu', 'inflight') : KINU_INFLIGHT_ROOT,
+  KINU_INFLIGHT_ROOT === undefined || KINU_INFLIGHT_ROOT === '' ? path.join(DEVICE_HOME, 'inflight') : KINU_INFLIGHT_ROOT,
 );
 
 const REQUEST_ID = /^rpc-[A-Za-z0-9_-]{10}-[1-9]\d*$/;
@@ -1012,20 +1055,35 @@ function readCapturedOutput(file) {
   }
 }
 
+/** Beside a command's supervisor files: why no checkpoint covers what it changes, when none does. */
+const UNCHECKPOINTED_FILE = 'uncheckpointed';
+
 /** A command a signal ended says so, in the words the CLI's own shell uses (cli-backend runtime.ts exitStatus). */
 function readExecResult(dir) {
   const terminal = readTerminalResult(dir);
   const stderr = readCapturedOutput(path.join(dir, 'stderr'));
   const note = terminal.signal === null ? '' : `Command terminated by ${terminal.signal}.`;
+  const uncheckpointed = readUncheckpointed(dir);
 
-  return {
-    terminal,
-    result: {
-      stdout: readCapturedOutput(path.join(dir, 'stdout')),
-      stderr: note === '' ? stderr : `${stderr}${stderr === '' || stderr.endsWith('\n') ? '' : '\n'}${note}`,
-      exitCode: terminal.exitCode,
-    },
+  const result = {
+    stdout: readCapturedOutput(path.join(dir, 'stdout')),
+    stderr: note === '' ? stderr : `${stderr}${stderr === '' || stderr.endsWith('\n') ? '' : '\n'}${note}`,
+    exitCode: terminal.exitCode,
   };
+
+  if (uncheckpointed !== null) result.uncheckpointed = uncheckpointed;
+
+  return { terminal, result };
+}
+
+/** Why no checkpoint covers what the command in `dir` changed, as its start recorded it, or null. */
+function readUncheckpointed(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, UNCHECKPOINTED_FILE), 'utf8'));
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    throw err;
+  }
 }
 
 /** The one shell a device command runs under, resolved on the machine's PATH
@@ -1675,7 +1733,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
  * durable request owner without creating another supervisor. */
 const inFlight = createInFlight();
 
-function startSupervisor(requestId, command, plan) {
+function startSupervisor(requestId, command, plan, uncheckpointed) {
   assertSupervisionSupported();
   const dir = requestDirectory(INFLIGHT_ROOT, requestId);
   fs.mkdirSync(INFLIGHT_ROOT, { recursive: true, mode: 0o700 });
@@ -1695,6 +1753,10 @@ function startSupervisor(requestId, command, plan) {
     }),
     { encoding: 'utf8', mode: 0o600, flag: 'wx' },
   );
+
+  if (uncheckpointed !== null) {
+    fs.writeFileSync(path.join(dir, UNCHECKPOINTED_FILE), JSON.stringify(uncheckpointed), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  }
 
   const child = spawn(process.execPath, [
     '-e', SUPERVISOR_SCRIPT,
@@ -1922,16 +1984,26 @@ function confinedDeviceViewPath(view, requested, mode) {
 }
 
 /**
- * The directory a checkpoint hint covers through this frame's view, or null
- * when the frame may not write it; the mutation it precedes still runs.
+ * Why no checkpoint covers what a mutating frame changes, as `{ dir, why }` the
+ * turn is told, or null when one does or none was asked for. `verdict` is the
+ * view's on the directory a checkpoint would cover; `snapshot` is what the
+ * store answered when asked for one.
  */
-function checkpointDirOf(view, dir) {
-  const verdict = view.checkpointDirectory(dir);
+function whyUncheckpointed(verdict, snapshot) {
+  if (verdict === null) return null;
 
-  if (verdict.why === null) return verdict.path;
-  log('device.checkpoint_skipped', dir, verdict.why);
+  if (verdict.why !== null) {
+    log('device.checkpoint_skipped', verdict.path, verdict.why);
 
-  return null;
+    return { dir: verdict.path, why: `it is ${verdict.why}` };
+  }
+
+  return snapshot?.skipped === undefined ? null : { dir: verdict.path, why: snapshot.skipped };
+}
+
+/** The directory a verdict lets a checkpoint cover, or null. */
+function coveredBy(verdict) {
+  return verdict !== null && verdict.why === null ? verdict.path : null;
 }
 
 /** A checkpoint RPC's directory, through the frame's view; a refusal names why. */
@@ -2178,12 +2250,13 @@ function startCommand(msg, cmd, ws, ctx) {
   const published = (async () => {
     const plan = await planFromFrame(msg, cmd);
     const checkpoints = ctx && ctx.checkpoints;
-    const covered = checkpoints && msg.checkpoint ? checkpointDirOf(plan.view, hintedDir(msg.checkpoint) ?? plan.cwd) : null;
+    // A command's checkpoint covers its working tree.
+    const tree = checkpoints && msg.checkpoint ? plan.view.workingTree(hintedDir(msg.checkpoint) ?? plan.cwd) : null;
 
-    const supervisor = await mutation(checkpoints, msg.checkpoint, covered, () => {
+    const supervisor = await mutation(checkpoints, msg.checkpoint, coveredBy(tree), (snapshot) => {
       if (socketClosed(ws)) throw new Error(`the socket that sent ${id} closed before it could start`);
 
-      return startSupervisor(id, cmd, plan);
+      return startSupervisor(id, cmd, plan, whyUncheckpointed(tree, snapshot));
     });
 
     await waitForSupervisorState(supervisor.dir, supervisor.child);
@@ -2229,19 +2302,106 @@ function execCommand(msg, ws, ctx) {
   })().catch(reportExecReplyFailure);
 }
 
+/** Why `method url` is not relayed, or null when it is. */
+function relayRefusal(method, url) {
+  const target = URL.parse(String(url ?? ''));
+
+  if (target === null || target.protocol !== 'https:' || target.hostname !== RELAY_HOST || target.port !== '' || target.username !== '' || target.password !== '') {
+    return `the Codex relay does not reach ${String(url)}`;
+  }
+
+  return RELAY_ROUTES.includes(`${method} ${target.pathname}`) ? null : `the Codex relay does not carry ${method} ${target.pathname}`;
+}
+
+function relayHeaders(pairs) {
+  const headers = new Headers();
+
+  for (const [name, value] of pairs) {
+    const lower = String(name).toLowerCase();
+
+    if (RELAY_DROPPED_HEADERS.has(lower) || lower.startsWith('cf-') || lower.startsWith('x-kinu-')) continue;
+    headers.set(lower, String(value));
+  }
+
+  return headers;
+}
+
+/** Fetch one allow-listed call and stream its answer back as frames; resolves with the byte count. */
+async function relayCall(ws, id, request) {
+  const refused = relayRefusal(request?.method, request?.url);
+
+  if (refused !== null) throw new Error(refused);
+
+  if (relays.has(id)) throw new Error(`relay ${id} is already in flight`);
+  const abort = new AbortController();
+  relays.set(id, abort);
+
+  try {
+    const upstream = await fetch(request.url, {
+      method: request.method,
+      headers: relayHeaders(Array.isArray(request.headers) ? request.headers : []),
+      body: request.method === 'POST' ? request.body : undefined,
+      redirect: 'manual',
+      signal: abort.signal,
+    });
+
+    // The runtime already decoded the body, so its encoding no longer describes the bytes sent on.
+    const headers = [...upstream.headers].filter(([name]) => !RELAY_DROPPED_HEADERS.has(name) && name !== 'content-encoding');
+    ws.send(JSON.stringify({ type: RELAY_HEAD_FRAME, relay: id, status: upstream.status, headers }));
+    let bytes = 0;
+
+    if (upstream.body !== null) {
+      for await (const chunk of upstream.body) {
+        if (socketClosed(ws)) throw new Error(`the socket that asked for relay ${id} closed`);
+        bytes += chunk.byteLength;
+        ws.send(JSON.stringify({ type: RELAY_BODY_FRAME, relay: id, data: Buffer.from(chunk).toString('base64') }));
+      }
+    }
+
+    return { bytes };
+  } catch (err) {
+    if (abort.signal.aborted) throw new Error(`relay ${id} was stopped by the caller`, { cause: err });
+    throw new Error(`chatgpt.com could not be reached from this machine: ${errorDetail(err)}`, { cause: err });
+  } finally {
+    relays.delete(id);
+  }
+}
+
+/** Frames that name a session or a relay rather than a request id: nothing to answer, so no reply. */
+const UNCORRELATED_FRAMES = new Set([...PTY_FRAMES, RELAY_CANCEL_FRAME]);
+
+function handleUncorrelatedFrame(msg, ctx) {
+  if (msg.type === RELAY_CANCEL_FRAME) {
+    relays.get(String(msg.relay))?.abort();
+
+    return;
+  }
+
+  handlePtyFrame(msg, ctx);
+}
+
+/** Methods past the file and command set: the Codex relay, else the answer an older hub's newer frame gets. */
+function answerLaterMethod(msg, ws) {
+  const { id, method, params } = msg;
+
+  if (method === RELAY_METHOD) rpcWhenSettled(ws, id, relayCall(ws, id, params[0]));
+  else rpc(ws, id, null, 'unknown method: ' + method);
+}
+
 function handle(msg, ws, ctx) {
   const { id, method, params } = msg;
   const checkpoints = ctx && ctx.checkpoints;
 
   // A session frame first: it carries a terminal's name rather than a request
   // id, so the method dispatch below has nothing to match it on.
-  if (PTY_FRAMES.has(msg.type)) return handlePtyFrame(msg, ctx);
+  if (UNCORRELATED_FRAMES.has(msg.type)) return handleUncorrelatedFrame(msg, ctx);
 
   try {
     if (method === PTY_OPEN_METHOD) {
       rpcWhenSettled(ws, id, openTerminalSession(msg, ws, ctx));
     } else if (method === 'exec') {
       execCommand(msg, ws, ctx);
+
     } else if (method === CANCEL_METHOD || method === EXEC_ACK_METHOD) {
       const requested = params[0];
       const target = String(requested);
@@ -2276,15 +2436,16 @@ function handle(msg, ws, ctx) {
       const confined = confinedDeviceViewPath(view, params[0], 'write');
       const covers = (candidate) => view.checkpointDirectory(candidate).why === null;
 
-      const covered = checkpoints && msg.checkpoint
-        ? checkpointDirOf(view, hintedDir(msg.checkpoint) ?? checkpoints.workdirForPath(confined, covers))
+      const verdict = checkpoints && msg.checkpoint
+        ? view.checkpointDirectory(hintedDir(msg.checkpoint) ?? checkpoints.workdirForPath(confined, covers))
         : null;
 
-      rpcWhenSettled(ws, id, mutation(checkpoints, msg.checkpoint, covered, () => {
+      rpcWhenSettled(ws, id, mutation(checkpoints, msg.checkpoint, coveredBy(verdict), (snapshot) => {
         fs.mkdirSync(path.dirname(confined), { recursive: true });
         fs.writeFileSync(confined, options.encoding === 'base64' ? Buffer.from(String(params[1]), 'base64') : params[1]);
+        const skipped = whyUncheckpointed(verdict, snapshot);
 
-        return { success: true };
+        return skipped === null ? { success: true } : { success: true, uncheckpointed: skipped };
       }));
     } else if (method === 'listFiles') {
       rpc(ws, id, listFilesAnswer(msg));
@@ -2327,7 +2488,7 @@ function handle(msg, ws, ctx) {
     } else if (method === 'checkpointRestore') {
       rpcWhenSettled(ws, id, checkpoints.restore(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
     } else {
-      rpc(ws, id, null, 'unknown method: ' + method);
+      answerLaterMethod(msg, ws);
     }
   } catch (err) {
     rpc(ws, id, null, err instanceof Error ? err.message : String(err));
@@ -3119,6 +3280,13 @@ module.exports = {
   PTY_CLOSE_FRAME,
   PTY_OUTPUT_FRAME,
   PTY_EXIT_FRAME,
+  RELAY_METHOD,
+  RELAY_HEAD_FRAME,
+  RELAY_BODY_FRAME,
+  RELAY_CANCEL_FRAME,
+  RELAY_HOST,
+  RELAY_ROUTES,
+  relayRefusal,
   SESSION_COMMAND,
   createInFlight,
   INFLIGHT_ROOT,

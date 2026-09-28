@@ -1,5 +1,7 @@
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import type { RawSqlExec, SqlExec, SqlExecRow } from '../types/primitives';
 import { JsonValueSchema, parseJsonValue, renderIssues, type JsonValue } from '../utils/json';
 import type { SlateBindingRequest } from './bindings';
@@ -15,7 +17,7 @@ const Key = v.pipe(v.string(), v.minLength(1), v.maxLength(512));
 /** Keyed per slate so one slate cannot read another's state. Also run by the resident-slate probe on its own DO storage. */
 export function initSlateStateTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS slate_state (
-    slate_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL,
+    slate_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
     PRIMARY KEY (slate_id, key)
   )`);
 }
@@ -33,51 +35,51 @@ export type SlateStorageOp =
   | { readonly op: 'delete'; readonly key: string }
   | { readonly op: 'list'; readonly prefix?: string; readonly limit?: number };
 
-function oneKey(request: SlateBindingRequest): string {
-  if (request.args.length !== 1) {
-    throw new KinuError('bad_input', `slate storage ${request.member} takes one key`);
-  }
+function oneKey(request: SlateBindingRequest): Effect.Effect<string, KinuError> {
+  if (request.args.length !== 1) return Effect.fail(new KinuError('bad_input', `slate storage ${request.member} takes one key`));
 
   const parsed = v.safeParse(Key, request.args[0]);
 
-  if (!parsed.success) {
-    throw new KinuError('bad_input', `slate storage ${request.member} takes one key: ${renderIssues(parsed.issues)}`);
-  }
-
-  return parsed.output;
+  return parsed.success
+    ? Effect.succeed(parsed.output)
+    : Effect.fail(new KinuError('bad_input', `slate storage ${request.member} takes one key: ${renderIssues(parsed.issues)}`));
 }
 
 /** Unknown members are `denied`; malformed arguments are `bad_input` naming the broken signature. */
 export function routeSlateStorageCall(request: SlateBindingRequest): SlateStorageOp {
+  return settleSync(storageOp(request));
+}
+
+function storageOp(request: SlateBindingRequest): Effect.Effect<SlateStorageOp, KinuError> {
   switch (request.member) {
-    case 'get': return { op: 'get', key: oneKey(request) };
-    case 'delete': return { op: 'delete', key: oneKey(request) };
+    case 'get': return Effect.map(oneKey(request), (key): SlateStorageOp => ({ op: 'get', key }));
+    case 'delete': return Effect.map(oneKey(request), (key): SlateStorageOp => ({ op: 'delete', key }));
     case 'put': {
-      if (request.args.length !== 2) throw new KinuError('bad_input', 'slate storage put takes key and value');
+      if (request.args.length !== 2) return Effect.fail(new KinuError('bad_input', 'slate storage put takes key and value'));
 
       const parsed = v.safeParse(v.tuple([Key, JsonValueSchema]), request.args);
 
       if (!parsed.success) {
-        throw new KinuError('bad_input', `slate storage put takes key and value: ${renderIssues(parsed.issues)}`);
+        return Effect.fail(new KinuError('bad_input', `slate storage put takes key and value: ${renderIssues(parsed.issues)}`));
       }
 
-      return { op: 'put', key: parsed.output[0], value: parsed.output[1] };
+      return Effect.succeed({ op: 'put', key: parsed.output[0], value: parsed.output[1] });
     }
 
     case 'list': {
-      if (request.args.length > 1) throw new KinuError('bad_input', 'slate storage list takes at most one { prefix?, limit? }');
+      if (request.args.length > 1) return Effect.fail(new KinuError('bad_input', 'slate storage list takes at most one { prefix?, limit? }'));
 
       const parsed = v.safeParse(ListOptions, request.args[0] ?? {});
 
       if (!parsed.success) {
-        throw new KinuError('bad_input', `slate storage list takes { prefix?, limit? }: ${renderIssues(parsed.issues)}`);
+        return Effect.fail(new KinuError('bad_input', `slate storage list takes { prefix?, limit? }: ${renderIssues(parsed.issues)}`));
       }
 
-      return { op: 'list', prefix: parsed.output.prefix, limit: parsed.output.limit };
+      return Effect.succeed({ op: 'list', prefix: parsed.output.prefix, limit: parsed.output.limit });
     }
 
     default:
-      throw new KinuError('denied', 'slate storage offers get, put, delete and list');
+      return Effect.fail(new KinuError('denied', 'slate storage offers get, put, delete and list'));
   }
 }
 
@@ -93,7 +95,6 @@ function stateEntry(row: SqlExecRow): [string, JsonValue] {
   return [key, parseJsonValue(value)];
 }
 
-/** `updated_at` is diagnostics only, never a guard. */
 export class SqliteSlateStateStore {
   constructor(private readonly db: SqlExec) {}
 
@@ -105,14 +106,18 @@ export class SqliteSlateStateStore {
 
   put(slateId: string, key: string, value: JsonValue): void {
     this.db.exec(
-      'INSERT INTO slate_state (slate_id, key, value, updated_at) VALUES (?, ?, ?, ?)'
-      + ' ON CONFLICT (slate_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
-      slateId, key, JSON.stringify(value), Date.now(),
+      'INSERT INTO slate_state (slate_id, key, value) VALUES (?, ?, ?) ON CONFLICT (slate_id, key) DO UPDATE SET value = excluded.value',
+      slateId, key, JSON.stringify(value),
     );
   }
 
   delete(slateId: string, key: string): boolean {
     return this.db.exec('DELETE FROM slate_state WHERE slate_id = ? AND key = ? RETURNING key', slateId, key).toArray().length !== 0;
+  }
+
+  /** A removed slate's state goes with it, so a later slate of the same id starts empty. */
+  forget(slateId: string): void {
+    this.db.exec('DELETE FROM slate_state WHERE slate_id = ?', slateId);
   }
 
   list(slateId: string, options?: SlateStorageListOptions): Array<[string, JsonValue]> {

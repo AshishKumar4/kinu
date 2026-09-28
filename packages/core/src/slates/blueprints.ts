@@ -6,12 +6,14 @@ import { CompatRange, ContentRef } from '@agent-core/core';
 import { BindingName, BindingRequirement, FacetPackageId } from '@agent-core/core/facets';
 import { SlateId, SlatePublicationId, SlateSkeleton, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settle, settleSync } from '../obs/effect';
 import { secretSightings, type SecretSighting } from '../safety/secret-patterns';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { nanoid } from '../utils/nanoid';
 import type { WorkspaceSlateContentStore } from './content';
-import { credentialedBindings, describeBindings, parseSlateProject, type SlateBindingDeclaration, type SlateProject } from './project';
+import { credentialedBindings, describeBindings, slateProject, type SlateBindingDeclaration, type SlateProject } from './project';
 import type { WorkspaceSlates } from './runtime';
 import { type NewSlateShare, type ShareUser, type SlateShareStore } from './shares';
 import {
@@ -39,31 +41,34 @@ const CANONICAL_BINDING_NAME = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/u;
 
 const BLUEPRINT_FACET_PREFIX = 'kinu.slate.';
 
-function canonicalBindingName(name: string): string {
+function canonicalBindingName(name: string): Effect.Effect<string, KinuError> {
   const canonical = name.toLowerCase().replace(/_/g, '-');
 
-  if (!CANONICAL_BINDING_NAME.test(canonical)) {
-    throw new KinuError('bad_input', `Binding "${name}" cannot be published: a requirement name is letters, digits, "." and "-", starting with a letter`);
-  }
-
-  return canonical;
+  return CANONICAL_BINDING_NAME.test(canonical)
+    ? Effect.succeed(canonical)
+    : Effect.fail(new KinuError('bad_input', `Binding "${name}" cannot be published: a requirement name is letters, digits, "." and "-", starting with a letter`));
 }
 
 /** A declaration, never a grant: the forker maps each requirement before the slate runs. */
-function blueprintRequirements(project: SlateProject): BindingRequirement[] {
-  const requirements: BindingRequirement[] = [];
-  const seen: Record<string, string> = {};
+function blueprintRequirements(project: SlateProject): Effect.Effect<BindingRequirement[], KinuError> {
+  return Effect.gen(function* () {
+    const requirements: BindingRequirement[] = [];
+    const seen: Record<string, string> = {};
 
-  for (const declaration of describeBindings(project)) {
-    const canonical = canonicalBindingName(declaration.name);
-    const other = seen[canonical];
+    for (const declaration of describeBindings(project)) {
+      const canonical = yield* canonicalBindingName(declaration.name);
+      const other = seen[canonical];
 
-    if (other !== undefined) throw new KinuError('bad_input', `Bindings "${other}" and "${declaration.name}" would publish as the same requirement "${canonical}"`);
-    seen[canonical] = declaration.name;
-    requirements.push(new BindingRequirement(new BindingName(canonical), new FacetPackageId(BLUEPRINT_FACET_PREFIX + declaration.kind), CompatRange.any()));
-  }
+      if (other !== undefined) {
+        return yield* new KinuError('bad_input', `Bindings "${other}" and "${declaration.name}" would publish as the same requirement "${canonical}"`);
+      }
 
-  return requirements;
+      seen[canonical] = declaration.name;
+      requirements.push(new BindingRequirement(new BindingName(canonical), new FacetPackageId(BLUEPRINT_FACET_PREFIX + declaration.kind), CompatRange.any()));
+    }
+
+    return requirements;
+  });
 }
 
 /** `package.json` always, plus every entry under an included top-level name. */
@@ -113,38 +118,47 @@ export class WorkspaceBlueprints {
 
   /** Reads only. */
   inspect(slate: string, version: string, included?: readonly string[]): BlueprintInspection {
-    const record = this.deps.slates.version(new SlateVersionId(version));
+    return settleSync(this.inspection(slate, version, included));
+  }
 
-    if (!record.slateId.equals(new SlateId(slate))) throw new KinuError('missing', 'That version belongs to another slate');
-    const tree = this.tree(record.source);
-    const chosen = includeTree(tree, included);
-    const project = this.project(chosen);
+  private inspection(slate: string, version: string, included?: readonly string[]): Effect.Effect<BlueprintInspection, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const record = this.deps.slates.version(new SlateVersionId(version));
 
-    return {
-      slate, version,
-      title: project.slate.title ?? project.name ?? slate,
-      description: project.description ?? '',
-      entries: this.entries(tree, chosen),
-      bindings: describeBindings(project),
-      credentialed: credentialedBindings(project),
-      warnings: this.warnings(chosen),
-    };
+      if (!record.slateId.equals(new SlateId(slate))) return yield* new KinuError('missing', 'That version belongs to another slate');
+      const tree = this.tree(record.source);
+      const chosen = includeTree(tree, included);
+      const project = yield* this.project(chosen);
+
+      return {
+        slate, version,
+        title: project.slate.title ?? project.name ?? slate,
+        description: project.description ?? '',
+        entries: this.entries(tree, chosen),
+        bindings: describeBindings(project),
+        credentialed: credentialedBindings(project),
+        warnings: this.warnings(chosen),
+      };
+    });
   }
 
   /** Answers the inspection of exactly the published bytes. */
   async publish(slate: string, version: string, included?: readonly string[]): Promise<PublishedBlueprint> {
-    const inspection = this.inspect(slate, version, included);
-    const record = this.deps.slates.version(new SlateVersionId(version));
-    const tree = includeTree(this.tree(record.source), included);
-    // A subset is retained as its own bundle so the skeleton names exactly what ships.
-    const bundle = included === undefined ? record.source : this.retainTree(tree);
-    const publication = await this.deps.slates.publish(record.id, blueprintRequirements(this.project(tree)), bundle);
+    return settle(Effect.gen({ self: this }, function* () {
+      const inspection = yield* this.inspection(slate, version, included);
+      const record = this.deps.slates.version(new SlateVersionId(version));
+      const tree = includeTree(this.tree(record.source), included);
+      // A subset is retained as its own bundle, so the skeleton names what ships.
+      const bundle = included === undefined ? record.source : this.retainTree(tree);
+      const requirements = yield* blueprintRequirements(yield* this.project(tree));
+      const publication = yield* Effect.promise(() => this.deps.slates.publish(record.id, requirements, bundle));
 
-    const row: NewSlateShare = {
-      id: nanoid(), slate, kind: 'blueprint', publication: publication.id.value, included: topLevelNames(tree),
-    };
+      const row: NewSlateShare = {
+        id: nanoid(), slate, publication: publication.id.value, included: topLevelNames(tree),
+      };
 
-    return { share: this.deps.shares.add(row), inspection };
+      return { share: this.deps.shares.add(row), inspection };
+    }));
   }
 
   unshare(share: string): SlateShareRecord {
@@ -161,9 +175,7 @@ export class WorkspaceBlueprints {
 
   /** Refuses when revoked (S6). */
   read(share: string): BlueprintReading {
-    const { record, tree, project } = this.published(share);
-
-    return {
+    return settleSync(Effect.map(this.published(share), ({ record, tree, project }) => ({
       record,
       view: {
         ...heading(record, project),
@@ -173,21 +185,23 @@ export class WorkspaceBlueprints {
         warnings: this.warnings(tree),
         createdAt: record.createdAt,
       },
-    };
+    })));
   }
 
   /** Without the entries and warnings, which read every file. */
   heading(share: string): BlueprintHeading {
-    const { record, project } = this.published(share);
-
-    return { ...heading(record, project), bindings: describeBindings(project).length };
+    return settleSync(Effect.map(this.published(share), ({ record, project }) => ({
+      ...heading(record, project), bindings: describeBindings(project).length,
+    })));
   }
 
-  private published(share: string) {
-    const record = this.deps.shares.live(share);
-    const tree = this.tree(this.deps.slates.publication(new SlatePublicationId(record.publication)).materialization);
+  private published(share: string): Effect.Effect<{ record: SlateShareRecord; tree: Tree; project: SlateProject }, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const record = this.deps.shares.live(share);
+      const tree = this.tree(this.deps.slates.publication(new SlatePublicationId(record.publication)).materialization);
 
-    return { record, tree, project: this.project(tree) };
+      return { record, tree, project: yield* this.project(tree) };
+    });
   }
 
   /** Re-reads the row, so a revoked blueprint refuses here too. */
@@ -212,52 +226,57 @@ export class WorkspaceBlueprints {
   }
   /** Live-share fork: the skeleton is built from the running slate's synchronized tree, never an included subset. */
   async liveBundle(slateId: string): Promise<BlueprintBundle> {
-    const slate = await this.deps.slates.synchronize(new SlateId(slateId));
-    const tree = this.tree(slate.source);
-    const project = this.project(tree);
-    const skeleton = new SlateSkeleton(slate.source.digest, blueprintRequirements(project));
-    const blobs: Record<string, string> = {};
+    return settle(Effect.gen({ self: this }, function* () {
+      const slate = yield* Effect.promise(() => this.deps.slates.synchronize(new SlateId(slateId)));
+      const tree = this.tree(slate.source);
+      const skeleton = new SlateSkeleton(slate.source.digest, yield* blueprintRequirements(yield* this.project(tree)));
+      const blobs: Record<string, string> = {};
 
-    for (const entry of tree.entries) {
-      if (entry.kind === 'file' && blobs[entry.content] === undefined) {
-        blobs[entry.content] = bytesToBase64(this.deps.content.read(new ContentRef(entry.content)));
+      for (const entry of tree.entries) {
+        if (entry.kind === 'file' && blobs[entry.content] === undefined) {
+          blobs[entry.content] = bytesToBase64(this.deps.content.read(new ContentRef(entry.content)));
+        }
       }
-    }
 
-    return v.parse(BlueprintBundleSchema, {
-      skeleton: skeleton.toData(),
-      tree: new TextDecoder().decode(this.deps.content.read(slate.source)),
-      blobs,
-    });
+      return v.parse(BlueprintBundleSchema, {
+        skeleton: skeleton.toData(),
+        tree: new TextDecoder().decode(this.deps.content.read(slate.source)),
+        blobs,
+      });
+    }));
   }
 
   /** Proves the bytes match the skeleton and lands them with every requirement unsatisfied; starts no process. */
   async admit(workspace: string, input: BlueprintBundle): Promise<BlueprintFork> {
-    const bundle = v.parse(BlueprintBundleSchema, input);
-    const skeleton = SlateSkeleton.fromData(bundle.skeleton);
-    const tree = v.parse(Tree, JSON.parse(bundle.tree));
+    return settle(Effect.gen({ self: this }, function* () {
+      const bundle = v.parse(BlueprintBundleSchema, input);
+      const skeleton = SlateSkeleton.fromData(bundle.skeleton);
+      const tree = v.parse(Tree, JSON.parse(bundle.tree));
 
-    for (const entry of tree.entries) {
-      if (entry.kind !== 'file') continue;
-      const encoded = bundle.blobs[entry.content];
+      for (const entry of tree.entries) {
+        if (entry.kind !== 'file') continue;
+        const encoded = bundle.blobs[entry.content];
 
-      if (encoded === undefined) throw new KinuError('bad_input', `The blueprint names ${entry.path} but carries no bytes for it`);
-      const retained = this.deps.content.retain(base64ToBytes(encoded));
+        if (encoded === undefined) return yield* new KinuError('bad_input', `The blueprint names ${entry.path} but carries no bytes for it`);
+        const retained = this.deps.content.retain(base64ToBytes(encoded));
 
-      if (retained.ref.value !== entry.content) throw new KinuError('bad_input', `The bytes for ${entry.path} are not the bytes the blueprint names`);
-    }
+        if (retained.ref.value !== entry.content) {
+          return yield* new KinuError('bad_input', `The bytes for ${entry.path} are not the bytes the blueprint names`);
+        }
+      }
 
-    const source = this.deps.content.retain(new TextEncoder().encode(bundle.tree)).ref;
-    const project = this.project(tree);
-    const admitted = await this.deps.slates.instantiate(skeleton, source);
+      const source = this.deps.content.retain(new TextEncoder().encode(bundle.tree)).ref;
+      const project = yield* this.project(tree);
+      const admitted = yield* Effect.promise(() => this.deps.slates.instantiate(skeleton, source));
 
-    return {
-      workspace,
-      slate: admitted.slate.id.value,
-      title: project.slate.title ?? project.name ?? admitted.slate.id.value,
-      requirements: admitted.unsatisfied.map((requirement) => ({ name: requirement.name.value, facet: requirement.facet.value })),
-      bindings: describeBindings(project),
-    };
+      return {
+        workspace,
+        slate: admitted.slate.id.value,
+        title: project.slate.title ?? project.name ?? admitted.slate.id.value,
+        requirements: admitted.unsatisfied.map((requirement) => ({ name: requirement.name.value, facet: requirement.facet.value })),
+        bindings: describeBindings(project),
+      };
+    }));
   }
 
   private tree(source: ContentRef): Tree {
@@ -268,12 +287,12 @@ export class WorkspaceBlueprints {
     return this.deps.content.retain(new TextEncoder().encode(JSON.stringify(tree))).ref;
   }
 
-  private project(tree: Tree): SlateProject {
+  private project(tree: Tree): Effect.Effect<SlateProject, KinuError> {
     const manifest = tree.entries.find((entry) => entry.path === 'package.json');
 
-    if (manifest === undefined || manifest.kind !== 'file') throw new KinuError('bad_input', 'This version has no package.json');
+    if (manifest === undefined || manifest.kind !== 'file') return Effect.fail(new KinuError('bad_input', 'This version has no package.json'));
 
-    return parseSlateProject(JSON.parse(new TextDecoder().decode(this.deps.content.read(new ContentRef(manifest.content)))));
+    return Effect.suspend(() => slateProject(JSON.parse(new TextDecoder().decode(this.deps.content.read(new ContentRef(manifest.content))))));
   }
 
   private entries(whole: Tree, chosen: Tree): BlueprintEntry[] {

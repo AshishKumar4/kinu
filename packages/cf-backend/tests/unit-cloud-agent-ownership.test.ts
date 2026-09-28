@@ -12,7 +12,7 @@ import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
 import { createCloudWorkspaceForUser, type CloudWorkspaceRegistry } from '../src/user/workspace-create';
 import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
 import {
-  halfBornOrchestratorHarness, orchestratorHarness, reactivateOrchestratorHarness, workspaceFiles,
+  unstartedOrchestratorHarness, orchestratorHarness, reactivateOrchestratorHarness, workspaceFiles,
 } from './helpers/actor-harness';
 import type { UserCaller } from '@kinu.run/core';
 import type { NameOrigin } from '@kinu.run/core';
@@ -21,6 +21,7 @@ import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import type { AuthIdentity } from '../src/auth/session';
 import type { IndexFeedSink } from '../src/control-plane/index-feed';
 import { bootstrappedProfile, userAccount, workspaceObject, workerContext } from './helpers/bindings';
+import { NO_RELAY_MACHINE } from './helpers/user-credentials';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -43,7 +44,7 @@ function registerWorkspaceStub(
     calls.push(logged(name, displayName, from));
 
     return {
-      entry: { name, displayName: displayName ?? name, createdAt: at, lastVisited: at, archivedAt: null },
+      entry: { name, displayName: displayName ?? name, createdAt: at, lastVisited: at },
       status: 'created' as const,
     };
   };
@@ -87,6 +88,7 @@ function indexFeed(): IndexFeed {
 /** A neutral registry; each rollback test overrides only the method whose failure it is about. */
 function registryStub(): CloudWorkspaceRegistry {
   return {
+    ...NO_RELAY_MACHINE,
     async getProfileCatalog(_caller: UserCaller) { return DEFAULT_ENVELOPE; },
     async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
     async getCredentialBaseURL(_caller: UserCaller) {
@@ -96,7 +98,7 @@ function registryStub(): CloudWorkspaceRegistry {
     async ensureWorkspaceCapability() {},
     async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
       return {
-        entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
+        entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1 },
         status: 'created' as const,
       };
     },
@@ -512,7 +514,7 @@ describe('cloud agent ownership safety', () => {
         calls.push(`register:${name}`);
 
         return {
-          entry: { name, displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2, archivedAt: null },
+          entry: { name, displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2 },
           status: 'active' as const,
         };
       },
@@ -569,7 +571,7 @@ describe('cloud agent ownership safety', () => {
     }
 
     expect(first).toEqual({
-      name: 'jarvis', displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2, archivedAt: null,
+      name: 'jarvis', displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2,
     });
     expect(second).toEqual(first);
     // The register is the whole call: no claim, soul, reset, genesis, or rollback.
@@ -813,12 +815,9 @@ describe('cloud agent ownership safety', () => {
       .rejects.toThrow('Agent owner mismatch; refusing to destroy.');
   });
 
-  test('a workspace whose schema never initialized is deleted: roster row and object storage go together', async () => {
-    // Half-born: a create that died before `ensureSchema` has no `workspace_identity`, so `destroyAgent`'s
-    // owner read throws.
-    const halfBorn = halfBornOrchestratorHarness({ workspace: 'jarvis' });
-    expect(halfBorn.tableNames()).not.toContain('workspace_identity');
-    expect(halfBorn.tableNames()).toContain('workspace_capability');
+  test('a workspace whose create died before its owner claim is deleted: roster row and object storage go together', async () => {
+    // Registered on the user, never claimed by the object: no owner to compare.
+    const halfBorn = unstartedOrchestratorHarness({ workspace: 'jarvis' });
 
     const userDO = createTestUserDO({
       durableObjectId: USER_ID,
@@ -852,7 +851,7 @@ describe('cloud agent ownership safety', () => {
   });
 
   test('a healthy workspace whose owner does not match is still refused, row and storage intact', async () => {
-    // The half-born skip must not widen: an initialized workspace with another owner is not destroyed.
+    // The unclaimed skip must not widen: a claimed workspace with another owner is not destroyed.
     const OTHER = 'b'.repeat(32);
     const healthy = orchestratorHarness(undefined, { workspace: 'jarvis', ownerUserId: OTHER });
 

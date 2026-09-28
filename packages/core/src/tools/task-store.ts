@@ -16,62 +16,34 @@ const TaskStatusSchema = v.picklist(TASK_STATUSES);
 
 const OPEN_STATUSES: ReadonlySet<string> = new Set(['open', 'active']);
 
-export interface AgentTask {
-  id: string;
-  parentId: string | null;
-  title: string;
-  status: TaskStatus;
-  createdAt: number;
-  updatedAt: number;
-  /** Operator annotation from `tasks.update`; own table because agent_tasks is genesis-locked. */
-  readonly note: string | null;
-}
+/** `note` is the operator annotation from `tasks.update`. */
+const AgentTaskSchema = v.object({ id: v.string(), parentId: v.nullable(v.string()), title: v.string(), status: TaskStatusSchema, updatedAt: v.number(), note: v.nullable(v.string()) });
 
-export interface AgentTaskTree extends AgentTask {
-  subtasks: AgentTask[];
-}
-
-const AgentTaskSchema = v.object({ id: v.string(), parentId: v.nullable(v.string()), title: v.string(), status: TaskStatusSchema, createdAt: v.number(), updatedAt: v.number(), note: v.nullable(v.string()) });
+export type AgentTask = v.InferOutput<typeof AgentTaskSchema>;
 
 export const AgentTaskTreeSchema = v.object({ ...AgentTaskSchema.entries, subtasks: v.array(AgentTaskSchema) });
 
-/** Read-only plan progress for one actor, usable without a write handle; scoped on both sides of the join. */
+export type AgentTaskTree = v.InferOutput<typeof AgentTaskTreeSchema>;
+
+/** Read-only plan progress for one actor, usable without a write handle. */
 export function readPlanTasks(sql: SqlExecutor, actor: ActorHandle, plan: TaskPlan): AgentTaskTree[] {
   actor.assertCurrent();
 
-  return nest(sql<Row>`SELECT t.id,t.parent_id,t.title,t.status,t.created_at,t.updated_at,n.note
-    FROM agent_tasks t INNER JOIN plan_task_links l ON l.task_id=t.id AND l.actor_id=t.actor_id
-    LEFT JOIN agent_task_notes n ON n.actor_id=t.actor_id AND n.task_id=t.id
-    WHERE t.actor_id=${actor.actorId} AND l.plan_id=${plan.id}
-      AND l.revision=${plan.revision} AND l.session_id=${plan.sessionId}
-    ORDER BY t.seq`.map(toTask));
+  return nest(sql<Row>`SELECT id,parent_id,title,status,updated_at,note FROM agent_tasks
+    WHERE actor_id=${actor.actorId} AND plan_id=${plan.id}
+      AND revision=${plan.revision} AND session_id=${plan.sessionId}
+    ORDER BY seq`.map(toTask));
 }
 
 interface Row {
-  id: string; parent_id: string | null; title: string; status: string;
-  created_at: number; updated_at: number; note: string | null;
+  id: string; parent_id: string | null; title: string;
+  /** The column's CHECK admits only these. */
+  status: TaskStatus;
+  updated_at: number; note: string | null;
 }
 
 function toTask(r: Row): AgentTask {
-  // An unknown stored status is corruption, never open (reads would disagree); name it for the repair.
-  const status = v.safeParse(TaskStatusSchema, r.status);
-
-  if (!status.success) {
-    throw new Error(
-      `agent_tasks row '${r.id}' stores unknown status '${r.status}'`
-      + ` — expected one of ${TASK_STATUSES.join(', ')}`,
-    );
-  }
-
-  return {
-    id: r.id,
-    parentId: r.parent_id,
-    title: r.title,
-    status: status.output,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    note: r.note,
-  };
+  return { id: r.id, parentId: r.parent_id, title: r.title, status: r.status, updatedAt: r.updated_at, note: r.note };
 }
 
 export function initTaskListTable(execRaw: RawSqlExec): void {
@@ -82,23 +54,18 @@ export function initTaskListTable(execRaw: RawSqlExec): void {
     parent_id  TEXT,
     title      TEXT NOT NULL,
     status     TEXT NOT NULL DEFAULT 'open' CHECK (status IN (${sqlCheckList(TASK_STATUSES)})),
-    created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
+    note       TEXT,
+    plan_id    TEXT,
+    revision   INTEGER,
+    session_id TEXT,
     PRIMARY KEY (actor_id, id)
   )`);
   // Per-actor: a table-wide UNIQUE(seq) would collide actors' `t{seq}` numbering.
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tasks_seq ON agent_tasks(actor_id, seq)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(actor_id, status)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent ON agent_tasks(actor_id, parent_id)`);
-  // Own table: agent_tasks is genesis-locked; reads LEFT JOIN it, so a missing row is a null note.
-  execRaw(`CREATE TABLE IF NOT EXISTS agent_task_notes (
-    actor_id TEXT NOT NULL,
-    task_id  TEXT NOT NULL,
-    note     TEXT NOT NULL,
-    PRIMARY KEY (actor_id, task_id)
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS plan_task_links (actor_id TEXT NOT NULL, task_id TEXT NOT NULL, plan_id TEXT NOT NULL, revision INTEGER NOT NULL, session_id TEXT NOT NULL, PRIMARY KEY (actor_id, task_id))`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_plan_task_revision ON plan_task_links(actor_id,session_id,plan_id,revision)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_plan ON agent_tasks(actor_id, session_id, plan_id, revision)`);
 }
 
 /** The model gets the reason, never a silent drop. */
@@ -118,8 +85,8 @@ export const MAX_TASK_TITLE_CHARS = 200;
 export class TaskListStore {
   private readonly actorId: string;
 
-  /** `actorId` is captured once so the store cannot be re-pointed. `transactionSync` is required: the
-   *  two INSERTs in {@link addLinked} must land or fail together. */
+  /** `actorId` is captured once so the store cannot be re-pointed. `transactionSync` is required: a
+   *  batch in {@link addLinked} must land or fail together. */
   constructor(
     private readonly sql: SqlExecutor,
     private readonly actor: ActorHandle,
@@ -141,7 +108,7 @@ export class TaskListStore {
     // A subtask inherits its parent's plan link, not the actor's live scope.
     const linkedPlan = parentId === null
       ? plan
-      : this.sql<TaskPlan>`SELECT plan_id AS id, revision, session_id AS sessionId FROM plan_task_links WHERE actor_id=${this.actorId} AND task_id=${parentId}`[0] ?? null;
+      : this.sql<TaskPlan>`SELECT plan_id AS id, revision, session_id AS sessionId FROM agent_tasks WHERE actor_id=${this.actorId} AND id=${parentId} AND plan_id IS NOT NULL`[0] ?? null;
 
     const parent = parentId === null ? null : this.get(parentId);
 
@@ -155,7 +122,7 @@ export class TaskListStore {
         added: [],
         rejected: titles.map((title) => ({
           title,
-          reason: `${parent.id} is itself a subtask — subtasks nest one level only`,
+          reason: `${parent.id} is itself a subtask: subtasks nest one level only`,
         })),
       };
     }
@@ -178,18 +145,16 @@ export class TaskListStore {
       }
 
       const id = `t${seq}`;
-      void this.sql`INSERT INTO agent_tasks (actor_id, id, seq, parent_id, title, status, created_at, updated_at)
-        VALUES (${this.actorId}, ${id}, ${seq}, ${parentId}, ${title}, 'open', ${now}, ${now})`;
-
-      if (linkedPlan) void this.sql`INSERT INTO plan_task_links(actor_id,task_id,plan_id,revision,session_id) VALUES (${this.actorId},${id},${linkedPlan.id},${linkedPlan.revision},${linkedPlan.sessionId})`;
-      added.push({ id, parentId, title, status: 'open', createdAt: now, updatedAt: now, note: null });
+      void this.sql`INSERT INTO agent_tasks (actor_id, id, seq, parent_id, title, status, updated_at, plan_id, revision, session_id)
+        VALUES (${this.actorId}, ${id}, ${seq}, ${parentId}, ${title}, 'open', ${now}, ${linkedPlan?.id ?? null}, ${linkedPlan?.revision ?? null}, ${linkedPlan?.sessionId ?? null})`;
+      added.push({ id, parentId, title, status: 'open', updatedAt: now, note: null });
       seq++;
     }
 
     return { added, rejected };
   }
 
-  /** A cleared note deletes its row so the LEFT JOIN reads null, not ''. Null when there is no such id. */
+  /** A cleared note is stored as null, not ''. Null when there is no such id. */
   update(id: string, patch: { readonly status?: TaskStatus; readonly note?: string | null }, now: number): AgentTask | null {
     this.actor.assertCurrent();
 
@@ -201,12 +166,7 @@ export class TaskListStore {
     }
 
     if (patch.note !== undefined) {
-      if (patch.note === null) {
-        void this.sql`DELETE FROM agent_task_notes WHERE actor_id=${this.actorId} AND task_id=${id}`;
-      } else {
-        void this.sql`INSERT INTO agent_task_notes (actor_id, task_id, note) VALUES (${this.actorId}, ${id}, ${patch.note})
-          ON CONFLICT(actor_id, task_id) DO UPDATE SET note=excluded.note`;
-      }
+      void this.sql`UPDATE agent_tasks SET note=${patch.note} WHERE actor_id=${this.actorId} AND id=${id}`;
     }
 
     return this.get(id);
@@ -215,9 +175,8 @@ export class TaskListStore {
   get(id: string): AgentTask | null {
     this.actor.assertCurrent();
 
-    const rows = this.sql<Row>`SELECT t.id, t.parent_id, t.title, t.status, t.created_at, t.updated_at, n.note
-      FROM agent_tasks t LEFT JOIN agent_task_notes n ON n.actor_id=t.actor_id AND n.task_id=t.id
-      WHERE t.actor_id=${this.actorId} AND t.id=${id} LIMIT 1`;
+    const rows = this.sql<Row>`SELECT id, parent_id, title, status, updated_at, note
+      FROM agent_tasks WHERE actor_id=${this.actorId} AND id=${id} LIMIT 1`;
 
     return rows[0] ? toTask(rows[0]) : null;
   }
@@ -272,9 +231,15 @@ export class TaskListStore {
   private rows(limit = -1): AgentTask[] {
     this.actor.assertCurrent();
 
-    return this.sql<Row>`SELECT t.id, t.parent_id, t.title, t.status, t.created_at, t.updated_at, n.note
-      FROM agent_tasks t LEFT JOIN agent_task_notes n ON n.actor_id=t.actor_id AND n.task_id=t.id
-      WHERE t.actor_id=${this.actorId} ORDER BY t.seq ASC LIMIT ${limit}`.map(toTask);
+    return this.sql<Row>`SELECT id, parent_id, title, status, updated_at, note
+      FROM agent_tasks WHERE actor_id=${this.actorId} ORDER BY seq ASC LIMIT ${limit}`.map(toTask);
+  }
+
+  /** Ids of this actor's tasks linked to a plan revision. */
+  linkedIds(): ReadonlySet<string> {
+    this.actor.assertCurrent();
+
+    return new Set(this.sql<{ id: string }>`SELECT id FROM agent_tasks WHERE actor_id=${this.actorId} AND plan_id IS NOT NULL`.map((r) => r.id));
   }
 
   /** Scoped per actor, so two actors' ids run independently. */

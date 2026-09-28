@@ -101,7 +101,7 @@ A hosted workspace has a root `OrchestratorAgent` Durable Object. Its SQLite sto
 
 ![Current workspace ownership with one shared actor store](diagrams/product-workspace-current.svg)
 
-One root actor directory issues immutable actor and parent references and keeps logical aliases apart from physical storage keys. Actor-scoped storage uses `actor_config`, `actor_program_state`, `actor_subordinates` and `subordinate_identity`. The root directory uses `workspace_actors`.
+One root actor directory issues immutable actor and parent references and keeps logical aliases apart from physical storage keys. Actor-scoped storage uses `actor_config`, `actor_program_state` and `actor_subordinates`. The root directory uses `workspace_actors`.
 
 On 2026-09-08, 8 directory cases and 3 admitted-birth cases passed locally. They cover colliding state keys, lost acknowledgements, cross-parent refusal, retirement retries and reused aliases. The native Worker tier passed 2 actor-identity cases and 5 retained-inspection cases. These are local proofs, not a deployment claim.
 
@@ -282,10 +282,10 @@ This is the source inventory for the reviewed revision. It is not a proposed sch
 | Optional SDK session/context | `assistant_sessions`, context-block and search tables | SDK facilities. Their existence in the package does not prove Kinu uses them for every actor. |
 | Stream replay | `cf_ai_chat_stream_chunks`, `cf_ai_chat_stream_metadata` | Actor-local reconnect buffers. Cleaning a replay buffer is not deletion of canonical messages. |
 | SDK lifecycle | `cf_agents_state`, queues, schedules, workflows, runs and fibers | SDK-owned runtime state in the workspace database, with root coordination where the SDK requires it. |
-| Kinu identity/roster | `workspace_identity`, `workspace_actors`, `actor_config`, `subordinate_identity`, `actor_subordinates` | Root directory or actor-scoped rows. The parent roster is distinct from the child identity. Capability-bearing records are protected state. |
+| Kinu identity/roster | `workspace_identity`, `workspace_actors`, `actor_config`, `actor_subordinates` | Root directory or actor-scoped rows. The parent roster is distinct from the child identity. Capability-bearing records are protected state. |
 | Program state | `actor_program_state`; `db` tables (`app_*`, catalogued in `agent_data_tables`) | `actor_program_state` is actor-private JSON key/value state behind `state.*`. `db` tables are agent-declared structured data at actor or workspace scope (§9.1). |
 | Admitted work/effects | `pending_steers`, `actor_turn_claims`, `run_events`, `background_jobs`, `tool_effect_claims`, `terminal_effects`, `effect_tombstones` | The actor's durable work, mode, outcome and recovery records. They must not become ordinary editable prompt text. |
-| Compaction/prompt versions | `compaction_state`, `compaction_archive`, `prompt_section_versions`, `prompt_section_evaluations` | Actor/session-scoped context planning, recall locations and prompt trials. |
+| Compaction/prompt versions | `compaction_state`, `compaction_archive`, `prompt_section_versions` | Actor/session-scoped context planning, recall locations and prompt trials. |
 | Scaffold/learning | `scaffold_versions`, regression fixtures, trials, evaluations, completed turns, evolution events, outcomes, lessons, labels and GEPA records | Actor-local version pointers and learning evidence. Source bytes and execution evidence have different owners. |
 | Exploration | `search_nodes`, `mcts_search_runs`, `swarm_node_records`, exploration records, head runs/journal/evidence/steps/merge results | Search/controller-owned durable results. Head, node and branch traces and model-operation outboxes are additional records; a search vertex is not a conversation. |
 | Memory/tasks/permissions | Memory chunks/FTS, `agent_facts`, `agent_tasks`, plan reviews and instruction approvals | The scope supplied by the actor/root adapter. An instruction's approval is not equivalent to permission to write its file. |
@@ -478,7 +478,7 @@ Kinu improves tools, instructions, working context and loop versions through obs
 5. Which actor/owner authority permitted activation.
 6. Which later outcome supports or contradicts the claimed benefit.
 
-Tool fitness updates, turn lessons, session reflection and lifetime search are different operations. Having them does not prove they improve task success.
+Tool fitness updates, turn lessons, session reflection and craft consolidation are different operations. Having them does not prove they improve task success.
 
 Model agreement is never labelled human ground truth. The recovered approval for ensemble calibration was: a human reference pass, blind model second opinions, measured agreement and confusion, then recurring automation with a human audit. A transcript corpus alone does not replace the human reference.
 
@@ -815,7 +815,7 @@ A group status does not close every historical bug mapped to it; each fix still 
 
 | Criterion group | Required acceptance behavior | Current comparison | Source/evidence entry point |
 |---|---|---|---|
-| <a id="accept-workspace-authority"></a>**workspace-authority** | Create main and multiple actors in one physical workspace SQLite; use colliding logical keys and verify isolation; snapshot and restore all actors together. | **Cut over in source.** Logical actors share the workspace's one SQLite under actor-led keys, with unit proof for colliding-key isolation. Snapshot/restore across all actors still owes its end-to-end proof, as does the disposition of pre-cutover facet-local state. | §4, §7; actor-host.ts; subordinate/exploration-hosting; messages 975, 818, 842 |
+| <a id="accept-workspace-authority"></a>**workspace-authority** | Create main and multiple actors in one physical workspace SQLite; use colliding logical keys and verify isolation; snapshot and restore all actors together. | **Cut over in source.** Logical actors share the workspace's one SQLite under actor-led keys, with unit proof for colliding-key isolation. Snapshot/restore across all actors still owes its end-to-end proof, as does the disposition of pre-cutover facet-local state. | §4, §7; actor-host.ts; hosted-actors.ts; messages 975, 818, 842 |
 | <a id='accept-workspace-identity'></a>**workspace-identity** | Start the first agent turn from the creation mission without reprompting; cold-open the generated title; rename without changing routing identity; reject invalid addresses before resource creation. | **Production proof, scoped**. Title/address cases passed. Initial-turn and complete creation-journey acceptance must be checked separately. | workspace-title and preview-address first-run receipts; messages 58, 186, 267, 972 |
 | <a id="accept-actor-core"></a>**actor-core** | Run the same status/cancellation/loop-version contract on main, persistent, temporary and tool-using exploration actors; vary only declared capabilities/lifetime. | **Partial**. One `ActorAgent` base; every kind is a logical actor on one `ActorHost`, run by the same claimed-turn runner, and no facet class remains. Heads read their own loop pointer each turn; search nodes start from the bootstrap loop origin. Cross-kind acceptance of the shared contract is not claimed. | ActorAgent; runHeadInference/runNodeLoop; messages 97, 300, 387, 935, 975 |
 | <a id="accept-delegation-contract"></a>**delegation-contract** | Ask an existing actor without spawning; ask by role as a real temporary actor; inspect actual nested context-reference reads and retained outcomes. | **Implemented paths; live acceptance incomplete**. Core behavior and owner inspection have local proof. A completed live recursive journey is not claimed. | temporary.ts; eval tier; owner inspection; messages 724, 741, 748, 749, 750 |
@@ -916,7 +916,7 @@ The document is maintained through source-grounded review. It creates no prose-s
 - [TOOLS.md](TOOLS.md): tool, delegation and owner-inspection surfaces.
 - [EXECUTION-LAYER-SPEC.md](EXECUTION-LAYER-SPEC.md): execution environments and result contracts.
 - [CONTEXT-BUDGET.md](CONTEXT-BUDGET.md): context preparation and measurement.
-- [EXPLORATION.md](EXPLORATION.md), [MCTS.md](MCTS.md): configured exploration and journals.
+- [EXPLORATION.md](EXPLORATION.md): configured exploration and journals.
 - [EVOLUTION.md](EVOLUTION.md), [CRAFT-ARCHITECTURE.md](CRAFT-ARCHITECTURE.md): learning, trials and tool versions.
 - [LIVE-UI.md](LIVE-UI.md): authored slates and adoption boundaries.
 - [USER-GUIDE.md](USER-GUIDE.md), [CLI.md](CLI.md), [CONFIG.md](CONFIG.md): user entry points and configuration.

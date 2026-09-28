@@ -9,7 +9,7 @@ import {
   type BackendHost,
   type SqlExec,
 } from '@kinu.run/core';
-import { createMemoryVfs, createTestActorsOver, createTestRuntime, unobservedSpend } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver, createTestRuntime } from '@kinu.run/test-utils';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
   sendInboundEmailReceipt, sendOwnerEmail,
@@ -164,7 +164,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const { rt, stores } = createTestRuntime();
 
     const orch = new AgentOrchestrator({
-      host, eventLog: log, engine: new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, enabled: false }),
+      host, eventLog: log, engine: new EvolutionEngine(rt, stores.history, { enabled: false }),
     });
 
     await orch.drainPendingEvents();
@@ -214,7 +214,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const result = await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-3', 'answer', 2_000);
     expect(result).toEqual({ delivered: 0, pending: true });
     expect(sent).toHaveLength(0);
-    expect(replies.findOpenByEvent(eventId)?.attempt_count).toBe(1);
+    expect(replies.findOpenByEvent(eventId)?.state).toBe('open');
     const attempts = sql.exec(`SELECT payload FROM agent_log WHERE kind = 'reply_attempt'`).toArray();
     expect(v.parse(ReplyAttemptSchema, JSON.parse(v.parse(v.string(), attempts[0].payload))).outcome.outcome).toBe('failed');
   });
@@ -366,10 +366,8 @@ describe('the receipt an accepted message gets immediately', () => {
       kind: 'email_thread',
       holder_addr: JSON.stringify(THREAD),
       ttl_expires_at: 10_000,
-      payload_policy: 'full',
       state: 'open',
       reply_payload: null,
-      attempt_count: 0,
       created_at: 1_000,
       updated_at: 1_000,
     }, 'Staging is green.');

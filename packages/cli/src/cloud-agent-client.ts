@@ -40,7 +40,7 @@ import {
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import type { AgentModelMenu, AgentRpcMethod } from '@kinu.run/core';
-import { hostedWindowCalls, pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
+import { hostedWindowCalls, pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
@@ -202,12 +202,11 @@ const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({
   turnId: v.nullable(v.string()),
   sessionId: v.nullable(v.string()),
   task: v.string(),
-  source: v.picklist(['mcts', 'branch', 'heads']),
+  source: v.picklist(['branch', 'heads']),
   winnerNodeId: v.string(),
   chosenNodeId: v.nullable(v.string()),
   candidates: v.array(AlternateTakeCandidateSchema),
   createdAt: v.number(),
-  pickedAt: v.nullable(v.number()),
 });
 
 const TakePickOutcomeSchema: v.GenericSchema<TakePickOutcome> = v.object({
@@ -628,7 +627,6 @@ export class CloudAgentClient implements AgentClient {
       scaffoldVersion: status.scaffoldVersion,
       messageCount: status.messageCount,
       searchNodeCount: status.searchNodeCount,
-      craftedToolCount: status.craftedToolCount,
     };
   }
 
@@ -645,9 +643,9 @@ export class CloudAgentClient implements AgentClient {
     return await this.callHttp('getMemoryContent', v.string());
   }
 
-  async changelog(limit?: number): Promise<AgentChangelogView> {
+  async changelog(): Promise<AgentChangelogView> {
     const result = v.parse(
-      ChangelogViewSchema, await this.callRpc('getEvolutionChangelog', [{ limit: limit ?? 50 }]),
+      ChangelogViewSchema, await this.callRpc('getEvolutionChangelog', [{ limit: 50 }]),
     );
 
     const view: AgentChangelogView = {
@@ -672,8 +670,8 @@ export class CloudAgentClient implements AgentClient {
     return v.parse(ChangelogRevertResultSchema, await this.callRpc('revertChangelogEntry', [id]));
   }
 
-  async refinements(limit?: number): Promise<AgentRefinementView> {
-    return v.parse(RefinementViewSchema, await this.callRpc('listRefinements', [limit ?? 20]));
+  async refinements(): Promise<AgentRefinementView> {
+    return v.parse(RefinementViewSchema, await this.callRpc('listRefinements', [20]));
   }
 
   async requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView> {
@@ -705,6 +703,10 @@ export class CloudAgentClient implements AgentClient {
     const input = v.parse(SubordinateInspectionRequestSchema, request);
 
     return this.callParentHttp('inspectSubordinate', SubordinateInspectionResultSchema, [decodeJsonValue({ value: input })]);
+  }
+
+  async workspaceWork(): Promise<WorkspaceWork> {
+    return this.callParentHttp('listWorkspaceWork', WorkspaceWorkSchema);
   }
 
   async latestTakes(): Promise<AlternateTakeSet | null> {

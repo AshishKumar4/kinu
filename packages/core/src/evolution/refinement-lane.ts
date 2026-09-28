@@ -2,8 +2,8 @@
 // authorities that already own them.
 //
 // `requestRefinement` opens the durable row with no model call and no artifact
-// write; `advanceRefinementLane` runs one step. The refiner is read-only, so
-// `resetStalePlanning` is the whole crash recovery.
+// write; `advanceRefinementLane` runs one step. Crash recovery is
+// `resetStalePlanning` plus the refiner's answer reclaimed from its helper row.
 //
 // The refiner is a temporary agent (`agents.ask`) with no write authority: it
 // returns prose, this module parses it, and every write is made here against a
@@ -11,6 +11,7 @@
 // skills wait for owner approval, subagent specs are refused, and facts must be
 // backed by the user's own sentence in the reviewed turns.
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
 
 import { controlTranscript, proposeMeasuredPromptSection } from './control';
@@ -20,9 +21,9 @@ import {
 } from './outcomes';
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, REFINEMENT_PROPOSAL_EXAMPLE,
-  RefinementProposalSchema, createRefinementStore, evolutionDebt,
+  RefinementProposalSchema, createRefinementStore, evolutionDebt, holdRefinementLane, refinementAnswerStored,
   refinementRequestView,
-  type RefinementClaim, type RefinementDeps,
+  type RefinementClaim, type RefinementDeps, type RefinementStore,
   type EvolutionDebt, type RefinementEdit, type RefinementProposal, type RefinementRequest,
   type RefinementRequestView, type RefinementRoute, type RefinementScope, type RefinementStage,
   type RefinementTrigger, type SettleRefinementPatch,
@@ -34,7 +35,7 @@ import { routeSkill, settleSkillApproval } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { renderIssues } from '../utils/json';
-import { renderThrownChain, tolerate, type ErrorCode } from '../obs/index';
+import { attempt, renderThrownChain, settle, toKinuError, tolerate, type ErrorCode, type KinuError } from '../obs/index';
 import type { TemporaryRunRequest } from '../subordinates/temporary';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -42,7 +43,6 @@ import type { ActorHandle } from '../identity/actor-handle';
 export interface RequestRefinementInput {
   readonly trigger: RefinementTrigger;
   readonly scope: RefinementScope;
-  readonly sessionId?: string;
   /** Omitted: the workspace's unresolved negative outcomes. */
   readonly turnIds?: readonly string[];
   readonly debtKey?: string;
@@ -84,10 +84,6 @@ export async function requestRefinement(
     turnIds: reviewed,
   };
 
-  if (input.sessionId !== undefined) {
-    requestInput = { ...requestInput, sessionId: input.sessionId };
-  }
-
   if (input.debtKey !== undefined) {
     requestInput = { ...requestInput, debtKey: input.debtKey };
   }
@@ -105,7 +101,7 @@ export async function requestRefinement(
   if (reviewed.length === 0) {
     return refuse(turnIds.length === 0
       ? describeSplitDegeneracy('no_labeled_turns')
-      : `${describeSplitDegeneracy('no_labeled_turns')} — none of the ${String(turnIds.length)} `
+      : `${describeSplitDegeneracy('no_labeled_turns')}; none of the ${String(turnIds.length)} `
         + 'named turns carries an outcome');
   }
 
@@ -146,35 +142,69 @@ export type RefinementLaneStep =
  * callers safe; the loser reports `idle`. Stale-planning recovery runs on every
  * pass and skips tokens this process is still running.
  */
-export async function advanceRefinementLane(
+export function advanceRefinementLane(
   deps: RefinementDeps,
 ): Promise<RefinementLaneStep> {
-  const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
-  store.resetStalePlanning();
+  return settle(Effect.gen(function* () {
+    const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
+    store.resetStalePlanning();
 
-  // `gated` too: a host killed between routing and settle leaves the row there.
-  for (const waiting of store.settleable()) {
-    const settled = await settleRoutes(deps, waiting);
+    // `gated` too: a host killed between routing and settle leaves the row there.
+    for (const waiting of store.settleable()) {
+      const step = yield* attempt({ doing: `settling refinement ${waiting.id}`, otherwise: 'unavailable' },
+        () => settleRoutes(deps, waiting)).pipe(
+        Effect.map((settled): RefinementLaneStep | null => settled && { step: 'settled', request: settled }),
+        Effect.catch((failure) => Effect.sync(() => laneHeld(deps, store, waiting, renderThrownChain({ cause: failure })))),
+      );
 
-    if (settled) return { step: 'settled', request: settled };
+      if (step) return step;
+    }
+
+    const owed = store.nextRequested();
+
+    if (!owed || !deps.refiner) return IDLE;
+    const claimed = store.claim(owed.id);
+
+    if (!claimed) return IDLE;
+
+    return yield* plan(deps, claimed).pipe(
+      // Null: the claim was lost to recovery and this pass wrote nothing.
+      Effect.map((planned): RefinementLaneStep => planned === null ? IDLE : { step: 'planned', request: planned }),
+      Effect.catchDefect((defect) => Effect.fail(toKinuError({ doing: `planning refinement ${owed.id}`, cause: defect, otherwise: 'unavailable' }))),
+      Effect.catch((failure) => planFailed(deps, { store, claimed, owed }, failure)),
+      // A claim left registered would make recovery skip a row nothing drives.
+      Effect.ensuring(Effect.sync(() => { claimed.release(); })),
+    );
+  }));
+}
+
+const IDLE: RefinementLaneStep = { step: 'idle' };
+
+function planFailed(
+  deps: RefinementDeps,
+  { store, claimed, owed }: { readonly store: RefinementStore; readonly claimed: RefinementClaim; readonly owed: RefinementRequest },
+  failure: KinuError,
+): Effect.Effect<RefinementLaneStep, KinuError> {
+  const current = store.get(owed.id) ?? owed;
+  const detail = renderThrownChain({ cause: failure });
+
+  // A stored answer keeps a wake due.
+  if (current.stage === 'planning') {
+    if (!refinementAnswerStored(deps.control.sql, deps.control.rt.actor.actorId, owed.id)) return Effect.fail(failure);
+
+    if (claimed.held() && claimed.advance('refused', { detail })) {
+      return Effect.succeed({ step: 'planned', request: refinementRequestView(store.get(owed.id) ?? owed) });
+    }
   }
 
-  const owed = store.nextRequested();
+  return Effect.succeed(laneHeld(deps, store, current, detail));
+}
 
-  if (!owed || !deps.refiner) return { step: 'idle' };
-  const claimed = store.claim(owed.id);
+function laneHeld(deps: RefinementDeps, store: RefinementStore, request: RefinementRequest, detail: string): RefinementLaneStep {
+  store.record(request.id, request.stage, { detail });
+  holdRefinementLane(deps.control.sql, deps.control.rt.actor.actorId);
 
-  if (!claimed) return { step: 'idle' };
-
-  try {
-    const planned = await plan(deps, claimed);
-
-    // Null: the claim was lost to recovery and this pass wrote nothing.
-    return planned === null ? { step: 'idle' } : { step: 'planned', request: planned };
-  } finally {
-    // A claim left registered would make recovery skip a row nothing drives.
-    claimed.release();
-  }
+  return { step: 'idle' };
 }
 
 /** `applied` or `rejected`. Fact `applied` is included: re-routing a fact is a no-op. */
@@ -205,75 +235,83 @@ function reviewedTrajectory(
  * stores the row cannot guard. `settleRoutes` runs right after `gated`, so fact-only proposals reach `applied` in the
  * same pass.
  */
-async function plan(
+function plan(
   deps: RefinementDeps,
   claim: RefinementClaim,
-): Promise<RefinementRequestView | null> {
-  const { request } = claim;
-  const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
+): Effect.Effect<RefinementRequestView | null, KinuError> {
+  return Effect.gen(function* () {
+    const { request } = claim;
+    const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
 
-  const view = (): RefinementRequestView =>
-    refinementRequestView(store.get(request.id) ?? request);
+    const view = (): RefinementRequestView =>
+      refinementRequestView(store.get(request.id) ?? request);
 
-  const refuse = (detail: string, rejected?: RefinementProposal): RefinementRequestView | null => {
-    let patch: SettleRefinementPatch = { detail };
+    const refuse = (detail: string, rejected?: RefinementProposal): RefinementRequestView | null => {
+      let patch: SettleRefinementPatch = { detail };
 
-    if (rejected !== undefined) patch = { ...patch, proposal: rejected, routes: [] };
+      if (rejected !== undefined) patch = { ...patch, proposal: rejected, routes: [] };
 
-    if (!claim.advance('refused', patch)) return null;
+      if (!claim.advance('refused', patch)) return null;
 
-    return view();
-  };
+      return view();
+    };
 
-  // A resumed claim reuses its plan; the on-disk writes belong to it.
-  let proposal = request.proposal;
+    // A resumed claim reuses its plan; the on-disk writes belong to it.
+    let proposal = request.proposal;
 
-  if (proposal === null) {
-    const answered = await askRefiner(deps, request);
+    if (proposal === null) {
+      const answered = yield* attempt({ doing: 'asking the refiner', otherwise: 'unavailable' }, () => askRefiner(deps, request));
 
-    if (!answered.ok) return refuse(answered.error);
-    proposal = answered.proposal;
-  }
+      // An evicted pass's refiner is still working; a later pass takes its answer.
+      if (answered === 'running') return null;
 
-  if (proposal.scope !== request.scope) {
-    return refuse(
-      `the refiner proposed at ${proposal.scope} scope and this request is ${request.scope} scope — `
-      + (proposal.scope === 'account' ? ACCOUNT_SCOPE_REFUSAL : 'the scopes must match'),
-      proposal,
-    );
-  }
-
-  if (proposal.edits.length === 0) {
-    return refuse(`the refiner proposed no edits — ${proposal.summary}`, proposal);
-  }
-
-  // Persist the plan before any owner write; also the first claim fence.
-  if (request.proposal === null
-    && !claim.record({ proposal, detail: proposal.summary })) return null;
-
-  const reviewed = reviewedTrajectory(deps.control.sql, deps.control.rt.actor, request);
-  const routes: RefinementRoute[] = [];
-
-  for (const [index, edit] of proposal.edits.entries()) {
-    // Never re-route an owner-decided route: that would re-ask the owner and
-    // could un-apply a real promotion.
-    const decided = request.routes[index];
-
-    if (decided !== undefined && ownerHasDecided(decided)) {
-      routes.push(decided);
-      continue;
+      if (!answered.ok) return refuse(answered.error);
+      proposal = answered.proposal;
     }
 
-    if (!claim.held()) return null;
-    routes.push(await routeEdit(deps, { edit, request, reviewed }));
+    if (proposal.scope !== request.scope) {
+      return refuse(
+        `the refiner proposed at ${proposal.scope} scope and this request is ${request.scope} scope: `
+        + (proposal.scope === 'account' ? ACCOUNT_SCOPE_REFUSAL : 'the scopes must match'),
+        proposal,
+      );
+    }
 
-    // Persist after each route so a crash between owner writes keeps them recorded.
-    if (!claim.record({ routes })) return null;
-  }
+    if (proposal.edits.length === 0) {
+      return refuse(`the refiner proposed no edits: ${proposal.summary}`, proposal);
+    }
 
-  if (!claim.advance('gated', { routes, detail: proposal.summary })) return null;
+    // Persist the plan before any owner write; also the first claim fence.
+    if (request.proposal === null
+      && !claim.record({ proposal, detail: proposal.summary })) return null;
 
-  return await settleRoutes(deps, store.get(request.id) ?? request) ?? view();
+    const reviewed = reviewedTrajectory(deps.control.sql, deps.control.rt.actor, request);
+    const routes: RefinementRoute[] = [];
+
+    for (const [index, edit] of proposal.edits.entries()) {
+      // Never re-route an owner-decided route: that would re-ask the owner and
+      // could un-apply a real promotion.
+      const decided = request.routes[index];
+
+      if (decided !== undefined && ownerHasDecided(decided)) {
+        routes.push(decided);
+        continue;
+      }
+
+      if (!claim.held()) return null;
+      routes.push(yield* routeEdit(deps, { edit, request, reviewed }));
+
+      // Persist after each route; a crash keeps them recorded.
+      if (!claim.record({ routes })) return null;
+    }
+
+    if (!claim.advance('gated', { routes, detail: proposal.summary })) return null;
+
+    const settled = yield* attempt({ doing: `settling refinement ${request.id}`, otherwise: 'unavailable' },
+      () => settleRoutes(deps, store.get(request.id) ?? request));
+
+    return settled ?? view();
+  });
 }
 
 type RefinerAnswer =
@@ -302,46 +340,60 @@ async function presentContextRefs(deps: RefinementDeps): Promise<string[]> {
 async function askRefiner(
   deps: RefinementDeps,
   request: RefinementRequest,
-): Promise<RefinerAnswer> {
+): Promise<RefinerAnswer | 'running'> {
   const refiner = deps.refiner;
 
   if (!refiner) return { ok: false, error: 'this host wires no refiner' };
-  const contextRefs = await presentContextRefs(deps);
+  const lane = { requestId: request.id } as const;
+  const held = refiner.reclaim(lane);
 
-  // Annotated, not inlined: this is the only production site supplying
-  // `contextRefs`, and `gate:wired` cannot see a literal passed to a method.
-  const brief: TemporaryRunRequest = {
-    role: 'task',
-    roleLabel: 'refiner',
-    task: await renderRefinerBrief(deps, request, contextRefs),
-    contextRefs,
-    // Plan mode: a refiner that could write would be a second authority.
-    mode: 'plan',
-  };
+  if (held?.state === 'running') return 'running';
+  let answer: string;
 
-  const outcome = await refiner.run(brief);
+  if (held) {
+    if (held.status !== 'completed') return { ok: false, error: `the refiner did not answer (unavailable): ${held.answer}` };
+    answer = held.answer;
+  } else {
+    const contextRefs = await presentContextRefs(deps);
 
-  if (!('status' in outcome)) {
-    return { ok: false, error: `the refiner could not start — ${outcome.error}` };
-  }
-
-  if (outcome.status !== 'completed') {
-    return {
-      ok: false,
-      error: `the refiner did not answer (${outcome.reason ?? 'unknown'}) — ${outcome.answer}`,
+    // Annotated, not inlined: this is the only production site supplying
+    // `contextRefs`, and `gate:wired` cannot see a literal passed to a method.
+    const brief: TemporaryRunRequest = {
+      role: 'task',
+      roleLabel: 'refiner',
+      task: await renderRefinerBrief(deps, request, contextRefs),
+      contextRefs,
+      // Plan mode: a refiner that could write would be a second authority.
+      mode: 'plan',
+      lane,
     };
+
+    const outcome = await refiner.run(brief);
+
+    if (!('status' in outcome)) {
+      return { ok: false, error: `the refiner could not start: ${outcome.error}` };
+    }
+
+    if (outcome.status !== 'completed') {
+      return {
+        ok: false,
+        error: `the refiner did not answer (${outcome.reason ?? 'unknown'}): ${outcome.answer}`,
+      };
+    }
+
+    answer = outcome.answer;
   }
 
   const parsed = v.safeParse(
     RefinementProposalSchema,
-    tolerate(() => extractJsonObject(outcome.answer), 'malformed-input'),
+    tolerate(() => extractJsonObject(answer), 'malformed-input'),
   );
 
   if (!parsed.success) {
     // `renderIssues` names each issue's path, so the refusal names keys to fix.
     return {
       ok: false,
-      error: `the refiner's answer is not a valid refinement proposal (${OFF_SCHEMA_ANSWER}) — `
+      error: `the refiner's answer is not a valid refinement proposal (${OFF_SCHEMA_ANSWER}): `
         + renderIssues(parsed.issues),
     };
   }
@@ -386,7 +438,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
   const history = createRefinementStore(sql, actor).list(5)
     .filter((prior) => prior.id !== request.id)
     .map((prior) => `  - ${prior.id} (${prior.trigger}, ${prior.stage}): ${prior.detail || '(no detail)'}`
-      + prior.routes.map((r) => `\n      ${r.kind} → ${r.owner || 'no owner'} ${r.target} [${r.disposition}]`).join(''))
+      + prior.routes.map((r) => `\n      ${r.kind} -> ${r.owner || 'no owner'} ${r.target} [${r.disposition}]`).join(''))
     .join('\n');
 
   // Printed from a schema-valid value at this request's scope, which `plan` enforces.
@@ -409,19 +461,19 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     '## The artifacts you may address, and their owners',
     '',
-    'Registered prompt sections (`prompt_section`) — replacing one costs every turn its bytes,',
+    'Registered prompt sections (`prompt_section`): replacing one costs every turn its bytes,',
     'and a longer section must earn them with a strictly better measured score:',
     sections,
     '',
-    'Recorded fact keys (`fact`) — the durable world model. Propose one ONLY for a preference the',
+    'Recorded fact keys (`fact`): the durable world model. Propose one ONLY for a preference the',
     'user stated in their own words, and quote those words verbatim from a turn above; a fact whose',
     'quote is not in the trajectory is refused:',
     factLines,
     '',
-    'Skill files (`skill`) — workspace instruction bytes. A proposed skill stays unverified and',
+    'Skill files (`skill`): workspace instruction bytes. A proposed skill stays unverified and',
     'carries no tool policy until the owner approves its exact digest.',
     '',
-    'Subordinate specs (`subagent_spec`) — a subordinate\'s role and spec belong to that agent\'s',
+    'Subordinate specs (`subagent_spec`): a subordinate\'s role and spec belong to that agent\'s',
     'own config and there is no writable proposal authority for them. Propose one only to record',
     'the finding; it will be refused rather than applied.',
     '',
@@ -433,13 +485,13 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     '## Your answer',
     '',
-    `One JSON object carrying exactly these keys — ${answerKeys} — and no others. Every level is`,
+    `One JSON object carrying exactly these keys: ${answerKeys}, and no others. Every level is`,
     'strict: a key that is not named here refuses the whole proposal rather than being dropped, so',
     'anything you want to say that is not one of these fields has no place to go. Each edit object',
     `carries exactly the keys its \`kind\` shows below, and every \`rationale\` is `
       + `${String(MIN_EDIT_RATIONALE)} characters or longer, whatever the kind.`,
     '',
-    `\`scope\` is ${JSON.stringify(answer.scope)} — the scope this request was opened at. A proposal`,
+    `\`scope\` is ${JSON.stringify(answer.scope)}: the scope this request was opened at. A proposal`,
     'at any other scope is refused without being routed.',
     '',
     `{"scope":${JSON.stringify(answer.scope)},"summary":${JSON.stringify(answer.summary)},"edits":[`,
@@ -448,7 +500,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     ']}',
     '',
     `Valid \`kind\` values: ${REFINEMENT_EDIT_KINDS.join(', ')}. The four edits above are every shape`,
-    'this accepts, one object per edit — not a checklist. Propose the fewest edits that address the',
+    'this accepts, one object per edit, not a checklist. Propose the fewest edits that address the',
     'pattern you actually found. An empty `edits` array is a legitimate answer when the trajectory',
     'shows no addressable pattern.',
     '',
@@ -458,7 +510,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
 
 function renderReviewedTurn(row: TurnOutcomeRow, index: number): string {
   return [
-    `### Turn ${String(index + 1)} — ${row.outcome} (${row.source})`,
+    `### Turn ${String(index + 1)}: ${row.outcome} (${row.source})`,
     `User asked: ${evidenceWindow(row.userMessage, EVIDENCE_BUDGETS.refinerUserMessage)}`,
     `Agent answered: ${evidenceWindow(row.assistantResponse, EVIDENCE_BUDGETS.refinerAssistantResponse)}`,
     row.followup === null
@@ -472,13 +524,37 @@ function renderReviewedTurn(row: TurnOutcomeRow, index: number): string {
 
 /** Hand one typed edit to its owning authority; the route stores only a pointer
  *  to the identity there, so the two rows cannot disagree. */
-async function routeEdit(
+function routeEdit(
   deps: RefinementDeps,
   input: {
     edit: RefinementEdit;
     request: RefinementRequest;
     reviewed: readonly TurnOutcomeRow[];
   },
+): Effect.Effect<RefinementRoute> {
+  const { edit } = input;
+
+  return attempt({ doing: `routing the ${edit.kind} edit`, otherwise: 'io' }, () => routeEditOnce(deps, input)).pipe(
+    Effect.catch((failure) => Effect.sync((): RefinementRoute => {
+      const [owner, target] = editOwnerAndTarget(edit);
+
+      return { kind: edit.kind, owner, target, disposition: 'refused', reason: renderThrownChain({ cause: failure }) };
+    })),
+  );
+}
+
+function editOwnerAndTarget(edit: RefinementEdit): readonly [string, string] {
+  switch (edit.kind) {
+    case 'fact': return ['agent_facts', edit.key];
+    case 'prompt_section': return ['prompt_section_versions', edit.sectionId];
+    case 'skill': return ['instruction_approvals', edit.path];
+    case 'subagent_spec': return ['', edit.role];
+  }
+}
+
+async function routeEditOnce(
+  deps: RefinementDeps,
+  input: Parameters<typeof routeEdit>[1],
 ): Promise<RefinementRoute> {
   const { edit } = input;
 
@@ -495,7 +571,7 @@ async function routeEdit(
         owner: '',
         target: edit.role,
         disposition: 'refused',
-        reason: 'no writable proposal authority exists for a subordinate\'s role or spec — those '
+        reason: 'no writable proposal authority exists for a subordinate\'s role or spec: those '
           + 'belong to that agent\'s own config, which this workspace reads and never writes. '
           + 'Recorded as a finding rather than mirrored into a second agent store.',
       };
@@ -523,7 +599,7 @@ function checkQuote(quote: string, reviewed: readonly TurnOutcomeRow[]): QuoteVe
   if (trimmed.length < MIN_QUOTE_CHARS || words.length < MIN_QUOTE_WORDS) {
     return {
       ok: false,
-      reason: `the quote is not substantive — ${String(trimmed.length)} characters and `
+      reason: `the quote is not substantive: ${String(trimmed.length)} characters and `
         + `${String(words.length)} words, below the ${String(MIN_QUOTE_CHARS)}-character and `
         + `${String(MIN_QUOTE_WORDS)}-word floor. A fragment that short matches almost any `
         + 'conversation, so it is evidence of nothing',
@@ -540,7 +616,7 @@ function checkQuote(quote: string, reviewed: readonly TurnOutcomeRow[]): QuoteVe
   if (!said) {
     return {
       ok: false,
-      reason: 'not quoted by the user anywhere in the reviewed trajectory — a preference reaches '
+      reason: 'not quoted by the user anywhere in the reviewed trajectory: a preference reaches '
         + "memory immediately, so the user's own words are the only evidence that can stand in "
         + 'for a trial',
     };
@@ -577,7 +653,7 @@ function routeFact(
     target: edit.key,
     disposition: 'applied',
     reason: `${outcome === 'unchanged' ? 'already recorded' : outcome} from the user's own words `
-      + `"${edit.quote.trim().replace(/\s+/gu, ' ')}" — ${edit.rationale}`,
+      + `"${edit.quote.trim().replace(/\s+/gu, ' ')}": ${edit.rationale}`,
   };
 }
 
@@ -608,20 +684,11 @@ async function routePromptSection(
     return pendingReason(already.version, 'pending held-out trials (adopted from an earlier pass)');
   }
 
-  let measured;
-
-  try {
-    measured = await proposeMeasuredPromptSection(deps.control, {
-      sectionId: edit.sectionId,
-      source: edit.source,
-      rationale: edit.rationale,
-    });
-  } catch (err) {
-    return {
-      kind: 'prompt_section', owner, target: edit.sectionId,
-      disposition: 'refused', reason: renderThrownChain({ cause: err }),
-    };
-  }
+  const measured = await proposeMeasuredPromptSection(deps.control, {
+    sectionId: edit.sectionId,
+    source: edit.source,
+    rationale: edit.rationale,
+  });
 
   if (!measured.ok) {
     return {
@@ -632,7 +699,7 @@ async function routePromptSection(
 
   return pendingReason(
     measured.version,
-    `pending held-out trials — candidate ${measured.candidateScore.mean.toFixed(3)} against `
+    `pending held-out trials: candidate ${measured.candidateScore.mean.toFixed(3)} against `
       + `incumbent ${measured.incumbentScore.mean.toFixed(3)}`,
   );
 }
@@ -729,7 +796,7 @@ async function settleRoutes(
   }
 
   if (rolledBack > 0) {
-    parts.push(`${String(rolledBack)} rolled back — the incumbent won its trials`);
+    parts.push(`${String(rolledBack)} rolled back: the incumbent won its trials`);
   }
 
   if (rejected > 0) parts.push(`${String(rejected)} rejected by you`);

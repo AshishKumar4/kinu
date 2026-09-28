@@ -90,7 +90,7 @@ describe('Inbox — one delivery time: the next step', () => {
     const { inbox, queued, activity } = setup({ turnInFlight: true });
     expect(await inbox.send(wake('mail from bob', { stepText: 'mid-turn: mail' }))).toBe('mid-turn');
     expect(queued).toEqual([]);
-    expect(activity).toEqual([{ event: 'signal_injected', detail: 'event_drain → live turn' }]);
+    expect(activity).toEqual([{ event: 'signal_injected', detail: 'event_drain -> live turn' }]);
     const step = present(await inbox.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a1')] }), 'the prepared step');
     expect(texts(step)).toEqual(['q', 'a1', 'mid-turn: mail']);
   });

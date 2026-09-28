@@ -174,7 +174,7 @@ export function renderLayerGateReport(report: LayerGateReport): string {
       s.conformance === null ? 'NOT MEASURED' : '',
     ].filter(Boolean);
 
-    return notes.length ? `${head}  — ${notes.join('; ')}` : head;
+    return notes.length ? `${head}: ${notes.join('; ')}` : head;
   });
 
   return [

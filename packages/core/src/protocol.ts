@@ -1,5 +1,3 @@
-/** Shared UI domain types for the agent RPC surface (@callable methods). */
-
 import type { ActivityLogEntry } from './identity/activity-log';
 import type { ContextComposition } from './context-meter';
 import type { HeadReportStatus, HeadUnsettledStatus } from './heads/types';
@@ -41,22 +39,6 @@ export interface TabPresence {
 	explorations: boolean;
 }
 
-export interface ToolInfo {
-	name: string;
-	/** One-line headline for a list row; never derived by splitting `description`. */
-	summary: string;
-	/** Full docstring the model sees; shown on demand. */
-	description: string;
-	/** Crafted by the agent rather than shipped. */
-	learned: boolean;
-	/** Reach as declared by `TOOL_REACH`; a crafted tool is `codemode`. */
-	exposure: "native" | "codemode" | "both";
-	/** Whether this agent actually wires it (e.g. `report` only on a subordinate). */
-	wired: boolean;
-	qualityScore: number;
-	usageCount: number;
-}
-
 /** A memory-pane row: a note or a hybrid-search hit; plain notes score 1. */
 export interface MemoryEntry extends MemoryNote {
 	matchScore: number;
@@ -79,12 +61,18 @@ export interface SubordinateRosterEntry {
 	actorId: string | null;
 	displayName: string;
 	role: string;
-	nameOrigin?: "user" | "auto";
-	createdBy: "orchestrator" | "user";
+	nameOrigin: "user" | "auto";
+	createdBy: "orchestrator" | "user" | "evolution";
+	lifetime: "durable" | "task";
 	status: SubordinateStatus;
 	currentTask: string | null;
 	createdAt: number;
 	dismissedAt: number | null;
+}
+
+/** Evolution and one-question helpers get no tab or list row. */
+export function ownerFacingSubordinate(entry: Pick<SubordinateRosterEntry, "createdBy" | "lifetime">): boolean {
+	return entry.createdBy !== "evolution" && entry.lifetime === "durable";
 }
 
 /** A task assignment or report mirrored into the main chat as a linked card. */
@@ -142,6 +130,9 @@ export interface ActivitySnapshot {
 		usage: Usage;
 		/** Null for steps recorded before the meter existed or never measured. */
 		context: ContextComposition | null;
+		modelId: string | null;
+		/** A machine's `name` is read now: null once it is removed. */
+		route: { kind: 'device'; id: string; name: string | null } | { kind: 'container' } | null;
 	} | null;
 	/** Resolved model's context window; null when the catalog has not answered. */
 	contextWindow: number | null;

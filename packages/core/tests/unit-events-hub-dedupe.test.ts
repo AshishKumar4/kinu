@@ -13,7 +13,6 @@ function base(): Extract<KinuEvent, { variant: 'webhook' }> {
     priority: 'normal',
     payload_visibility: 'redact',
     received_at: 1700000000000,
-    schema_version: 1,
     reply_channel: null,
     dedupe_key: null,
     payload: {

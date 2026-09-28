@@ -15,7 +15,6 @@ import { setupCommand } from './commands/setup';
 import { providersCommand } from './commands/providers';
 import { transcriptsCommand } from './commands/transcripts';
 import { doctorCommand, uninstallCommand, updateCommand } from './commands/self';
-import { evolveCommand } from './commands/evolve';
 import { statusCommand } from './commands/status';
 import { listCommand } from './commands/list';
 import { effortCommand, jobsCommand, modelCommand, toolsCommand, triggersCommand } from './commands/control';
@@ -306,16 +305,6 @@ export function buildProgram(): Command {
 
   llmOpts(
     program
-      .command('evolve <name>')
-      .helpGroup(INSPECT)
-      .description('Run an MCTS search for one improvement to a local workspace')
-      .option('--budget <n>', 'MCTS iterations (default: the engine default)')
-      .option('--branches <n>', 'Branches per expansion (default: the engine default)')
-      .option('--max-cost <usd>', 'Cost limit in USD (default: the engine default)'),
-  ).action(wrapAction(evolveCommand));
-
-  llmOpts(
-    program
       .command('jobs <name> [action] [id]')
       .helpGroup(INSPECT)
       .description('List or cancel background jobs')
@@ -518,7 +507,6 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['tools', 'kinu tools jarvis'],
   ['triggers', 'kinu triggers jarvis every "0 9 * * 1-5"'],
   ['webhook', 'kinu webhook jarvis github-push --auth-mode hmac --secret "$HOOK_SECRET"'],
-  ['evolve', 'kinu evolve jarvis --budget 4'],
   ['jobs', 'kinu jobs jarvis'],
   ['actors', 'kinu actors jarvis'],
   ['state', 'kinu state jarvis --json'],

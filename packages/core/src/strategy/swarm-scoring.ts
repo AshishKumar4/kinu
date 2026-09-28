@@ -58,7 +58,7 @@ export function reportGate(input: {
 
       if (measurement.kind === 'unmeasurable') {
         return `the verifier ran and could not measure what you reported: ${measurement.detail}. `
-          + 'Fix the answer and report again — a report the instrument cannot read is a '
+          + 'Fix the answer and report again: a report the instrument cannot read is a '
           + 'candidate the search cannot score.';
       }
 
@@ -373,7 +373,7 @@ export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusa
   if (breach !== null) {
     publication = { kind: 'sealed', breach };
 
-    if (identity !== null) sealRecords(sql, rt.actor, { identity, breach, at: Date.now() });
+    if (identity !== null) sealRecords(sql, rt.actor, { identity, breach });
     log.event('exploration.floor_breach', {
       preset: resolved.preset,
       metric: measured?.metric ?? '',
@@ -394,10 +394,9 @@ export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusa
       aggregated: expansion.aggregated,
       tokens: spentBy.get(expansion.id) ?? null,
     },
-    now: Date.now(),
   });
   insertSearchNode(sql, rt.actor, {
-    nodeId: expansion.id, parentNodeId: expansion.parentId, parentMsgId: null, rootId,
+    nodeId: expansion.id, parentNodeId: expansion.parentId, rootId,
     task: resolved.task, action: '', observation: expansion.artifact,
     codeUsed: null, depth: expansion.depth, msgId: null,
   });

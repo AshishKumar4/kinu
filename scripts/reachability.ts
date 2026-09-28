@@ -39,13 +39,22 @@
  * (`['missionGuard']`), an import specifier, a type reference and a comment are
  * none of those, and drop out by construction rather than by being listed.
  * That is why this parses instead of matching text.
+ *
+ * ## Broadcast channels
+ *
+ * The same holds for a frame a Durable Object broadcasts: its `type` names the
+ * channel, and a client branches on that string, so a channel with a producer
+ * and no reader is invisible to the type and export graph too
+ * (`background_event_injected` shipped that way). The channel half below finds
+ * each produced name and asks whether any reader compares against it.
  */
 
 
 import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
 import { readSources, readTests } from './sources';
 import {
-  classMembers, declaredName, decoratorNames, memberCalleeName, parse, stringArguments, walk,
+  classMembers, declaredName, decoratorNames, identifierCalleeName, literalString, memberCalleeName, parse, stringArguments,
+  walk, type SyntaxNode,
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -178,7 +187,7 @@ export function findUnreachable(
   // reaches it under the PROPERTY's name in another file. `recordHeadStep` was
   // reported "no caller anywhere" while being installed at
   // `orchestrator.ts:716` as `ExplorationHostSeams.recordStep`, declared at
-  // `exploration-hosting.ts:155` and consumed at `:282` as `reportStep` — two
+  // `exploration-hosting.ts:155` (now `hosted-actors.ts`) and consumed at `:282` as `reportStep` — two
   // renames, which a name-keyed gate cannot follow. A recursive method that
   // happens to sit in an object literal now counts as reached, which is a far
   // narrower miss than calling a wired seam dead: this gate's whole purpose is
@@ -230,8 +239,141 @@ export function findUnreachable(
   return { declared: rpcs, unreachable };
 }
 
+/* ── Broadcast channels ───────────────────────────────────────────────── */
+
+/**
+ * THE SAME DEFECT OVER A SOCKET. A Durable Object `broadcast`s a frame whose `type` names its channel, and a client
+ * reads it by comparing that `type` with a string: dispatch by string again, so neither `tsc` nor `knip` can tell a
+ * channel nothing reads. `background_event_injected` shipped that way, a producer and no consumer, and the payload
+ * type could not catch it, because producer and consumer never share a process.
+ */
+const BROADCASTS = ['broadcast', 'broadcastToActor'];
+
+/** The frame the agents SDK's chat hook reads itself: its registration is the evidence. */
+const FRAMEWORK_CHANNEL = 'cf_agent_chat_messages';
+
+export interface Channel {
+  readonly name: string;
+  /** Every file that broadcasts it, with the line. */
+  readonly producers: readonly string[];
+}
+
+/** The top-level object literals of a node's subtree: those not nested in another literal of it. A frame's own
+ *  `type` is its channel; `parts: [{ type: 'text' }]` inside it is a message part. */
+function frameLiterals(node: SyntaxNode): SyntaxNode[] {
+  if (node.type === 'ObjectExpression') return [node];
+
+  return node.children.flatMap(frameLiterals);
+}
+
+/** One channel broadcast, and where. */
+export interface Broadcast {
+  readonly name: string;
+  readonly line: number;
+}
+
+/** The channels one file broadcasts: the `type` of each frame literal a `broadcast(…)` call is handed. */
+export function broadcastChannels(file: string, text: string): Broadcast[] {
+  const parsed = parse(file, text);
+  const found: Broadcast[] = [];
+
+  walk(parsed.root, (node) => {
+    const called = memberCalleeName(node) ?? identifierCalleeName(node);
+
+    if (node.raw.type !== 'CallExpression' || called === undefined || !BROADCASTS.includes(called)) return;
+    const argumentNodes = node.children.filter((child) => node.raw.type === 'CallExpression' && node.raw.arguments.some((argument) => argument === child.raw));
+
+    for (const literal of argumentNodes.flatMap(frameLiterals)) {
+      for (const property of literal.children) {
+        const [key, value] = property.children;
+
+        if (property.type !== 'Property' || key === undefined || value === undefined) continue;
+
+        if (declaredName(property) !== 'type') continue;
+        const name = literalString(value.raw);
+
+        if (name !== undefined) found.push({ name, line: parsed.lineAt(node.start) });
+      }
+    }
+  });
+
+  return found;
+}
+
+/** The channels one file reads: a string compared with `===`, `!==`, `==` or `!=`, or a `case` label. A bare mention
+ *  is none: producers, type declarations and SQL name channels too. */
+export function readChannels(file: string, text: string): Set<string> {
+  const read = new Set<string>();
+
+  walk(parse(file, text).root, (node) => {
+    const { raw } = node;
+
+    if (raw.type === 'BinaryExpression' && ['===', '!==', '==', '!='].includes(raw.operator)) {
+      for (const side of node.children) {
+        const value = literalString(side.raw);
+
+        if (value !== undefined) read.add(value);
+      }
+    }
+
+    if (raw.type === 'SwitchCase') {
+      const [test] = node.children;
+      const value = test === undefined || raw.test === null ? undefined : literalString(test.raw);
+
+      if (value !== undefined) read.add(value);
+    }
+
+    // `useAgentChat({ agent, … })`: the hook registers for the SDK's own chat frame.
+    if (identifierCalleeName(node) === 'useAgentChat') read.add(FRAMEWORK_CHANNEL);
+  });
+
+  return read;
+}
+
+/** Every channel broadcast, the gate's denominator, and those no file but their producers reads. */
+export interface ChannelReach {
+  readonly channels: readonly Channel[];
+  readonly unread: readonly Channel[];
+}
+
+/** Every channel broadcast in `sources`, and those no file but its producers reads. */
+export function findUnreadChannels(sources: ReadonlyMap<string, string>): ChannelReach {
+  const producers = new Map<string, string[]>();
+
+  for (const [file, text] of sources) {
+    if (!BROADCASTS.some((name) => text.includes(name))) continue;
+
+    for (const { name, line } of broadcastChannels(file, text)) {
+      producers.set(name, [...(producers.get(name) ?? []), `${file}:${String(line)}`]);
+    }
+  }
+
+  const readers = new Map<string, Set<string>>();
+
+  for (const [file, text] of sources) {
+    for (const name of readChannels(file, text)) {
+      if (producers.has(name)) readers.set(name, (readers.get(name) ?? new Set()).add(file));
+    }
+  }
+
+  const channels = [...producers].map(([name, at]) => ({ name, producers: at })).sort((a, b) => a.name.localeCompare(b.name));
+
+  // A producer's own file reading its channel is not a consumer: that is the producer, or a test of what it sent.
+  const unread = channels.filter((channel) => {
+    const own = new Set(channel.producers.map((at) => at.slice(0, at.lastIndexOf(':'))));
+
+    return ![...(readers.get(channel.name) ?? [])].some((file) => !own.has(file));
+  });
+
+  return { channels, unread };
+}
+
 export function keyOf(entry: Unreachable): string {
   return `${entry.rpc.file}#${entry.rpc.owner}.${entry.rpc.method}`;
+}
+
+export function channelKey(channel: Channel): string {
+  return `broadcast#${channel.name}`;
 }
 
 export function describe(entry: Unreachable): string {
@@ -250,6 +392,12 @@ export function describe(entry: Unreachable): string {
  * when somebody decides how far to trust the signal.
  */
 export const BLIND_SPOTS: readonly string[] = [
+  'A SAME-NAMED STRING COMPARED OUTSIDE SOCKET DISPATCH — COUNTS AS A READER. This is a name-based check, '
+  + 'not dataflow from a particular connection to its client; a dead branch or another transport can satisfy it.',
+  'A BROADCAST BUILT WITHOUT AN INLINE LITERAL CHANNEL — NOT DETECTED. Variable frames, computed channel names '
+  + 'and send helpers not named broadcast or broadcastToActor need review.',
+  'A CHANNEL READ ONLY BY A MEMBER-SHAPED DISPATCH — NOT SEEN AS READ. A consumer that looks its handler up in a '
+  + 'table keyed by channel name compares no string, so its channel reads as unread, loudly rather than quietly.',
   'A REACHABLE RPC WHOSE RESULT NOBODY READS — NOT DETECTED. This gate proves a '
   + 'call path exists. It has no opinion on whether any caller reads the result.',
   'AN INVOCATION THAT IS NEITHER A STRING ARGUMENT NOR A MEMBER CALL — NOT '
@@ -272,21 +420,29 @@ if (import.meta.main) {
   // empty test corpus — which turns every RPC into "no caller anywhere" — and an
   // empty source corpus past the matcher were both invisible. The ratchet hides it
   // particularly well, because a lock of zero findings reads as a clean tree.
+  const { channels, unread } = findUnreadChannels(sources);
+
   const measured = assertMeasured('reachability', [
     ['product source files', sources.size],
     ['test files searched for callers', tests.size],
     ['@callable RPCs declared', declared.length],
+    ['broadcast channels', channels.length],
   ]);
 
+  const keys = [...unreachable.map(keyOf), ...unread.map(channelKey)];
+
   if (process.argv.includes('--lock')) {
-    const count = writeLock(unreachable.map(keyOf), LOCK);
+    const count = writeLock(keys, LOCK);
     console.log(`reachability: locked ${count} unreachable over ${measured}`);
   } else {
-    const detail = new Map(unreachable.map((e) => [keyOf(e), describe(e)]));
+    const detail = new Map([
+      ...unreachable.map((e) => [keyOf(e), describe(e)] as const),
+      ...unread.map((channel) => [channelKey(channel), `  broadcast "${channel.name}" — no client reads it; sent from ${channel.producers.join(', ')}`] as const),
+    ]);
 
     const code = report({
       gate: 'reachability',
-      ratchet: reconcile(unreachable.map(keyOf), LOCK),
+      ratchet: reconcile(keys, LOCK),
       detail,
       lockCommand: 'bun scripts/reachability.ts --lock',
       measured,

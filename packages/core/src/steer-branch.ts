@@ -20,7 +20,7 @@ export const BRANCH_HEAD_BUDGET = {
 } as const;
 
 export const BRANCH_RATIONALE =
-  'User redirected mid-turn — running the redirect as a parallel branch of the live turn.';
+  'User redirected mid-turn: running the redirect as a parallel branch of the live turn.';
 
 export type BranchStatusEvent =
   | { type: 'branch_status'; status: 'running'; branchId: string; task: string }
@@ -82,7 +82,7 @@ export async function startBranchHead(
     budget: { ...BRANCH_HEAD_BUDGET, spawnedAt },
     model: input.model,
     mergeStrategy: 'best_of',
-    loop: defaultLoopOrigin('head'),
+    loop: defaultLoopOrigin('run'),
     ...forkMission(input.missionLabels),
   };
 

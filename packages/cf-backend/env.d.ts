@@ -96,6 +96,8 @@ declare global {
     WEBHOOK_ROUTE_SECRET?: string;
     /** Cloudflare account OAuth client settings. Client secret must be a Wrangler secret. */
     CLOUDFLARE_OAUTH_CLIENT_ID?: string;
+    /** Comma-separated provider ids /login must offer (`cloudflare`, `google`, `github`); empty on staging. */
+    SIGN_IN_PROVIDERS: string;
     CLOUDFLARE_OAUTH_CLIENT_SECRET?: string;
     CLOUDFLARE_OAUTH_SCOPES?: string;
     CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD?: string;
@@ -109,6 +111,8 @@ declare global {
     KINU_SELF_DEPLOY_REFRESH_TOKEN?: string;
     /** The one identity usable without OAuth; off localhost it also needs `DEV_IDENTITY_SECRET`. */
     DEV_USER_EMAIL?: string;
+    /** `on`: every user's Workers AI goes through this Worker's `AI` binding. */
+    WORKERS_AI_VIA_BINDING?: string;
     /** Presented in core's `DEV_IDENTITY_HEADER` to act as `DEV_USER_EMAIL` off localhost. */
     DEV_IDENTITY_SECRET?: string;
     /** Email Sending (`send_email`); optional, outbound email skips without it. */

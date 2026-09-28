@@ -158,8 +158,8 @@ export interface HeadRunView {
   readonly status: string;
   readonly spawnedAt: number;
   readonly heads: readonly HeadRunHeadView[];
-  /** Null when no head reported any; never substituted with 0. */
-  readonly merge: { narrative: string; headCount: number; totalTokens: number | null } | null;
+  /** Null until the run merged. */
+  readonly merge: { narrative: string } | null;
 }
 
 /**

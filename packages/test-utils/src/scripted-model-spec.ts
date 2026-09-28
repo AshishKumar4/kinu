@@ -9,3 +9,5 @@ export const SCRIPTED_MODEL_SPEC = `openai-compat/${SCRIPTED_MODEL_ID}`;
 
 /** Where a deployment reaches it: the tiers' Worker, on its own route and Custom Domain (scripts/scripted-model-worker.jsonc). */
 export const SCRIPTED_MODEL_ORIGIN = 'https://scripted-model.kinu.run';
+
+export const SCRIPTED_MODEL_KEY_ENV = 'KINU_SCRIPTED_MODEL_KEY';

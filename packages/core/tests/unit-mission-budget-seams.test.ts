@@ -418,7 +418,6 @@ describe('mission scope reaches the woken turn', () => {
       trace_id: id,
       caused_by: null,
       payload_visibility: 'full',
-      schema_version: 1,
       reply_channel: null,
       dedupe_key: null,
     };

@@ -37,6 +37,15 @@ export interface VfsEntryStat {
   revision?: VfsRevision;
 }
 
+export interface Uncheckpointed {
+  readonly dir: string;
+  readonly why: string;
+}
+
+export interface VfsWriteReport {
+  readonly uncheckpointed: Uncheckpointed;
+}
+
 export interface VfsLinkStat extends VfsEntryStat {
   readonly isSymlink: boolean;
 }
@@ -53,6 +62,7 @@ export interface VFS {
   /** Exact immutable version or refusal; never substitutes the current file. */
   readFileAtRevision?: (path: string, revision: VfsRevision, range?: { offset: number; length: number }) => Promise<Uint8Array | string>;
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
+  writeFileWithReport?(path: string, data: string | Uint8Array): Promise<VfsWriteReport | null>;
   readdir(path: string): Promise<string[]>;
   stat(path: string): Promise<VfsEntryStat | null>;
   /** The entry itself, a symbolic link not followed; absent on a plane that cannot tell a link from its target. */
@@ -103,9 +113,7 @@ export interface Executor {
   execute(
     code: string,
     providers: ResolvedProvider[] | Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>,
-    /** Omitted `timeoutMs` gets the executor default; executors that cannot honour it may ignore it. */
     opts?: {
-      timeoutMs?: number;
       /** Omitted means the executor's first declared language. */
       language?: string;
     },
