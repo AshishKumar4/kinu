@@ -124,9 +124,10 @@ const turnStatements = new Map<number, OperationCost['tables']>();
 /**
  * Statements one production turn runs, measured 2026-09-27 on this subject: 5,087 at 7dd73e1ac9, 2,035 of them
  * asking `sqlite_master` whether the actor tables exist and 2,041 re-reading the actor and identity rows before every
- * statement; 1,514 once `WorkspaceActorDirectory` checked a handle once a synchronous run, in one statement.
+ * statement; 1,514 once `WorkspaceActorDirectory` checked a handle once a synchronous run, in one statement; 1,024
+ * once the directory remembered the actors it retired instead of re-reading their rows (1,515 before, at 41ffcb57b7).
  */
-const TURN_STATEMENTS = 1_514;
+const TURN_STATEMENTS = 1_024;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
