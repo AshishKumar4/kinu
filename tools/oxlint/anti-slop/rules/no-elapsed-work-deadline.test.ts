@@ -2,16 +2,13 @@
 // red-to-green Oxlint proof are in ../no-elapsed-deadline.gate.test.ts.
 import { RuleTester } from "oxlint/plugins-dev";
 
-import {
-  BRANCH_PROCESS_SOURCE,
-  noElapsedWorkDeadlineRule,
-} from "./no-elapsed-work-deadline.ts";
+import { noElapsedWorkDeadlineRule } from "./no-elapsed-work-deadline.ts";
 
 const tester = new RuleTester({ languageOptions: { parserOptions: { lang: "ts" } } });
 const armError = { messageId: "elapsedDeadlineArm" };
 const raceError = { messageId: "elapsedRaceSignal" };
 
-const production = BRANCH_PROCESS_SOURCE;
+const production = "packages/core/src/strategy/swarm-run.ts";
 const llmSource = "packages/core/src/providers/anthropic.ts";
 const testHelper = "packages/core/src/providers/fixture.test.ts";
 
@@ -81,29 +78,6 @@ tester.run("anti-slop/no-elapsed-work-deadline", noElapsedWorkDeadlineRule, {
       filename: production,
     },
 
-    // The only branch-process exception is its complete child readiness handshake. The message
-    // listener resolves on `ready`; child error and exit listeners both clear the timer and reject.
-    {
-      code: `async function waitForChildReady(): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
-    const handler = (msg: { method: string }) => {
-      if (msg.method === 'ready') {
-        clearTimeout(timeout);
-        child.off('message', handler);
-        resolve();
-      }
-    };
-    child.on('message', handler);
-    child.on('error', (error) => { clearTimeout(timeout); reject(error); });
-    child.on('exit', (code) => {
-      if (code !== 0) { clearTimeout(timeout); reject(new Error('Branch worker exited')); }
-    });
-  });
-}
-`,
-      filename: production,
-    },
 
     // A bounded I/O wait is not an elapsed arm raced against work.
     {
@@ -151,95 +125,6 @@ tester.run("anti-slop/no-elapsed-work-deadline", noElapsedWorkDeadlineRule, {
   ],
 
   invalid: [
-    {
-      name: "a ready message alone is not the branch startup handshake",
-      code: `await new Promise<void>((resolve, reject) => {
-  const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
-  const handler = (msg: { method: string }) => { if (msg.method === 'ready') resolve(); };
-  child.on('message', handler);
-});
-`,
-      filename: production,
-      errors: [armError],
-    },
-    {
-      name: "arm 1 — the BRANCH_RPC_TIMEOUT_MS body from b936e3b84~1:134-138",
-      code: `const rpc = <T>(method: string, args: RpcArgs): Promise<T> => {
-  const { promise, resolve, reject } = Promise.withResolvers<T>();
-  const timeout = setTimeout(() => {
-    child.off('message', handler);
-    reject(new Error(\`Branch RPC timeout: \${method}\`));
-  }, BRANCH_RPC_TIMEOUT_MS);
-  return promise;
-};
-`,
-      filename: production,
-      errors: [armError],
-    },
-    {
-      name: "child error and exit alone do not exempt a timer without ready settlement",
-      code: `await new Promise<void>((resolve, reject) => {
-  const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
-  child.on('error', (error) => { clearTimeout(timeout); reject(error); });
-  child.on('exit', (code) => {
-    if (code !== 0) { clearTimeout(timeout); reject(new Error('Branch worker exited')); }
-  });
-});
-`,
-      filename: production,
-      errors: [armError],
-    },
-    {
-      name: "the branch handshake requires the ready listener to clear its timer",
-      code: `await new Promise<void>((resolve, reject) => {
-  const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
-  const handler = (msg: { method: string }) => {
-    if (msg.method === 'ready') { child.off('message', handler); resolve(); }
-  };
-  child.on('message', handler);
-  child.on('error', (error) => { clearTimeout(timeout); reject(error); });
-  child.on('exit', (code) => {
-    if (code !== 0) { clearTimeout(timeout); reject(new Error('Branch worker exited')); }
-  });
-});
-`,
-      filename: production,
-      errors: [armError],
-    },
-    {
-      name: "the branch handshake requires every rejecting child listener to clear its timer",
-      code: `await new Promise<void>((resolve, reject) => {
-  const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
-  const handler = (msg: { method: string }) => {
-    if (msg.method === 'ready') { clearTimeout(timeout); child.off('message', handler); resolve(); }
-  };
-  child.on('message', handler);
-  child.on('error', (error) => reject(error));
-  child.on('exit', (code) => {
-    if (code !== 0) { clearTimeout(timeout); reject(new Error('Branch worker exited')); }
-  });
-});
-`,
-      filename: production,
-      errors: [armError],
-    },
-    {
-      name: "the branch handshake listeners must belong to the same child",
-      code: `await new Promise<void>((resolve, reject) => {
-  const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
-  const handler = (msg: { method: string }) => {
-    if (msg.method === 'ready') { clearTimeout(timeout); readyChild.off('message', handler); resolve(); }
-  };
-  readyChild.on('message', handler);
-  child.on('error', (error) => { clearTimeout(timeout); reject(error); });
-  child.on('exit', (code) => {
-    if (code !== 0) { clearTimeout(timeout); reject(new Error('Branch worker exited')); }
-  });
-});
-`,
-      filename: production,
-      errors: [armError],
-    },
     {
       name: "arm 1 — a callback that throws ends work the same way",
       code: `setTimeout(() => {

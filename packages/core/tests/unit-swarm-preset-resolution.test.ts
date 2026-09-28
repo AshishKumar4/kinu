@@ -133,14 +133,6 @@ describe('every named preset resolves to a tuple validity accepts', () => {
     expect(legal(callFor('redteam')).config.carry).toEqual({ kind: 'elites' });
   });
 
-  test('the artifacts bar is the pass-band midpoint this repository already publishes at', () => {
-    // `craftExtractionThreshold` 0.80 is the pass-band midpoint, already the bar for publishing
-    // an artifact derived from a search winner.
-    const carry = legal(callFor('research')).config.carry;
-    expect(carry.kind === 'artifacts' ? carry.threshold : null)
-      .toBe(DEFAULT_CONFIG.mcts.craftExtractionThreshold);
-  });
-
   test('a preset row is a POINT — every row declares its config, so nothing guards one', () => {
     for (const preset of NAMED_SWARM_PRESETS) {
       expect(SWARM_PRESET_POINTS[preset].config).toBeDefined();

@@ -49,8 +49,8 @@ requirements:
       - Kinu.Agent.FiberDurability.n_steps_remaining
       - Kinu.MCTS.StorageIsolation.budget_well_founded
     tsRefs:
-      - packages/core/src/mcts/engine.ts#runMCTS
-      - packages/core/src/types/mcts.ts#MCTSConfig.budget
+      - packages/core/src/strategy/swarm-run.ts#runSwarm
+      - packages/core/src/mcts/search-store.ts#PersistedSearchKnobs.budget
     remainingEvidence:
       - WP-F4 termination and budget-consumption fixtures on the production loop
       - The production configuration uses JavaScript numbers rather than a universally quantified natural-number budget
@@ -61,7 +61,6 @@ requirements:
       - Kinu.Agent.FiberDurability.start_conserved
       - Kinu.Agent.FiberDurability.checkpoint_restore_roundtrip
     tsRefs:
-      - packages/core/src/mcts/engine.ts#runMCTS
       - packages/cf-backend/src/runtime.ts#createCFRuntime
     remainingEvidence:
       - Checkpoint field equality does not prove durable persistence or crash recovery
@@ -153,7 +152,7 @@ requirements:
       - The router lists available executors and never chooses by capability, so a requirement for docker or gpu surfaces as the model's own choice, not as a routing refusal
   PR-MCTS-001:
     statement: Exact scaled-integer backpropagation preserves reward bounds and the reward-sum and visit-count invariants in the abstract model.
-    status: proved-and-refined
+    status: proved-in-abstract-model
     theorems:
       - Kinu.MCTS.Backpropagation.update_preserves_range
       - Kinu.MCTS.Backpropagation.applyRewards_preserves_range
@@ -163,9 +162,7 @@ requirements:
       - packages/core/src/mcts/backpropagation.ts#backpropagate
       - packages/core/src/mcts/schemas.ts#initSearchTables
     remainingEvidence:
-      - TypeScript and SQLite compute IEEE-754 REAL values rather than exact scaled integers; the fixture holds the deployed running mean to the exact mean within 12 decimal places, a tolerance rather than a proved rounding bound
-    refinement:
-      - lean/fixtures/convergence.json :: packages/core/tests/refinement-convergence.test.ts
+      - TypeScript and SQLite compute IEEE-754 REAL values rather than exact scaled integers, and no fixture holds the deployed running mean to the model since its refinement went with MCTS convergence (2026-09-27)
   PR-MCTS-002:
     statement: Initial-value erasure, numerator shape, zero-state range, and identifier preservation follow directly from the abstract backpropagation constructors.
     status: by-construction-witness
@@ -179,7 +176,7 @@ requirements:
     remainingEvidence:
       - WP-F4 differential fixtures must connect these constructor-shape witnesses to the recursive SQLite update
   PR-MCTS-003:
-    statement: No MCTS transition lets a branch run as the orchestrator's actor, and on the workspace's one actor-keyed store a write under one actor leaves every other actor's rows exactly as they were, so nothing a branch does changes the orchestrator's rows.
+    statement: No search transition lets a branch run as the orchestrator's actor, and on the workspace's one actor-keyed store a write under one actor leaves every other actor's rows exactly as they were, so nothing a branch does changes the orchestrator's rows.
     status: proved-in-abstract-model
     theorems:
       - Kinu.MCTS.StorageIsolation.init_isolated
@@ -187,12 +184,11 @@ requirements:
       - Kinu.MCTS.StorageIsolation.a_write_leaves_other_actors_alone
       - Kinu.MCTS.StorageIsolation.another_actors_writes_are_invisible
     tsRefs:
-      - packages/cli-backend/src/branch-process.ts#createBranchSpawner
-      - packages/cli-backend/src/branch-worker.ts#validateActor
+      - packages/core/src/identity/actor-handle.ts#ActorHandle
       - packages/cf-backend/src/runtime.ts#createCFRuntime
-      - packages/cf-backend/src/exploration-hosting.ts#hostBranch
     remainingEvidence:
-      - Actor separation is a premise of Expand, not a property proved of hostBranch or createBranchSpawner
+      - The toolless MCTS branches this model was written for were folded into swarm (2026-09-27); a swarm node is a run actor, and whether its region fits this relation is PR-ISOLATION-001's open question
+      - Actor separation is a premise of Expand, not a property proved of any spawner
       - That every statement binds the acting actor's id is read off the shipped queries, which take an ActorHandle; no fixture runs them against the model
       - A swarm node with tools is not a branch; Exploration/Isolation.lean proves this proof does not reach it
   PR-MCTS-004:
@@ -230,31 +226,6 @@ requirements:
       - The fixture runs the query on bun:sqlite; the Durable Object's SQLite build is not exercised by it
     refinement:
       - lean/fixtures/uct-select.json :: packages/core/tests/refinement-uct.test.ts
-  PR-MCTS-005:
-    statement: Convergence ranks a candidate by its own reward, so every winner carries the best reward a population candidate reached and the search keeps its best candidate through weak refinements, no ancestor is a rival of its descendant whatever lies between them, a converged winner is undisputed and acceptable, and the winner's reward stabilizes.
-    status: proved-and-refined
-    theorems:
-      - Kinu.MCTS.Convergence.backprop_accumulates_the_evaluations_through_a_node
-      - Kinu.MCTS.Convergence.the_winner_has_the_greatest_value
-      - Kinu.MCTS.Convergence.a_bounded_rising_reward_stabilizes
-      - Kinu.MCTS.Convergence.a_converged_winner_is_undisputed_and_acceptable
-      - Kinu.MCTS.Convergence.the_winner_carries_the_best_reward
-      - Kinu.MCTS.Convergence.the_search_expands_its_best_candidate_and_converges_on_it
-      - Kinu.MCTS.Convergence.an_ancestor_is_never_a_rival
-    tsRefs:
-      - packages/core/src/mcts/convergence.ts#converge
-      - packages/core/src/mcts/engine.ts#runMCTS
-      - packages/core/src/mcts/backpropagation.ts#backpropagate
-      - packages/core/src/mcts/uct.ts#selectNode
-      - packages/core/src/mcts/takes.ts#findNearTiedRivals
-      - packages/core/src/mcts/takes.ts#searchTree
-      - packages/core/src/mcts/schemas.ts#initSearchTables
-    remainingEvidence:
-      - Until the fix that accompanies this model, converge ranked by the subtree mean and walked lineage through population rows only; the fixture's expands-then-converges and pruned-parent cases are those regressions
-      - The fixture runs converge in plan mode; build mode adds the near-tie test selection, the memory writes and the task history, which it does not exercise
-      - Rewards are exact scaled integers while the stored value is a floating-point running mean; the fixture keeps only trees where the doubles give the exact model's answer
-    refinement:
-      - lean/fixtures/convergence.json :: packages/core/tests/refinement-convergence.test.ts
   PR-CRED-001:
     statement: No client operation on the credential store answers anything that depends on a stored secret, an envelope opens only under the store and key it was sealed for, credential and MCP header contexts never meet, a deleted credential yields no headers, rotation keeps every readable secret, and a row without an envelope opens under no context and is read as plaintext only by the rotation of a store that was never sealed.
     status: proved-and-refined
@@ -449,7 +420,7 @@ requirements:
       - Kinu.Exploration.Publication.retry_does_not_clear
       - Kinu.Exploration.Publication.good_measurement_does_not_clear
       - Kinu.Exploration.Publication.surface_enumeration_is_total
-      - Kinu.Exploration.Publication.surface_enumeration_has_six
+      - Kinu.Exploration.Publication.surface_enumeration_has_five
       - Kinu.Exploration.Publication.admits_ignores_surface
       - Kinu.Exploration.Publication.admits_iff_not_sealed
       - Kinu.Exploration.Publication.every_surface_is_writable
@@ -529,7 +500,7 @@ requirements:
       - Kinu.Exploration.Publication.no_unobserved_node_is_reachable
       - Kinu.Exploration.Publication.unobserved_node_is_representable
     tsRefs:
-      - packages/core/src/mcts/engine.ts#runMCTS
+      - packages/core/src/mcts/record-node.ts#insertSearchNode
       - packages/core/src/types/mcts.ts#SearchNode.observation
     remainingEvidence:
       - That the observation is the environment's reply rather than the node's own claim is a property of the TypeScript surface that Lean can only restate

@@ -10,7 +10,6 @@ import { tmpdir } from "node:os";
 
 import { isParseable, trackedFiles } from "../../../scripts/sources.ts";
 import {
-  BRANCH_PROCESS_SOURCE,
   ELAPSED_WORK_SOURCE_ROOTS,
   isElapsedWorkDeadlineSource,
 } from "./rules/no-elapsed-work-deadline.ts";
@@ -53,9 +52,10 @@ assert.equal(
   `${ACTIVE_RULE} must be active at error; a staged-only rule cannot protect the repository`,
 );
 
+/** The deleted source the historical timer came from; its fixture now stands in a governed path. */
 const HISTORICAL_SOURCE: HistoricalSource = {
   commit: "b936e3b84101dd7074986da8758363d496b0fb23^",
-  path: BRANCH_PROCESS_SOURCE,
+  path: "packages/cli-backend/src/branch-process.ts",
   constantLine: 43,
   timerLines: [134, 138],
 };
@@ -144,28 +144,11 @@ export function correctedRpc<T>(): Promise<T> {
   child.once('exit', onExit);
   return promise;
 }
-export async function waitForChildReady(): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
-    const handler = (msg: { method: string }) => {
-      if (msg.method === 'ready') {
-        clearTimeout(timeout);
-        child.off('message', handler);
-        resolve();
-      }
-    };
-    child.on('message', handler);
-    child.on('error', (error) => { clearTimeout(timeout); reject(error); });
-    child.on('exit', (code) => {
-      if (code !== 0) { clearTimeout(timeout); reject(new Error('Branch worker exited')); }
-    });
-  });
-}
 `;
 
 const RED_FIXTURES: readonly Fixture[] = [
   {
-    path: BRANCH_PROCESS_SOURCE,
+    path: "packages/core/src/strategy/branch-rpc.ts",
     label: "verified historical branch RPC timer",
     code: HISTORICAL_RED_FIXTURE,
   },
@@ -351,10 +334,6 @@ export default eslintCompatPlugin({
 
   const governed = governedSourceSet();
   assert.ok(governed.length > 0, "the rule's own path predicate selected 0 parseable policy sources");
-  assert.ok(
-    governed.includes(BRANCH_PROCESS_SOURCE),
-    `${BRANCH_PROCESS_SOURCE} must remain governed for the historical RPC regression`,
-  );
   const domainFiles = Object.entries(ELAPSED_WORK_SOURCE_ROOTS).map(([domain, roots]) => ({
     domain,
     files: governed.filter((file) => roots.some((root) => file.includes(root))),
@@ -395,8 +374,8 @@ export default eslintCompatPlugin({
   mkdirSync(boundaryDirectory);
   for (const fixture of RED_FIXTURES) writeFixture(redDirectory, fixture);
   writeFixture(greenDirectory, {
-    path: BRANCH_PROCESS_SOURCE,
-    label: "child-exit correction and complete ready handshake",
+    path: "packages/core/src/strategy/branch-rpc.ts",
+    label: "child-exit correction",
     code: GREEN_FIXTURE,
   });
   for (const boundary of BOUNDARIES) writeFixture(boundaryDirectory, boundary);
@@ -415,7 +394,7 @@ export default eslintCompatPlugin({
   assert.deepEqual(
     green.diagnostics.map((diagnostic) => `${diagnostic.filename ?? "?"}: ${diagnostic.code ?? "?"}`),
     [],
-    "the child-exit correction and complete ready handshake must lint clean under the isolated rule",
+    "the child-exit correction must lint clean under the isolated rule",
   );
   const boundaries = lint(configPath, [boundaryDirectory], BOUNDARIES.length);
   assert.deepEqual(
@@ -428,7 +407,7 @@ export default eslintCompatPlugin({
     .map(({ domain, files }) => `${domain}=${String(files.length)}`)
     .join(", ");
   process.stdout.write(
-    `no-elapsed-work-deadline: activated rule proven red-to-green through isolated oxlint over ${String(governed.length)} governed and ${String(measured.length)} measured files (${domainSummary}); zero live findings. Blind spots: indirect callbacks, Date.now deltas, and pre-bound AbortSignal.timeout races. Transport, scripts, and process-liveness remain outside this work-path scope; only the complete branch ready handshake is structurally exempt\n`,
+    `no-elapsed-work-deadline: activated rule proven red-to-green through isolated oxlint over ${String(governed.length)} governed and ${String(measured.length)} measured files (${domainSummary}); zero live findings. Blind spots: indirect callbacks, Date.now deltas, and pre-bound AbortSignal.timeout races. Transport, scripts, and process-liveness remain outside this work-path scope\n`,
   );
 } finally {
   rmSync(workspace, { recursive: true, force: true });

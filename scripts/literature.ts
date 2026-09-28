@@ -149,12 +149,6 @@ export const WORKS: readonly Work[] = [
     cites: ['Rainbow Teaming', 'Rainbow-Teaming', '2402.16822'],
   },
   {
-    id: 'funsearch',
-    source: 'Romera-Paredes et al., FunSearch, Nature 625, 2024',
-    cites: ['FunSearch'],
-    parameters: ['2', '1', '5', '15', '10'],
-  },
-  {
     id: 'lats',
     source: 'Zhou et al., Language Agent Tree Search, arXiv:2310.04406',
     cites: ['LATS', '2310.04406'],
@@ -356,17 +350,7 @@ export const CLAIMS: readonly Claim[] = [
       + ' measured a floor for these archives. A run that finds cells collapsing or'
       + ' starving should move it and record what it measured.',
   },
-  {
-    work: 'lats',
-    value: '4',
-    says: 'the number of independent assertions LATS generates per candidate',
-    where: '§5.2, the programming instantiation',
-    unit: 'generated assertions per candidate',
-    hand: 'artifact',
-    via: 'agent://TreeSearchLiterature',
-    verifiedBy: 'MctsAsLats read the reference implementation (programming/mcts.py); the'
-      + ' paper section itself is second-hand here',
-  },
+
   {
     work: 'lats',
     value: '7',

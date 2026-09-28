@@ -64,8 +64,6 @@ sequenceDiagram
     Agent->>Lifetime: onLifetimeEvolution()
     Lifetime->>Lifetime: periodicCraftConsolidation()
     Lifetime->>Lifetime: Retire low-scoring tools (EMA + time decay)
-    Lifetime->>Lifetime: runReplayEval(), measured loss vs labeled turns
-    Lifetime->>Lifetime: runMCTS(task, budget 2, branches 2)
 ```
 
 ## Turn-level evolution
@@ -201,8 +199,6 @@ metric boundary refuses non-finite scores and scores outside 0..1. Iteration cou
 include rejected proposals, independently of the accepted-candidate history.
 Section proposal and paired promotion trials propagate judge failures before
 writing the unmeasured proposal or trial.
-
-MCTS exploration runs smaller than the engine's default, at budget 2 and branches 2 (`DEFAULT_EVOLUTION_CONFIG`, called from `onLifetimeEvolution` in `core/src/evolution/engine.ts`). An operator MCTS override replaces the branch count; the budget stays the lifetime cap. See [MCTS.md](./MCTS.md).
 
 ## Evolution changelog
 
@@ -341,7 +337,7 @@ The scoring constants live in `DEFAULT_CONFIG.craftStore` (`core/src/config.ts`)
 - Injection cutoff: `effectiveScore >= 0.2`. Unscored tools pass, which is why `workspace.createTool` seeds the 0.5 neutral prior at creation.
 - Retirement threshold: `effectiveScore < 0.1`, and only after 2 uses.
 
-Extraction happens in three places: an accepted turn (`extractPattern`), an MCTS iteration scoring above `craftExtractionThreshold` (0.8, `DEFAULT_CONFIG.mcts` in `core/src/config.ts`, applied in `runMCTS`, `core/src/mcts/engine.ts`), and MCTS convergence when the winner scores above the same threshold (`core/src/mcts/convergence.ts`). Only the MCTS paths have a size gate, and it is a floor: `maybeStoreCraftedTool` (`core/src/craft/discovery.ts`) returns early below 50 characters. There is no upper limit, because a ceiling silently excluded every substantial win from the craft loop; the prompt budget bounds the source instead. `extractPattern` applies no length gate. `upsertCraftedTool` decides usability by compiling the code the way the runtime will.
+Extraction happens on an accepted turn (`extractPattern`), with no length gate. `upsertCraftedTool` decides usability by compiling the code the way the runtime will.
 
 ## Evolution events
 
@@ -355,6 +351,6 @@ Evolution activity is persisted to the `evolution_events` SQL table:
 | `data` | TEXT | JSON payload (optional) |
 | `created_at` | INTEGER | Epoch milliseconds |
 
-The engine emits eleven types (`EvolutionEvent`, `core/src/evolution/types.ts`): `reflection`, `craft_discovered`, `scaffold_proposed`, `consolidation`, `mcts_started`, `mcts_complete`, `turn_complete`, `replay_eval`, `changelog_digest`, `experience_import` and `advisor_note`. `recordMisevolutionVeto` writes a twelfth, `misevolution_veto`, directly (`core/src/safety/misevolution.ts`).
+The engine emits nine types (`EvolutionEvent`, `core/src/evolution/types.ts`): `reflection`, `craft_discovered`, `scaffold_proposed`, `consolidation`, `turn_complete`, `replay_eval`, `changelog_digest`, `experience_import` and `advisor_note`. `recordMisevolutionVeto` writes a tenth, `misevolution_veto`, directly (`core/src/safety/misevolution.ts`).
 
 This table is one of four sources the Run Timeline read model merges (`getRunTimeline`, `core/src/read-models/timeline.ts`); the others are the per-run `run_events` log, the MCTS `search_nodes` table, and detached background jobs. The merge runs server-side and does not depend on the platform, so every backend has the timeline. `kinu status` reads the same table locally.

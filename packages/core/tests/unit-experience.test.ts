@@ -37,7 +37,6 @@ import {
 import { stageImport } from '../src/experience/imports';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
-import { unobservedSpend } from '@kinu.run/test-utils';
 
 function sqlExec(db: Database): SqlExec {
   return makeSqlExec(db);
@@ -116,7 +115,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
 
   const call = (input: ExperienceTestInput) => runExperienceAction(deps, { value: input });
 
-  return { rt, db, facts, call, engine: new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend }) };
+  return { rt, db, facts, call, engine: new EvolutionEngine(rt, stores.history) };
 }
 
 function proveCraft(ws: Workspace, input: { name: string; description: string; code: string; score: number; uses: number }): void {

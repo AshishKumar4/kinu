@@ -1,6 +1,6 @@
 # Kinu — Agent Guide
 
-Self-evolving agent framework: MCTS exploration, mutable scaffolding, durable skill evolution. Two backends over one core: Cloudflare Workers (`cf-backend`, Agents SDK DOs) and local CLI (`cli-backend`, bun:sqlite). Bun workspaces under `packages/*`.
+Self-evolving agent framework: swarm tree-search exploration, mutable scaffolding, durable skill evolution. Two backends over one core: Cloudflare Workers (`cf-backend`, Agents SDK DOs) and local CLI (`cli-backend`, bun:sqlite). Bun workspaces under `packages/*`.
 
 ## Commands
 `bun install` · `bun run check` (strict lint + typecheck; all anti-slop rules are errors, warnings fail) · `bun test --cwd packages/core` · `bun run dev` · `bun run layergate` · `bun run deploy` (the only deploy path; never bare `wrangler deploy`) · `bash scripts/setup-worktree.sh` (once per fresh worktree; never symlink the primary's `node_modules`; never `bun install` in a linked worktree, the root `preinstall` refuses).
@@ -68,7 +68,7 @@ The main agent orchestrates; lanes build. Main plans each change in a loop with 
 - A commit body is not where a decision lives; it is where the change is explained. The log entry is the durable record, and the body cites it.
 
 ## Packages
-`core` (interfaces, MCTS, evolution, scaffold, craft) · `cf-backend` (Agents SDK DOs, React UI, Vite+Wrangler) · `agent-utils` (stores, VFS types) · `cli` · `cli-backend` · `compaction` · `devbox` · `test-utils` · `tests/` (E2E) · `bench/clbench/`.
+`core` (interfaces, swarm search, evolution, scaffold, craft) · `cf-backend` (Agents SDK DOs, React UI, Vite+Wrangler) · `agent-utils` (stores, VFS types) · `cli` · `cli-backend` · `compaction` · `devbox` · `test-utils` · `tests/` (E2E) · `bench/clbench/`.
 
 ## Architecture
 - One Durable Object per workspace: files, conversation, ledgers, memory index in one SQLite. Every non-root actor (a hired subordinate, or a `run` actor: exploration head, swarm node, branch) is a logical actor of that object, one identity row per actor, hosted through `hosted-actors.ts`; they run `runHeadInference` and record no turn into the evolution window.
@@ -77,7 +77,7 @@ The main agent orchestrates; lanes build. Main plans each change in a loop with 
 - `AgentRuntime` bundles six primitives: `VFS Memory Executor LLM Schedule Identity`. `SqlExecutor` is tagged-template SQL; `RawSqlExec` only for `CREATE ... IF NOT EXISTS`; schema init is idempotent, genesis is locked, no column reconcile ever.
 - Execution: `workspace` (Nimbus over the DO's SQLite; canonical files, shell, git; hosted `node` runs in a facet), `sandbox` (Linux container), `device` (user's machines via tunnel, one grant per workspace+machine, always mounted at `/pc/<name>`), `parent` (forks). One file plane; mounts extend the view, never copy it. The prompt renders each executor's declared `capabilities`; see `docs/EXECUTION-LAYER-SPEC.md`.
 - Eight native tools (`BUILTIN_TOOLS`): `eval shell file agents memory tasks web report`. Reach is declared in `TOOL_REACH`, not derived. `agents` is the one delegation surface: `swarm | hire | msg | list | dismiss`; every field belongs to an action and an unknown field is refused naming the one meant (`gate:agents-fields`). `file` is `read | write | edit | list | stat | search` with edit refusing absent or repeated `old_text` and requiring a prior read. `memory` is `save | search | conversations | remember | recall | forget`; `web` is `search | fetch`. `eval`'s description is composed once in `registry.ts`. Never reintroduce removed tools or actions.
-- `SOUL.md` in VFS is the workspace identity; scaffold versioned in VFS; MCTS in `search_nodes`; crafted tools in `crafted_tools` (workspace-wide, no `actor_id`) with EMA scores; evolution runs async and never blocks the turn queue.
+- `SOUL.md` in VFS is the workspace identity; scaffold versioned in VFS; search trees in `search_nodes`; crafted tools in `crafted_tools` (workspace-wide, no `actor_id`) with EMA scores; evolution runs async and never blocks the turn queue.
 - The AI SDK (`ai`) is required by the core chat driver and is not up for replacement. `@earendil-works/pi-*` is a bench subject only; oh-my-pi (`can1357/oh-my-pi`) is the source for borrowed ideas, cited.
 - Port 3000 is reserved; dev servers bind `0.0.0.0`; wrangler uses `--ip 0.0.0.0`.
 

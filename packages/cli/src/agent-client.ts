@@ -91,7 +91,6 @@ export interface AgentClientStatus {
   messageCount?: number;
   searchNodeCount?: number;
   craftedToolCount?: number;
-  taskCount?: number;
   memorySize?: number;
   dbSize?: number;
   toolCount?: number;

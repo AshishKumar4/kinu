@@ -20,7 +20,7 @@ import { describePathology } from '../src/evolution/pathology';
 import { createRefinementStore, initRefinementTables } from '../src/evolution/refinement';
 import { createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
-import { present, unobservedSpend } from '@kinu.run/test-utils';
+import { present } from '@kinu.run/test-utils';
 
 const V0_CODE = 'async function* run(rt, task) { yield "v0"; }';
 
@@ -689,7 +689,7 @@ describe('reverts — real paths only', () => {
 describe('session-end digest — assembled when the window closes', () => {
   test('onSessionComplete emits one changelog_digest covering the window', async () => {
     const { rt, facts, stores } = setup();
-    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
+    const engine = new EvolutionEngine(rt, stores.history);
     const events: EvolutionEvent[] = [];
     engine.onEvent((e) => events.push(e));
 
@@ -723,7 +723,7 @@ describe('session-end digest — assembled when the window closes', () => {
 
   test('a window that changed nothing emits no digest', async () => {
     const { rt, stores } = setup();
-    const engine = new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend });
+    const engine = new EvolutionEngine(rt, stores.history);
     const events: EvolutionEvent[] = [];
     engine.onEvent((e) => events.push(e));
     await engine.onSessionComplete({

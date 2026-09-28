@@ -20,12 +20,11 @@ import {
   storedHeadReportStatus, subordinateDelegatesOf,
   registeredParent, terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, CHAT_SESSION_ID,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
-  type BranchExploration, type BranchHandle, type BranchReflection, type CraftedTool,
   type DelegationBudget,
   type DynamicContext, type HeadId, type HeadInferenceDeps, type HeadInput, type HeadSplitRequest, type HeadSplitResult,
   type HeadStep, type HostedActor, type HostedNodeSeat, type LoopOrigin, type MissionScope, type NodeIdentity,
-  type NodeWorkspace, type ProfileAuthorityInputs, type ReasoningEffort, type ReportHeadDelta, type ResolvedTurnProfile,
-  type SpawnedHead, type SqlExec, type SqlExecutor, type SubordinateEventResult, type SubordinateHandoff,
+  type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile,
+  type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff,
   type SubordinateLifetime, type SubordinateReportOrigin,
   type SubordinateReportHandoff,
   type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime,
@@ -71,7 +70,6 @@ export interface HostedTaskProfile {
 /** One workspace's host and directory, for every hosted kind. */
 export interface HostedActorSeams {
   readonly host: ActorHost;
-  readonly sql: SqlExecutor;
   /** Positional executor for the same database; the event log needs this port, not the tagged one. */
   readonly exec: SqlExec;
   readonly directory: WorkspaceActorDirectory;
@@ -550,10 +548,9 @@ export function reportSettlesRun(status: SubordinateReportStatus, origin: Subord
   return temporaryRunSettles({ status, origin });
 }
 
-/** Heads, swarm nodes and steer branches are full run actors; an MCTS branch is a toolless one. */
+/** Heads, swarm nodes and steer branches are run actors. */
 export interface ExplorationActorRequest {
   readonly creationId: string;
-  readonly toolProfile: 'full' | 'toolless';
   /** Absent lets `defaultLoopOrigin` stand (`inherit`). */
   readonly loop?: LoopOrigin;
 }
@@ -562,29 +559,6 @@ export interface ExplorationProfile {
   readonly profile: ResolvedTurnProfile;
   readonly inputs: ProfileAuthorityInputs;
 }
-
-export interface BranchCompletionRequest {
-  readonly actor: HostedActor;
-  readonly spec: string;
-  /** The route's own reasoning effort; spec and effort are one decision and travel together. */
-  readonly effort: ReasoningEffort | null;
-  readonly system?: string;
-  readonly user: string;
-}
-
-/** Supplied by the root because the provider registry and operation sink are its own. */
-export interface BranchRunnerDeps {
-  explorePrompt(input: {
-    readonly mode: WorkMode;
-    readonly context: string;
-    readonly craftedTools: CraftedTool[];
-    readonly languages: readonly [string, ...string[]];
-    readonly siblings: readonly string[];
-  }): { readonly system: string; readonly user: string };
-  reflectionPrompt(task: string, traces: string, outcome?: string): string;
-  complete(request: BranchCompletionRequest): Promise<BranchExploration>;
-}
-
 
 /** One run actor: registered (or re-found) under its creation id, retired when its run settles. */
 async function hostRunActor(seams: HostedActorSeams, request: ExplorationActorRequest): Promise<{
@@ -629,7 +603,7 @@ function explorationModelSpec(
 function runRoute(
   seams: HostedActorSeams,
   actor: HostedActor,
-  request: { readonly source: 'head' | 'swarm' | 'mcts'; readonly workMode: WorkMode; readonly what: string },
+  request: { readonly source: 'head' | 'swarm'; readonly workMode: WorkMode; readonly what: string },
 ): Effect.Effect<NonNullable<ReturnType<typeof resolveModelRoute>>, KinuError> {
   return Effect.promise(() => seams.profile({ actor, availableTools: [], workMode: request.workMode })).pipe(
     Effect.flatMap(({ profile }) => {
@@ -655,7 +629,7 @@ function explorationDynamicContext(actor: HostedActor, profile: ResolvedTurnProf
 
 /** A branching head, hosted on the one head runner. The actor is retired when `run()` settles. */
 export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promise<SpawnedHead> {
-  const { reference, retire } = await hostRunActor(seams, { creationId: input.id, toolProfile: 'full', loop: input.loop });
+  const { reference, retire } = await hostRunActor(seams, { creationId: input.id, loop: input.loop });
 
   return spawnSeatedHead(input, {
     // The watch is named before the acquire that builds the runtime over it; a later one sees no writes.
@@ -713,7 +687,7 @@ async function runActorSeat(seams: HostedActorSeams, reference: ActorReference):
 export async function hostNodeSeat(
   seams: HostedActorSeams, node: NodeIdentity,
 ): Promise<HostedNodeSeat> {
-  return await runActorSeat(seams, (await hostRunActor(seams, { creationId: node.nodeId, toolProfile: 'full' })).reference);
+  return await runActorSeat(seams, (await hostRunActor(seams, { creationId: node.nodeId })).reference);
 }
 
 /** A swarm node's `eval`, over the hosted actor the node runs as. */
@@ -769,60 +743,4 @@ function parseExplorationId(storageKey: string, name: string): string {
   const marked = name.startsWith('exp:') ? name.slice(4) : name;
 
   return marked === '' ? storageKey : marked;
-}
-
-/**
- * An MCTS rollout branch: no ToolSet, no plane, no home. The durable trace is
- * `search_nodes.observation`. The engine releases it in the `finally` after every reflection.
- */
-export async function hostBranch(
-  seams: HostedActorSeams,
-  branchId: string,
-  deps: BranchRunnerDeps,
-): Promise<BranchHandle> {
-  const { reference, retire } = await hostRunActor(seams, { creationId: branchId, toolProfile: 'toolless' });
-  /** Held in memory for the reflection that may follow; the handle's life is the window. */
-  let trace = '';
-
-  return {
-    explore: (request) => seams.host.run(reference, (actor) => settle(Effect.gen(function* () {
-      const { priorHistory, craftedTools, languages, mode, siblings } = request;
-      const route = yield* runRoute(seams, actor, { source: 'mcts', workMode: mode, what: 'an MCTS branch' });
-
-      const { system, user } = deps.explorePrompt({
-        mode,
-        context: priorHistory.map((turn) => `${turn.role}: ${turn.content}`).join('\n\n'),
-        craftedTools, languages, siblings: siblings ?? [],
-      });
-
-      const answer = yield* Effect.promise(() => deps.complete({
-        actor, spec: route.model, effort: route.reasoningEffort, system, user,
-      }));
-
-      trace = answer.text;
-
-      return answer;
-    }))),
-    generateReflection: (task, outcome) => seams.host.run(reference, (actor) => settle(Effect.gen(function* () {
-      const route = yield* runRoute(seams, actor, { source: 'mcts', workMode: 'build', what: 'an MCTS reflection' });
-
-      const answer = yield* Effect.promise(() => deps.complete({
-        actor, spec: route.model, effort: route.reasoningEffort,
-        user: deps.reflectionPrompt(task, trace, outcome),
-      }));
-
-      return { text: answer.text, usage: answer.usage } satisfies BranchReflection;
-    }))),
-    release: retire,
-  };
-}
-
-/**
- * Stop one branch by id; ends at `retireExploration` like `release()`. `register` re-finds
- * (idempotent on the creation id). Wired beside `spawn` and never without it.
- */
-export async function abortHostedBranch(
-  seams: HostedActorSeams, branchId: string,
-): Promise<void> {
-  await (await hostRunActor(seams, { creationId: branchId, toolProfile: 'toolless' })).retire();
 }

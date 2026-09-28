@@ -459,13 +459,8 @@ export type EntrypointKind =
    *  `fork`/`spawn`/`execFile`, resolved back into the corpus. The child
    *  process is a second root — nothing IMPORTS the script, so the module graph
    *  ends at the spawn call and everything the child consumes reads as
-   *  unreached. `cli-backend/src/branch-worker.ts` is the live instance: it is
-   *  `fork(workerPath, [dbPath])`-ed from `branch-process.ts`, `package.json`'s
-   *  knip block already has to declare `src/branch-worker.ts!` for the same
-   *  reason, and without this kind its three production imports
-   *  (`exploreRollout`, `reflectRollout`, `LocalActorProcessBootstrapSchema`)
-   *  were reported as reached by nothing. That is the false-positive direction,
-   *  which is the one that gets a gate switched off. */
+   *  unreached. Without this kind a forked worker's imports read as reached by
+   *  nothing: the false-positive direction, which gets a gate switched off. */
   | 'spawned-script';
 
 export interface Entrypoint {
@@ -606,10 +601,8 @@ function spawningCallee(call: SyntaxNode): string | undefined {
  * The corpus files a spawn call names, resolved the way the code resolves them.
  *
  * Path strings reach a spawn three ways here and all three are followed: the
- * literal itself, inside the argv array beside it, and — the live case — bound
- * to a name first, because `branch-process.ts` writes
- * `const workerPath = join(dirname(fileURLToPath(import.meta.url)),
- * 'branch-worker.ts')` and passes the NAME. So every string literal reachable
+ * literal itself, inside the argv array beside it, and bound to a name first
+ * (`const workerPath = join(dir, 'worker.ts')`, passing the NAME). So every string literal reachable
  * from an argument is a candidate, and the CORPUS decides: a candidate the tree
  * does not hold is not a resolution. That is what keeps this from rooting files
  * at random — `spawn(process.execPath, [entry, 'daemon', 'run'])`,
@@ -645,7 +638,7 @@ function spawnedScripts(
     const text = literalText(node);
 
     if (text !== undefined) {
-      // Relative to the spawning file first — a bare `branch-worker.ts` is a
+      // Relative to the spawning file first — a bare `worker.ts` is a
       // sibling — then as a repository path, which is how a script names
       // another script.
       for (const candidate of [collapsePath(`${directory}/${text}`), collapsePath(text)]) {
@@ -2104,8 +2097,7 @@ export const BLIND_SPOTS: readonly string[] = [
   + 'file a `fork`/`spawn`/`execFile` names, following one binding hop to the string literal; a '
   + 'path assembled from a variable this gate cannot fold, read out of config, or handed in by a '
   + 'caller roots nothing, and every symbol that child consumes then reads as unreached. That is '
-  + 'the FALSE POSITIVE direction, and it cost five findings against `branch-worker.ts` before '
-  + 'this kind existed.',
+  + 'the FALSE POSITIVE direction.',
 ];
 
 if (import.meta.main) {

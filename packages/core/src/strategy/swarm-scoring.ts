@@ -397,7 +397,7 @@ export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusa
     now: Date.now(),
   });
   insertSearchNode(sql, rt.actor, {
-    nodeId: expansion.id, parentNodeId: expansion.parentId, parentMsgId: null, rootId,
+    nodeId: expansion.id, parentNodeId: expansion.parentId, rootId,
     task: resolved.task, action: '', observation: expansion.artifact,
     codeUsed: null, depth: expansion.depth, msgId: null,
   });

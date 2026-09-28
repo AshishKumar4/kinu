@@ -130,8 +130,7 @@
       },
       "packages/cli-backend": {
         "entry": [
-          "src/index.ts!",
-          "src/branch-worker.ts!"
+          "src/index.ts!"
         ]
       },
       "packages/devbox": {

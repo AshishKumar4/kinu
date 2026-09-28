@@ -34,7 +34,7 @@ const TOOL_CLAIM: ToolEffectKey = {
 };
 
 const SEQUENCE = [
-  'takes', 'event_reply', 'turn_record', 'auto_title',
+  'craft_usage', 'event_reply', 'turn_record', 'auto_title',
 ] as const satisfies readonly TerminalEffectName[];
 
 /** Last, so a cut on an inline effect leaves an exact suffix. */
@@ -459,7 +459,7 @@ test('an unsupported recorded roster remains inspectable and owed after reopenin
 
 test('an unreadable recorded effect input is retained instead of dropping its obligation', async () => {
   await conform(async (plane) => {
-    plane.process().record(TRANSITION, [{ name: 'takes', scope: 'answer', lane: 'inline', input: { answer: 42 } }]);
+    plane.process().record(TRANSITION, [{ name: 'craft_usage', scope: 'answer', lane: 'inline', input: { answer: 42 } }]);
     plane.restart();
     await plane.process().resumeAll();
     plane.advance(PAST_BACKOFF_MS);
@@ -468,7 +468,7 @@ test('an unreadable recorded effect input is retained instead of dropping its ob
 
     const owed = plane.process().ledger.owed(plane.process().sequenceId(TRANSITION));
     expect(owed).toHaveLength(1);
-    expect(owed[0]).toMatchObject({ rawName: 'takes', input: '{"answer":42}', attempts: 2 });
+    expect(owed[0]).toMatchObject({ rawName: 'craft_usage', input: '{"answer":42}', attempts: 2 });
     expect(plane.process().incomplete()).toEqual([TRANSITION]);
     expect(plane.runOrder()).toEqual([]);
   });
@@ -544,12 +544,12 @@ describe('terminal transition conformance across two adapters', () => {
 
       const cut = plane.snapshot();
       expect(dispositions(cut)).toEqual({
-        [K('takes')]: 'completed',
+        [K('craft_usage')]: 'completed',
         [K('event_reply')]: 'completed',
         [K('turn_record')]: 'pending',
         [K('auto_title')]: 'pending',
       });
-      expect(cut.runs).toEqual({ [K('takes')]: 1, [K('event_reply')]: 1 });
+      expect(cut.runs).toEqual({ [K('craft_usage')]: 1, [K('event_reply')]: 1 });
       expect(claimState(cut)[TERMINAL_CLAIM_CALL]).toBeNull();
 
       plane.interruptAt(null);
@@ -602,7 +602,7 @@ describe('terminal transition conformance across two adapters', () => {
       const held = plane.snapshot();
       // Owed, not failed: the row gates the close.
       expect(dispositions(held)).toEqual({
-        [K('takes')]: 'completed',
+        [K('craft_usage')]: 'completed',
         [K('event_reply')]: 'pending',
         [K('turn_record')]: 'completed',
         [K('auto_title')]: 'completed',
@@ -678,7 +678,7 @@ describe('terminal transition conformance across two adapters', () => {
 
     // Nothing pruned: a blocked row is work a deploy still owes.
     expect(dispositions(snap)).toEqual({
-      [K('takes')]: 'completed',
+      [K('craft_usage')]: 'completed',
       [K('event_reply')]: 'completed',
       [K('turn_record')]: 'completed',
       [K('auto_title')]: 'completed',
@@ -730,7 +730,7 @@ describe('terminal transition conformance across two adapters', () => {
       circular.self = circular;
 
       const declared = (): readonly OwedEffect[] => [
-        { name: 'takes', scope: TRANSITION.messageId, lane: 'inline', input: { answer: 'a' } },
+        { name: 'craft_usage', scope: TRANSITION.messageId, lane: 'inline', input: { answer: 'a' } },
         {
           name: 'turn_record', scope: TRANSITION.messageId, lane: 'inline',
           input: circular,

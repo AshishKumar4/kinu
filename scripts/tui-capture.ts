@@ -195,7 +195,7 @@ const TAKES_SET: AlternateTakeSet = {
   turnId: 'turn-9',
   sessionId: 'sess-1',
   task: 'Decide how to fix the flaky retry test without masking real races.',
-  source: 'mcts',
+  source: 'branch',
   winnerNodeId: 'node-b',
   chosenNodeId: null,
   candidates: [

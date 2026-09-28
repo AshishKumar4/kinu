@@ -38,7 +38,7 @@ const ERR: Paint = chalk.hex(INK.danger);
 
 const MUTED: Paint = chalk.hex(INK.dim);
 
-export { BRAND, VERSION, DIM, ACCENT, OK, WARN, ERR, MUTED };
+export { VERSION, DIM, ACCENT, OK, WARN, ERR, MUTED };
 
 const BOX = { tl: '┌', bl: '└', v: '│' } as const;
 
@@ -167,7 +167,6 @@ interface AgentStatusInfo {
   createdAt: number;
   scaffoldVersion: number;
   searchNodeCount: number;
-  taskCount: number;
   craftedToolCount: number;
   memorySize: number;
 }
@@ -195,7 +194,6 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
 
   console.log(boxRow(L('Scaffold:'), `v${info.scaffoldVersion}`, w));
   console.log(boxRow(L('MCTS nodes:'), String(info.searchNodeCount), w));
-  console.log(boxRow(L('Tasks:'), String(info.taskCount), w));
 
   if (extra?.conversationCount !== undefined) {
     console.log(boxRow(L('Chats:'), String(extra.conversationCount), w));
@@ -333,7 +331,7 @@ export function printToolResult(result: string, outcome: ToolOutcome): void {
 
 const EVOLUTION_ICONS = new Map<string, string>([
   ['reflection', '◔'], ['craft_discovered', '✚'], ['consolidation', '⟳'],
-  ['scaffold_proposed', '✎'], ['mcts_started', '⌕'], ['mcts_complete', '✓'],
+  ['scaffold_proposed', '✎'],
 ]);
 
 export function printEvolutionEvent(type: string, message: string): void {

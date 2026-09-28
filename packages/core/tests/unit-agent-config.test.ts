@@ -251,49 +251,6 @@ describe('AgentConfigStore — typed accessors', () => {
   });
 });
 
-describe('AgentConfigStore — MCTS overrides', () => {
-  test('empty when nothing stored (engine defaults apply at call sites)', () => {
-    const c = setup();
-    expect(c.getMctsOverrides()).toEqual({});
-  });
-
-  test('round-trips only the explicitly set knobs', () => {
-    const c = setup();
-    c.setMctsOverrides({ explorationWeight: 1.2, branches: 4 });
-    expect(c.getMctsOverrides()).toEqual({ explorationWeight: 1.2, branches: 4 });
-    c.setMctsOverrides({ budget: 8, maxDepth: 6 });
-    expect(c.getMctsOverrides()).toEqual({ explorationWeight: 1.2, budget: 8, maxDepth: 6, branches: 4 });
-  });
-
-  test('floors integer knobs and rejects non-positive values', () => {
-    const c = setup();
-    c.setMctsOverrides({ budget: 3.7 });
-    expect(c.getMctsOverrides()).toEqual({ budget: 3 });
-    expect(() => c.setMctsOverrides({ branches: 0 })).toThrow(/invalid MCTS setting/);
-    expect(() => c.setMctsOverrides({ explorationWeight: Number.NaN })).toThrow(/invalid MCTS setting/);
-  });
-
-  test('a rejected multi-knob write leaves prior knobs untouched', () => {
-    const c = setup();
-    c.setMctsOverrides({ explorationWeight: 2 });
-    expect(() => c.setMctsOverrides({ explorationWeight: 1.2, budget: -1 })).toThrow(/invalid MCTS setting/);
-    expect(c.getMctsOverrides()).toEqual({ explorationWeight: 2 });
-  });
-
-  test('rejects an integer knob that floors to zero without storing it', () => {
-    const c = setup();
-    expect(() => c.setMctsOverrides({ budget: 0.5 })).toThrow(/invalid MCTS setting/);
-    expect(c.getMctsOverrides()).toEqual({});
-  });
-
-  test('garbage stored values are ignored on read', () => {
-    const c = setup();
-    c.set(AGENT_CONFIG_KEYS.mctsBudget, 'lots');
-    c.set(AGENT_CONFIG_KEYS.mctsBranches, '-2');
-    expect(c.getMctsOverrides()).toEqual({});
-  });
-});
-
 describe('AgentConfigStore — GEPA eval budget', () => {
   test('defaults to 24, reads stored values, clamps to 4..64, ignores garbage', () => {
     const c = setup();
@@ -372,10 +329,6 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.countClosedTurnWindow(),
     (c) => c.countIsolateGeneration(),
     (c) => c.setGepaEvalBudget(16),
-    (c) => c.setMctsOverrides({
-      explorationWeight: 1.2, budget: 8, maxDepth: 4,
-      branches: 3, judgeSamples: 2, maxEvalLLMCalls: 5,
-    }),
     (c) => c.setEmailNotificationsEnabled(false),
     (c) => { canonicalConversationId(c); },
   ];

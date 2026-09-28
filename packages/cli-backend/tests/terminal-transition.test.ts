@@ -17,7 +17,7 @@ import type { TestLanguageModelV2 } from './test-language-model';
 import type { CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import {
-  armShadowTrials, captureTakes, openTerminalWorkspace, scriptedModel,
+  armShadowTrials, openTerminalWorkspace, scriptedModel,
 } from './terminal-workspace';
 
 /** `terminalEffectFault` is protected with no production setter, so the test subclasses, as the DO's harness does. */
@@ -58,9 +58,6 @@ const queuedTrials = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM scaffold_trial_queue
     WHERE actor_id = ${rt.actor.actorId}`[0]?.n ?? 0;
 
-const claimedTakes = (rt: CLIRuntime) =>
-  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM alternate_takes WHERE turn_id IS NOT NULL`[0]?.n ?? 0;
-
 const stillOwed = (rt: CLIRuntime) =>
   rt.storage.sql<{ effect_name: string; status: string }>`
     SELECT effect_name, status FROM terminal_effects WHERE status != 'completed'`;
@@ -85,30 +82,24 @@ async function restart({ rt, db, model, events, generation = 1, ...sessionOpts }
 }
 
 describe('an interrupted terminal sequence is finished by the next start', () => {
-  test('the takes claim, the recording, the trial and the title each run exactly once', async () => {
+  test('the recording, the trial and the title each run exactly once', async () => {
     const { db, rt } = workspace();
     await armShadowTrials(rt);
-    captureTakes(rt, 'root-a');
     const { model, state } = scriptedModel('the parser is fixed');
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
 
-    // Killed after the takes claim wrote its rows and before anything recorded that it had.
-    session.cutAt('takes', 'after');
+    // Killed before the recording, with the answer already durable.
+    session.cutAt('turn_record', 'before');
     await session.send('refactor the parser', { id: crypto.randomUUID() });
 
-    expect(claimedTakes(rt)).toBe(1);
     expect(completedTurns(rt)).toBe(0);
     expect(queuedTrials(rt)).toBe(0);
     expect(state.titleCalls).toBe(0);
     expect(stillOwed(rt).length).toBeGreaterThan(0);
 
-    // A later turn's captures: the replay claims the take ids its row recorded, not whatever is unclaimed now.
-    captureTakes(rt, 'root-b');
-
     const next = await restart({ rt, db, model, events });
 
-    expect(claimedTakes(rt)).toBe(1);
     expect(completedTurns(rt)).toBe(1);
     expect(queuedTrials(rt)).toBe(1);
     expect(state.titleCalls).toBe(1);
@@ -326,7 +317,6 @@ describe('a killed CLI process is recovered by the next start', () => {
 
     expect(completedTurns(rt)).toBe(1);
     expect(queuedTrials(rt)).toBe(1);
-    expect(claimedTakes(rt)).toBe(1);
     expect(state.titleCalls).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
     // A replay that re-persisted would leave two assistant rows.
@@ -353,7 +343,6 @@ describe('a killed CLI process is recovered by the next start', () => {
     expect(events.some((e) => e.type === 'turn-start')).toBe(true);
     expect(completedTurns(rt)).toBe(1);
     expect(queuedTrials(rt)).toBe(1);
-    expect(claimedTakes(rt)).toBe(1);
     expect(state.titleCalls).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
     expect(assistantRows(rt)).toBe(1);

@@ -10,12 +10,9 @@ export interface WorkspaceActorAuthority {
   readonly ownerUserId: string | null;
 }
 
-/** A run actor lives one run; a toolless one has no tools or home. */
-const TOOL_PROFILES = ['full', 'toolless'] as const;
-
 const StoredActorSchema = v.object({
   actorId: v.string(), workspaceId: v.string(), parentActorId: v.nullable(v.string()),
-  name: v.string(), storageKey: v.string(), kind: v.picklist(['main', 'subordinate', 'run']), toolProfile: v.picklist(TOOL_PROFILES),
+  name: v.string(), storageKey: v.string(), kind: v.picklist(['main', 'subordinate', 'run']),
   creationId: v.string(), lifetime: v.picklist(['durable', 'task']), createdAt: v.number(), retiringAt: v.nullable(v.number()), deletedAt: v.nullable(v.number()),
 });
 
@@ -26,20 +23,14 @@ export interface CreateWorkspaceActor {
   readonly name: string;
   readonly creationId: string;
   readonly kind: Exclude<WorkspaceActor['kind'], 'main'>;
-  readonly toolProfile?: WorkspaceActor['toolProfile'];
   readonly lifetime: WorkspaceActor['lifetime'];
 }
 
 const CreationFields = { creationId: v.pipe(v.string(), v.nonEmpty()), name: v.pipe(v.string(), v.nonEmpty()), lifetime: v.picklist(['durable', 'task']) };
 
-const CreatedKinds = [
-  { kind: v.literal('subordinate'), toolProfile: v.optional(v.literal('full')) },
-  { kind: v.literal('run'), toolProfile: v.optional(v.picklist(TOOL_PROFILES)) },
-] as const;
-
 export const ChildActorOperationSchema = v.union([
-  ...CreatedKinds.map((created) => v.strictObject({ action: v.literal('register'), ...CreationFields, ...created })),
-  ...CreatedKinds.map((created) => v.strictObject({ action: v.literal('cancelCreation'), ...CreationFields, ...created })),
+  v.strictObject({ action: v.literal('register'), ...CreationFields, kind: v.picklist(['subordinate', 'run']) }),
+  v.strictObject({ action: v.literal('cancelCreation'), ...CreationFields, kind: v.picklist(['subordinate', 'run']) }),
   v.strictObject({ action: v.literal('resolve'), name: v.pipe(v.string(), v.nonEmpty()) }),
   v.strictObject({ action: v.literal('resolveStorage'), storageKey: v.pipe(v.string(), v.nonEmpty()) }),
   v.strictObject({ action: v.literal('resolveCreation'), creationId: v.pipe(v.string(), v.nonEmpty()) }),
@@ -52,7 +43,6 @@ export interface ActorDirectoryResult {
   readonly reference: ActorReference;
   readonly state: 'active' | 'retiring' | 'deleted';
   readonly kind: WorkspaceActor['kind'];
-  readonly toolProfile: WorkspaceActor['toolProfile'];
   readonly lifetime: WorkspaceActor['lifetime'];
   readonly creationId: string;
   readonly createdAt: number;
@@ -68,7 +58,6 @@ export function initWorkspaceActorTable(execRaw: RawSqlExec): void {
     name TEXT NOT NULL,
     storage_key TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('main','subordinate','run')),
-    tool_profile TEXT NOT NULL CHECK (tool_profile IN ('full','toolless')),
     lifetime TEXT NOT NULL CHECK (lifetime IN ('durable','task')),
     created_at INTEGER NOT NULL,
     creation_id TEXT NOT NULL,
@@ -76,8 +65,7 @@ export function initWorkspaceActorTable(execRaw: RawSqlExec): void {
     deleted_at INTEGER,
     UNIQUE (workspace_id, parent_actor_id, creation_id),
     UNIQUE (workspace_id, parent_actor_id, storage_key),
-    CHECK ((kind = 'main' AND parent_actor_id IS NULL) OR (kind != 'main' AND parent_actor_id IS NOT NULL)),
-    CHECK (kind = 'run' OR tool_profile = 'full')
+    CHECK ((kind = 'main' AND parent_actor_id IS NULL) OR (kind != 'main' AND parent_actor_id IS NOT NULL))
   )`);
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_actors_main
     ON workspace_actors(workspace_id) WHERE kind = 'main'`);
@@ -93,10 +81,8 @@ function requiredIdentity(value: string): string {
   return value;
 }
 
-function mayCreate(owner: WorkspaceActor, child: { readonly kind: WorkspaceActor['kind']; readonly toolProfile?: WorkspaceActor['toolProfile'] }): boolean {
-  if (owner.kind !== 'run') return true;
-
-  return owner.toolProfile === 'full' && child.kind === 'run' && child.toolProfile !== 'toolless';
+function mayCreate(owner: WorkspaceActor, child: { readonly kind: WorkspaceActor['kind'] }): boolean {
+  return owner.kind !== 'run' || child.kind === 'run';
 }
 
 /** Deletion outranks retirement. */
@@ -130,7 +116,7 @@ export class WorkspaceActorDirectory {
 
   private row(actorId: string): WorkspaceActor | null {
     const rows = this.sql<WorkspaceActor>`SELECT actor_id AS actorId, workspace_id AS workspaceId,
-      parent_actor_id AS parentActorId, name, storage_key AS storageKey, kind, tool_profile AS toolProfile, lifetime, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
+      parent_actor_id AS parentActorId, name, storage_key AS storageKey, kind, lifetime, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
       FROM workspace_actors WHERE workspace_id = ${this.authority.workspaceId} AND actor_id = ${actorId}`;
 
     const stored = rows[0];
@@ -249,8 +235,8 @@ export class WorkspaceActorDirectory {
     }
 
     const actorId = crypto.randomUUID();
-    void this.sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
-      VALUES (${actorId}, ${this.authority.workspaceId}, NULL, ${name}, ${name}, 'main', 'full', 'durable', ${Date.now()}, ${this.authority.workspaceId})`;
+    void this.sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, lifetime, created_at, creation_id)
+      VALUES (${actorId}, ${this.authority.workspaceId}, NULL, ${name}, ${name}, 'main', 'durable', ${Date.now()}, ${this.authority.workspaceId})`;
     const row = this.row(actorId);
 
     if (!row) throw new KinuError('io', 'The main actor was not recorded.');
@@ -274,15 +260,15 @@ export class WorkspaceActorDirectory {
 
       if (!existing || existing.retiringAt !== null || existing.deletedAt !== null) throw new KinuError('missing', 'The admitted actor creation is retired.');
 
-      if (existing.name !== name || existing.kind !== input.kind || existing.toolProfile !== (input.toolProfile ?? 'full') || existing.lifetime !== input.lifetime) throw new KinuError('denied', 'The admitted actor creation cannot change its name, kind or lifetime.');
+      if (existing.name !== name || existing.kind !== input.kind || existing.lifetime !== input.lifetime) throw new KinuError('denied', 'The admitted actor creation cannot change its name, kind or lifetime.');
 
       return this.issue(existing);
     }
 
     if (this.childRow(parent.actorId, name)) throw new KinuError('denied', 'The sibling name already exists.');
     const actorId = crypto.randomUUID();
-    void this.sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
-      VALUES (${actorId}, ${this.authority.workspaceId}, ${parent.actorId}, ${name}, ${actorId}, ${input.kind}, ${input.toolProfile ?? 'full'}, ${input.lifetime}, ${Date.now()}, ${creationId})`;
+    void this.sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, lifetime, created_at, creation_id)
+      VALUES (${actorId}, ${this.authority.workspaceId}, ${parent.actorId}, ${name}, ${actorId}, ${input.kind}, ${input.lifetime}, ${Date.now()}, ${creationId})`;
     const row = this.row(actorId);
 
     if (!row) throw new KinuError('io', 'The child actor was not recorded.');
@@ -347,7 +333,7 @@ export class WorkspaceActorDirectory {
 
       if (!row) throw new KinuError('missing', 'The actor creation record disappeared.');
 
-      if (row.name !== input.name || row.kind !== input.kind || row.toolProfile !== (input.toolProfile ?? 'full') || row.lifetime !== input.lifetime) throw new KinuError('denied', 'The cancellation does not match the admitted creation.');
+      if (row.name !== input.name || row.kind !== input.kind || row.lifetime !== input.lifetime) throw new KinuError('denied', 'The cancellation does not match the admitted creation.');
 
       if (row.retiringAt === null && row.deletedAt === null) this.transitionRetirement(row.actorId, 'retire');
       const updated = this.row(row.actorId);
@@ -359,8 +345,8 @@ export class WorkspaceActorDirectory {
 
     const actorId = crypto.randomUUID();
     const now = Date.now();
-    void this.sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id, retiring_at, deleted_at)
-      VALUES (${actorId}, ${this.authority.workspaceId}, ${parent.actorId}, ${input.name}, ${actorId}, ${input.kind}, ${input.toolProfile ?? 'full'}, ${input.lifetime}, ${now}, ${input.creationId}, ${now}, ${now})`;
+    void this.sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, lifetime, created_at, creation_id, retiring_at, deleted_at)
+      VALUES (${actorId}, ${this.authority.workspaceId}, ${parent.actorId}, ${input.name}, ${actorId}, ${input.kind}, ${input.lifetime}, ${now}, ${input.creationId}, ${now}, ${now})`;
     const row = this.row(actorId);
 
     if (!row) throw new KinuError('io', 'The cancelled creation was not recorded.');
@@ -384,7 +370,7 @@ export class WorkspaceActorDirectory {
 
       if (input.kind !== 'subordinate' && input.lifetime !== 'task') throw new KinuError('bad_input', 'Exploration actors have task lifetime.');
 
-      const creation = { parent, name: input.name, kind: input.kind, toolProfile: input.toolProfile, lifetime: input.lifetime, creationId: input.creationId };
+      const creation = { parent, name: input.name, kind: input.kind, lifetime: input.lifetime, creationId: input.creationId };
       child = input.action === 'register' ? this.describe(this.create(creation)) : this.cancelCreation(creation);
     } else if (input.action === 'resolve') {
       const existing = this.childRow(parent.actorId, input.name);
@@ -438,7 +424,7 @@ export class WorkspaceActorDirectory {
     return {
       reference: { actorId: child.actorId, workspaceId: child.workspaceId, parentActorId: child.parentActorId },
       state: actorState(child),
-      kind: child.kind, toolProfile: child.toolProfile, lifetime: child.lifetime, creationId: child.creationId, createdAt: child.createdAt, name: child.name, storageKey: child.storageKey,
+      kind: child.kind, lifetime: child.lifetime, creationId: child.creationId, createdAt: child.createdAt, name: child.name, storageKey: child.storageKey,
     };
   }
 

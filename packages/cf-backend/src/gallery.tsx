@@ -1042,7 +1042,6 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
   },
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
-  getMctsConfig: { explorationConstant: 1.41, maxIterations: 12, branchBudget: 3 },
   getEvolutionChangelog: { entries: [], unseen: 0 },
 });
 
@@ -2588,7 +2587,6 @@ function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
     action: row.action,
     observation: row.observation ?? "",
     code_used: row.code_used ?? null,
-    code_language: row.code_used ? "typescript" : null,
     visits: row.visits,
     value: row.value,
     own_score: row.own_score,
@@ -2596,8 +2594,6 @@ function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
     // `running` is a merged-head status the search_nodes CHECK constraint cannot hold.
     status: row.status === "running" ? "open" : row.status,
     msg_id: row.msg_id ?? null,
-    branch_agent_key: row.branch_agent_key ?? null,
-    evaluation_json: null,
     created_at: row.created_at ?? NOW,
   };
 }
@@ -5018,7 +5014,7 @@ const ACTIVITY_PRODUCERS: ProducerSpend[] = [
     usage: { input: 288_004, output: 31_902 }, usd: 0.86, unpricedCalls: 0,
   },
   {
-    source: "mcts", calls: 28, callsWithoutUsage: 0,
+    source: "swarm", calls: 28, callsWithoutUsage: 0,
     usage: { input: 96_210, output: 12_004, neurons: 12_986 },
     unpricedCalls: 28,
   },

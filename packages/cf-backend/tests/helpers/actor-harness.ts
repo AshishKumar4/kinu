@@ -1628,11 +1628,10 @@ export async function hostedSubordinateHarness(
 
 export async function hostedExplorationHarness(
   workspace: ActorHarness<HarnessOrchestratorAgent>,
-  toolProfile: 'full' | 'toolless',
   id: string,
 ): Promise<HostedActorHarness> {
   const entry = await workspace.agent.actorDirectory({
-    action: 'register', creationId: id, name: `exp:${id}`, kind: 'run', toolProfile, lifetime: 'task',
+    action: 'register', creationId: id, name: `exp:${id}`, kind: 'run', lifetime: 'task',
   });
 
   const actor = await workspace.agent.observeActorHost().acquire(entry.reference);

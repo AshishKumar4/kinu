@@ -49,7 +49,7 @@ describe('a terminal sequence on real Durable Object storage', () => {
 
     await stub.holdWakes();
     expect(await stub.settle('u-head', 'a-head', ANSWER, {
-      cut: { name: 'takes', phase: 'before' },
+      cut: { name: 'craft_usage', phase: 'before' },
     })).toMatch(/interrupted before its side effect/u);
 
     const rows = await stub.effectRows('u-head', 'a-head');
@@ -74,7 +74,7 @@ describe('an eviction part-way through a terminal sequence', () => {
       cut: { name: 'turn_record', phase: 'before' },
     })).toMatch(/interrupted before its side effect/u);
     expect(await stub.executions()).toEqual([
-      { key: terminalEffectKey('takes', 'a-cut'), runs: 1 },
+      { key: terminalEffectKey('craft_usage', 'a-cut'), runs: 1 },
       { key: terminalEffectKey('event_reply', 'a-cut'), runs: 1 },
     ]);
     // The suffix is owed a wake before the isolate dies, or nothing would ever finish it.
@@ -86,7 +86,7 @@ describe('an eviction part-way through a terminal sequence', () => {
     expect(await fresh.owedSequences()).toEqual(['u-cut/a-cut']);
     const survived = await fresh.effectRows('u-cut', 'a-cut');
     expect(survived.map((row) => `${row.name}=${row.status}`)).toEqual([
-      'takes=completed', 'event_reply=completed',
+      'craft_usage=completed', 'event_reply=completed',
       'turn_record=pending', 'auto_title=pending', 'auto_gepa=pending',
     ]);
     expect(survived.every((row) => row.answer === ANSWER)).toBe(true);
@@ -109,7 +109,7 @@ describe('an eviction part-way through a terminal sequence', () => {
 
     // The order is the recovery's: never-attempted rows were due at once, the cut one waited for its wake.
     expect(await fresh.executions()).toEqual([
-      { key: terminalEffectKey('takes', 'a-cut'), runs: 1 },
+      { key: terminalEffectKey('craft_usage', 'a-cut'), runs: 1 },
       { key: terminalEffectKey('event_reply', 'a-cut'), runs: 1 },
       { key: terminalEffectKey('auto_title', 'a-cut'), runs: 1 },
       { key: terminalEffectKey('auto_gepa', 'a-cut'), runs: 1 },
@@ -144,7 +144,7 @@ describe('an eviction part-way through a terminal sequence', () => {
     await fresh.resume(true);
 
     expect(await fresh.executions()).toEqual([
-      { key: terminalEffectKey('takes', 'a-after'), runs: 1 },
+      { key: terminalEffectKey('craft_usage', 'a-after'), runs: 1 },
       { key: terminalEffectKey('event_reply', 'a-after'), runs: 1 },
       { key: terminalEffectKey('turn_record', 'a-after'), runs: 2 },
       { key: terminalEffectKey('auto_title', 'a-after'), runs: 1 },
@@ -238,7 +238,7 @@ describe('an effect that is still owed when the isolate dies', () => {
     // Attributable: done by an alarm delivery, not a read.
     expect(await fresh.alarmRuns()).toBeGreaterThan(0);
     expect(await fresh.executions()).toEqual([
-      { key: terminalEffectKey('takes', 'a-owed'), runs: 1 },
+      { key: terminalEffectKey('craft_usage', 'a-owed'), runs: 1 },
       // Twice: once reporting itself owed, once finishing.
       { key: terminalEffectKey(HELD_EFFECT, 'a-owed'), runs: 2 },
       { key: terminalEffectKey('turn_record', 'a-owed'), runs: 1 },

@@ -18,7 +18,6 @@ import type { EvolutionEngine } from '../evolution/engine';
 import type { HeadJournal } from '../heads/journal';
 import { CompletedTurnSchema } from '../evolution/session-window';
 import { WorkModeSchema } from '../types/turn';
-import { claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes } from '../mcts/takes';
 import {
   branchHeadId, branchOutcomeFromJournal, settleBranchIntoTakes, settlePendingBranch,
   type BranchStatusEvent, type PendingBranch,
@@ -63,7 +62,7 @@ function terminalEffectBackoffMs(attempts: number): number {
 
 /** A row naming anything else is blocked; each actor's {@link TerminalEffectTable} picks its subset. */
 const TERMINAL_EFFECT_NAMES = [
-  'takes', 'craft_usage', 'event_reply', 'branches',
+  'craft_usage', 'event_reply', 'branches',
   // Its armed state lives in RAM, so this row alone records whether the confirming turn was enqueued.
   'completion_gate',
   // Five separately claimed boundaries, each idempotent and keyed on the turn. `overflow_retry` and
@@ -162,31 +161,6 @@ export function taskReminderTerminalEffect(queue: () => OwedTurnQueue): Terminal
   return owedTurnTerminalEffect(queue, {
     input: v.object({ text: v.string() }), event: TASK_REMINDER_EVENT, text: ({ text }) => text,
     key: taskReminderIdempotencyKey,
-  });
-}
-
-/** Claim or purge captures so the next turn never inherits them. */
-export function takesTerminalEffect(deps: {
-  readonly sql: SqlExecutor;
-  readonly actor: ActorHandle;
-  readonly sessionId: string;
-}): TerminalEffect {
-  return terminalEffect({
-    input: v.object({
-      credited: v.nullable(v.string()), startedAt: v.number(),
-      takeIds: v.array(v.string()),
-    }),
-    run: ({ credited, startedAt, takeIds }) => {
-      if (credited === null) {
-        purgeUnclaimedAlternateTakes(deps.sql, deps.actor, takeIds);
-      } else {
-        claimAlternateTakesForTurn(deps.sql, deps.actor, {
-          turnId: credited, sessionId: deps.sessionId, startedAt, takeIds,
-        });
-      }
-
-      return { status: 'completed' };
-    },
   });
 }
 

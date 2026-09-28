@@ -125,7 +125,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     fork_staged_files: EVERYWHERE,
     scaffold_versions: EVERYWHERE,
     scaffold_regression_fixtures: EVERYWHERE,
-    task_history: EVERYWHERE,
     scaffold_evaluations: EVERYWHERE,
     scaffold_trial_queue: EVERYWHERE,
 

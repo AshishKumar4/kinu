@@ -68,39 +68,8 @@ export interface BranchEvaluation {
   judgeSamplesUsed: number;
 }
 
-function checkTally(passedChecks: number | undefined, totalChecks: number | undefined, generated: boolean): string {
-  if (totalChecks !== undefined && passedChecks !== undefined) {
-    return ` and passed ${passedChecks} of ${totalChecks} generated checks`;
-  }
-
-  if (generated) return ' against generated assertions';
-
-  return '';
-}
-
-/**
- * The environment's one-sentence reply to a proposal, or null when it never ran; fed back into the
- * child's trajectory and the post-mortem as LATS §5.2 does.
- */
-export function executionObservation(execution: BranchEvaluation['execution']): string | null {
-  if (!execution) return null;
-  const { passedChecks, totalChecks } = execution;
-
-  const tally = checkTally(passedChecks, totalChecks, execution.assertionsGenerated);
-
-  if (execution.passed) return `the proposed code ran${tally || ''} and PASSED.`;
-
-  const error = execution.error
-    ? evidenceWindow(execution.error, EVIDENCE_BUDGETS.judgeExecutionError)
-    : 'no error text was reported';
-
-  return totalChecks !== undefined && passedChecks !== undefined
-    ? `the proposed code ran and passed ${passedChecks} of ${totalChecks} generated checks; the first failure was: ${error}`
-    : `the proposed code ran and FAILED: ${error}`;
-}
-
 /** Measured share of generated checks passed, or null when no suite ran (LATS's backpropagated numerator). */
-export function checkFraction(execution: BranchEvaluation['execution']): number | null {
+function checkFraction(execution: BranchEvaluation['execution']): number | null {
   const total = execution?.totalChecks;
   const passed = execution?.passedChecks;
 
@@ -267,7 +236,7 @@ const MAX_GENERATED_CHECKS = 4;
  * Ask the judge for independent checks, one fence each, so a measured pass fraction exists. Empty when
  * the judge declines or answers UNVERIFIABLE; a failing judge call propagates. Shared with test-selection.ts.
  */
-export async function generateAssertionSuite(
+async function generateAssertionSuite(
   judge: LLM,
   task: string,
   code: string,
@@ -310,7 +279,7 @@ UNVERIFIABLE`;
  * Run the branch's code against each check separately and count passes. With no checks the run is bare.
  * A throwing executor counts as failed. Known limit: a top-level `return` skips the appended check.
  */
-export async function runForVerdict(
+async function runForVerdict(
   executor: Executor,
   code: string,
   checks: readonly string[],

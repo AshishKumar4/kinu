@@ -65,7 +65,7 @@ import { TierIdSchema,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial,
-  takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
+  branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
   type OwedReport, type SubordinateReportStatus, type TaskTurnEnding,
@@ -110,7 +110,6 @@ import { TierIdSchema,
   type StagedSkillResult,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
   revertChangelogEntryById, type ChangelogRevertResult,
-  unclaimedAlternateTakeIds,
   latestAlternateTakeSet,
   type ScaffoldRunOptions,
   bootstrapScaffold,
@@ -216,7 +215,6 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
-    reportModelCall: (report) => { input.session().reportModelCall(report); },
     // Local replay runs with tools disabled: re-running tools would re-execute shell work on the
     // user's machine, so CLI replay measures prompt/model config only.
     replayTaskRunner: (task) => input.session().runReplayTask(task),
@@ -1846,12 +1844,7 @@ export class LocalAgentSession {
     };
 
     const parts: Writable<TerminalTurnParts> = {};
-    parts.takes = {
-      credited: input.credited,
-      startedAt: input.startedAt,
-      // Read here: a retry selecting "unclaimed now" would claim a later turn's captures.
-      takeIds: unclaimedAlternateTakeIds(this.rt.storage.sql, this.rt.actor),
-    };
+    parts.credited = input.credited;
     parts.branches = this.pendingBranches.map(({ id, task }) => ({ id, task }));
 
     if (input.taskReminder !== null) parts.taskReminder = { text: input.taskReminder.text };
@@ -1902,7 +1895,6 @@ export class LocalAgentSession {
     const relay = this.parentRelay;
 
     const base = {
-      takes: takesTerminalEffect({ sql: this.rt.storage.sql, actor: this.rt.actor, sessionId: this.sessionId }),
       branches: branchesTerminalEffect({
         sql: this.rt.storage.sql,
         actor: this.rt.actor,
@@ -2569,10 +2561,6 @@ export class LocalAgentSession {
       nodeCodemode: (actor) => hostedCodemodeTool(actor, this.headCodemodeExtras()),
       webSearch: this.getWebSearchProvider(),
       originContext: () => this.actorSession.history,
-      costModel: () => ({
-        spec: this.effectiveModelSpec(),
-        pricing: this.modelCatalog.pricing(),
-      }),
       // Only the runner knows which profile snapshot applies (caller's, or frozen on re-drive), so it
       // picks the spec; a swarm with a profile refuses rather than run the caller's model.
       resolveModel: (spec: string) => this.resolveModelForSpec(spec),

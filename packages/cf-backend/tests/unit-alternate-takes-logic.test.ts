@@ -7,7 +7,7 @@ import {
 
 function makeSet(overrides: Partial<AlternateTakeSet> = {}): AlternateTakeSet {
   return {
-    id: 'take-1', turnId: 'm2', sessionId: 'default', task: 'choose a plan', source: 'mcts',
+    id: 'take-1', turnId: 'm2', sessionId: 'default', task: 'choose a plan', source: 'branch',
     winnerNodeId: 'win', chosenNodeId: null, createdAt: 1, pickedAt: null,
     candidates: [
       { nodeId: 'win', text: 'plan A', score: 0.9, visits: 3, depth: 1 },

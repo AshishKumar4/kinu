@@ -153,14 +153,6 @@ erDiagram
         TEXT expected_keywords "Expected output keywords"
         INTEGER created_at "Epoch ms"
     }
-    task_history {
-        TEXT id PK "Random hex ID"
-        TEXT task "Task description"
-        INTEGER scaffold_version "Version used (default 0)"
-        TEXT outcome "success/error/timeout"
-        REAL score "Task score"
-        INTEGER created_at "Epoch ms"
-    }
     fibers {
         TEXT id PK "Fiber ID"
         TEXT name "Fiber name (NOT NULL)"
@@ -267,7 +259,6 @@ erDiagram
     conversation_entries ||--o| conversation_heads : "one head per session"
     conversation_entries ||--o{ conversation_fts : "local transcript index"
     search_nodes ||--o{ search_nodes : "parent_id"
-    scaffold_versions ||--o{ task_history : "scaffold_version"
 ```
 
 ## Agent identity (SOUL.md)

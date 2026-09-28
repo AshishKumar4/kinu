@@ -687,6 +687,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Removed
 
+- **MCTS is folded into swarm.** Swarm's tree search is now the one search engine, and these go with the lifetime MCTS search: `kinu evolve`, the MCTS settings card and its `getMctsConfig`/`setMctsConfig` calls, the per-workspace MCTS settings keys, the lifetime background search every fifth session window (craft consolidation still runs there), the `mcts` spend row, and the task-history ledger. `kinu mcts`, `/tree` and the explorer page still show swarm search trees. Ships with the production reset: stored MCTS search rows and task history are not carried over.
 - **Releases.** The Releases tab, the `release.*` eval namespace, the MCP server's `release` tool and `kinu release <name>` are gone, with the release board's tables. A workspace's pending release approvals no longer count toward its roster tile.
 - **Every schema compatibility path, because production is reset.** A table's
   `CREATE TABLE IF NOT EXISTS` is now its genesis. Gone: the column reconcile
