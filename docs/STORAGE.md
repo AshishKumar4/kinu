@@ -74,8 +74,11 @@ erDiagram
         TEXT actor_id PK "Actor ID"
         TEXT parent_actor_id FK "Parent actor"
         TEXT name "Actor name"
-        TEXT kind "main/subordinate/head/node/branch"
+        TEXT origin "system/user/agent/swarm/evolution"
+        INTEGER tab "Has a chat tab"
+        INTEGER input "Takes the owner's messages"
         TEXT lifetime "durable/task"
+        INTEGER evolves "Feeds the evolution window"
         INTEGER created_at "Epoch ms"
     }
     actor_config {

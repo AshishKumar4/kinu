@@ -417,6 +417,7 @@ export function createTeamToolDeps(deps: {
       role: selection,
       // Every child created here is durable; the task lifetime has one producer, `createTemporaryAgentPort`.
       lifetime: 'durable',
+      origin: ownerCreated ? 'user' : 'agent',
     };
 
     if (input.tier !== undefined) seed.tier = input.tier;
@@ -435,7 +436,6 @@ export function createTeamToolDeps(deps: {
     const creationId = crypto.randomUUID();
     deps.roster.create({
       name, actorReference: null, birth: { creationId, seed, assignment }, deleteRequested: false,
-      createdBy: ownerCreated ? 'user' : 'orchestrator',
       status: ownerCreated ? 'idle' : 'working', currentTask: ownerCreated ? null : mission,
       createdAt, dismissedAt: null, lifetime: 'durable', taskEventId: null,
     });
@@ -550,7 +550,7 @@ export function createTeamToolDeps(deps: {
     dismiss: async (input) => {
       const before = deps.roster.requireExisting(input.name);
 
-      if (before.createdBy === 'user' && input.requestedBy !== 'user') {
+      if (before.origin === 'user' && input.requestedBy !== 'user') {
         throw new Error(`subordinate "${input.name}" was created by the owner and only the owner can dismiss it`);
       }
 

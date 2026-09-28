@@ -268,7 +268,7 @@ const SubordinateRosterEntrySchema = v.object({
   displayName: v.string(),
   role: v.string(),
   nameOrigin: v.picklist(["user", "auto"]),
-  createdBy: v.picklist(["orchestrator", "user", "evolution"]),
+  origin: v.picklist(["user", "agent", "evolution"]),
   lifetime: v.picklist(["durable", "task"]),
   status: v.picklist(["idle", "working", "awaiting_input", "dismissed"]),
   currentTask: v.nullable(v.string()),

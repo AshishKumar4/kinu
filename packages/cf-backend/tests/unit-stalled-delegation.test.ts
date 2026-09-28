@@ -77,11 +77,11 @@ async function stalledChild(): Promise<{ first: Workspace; gateway: StubbedAiBin
   const first = gatewayWorkspace(gateway, { versionId: BUILD });
 
   const child = await first.agent.actorDirectory({
-    action: 'register', creationId: 'stalled-proof', name: 'stalled-child', kind: 'subordinate', lifetime: 'task',
+    action: 'register', creationId: 'stalled-proof', name: 'stalled-child', origin: 'agent', lifetime: 'task',
   });
 
   rosterOver(first.db).create({
-    name: 'stalled-child', actorReference: child.reference, birth: null, deleteRequested: false, createdBy: 'orchestrator',
+    name: 'stalled-child', actorReference: child.reference, birth: null, deleteRequested: false,
     status: 'working', currentTask: TASK, createdAt: Date.now(), dismissedAt: null, lifetime: 'task', taskEventId: null,
   });
 

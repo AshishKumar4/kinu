@@ -29,8 +29,8 @@ import type { VFS } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
 import type { CompletedTurn } from '../evolution/types';
 import {
-  reviewRecordedTurn, startAdvisorLane,
-  type AdvisorLaneStart, type AdvisorRecoverySnapshot, type AdvisorDisposition,
+  reviewRecordedTurn,
+  type AdvisorRecoverySnapshot, type AdvisorDisposition,
 } from '../advisor/review';
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { resolveModelRoute } from '../profiles/model-route';
@@ -260,10 +260,9 @@ export class ActorSession {
     };
   }
 
-  startAdvisorLane(lane: AdvisorLaneStart): Promise<void> {
-    if (this.runtime.advisorLlm === undefined || !this.advisorEnabled) return Promise.resolve();
-
-    return startAdvisorLane({ sql: this.runtime.storage.sql, actor: this.runtime.actor }, lane);
+  /** Off by default: the owner's switch and a wired reviewer model both decide. */
+  get reviewsTurns(): boolean {
+    return this.runtime.advisorLlm !== undefined && this.advisorEnabled;
   }
 
   /** Per-turn feedback never calls recordTurn or changes the learning window. */
@@ -599,11 +598,6 @@ export class ActorSession {
     lease: ActorTurnLease, program: ActorTurnProgram, context: ContextSelection, input: ActorExecutionInput,
   ): Promise<ActorTurnClaim> {
     const previous = this.options.claims.read(lease.turnId);
-
-    // A step whose run reset the workspace, resumed on the same build, would reset it again: closed, not re-issued.
-    if (previous?.status === 'admitted' && sameBuildOf(previous.program.build, this.options.installedBuild) !== 'no') {
-      await this.options.claims.closePoisoned(lease.turnId, previous.epoch);
-    }
 
     const claim = await this.options.claims.admit({
       runId: lease.runId,

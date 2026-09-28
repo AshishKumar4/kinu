@@ -29,7 +29,7 @@ function searching(node: (run: RecordedGatewayRun) => Response | Promise<Respons
   });
 }
 
-interface ActorRow { readonly actor_id: string; readonly parent_actor_id: string | null; readonly kind: string; readonly creation_id: string }
+interface ActorRow { readonly actor_id: string; readonly parent_actor_id: string | null; readonly origin: string; readonly creation_id: string }
 
 describe('cancelling a search reaches its hosted nodes', () => {
   test('a node runs as its own hosted actor under the workspace loop', async () => {
@@ -38,14 +38,14 @@ describe('cancelling a search reaches its hosted nodes', () => {
     await catalogTurn(agent, ASK);
     await agent.harnessJoinDetachedFibers();
 
-    const actors = db.query<ActorRow, []>('SELECT actor_id, parent_actor_id, kind, creation_id FROM workspace_actors').all();
-    const main = actors.find((actor) => actor.kind === 'main');
+    const actors = db.query<ActorRow, []>('SELECT actor_id, parent_actor_id, origin, creation_id FROM workspace_actors').all();
+    const main = actors.find((actor) => actor.origin === 'system');
     const node = db.query<{ id: string }, []>('SELECT id FROM head_journal').get();
     const seat = actors.find((actor) => actor.creation_id === node?.id);
     const claims = db.query<{ actor_id: string; outcome: string }, []>('SELECT actor_id, outcome FROM actor_turn_claims').all();
 
-    // The run is bridged onto this actor's session, so the seating (kind, parent, own claim) is load-bearing.
-    expect(seat).toMatchObject({ kind: 'run', parent_actor_id: main?.actor_id });
+    // The run is bridged onto this actor's session, so the seating (origin, parent, own claim) is load-bearing.
+    expect(seat).toMatchObject({ origin: 'swarm', parent_actor_id: main?.actor_id });
     expect(claims.filter((claim) => claim.actor_id === seat?.actor_id)).toEqual([
       { actor_id: seat?.actor_id ?? '', outcome: 'completed' },
     ]);

@@ -94,14 +94,14 @@ function headInput(): HeadInput {
     inheritedContext: [],
     budget: { maxDepth: 2, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('run'),
+    loop: defaultLoopOrigin('swarm'),
   };
 }
 
 /** A head's deps over a real hosted actor, so the frames come from a claimed turn on its `ActorSession`. */
 async function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): Promise<HeadInferenceDeps> {
   const { rt, testSql } = createTestRuntime();
-  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-stream', 'run');
+  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-stream', 'swarm');
 
   return {
     ...seat,

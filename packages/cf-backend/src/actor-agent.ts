@@ -14,6 +14,7 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle, readSessionTranscript,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, type SessionTranscriptReader,
+  isSubordinateOrigin,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -196,7 +197,7 @@ import {
   terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
   turnRecordTerminalEffect, eventDrainTerminalEffect, shadowTrialTerminalEffect,
   RunEndReasonSchema, WorkModeSchema,
-  CompletedTurnSchema, AdvisorRecoverySnapshotSchema,
+  AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
 import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
@@ -968,7 +969,7 @@ export abstract class ActorAgent extends Agent<Env> {
     ownerUserId: string;
     model: string | null;
     depth: number | null;
-    kind: ActorDirectoryResult['kind'];
+    origin: ActorDirectoryResult['origin'];
     lifetime: ActorDirectoryResult['lifetime'];
     name: string;
     storageKey: string;
@@ -981,7 +982,7 @@ export abstract class ActorAgent extends Agent<Env> {
       if (!ownerUserId) throw new KinuError('missing', 'The workspace has no owner.');
       let depth: number | null = null;
 
-      if (child.kind === 'subordinate') {
+      if (isSubordinateOrigin(child.origin)) {
         const own = this.delegationBudget();
 
         if (delegationExhausted(own)) throw new KinuError('denied', 'The parent cannot create a subordinate below its delegation depth.');
@@ -990,7 +991,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return {
         parentWorkspace: this.workspaceName(), ownerUserId, model: this.config.getModel(),
-        depth, kind: child.kind, lifetime: child.lifetime, name: child.name, storageKey: child.storageKey, creationId: child.creationId,
+        depth, origin: child.origin, lifetime: child.lifetime, name: child.name, storageKey: child.storageKey, creationId: child.creationId,
       };
     } catch (cause) {
       return refusalOf(toKinuError({ doing: 'reading a registered child bootstrap', cause, otherwise: 'io' }));
@@ -1291,13 +1292,10 @@ export abstract class ActorAgent extends Agent<Env> {
       event_drain: eventDrainTerminalEffect(this.orch),
 
       improvement_lanes: terminalEffect({
-        input: v.object({
-          status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema,
-          advisor: JsonValueSchema,
-        }),
+        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
         // Lanes read durable queues on re-entry (per-turn snapshots do not survive), and the verdict
         // uses the recorded mode so a fresh activation's default cannot open an unearned lane.
-        run: async ({ status, turn, workMode, advisor }) => {
+        run: async ({ status, workMode }) => {
           this.warmUserMcpInBackground();
 
           if (!this.orch.improvementLanesOpen(status, workMode)) {
@@ -1305,15 +1303,24 @@ export abstract class ActorAgent extends Agent<Env> {
           }
 
           this.settleEvolutionInBackground();
-          const snapshot = v.parse(AdvisorRecoverySnapshotSchema, advisor);
-          // Awaited to the lane's checkpoint, not its finish: `runFiber` awaits `keepAlive()` before its
-          // body, and a later turn's tool set must not bleed into this review.
-          await this.actorSession.startAdvisorLane({
-            turn: v.parse(CompletedTurnSchema, turn),
-            snapshot: advisor,
-            carry: (name, body) => this.runFiber(name, body),
-            review: async () => { await this.runAdvisorReview(snapshot); },
-          });
+
+          return { status: 'completed' };
+        },
+      }),
+
+      // The snapshot is the row's input, so a replay reviews the tool surface the turn had, and a note
+      // already recorded for the turn is never reviewed again.
+      advisor_review: terminalEffect({
+        input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
+        run: async ({ status, workMode, advisor }) => {
+          const turnId = advisor.turn.turnId;
+
+          if (!this.actorSession.reviewsTurns || !this.orch.improvementLanesOpen(status, workMode)
+            || (turnId !== undefined && this.engine.hasAdvisorNoteForTurn(turnId))) {
+            return { status: 'completed' };
+          }
+
+          await this.runAdvisorReview(advisor);
 
           return { status: 'completed' };
         },
@@ -3540,7 +3547,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (record === null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
 
     for (let step: typeof record | null = record; step?.actorId !== this.actorHandle().actorId; step = directory.retained(step.parentActorId ?? '')) {
-      if (step === null || step.kind !== 'subordinate') throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
+      if (step === null || !isSubordinateOrigin(step.origin)) throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
     }
 
     if (record.retiringAt === null && record.deletedAt === null) return this.transcriptFor(directory.open(actorId));
@@ -4648,8 +4655,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return {
       jobs: this.jobRunner,
       runDueSessionEvolution: () => this.orch.runDueSessionEvolution(),
-      hasAdvisorNoteForTurn: (turnId) => this.engine.hasAdvisorNoteForTurn(turnId),
-      reviewAdvisorSnapshot: (snapshot) => this.runAdvisorReview(snapshot),
       armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
       deliverSignal: (signal) => this.orch.inbox.send(signal),
       redrive: (lane, checkpoint, body) => this.redriveRecoveredLane(lane, checkpoint, body),

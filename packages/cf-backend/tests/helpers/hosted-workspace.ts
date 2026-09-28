@@ -7,7 +7,6 @@ import {
   WorkspaceActorDirectory, actorReferenceOf,
   type ActorHost, type ActorReference, type AgentRuntime, type HostedActor, type LoopOrigin,
   type ProfileAuthorityInputs, type SqlExec, type SqlExecutor,
-  type WorkspaceActor,
 } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
 import { createAgentTracing, createRecordingTracer } from '@kinu.run/core/obs';
@@ -37,7 +36,7 @@ export interface HostedWorkspaceFixture {
   readonly host: ActorHost;
   readonly directory: WorkspaceActorDirectory;
   readonly main: ActorReference;
-  hire(parent: ActorReference, name: string, kind: WorkspaceActor['kind'], loop?: LoopOrigin): Promise<HostedActor>;
+  hire(parent: ActorReference, name: string, origin: 'agent' | 'swarm', loop?: LoopOrigin): Promise<HostedActor>;
   tables(): readonly string[];
 }
 
@@ -162,13 +161,12 @@ export async function hostedWorkspace(
 
   return {
     db, sql, exec, host, directory, main,
-    hire: async (parent, name, kind, loop) => {
+    hire: async (parent, name, origin, loop) => {
       const parentHandle = directory.open(parent.actorId);
 
       const handle = directory.create({
-        parent: parentHandle, name, creationId: name,
-        kind: kind === 'main' ? 'subordinate' : kind,
-        lifetime: kind === 'subordinate' ? 'durable' : 'task',
+        parent: parentHandle, name, creationId: name, origin,
+        lifetime: origin === 'agent' ? 'durable' : 'task',
       });
 
       if (loop) chosen.set(handle.actorId, loop);

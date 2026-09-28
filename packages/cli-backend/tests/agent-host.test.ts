@@ -1539,7 +1539,7 @@ describe('LocalAgentHost', () => {
       VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
     seed.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
       VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
-    seed.run(`UPDATE actor_subordinates SET created_by = 'evolution' WHERE name = 'ask-refiner-x1'`);
+    seed.run(`UPDATE workspace_actors SET origin = 'evolution', tab = 0, input = 0, lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
     seed.close();
 
     const stage = () => {

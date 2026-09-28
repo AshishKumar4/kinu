@@ -89,7 +89,7 @@ function makePeers(overrides: Partial<PeersToolDeps> = {}) {
 
 const rosterEntry: SubordinateRosterEntry = {
   name: 'researcher', actorReference: null, birth: null, deleteRequested: false,
-  createdBy: 'orchestrator', status: 'idle', currentTask: null, createdAt: 1,
+  origin: 'agent', status: 'idle', currentTask: null, createdAt: 1,
   dismissedAt: null, lifetime: 'durable', taskEventId: null,
 };
 

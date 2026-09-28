@@ -19,7 +19,7 @@ function textOf(message: ModelMessage): string {
 async function seated(name: string) {
   const { rt, testSql } = createTestRuntime();
   const seats = hostedSeatsOver({ rt, db: testSql.db });
-  const { actor } = await seats.seat(name, 'subordinate');
+  const { actor } = await seats.seat(name, 'agent');
   const asked: string[] = [];
 
   const open = async (turnId: string, message: string, item: { metadata?: { drainTurnId?: string } }) => {

@@ -23,7 +23,7 @@ function oneTextTurn(text: string, before?: () => Promise<void>) {
   } });
 }
 
-const SCAFFOLD = actorScaffoldPath({ kind: 'main', storageKey: MAIN_AGENT });
+const SCAFFOLD = actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT });
 
 /** Version 1 of the root's program on disk and selected as current, as a promotion leaves it. */
 async function selectProgram(harness: ActorHarness<HarnessOrchestratorAgent>, source: string, rationale: string): Promise<void> {

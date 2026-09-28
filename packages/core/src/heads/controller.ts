@@ -196,7 +196,7 @@ export class HeadController {
         allowedTools: h.allowedTools,
         mergeStrategy: strategy,
         // A fork explores under the loop it forks from, via the per-kind default.
-        loop: defaultLoopOrigin('run'),
+        loop: defaultLoopOrigin('swarm'),
         ...forkMission(opts.missionLabels),
       };
 

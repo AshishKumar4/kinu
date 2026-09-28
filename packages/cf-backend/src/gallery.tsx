@@ -1324,7 +1324,7 @@ function maybeRefuseCreate(): void {
 
 /* The `workspacepage` frame's additional-agent roster, mutated by the real page; only the chat stays inert (`agentchats` covers send). */
 const GALLERY_SUBS: {
-  name: string; actorId: string; displayName: string; role: string; createdBy: string;
+  name: string; actorId: string; displayName: string; role: string; origin: string;
   status: string; currentTask: string | null; createdAt: number; dismissedAt: number | null;
 }[] = [];
 
@@ -1334,7 +1334,7 @@ const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "pan
 
 if (AGENTS_PANEL) {
   const docs = {
-    name: "docs", actorId: galleryActorId("docs"), displayName: "Docs writer", role: "agent", nameOrigin: "user", createdBy: "user",
+    name: "docs", actorId: galleryActorId("docs"), displayName: "Docs writer", role: "agent", nameOrigin: "user", origin: "user",
     lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
   };
 
@@ -1650,7 +1650,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     const name = `agent-${++gallerySubSeq}`;
 
     const entry = {
-      name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable",
+      name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", nameOrigin: "auto", origin: "user", lifetime: "durable",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     };
 
@@ -3618,11 +3618,11 @@ function All() {
 }
 
 const SUBORDINATES: Parameters<typeof SubordinateTabs>[0]["subordinates"] = [
-  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
-  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
-  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", nameOrigin: "user", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
+  { name: "coupon-tester", actorId: galleryActorId("coupon-tester"), displayName: "Coupon tester", role: "QA", nameOrigin: "auto", origin: "agent", lifetime: "durable", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "migration-review", actorId: galleryActorId("migration-review"), displayName: "Migration review", role: "Reviewer", nameOrigin: "auto", origin: "agent", lifetime: "durable", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
+  { name: "docs", actorId: galleryActorId("docs"), displayName: "Release notes", role: "Writer", nameOrigin: "user", origin: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
   // A one-click agent the titler has not reached: blank name, shown as "New agent".
-  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
+  { name: "agent-4f2c", actorId: galleryActorId("agent-4f2c"), displayName: "", role: "agent", nameOrigin: "auto", origin: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 6e5, dismissedAt: null },
 ];
 
 /* The open tab is the strip's hook, so a gate can compare strips. */
@@ -3669,9 +3669,9 @@ type GalleryRosterEntry = Parameters<typeof SubordinateTabs>[0]["subordinates"][
 
 const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
   // Distinctive: the gate asserts it never renders; subordination shows as hierarchy, not a badge.
-  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", nameOrigin: "user", createdBy: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "scout", actorId: galleryActorId("scout"), displayName: "Checkout scout", role: "Fixture-role QA lead", nameOrigin: "user", origin: "user", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
   // Agent-created: keeps the confirmation path, unlike the user-created seed.
-  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", nameOrigin: "auto", createdBy: "orchestrator", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
+  { name: "auto-scout", actorId: galleryActorId("auto-scout"), displayName: "Auto scout", role: "Fixture-role QA lead", nameOrigin: "auto", origin: "agent", lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
 ];
 
 const AGENTCHATS_ROWS = 40;
@@ -3755,7 +3755,7 @@ function AgentChatsScene() {
     const name = `agent-${++counter.current}`;
     missions.current[name] = AGENTCHATS_MISSION;
     setRoster((current) => [...current, {
-      name, actorId: galleryActorId(name), displayName: "", role: "agent", nameOrigin: "auto", createdBy: "user", lifetime: "durable",
+      name, actorId: galleryActorId(name), displayName: "", role: "agent", nameOrigin: "auto", origin: "user", lifetime: "durable",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     }]);
     await navigate(`/workspace/checkout-fixes/agents/${name}`);

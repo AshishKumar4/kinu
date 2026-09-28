@@ -9,13 +9,13 @@ describe('the workspace work read', () => {
     const workspace = createTestWorkspace();
     const { directory, main } = createTestActorsOver(workspace.db, { name: 'workspace' });
 
-    const child = (parent: ActorHandle, name: string, kind: 'subordinate' | 'run', lifetime: 'durable' | 'task') =>
-      directory.create({ parent, name, creationId: `${parent.name}/${name}`, kind, lifetime });
+    const child = (parent: ActorHandle, name: string, origin: 'agent' | 'swarm', lifetime: 'durable' | 'task') =>
+      directory.create({ parent, name, creationId: `${parent.name}/${name}`, origin, lifetime });
 
-    const refiner = child(main, 'ask-refiner-fb0gr9', 'subordinate', 'task');
-    const nested = child(refiner, 'ask-checker-a1', 'subordinate', 'task');
-    const head = child(main, explorationActorKey('head-1'), 'run', 'task');
-    const underHead = child(head, 'ask-reader-b2', 'subordinate', 'task');
+    const refiner = child(main, 'ask-refiner-fb0gr9', 'agent', 'task');
+    const nested = child(refiner, 'ask-checker-a1', 'agent', 'task');
+    const head = child(main, explorationActorKey('head-1'), 'swarm', 'task');
+    const underHead = child(head, 'ask-reader-b2', 'agent', 'task');
 
     for (const actor of [main, refiner, nested, head, underHead]) {
       new TaskListStore(workspace.sql, actor, (write) => workspace.db.transaction(write)()).add([`${actor.name}'s task`], null, 1);
@@ -36,8 +36,8 @@ describe('the workspace work read', () => {
   test('a task owner is shown by its display name, and by its name when it has none', () => {
     const workspace = createTestWorkspace();
     const { directory, main } = createTestActorsOver(workspace.db, { name: 'workspace' });
-    const auditor = directory.create({ parent: main, name: 'auditor', creationId: 'auditor', kind: 'subordinate', lifetime: 'durable' });
-    const unnamed = directory.create({ parent: main, name: 'lookup-a1', creationId: 'lookup', kind: 'subordinate', lifetime: 'task' });
+    const auditor = directory.create({ parent: main, name: 'auditor', creationId: 'auditor', origin: 'agent', lifetime: 'durable' });
+    const unnamed = directory.create({ parent: main, name: 'lookup-a1', creationId: 'lookup', origin: 'agent', lifetime: 'task' });
     auditor.config.setDisplayName('Coupon auditor');
 
     for (const actor of [auditor, unnamed]) {

@@ -41,8 +41,8 @@ export const LANDING_WORKSPACE = 'checkout-fixes';
 export const LANDING_TAB_PRESENCE: TabPresence = { explorations: false, work: true };
 
 export const LANDING_SUBORDINATES: readonly SubordinateRosterEntry[] = [
-  { name: 'coupon-tester', actorId: 'actor-coupon-tester', displayName: 'Coupon tester', role: 'QA', nameOrigin: 'auto', createdBy: 'orchestrator', lifetime: 'durable', status: 'working', currentTask: 'Running the checkout regression suite', createdAt: NOW - 36e5, dismissedAt: null },
-  { name: 'migration-review', actorId: 'actor-migration-review', displayName: 'Migration review', role: 'Reviewer', nameOrigin: 'auto', createdBy: 'orchestrator', lifetime: 'durable', status: 'awaiting_input', currentTask: 'Needs a call on the backfill order', createdAt: NOW - 72e5, dismissedAt: null },
+  { name: 'coupon-tester', actorId: 'actor-coupon-tester', displayName: 'Coupon tester', role: 'QA', nameOrigin: 'auto', origin: 'agent', lifetime: 'durable', status: 'working', currentTask: 'Running the checkout regression suite', createdAt: NOW - 36e5, dismissedAt: null },
+  { name: 'migration-review', actorId: 'actor-migration-review', displayName: 'Migration review', role: 'Reviewer', nameOrigin: 'auto', origin: 'agent', lifetime: 'durable', status: 'awaiting_input', currentTask: 'Needs a call on the backfill order', createdAt: NOW - 72e5, dismissedAt: null },
 ];
 
 /** Served by the `landing.tsx` fetch shim; the frame's workspace is first so the rail marks it open. */

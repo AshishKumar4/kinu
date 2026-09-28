@@ -52,7 +52,7 @@ async function workspaceThatHired(home: string, name: string, subagent: { name: 
     const main = directory.main();
 
     const child = directory.apply(main, [], {
-      action: 'register', name: subagent.name, creationId: `birth-${subagent.name}`, kind: 'subordinate', lifetime: 'durable',
+      action: 'register', name: subagent.name, creationId: `birth-${subagent.name}`, origin: 'agent', lifetime: 'durable',
     });
 
     // A born child's title lives in its own config, which is what a listing reads.
@@ -65,11 +65,10 @@ async function workspaceThatHired(home: string, name: string, subagent: { name: 
       actorReference: child.reference,
       birth: {
         creationId: `birth-${subagent.name}`,
-        seed: { name: subagent.name, displayName: subagent.displayName, nameOrigin: 'user', role: 'task', mission: 'Survey the logs', lifetime: 'durable' },
+        seed: { name: subagent.name, displayName: subagent.displayName, nameOrigin: 'user', role: 'task', mission: 'Survey the logs', lifetime: 'durable', origin: 'user' },
         assignment: null,
       },
       deleteRequested: false,
-      createdBy: 'orchestrator',
       status: 'idle',
       currentTask: null,
       createdAt: Date.now(),

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-28",
   "files": 2820,
-  "functions": 69904,
+  "functions": 69973,
   "ceiling": 87,
   "line": 29,
   "inventory": [
@@ -263,10 +263,6 @@
     },
     {
       "key": "packages/core/src/chat.ts#ProviderCall.consume",
-      "complexity": 30
-    },
-    {
-      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 30
     },
     {
