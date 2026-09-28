@@ -1,9 +1,9 @@
 {
   "measuredAt": "2026-09-28",
-  "files": 2804,
-  "functions": 69189,
+  "files": 2807,
+  "functions": 69267,
   "ceiling": 87,
-  "line": 30,
+  "line": 29,
   "inventory": [
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
@@ -102,19 +102,11 @@
       "complexity": 36
     },
     {
-      "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage",
-      "complexity": 36
-    },
-    {
       "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 36
     },
     {
       "key": "packages/cli/src/cc-transcript.ts#mineSession",
-      "complexity": 35
-    },
-    {
-      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive",
       "complexity": 35
     },
     {
@@ -288,6 +280,70 @@
     {
       "key": "scripts/shell-words.ts#readScript",
       "complexity": 30
+    },
+    {
+      "key": "packages/cf-backend/src/components/ProfileCatalogSettings.tsx#ProfileCatalogSettings",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/changes/ChangesPanel.tsx#ChangesPanel",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cf-backend/src/pages/DeployPage.tsx#DeployPage",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cf-backend/tests/helpers/actor-harness.ts#chatSessionTurns>admit",
+      "complexity": 29
+    },
+    {
+      "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding>useKeyboard",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/feedback/png.ts#sanitizePng",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive>gen",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/session/transcript.ts#SessionTranscriptReader.materializeEntry",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/slates/capability-graph.ts#riskOf",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/web/hero-canvas.ts#createCanvasRenderer>render",
+      "complexity": 29
+    },
+    {
+      "key": "scripts/bench-devbox-fixture.ts#measureLiveC3",
+      "complexity": 29
+    },
+    {
+      "key": "scripts/ladder.ts#claims",
+      "complexity": 29
+    },
+    {
+      "key": "tests/first-run/agent-tab.first-run.ts#describe>liveTest>run",
+      "complexity": 29
+    },
+    {
+      "key": "tests/first-run/workspace-settings.first-run.ts#describe>liveTest>run",
+      "complexity": 29
     }
   ]
 }
