@@ -9,6 +9,7 @@ import {
   parseProtocolMessage, reconcileMessages, sanitizeMessage, sendIfOpen,
   type ChatProtocolEvent,
 } from 'agents/chat';
+import type { Streams } from 'agents/streams';
 import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import {
@@ -22,7 +23,7 @@ export type ChatSocket = Pick<Connection, 'id'>;
 
 export interface ChatWire {
   /** Null for a wire whose turns stream live only (hosted actors; see header). */
-  readonly sql: SqlExecutor | null;
+  readonly resumeStore: { readonly streams: Streams; readonly sql: SqlExecutor } | null;
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): Connection | undefined;
@@ -136,10 +137,10 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   private get resume(): { readonly resumable: ResumableStream; readonly handshake: ResumeHandshake } | null {
     if (this._resume !== null) return this._resume;
-    const sql = this.wire.sql;
+    const store = this.wire.resumeStore;
 
-    if (sql === null) return null;
-    const resumable = new ResumableStream(sql);
+    if (store === null) return null;
+    const resumable = new ResumableStream(store.streams, store.sql);
 
     return this._resume = {
       resumable,

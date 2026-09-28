@@ -3,9 +3,10 @@
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
  */
 
-import { callable, type AgentContext, type Connection, type ConnectionContext, type Schedule } from "agents";
+import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } from "./rpc-surface";
 import { ActivationGate, startBeforeRpc } from "./activation-gate";
+import { KINU_TIMER_JOB } from "./wake-jobs";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
@@ -208,7 +209,6 @@ import { experienceLibraryOver } from './user/experience-library';
 import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
-  TERMINAL_RETRY_CALLBACK,
   type ActorDynamicContextExtras,
   type ActorToolDeps,
   type UntimedArms,
@@ -240,9 +240,7 @@ import {
   sendInboundEmailReceipt, sendOwnerEmail,
 } from "./email/outbound";
 import { EmailOutbox } from "@kinu.run/core";
-import {
-  FIBER_RECOVERY_MAX_AGE_MS, SWEEP_MAX_ROWS, dispatchRecoveredNotice, type RecoveredNotice,
-} from "./fiber-recovery";
+import { dispatchRecoveredNotice, type RecoveredNotice } from "./fiber-recovery";
 import {
   acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
   type SandboxLifecycleFailureResult,
@@ -295,16 +293,8 @@ const SANDBOX_REFUSED = 'sandbox_refused';
  *  window decides every trigger as the whole transcript would. */
 const SLEEP_TIME_READ_ROWS = (SLEEP_TIME_CADENCE.everyTurns + 1) * 8;
 
-/** One schedule row carries every Kinu-owned wake. Public because `Agent.schedule()`
- *  types the callback as `keyof this`, which excludes private members. */
-const KINU_TIMER_CALLBACK = '_kinuTimerTick';
-
-/** Past this age the framework no longer recovers the fiber, so a one-shot row is
- *  dead. Shares the value `ActorAgent.options` passes (fiber-recovery.ts). */
-/** Smaller than {@link SWEEP_MAX_ROWS}: each sealed head costs a durable report write
+/** Smaller than the fiber sweep's row budget: each sealed head costs a durable report write
  *  and a broadcast. A pass that fills either budget arms the maintenance wake. */
-const STALE_SCHEDULE_HORIZON_MS = FIBER_RECOVERY_MAX_AGE_MS;
-
 const ORPHAN_SEAL_MAX_ROWS = 256;
 
 /** Transfer id is fresh per transfer, so two readers of one path cannot replace
@@ -381,7 +371,7 @@ function clampLimit(requested: number | undefined, max: number): number {
   return Math.min(Math.max(Math.floor(requested), 1), max);
 }
 
-/** agents 0.22 reads this key back at start when `ctx.id` has no name. */
+/** agents 0.24's Lifecycle reads this key back at start when `ctx.id` has no name (a migration read; it never writes it). */
 const PERSISTED_NAME_KEY = '__ps_name';
 
 /** A terminal that cannot open: the owner's pane reads the whole chain. */
@@ -1450,7 +1440,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private _emailOutbox: EmailOutbox | null = null;
   /** Outbound-email intent log (SPEC §7.4); creates its own table on first use. */
   private get emailOutbox(): EmailOutbox {
-    this._emailOutbox ??= new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at));
+    this._emailOutbox ??= new EmailOutbox(this.ctx.storage.sql, (at) => this.wakes.arm(KINU_TIMER_JOB, at));
 
     return this._emailOutbox;
   }
@@ -1480,7 +1470,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private _replyChannels: ReplyChannelStore | null = null;
   private _cacheWarming: CacheWarmingLane | null = null;
 
-  /** Wakes go through `armTimer`, never `setTimeout`: nothing in the isolate survives hibernation. */
+  /** Wakes go through the Kinu timer job, never `setTimeout`: nothing in the isolate survives hibernation. */
   protected get cacheWarming(): CacheWarmingLane {
     this._cacheWarming ??= new CacheWarmingLane({
       store: new CacheWarmStore(this.boundSql, this.actorHandle()),
@@ -1510,7 +1500,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected get triggerRegistry(): TriggerRegistry {
     if (!this._triggerRegistry) {
       const alarmScheduler: AlarmScheduler = {
-        scheduleAt: (ts: number) => this.armTimer(ts),
+        scheduleAt: (ts: number) => this.wakes.arm(KINU_TIMER_JOB, ts),
       };
 
       this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, this.actorHandle(), alarmScheduler);
@@ -1584,47 +1574,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
       },
-      scheduleDispatch: (at) => this.armTimer(at),
+      scheduleDispatch: (at) => this.wakes.arm(KINU_TIMER_JOB, at),
       onAdmitted: () => { this.orch.scheduleDrain(); },
     });
 
     return this._peerHub;
-  }
-
-  /**
-   * Soonest-wins arm of the `KINU_TIMER_CALLBACK` schedule row; never call `setAlarm` (the SDK owns
-   * the alarm). Await it: `waitUntil` is a no-op (`do.wait_until.no_op`,
-   * `do.background_task.cancelled_on_reset`).
-   */
-  private async armTimer(atMs: number): Promise<void> {
-    await this.armWakeRow(KINU_TIMER_CALLBACK, atMs);
-  }
-
-  /**
-   * Restore the wake row when durable work is waiting and no Kinu timer row exists.
-   * Any Kinu timer row, due or future, counts as armed; the row is derived from the tick's ledgers.
-   */
-  protected async reconcileTimerRow(): Promise<void> {
-    const next = this.nextWakeAt(Date.now());
-
-    if (next === null) return;
-
-    const armed = (await this.listSchedules())
-      .filter((row) => row.callback === KINU_TIMER_CALLBACK)
-      .map((row) => row.time);
-
-    if (armed.length === 0) {
-      await this.armTimer(next);
-      diagnostics.event('schedule.timer_reconciled', { at: next });
-
-      return;
-    }
-
-    // A due row already covers now; only a future row later than the owed wake needs pulling earlier.
-    // `armTimer` collapses, so this still leaves exactly one row.
-    if (Math.min(...armed) * 1000 <= next) return;
-    await this.armTimer(next);
-    diagnostics.event('schedule.timer_pulled_earlier', { at: next });
   }
 
   /** The next wake owed across triggers, peer outbox, email outbox and pending reactions.
@@ -1648,7 +1602,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Arms the terminal-retry chain, the only one that drains admitted delegations (reverses the arm
-   * half of D3, docs/ARCHITECTURE-DECISIONS.md); `armTimer`'s tick never touches assignment queues.
+   * half of D3, docs/ARCHITECTURE-DECISIONS.md); the timer's tick never touches assignment queues.
    */
   private armDelegationWake(): void {
     this.armOwedWorkWake('delegation');
@@ -1670,8 +1624,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Re-derive and arm the wake when durable work changed; safe on every ingress since `armTimer`
-   * collapses. Unlike {@link reconcileTimerRow}, this moves an existing wake earlier.
+   * Re-derive and arm the wake when durable work changed; safe on every ingress since the arm
+   * is soonest-wins.
    */
   protected override durableWakeOwner(): () => void {
     return () => this.armDurableWake();
@@ -1683,7 +1637,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (next === null) return;
     this.detachOwned(async () => {
       try {
-        await this.armTimer(next);
+        await this.wakes.arm(KINU_TIMER_JOB, next);
       } catch (cause) {
         diagnostics.failure('schedule.durable_wake_arm_failed', toKinuError({
           doing: 'arming the wake a pending reaction needs', cause, otherwise: 'io',
@@ -1696,92 +1650,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override maintenanceSweeps(): boolean {
     const branches = this.reconcileOrphanedBranches();
     const fibers = super.maintenanceSweeps();
-    // A throwing schedule sweep reports unfinished instead of failing: the gate must complete, and the
-    // wake's capped backoff prevents a one-second loop.
-    let schedules = true;
 
-    try {
-      schedules = this.sweepUnrunnableSchedules();
-    } catch (err) {
-      diagnostics.failure('schedule.stale_sweep_failed', toKinuError({
-        doing: 'sweeping unrunnable schedule rows',
-        cause: err,
-        otherwise: 'io',
-      }), { workspace: this.name });
-    }
-
-    return branches || fibers || schedules;
-  }
-
-  /**
-   * `this[row.callback]` is what the framework dispatches, so a row naming nothing here is unrunnable.
-   * Membership, not callability: every arming site names a method (`keyof this`).
-   */
-  private canDispatch(callback: string): boolean {
-    return callback in this;
-  }
-
-  /**
-   * Drop one-shot rows overdue past `fiberRecoveryMaxAgeMs`-era horizon; the fiber checks re-register
-   * live continuations on the same wake. Recurring rows re-date themselves and are left alone.
-   * The Kinu wake is exempt however overdue: it is the workspace's only, state-driven wake.
-   */
-  private sweepUnrunnableSchedules(): boolean {
-    const cutoffSec = Math.floor((Date.now() - STALE_SCHEDULE_HORIZON_MS) / 1000);
-
-    // The terminal retry is exempt like the Kinu timer: a state-driven wake whose ledger obligation
-    // never expires. LIMIT-bounded; select then delete so the count decides truncation portably.
-    const rowidOf = (row: Record<string, SqlStorageValue>): number =>
-      v.parse(v.object({ rowid: v.number() }), row).rowid;
-
-    const doomed = new Set(this.ctx.storage.sql.exec(
-      `SELECT rowid FROM cf_agents_schedules
-        WHERE type IN ('delayed', 'scheduled') AND time <= ?
-          AND callback NOT IN (?, ?)
-        LIMIT ${SWEEP_MAX_ROWS}`,
-      cutoffSec,
-      KINU_TIMER_CALLBACK,
-      TERMINAL_RETRY_CALLBACK,
-    ).toArray().map(rowidOf));
-
-    // A row whose callback is not a method here never runs and the alarm loop never deletes it, and
-    // recurring rows escape the horizon. DISTINCT keeps the dispatch check once per name.
-    const dead = this.ctx.storage.sql.exec(`SELECT DISTINCT callback FROM cf_agents_schedules`)
-      .toArray()
-      .map((row) => v.parse(v.object({ callback: v.string() }), row).callback)
-      .filter((callback) => !this.canDispatch(callback));
-
-    if (dead.length > 0 && doomed.size < SWEEP_MAX_ROWS) {
-      const placeholders = dead.map(() => '?').join(', ');
-
-      for (const rowid of this.ctx.storage.sql.exec(
-        `SELECT rowid FROM cf_agents_schedules
-          WHERE callback IN (${placeholders})
-          LIMIT ${SWEEP_MAX_ROWS - doomed.size}`,
-        ...dead,
-      ).toArray().map(rowidOf)) doomed.add(rowid);
-    }
-
-    const rowids = [...doomed];
-
-    if (rowids.length > 0) {
-      this.ctx.storage.sql.exec(
-        `DELETE FROM cf_agents_schedules WHERE rowid IN (${rowids.map(() => '?').join(', ')})`,
-        ...rowids,
-      );
-    }
-
-    const dropped = rowids.length;
-
-    if (dropped > 0) {
-      diagnostics.event('schedule.stale_rows_dropped', {
-        dropped,
-        horizonMs: STALE_SCHEDULE_HORIZON_MS,
-        unrunnableCallbacks: dead.join(','),
-      });
-    }
-
-    return dropped >= SWEEP_MAX_ROWS;
+    return branches || fibers;
   }
 
   protected get engine(): EvolutionEngine {
@@ -2015,7 +1885,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
 
     return {
-      sql: null,
+      resumeStore: null,
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
       history: (limit) => rows.history(limit),
@@ -3017,17 +2887,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.rependDeadActivationLeases();
     // Row-budgeted (init gate); a truncated pass drains under the wake below.
     this.maintenanceUnfinished = this.maintenanceSweeps();
-    // An activation is the only moment a workspace whose wake row was lost can notice.
-    // Detached because arming a schedule row is I/O and this method runs inside the init gate.
-    this.detachOwned(async () => {
-      try {
-        await this.reconcileTimerRow();
-      } catch (cause) {
-        diagnostics.failure('schedule.timer_reconcile_failed', toKinuError({
-          doing: 'restoring the wake row an activation found missing', cause, otherwise: 'io',
-        }), { workspace: this.name });
-      }
-    });
+    // An activation is the only moment a workspace whose wake was lost can notice; the arm is detached.
+    this.armDurableWake();
 
     // The activation only classifies and arms a wake; all dispatch runs under that durable wake,
     // because an activation launches no external work, awaited or detached.
@@ -3228,18 +3089,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms();
   }
 
-  // Kinu's timer, dispatched by `Agent.alarm()` from `cf_agents_schedules` (see `armTimer`); not an
-  // `alarm()` override because the SDK owns the DO's single alarm slot.
+  // Kinu's timer, the `kinu-timer` Lifecycle job (wake-jobs.ts); not an `alarm()` override because
+  // Lifecycle owns the DO's single alarm slot.
   // Every source `nextWakeAt` folds must have a phase here. Dedupe on
   // `(trigger_id, scheduled_fire_at)` makes a re-fire after eviction a no-op publish.
   // A wake is a separate invocation from whatever armed it; `tracing.invocation` revokes the handle
   // when this promise settles, so spans cannot cover both.
-  async _kinuTimerTick(_payload?: undefined, own?: Schedule<undefined>): Promise<void> {
-    if (own === undefined) return this.timerTickPass();
-    await this.runWakeRow(own, () => this.timerTickPass());
-  }
-
-  private async timerTickPass(): Promise<void> {
+  async _kinuTimerTick(): Promise<void> {
     const now = Date.now();
     await this.tracing.invocation('alarm', 'tick', async (tick) => {
       await tick.span('alarm.due_triggers', async (span) => {
@@ -3373,7 +3229,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           const next = this.nextWakeAt(now);
           span.setAttribute('kinu.rearmed', next !== null);
 
-          if (next !== null) await this.armTimer(next);
+          if (next !== null) await this.wakes.arm(KINU_TIMER_JOB, next);
         } catch (err) {
           const failure = toKinuError({
             doing: 're-arming the wake that keeps the timer chain alive',

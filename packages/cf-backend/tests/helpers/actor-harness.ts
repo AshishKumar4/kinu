@@ -3,6 +3,10 @@
  * (agents SDK base, DO storage over bun:sqlite, env). Codemode runs through an in-process Worker Loader.
  */
 import { Database } from 'bun:sqlite';
+import { setSystemTime } from 'bun:test';
+import { DurableObject } from 'cloudflare:workers';
+import { Lifecycle } from 'agents/lifecycle';
+import { Streams } from 'agents/streams';
 import { makeSqlExec } from '../../../core/tests/helpers';
 import type { AgentContext, Connection, FiberRecoveryContext, FiberRecoveryResult, WSMessage } from 'agents';
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
@@ -24,7 +28,7 @@ import {
   MAIN_AGENT, openWorkspaceMainActor,
   SessionHistory, TerminalTransitions, type VFS, WorkspaceActorDirectory,
 } from '@kinu.run/core';
-import { sqlOver } from '@kinu.run/test-utils';
+import { present, sqlOver } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
@@ -42,7 +46,7 @@ import {
   type RoleCatalog, type ResolvedTurnProfile, type SqlValue,
   type TierAssignments,
   composePrepareStep,
-  BackgroundJobStore, type JsonValue,
+  BackgroundJobStore, parseJsonValue, type JsonValue,
   type WorkMode, type JsonObject,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
@@ -670,7 +674,7 @@ export const GATEWAY_CATALOG = {
 };
 
 /** A workspace whose every model lane the platform gateway `gateway` serves. */
-export function gatewayWorkspace(gateway: StubbedAiBinding, world: HarnessActorWorld = {}): ActorHarness<HarnessOrchestratorAgent> {
+export function gatewayWorkspace(gateway: StubbedAiBinding, world: HarnessActorWorld = {}): StartedHarness {
   const workspace = orchestratorHarness(undefined, { ...world, aiGateway: gateway });
   workspace.agent.harnessInstallCatalog(GATEWAY_CATALOG);
 
@@ -1242,7 +1246,14 @@ export function makeCtx(db: Database, id = 'harness-actor', objectName = id): Ag
   const sqlExec = (query: string, ...bindings: SqlValue[]) => {
     const rows = canonicalSql.exec(query, ...bindings).toArray();
 
-    return { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
+    return {
+      toArray: () => rows,
+      // workerd's cursor count, read by the SDK's Streams right after a write and before any other statement.
+      get rowsWritten(): number {
+        return present(db.query<{ n: number }, []>('SELECT changes() AS n').get(), 'the changes() row').n;
+      },
+      [Symbol.iterator]: () => rows[Symbol.iterator](),
+    };
   };
 
   // Real KV storage: `_cf_initAsFacet` puts `cf_agents_parent_path` here and the
@@ -1309,6 +1320,37 @@ export function makeCtx(db: Database, id = 'harness-actor', objectName = id): Ag
   // transaction, identity, alarm, and concurrency members above.
   return partialContext as AgentContext;
 }
+
+/** Kinu's wakes as the Lifecycle queue holds them (`src/wake-jobs.ts`), soonest first. */
+export function armedWakes(db: Database): { id: string; time: number; payload: JsonValue }[] {
+  // The SDK creates its queue table on the first job operation; before it, nothing is armed.
+  if (db.query("SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_jobs'").get() === null) return [];
+
+  return db.query<{ id: string; time: number; payload: string | null }, []>(
+    "SELECT id, time, payload FROM cf_agents_jobs WHERE capability = 'kinu-wakes' ORDER BY time",
+  ).all().map((row) => ({ id: row.id, time: row.time, payload: row.payload === null ? null : parseJsonValue(row.payload) }));
+}
+
+/** The platform's delivery: the clock reaches the soonest wake, and the alarm drives it. The caller resets the clock. */
+export async function fireSoonestWake(agent: Pick<HarnessOrchestratorAgent, 'alarm'>, db: Database): Promise<void> {
+  const [soonest] = armedWakes(db);
+
+  if (soonest === undefined) throw new Error('no wake is armed');
+
+  setSystemTime(new Date(Math.max(soonest.time, Date.now())));
+  await agent.alarm();
+}
+
+/** The SDK's Streams over `db`, installed on the SDK's own Lifecycle as a root actor installs it. */
+export function streamsOver(db: Database): Streams {
+  const streams = new Streams();
+
+  new Lifecycle(new StreamsHost(makeCtx(db), makeEnv())).use(streams);
+
+  return streams;
+}
+
+class StreamsHost extends DurableObject<Env> {}
 
 /**
  * Env with the bindings actor construction reaches. UserDO is present-but-inert unless the
@@ -1601,6 +1643,10 @@ function startActivation(agent: InstanceType<typeof OrchestratorAgent>): Promise
 }
 
 
+/** A harness whose first activation is under way: the SDK's start runs `onStart` only after its capabilities
+ *  start, so a suite that seeds rows the activation must not see awaits `started` first. */
+export type StartedHarness = ActorHarness<HarnessOrchestratorAgent> & { readonly started: Promise<void> };
+
 /** A real OrchestratorAgent with a claimed owner, schema ensured. `userPlane`
  *  opts into a recording UserDO binding; `world` places it in a real owner's DO. */
 export function orchestratorHarness(
@@ -1612,12 +1658,11 @@ export function orchestratorHarness(
      *  update; prompts land in `sleepTimePrompts`. Absent, the lane is off. */
     readonly sleepTimeModel?: SleepTimeUpdate;
   },
-): ActorHarness<HarnessOrchestratorAgent> {
+): StartedHarness {
   const harness = instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), userPlane, world, env });
   // Born as a first claim bears it, then started.
   harness.agent.harnessBear(world?.ownerUserId ?? 'harness-owner');
-  const started: unknown = startActivation(harness.agent);
-  void started;
+  const started = startActivation(harness.agent);
   // Without the capability this root cannot reach its title registry, so every settle
   // would owe an auto title forever.
   harness.agent.harnessHoldsCapability('harness-capability');
@@ -1632,7 +1677,7 @@ export function orchestratorHarness(
     workspaceMainActor(harness.db).config.setSleepTimeComputeEnabled(false);
   }
 
-  return harness;
+  return { ...harness, started };
 }
 
 /** Constructed, and nothing else: no start ran, no owner claimed it. What a native RPC meets when it is an
@@ -1660,7 +1705,7 @@ export async function reactivateOrchestratorHarness(
     readonly env?: Env;
     readonly beforeStart?: (agent: HarnessOrchestratorAgent) => void;
   },
-): Promise<ActorHarness<HarnessOrchestratorAgent> & { readonly started: Promise<void> }> {
+): Promise<StartedHarness> {
   // Durable state the prior activation left, written through the stores before `onStart` runs the recovery.
   const config = workspaceMainActor(db).config;
 

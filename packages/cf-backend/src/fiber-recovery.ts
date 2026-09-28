@@ -20,9 +20,9 @@ export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Max rows one activation sweep scans; matches the framework's own scan
- * (`patches/agents@0.22.0.patch`). Shared by every row-budgeted sweep here.
+ * (`patches/agents@0.24.0.patch`). Shared by every row-budgeted sweep here.
  */
-export const SWEEP_MAX_ROWS = 4096;
+const SWEEP_MAX_ROWS = 4096;
 
 /** One metadata row per read, so a read never holds more than one snapshot candidate. */
 const ONE_FIBER_ROW = 1;

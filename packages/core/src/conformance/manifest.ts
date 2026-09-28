@@ -184,17 +184,14 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       },
       cli: WIRED,
     },
-    // The Agents SDK's schedule registry, created by its constructor. The orchestrator
-    // sweeps unrunnable rows from it at activation (`orchestrator.ts`).
-    cf_agents_schedules: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
+    // The Agents SDK Lifecycle's job queue, created on first use; Kinu's two wakes (`wake-jobs.ts`) are its rows.
+    cf_agents_jobs: {
+      'cf-orchestrator': LAZY_ON_FIRST_USE('the first wake a job arms'),
+      'cf-subordinate': LAZY_ON_FIRST_USE('the first wake a job arms'),
       cli: {
-        absent: 'the Agents SDK\'s Durable Object base is what creates this registry, and a local '
-          + 'session has no Durable Object: it is an OS process over its own SQLite file with no DO '
-          + 'alarm to register against. Its durable timers are `triggers` rows driven by the local '
-          + 'AlarmScheduler (core/src/events/hub/triggers.ts), so there is no vendor schedule '
-          + 'registry to wire and nothing to sweep',
+        absent: 'the Agents SDK\'s Lifecycle is what creates this queue, and a local session has no Durable '
+          + 'Object: it is an OS process over its own SQLite file with no DO alarm. Its durable timers are '
+          + '`triggers` rows driven by the local AlarmScheduler (core/src/events/hub/triggers.ts)',
       },
     },
     // Created by the first `runFiber` in the shared workspace database.
@@ -208,13 +205,19 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': LAZY_ON_FIRST_USE('runFiber'),
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
-    // Agents SDK `ResumableStream` store, created by the chat transport.
-    cf_ai_chat_stream_chunks: {
-      'cf-orchestrator': LAZY_ON_FIRST_USE('the chat transport'),
-      'cf-subordinate': LAZY_ON_FIRST_USE('the chat transport'),
+    // The Agents SDK's Streams capability, which the actor installs; its tables are made at start.
+    cf_agents_streams: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
       cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
     },
-    cf_ai_chat_stream_metadata: {
+    cf_agents_stream_blocks: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
+    },
+    // Agents SDK `ResumableStream` progress marker, created by the chat transport.
+    cf_agents_chat_progress: {
       'cf-orchestrator': LAZY_ON_FIRST_USE('the chat transport'),
       'cf-subordinate': LAZY_ON_FIRST_USE('the chat transport'),
       cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },

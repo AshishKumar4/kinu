@@ -12,6 +12,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import type { Connection } from 'agents';
 import { ChatWireTransport, type ChatWire } from '../src/chat-transport';
 import { socketConnection } from './helpers/bindings';
+import { streamsOver } from './helpers/actor-harness';
 
 const FrameSchema = v.looseObject({ type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()), landed: v.optional(v.string()), replay: v.optional(v.boolean()) });
 
@@ -53,7 +54,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   };
 
   const wire: ChatWire = {
-    sql,
+    resumeStore: { streams: streamsOver(db), sql },
     broadcast: (message, exclude) => {
       broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude });
 
@@ -82,7 +83,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
   const transport = new ChatWireTransport(wire);
 
-  const chunkRows = () => db.query<{ body: string }, []>('SELECT body FROM cf_ai_chat_stream_chunks ORDER BY chunk_index').all().map((row) => row.body);
+  const chunkRows = () => db.query<{ body: string }, []>('SELECT body FROM cf_agents_stream_blocks ORDER BY block').all().map((row) => row.body);
 
   return {
     /** The object after an eviction: a fresh transport over the same database and sockets. */

@@ -6,8 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { turnAuthor, type ProgrammaticTurn } from '@kinu.run/core';
-import type { ModelMessage } from 'ai';
-import type { SessionMessage } from 'agents/experimental/memory/session';
+import type { ModelMessage, UIMessage } from 'ai';
 import * as v from 'valibot';
 import {
   admittedTurnClaim, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat,
@@ -36,7 +35,7 @@ interface SteerHarness {
   /** pending_steers is SQL authority, so dead-turn rows and admission deletes are asserted here, not in RAM. */
   db: Database;
   frames: string[];
-  appended(): Promise<SessionMessage[]>;
+  appended(): Promise<UIMessage[]>;
   enqueued: ProgrammaticTurn[];
   /** `liveTurnId` names the turn, which is what makes a resumed turn re-bind under it. */
   startTurn(liveTurnId?: string): Promise<void>;

@@ -3,7 +3,6 @@
  * turn is driven. Implemented by `chatSessionTurns` (actor-harness) over core's ChatSession.
  */
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
-import type { SessionMessage } from 'agents/experimental/memory/session';
 import type { ChatOptions, JsonObject } from '@kinu.run/core';
 
 export interface PreparedRequest {
@@ -52,7 +51,7 @@ export interface SettledTurn {
 /** The loop's verdict and the persisted answer row, in the transcript store's shape. */
 export interface RanTurn {
   readonly status: 'completed' | 'error' | 'aborted' | 'skipped';
-  readonly message: SessionMessage | undefined;
+  readonly message: UIMessage | undefined;
 }
 
 export interface TurnHarness {
