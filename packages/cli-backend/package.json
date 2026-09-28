@@ -10,7 +10,7 @@
     "@ai-sdk/openai": "3.0.77",
     "@ai-sdk/openai-compatible": "2.0.54",
     "@ai-sdk/provider": "3.0.12",
-    "@cloudflare/codemode": "0.5.1",
+    "@cloudflare/codemode": "0.5.2",
     "@kinu.run/agent-utils": "workspace:*",
     "@kinu.run/compaction": "workspace:*",
     "@kinu.run/core": "workspace:*",

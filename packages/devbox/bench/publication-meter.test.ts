@@ -18,7 +18,7 @@ async function meterRuntime(entry: string): Promise<Miniflare> {
   if (!build.success || build.outputs[0] === undefined) throw new Error(build.logs.map(String).join('\n'));
 
   return new Miniflare({ workers: [{ config: {
-    name: 'publication-meter', type: 'worker', compatibilityDate: '2026-04-14', compatibilityFlags: ['nodejs_compat'],
+    name: 'publication-meter', compatibilityDate: '2026-04-14', compatibilityFlags: ['nodejs_compat'],
     manifest: { mainModule: 'index.mjs', modulesRoot: '/', modules: { 'index.mjs': { type: 'esm', contents: await build.outputs[0].text() } } },
     env: { BUCKET: { type: 'r2', name: 'BUCKET' } },
   } }] });

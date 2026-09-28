@@ -23,7 +23,7 @@ export class DevboxNotReadyProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   /**
-     *  Normalization control: the caller's isolate reads `Error` whatever the class name. Synchronous by
+     *  Normalization control: the caller's isolate reads a bare `Error` keeping only name and message. Synchronous by
      *  necessity: an async rejection is `Uncaught (in promise)` in the callee and fails the pool run. */
   namedRefusal(): string {
     throw new StillRestoring(NOT_READY_TEXT);

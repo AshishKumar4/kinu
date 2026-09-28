@@ -1833,19 +1833,20 @@ export const PLATFORM_CATALOG = {
   },
 
   'worker.script_bytes': {
-    subject: 'Deployed Worker size after gzip compression',
-    limit: { value: 10 * MB, unit: 'bytes' },
+    subject: 'Deployed Worker size, uncompressed',
+    limit: { value: 64 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'bundle',
     evidence: 'documented',
     provenance: `${CF_WORKER_LIMITS}#worker-size`,
-    date: DOCS_READ,
-    trigger: 'a bundle over 10 MB gzipped on Workers Paid (3 MB Free), or 64 MB uncompressed',
+    date: '2026-09-28',
+    trigger: 'a bundle over 64 MiB uncompressed (`Total Upload` in `wrangler deploy --dry-run`) on Free or Paid',
     onBreach: 'the deploy is rejected',
     observable: [],
     firstPartySignal: true,
     notes:
-      'Comfortable today and worth watching, because bundle size also charges against '
+      'There is no compressed limit; the dry-run prints gzip for reference only. Reading on '
+      + '2026-09-28: 21,347 KiB raw, 5,745 KiB gzip. Bundle size also charges against '
       + 'worker.startup_ms, which is the tighter of the two.',
   },
 

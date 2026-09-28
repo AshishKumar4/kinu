@@ -13,7 +13,7 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { evalSessionPath } from '@kinu.run/test-utils';
 import { containerApplications, deployment, why, wrangler } from './infra-cloudflare';
-import { type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig } from './infra-manifest';
+import { type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig, liveClasses } from './infra-manifest';
 
 /** What one reset deleted. */
 export const ResetSchema = v.object({
@@ -33,19 +33,6 @@ export const LATEST_RESET_KEY = 'resets/latest.json';
 
 /** The words a production reset is confirmed with. */
 export const PRODUCTION_CONFIRMATION = 'reset production';
-
-/** Every class the migrations leave standing. */
-function carriedClasses(migrations: DeployedConfig['migrations']): readonly string[] {
-  const carried = new Set<string>();
-
-  for (const migration of migrations ?? []) {
-    for (const name of [...migration.new_sqlite_classes ?? [], ...migration.new_classes ?? []]) carried.add(name);
-
-    for (const name of migration.deleted_classes ?? []) carried.delete(name);
-  }
-
-  return [...carried];
-}
 
 const PLACEHOLDER = `const notice = { ok: false, resetting: true, build: null, message: 'Kinu is being reset to a fresh deployment. Back in a few minutes.' };
 export default {
@@ -86,7 +73,7 @@ function run(argv: readonly string[]): string {
 function plan(environment: InfraEnvironment) {
   const config = deployedConfig(environment);
 
-  return { config, classes: carriedClasses(config.migrations) };
+  return { config, classes: liveClasses(config.exports) };
 }
 
 async function wipe(environment: InfraEnvironment, recordFile: string, scratch: string): Promise<Reset> {
@@ -129,7 +116,7 @@ async function wipe(environment: InfraEnvironment, recordFile: string, scratch: 
     compatibility_date: config.compatibility_date,
     workers_dev: false,
     routes: config.routes,
-    migrations: [{ tag, deleted_classes: classes }],
+    exports: Object.fromEntries(classes.map((name) => [name, { type: 'durable-object', state: 'deleted' }])),
   }));
   const deployed = run(['deploy', '-c', placeholder, '--message', `kinu ${environment} ${tag}`]);
   const placeholderVersion = /Version ID:\s*([0-9a-f-]{36})/u.exec(deployed)?.[1] ?? '';

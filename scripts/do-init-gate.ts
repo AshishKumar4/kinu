@@ -124,7 +124,7 @@ function declaredDurableObjects(): string[] {
 }
 
 /** `durable_objects.bindings[].class_name`: the one place a class is bound, so
- *  the `migrations` block that names each class again is not read. */
+ *  the `exports` map that names each class again is not read. */
 const WranglerDurableObjects = v.object({
   durable_objects: v.object({ bindings: v.array(v.object({ class_name: v.string() })) }),
 });
