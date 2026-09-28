@@ -382,6 +382,10 @@ export function isLintSource(file: string): boolean {
   return !lintIgnoreRoots.some(ignored => file === ignored || file.startsWith(`${ignored}/`));
 }
 
+/** Source languages covered by the pattern inventory. */
+export const isPatternSource = (file: string): boolean =>
+  isParseable(file) || file.endsWith('.py') || file.endsWith('.sh');
+
 /** Loaded by raw `node --experimental-strip-types` rather than by Bun or a
  *  bundler, and therefore the one set whose imports must carry an explicit
  *  `.ts` — Node's ESM resolver takes a complete path and resolves neither an

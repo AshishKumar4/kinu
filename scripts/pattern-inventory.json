@@ -1,0 +1,872 @@
+{
+  "candidates": [
+    {
+      "file": "lean/check-traceability.mjs",
+      "kind": "hand-parser",
+      "owner": "parseTraceability",
+      "sourceSha256": "fd260257a56471ccddf5440d51695cd4e88ea9d719e42f6f49d513e7908c7d59",
+      "decision": "traceability"
+    },
+    {
+      "file": "lean/check-traceability.mjs",
+      "kind": "hand-parser",
+      "owner": "stripLeanComments",
+      "sourceSha256": "94c02b52dff423368d6a861b9a0d16a47fe895edc8ee50ae3bf4dd1da7a5b1f7",
+      "decision": "traceability"
+    },
+    {
+      "file": "lean/check-traceability.mjs",
+      "kind": "hand-parser",
+      "owner": "stripLeanAttributes",
+      "sourceSha256": "483c59f8a078f3ab9b41d312e569106bd6707a760ec0c37a1f27006e1eadc1d7",
+      "decision": "traceability"
+    },
+    {
+      "file": "packages/cf-backend/src/actor-agent.ts",
+      "kind": "hand-parser",
+      "owner": "extractLastUserText",
+      "sourceSha256": "74647bb34d4c5bf38191d5a1e78bf70b9d30adead6014a354cc7b5e012240d67",
+      "decision": "traversal"
+    },
+    {
+      "file": "packages/cf-backend/src/components/surfaces/shared.tsx",
+      "kind": "hand-parser",
+      "owner": "split",
+      "sourceSha256": "a5f8c22b791c30a7ba57043a0e56ab089ff8a75ff92a61fbb49830251384baa2",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/src/email/inbound.ts",
+      "kind": "hand-parser",
+      "owner": "stripQuotedReply",
+      "sourceSha256": "6b8e7f37ea7cb376d92e781d2f8faa67c3aad2d79790f520c4d42c1533990e22",
+      "decision": "framing"
+    },
+    {
+      "file": "packages/cf-backend/src/email/inbound.ts",
+      "kind": "regex-literal",
+      "owner": "htmlToText",
+      "sourceSha256": "70c5c1f05af2adf80ebf31e370e79d11a70bd93d39cee81ec9e8ff2280218d97",
+      "decision": "html"
+    },
+    {
+      "file": "packages/cf-backend/src/email/inbound.ts",
+      "kind": "regex-literal",
+      "owner": "htmlToText",
+      "sourceSha256": "55797ce4af50ebc2b14c8e0f5e6fd5be5513dcdba2479a44a409368808d9ed6d",
+      "decision": "html"
+    },
+    {
+      "file": "packages/cf-backend/src/email/inbound.ts",
+      "kind": "regex-literal",
+      "owner": "htmlToText",
+      "sourceSha256": "019e0b8a6822d20e835f355b340ffa40264181fd90425c4239d244981a5b4750",
+      "decision": "html"
+    },
+    {
+      "file": "packages/cf-backend/src/events/routes.ts",
+      "kind": "hand-parser",
+      "owner": "extractHeaders",
+      "sourceSha256": "3fd5e7ae5d75d2cd60c892dc6bd0cd4173577bb50481c08680b3bf729e552c56",
+      "decision": "framing"
+    },
+    {
+      "file": "packages/cf-backend/src/slates/resident.ts",
+      "kind": "regexp-constructor",
+      "owner": "STATIC_SPECIFIER",
+      "sourceSha256": "7173476f62ac398120293f59a410afa602ff76829ce0bd862ad370e67073b0d5",
+      "decision": "bundleResolver"
+    },
+    {
+      "file": "packages/cf-backend/src/slates/resident.ts",
+      "kind": "regexp-constructor",
+      "owner": "DYNAMIC_SPECIFIER",
+      "sourceSha256": "7777f202bfa932d2300080452a9677100fe4df1d5202c680273544b757c2292d",
+      "decision": "bundleResolver"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-activity-cache-pane.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "34f3dba73bc93b78de7c5c749d8a46c024e13fa8331ab1406c633d855ce77e50",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-activity-cache-pane.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "e8627f3c73bf523de4d88bba418743213f0ad06d5cd1437b5e67d5997127b0d4",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-activity-cache-pane.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "b42a5bfc90617b79189d12c5c99df7a59d4de46a9b2f349235bb584f22ba18c0",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-activity-cache-pane.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "9785ca4f2bf40697b6c3093a1e7eb1286d38a2309c364369bf9c7003f014f908",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-agent-registry.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "14fe31c3bb7f2fa8d97ac50a4eb181b58b55460455b9453d15eb157593ce22d5",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-code-highlighter.test.ts",
+      "kind": "regex-literal",
+      "owner": "tokens",
+      "sourceSha256": "9b251c55a99cad074d64aba2f49462fded0f993abe8b5b697f4da2ddd4cb4e5e",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-composer.test.ts",
+      "kind": "regex-literal",
+      "owner": "textarea",
+      "sourceSha256": "23d782c03b41a81a69ef4bf7019d83c8f8de4785a19de4d037fe2d3616dedf1f",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-composer.test.ts",
+      "kind": "regex-literal",
+      "owner": "send",
+      "sourceSha256": "884c96a030fdbb6ef3cdd5fc57517142244473c15a9fcfb3751b1d51298023d7",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-connect-device-panel.test.ts",
+      "kind": "regex-literal",
+      "owner": "shown",
+      "sourceSha256": "19dd1f23a03bd8917c3a302c7760985e2b7f08c8176514afbed245a4b88916cb",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
+      "kind": "regex-literal",
+      "owner": "switches",
+      "sourceSha256": "7f6929db704b3e760e5050891972065b3d682b68b81c8f2382abf8024fe0dd02",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
+      "kind": "regex-literal",
+      "owner": "buttons",
+      "sourceSha256": "f2e28a28d357e04d5c7af9172a1f60e9cdf5ad1af117d62232d684ba0f78f7be",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
+      "kind": "regex-literal",
+      "owner": "match",
+      "sourceSha256": "7c6bf3e688d18df165a15ea7e31935d5e923b14afcf46ecf6350bcafb22c4b01",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-email-outbound.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "608b9f9251a492e88bbe180a28173cd3b5800f8d3ab87029b0f5231b7078d13d",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-email-outbound.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "608b9f9251a492e88bbe180a28173cd3b5800f8d3ab87029b0f5231b7078d13d",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-email-outbox.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "608b9f9251a492e88bbe180a28173cd3b5800f8d3ab87029b0f5231b7078d13d",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-public-shell.test.ts",
+      "kind": "regex-literal",
+      "owner": "match",
+      "sourceSha256": "401699e3478a3d1a77238fba91276691709662efc35d6beb612a50f6c71cb4f2",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-public-shell.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "2353b92a1290a02e9fd9b3ea097bd000612d761e454fe5591417fc535431d6eb",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-public-shell.test.ts",
+      "kind": "regex-literal",
+      "owner": "shipped",
+      "sourceSha256": "9fb95a84e045f6e67446621b11b4274a0287a366ea9f0dcd3ac849b789ed7d82",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-public-shell.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "3157e4146cd8590236b6f671db94298a5d56e2dbdd170425bf8a10f583fcf5bd",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-settings-sections.test.ts",
+      "kind": "regexp-constructor",
+      "owner": "match",
+      "sourceSha256": "c2bbb28e28225aa65c79aa80ef96d55667888ea952ad0a2424187bf3a3a84c36",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-work-journal.test.ts",
+      "kind": "regex-literal",
+      "owner": "sectionTitles",
+      "sourceSha256": "50c7a7ac8e3d9bb0da39d9ecbb2e3d24071d01f56c0c0a3ed30836ffae06ce26",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/workerd/slate-process.test.ts",
+      "kind": "regex-literal",
+      "owner": "importMap",
+      "sourceSha256": "0682a5b2fbc8da91cd67d0f7740d144767ae0e61f37cdc1786113e3cd4d679d6",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cli-backend/tests/executor.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "2c7b3a31bc04ef72dd2b72aa5eed5167a327f8693796fa16a0ecd35647c43597",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cli-backend/tests/local-session.test.ts",
+      "kind": "regex-literal",
+      "owner": "isDynamicBlock",
+      "sourceSha256": "62f212fe9fc82313e58907b96bb77282866a1583827865279400c256ade6646f",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cli-backend/tests/local-session.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "b5655ca420e00e99ffbc726891db4c7aa09b0578193baf902bbdc5ea8c9cc009",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cli-backend/tests/unit-executor-lifecycle.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "2c7b3a31bc04ef72dd2b72aa5eed5167a327f8693796fa16a0ecd35647c43597",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cli/src/attachments.ts",
+      "kind": "hand-parser",
+      "owner": "extractPathTokens",
+      "sourceSha256": "da712f6b36c92a3e61639dc08877c51a283efc7e56586b1729b0473b316f1f28",
+      "decision": "cli"
+    },
+    {
+      "file": "packages/cli/src/device-connect.ts",
+      "kind": "regex-literal",
+      "owner": "daemonSiblingNames",
+      "sourceSha256": "aa650df96fcdfb8765ac6962799234120eecaf9c8a44ebfc06dbad010f442327",
+      "decision": "daemon"
+    },
+    {
+      "file": "packages/cli/src/tui/actions.tsx",
+      "kind": "hand-parser",
+      "owner": "parseStroke",
+      "sourceSha256": "acce03a5d4be2dccd5b10e1e0cdbbe95efe209a6a3b8488b42b55eeec6682e7e",
+      "decision": "cli"
+    },
+    {
+      "file": "packages/core/src/bench/longhorizon.ts",
+      "kind": "hand-parser",
+      "owner": "parseLongHorizonAnswerFile",
+      "sourceSha256": "e5237780787cad298a952d06e9284b62671124b6ab5ef395f3e0a112f31394f4",
+      "decision": "framing"
+    },
+    {
+      "file": "packages/core/src/craft/source.ts",
+      "kind": "hand-parser",
+      "owner": "stripExports",
+      "sourceSha256": "27dbc5b3c034e81ed4952a8a97ad1c92150422fd4f0054dc8b416249b243592b",
+      "decision": "traversal"
+    },
+    {
+      "file": "packages/core/src/evolution/calibration.ts",
+      "kind": "hand-parser",
+      "owner": "parseLabelingFile",
+      "sourceSha256": "93faff86b9210f06b65f4863242f8f71b0c256cf12455dbf1d4db0cfaed8e937",
+      "decision": "framing"
+    },
+    {
+      "file": "packages/core/src/evolution/pathology.ts",
+      "kind": "regex-literal",
+      "owner": "COMPLAINT_PATTERNS",
+      "sourceSha256": "53bab6d9745e42b68a56dc16be52a3c005804da17ed8cd8c73110f33681b0fb5",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/evolution/scaffold-handbook.ts",
+      "kind": "regex-literal",
+      "owner": "DECLARATION",
+      "sourceSha256": "29cc2e9e59ab1c7a3c1efb6c8ceea9192888ecb99b923028e4c0ee7d6db6a558",
+      "decision": "handbook"
+    },
+    {
+      "file": "packages/core/src/evolution/scaffold-handbook.ts",
+      "kind": "hand-parser",
+      "owner": "stripComments",
+      "sourceSha256": "e71fa7a92f10fe4e09c7f765005dcf35bf76acb54ab0ce1ba47ee52911356140",
+      "decision": "handbook"
+    },
+    {
+      "file": "packages/core/src/evolution/scaffold-handbook.ts",
+      "kind": "hand-parser",
+      "owner": "stripComments",
+      "sourceSha256": "e522cb32868c190d45bdcefd5629e0ed1ea8ee0ee5526860c26dfa442c989043",
+      "decision": "handbook"
+    },
+    {
+      "file": "packages/core/src/execution/terminal-lane.ts",
+      "kind": "hand-parser",
+      "owner": "scanCommandLine",
+      "sourceSha256": "25ea22b95c7aa0d287571b3d6f3a73cd8d9edc79bb926dfb6661050883171655",
+      "decision": "cli"
+    },
+    {
+      "file": "packages/core/src/heads/head-summary.ts",
+      "kind": "hand-parser",
+      "owner": "extractFinalText",
+      "sourceSha256": "867fc41685eabf335ae6136eef9a6c0ae0d7dee7cb362a1410e5e585224fd388",
+      "decision": "traversal"
+    },
+    {
+      "file": "packages/core/src/memory/note.ts",
+      "kind": "hand-parser",
+      "owner": "parseMemoryNotes",
+      "sourceSha256": "8f9ae1868789939eec133cef2c41d4ae14b5057f3c0cc4f83d7ce535bc33fe2a",
+      "decision": "framing"
+    },
+    {
+      "file": "packages/core/src/prompting/attachment-sanitizer.ts",
+      "kind": "hand-parser",
+      "owner": "decodeBase64OrText",
+      "sourceSha256": "0c3fbbc4bccacd3460b22af4b71cd79cbceae54a875bd9e9b6e6e4c3dd5c68e4",
+      "decision": "traversal"
+    },
+    {
+      "file": "packages/core/src/providers/structured.ts",
+      "kind": "hand-parser",
+      "owner": "extractBalancedJson",
+      "sourceSha256": "4cf0e02736d26c5eaa962107ae1438d4bb795a4f07be3a933431f53de557f207",
+      "decision": "framing"
+    },
+    {
+      "file": "packages/core/src/read-models/background-event.ts",
+      "kind": "hand-parser",
+      "owner": "parseDrainedEvents",
+      "sourceSha256": "cd5301a7689b7c3af2cb4cd0982c7fa2b1151e1a5773b86a64efada2fbcf68f4",
+      "decision": "framing"
+    },
+    {
+      "file": "packages/core/src/safety/approval-gate.ts",
+      "kind": "hand-parser",
+      "owner": "scanCommand",
+      "sourceSha256": "a9bc3396a308b95a35276efd8388557fbb02dd201817d41bc6a5ff781cdf3374",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/safety/egress-destination.ts",
+      "kind": "hand-parser",
+      "owner": "parseIPv4",
+      "sourceSha256": "9ed338a35bca5689a51bc7007d7a8e9daeac0d61153f35c1483f7725ae7e5107",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/safety/secret-patterns.ts",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "2d7c27457d05e63551a4e7f185ade54f18c1772c265e29fc03e974b80d07ee99",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/safety/secret-patterns.ts",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "25fa2c23200f4ecc3e39864cfaada76677f7ca980f028f9f87bc4e9c08abed04",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/safety/secret-patterns.ts",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "394df264fa214db3331303e2960309a1616d285d4104874a71fc9d59533b89d5",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/safety/secret-patterns.ts",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "4bf5361fd6566fda9f10c65723b4fbe178f60f6741545fd2b95a5816295facd0",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/safety/secret-patterns.ts",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "f799efffe80697fc506aebf320ccdac23be924dbab4e10818b3875fe1fa052bb",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/safety/secret-patterns.ts",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "217949181b575201996482f349e4e5a6e2b272fe0827fdf4a98a44c43eb6a903",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/safety/secret-patterns.ts",
+      "kind": "hand-parser",
+      "owner": "scanText",
+      "sourceSha256": "0e4fd061e95680821ae2abc1552ba65faf22814ec76877ae9f7abb67f7998750",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/session/message-codec.ts",
+      "kind": "hand-parser",
+      "owner": "decodeValue",
+      "sourceSha256": "4a6a0478c28ab155c75d6c8dfabead45b6377cdff12c8f8a9712303edcf2c907",
+      "decision": "traversal"
+    },
+    {
+      "file": "packages/core/src/skills/loader.ts",
+      "kind": "hand-parser",
+      "owner": "extractExplicitInvocations",
+      "sourceSha256": "ca0d81a55591dd9099045505820aae6c5f9d9c77beb7d4066750f6a385876a7b",
+      "decision": "cli"
+    },
+    {
+      "file": "packages/core/src/skills/parse.ts",
+      "kind": "hand-parser",
+      "owner": "parseSkillFile",
+      "sourceSha256": "127508da4c12dfdd6ee5c3cda6f8b28ff6043632b99950472b55683e2bb8dfef",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/tui/context-status.ts",
+      "kind": "hand-parser",
+      "owner": "stripKnownProvider",
+      "sourceSha256": "e41b2bd0d7a20cf88067b46fe3b82a4bf4b1f46553a1145c06fcfaebab55aab4",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/utils/markdown-frontmatter.ts",
+      "kind": "hand-parser",
+      "owner": "parseFlatYaml",
+      "sourceSha256": "303dfaf4a1a8ec624b803327ece19c33d9c654b6452ae8bea5360fd56f076bfa",
+      "decision": "frontmatter"
+    },
+    {
+      "file": "packages/core/src/utils/markdown-frontmatter.ts",
+      "kind": "hand-parser",
+      "owner": "stripComment",
+      "sourceSha256": "9dd04c280e68c2e0d7d1044c80a09510358855a177a9fa3eb74606e3b9eaf002",
+      "decision": "frontmatter"
+    },
+    {
+      "file": "packages/core/src/utils/xxhash64.ts",
+      "kind": "hand-parser",
+      "owner": "stripes",
+      "sourceSha256": "342e5a274af0635604a0053b11ab120e95b04d6d16c2fb7542ba10417ba13e78",
+      "decision": "traversal"
+    },
+    {
+      "file": "packages/core/src/vfs/diff.ts",
+      "kind": "hand-parser",
+      "owner": "parseGitDiff",
+      "sourceSha256": "dc28518b38e748eb5e2601a1885951e0e098da3c2a72932fd4f670f1b07db64e",
+      "decision": "framing"
+    },
+    {
+      "file": "packages/core/src/vfs/observe.ts",
+      "kind": "hand-parser",
+      "owner": "decodedText",
+      "sourceSha256": "8ee5281370fc2650a470c0525038d15a72a6e0e64b6a495426945b82075dc701",
+      "decision": "traversal"
+    },
+    {
+      "file": "packages/core/src/web/markdown.ts",
+      "kind": "regex-literal",
+      "owner": "htmlToMarkdown",
+      "sourceSha256": "ac20c291ee60f67cc6dabf55d05bc6d4b717f128103d37584f63298ceef921c5",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/markdown.ts",
+      "kind": "regex-literal",
+      "owner": "htmlToMarkdown",
+      "sourceSha256": "492b3286155c23022ca00a3575865e2d68f443b4ae5edaa61c136e3f3ba6ca58",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/markdown.ts",
+      "kind": "regex-literal",
+      "owner": "htmlToMarkdown",
+      "sourceSha256": "6332ec3ea283e67d210acb20a21b4947bfce8f438d0105cdf9b8a1ae120f30a5",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/markdown.ts",
+      "kind": "regex-literal",
+      "owner": "htmlToMarkdown",
+      "sourceSha256": "0b1244bdf6bb0b931d05c44ed7707a8a13039933ba792a7577484669583c2d23",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/markdown.ts",
+      "kind": "regex-literal",
+      "owner": "htmlToMarkdown",
+      "sourceSha256": "e51ecb88265e9e8d23f80e0c1e130aab2b435579d257dd4fce51924f06939bc6",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/markdown.ts",
+      "kind": "regex-literal",
+      "owner": "htmlToMarkdown",
+      "sourceSha256": "65f8eee795cbba1130a02b2310e4c43b960a9f1f309cba864a0a017a05c8d695",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/markdown.ts",
+      "kind": "regex-literal",
+      "owner": "htmlToMarkdown",
+      "sourceSha256": "6dc916d1e447581440755f5074b09d17eaaa236694c806fc4b65fce936acec67",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/markdown.ts",
+      "kind": "regexp-constructor",
+      "owner": "htmlToMarkdown",
+      "sourceSha256": "0e1b8f65cf207ea779cc98d5e54b361c7f6278275cfd981bc588dc44735f6b1c",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/markdown.ts",
+      "kind": "regex-literal",
+      "owner": "looksLikeHtml",
+      "sourceSha256": "127c430ff4a58691ae1061751aea14d2bf239beb13294a70e2efdffdd8ba8f76",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/provider.ts",
+      "kind": "hand-parser",
+      "owner": "parseDuckDuckGoHtml",
+      "sourceSha256": "efa8b0553be4251ef463229ede5ea363dfe57e318654258a7b84c3c1d6031b65",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/provider.ts",
+      "kind": "regex-literal",
+      "owner": "linkRe",
+      "sourceSha256": "f9aa95563c78fffb8c409895e49e26403b35b808893f81a7d4c8ef6f060ba2b8",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/provider.ts",
+      "kind": "regex-literal",
+      "owner": "snippetRe",
+      "sourceSha256": "f76dad9e0761568a5027fcca4d47ed682e4bebf9da0f7c212fbacb8b0e9d21bd",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/provider.ts",
+      "kind": "regex-literal",
+      "owner": "m",
+      "sourceSha256": "ea46e30ffdff6ee4d93bfa439c9f7ffe2d87d7e88cbcd1c8864bc48b67f5ee06",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/tests/unit-db-codemode.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "218ba9297719b63c2f1097472de29133b53689b481e80ae28d801b4fe7ddf07e",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-experience.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "c54cb420f9772db29788e3abfe1f16d77849be0a369673c7d71fb1279d9673cd",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-instruction-placement.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "ae8cae81703039d40a297cf6cdfe8fe32bbf6a886614365a422c3ca9bb6e9bb1",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-instruction-placement.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "fb7631c54cac2ace62611e2328cb8d950c5891b3dd4e5ef77bb2c5641225b3b4",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-layergate.test.ts",
+      "kind": "regex-literal",
+      "owner": "IMPORT",
+      "sourceSha256": "97a7d1c090fcb1bad84bbb1ce66e708c1a5b44e52c9acfe5b3648e024fd65ed1",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/core/tests/unit-prompt.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "cc938531366890e253fd2d249db7e80d5aae151b22fd2860aa0813f70e6122cc",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-volatile-context.test.ts",
+      "kind": "regex-literal",
+      "owner": "BLOCK_OPEN",
+      "sourceSha256": "62f212fe9fc82313e58907b96bb77282866a1583827865279400c256ade6646f",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-volatile-context.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "c5cb086d3e895a425392a0b2a1087ed451a285d7d33c5f3a07022573d54fd00d",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-volatile-context.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "fe9344e37b1186ef060516de4ba141f58e056c3c1c79c08b4d895d5947b028d4",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-volatile-context.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "c5cb086d3e895a425392a0b2a1087ed451a285d7d33c5f3a07022573d54fd00d",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-volatile-context.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "fe9344e37b1186ef060516de4ba141f58e056c3c1c79c08b4d895d5947b028d4",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/devbox/bench/publication-meter.test.ts",
+      "kind": "regex-literal",
+      "owner": "uploadId",
+      "sourceSha256": "9b030d5cd3b5e6d2bc72c640fda0deb28395089997810eec35fe7d3f90d37dfb",
+      "decision": "xml"
+    },
+    {
+      "file": "packages/devbox/src/chunked-delta.ts",
+      "kind": "hand-parser",
+      "owner": "parseDeltaProbe",
+      "sourceSha256": "06cad49b93681e095977a33aaeaa5cc98ffb43f2d65d6fba91d4a9cb29d57c68",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/src/chunked-delta.ts",
+      "kind": "hand-parser",
+      "owner": "parseSplitSuffix",
+      "sourceSha256": "3092f77df7e5b5a6ba6e3fcf51f014e4cdada29593739bdcd39a9b80711560fa",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/src/chunked-delta.ts",
+      "kind": "hand-parser",
+      "owner": "parseDeltaBlockHashes",
+      "sourceSha256": "4bc144dcd1e460bbdef089ca2d5470e47236a9ff859526d63daf337e64bdceab",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/src/chunked-delta.ts",
+      "kind": "hand-parser",
+      "owner": "parseDeltaBaseStat",
+      "sourceSha256": "e4099f7529d00fcf5308f83abdb52f458d44788de6761d008591ee50e12f5161",
+      "decision": "framing"
+    },
+    {
+      "file": "packages/devbox/src/lifecycle.ts",
+      "kind": "hand-parser",
+      "owner": "parseWorkdirHolders",
+      "sourceSha256": "cbbf730f08c986db54c88f306509963fb8e507e69761cdc9fc11483af50b71bd",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/pc-agent/src/update.js",
+      "kind": "hand-parser",
+      "owner": "parseUpdateFrame",
+      "sourceSha256": "6b399f6c554ffece81688b060cd2dbe7614bed81d84ca7b083482b1b46b29250",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/test-utils/src/git.ts",
+      "kind": "hand-parser",
+      "owner": "stripGitContext",
+      "sourceSha256": "d6851f7dfc16565fc73f328d7e663184ba9ccb5804d19b862cdc5db6b86c6376",
+      "decision": "lexical"
+    },
+    {
+      "file": "scripts/bench-devbox-fixture.ts",
+      "kind": "regex-literal",
+      "owner": "key",
+      "sourceSha256": "a078070c2846ca6a074cdc837b32604244069de11122f3ce50889a7f0ac6caa4",
+      "decision": "xml"
+    },
+    {
+      "file": "scripts/bench-devbox-fixture.ts",
+      "kind": "regex-literal",
+      "owner": "listObjects",
+      "sourceSha256": "12e964e6ebff3855800b1692251f8c0e3a31f861323f572dd93fa0293460823a",
+      "decision": "xml"
+    },
+    {
+      "file": "scripts/bench-devbox-fixture.ts",
+      "kind": "regex-literal",
+      "owner": "key",
+      "sourceSha256": "a078070c2846ca6a074cdc837b32604244069de11122f3ce50889a7f0ac6caa4",
+      "decision": "xml"
+    },
+    {
+      "file": "scripts/bench-devbox-fixture.ts",
+      "kind": "regex-literal",
+      "owner": "uploadId",
+      "sourceSha256": "a7c1d5f3b2c0f43f0cbb30a8e3d50a69942620acfbb9c09fc25e9d7665deea0b",
+      "decision": "xml"
+    },
+    {
+      "file": "scripts/bench.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "d4a12484c36b20b891fd3172a7dcd9832174747708640ce342ac67c4817bf606",
+      "decision": "lexical"
+    },
+    {
+      "file": "scripts/bench.ts",
+      "kind": "hand-parser",
+      "owner": "parseArgv",
+      "sourceSha256": "da0a263f1efcba328452e02951f7a541b4a9b69357fe8b0e98eacdeb4095e118",
+      "decision": "cli"
+    },
+    {
+      "file": "scripts/coverage-lcov.ts",
+      "kind": "hand-parser",
+      "owner": "parseLcov",
+      "sourceSha256": "0764d1958d9d460b111a7c065fb86baad08d4cff082ffdf22bdbd44eeb9c13ce",
+      "decision": "framing"
+    },
+    {
+      "file": "scripts/devbox-holder-probe.ts",
+      "kind": "hand-parser",
+      "owner": "scan",
+      "sourceSha256": "3af71376f6acceac41eb3af608c12290bc9f3ae6cd6cfe3a0f7a50636a0b4104",
+      "decision": "protected"
+    },
+    {
+      "file": "scripts/eval-workspaces.ts",
+      "kind": "hand-parser",
+      "owner": "parseArgs",
+      "sourceSha256": "14ecc19b299e0aa7fe22213b31c53b5d312c2a24671d446ed5d3fac34e9cbfe1",
+      "decision": "cli"
+    },
+    {
+      "file": "scripts/patch-parity.ts",
+      "kind": "hand-parser",
+      "owner": "parsePatch",
+      "sourceSha256": "5043abc56cdb957b98aff82da7b71bc0acbbe9ef365b946251bd104d070e40ba",
+      "decision": "grammar"
+    },
+    {
+      "file": "scripts/plan-demo-film.test.ts",
+      "kind": "regex-literal",
+      "owner": "tag",
+      "sourceSha256": "02b50202baeb02cf6091c74dccc9e047ef372e1a9374f7b3301cffaf4612d3e1",
+      "decision": "lexical"
+    },
+    {
+      "file": "scripts/review-package.ts",
+      "kind": "regex-literal",
+      "owner": "artifactHtml",
+      "sourceSha256": "7eb623284311613b1d5f5d089b629a265cfd2d210d9b1ee62fa659c6f51f7aa0",
+      "decision": "lexical"
+    },
+    {
+      "file": "scripts/review-round2.ts",
+      "kind": "regex-literal",
+      "owner": "html",
+      "sourceSha256": "7eb623284311613b1d5f5d089b629a265cfd2d210d9b1ee62fa659c6f51f7aa0",
+      "decision": "lexical"
+    },
+    {
+      "file": "scripts/syntax.ts",
+      "kind": "hand-parser",
+      "owner": "parse",
+      "sourceSha256": "1b3d473d320f0f0d72a97d6eb491e90e4b101d791c404ad5089b2aa646a17ac3",
+      "decision": "traversal"
+    },
+    {
+      "file": "scripts/test-census.ts",
+      "kind": "regex-literal",
+      "owner": "ASSERTING_IMPORT",
+      "sourceSha256": "0ddad50727f73a4801327618cad1eeba2795063680593f769b077e0d4694497f",
+      "decision": "lexical"
+    },
+    {
+      "file": "scripts/workflow-expressions.ts",
+      "kind": "hand-parser",
+      "owner": "tokenize",
+      "sourceSha256": "be06a99722260c66d8daee0862a9290002ad134306b6e61d9c1dead7c422e1a3",
+      "decision": "grammar"
+    },
+    {
+      "file": "scripts/xml.ts",
+      "kind": "hand-parser",
+      "owner": "parseXml",
+      "sourceSha256": "2483c57fcebeb969f63ff8b15ff05dcace71cb5fd3e0a2d51a946e9db1c884a9",
+      "decision": "grammar"
+    },
+    {
+      "file": "scripts/xml.ts",
+      "kind": "hand-parser",
+      "owner": "decode",
+      "sourceSha256": "b9768501156aba978c5353ec91b573b8dc2d57fe6d782fa81e1cd5b01cac49ae",
+      "decision": "grammar"
+    },
+    {
+      "file": "tests/first-run/device-session.ts",
+      "kind": "regex-literal",
+      "owner": "title",
+      "sourceSha256": "891d93155d34670161d9ad7f34cb467979364a458b5fa4acf3030fc40cd24aea",
+      "decision": "lexical"
+    },
+    {
+      "file": "tools/oxlint/anti-slop/vendor/eslint-stylistic/padding-line-between-statements.ts",
+      "kind": "regex-literal",
+      "owner": "CJS_IMPORT",
+      "sourceSha256": "35649bf934923ae7e10df35684af94ba865b4eefc387701406e8629df4dda392",
+      "decision": "lexical"
+    }
+  ]
+}

@@ -14,6 +14,17 @@
       "loadAtStart": 3.57,
       "exit": 0
     },
+    "bun scripts/pattern-inventory.ts": {
+      "wallSeconds": 2.35,
+      "cpuSeconds": 3.26,
+      "peakRssMb": 1507.59,
+      "peakRunnable": 3,
+      "peakCpuThreads": 2.37,
+      "meanThreads": 1.39,
+      "samples": 38,
+      "loadAtStart": 3.19,
+      "exit": 0
+    },
     "bun run lint": {
       "wallSeconds": 22.29,
       "cpuSeconds": 74.05,
@@ -784,7 +795,7 @@
       "loadAtStart": 18.46,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/jsonc.test.ts scripts/syntax.test.ts": {
+    "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts": {
       "wallSeconds": 0.36,
       "cpuSeconds": 0.17,
       "peakRssMb": 50.86,
