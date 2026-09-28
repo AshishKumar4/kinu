@@ -1,7 +1,6 @@
 /** The one cf-side construction of the shared web provider, so wiring cannot drift between actors. */
 
 import { createDefaultWebSearchProvider, type WebSearchProvider } from './provider';
-import { REAL_CLOCK } from '../types/clock';
 import type { AuthResolver } from '../providers/types';
 import type { ModelCallSink } from '../events/model-call';
 import { workersAiHtmlToMarkdown, type WorkersAiMarkdown } from '../providers/model-invocation';
@@ -22,7 +21,6 @@ export function buildCfWebSearchProvider(
 ): WebSearchProvider {
   const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
     fetch: globalThis.fetch,
-    clock: REAL_CLOCK,
     getAuth: async (key, opts) => {
       const auth = resolveAuth();
 

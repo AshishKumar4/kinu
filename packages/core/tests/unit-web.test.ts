@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { handClock, toolExecute } from '@kinu.run/test-utils';
+import { toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime, storesFor } from './helpers';
@@ -203,7 +203,7 @@ describe('web provider — search', () => {
     expect((await provider.search('query')).results[0]?.url).toBe('https://docs.example.com/x');
     expect(calls.map((call) => call.url)).toEqual(['https://search.example.net/v1/search']);
   });
-  test('an unreadable Tavily response maps to a non-retriable WebFetchError with cause', async () => {
+  test('an unreadable Tavily response maps to a WebFetchError with cause', async () => {
     const bodies = ['not-json-at-all', JSON.stringify({ results: [{ url: 123 }] })];
 
     for (const body of bodies) {
@@ -219,22 +219,22 @@ describe('web provider — search', () => {
       });
 
       const attempt = provider.search('query');
-      await expect(attempt).rejects.toMatchObject({ name: 'WebFetchError', retriable: false });
+      await expect(attempt).rejects.toMatchObject({ name: 'WebFetchError' });
       await expect(attempt).rejects.toThrow(/unreadable.*Tavily|Tavily.*unreadable/i);
       await expect(attempt).rejects.toMatchObject({ cause: expect.anything() });
     }
   });
 
-  test('DuckDuckGo rate-limit maps to a retriable error', async () => {
+  test('DuckDuckGo rate-limit rejects instead of answering no results', async () => {
     const { fetch } = stubFetch(() => ({ status: 429, body: '' }));
     const provider = createDefaultWebSearchProvider({ fetch });
-    await expect(provider.search('x')).rejects.toMatchObject({ name: 'WebFetchError', retriable: true });
+    await expect(provider.search('x')).rejects.toMatchObject({ name: 'WebFetchError' });
   });
 
   test('empty query is rejected', async () => {
     const { fetch } = stubFetch(() => ({ body: '' }));
     const provider = createDefaultWebSearchProvider({ fetch });
-    await expect(provider.search('   ')).rejects.toMatchObject({ message: 'search query is empty', retriable: false });
+    await expect(provider.search('   ')).rejects.toMatchObject({ message: 'search query is empty' });
   });
 });
 
@@ -300,7 +300,7 @@ describe('web provider — fetch', () => {
   test('http error maps to a WebFetchError', async () => {
     const { fetch } = stubFetch(() => ({ status: 404, body: 'nope' }));
     const provider = createDefaultWebSearchProvider({ fetch });
-    await expect(provider.fetch('https://example.com/missing')).rejects.toMatchObject({ message: expect.stringContaining('404'), retriable: false });
+    await expect(provider.fetch('https://example.com/missing')).rejects.toMatchObject({ message: expect.stringContaining('404') });
   });
 
   test('SECURITY: a public name that resolves to a private, loopback or metadata address is refused before connecting', async () => {
@@ -351,7 +351,7 @@ describe('web provider — fetch', () => {
 
     const provider = createDefaultWebSearchProvider({ fetch: fakeFetch });
     const attempt = provider.fetch('https://example.com/start');
-    await expect(attempt).rejects.toMatchObject({ retriable: false });
+    await expect(attempt).rejects.toMatchObject({ name: 'WebFetchError' });
     await expect(attempt).rejects.toThrow(/169\.254\.169\.254/);
     expect(calls).toEqual(['https://example.com/start']);
   });
@@ -409,69 +409,7 @@ describe('web provider — fetch', () => {
     expect(pulls).toBeLessThan(totalChunks);
   });
 
-  test('a trickling body past the timeout rejects as timed out', async () => {
-    // The provider's timer is injected (D19); the test fires it after the first chunk, racing no real timer.
-    const clock = handClock();
-
-    const trickle = () => {
-      const pulled = Promise.withResolvers<void>();
-
-      const stream = new ReadableStream<Uint8Array>({
-        async pull(controller) {
-          controller.enqueue(new TextEncoder().encode('hello '));
-          pulled.resolve();
-          await new Promise<void>(() => undefined);
-        },
-      });
-
-      return { stream, pulled: pulled.promise };
-    };
-
-    let fetched = Promise.withResolvers<ReturnType<typeof trickle>>();
-
-    const slowFetch = Object.assign(
-      async () => {
-        const body = trickle();
-        fetched.resolve(body);
-
-        return new Response(body.stream, { headers: { 'content-type': 'text/plain' } });
-      },
-      { preconnect: fetch.preconnect },
-    ) satisfies typeof fetch;
-
-    const provider = createDefaultWebSearchProvider({ fetch: slowFetch, timeoutMs: 40, clock });
-
-    // Catch before firing the budget: bun's `.rejects` spins until settlement, so it cannot be attached first.
-    const Refusal = v.object({ name: v.string(), retriable: v.boolean(), message: v.string() });
-
-    const pastBudget = async (): Promise<v.InferOutput<typeof Refusal>> => {
-      fetched = Promise.withResolvers();
-
-      const outcome = (async (): Promise<v.InferOutput<typeof Refusal> | undefined> => {
-        try {
-          await provider.fetch('https://example.com/slow');
-
-          return undefined;
-        } catch (cause) {
-          return v.parse(Refusal, cause);
-        }
-      })();
-
-      const body = await fetched.promise;
-      await body.pulled;
-      clock.advance(40);
-      const refused = await outcome;
-
-      if (refused === undefined) throw new Error('the fetch past its budget resolved');
-
-      return refused;
-    };
-
-    expect(await pastBudget()).toMatchObject({ name: 'WebFetchError', retriable: true });
-    expect((await pastBudget()).message).toMatch(/timed out after 40ms/);
-  });
-
-  test('with no caller budget a fetch carries no abort signal, so no clock can end it', async () => {
+  test('a fetch without a caller signal carries no abort signal, so no timer can end it', async () => {
     // A default timeout would arm on every request, and its refusal reads as a failed origin.
     const { fetch, calls } = stubFetch(() => ({ body: '<html><body><p>slow but fine</p></body></html>' }));
     const provider = createDefaultWebSearchProvider({ fetch });
@@ -542,7 +480,7 @@ describe('url safety (SSRF + exfil guards)', () => {
     test(c.name, async () => {
       const { fetch, calls } = stubFetch(() => ({ body: 'x' }));
       const provider = createDefaultWebSearchProvider({ fetch });
-      await expect(provider.fetch(c.url)).rejects.toMatchObject({ retriable: false });
+      await expect(provider.fetch(c.url)).rejects.toMatchObject({ name: 'WebFetchError' });
       expect(calls.length).toBe(0);
     });
   }
@@ -647,8 +585,8 @@ describe('web builtin', () => {
     })).fetch });
 
     const execute = toolExecute<WebArgs, JsonValue>(buildWithWeb(rt, failing).web);
-    await expect(execute({ action: 'search', query: 'x' })).rejects.toMatchObject({ message: expect.stringContaining('rate-limited'), retriable: true });
-    await expect(execute({ action: 'fetch', url: 'https://example.com' })).rejects.toMatchObject({ message: expect.stringContaining('404'), retriable: false });
+    await expect(execute({ action: 'search', query: 'x' })).rejects.toMatchObject({ message: expect.stringContaining('rate-limited') });
+    await expect(execute({ action: 'fetch', url: 'https://example.com' })).rejects.toMatchObject({ message: expect.stringContaining('404') });
   });
 
   test('codemode can call web.search() and web.fetch()', async () => {

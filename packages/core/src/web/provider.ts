@@ -8,7 +8,6 @@ import { TOOL_REACH } from '../tools/registry';
 import { readExecSignal } from '../execution/signal';
 import { codemodeText } from '../tools/sandbox-contract';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
-import { REAL_CLOCK, type Clock } from '../types/clock';
 
 const TAVILY_CRED_KEY = 'tavily';
 
@@ -41,7 +40,6 @@ export interface WebFetchResult {
 }
 
 export interface WebSearchProvider {
-  /** Without `timeoutMs`, `signal` is the only thing that ends a request early. */
   search(query: string, opts?: { limit?: number; signal?: AbortSignal }): Promise<WebSearchResponse>;
   fetch(url: string, opts?: { signal?: AbortSignal }): Promise<WebFetchResult>;
 }
@@ -54,9 +52,6 @@ export interface DefaultWebSearchProviderDeps {
   htmlToMarkdown?: (html: string, opts?: { url?: string }) => Promise<string>;
   /** Absent on a Worker, whose platform refuses a name resolving inward (`url-safety.ts`). */
   resolve?: HostResolver;
-  /** Per-request budget in ms; absent means no local timeout. */
-  timeoutMs?: number;
-  clock?: Clock;
 }
 
 const DEFAULT_SEARCH_LIMIT = 5;
@@ -81,45 +76,12 @@ const MAX_FETCH_BYTES = 2_000_000;
 const MAX_REDIRECTS = 20;
 
 class WebFetchError extends Error {
-  constructor(message: string, public readonly retriable = false, options?: ErrorOptions) {
-    super(message, options);
-    this.name = 'WebFetchError';
-  }
+  override readonly name = 'WebFetchError';
 }
 
 export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDeps): WebSearchProvider {
-  const budgetMs = deps.timeoutMs;
-  const clock = deps.clock ?? REAL_CLOCK;
   // Detached: workerd's fetch throws "Illegal invocation" when called as `deps.fetch`.
   const fetchImpl = deps.fetch;
-
-  const withRequestBudget = async <T>(
-    caller: AbortSignal | undefined,
-    run: (signal?: AbortSignal) => Promise<T>,
-  ): Promise<T> => {
-    if (budgetMs === undefined) return run(caller);
-    const ctrl = new AbortController();
-    caller?.addEventListener('abort', () => ctrl.abort(caller.reason), { once: true });
-    const cancelBudget = clock.after(budgetMs, () => { ctrl.abort(); });
-
-    const onAbort = new Promise<never>((_, reject) => {
-      ctrl.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true });
-    });
-
-    try {
-      return await Promise.race([run(ctrl.signal), onAbort]);
-    } catch (error) {
-      if (caller?.aborted === true) throw error;
-
-      if (ctrl.signal.aborted) {
-        throw new WebFetchError(`request timed out after ${String(budgetMs)}ms`, true, { cause: error });
-      }
-
-      throw error;
-    } finally {
-      cancelBudget();
-    }
-  };
 
   const convert = async (html: string, url: string): Promise<string> => {
     if (!deps.htmlToMarkdown) return localHtmlToMarkdown(html);
@@ -144,83 +106,79 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     query: string,
     limit: number,
     { headers, baseURL = TAVILY_API }: AuthResolution,
-    caller: AbortSignal | undefined,
+    signal: AbortSignal | undefined,
   ): Promise<WebSearchResponse> {
-    return withRequestBudget(caller, async (signal) => {
-      const res = await fetchImpl(new URL('search', baseURL.endsWith('/') ? baseURL : `${baseURL}/`).href, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...headers },
-        body: JSON.stringify({
-          query,
-          max_results: limit,
-          include_answer: true,
-          search_depth: 'basic',
-        }),
-        signal,
+    const res = await fetchImpl(new URL('search', baseURL.endsWith('/') ? baseURL : `${baseURL}/`).href, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({
+        query,
+        max_results: limit,
+        include_answer: true,
+        search_depth: 'basic',
+      }),
+      signal,
+    });
+
+    if (res.status === 429) throw new WebFetchError('Tavily rate limit (429): retry shortly');
+
+    if (!res.ok) {
+      const body = await res.text();
+      throw new WebFetchError(`Tavily search failed (${res.status}): ${body.slice(0, 200)}`);
+    }
+
+    try {
+      const json = v.parse(TavilyResponseSchema, await res.json());
+
+      const safe = (json.results ?? []).flatMap((r) => {
+        const url = r.url;
+
+        return url !== undefined && isSafeUrl(url) ? [{ ...r, url }] : [];
       });
 
-      if (res.status === 429) throw new WebFetchError('Tavily rate limit (429): retry shortly', true);
+      const results: WebSearchResult[] = safe
+        .slice(0, limit)
+        .map((r, i) => {
+          const title = r.title?.trim();
 
-      if (!res.ok) {
-        const body = await res.text();
-        throw new WebFetchError(`Tavily search failed (${res.status}): ${body.slice(0, 200)}`);
-      }
-
-      try {
-        const json = v.parse(TavilyResponseSchema, await res.json());
-
-        const safe = (json.results ?? []).flatMap((r) => {
-          const url = r.url;
-
-          return url !== undefined && isSafeUrl(url) ? [{ ...r, url }] : [];
+          return {
+            title: title === undefined || title === '' ? r.url : title,
+            url: r.url,
+            snippet: stripBase64Images((r.content ?? '').trim()).slice(0, 600),
+            date: r.published_date === '' ? undefined : r.published_date,
+            position: i + 1,
+          };
         });
 
-        const results: WebSearchResult[] = safe
-          .slice(0, limit)
-          .map((r, i) => {
-            const title = r.title?.trim();
+      const answer = json.answer?.trim();
 
-            return {
-              title: title === undefined || title === '' ? r.url : title,
-              url: r.url,
-              snippet: stripBase64Images((r.content ?? '').trim()).slice(0, 600),
-              date: r.published_date === '' ? undefined : r.published_date,
-              position: i + 1,
-            };
-          });
-
-        const answer = json.answer?.trim();
-
-        return { query, answer: answer === '' ? undefined : answer, results, source: 'tavily' };
-      } catch (error) {
-        if (signal?.aborted === true) throw error;
-        throw new WebFetchError('Tavily search returned an unreadable response', false, { cause: error });
-      }
-    });
+      return { query, answer: answer === '' ? undefined : answer, results, source: 'tavily' };
+    } catch (error) {
+      if (signal?.aborted === true) throw error;
+      throw new WebFetchError('Tavily search returned an unreadable response', { cause: error });
+    }
   }
 
-  async function duckDuckGoSearch(query: string, limit: number, caller: AbortSignal | undefined): Promise<WebSearchResponse> {
-    return withRequestBudget(caller, async (signal) => {
-      const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  async function duckDuckGoSearch(query: string, limit: number, signal: AbortSignal | undefined): Promise<WebSearchResponse> {
+    const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
 
-      const res = await fetchImpl(endpoint, {
-        headers: {
-          'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
-          accept: 'text/html',
-        },
-        signal,
-      });
-
-      if (res.status === 429 || res.status === 202) {
-        throw new WebFetchError('DuckDuckGo rate-limited the request: retry shortly, or connect a Tavily key for reliable search', true);
-      }
-
-      if (!res.ok) throw new WebFetchError(`web search failed (${res.status})`);
-      const html = await res.text();
-      const results = parseDuckDuckGoHtml(html, limit);
-
-      return { query, results, source: 'duckduckgo' };
+    const res = await fetchImpl(endpoint, {
+      headers: {
+        'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
+        accept: 'text/html',
+      },
+      signal,
     });
+
+    if (res.status === 429 || res.status === 202) {
+      throw new WebFetchError('DuckDuckGo rate-limited the request: retry shortly, or connect a Tavily key for reliable search');
+    }
+
+    if (!res.ok) throw new WebFetchError(`web search failed (${res.status})`);
+    const html = await res.text();
+    const results = parseDuckDuckGoHtml(html, limit);
+
+    return { query, results, source: 'duckduckgo' };
   }
 
   const judged = async (url: string): Promise<URL> => {
@@ -229,7 +187,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     try {
       parsed = assertSafeUrl(url);
     } catch (error) {
-      if (error instanceof UnsafeUrlError) throw new WebFetchError(error.reason, false, { cause: error });
+      if (error instanceof UnsafeUrlError) throw new WebFetchError(error.reason, { cause: error });
       throw error;
     }
 
@@ -242,7 +200,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
 
   return {
     async search(query, opts) {
-      const q = (query ?? '').trim();
+      const q = query.trim();
 
       if (!q) throw new WebFetchError('search query is empty');
       const limit = clampLimit(opts?.limit);
@@ -258,57 +216,48 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
 
       // Redirects followed manually so every Location passes the SSRF guard.
       let finalUrl = parsed.toString();
+      let hop: Response;
 
-      const fetched = await withRequestBudget(opts?.signal, async (signal) => {
-        let target = finalUrl;
+      for (let redirects = 0; ; redirects++) {
+        if (redirects > 0) await judged(finalUrl);
 
-        for (let redirects = 0; ; redirects++) {
-          if (redirects > 0) await judged(target);
+        hop = await fetchImpl(finalUrl, {
+          headers: {
+            // Markdown-for-Agents: Cloudflare-proxied zones answer with markdown.
+            accept: 'text/markdown, text/html;q=0.9, text/plain;q=0.8',
+            'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
+          },
+          redirect: 'manual',
+          signal: opts?.signal,
+        });
 
-          const hop = await fetchImpl(target, {
-            headers: {
-              // Markdown-for-Agents: Cloudflare-proxied zones answer with markdown.
-              accept: 'text/markdown, text/html;q=0.9, text/plain;q=0.8',
-              'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
-            },
-            redirect: 'manual',
-            signal,
-          });
+        const location =
+          hop.status === 301 || hop.status === 302 || hop.status === 303 || hop.status === 307 || hop.status === 308
+            ? hop.headers.get('location')
+            : null;
 
-          const location =
-            hop.status === 301 || hop.status === 302 || hop.status === 303 || hop.status === 307 || hop.status === 308
-              ? hop.headers.get('location')
-              : null;
+        if (!location) break;
 
-          if (!location) {
-            finalUrl = target;
-
-            if (hop.status === 429) throw new WebFetchError('fetch rate-limited (429): retry shortly', true);
-
-            if (!hop.ok) throw new WebFetchError(`fetch failed (${hop.status}) for ${finalUrl}`);
-            const contentType = hop.headers.get('content-type') ?? '';
-            const { bytes, clipped } = await readCappedBody(hop, MAX_FETCH_BYTES);
-
-            return { contentType, bytes, clipped };
-          }
-
-          if (redirects >= MAX_REDIRECTS) {
-            throw new WebFetchError(`too many redirects (over ${MAX_REDIRECTS}) for ${parsed.toString()}`);
-          }
-
-          let next: URL;
-
-          try {
-            next = new URL(location, target);
-          } catch (error) {
-            throw new WebFetchError(`redirect from ${target} names an unparseable location`, false, { cause: error });
-          }
-
-          target = next.toString();
+        if (redirects >= MAX_REDIRECTS) {
+          throw new WebFetchError(`too many redirects (over ${MAX_REDIRECTS}) for ${parsed.toString()}`);
         }
-      });
 
-      const { contentType, bytes, clipped } = fetched;
+        let next: URL;
+
+        try {
+          next = new URL(location, finalUrl);
+        } catch (error) {
+          throw new WebFetchError(`redirect from ${finalUrl} names an unparseable location`, { cause: error });
+        }
+
+        finalUrl = next.toString();
+      }
+
+      if (hop.status === 429) throw new WebFetchError('fetch rate-limited (429): retry shortly');
+
+      if (!hop.ok) throw new WebFetchError(`fetch failed (${hop.status}) for ${finalUrl}`);
+      const contentType = hop.headers.get('content-type') ?? '';
+      const { bytes, clipped } = await readCappedBody(hop, MAX_FETCH_BYTES);
       const raw = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
 
       const markdown = looksLikeHtml(raw, contentType)

@@ -310,7 +310,6 @@
   "packages/core/src/vfs/agent-home.ts#AGENT_UID_FLOOR (unreached-export)",
   "packages/core/src/vfs/agent-home.ts#SESSION_UID (unreached-export)",
   "packages/core/src/web/provider.ts#DefaultWebSearchProviderDeps.htmlToMarkdown (unsupplied-field)",
-  "packages/core/src/web/provider.ts#DefaultWebSearchProviderDeps.timeoutMs (unsupplied-field)",
   "packages/core/src/workspace-birth.ts#WorkspaceBirthConfig.scaffold (unsupplied-field)",
   "packages/devbox/src/durability/contracts.ts#PayloadGrantSchema (unreached-export)",
   "packages/devbox/src/durability/contracts.ts#PublishWorkSchema (unreached-export)",
