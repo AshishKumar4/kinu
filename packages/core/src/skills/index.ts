@@ -5,7 +5,7 @@
 export * from './types';
 
 export {
-  parseSkillFile, stringifySkillFile, skillNameProblem,
+  parseSkillFile, skillNameProblem,
 } from './parse';
 
 export {

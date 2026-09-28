@@ -514,7 +514,7 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
         {actions.map((action) => (
           <label key={action.id}
             className="flex items-start gap-2 rounded-md px-2 py-1.5 p-elevated cursor-pointer">
-            <input type="checkbox" className="mt-0.5 shrink-0" checked={chosen.has(action.id)}
+            <input type="checkbox" className="mt-0.5 shrink-0 cursor-pointer accent-[var(--c-accent)] hover:brightness-110" checked={chosen.has(action.id)}
               onChange={() => flow.toggle(action.id, allIds)} disabled={state.busy} />
             <span className="min-w-0 flex-1">
               <code className="block p-t-code p-text break-all whitespace-pre-wrap">{revealMisrepresenting(action.detail ?? "")}</code>

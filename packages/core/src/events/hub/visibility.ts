@@ -1,5 +1,7 @@
 /** Payload visibility gates display and audit storage; trust (separately) gates execution. */
 
+import { Effect } from 'effect';
+import { settleSync } from '../../obs/index';
 import { createHash, createHmac } from 'node:crypto';
 import * as v from 'valibot';
 import { evidenceWindow } from '../../utils/evidence-window';
@@ -95,7 +97,7 @@ export function applyVisibilityForStorage(
   const serializedPayload = JSON.stringify(payload);
 
   if (serializedPayload === undefined) {
-    throw new Error('event payload must be JSON-serializable');
+    return settleSync(Effect.die(new Error('event payload must be JSON-serializable')));
   }
 
   const admittedPayload = parseJsonValue(serializedPayload);

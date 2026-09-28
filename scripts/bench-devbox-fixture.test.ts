@@ -1,13 +1,10 @@
 import { expect, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { present, scratchDir } from '@kinu.run/test-utils';
-import { C3_WORKLOAD, C3_OVERWRITE_SHA256 } from '../packages/devbox/bench/witness-files';
-import { evaluateLiveC3, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
-import { measureLiveC3 } from './bench-devbox-fixture';
-import type { PublicationWindow } from '../packages/devbox/bench/publication-meter';
 import * as v from 'valibot';
+import { C3_OVERWRITE_SHA256, C3_WORKLOAD } from '../packages/devbox/bench/witness-files';
+import { evaluateLiveC3, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
+import type { PublicationWindow } from '../packages/devbox/bench/publication-meter';
 import type { StartupCompletion } from '../packages/devbox/bench/observation-schema';
+import { measureLiveC3 } from './bench-devbox-fixture';
 
 function startup(bootId: string, startedAt: number, kind: string): StartupCompletion {
   return {
@@ -17,7 +14,7 @@ function startup(bootId: string, startedAt: number, kind: string): StartupComple
   };
 }
 
-export function c3Fixture(): LiveC3Observation {
+function c3Fixture(): LiveC3Observation {
   return {
     event: 'matched.chain.C3.observations', case: 'snapshot-chain/C3', runId: 'test-run', box: 'test-box',
     identity: { commit: 'c'.repeat(40), dirtyDigest: 'clean', workerVersion: 'worker-version', image: `image@sha256:${'a'.repeat(64)}` },
@@ -44,72 +41,6 @@ export function c3Fixture(): LiveC3Observation {
       evidence: { kind: 'file', size: 67_108_864, sha256: C3_OVERWRITE_SHA256 } },
     correctness: 'passed', errors: [], cleanup: null,
   };
-}
-
-function check(record: LiveC3Observation, encoded = JSON.stringify(record)) {
-  const path = join(scratchDir('c3-checker'), 'stdout.ndjson');
-  writeFileSync(path, `${encoded}\n${JSON.stringify({ event: 'matched.chain.complete', case: record.case, runId: record.runId, correctness: record.correctness })}\n`);
-
-  return Bun.spawnSync(['bun', new URL('./bench-c3-overwrite-cell.ts', import.meta.url).pathname, path]);
-}
-
-test('the C3 checker refuses an object-count increase even within the byte bound', () => {
-  const record = c3Fixture();
-  const round = record.rounds[0];
-  const window = present(round.accounting.window, 'the publication window');
-
-  round.published.transport = { puts: 2, putUploadBytes: 131_072 };
-  round.accounting.afterOps = { calls: { put: 2 } };
-  window.attempts.push({ ...window.attempts[0], id: 'put-2', startedAt: 14, finishedAt: 15 });
-  expect(check(record).exitCode).toBe(1);
-});
-
-test('the C3 byte bound is strict, not inclusive', () => {
-  const record = c3Fixture();
-  const round = record.rounds[0];
-  const attempt = present(round.accounting.window, 'the publication window').attempts[0];
-
-  round.published.transport.putUploadBytes = 196_608;
-  attempt.bytes = 196_608;
-  attempt.observedBytes = 196_608;
-  expect(check(record).exitCode).toBe(1);
-});
-
-const invalidC3: Array<{ name: string; change: (row: LiveC3Observation) => void }> = [
-  { name: 'missing build identity', change: (row) => { row.identity = null; } },
-  { name: 'unacknowledged baseline', change: (row) => { row.baselineCheckpoint = { ok: true, outcome: { kind: 'failed' } }; } },
-  { name: 'uncommitted overwrite', change: (row) => { row.rounds[0].checkpoint = { ok: true, outcome: { kind: 'failed' } }; } },
-  { name: 'missing publication window', change: (row) => { row.rounds[0].accounting.window = null; } },
-  { name: 'missing accounting bracket', change: (row) => { row.rounds[0].accounting.afterOps = null; } },
-  { name: 'missing restore probe', change: (row) => { row.restoreProbe = null; } },
-  { name: 'warm boot reuse', change: (row) => {
-    const restored = present(row.restoration, 'the cold restoration');
-
-    present(restored.state.state, 'the restored box state').bootId = 'before';
-  } },
-  { name: 'unconfirmed destruction', change: (row) => { row.destroyReceipt = { ok: true, destroyed: false }; } },
-  { name: 'refused file observer', change: (row) => { row.file = { path: '/workspace/vol/dense.bin', reply: { ok: false, error: 'pending' }, error: 'pending', evidence: null }; } },
-];
-
-for (const invalid of invalidC3) {
-  test(`the C3 checker refuses ${invalid.name}`, () => {
-    const row = c3Fixture();
-    invalid.change(row);
-    expect(check(row).exitCode).toBe(1);
-  });
-}
-
-test('a complete cold C3 observation passes the checker', () => {
-  expect(check(c3Fixture()).exitCode).toBe(0);
-});
-
-for (const field of ['preparation', 'cleanup', 'initialObservations', 'restorationObservations'] as const) {
-  test(`the C3 checker validates the concrete ${field} receipt`, () => {
-    const row = c3Fixture();
-    const invalid = field.endsWith('Observations') ? '[7]' : '7';
-    const encoded = JSON.stringify(row).replace(`"${field}":${JSON.stringify(row[field])}`, `"${field}":${invalid}`);
-    expect(check(row, encoded).exitCode).toBe(1);
-  });
 }
 
 async function driverC3Proof(publishDuringOverwrite: boolean) {

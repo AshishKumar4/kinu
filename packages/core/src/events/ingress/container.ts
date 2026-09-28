@@ -6,6 +6,8 @@
  * response because `waitUntil` is a no-op in a DO (`do.wait_until.no_op`); the retry is recovery.
  */
 
+import { Effect } from 'effect';
+import { settleSync } from '../../obs/index';
 import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
 import { IngressRejectedError, type IngressDescriptor, type TrustLevel } from '../hub/types';
@@ -78,19 +80,22 @@ export async function acceptContainerEvent(
     : fileChangedDescriptor(deps, envelope);
 
   // The hub's priority table decides which trust may publish; its rejection becomes a 403.
-  try {
-    const { id, admitted } = deps.log.publish({ descriptor, now });
+  return settleSync(Effect.try({
+    try: (): ContainerEventResult => {
+      const { id, admitted } = deps.log.publish({ descriptor, now });
 
-    if (admitted) deps.onAdmitted();
+      if (admitted) deps.onAdmitted();
 
-    return { status: 'admitted', event_id: id, admitted };
-  } catch (err) {
-    if (err instanceof IngressRejectedError) {
-      return { status: 'rejected', http_status: 403, reason: err.message };
-    }
-
-    throw err;
-  }
+      return { status: 'admitted', event_id: id, admitted };
+    },
+    catch: (cause) => ({ cause }),
+  }).pipe(
+    Effect.catchIf(
+      (failed): failed is { cause: IngressRejectedError } => failed.cause instanceof IngressRejectedError,
+      (failed) => Effect.succeed<ContainerEventResult>({ status: 'rejected', http_status: 403, reason: failed.cause.message }),
+    ),
+    Effect.catch((failed) => Effect.die(failed.cause)),
+  ));
 }
 
 async function processDoneDescriptor(

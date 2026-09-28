@@ -42,8 +42,8 @@ function toJob(r: Row): BackgroundJob {
   return {
     id: r.id, kind: r.kind, label: r.label, workMode: r.work_mode === 'plan' ? 'plan' : 'build', status,
     result: r.result, error: r.error, createdAt: r.created_at, settledAt: r.settled_at,
-    epoch: r.epoch ?? 0,
-    resumeAttempts: r.resume_attempts ?? 0,
+    epoch: r.epoch,
+    resumeAttempts: r.resume_attempts,
     retriedBy: r.retried_by ?? null,
     attemptStartedAt: r.attempt_started_at ?? r.created_at,
     resumeAfter: r.resume_after ?? null,

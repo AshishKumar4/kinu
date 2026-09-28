@@ -71,7 +71,7 @@ interface CurriculumContext {
   recent: RecentOutcome[];
 }
 
-function collectContext(rt: AgentRuntime, takeOutcomes = 20): CurriculumContext {
+function collectContext(rt: AgentRuntime): CurriculumContext {
   const skills = rt.storage.sql<CurriculumSkill>`
     SELECT name, COALESCE(description, '') as description,
            COALESCE(score, 0.5) as score,
@@ -86,7 +86,7 @@ function collectContext(rt: AgentRuntime, takeOutcomes = 20): CurriculumContext 
   const recent = rt.storage.sql<{ user_message: string; outcome: TurnOutcome }>`
     SELECT user_message, outcome FROM turn_outcomes
       WHERE actor_id = ${rt.actor.actorId} AND outcome != 'abandoned'
-      ORDER BY created_at DESC LIMIT ${takeOutcomes}`
+      ORDER BY created_at DESC LIMIT 20`
     .map((row) => ({ task: row.user_message, succeeded: row.outcome === 'accepted' }));
 
   return { skills, recent };

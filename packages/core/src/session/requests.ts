@@ -73,14 +73,11 @@ export class SessionRequests {
     return { request: await this.prepare(request), messages, rendered };
   }
 
-  /** A position the last request held writes nothing. */
-  recordPrepared(bundle: PreparedRequestBundle, assertEpoch: () => void): void {
-    this.actor.assertCurrent();
-    assertEpoch();
-
+  /** Inside the claim owner's transaction, after it rechecked its epoch. A position the last request held writes nothing. */
+  recordPrepared(bundle: PreparedRequestBundle): void {
     for (const { prepared } of bundle.rendered) this.messages.insertRender(prepared);
     const list = this.context.record(REQUEST_LINEAGE, bundle.messages);
-    this.record(bundle.request, assertEpoch);
+    this.record(bundle.request);
     void this.sql`INSERT INTO request_renders(actor_id,request_id,context_id,revision)
       VALUES(${this.actor.actorId},${bundle.request.id},${list.contextId},${list.revision})`;
   }
@@ -97,10 +94,8 @@ export class SessionRequests {
       FROM actor_requests WHERE actor_id=${this.actor.actorId} AND turn_id=${turnId} ORDER BY epoch,revision`.map(requestOf);
   }
 
-  /** The claim owner calls this in its admission transaction after rechecking its epoch. */
-  record(request: PreparedRequest, assertEpoch: () => void): void {
-    this.actor.assertCurrent();
-    assertEpoch();
+  /** Inside the claim owner's transaction, after it rechecked its epoch. */
+  record(request: PreparedRequest): void {
     void this.sql`INSERT INTO actor_requests(actor_id,request_id,turn_id,run_id,epoch,step_index,revision,context_id,context_revision,metadata_json,metadata_path,metadata_digest,recorded_at)
       VALUES(${this.actor.actorId},${request.id},${request.turnId},${request.runId},${request.epoch},${request.step},${request.revision},${request.source.contextId},${request.source.revision},${request.metadata.json},${request.metadata.path},${request.metadata.digest},${Date.now()})`;
   }

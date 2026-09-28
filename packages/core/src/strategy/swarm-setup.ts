@@ -8,8 +8,7 @@ import {
 } from '../obs/error';
 import type { AgentRuntime } from '../types/agent-runtime';
 import {
-  archiveRegionRefusal, isTreeAdvance, judgeMarginalisationRefusal,
-  SWARM_TREE_ADVANCES,
+  isTreeAdvance, SWARM_TREE_ADVANCES,
 } from './swarm';
 import type { ResolvedSwarm } from './swarm';
 import type {
@@ -100,36 +99,6 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
   if (!caps.branches) {
     return badInput('neither this call nor its base states `branches`, so nothing says how many '
       + 'candidates an expansion produces. Pass `branches`, or name a base with `from`.');
-  }
-
-  // Judged scoring reaches the `mcts/evaluation.ts` ensemble. The marginalisation refusal is repeated
-  // from `swarmValidity` because this is also the in-process entry point.
-  const marginalisation = judgeMarginalisationRefusal(config);
-
-  if (marginalisation) return marginalisation;
-
-  if (isTreeAdvance(config.advance.kind) && config.score.kind === 'none') {
-    // Also refused by `swarmValidity`; kept for in-process callers.
-    return badInput(`advance:"${config.advance.kind}" cannot select without a score.`);
-  }
-
-  if (config.advance.kind === 'pareto'
-    && PUBLISHING_CARRIES.some((carry) => carry === config.carry.kind)) {
-    // Also refused by `swarmValidity`; kept for in-process callers.
-    return badInput('advance:"pareto" keeps its durable frontier in node evidence and cannot '
-      + 'publish a vector through the scalar records store. Use carry:"none" or "reflections".');
-  }
-
-  // The archive's own region, via the predicate `swarmValidity` shares, so an in-process caller
-  // cannot run a shape the tool surface refuses.
-  const archive = archiveRegionRefusal(config, caps);
-
-  if (archive) return archive;
-
-  if (!resolved.key && config.advance.kind === 'archive') {
-    // Also refused by `swarmValidity`; kept for in-process callers and because the cell binds to `key`.
-    return badInput('advance:"archive" bins its elites by a descriptor and this call named none. '
-      + 'Supply `key`, naming a quantity the objective\'s own instrument reports.');
   }
 
   // Refuse compositions where a fan-in could never happen (*Accepted and ignored*).

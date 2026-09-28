@@ -72,6 +72,7 @@ const SUBJECTS: readonly Subject[] = [{
     const measured = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName(`long-cost-${String(size)}`)).longTurnCost(size);
 
     transportReads.set(size, measured.historyReads);
+    turnStatements.set(size, measured.cost.tables);
 
     return measured.cost;
   },
@@ -116,6 +117,18 @@ const SUBJECTS: readonly Subject[] = [{
 
 /** The chat transport's whole-transcript reads during the orchestrator subject's measured turn, by size. */
 const transportReads = new Map<number, number>();
+
+/** The orchestrator subject's measured turn, its statements by the tables they name, by size. */
+const turnStatements = new Map<number, OperationCost['tables']>();
+
+/**
+ * Statements one production turn runs, measured 2026-09-27 on this subject: 5,087 at 7dd73e1ac9, 2,035 of them
+ * asking `sqlite_master` whether the actor tables exist and 2,041 re-reading the actor and identity rows before every
+ * statement; 1,514 once `WorkspaceActorDirectory` checked a handle once a synchronous run, in one statement; 1,024
+ * once the directory remembered the actors it retired instead of re-reading their rows (1,515 before, at 41ffcb57b7);
+ * 775 once the transcript frame read its ancestry and its messages in one statement each, not one or two an entry.
+ */
+const TURN_STATEMENTS = 775;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
@@ -200,6 +213,21 @@ for (const subject of SUBJECTS) {
     expect(judge(subject.sizes, counters).map((finding) => describeFinding(subject, finding)), subject.why).toEqual([]);
   });
 }
+
+// Runs after the subjects: the orchestrator subject fills `turnStatements`.
+test('a production turn runs no more statements than it was measured at, and asks sqlite_master nothing', () => {
+  const totals = [...turnStatements.values()].map((tables) => ({
+    statements: Object.values(tables).reduce((sum, table) => sum + table.statements, 0),
+    schema: tables.sqlite_master?.statements ?? 0,
+  }));
+
+  expect(totals).toHaveLength(2);
+
+  for (const total of totals) {
+    expect(total.schema).toBe(0);
+    expect(total.statements).toBeLessThanOrEqual(TURN_STATEMENTS);
+  }
+});
 
 // Runs after the subjects: the orchestrator subject fills `transportReads`.
 test('the chat transport reads the transcript a fixed number of times a turn, never once a delta', () => {

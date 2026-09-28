@@ -3,8 +3,7 @@
  * govern and green on the shapes it must not fire on.
  *
  * WHY EVERY FIXTURE IS ASSEMBLED AT RUNTIME. `lean-citations.ts` deliberately carries
- * no self-skip — `literature-citations.ts` records that choice and calls it the better
- * one — so this file is scanned like any other, and a fixture written as a literal
+ * no self-skip, so this file is scanned like any other, and a fixture written as a literal
  * citation would be a finding the gate reports against its own test. Greening that
  * would mean deleting the proof. So a name and a locator never meet in these bytes:
  * they meet inside `nameFirst` and `pathFirst` at run time, and no placeholder module

@@ -1,5 +1,5 @@
 {
-  "measured": "bb127547c4: 1201 test files, 1038 runnable suites, 12961 tests, 43 runners, 1424 non-public product members, 8490 product function bodies",
+  "measured": "86fbd16b82: 1282 test files, 1106 runnable suites, 13514 tests, 50 runners, 1519 non-public product members, 8891 product function bodies",
   "entries": [
     {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: only a resolved write reads as copied :: expected side computed by the code under test",
@@ -21,7 +21,7 @@
           "edits": [
             [
               "if (status === \"failed\") return \"Could not copy\";",
-              "if (status === \"failed\") return idle;"
+              "if (status === \"failed\") return \"Copy\";"
             ]
           ]
         },
@@ -31,33 +31,7 @@
           "edits": [
             [
               "if (status === \"copied\") return \"Copied\";",
-              "if (status === \"copied\") return idle;"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-copy-label.test.ts :: the idle label is the caller's, the outcome labels are not :: expected side computed by the code under test",
-      "count": 2,
-      "plants": [
-        {
-          "defect": "the copied label taken from the caller's idle label",
-          "file": "packages/cf-backend/src/hooks/use-copy.ts",
-          "edits": [
-            [
-              "if (status === \"copied\") return \"Copied\";",
-              "if (status === \"copied\") return idle === \"Copy\" ? \"Copied\" : idle;"
-            ]
-          ]
-        },
-        {
-          "defect": "the failed label built from the caller's idle label",
-          "file": "packages/cf-backend/src/hooks/use-copy.ts",
-          "edits": [
-            [
-              "if (status === \"failed\") return \"Could not copy\";",
-              "if (status === \"failed\") return idle === \"Copy\" ? \"Could not copy\" : `${idle} failed`;"
+              "if (status === \"copied\") return \"Copy\";"
             ]
           ]
         }

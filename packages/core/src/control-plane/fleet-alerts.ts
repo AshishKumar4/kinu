@@ -154,23 +154,18 @@ async function readKills(env: FleetEnv, now: number, fetch: Fetch): Promise<Read
   };
 }
 
-async function analyticsPanels(env: FleetEnv, queries: ReadonlyMap<string, string>, now: number): Promise<Partial<Record<string, AnalyticsResult>>> {
+/** `runAnalyticsSql` answers each failure as a `failed` panel, so the batch never rejects. */
+async function analyticsPanels(env: FleetEnv, queries: ReadonlyMap<string, string>): Promise<Partial<Record<string, AnalyticsResult>>> {
   if (analyticsMissingSettings(env).length > 0) return {};
 
-  try {
-    return await runAnalyticsBatch(env, queries, now);
-  } catch (cause) {
-    const failed: AnalyticsResult = { status: 'failed', reason: renderThrownChain({ cause }) };
-
-    return Object.fromEntries([...queries.keys()].map((name) => [name, failed]));
-  }
+  return runAnalyticsBatch(env, queries);
 }
 
 export async function sampleFleet(env: FleetEnv, now: number, fetch: Fetch): Promise<{ sample: FleetSample; unavailable: Unavailable[] }> {
   const queries = fleetAlertQueries();
   const missing = analyticsMissingSettings(env);
 
-  const panels = await analyticsPanels(env, new Map(Object.entries(queries)), now);
+  const panels = await analyticsPanels(env, new Map(Object.entries(queries)));
   const panel = (name: keyof typeof queries): AnalyticsResult | undefined => missing.length > 0 ? { status: 'unconfigured', missing } : panels[name];
 
   const startups = fromPanel('startups', panel('startups'), StartupRow, (rows) => rows.map((row) => (

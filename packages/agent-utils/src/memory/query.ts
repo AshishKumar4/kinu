@@ -12,14 +12,8 @@ const STOP_WORDS = new Set([
 	"and", "but", "or", "as", "just", "also", "very", "too", "any", "all",
 ]);
 
-export interface SanitizeOptions {
-	stopWords?: boolean;
-}
-
-/** Terms an FTS query reduces to (operators and, unless disabled, stop words removed). */
-export function ftsQueryTerms(query: string, options?: SanitizeOptions): string[] {
-	const useStopWords = options?.stopWords ?? true;
-
+/** Terms an FTS query reduces to (operators and stop words removed). */
+export function ftsQueryTerms(query: string): string[] {
 	const tokens = query
 		.replace(/[^\w\s]/g, " ")
 		.split(/\s+/)
@@ -28,7 +22,7 @@ export function ftsQueryTerms(query: string, options?: SanitizeOptions): string[
 
 			if (FTS_OPERATORS.has(t.toUpperCase())) return false;
 
-			if (useStopWords && STOP_WORDS.has(t.toLowerCase())) return false;
+			if (STOP_WORDS.has(t.toLowerCase())) return false;
 
 			return true;
 		});
@@ -40,8 +34,8 @@ export function ftsQueryTerms(query: string, options?: SanitizeOptions): string[
 	return tokens;
 }
 
-export function sanitizeFtsQuery(query: string, options?: SanitizeOptions): string {
-	const tokens = ftsQueryTerms(query, options);
+export function sanitizeFtsQuery(query: string): string {
+	const tokens = ftsQueryTerms(query);
 
 	if (tokens.length === 0) return '""';
 

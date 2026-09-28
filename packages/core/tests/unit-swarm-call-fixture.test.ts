@@ -321,10 +321,10 @@ describe('the implementation, asserted against the shipped strategy modules', ()
       'SWARM_CONTEXTS', 'SWARM_EXPANDS',
       'SWARM_PRESETS', 'SWARM_PRESET_DOCTRINE', 'SWARM_PRESET_POINTS', 'SWARM_SCORES',
       'SWARM_TREE_ADVANCES',
-      'SWARM_UNITS', 'UNMEASURED_JUDGE_SAMPLES', 'arbitrateBranch', 'archiveRegionRefusal',
+      'SWARM_UNITS', 'UNMEASURED_JUDGE_SAMPLES', 'arbitrateBranch',
       'configDigestOf',
       'isTreeAdvance', 'judgeCallPool',
-      'judgeMarginalisationRefusal', 'resolveSwarm', 'settleOf', 'swarmValidity',
+      'resolveSwarm', 'settleOf', 'swarmValidity',
       'unmeasuredPoint',
     ]);
   });

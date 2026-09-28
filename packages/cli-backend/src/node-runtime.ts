@@ -1,4 +1,4 @@
-import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, createShellSession, shellCwd, observeWrites, skillsMount, withApprovalGatedShell, withMountTable, standardMounts, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
+import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, createShellSession, shellCwd, observeWrites, skillsMount, withApprovalGatedShell, withMountTable, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, VFS, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
@@ -23,8 +23,6 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
     // A node reading the parent's claim ledger would present the parent's turns as its own history.
     const stores = createAgentStores(() => origin.storage.sql, () => actor, (write) => origin.storage.transactionSync(write), async () => {
-      requireLocalActorWorkspace(origin.actor, actor);
-
       if (node.isolation === 'private-home') return { vfs, artifactDirectory: agentArtifactDirectory(node.home) };
 
       if (!deps.origin.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
@@ -43,7 +41,6 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
     if (node.isolation === 'private-home') {
       const plane = await deps.workspace.asAgent({ cred: node.cred, home: node.home, tmp: node.tmp });
-      requireLocalActorWorkspace(origin.actor, actor);
 
       // A private home is a plane of the in-SQLite workspace, never the user's directory.
       const shellSession = createShellSession({
@@ -55,7 +52,6 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       const files = observer ? observeWrites(plane.vfs, observer) : plane.vfs;
 
       const mounted = withMountTable(files, [
-        ...standardMounts((name) => ownRouter.getProvider(name)),
         sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
         skillsMount((): VFS => vfs),
         ownContext,

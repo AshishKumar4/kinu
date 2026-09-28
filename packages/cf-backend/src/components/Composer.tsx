@@ -72,7 +72,7 @@ function Notice({ notice }: { notice: ComposerNotice }) {
         )}
         {detail && (
           <details className="mt-0.5">
-            <summary className="cursor-pointer underline decoration-dotted underline-offset-2">Technical details</summary>
+            <summary className="cursor-pointer underline decoration-dotted underline-offset-2 transition-colors hover:p-text hover:decoration-solid">Technical details</summary>
             <pre className="mt-1 max-h-32 overflow-auto font-mono whitespace-pre-wrap break-all">{detail}</pre>
           </details>
         )}

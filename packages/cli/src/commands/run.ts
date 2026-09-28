@@ -4,7 +4,7 @@ import { listConfiguredAgentRefs, requireAuthConfig } from '../config';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
 import { createAgentClient, type AgentClientFlags } from '../client-factory';
 import type { AgentClient, AgentClientEvent } from '../agent-client';
-import { decodeJsonValue, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, ToolOutcomeSchema, type AgentRpcMethod, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { decodeJsonValue, describeProviderError, JsonValueSchema, parseJsonObject, projectJsonValue, usageReported, ToolOutcomeSchema, type AgentRpcMethod, type JsonObject, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { CliSessionOptions } from '../session';
 import { chatCommand } from './chat';
@@ -13,7 +13,6 @@ import { resolvePromptAttachments } from '../attachments';
 import { watchHeadlessConsents, watchTerminalConsents, type ConsentWatcher } from '../consent-watch';
 import { DIM, ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display';
 import { normalizeWebhookAuthMode, numberField, oneOfFlag, stringField } from '../options';
-import { guideFailure } from '../provider-guidance';
 import {
   executeLocalExecutor,
   getLocalAgentState,
@@ -188,7 +187,7 @@ async function runOneShot(
     failed = true;
 
     if (!alreadyReported) {
-      if (surface.json) process.stdout.write(`${JSON.stringify({ type: 'error', ...guideFailure({ cause: err }) })}\n`);
+      if (surface.json) process.stdout.write(`${JSON.stringify({ type: 'error', message: describeProviderError({ cause: err }) })}\n`);
       else printFailure({ cause: err });
     }
   } finally {
@@ -603,7 +602,7 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
     case 'step-finish':
       return [];
     case 'error':
-      return [{ type: 'error', ...guideFailure({ cause: event.message }) }];
+      return [{ type: 'error', message: describeProviderError({ cause: event.message }) }];
     case 'evolution':
       return [{ type: 'evolution', event: event.event, message: event.message }];
     case 'background':

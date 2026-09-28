@@ -121,8 +121,7 @@ export function countMsgReceived(fact: MsgReceivedFact): void {
 }
 
 /**
- * Retention bound, not a finding: lines carry `gap_ms` for re-windowing. Not
- * 300_000: that value already trips `gate:policy-drift` for two other windows.
+ * Retention bound, not a finding: lines carry `gap_ms` for re-windowing.
  */
 const WRITE_SETTLE_WINDOW_MS = 60_000;
 

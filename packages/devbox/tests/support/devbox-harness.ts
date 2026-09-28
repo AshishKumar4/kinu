@@ -341,11 +341,16 @@ export class FakeSandbox {
   /** Container is running, but the SDK has not invoked the port-proven hook. */
   containerHookGate: Gate | undefined;
   execGate: Gate | undefined;
+  /** Parks a session exec where the SDK reads its object's state (`containerFetch`,
+   *  `startContainerForRPC`): issued, but not yet at the container. */
+  stateReadGate: Gate | undefined;
   /** Delay inside the container per command, modelling a counted loop (`awaitLayer`, `awaitListenerCommand`).
    *  A real wait: the test checks whether one command's duration can extend a caller's window. */
   execDelayMs = 0;
   stampGate: Gate | undefined;
   exposeGate: Gate | undefined;
+  /** Parks a file write inside the container, while its caller still holds the path. */
+  writeGate: Gate | undefined;
   destroyFault: Error | undefined;
   stopFault: Error | undefined;
   destroys = 0;
@@ -411,6 +416,18 @@ export class FakeSandbox {
     command: string,
     options?: { readonly cwd?: string },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const reading = this.stateReadGate;
+
+    if (reading !== undefined) {
+      this.stateReadGate = undefined;
+      reading.enter();
+      await reading.promise;
+    }
+
+    // The SDK starts a stopped container before a command reaches it, through the one start both
+    // transports share (0.12.9), so a subclass's `startAndWaitForPorts` decides.
+    if (!this.running.running) await this.startAndWaitForPorts({ ports: this.defaultPort });
+
     const refusedChdir = this.#chdir(options?.cwd);
 
     if (refusedChdir !== null) return refusedChdir;
@@ -912,6 +929,14 @@ export class FakeSandbox {
   /** A write under the work directory also lands in the overlay upper, where an overlayfs
    *  write really goes and what the chain's delta archiver walks. */
   async writeFile(path: string, content: string): Promise<{ success: true; path: string; timestamp: string }> {
+    const held = this.writeGate;
+
+    if (held !== undefined) {
+      this.writeGate = undefined;
+      held.enter();
+      await held.promise;
+    }
+
     this.files.set(path, content);
     this.changeVersion += 1;
 

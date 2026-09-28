@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { RunEvent } from '../../packages/core/src/index';
-import { firstRunReplyText, firstRunTurnEvents, firstRunTurnSettlement } from './turn-settlement';
+import { backgroundSettleWait, firstRunReplyText, firstRunTurnEvents, firstRunTurnSettlement } from './turn-settlement';
 
 test('a later conversation cannot satisfy the first-run reply', () => {
   const history = [
@@ -100,4 +100,21 @@ test('a landing instant names the absorbing run when several runs share the log'
 
   // At `at` both runs are open; the latest-STARTED open run absorbs the landing.
   expect(firstRunTurnEvents(shared, 'MARKER', { landedAt: at }).every((event) => event.runId === 'mid')).toBe(true);
+});
+
+// A call that never detached leaves no job: waiting for one spent the case's whole 600 s budget on staging b80eaa8d06
+// (2026-09-27) after its only run had ended.
+test('background-settle waits for a wake or a settled job, and not at all when nothing detached', () => {
+  const run = (runId: string, userMessage: string): RunEvent[] => [
+    { ...stamp, runId, type: 'run_start', agentId: 'root', userMessage },
+    { ...stamp, runId, type: 'run_end', reason: 'completed' },
+  ];
+
+  const asked = run('ask', 'sleep 45 please');
+
+  expect(backgroundSettleWait(undefined, [], asked)).toBe('nothing-detached');
+  expect(backgroundSettleWait('bgjob-1', [{ id: 'bgjob-1', status: 'running' }], asked)).toBe('wait');
+  expect(backgroundSettleWait('bgjob-1', [{ id: 'bgjob-1', status: 'done' }], asked)).toBe('job-settled');
+  expect(backgroundSettleWait('bgjob-1', [], [...asked, ...run('wake', 'bgjob-1 finished').slice(0, 1)])).toBe('wait');
+  expect(backgroundSettleWait('bgjob-1', [], [...asked, ...run('wake', 'bgjob-1 finished')])).toBe('wake-closed');
 });
