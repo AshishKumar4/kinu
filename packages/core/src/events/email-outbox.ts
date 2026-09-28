@@ -4,10 +4,11 @@
  */
 
 import { argumentDigest } from '../safety/argument-digest';
-import { scheduledOutbox, type Outbox } from './outbox';
+import { Effect } from 'effect';
+import { scheduledOutbox, type Outbox, type OutboxDisposition } from './outbox';
 import { type SqlExec } from '../types/primitives';
 import * as v from 'valibot';
-import { diagnostics, renderThrownChain, toKinuError } from "../obs/index";
+import { diagnostics, renderThrownChain, settle, toKinuError } from "../obs/index";
 
 interface EmailAddress {
   name: string;
@@ -48,21 +49,20 @@ export class EmailOutbox {
       baseMs: RETRY_BASE_MS,
       schedule: scheduleRetry,
       // No `orderBy`: one provider outage must not hold unrelated mail.
-      async send(message, _info, binding) {
-        try {
-          await binding.send(message);
+      send(message, _info, binding) {
+        return settle(Effect.tryPromise({ try: () => binding.send(message), catch: (cause) => ({ cause }) }).pipe(Effect.match({
+          onSuccess: (): OutboxDisposition => ({ status: 'sent' }),
+          onFailure: (failed): OutboxDisposition => {
+            // Counted without address, subject or body; `last_error` alone is invisible at fleet scale.
+            diagnostics.failure('email.outbox_send_failed', toKinuError({
+              doing: 'sending a queued outbound message',
+              cause: failed.cause,
+              otherwise: 'unavailable',
+            }));
 
-          return { status: 'sent' };
-        } catch (err) {
-          // Counted without address, subject or body; `last_error` alone is invisible at fleet scale.
-          diagnostics.failure('email.outbox_send_failed', toKinuError({
-            doing: 'sending a queued outbound message',
-            cause: err,
-            otherwise: 'unavailable',
-          }));
-
-          return { status: 'retry', reason: renderThrownChain({ cause: err }) };
-        }
+            return { status: 'retry', reason: renderThrownChain(failed) };
+          },
+        })));
       },
     });
   }

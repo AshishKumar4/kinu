@@ -23,7 +23,8 @@ import {
   JsonValueSchema, parseJsonObject,
   type JsonValue,
 } from '../../utils/json';
-import { renderThrownChain } from '../../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settle, settleSync } from '../../obs/index';
 
 export interface PeerMessage {
   sender_event_id: string;
@@ -123,10 +124,8 @@ export async function receivePeerMessage(
 
   if (spilled?.unsaved !== undefined) payload.body_unsaved = spilled.unsaved;
 
-  let published: { id: string; admitted: boolean };
-
-  try {
-    published = deps.log.publish({
+  return settleSync(Effect.try({
+    try: () => deps.log.publish({
       descriptor: {
         ingress: 'peer_async',
         variant: 'peer_agent',
@@ -135,18 +134,20 @@ export async function receivePeerMessage(
         receiver_grant_present,
       },
       now,
-    });
-  } catch (err) {
+    }),
+    catch: (cause) => ({ cause }),
+  }).pipe(
     // Reported as a hop failure: a refusal would dead-letter for good.
-    counted(false);
-    throw err;
-  }
+    Effect.tapError(() => Effect.sync(() => counted(false))),
+    Effect.catch((failed) => Effect.die(failed.cause)),
+    Effect.map((published): ReceiveResult => {
+      counted(published.admitted);
 
-  counted(published.admitted);
+      if (published.admitted && msg.reply_expected) deps.openPeerBackChannel?.(published.id, msg);
 
-  if (published.admitted && msg.reply_expected) deps.openPeerBackChannel?.(published.id, msg);
-
-  return { admitted: published.admitted, event_id: published.id };
+      return { admitted: published.admitted, event_id: published.id };
+    }),
+  ));
 }
 
 /** Receiver refusals dead-letter immediately. */
@@ -201,7 +202,7 @@ export class PeerHub {
       // A backed-off head blocks only its own receiver's queue.
       orderBy: (message) => `${message.receiver_user_id}:${message.receiver_agent_name}`,
       schedule: (at) => deps.scheduleDispatch(at),
-      send: (message, info) => this.deliverOne(message, info.id),
+      send: (message, info) => settle(this.deliverOne(message, info.id)),
     });
   }
 
@@ -319,12 +320,12 @@ export class PeerHub {
     if (reply) return { status: 'replied', from: input.agent, reply: reply.content };
 
     if (input.signal?.aborted) {
-      throw input.signal.reason instanceof Error
+      return settleSync(Effect.die(input.signal.reason instanceof Error
         ? input.signal.reason
-        : new Error('peer ask cancelled');
+        : new Error('peer ask cancelled')));
     }
 
-    throw new Error('the peer ask waiter resolved without a reply, cancellation, or a dead-letter');
+    return settleSync(Effect.die(new Error('the peer ask waiter resolved without a reply, cancellation, or a dead-letter')));
   }
 
   async reply(input: { eventId: string; message: string }): Promise<PeerReplyOutcome> {
@@ -346,22 +347,22 @@ export class PeerHub {
   }
 
   async dispatchPeerBack(channel: ReplyChannelRow, payload: JsonValue): Promise<{ delivered: boolean; detail?: string }> {
-    let holder: PeerBackHolder;
+    return settle(Effect.try({
+      try: (): PeerBackHolder => v.parse(PeerBackHolderSchema, parseJsonObject(channel.holder_addr)),
+      catch: (cause) => ({ cause }),
+    }).pipe(Effect.matchEffect({
+      onFailure: (failed) => Effect.succeed({ delivered: false, detail: `malformed peer_back holder_addr: ${renderThrownChain(failed)}` }),
+      onSuccess: (holder) => Effect.promise(async () => {
+        await this.enqueue({
+          receiverAgent: holder.agent_name, receiverUserId: holder.user_id, topic: PEER_REPLY_TOPIC,
+          body: { in_reply_to: holder.ask_id, content: payload },
+          mode: holder.mode, replyExpected: false,
+        });
+        await this.dispatchOutbox();
 
-    try {
-      holder = v.parse(PeerBackHolderSchema, parseJsonObject(channel.holder_addr));
-    } catch (error) {
-      return { delivered: false, detail: `malformed peer_back holder_addr: ${renderThrownChain({ cause: error })}` };
-    }
-
-    await this.enqueue({
-      receiverAgent: holder.agent_name, receiverUserId: holder.user_id, topic: PEER_REPLY_TOPIC,
-      body: { in_reply_to: holder.ask_id, content: payload },
-      mode: holder.mode, replyExpected: false,
-    });
-    await this.dispatchOutbox();
-
-    return { delivered: true };
+        return { delivered: true };
+      }),
+    })));
   }
 
   private async enqueue(message: OutboundPeerMessage): Promise<string> {
@@ -383,11 +384,11 @@ export class PeerHub {
   }
 
   /** A resolved refusal is permanent; a thrown hop backs off. */
-  private async deliverOne(message: PeerOutboxMessage, id: string): Promise<OutboxDisposition> {
+  private deliverOne(message: PeerOutboxMessage, id: string): Effect.Effect<OutboxDisposition> {
     const parsed = v.safeParse(PeerOutboxMessageSchema, message);
 
     if (!parsed.success) {
-      return { status: 'poison', reason: 'peer outbox row is missing a valid work mode' };
+      return Effect.succeed({ status: 'poison', reason: 'peer outbox row is missing a valid work mode' });
     }
 
     const queued = parsed.output;
@@ -402,18 +403,14 @@ export class PeerHub {
     };
 
     if (queued.reply_expected) Object.assign(wire, { reply_expected: true });
-    let result: ReceiveResult;
 
-    try {
-      result = await this.deps.deliver(queued.receiver_agent_name, wire);
-    } catch (err) {
-      return { status: 'retry', reason: renderThrownChain({ cause: err }) };
-    }
-
-    // Deduped by the receiver (crash redelivery) still counts as sent.
-    if (result.admitted || result.event_id) return { status: 'sent' };
-
-    return { status: 'poison', reason: result.reason ?? 'rejected by receiver' };
+    return Effect.tryPromise({ try: () => this.deps.deliver(queued.receiver_agent_name, wire), catch: (cause) => ({ cause }) }).pipe(Effect.match({
+      onFailure: (failed): OutboxDisposition => ({ status: 'retry', reason: renderThrownChain(failed) }),
+      // Deduped by the receiver (crash redelivery) still counts as sent.
+      onSuccess: (result): OutboxDisposition => (result.admitted || result.event_id
+        ? { status: 'sent' }
+        : { status: 'poison', reason: result.reason ?? 'rejected by receiver' }),
+    }));
   }
 
   nextRetryAt(): number | null {

@@ -10,7 +10,8 @@ import { ulid } from './ulid';
 import type { SqlExec } from '../../types/primitives';
 import type { ActorHandle } from '../../identity/actor-handle';
 import { parseJsonValue, type JsonValue } from '../../utils/json';
-import { renderThrownChain } from '../../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settle } from '../../obs/index';
 
 const TTL_MS = {
   peer_back: 24 * 60 * 60 * 1000,
@@ -135,10 +136,9 @@ export class ReplyChannelStore {
 
     if (!dispatcher) return { outcome: 'no_dispatcher', kind: channel.kind };
 
-    try {
-      const r = await dispatcher.dispatch(channel, payload);
-
-      if (r.delivered) {
+    return settle(Effect.tryPromise({ try: () => dispatcher.dispatch(channel, payload), catch: (cause) => ({ cause }) }).pipe(Effect.match({
+      onSuccess: (r): ReplyOutcome => {
+        if (!r.delivered) return { outcome: 'failed', detail: r.detail };
         this.sql.exec(
           `UPDATE reply_channels
              SET state = 'replied',
@@ -149,12 +149,9 @@ export class ReplyChannelStore {
         );
 
         return { outcome: 'delivered' };
-      }
-
-      return { outcome: 'failed', detail: r.detail };
-    } catch (err) {
-      return { outcome: 'failed', detail: renderThrownChain({ cause: err }) };
-    }
+      },
+      onFailure: (failed): ReplyOutcome => ({ outcome: 'failed', detail: renderThrownChain(failed) }),
+    })));
   }
 
   abort(id: ReplyChannelId, now: number, reason?: string): void {
