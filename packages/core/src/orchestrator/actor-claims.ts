@@ -119,7 +119,7 @@ export class ActorClaimStore {
         VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},${input.program.kind},${input.program.version},${input.program.digest},${input.program.build},NULL,${nowMs()})
         ON CONFLICT(actor_id,turn_id) DO UPDATE SET run_id=excluded.run_id,epoch=excluded.epoch,work_mode=excluded.work_mode,program_kind=excluded.program_kind,
           program_version=excluded.program_version,program_digest=excluded.program_digest,program_build=excluded.program_build,outcome=NULL,claimed_at=excluded.claimed_at`;
-      this.history.requests.record(admission, () => this.assertLive(admitted));
+      this.history.requests.record(admission);
 
       return admitted;
     });
@@ -132,7 +132,6 @@ export class ActorClaimStore {
   }
 
   async consume(claim: ActorTurnClaim, input: { readonly index: number; readonly messages: readonly ModelMessage[]; readonly cache?: PromptCacheRoute | undefined }): Promise<ConsumedContext> {
-    this.assertLive(claim);
     const source = this.history.context.selected();
 
     if (source === null || source.contextId !== claim.workingContextId) throw new KinuError('denied', 'claimed working context is not selected');
@@ -150,7 +149,7 @@ export class ActorClaimStore {
       const selected = this.history.context.selected();
 
       if (selected?.contextId !== source.contextId || selected.revision !== source.revision) throw new KinuError('denied', 'working selection changed during request preparation');
-      this.history.requests.recordPrepared(prepared, () => this.assertLive(claim));
+      this.history.requests.recordPrepared(prepared);
 
       return { requestId: prepared.request.id, revision: prepared.request.revision };
     });
@@ -235,9 +234,6 @@ export class ActorClaimStore {
       status: row.outcome === null ? 'admitted' : 'settled', outcome: row.outcome, claimedAt: row.claimed_at });
   }
   private assertLive(claim: ActorTurnClaim): void {
-    this.actor.assertCurrent();
-
-    if (claim.actorId !== this.actorId) throw new KinuError('denied', 'claim belongs to another actor');
     const current = this.read(claim.turnId);
 
     if (current === null || current.epoch !== claim.epoch) throw new KinuError('denied', 'actor turn is owned by another execution epoch');

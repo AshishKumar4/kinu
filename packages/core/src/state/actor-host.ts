@@ -178,7 +178,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
     const fence: ReleaseFence = { released: false };
 
-    const handle = deps.directory.openFenced(reference.actorId, () => {
+    const handle = deps.directory.open(reference.actorId, () => {
       if (fence.released) {
         throw new KinuError('missing', 'The hosted actor was released by its root.');
       }
