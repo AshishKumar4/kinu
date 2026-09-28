@@ -92,13 +92,13 @@ export function createUserDOAuthResolver(source: UserCredentialSource | null): A
 export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProviderRegistry {
   const registry = createProviderRegistry();
 
-  let developmentBinding: DirectAiBinding | undefined;
+  let deploymentBinding: DirectAiBinding | undefined;
 
   if (opts.env.WORKERS_AI_VIA_BINDING === 'on' && opts.env.AI && isDirectAiBinding(opts.env.AI)) {
-    developmentBinding = opts.env.AI;
+    deploymentBinding = opts.env.AI;
   }
 
-  registry.register(createWorkersAIProvider({ sessionAffinity: opts.sessionAffinity }, developmentBinding));
+  registry.register(createWorkersAIProvider({ sessionAffinity: opts.sessionAffinity }, deploymentBinding));
   registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
 
