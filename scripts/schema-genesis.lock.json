@@ -825,6 +825,7 @@
     "wins INTEGER NOT NULL DEFAULT 0",
     "losses INTEGER NOT NULL DEFAULT 0",
     "ties INTEGER NOT NULL DEFAULT 0",
+    "decided_at INTEGER",
     "PRIMARY KEY (actor_id, section_id, version)"
   ],
   "proposed_tasks@packages/core/src/curriculum/proposer.ts": [

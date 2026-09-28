@@ -10,7 +10,7 @@ import {
   NotePencilIcon, ArrowLeftIcon, DatabaseIcon,
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, revealMisrepresenting, timeAgo } from "@kinu.run/core";
-import type { AgentTaskTree, ChangelogEntry, MemoryEntry, OwnedPlan, PendingAction, PendingActionKind, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
+import type { AgentTaskTree, ChangelogEntry, MemoryEntry, OwnedPlan, PanelAgent, PendingAction, PendingActionKind, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
 import type { ReadMoves, WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -18,7 +18,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { Section } from "./shared";
-import { isClosedTree, PlanProgress, TaskTree } from "./work-tasks";
+import { HelperRow, isClosedTree, PlanProgress, TaskTree } from "./work-tasks";
 import { JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog, type ChangelogView } from "./changelog-entries";
 import type { SurfaceKind } from "@kinu.run/core";
@@ -69,10 +69,11 @@ export interface WorkTabProps {
   rpc: Rpc;
   memory?: MemoryEntry[];
   readMoves?: ReadMoves;
+  agents?: { readonly list: readonly PanelAgent[]; readonly open: (agent: PanelAgent) => void };
 }
 
 export function WorkTab({
-  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, rpc, memory = [], readMoves = {},
+  plan, planRpc, planOwner, workspacePlanArrival, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, rpc, memory = [], readMoves = {}, agents,
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
   const [hasPlans, setHasPlans] = useState(plan !== null);
@@ -113,6 +114,7 @@ export function WorkTab({
   const openTasks = taskRows.filter(({ task }) => !isClosedTree(task));
   const closedTasks = taskRows.filter(({ task }) => isClosedTree(task));
   const runningJobs = backgroundJobs.filter((job) => job.status === "running");
+  const helpers = useMemo(() => (agents?.list ?? []).filter((agent) => agent.category === "background"), [agents]);
   const settledJobs = backgroundJobs.filter((job) => job.status !== "running");
 
   const journal = useMemo(
@@ -179,7 +181,7 @@ export function WorkTab({
     <div className="space-y-6 animate-fade-in">
       <WorkPlans work={work} owner={planOwner ?? "main"} arrival={workspacePlanArrival} onPresence={setHasPlans} onNewPlan={onNewPlan} onOpenReview={openReview} />
       <NeedsYou pendingActions={pendingActions} rpc={rpc} onDecided={onRefreshQueue} onOpenSurface={onOpenSurface} onOpenReview={setReview} />
-      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} runningJobs={runningJobs} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
+      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} runningJobs={runningJobs} helpers={helpers} onOpenHelper={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
       <WorkJournal journal={journal} filter={filter} onFilter={setFilter} view={changelog} seenAt={changelogSeenAt} seenError={changelogSeenError} resource={changelogResource} onReload={reloadChangelog} rpc={rpc} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} />
       <Learnings memory={memory} onOpenSurface={onOpenSurface} />
     </div>
@@ -266,18 +268,20 @@ export interface WorkTaskRow {
 }
 
 /** The read's tri-state gates only the work half, so a running job never waits behind the plan's spinner. */
-function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
+function WorkNow({ work, taskRows, openTasks, runningJobs, helpers, onOpenHelper, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
   work: WorkspaceWork | null;
   taskRows: WorkTaskRow[];
   openTasks: WorkTaskRow[];
   runningJobs: BackgroundJob[];
+  helpers: readonly PanelAgent[];
+  onOpenHelper?: (agent: PanelAgent) => void;
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
   onRefreshJobs: () => void;
   onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
   rpc: Rpc;
 }) {
-  const nowEmpty = work !== null && openTasks.length === 0 && runningJobs.length === 0;
+  const nowEmpty = work !== null && openTasks.length === 0 && runningJobs.length === 0 && helpers.length === 0;
 
   if (nowEmpty && resource.status !== "error") return null;
 
@@ -304,6 +308,11 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, on
             {runningJobs.map((job) => (
               <JobCard key={job.id} job={job} onRefresh={onRefreshJobs} rpc={rpc} />
             ))}
+          </div>
+        )}
+        {helpers.length > 0 && (
+          <div className="space-y-1">
+            {helpers.map((agent) => <HelperRow key={agent.key} agent={agent} onOpen={onOpenHelper} />)}
           </div>
         )}
       </div>

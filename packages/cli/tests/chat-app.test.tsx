@@ -1015,9 +1015,8 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the hired subagent in the hub', () => screen.frame().includes('Scout · agent · task/default'));
     expect(screen.frame()).toContain('Survey the logs');
     expect(screen.frame()).not.toContain('retired-helper');
-    // Internal helpers are not listed at all, by title or by slug.
 
-    for (const shown of ['Quiet Ash', 'ask-refiner-fb0gr9', 'reviewing', 'ask-reviewer-a1']) expect(screen.frame()).not.toContain(shown);
+    for (const shown of ['reviewing', 'ask-reviewer-a1', 'Quiet Ash · agent']) expect(screen.frame()).not.toContain(shown);
     expect(screen.frame()).toContain('Busy Mill · agent');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('down');
@@ -1098,6 +1097,40 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the kept conversation', () => screen.frame().includes('Two edits proposed'));
+    expect(reads).toEqual([{ path: [], actor: 'actor-refiner', view: 'history', page: {} }]);
+    screen.mockInput.pressEscape();
+  });
+
+  test('an evolution helper is a Work row in the Agent Hub, and Enter opens its kept chat by id', async () => {
+    const reads: unknown[] = [];
+
+    const refiner: SubordinateChild = {
+      name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', nameOrigin: 'auto', role: 'task',
+      actorReference: { actorId: 'actor-refiner', workspaceId: 'ws', parentActorId: null }, birth: null, deleteRequested: false, createdBy: 'evolution',
+      status: 'dismissed', currentTask: null, createdAt: 1, dismissedAt: 2, lifetime: 'task', taskEventId: null,
+    };
+
+    const main = fakeClient({
+      name: 'checkout',
+      inspectSubordinate: async (request) => {
+        if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [refiner] } };
+
+        if (request.view !== 'history') return missingSubordinateHistory(request.path);
+        reads.push(request);
+
+        return request.actor === 'actor-refiner'
+          ? { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', content: 'One wording change proposed', createdAt: 1 }] } }
+          : missingSubordinateHistory(request.path);
+      },
+    });
+
+    const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the refiner in Work', () => screen.frame().includes('Quiet Ash'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the kept conversation', () => screen.frame().includes('One wording change proposed'));
     expect(reads).toEqual([{ path: [], actor: 'actor-refiner', view: 'history', page: {} }]);
     screen.mockInput.pressEscape();
   });
