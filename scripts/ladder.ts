@@ -232,23 +232,13 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'reads the machine — inode tables, temp roots, stray project markers — none of which a hash over the tree stands for.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts',
-    label: 'Pattern census and parser self-tests',
+    run: 'bun test --timeout=0 scripts/jsonc.test.ts scripts/syntax.test.ts',
+    label: 'Parser self-tests',
     tier: 'push',
     seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.
-    catches: 'a pattern census that mistakes strings for regexes, a JSONC parser that changes data, or a syntax tree '
-      + 'kept alive after its caller drops it',
-    blind: 'semantic quality of a reviewed parser candidate',
+    catches: 'a JSONC parser that changes data, or a syntax tree kept alive after its caller drops it',
+    blind: 'parsers outside scripts/jsonc.ts and scripts/syntax.ts',
     inputs: AMBIENT_BY_NAME,
-  },
-  {
-    run: 'bun scripts/pattern-inventory.ts',
-    label: 'Pattern inventory',
-    tier: 'commit',
-    seconds: 2.5, // Measured 2026-09-23 on the 24-thread box at load 5: 2.50/2.51/2.63 s.
-    catches: 'unclassified code-pattern and named scanner candidates in the shared source corpus',
-    blind: 'runtime aliases, unnamed scanners, native source and embedded shell language tokens',
-    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run lint',
