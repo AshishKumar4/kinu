@@ -23,6 +23,8 @@ import {
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
   type LoopOrigin, type NimbusSandboxHandle, type NodeHomeHost,
   type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
+  isSubordinateOrigin,
+  whenActorTakesInput,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
@@ -719,7 +721,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       rederiveWake: () => { this.armDurableWake(); },
       register: async ({ creationId, loop }) => {
         const entry = await this.actorDirectory({
-          action: 'register', creationId, name: explorationActorKey(creationId), kind: 'run', lifetime: 'task',
+          action: 'register', creationId, name: explorationActorKey(creationId), origin: 'swarm', lifetime: 'task',
         });
 
         if (loop) this._chosenLoopOrigins.set(entry.reference.actorId, loop);
@@ -1169,7 +1171,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private startDelegationDrain(): void {
-    const hires = this.workspaceActors().list().filter((record) => record.kind === 'subordinate');
+    const hires = this.workspaceActors().list().filter((record) => isSubordinateOrigin(record.origin));
 
     for (const orphan of dismissOrphanedAssignments(this.boundExec(), new Set(hires.map((record) => record.actorId)))) {
       diagnostics.event('subordinate.assignment_orphaned', { workspace: this.name, actor: orphan.actorId, assignment: orphan.id });
@@ -1239,7 +1241,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const exec = this.boundExec();
 
     for (const turn of this.actorHost().resumable()) {
-      if (turn.record.kind !== 'subordinate' || !owed.has(turn.claim.turnId)) continue;
+      if (!isSubordinateOrigin(turn.record.origin) || !owed.has(turn.claim.turnId)) continue;
 
       try {
         const bound = this.actorHost().bindStores({
@@ -1269,7 +1271,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private async retireStalledAssignments(stalled: readonly ResumableActorTurn[]): Promise<void> {
     for (const turn of stalled) {
-      if (turn.record.kind !== 'subordinate') continue;
+      if (!isSubordinateOrigin(turn.record.origin)) continue;
 
       try {
         const child = await this.actorHost().acquire(actorReferenceOf(turn.record));
@@ -1823,7 +1825,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (handle === null || entry === null || entry.status === 'dismissed' || entry.actorReference?.actorId !== handle.actorId) return null;
 
-      if (directory.retained(handle.actorId)?.kind !== 'subordinate') return null;
+      const retained = directory.retained(handle.actorId);
+
+      if (retained === null || !isSubordinateOrigin(retained.origin)) return null;
       found = { handle, entry };
       parent = handle;
     }
@@ -1871,35 +1875,37 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const history = bound.stores.history;
     const rows = history.transcript(CHAT_SESSION_ID);
 
+    // Opening row first, under the client's id: the hook resends its whole list, and `admitted`
+    // stops the same words becoming a second turn.
+    const sendNow = async (input: Parameters<ChatWire['send']>[0]): ReturnType<ChatWire['send']> => {
+      const message = await history.admitInput({
+        id: input.id, turnId: input.id, message: turnInputMessage(input),
+        assertOwner: () => bound.handle.assertCurrent(),
+      });
+
+      const prepared = await rows.prepareUser({
+        id: input.id, turnId: input.id, message, metadata: { kinuMode: input.mode },
+      });
+
+      this.ctx.storage.transactionSync(() => rows.appendUser(prepared));
+
+      const handoff = await admitHostedTask(this.hostedSeams(), reference, {
+        kind: 'message', body: input.text, mode: input.mode, messageId: input.id,
+      });
+
+      // Nothing is armed here: `admitHostedTask` arms the wake (`seams.armWake`), and only that seam knows
+      // the right chain; a second arm would duplicate the row or name the wrong chain.
+
+      return handoff.delivery === 'starts_now' ? 'turn' : 'mid-turn';
+    };
+
     return {
       sql: null,
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
       history: (limit) => rows.history(undefined, limit),
       admitted: (id) => rows.has(id),
-      send: async (input) => {
-        // Opening row first, under the client's id: the hook resends its whole list, and `admitted`
-        // stops the same words becoming a second turn.
-        const message = await history.admitInput({
-          id: input.id, turnId: input.id, message: turnInputMessage(input),
-          assertOwner: () => bound.handle.assertCurrent(),
-        });
-
-        const prepared = await rows.prepareUser({
-          id: input.id, turnId: input.id, message, metadata: { kinuMode: input.mode },
-        });
-
-        this.ctx.storage.transactionSync(() => rows.appendUser(prepared));
-
-        const handoff = await admitHostedTask(this.hostedSeams(), reference, {
-          kind: 'message', body: input.text, mode: input.mode, messageId: input.id,
-        });
-
-        // Nothing is armed here: `admitHostedTask` arms the wake (`seams.armWake`), and only that seam knows
-        // the right chain; a second arm would duplicate the row or name the wrong chain.
-
-        return handoff.delivery === 'starts_now' ? 'turn' : 'mid-turn';
-      },
+      send: (input) => whenActorTakesInput(this.boundSql, actorId, () => sendNow(input)),
       interrupt: () => { this.actorHost().hosted(reference)?.session.interrupt(); },
       clear: () => {
         history.clearConversation(CHAT_SESSION_ID, () => {

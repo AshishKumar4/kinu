@@ -36,7 +36,7 @@ describe('lead doctrine follows actor authority and available delegation', () =>
 
     for (const lifetime of ['task', 'durable']) {
       const actor = directory.create({
-        parent: directory.main(), name: `worker-${lifetime}`, kind: 'subordinate',
+        parent: directory.main(), name: `worker-${lifetime}`, origin: 'agent',
         lifetime: lifetime === 'task' ? 'task' : 'durable', creationId: crypto.randomUUID(),
       });
 

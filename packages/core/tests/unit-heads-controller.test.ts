@@ -593,7 +593,7 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     mode: 'build',
     inheritedContext: [], mergeStrategy: 'consensus',
     budget: { maxDepth: 2, spawnedAt: Date.now() },
-    loop: defaultLoopOrigin('run'),
+    loop: defaultLoopOrigin('swarm'),
   });
 
   test('a run with heads still running is reported with its progress and its split rationale', () => {

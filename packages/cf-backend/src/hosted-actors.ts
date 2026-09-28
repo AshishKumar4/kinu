@@ -7,7 +7,7 @@
  * Not facets: `do.facet.cpu_shared` means hosted actors serialise as in one isolate.
  */
 
-import { REAL_CLOCK, type HeadReport, type ObserveStream } from '@kinu.run/core';
+import { REAL_CLOCK, type HeadReport, type ObserveStream, isSubordinateOrigin } from '@kinu.run/core';
 import type { LanguageModel, Tool, ToolSet } from 'ai';
 import {
   EventLog, HeadCapture, runHeadInference, titleActorFromMessage, spawnSeatedHead,
@@ -146,7 +146,7 @@ function delegatedHeadInput(
     inheritedContext: subordinateForkContext(task.inheritedContext),
     mergeStrategy: 'synthesize',
     budget: { maxDepth: 0, spawnedAt: Date.now() },
-    loop: defaultLoopOrigin('subordinate'),
+    loop: defaultLoopOrigin('agent'),
   };
 }
 
@@ -489,7 +489,7 @@ export function hostedSubordinateRuntime(
     return refusal(action === 'register' && delegationExhausted(hostedDelegationBudget(seams, owner)),
       () => new KinuError('denied', 'This actor cannot create a subordinate below its delegation depth.'))
       .pipe(Effect.andThen(Effect.sync(() => seams.directory.apply(owner.reference, seams.directory.storagePath(owner.reference), {
-        action, name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime,
+        action, name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime,
       }).reference)));
   });
 
@@ -500,7 +500,7 @@ export function hostedSubordinateRuntime(
       action: 'resolve', name,
     });
 
-    return refusal(entry.kind !== 'subordinate', () => new KinuError('denied', 'The roster name does not identify a subordinate.'))
+    return refusal(!isSubordinateOrigin(entry.origin), () => new KinuError('denied', 'The roster name does not identify a subordinate.'))
       .pipe(Effect.as(entry.reference));
   });
 
@@ -715,7 +715,7 @@ export async function reclaimSettledExplorationActors(
   for (const reference of seams.host.list()) {
     const record = seams.host.describe(reference.actorId);
 
-    if (record === null || record.kind === 'main' || record.kind === 'subordinate') {
+    if (record === null || record.origin !== 'swarm') {
       retained += 1;
       continue;
     }

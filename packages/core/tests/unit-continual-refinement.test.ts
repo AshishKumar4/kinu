@@ -2263,7 +2263,7 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
   const handoff: SubordinateHandoff = { eventId: 'evt-refine', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
 
   const runtime: SubordinateRuntime = {
-    spawn: async (input) => directory.apply(root, [], { action: 'register', name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime }).reference,
+    spawn: async (input) => directory.apply(root, [], { action: 'register', name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime }).reference,
     cancelBirth: async () => { throw new Error('no birth is cancelled here'); },
     assign: async () => handoff,
     status: async () => ({ lastActivity: null, recentSteps: [] }),
@@ -2322,7 +2322,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
 
     const opened = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
     await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
-    expect(rail.roster.get(rail.helper)?.createdBy).toBe('evolution');
+    expect(rail.roster.get(rail.helper)?.origin).toBe('evolution');
 
     let asks = 0;
     const resumed = rail.port();

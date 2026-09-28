@@ -51,13 +51,13 @@ test('an assignment leased by a dead activation runs after the next activation, 
 type Lifetime = 'task' | 'durable';
 
 /** A hire of `lifetime` on the root's roster, as the `agents` tool hires one. */
-async function hire(workspace: ReturnType<typeof gatewayWorkspace>, lifetime: Lifetime): Promise<string> {
+async function hire(workspace: ReturnType<typeof gatewayWorkspace>, lifetime: Lifetime, origin: 'agent' | 'evolution' = 'agent'): Promise<string> {
   const child = await workspace.agent.actorDirectory({
-    action: 'register', creationId: `hire-${lifetime}`, name: 'summariser', kind: 'subordinate', lifetime,
+    action: 'register', creationId: `hire-${lifetime}`, name: 'summariser', origin, lifetime,
   });
 
   rosterOver(workspace.db).create({
-    name: 'summariser', actorReference: child.reference, birth: null, deleteRequested: false, createdBy: 'orchestrator',
+    name: 'summariser', actorReference: child.reference, birth: null, deleteRequested: false,
     status: 'working', currentTask: BRIEF, createdAt: Date.now(), dismissedAt: null, lifetime, taskEventId: null,
   });
 
@@ -147,11 +147,10 @@ test('a turn cut off after its report-tool answer, mid-turn, is not run again an
 test('an evolution helper whose answer was stored for its lane is not run again after a reset', async () => {
   const gateway = answeringGateway('summarised');
   const workspace = gatewayWorkspace(gateway);
-  const actorId = await hire(workspace, 'task');
+  const actorId = await hire(workspace, 'task', 'evolution');
 
   // A refiner's answer goes to its lane's durable inbox, never the root's rail.
   rosterOver(workspace.db).helpers.record('summariser', { requestId: 'refine-1' }, Date.now());
-  workspace.db.run(`UPDATE actor_subordinates SET created_by = 'evolution' WHERE name = 'summariser'`);
 
   const mark = Object.getOwnPropertyDescriptor(EventLog.prototype, 'markTurnCompleted');
 

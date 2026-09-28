@@ -23,7 +23,7 @@ function rootRuntime(state: string, cwd?: string): LocalRoot {
 
 /** A child over its root's database: same handle, same file, its own actor row. */
 async function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string): Promise<CLIRuntime> {
-  const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), kind: 'subordinate', lifetime: 'durable' });
+  const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), origin: 'agent', lifetime: 'durable' });
   const facet = subordinateAgentName(binding.storageKey);
   const child = createCLIRuntime(root.db, { dbPath: root.dbPath, llm: null, cwd: parent.cwd, facet, actorBinding: binding });
 
@@ -77,7 +77,7 @@ describe('local actor file-plane identity', () => {
   test('hostile logical names are refused before a physical child is allocated', () => {
     const state = scratchDir('facet-plane-hostile');
     const root = rootRuntime(state);
-    const register = (name: string) => registerLocalActor(root.rt.actor, { name, creationId: crypto.randomUUID(), kind: 'subordinate', lifetime: 'durable' });
+    const register = (name: string) => registerLocalActor(root.rt.actor, { name, creationId: crypto.randomUUID(), origin: 'agent', lifetime: 'durable' });
     expect(() => register('../escape')).toThrow(expect.objectContaining({ code: 'bad_input' }));
     expect(() => register('a/b')).toThrow(expect.objectContaining({ code: 'bad_input' }));
     expect(existsSync(join(state, 'escape'))).toBe(false);

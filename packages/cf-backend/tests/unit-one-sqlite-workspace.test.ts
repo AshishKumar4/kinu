@@ -60,10 +60,10 @@ describe('one SQLite for every logical actor', () => {
   test('five actors, one database, and no actor without rows of its own', async () => {
     const fixture: HostedWorkspaceFixture = await hostedWorkspace();
     const main = await fixture.host.acquire(fixture.main);
-    const first = await fixture.hire(fixture.main, 'sub-reader-1', 'subordinate');
-    const second = await fixture.hire(fixture.main, 'sub-writer-2', 'subordinate');
-    const head = await fixture.hire(fixture.main, 'exp:head-a1', 'run');
-    const node = await fixture.hire(fixture.main, 'exp:node-b2', 'run');
+    const first = await fixture.hire(fixture.main, 'sub-reader-1', 'agent');
+    const second = await fixture.hire(fixture.main, 'sub-writer-2', 'agent');
+    const head = await fixture.hire(fixture.main, 'exp:head-a1', 'swarm');
+    const node = await fixture.hire(fixture.main, 'exp:node-b2', 'swarm');
     const actors = [main, first, second, head, node];
 
     // Asserted first: every assertion below would read true over a fixture that had opened five.
@@ -95,10 +95,10 @@ describe('one SQLite for every logical actor', () => {
 
     const roster = [
       main,
-      await fixture.hire(fixture.main, 'sub-reader-1', 'subordinate'),
-      await fixture.hire(fixture.main, 'sub-writer-2', 'subordinate'),
-      await fixture.hire(fixture.main, 'exp:head-a1', 'run'),
-      await fixture.hire(fixture.main, 'exp:node-b2', 'run'),
+      await fixture.hire(fixture.main, 'sub-reader-1', 'agent'),
+      await fixture.hire(fixture.main, 'sub-writer-2', 'agent'),
+      await fixture.hire(fixture.main, 'exp:head-a1', 'swarm'),
+      await fixture.hire(fixture.main, 'exp:node-b2', 'swarm'),
     ];
 
     for (const actor of roster) await scriptedTurn(actor, `work for ${actor.record.name}`);

@@ -339,7 +339,7 @@ describe('turn-pipeline correctness wiring', () => {
     const rootFiles = workspaceFiles(workspace.agent);
     await rootFiles.writeFile('/home/main/shared-proof.md', 'registered workspace bytes');
     const head = await hostedExplorationHarness(workspace, 'head-a1');
-    expect(head.actor.record.kind).toBe('run');
+    expect(head.actor.record.origin).toBe('swarm');
     const headFiles = head.actor.runtime.storage.vfs;
     expect(await headFiles.readFile('/home/main/shared-proof.md', { encoding: 'utf8' }))
       .toBe('registered workspace bytes');

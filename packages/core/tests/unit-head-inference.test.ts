@@ -55,7 +55,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     inheritedContext: [{ id: 'm1', role: 'user', content: 'the prior user message', createdAt: 1 }],
     budget: { maxDepth: 2, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('run'),
+    loop: defaultLoopOrigin('swarm'),
     ...overrides,
   };
 }
@@ -66,7 +66,7 @@ const deps = async (
   over?: Partial<HeadInferenceDeps>,
 ): Promise<HeadInferenceDeps> => {
   const { rt, testSql } = createTestRuntime();
-  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-under-test', 'run');
+  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-under-test', 'swarm');
 
   return {
     actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
@@ -226,8 +226,8 @@ describe('durable delegated turn opening', () => {
     test(`a fork's first working revision is its seed and survives reopening, empty=${empty}`, async () => {
       const { rt, testSql } = createTestRuntime();
       const seats = hostedSeatsOver({ rt, db: testSql.db });
-      const source = await seats.seat('fork-source', 'subordinate');
-      const fork = await seats.seat('walked-back-fork', 'subordinate');
+      const source = await seats.seat('fork-source', 'agent');
+      const fork = await seats.seat('walked-back-fork', 'agent');
 
       const original: ModelMessage[] = [
         { role: 'user', content: 'first question' },
@@ -249,7 +249,7 @@ describe('durable delegated turn opening', () => {
         expect((await fork.actor.stores.history.materialize()).messages).toEqual(seed);
         expect((await source.actor.stores.history.materialize()).messages).toEqual(original);
 
-        const reopened = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back-fork', 'subordinate');
+        const reopened = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back-fork', 'agent');
         await reopened.actor.session.restoreWorkingHistory();
         expect(reopened.actor.session.history).toEqual(seed);
         expect(reopened.actor.stores.history.context.revisions(selection.contextId)).toEqual(revisions);
@@ -261,7 +261,7 @@ describe('durable delegated turn opening', () => {
 
   test('the walk-back is one session method: head, selection, woven blocks and working history move together', async () => {
     const { rt, testSql } = createTestRuntime();
-    const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back', 'subordinate');
+    const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back', 'agent');
     const { session, stores } = seat.actor;
     const chat = stores.history.transcript(CHAT_SESSION_ID);
     const assertOwner = () => rt.actor.assertCurrent();
@@ -298,9 +298,9 @@ describe('durable delegated turn opening', () => {
 
   test('an explicitly empty working revision is authoritative, not a new birth', async () => {
     const { rt, testSql } = createTestRuntime();
-    const first = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'subordinate');
+    const first = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'agent');
     await first.actor.session.restoreHistory([]);
-    const restored = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'subordinate');
+    const restored = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'agent');
 
     try {
       await restored.actor.session.restoreWorkingHistory();
@@ -350,7 +350,7 @@ describe('durable delegated turn opening', () => {
         };
       } });
 
-      let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'subordinate');
+      let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'agent');
 
       const run = async (assignmentId: string) => runHeadInference(headInput(), {
         ...seat, model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
@@ -362,7 +362,7 @@ describe('durable delegated turn opening', () => {
       try {
         expect((await run('assignment-a')).status).toBe('completed');
 
-        if (cold) seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'subordinate');
+        if (cold) seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'agent');
         expect((await run('assignment-a')).status).toBe('completed');
         expect((await run('assignment-b')).status).toBe('completed');
 
@@ -381,7 +381,7 @@ describe('durable delegated turn opening', () => {
 
   test('a staged replacement survives delegation opening and cold restore without resurrecting the birth seed', async () => {
     const { rt, testSql } = createTestRuntime();
-    let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'subordinate');
+    let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'agent');
     const model = fakeHeadModel('Child answer.');
 
     const run = (assignmentId: string, edit: boolean) => runHeadInference(headInput(), {
@@ -399,7 +399,7 @@ describe('durable delegated turn opening', () => {
     try {
       expect((await run('assignment-a', false)).status).toBe('completed');
       expect((await run('assignment-b', true)).status).toBe('completed');
-      seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'subordinate');
+      seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'agent');
       expect((await run('assignment-c', false)).status).toBe('completed');
       expect(seat.actor.session.history).toEqual([
         { role: 'user', content: 'Edited working prefix.' },

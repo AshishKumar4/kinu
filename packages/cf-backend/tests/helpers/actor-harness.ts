@@ -470,7 +470,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return {
       spawnHead: async (input: HeadInput) => {
         // The `exp:`-marked name `hostHead` registers; a head has no database of its own.
-        await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, kind: 'run', lifetime: 'task' });
+        await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, origin: 'swarm', lifetime: 'task' });
 
         return {
           id: input.id,
@@ -1684,14 +1684,17 @@ export async function hostedSubordinateHarness(
     readonly nameOrigin: 'user' | 'auto';
     readonly mission: string;
     readonly roleId?: string;
+    /** `evolution` stands in for a lane's helper: a view-only task agent. */
+    readonly origin?: 'agent' | 'evolution';
   },
 ): Promise<HostedActorHarness> {
   const seed: SubordinateSeed & { creationId: string } = {
     name: identity.name,
     displayName: identity.displayName,
     nameOrigin: identity.nameOrigin,
-    // Durable: this stands in for a hire.
-    lifetime: 'durable',
+    // Durable: this stands in for a hire; a lane's helper lives one task.
+    lifetime: identity.origin === 'evolution' ? 'task' : 'durable',
+    origin: identity.origin ?? 'agent',
     mission: identity.mission,
     role: identity.roleId ?? 'task',
     // Absent, not null: null would pin "no tier", which the catalog cannot honour.
@@ -1709,7 +1712,7 @@ export async function hostedExplorationHarness(
   id: string,
 ): Promise<HostedActorHarness> {
   const entry = await workspace.agent.actorDirectory({
-    action: 'register', creationId: id, name: `exp:${id}`, kind: 'run', lifetime: 'task',
+    action: 'register', creationId: id, name: `exp:${id}`, origin: 'swarm', lifetime: 'task',
   });
 
   const actor = await workspace.agent.observeActorHost().acquire(entry.reference);

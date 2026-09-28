@@ -40,7 +40,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
   /** Read, not assumed: child counts are "not this id", and a guessed literal would count the root's rows. */
   async rootActorId(): Promise<string> {
     const rows = this.probeState.storage.sql.exec<{ actor_id: string }>(
-      `SELECT actor_id FROM workspace_actors WHERE kind = 'main' LIMIT 1`).toArray();
+      `SELECT actor_id FROM workspace_actors WHERE origin = 'system' LIMIT 1`).toArray();
 
     return rows[0]?.actor_id ?? '';
   }

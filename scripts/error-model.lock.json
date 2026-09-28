@@ -536,7 +536,7 @@
     "packages/core/src/identity/fork.ts#throw": 4,
     "packages/core/src/identity/inline-primitives.ts#catch": 1,
     "packages/core/src/identity/naming.ts#throw": 1,
-    "packages/core/src/identity/workspace-actors.ts#throw": 38,
+    "packages/core/src/identity/workspace-actors.ts#throw": 37,
     "packages/core/src/jobs/runner.ts#catch": 12,
     "packages/core/src/jobs/runner.ts#error-class": 1,
     "packages/core/src/jobs/runner.ts#result-literal": 4,

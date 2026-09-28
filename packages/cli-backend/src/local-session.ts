@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { sameActorReference, testModel, type ModelTestResult } from '@kinu.run/core';
+import { sameActorReference, testModel, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
@@ -1116,7 +1116,7 @@ export class LocalAgentSession {
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
     opts: Pick<SendOptions, 'tier' | 'id' | 'mode'>,
   ): Promise<SendLanding> {
-    return this.chat.send(input, opts);
+    return whenActorTakesInput(this.rt.storage.sql, this.rt.actor.actorId, () => this.chat.send(input, opts));
   }
 
   /** Run a mid-turn redirect as a budgeted head beside the live turn, settling into Alternate Takes
@@ -2524,7 +2524,7 @@ export class LocalAgentSession {
       }).deps,
       // A head inherits the parent's promoted program, making it a fork of this agent.
       loopFor: (bound) => ({
-        origin: this.loopOrigins.get(bound.reference.actorId) ?? defaultLoopOrigin(bound.record.kind),
+        origin: this.loopOrigins.get(bound.reference.actorId) ?? defaultLoopOrigin(bound.record.origin),
         parent: this.rt,
       }),
       contextEvents: (bound) => bound.stores.eventRecorder,
@@ -2876,7 +2876,7 @@ export class LocalAgentSession {
     readonly seat: HostedNodeSeat;
   }> {
     const binding = registerLocalActor(this.rt.actor, {
-      name: explorationActorKey(creationId), creationId, kind: 'run', lifetime: 'task',
+      name: explorationActorKey(creationId), creationId, origin: 'swarm', lifetime: 'task',
     });
 
     declare(binding.reference.actorId);

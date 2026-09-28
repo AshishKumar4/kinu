@@ -87,7 +87,6 @@ const GeneralizedToolSchema = v.object({
 
 import type { SessionHistory } from '../session/history';
 import type { AgentConfigStore } from '../config/store';
-import type { WorkspaceActor } from '../identity/workspace-actors';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';
 
 /** The version a proposal branches from and the variants it may cite. */
@@ -252,11 +251,11 @@ export class EvolutionEngine {
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
     rt.actor.assertCurrent();
 
-    const actor = rt.storage.sql<Pick<WorkspaceActor, 'kind'>>`
-      SELECT kind FROM workspace_actors WHERE actor_id = ${rt.actor.actorId}`[0];
+    const actor = rt.storage.sql<{ evolves: number }>`
+      SELECT evolves FROM workspace_actors WHERE actor_id = ${rt.actor.actorId}`[0];
 
     if (actor === undefined) throw new KinuError('missing', 'the evolution actor has no membership record');
-    this.recordsTurns = this.config.enabled && actor.kind === 'main';
+    this.recordsTurns = this.config.enabled && actor.evolves === 1;
     this.craftLedger = createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql });
 
     // Created here so every backend gets the engine's ledgers without schema wiring.

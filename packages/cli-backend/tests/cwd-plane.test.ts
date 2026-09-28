@@ -135,7 +135,7 @@ describe('peers over one directory', () => {
   test('a subordinate writes into the shared directory and keeps its own actor-scoped stores', async () => {
     const { state, project } = roots('cwd-plane-subordinate');
     const parent = agentRuntime(state, 'parent', project);
-    const binding = registerLocalActor(parent.actor, { name: 'child', creationId: 'child-birth', kind: 'subordinate', lifetime: 'durable' });
+    const binding = registerLocalActor(parent.actor, { name: 'child', creationId: 'child-birth', origin: 'agent', lifetime: 'durable' });
     const physicalName = subordinateAgentName(binding.storageKey);
 
     const child = await shareLocalWorkspacePlane(

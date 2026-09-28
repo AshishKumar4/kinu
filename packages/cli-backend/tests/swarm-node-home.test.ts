@@ -226,7 +226,7 @@ describe('a node seat shares the origin plane on its own head row', () => {
     expect(rt.shell).toBeDefined();
     const seat = await nodeSeatFactory(rt)({ nodeId: 'seat-probe', rootId: 'seat-probe', depth: 1 });
     // A former-node actor's seat runs on the origin plane; the home comes later through provisionNodeHome.
-    expect(seat.actor.record.kind).toBe('run');
+    expect(seat.actor.record.origin).toBe('swarm');
     expect(seat.actor.handle.actorId).not.toBe(rt.actor.actorId);
     expect(seat.actor.runtime.shell).toBe(rt.shell);
     expect(nodeHomeName(rt, 'seat-probe')).toBe(headAgentName(seat.actor.handle.storageKey));

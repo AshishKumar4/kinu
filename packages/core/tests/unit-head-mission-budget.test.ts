@@ -58,7 +58,7 @@ function headInput(missionLabels?: readonly string[]): HeadInput {
     inheritedContext: [{ id: 'm1', role: 'user', content: 'go', createdAt: 1 }],
     budget: { maxDepth: 0, spawnedAt: Date.now() },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('run'),
+    loop: defaultLoopOrigin('swarm'),
   };
 
   return missionLabels ? { ...input, missionLabels } : input;
@@ -68,7 +68,7 @@ function headInput(missionLabels?: readonly string[]): HeadInput {
 async function hostedHead(): Promise<HostedNodeSeat> {
   const { rt, testSql } = createTestRuntime();
 
-  return hostedSeatsOver({ rt, db: testSql.db }).seat('head-mission', 'run');
+  return hostedSeatsOver({ rt, db: testSql.db }).seat('head-mission', 'swarm');
 }
 
 async function runHead(mission: MissionScope | null, opts: { stopAfter?: number } = {}) {
