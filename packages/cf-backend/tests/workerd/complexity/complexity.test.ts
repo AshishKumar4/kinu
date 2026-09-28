@@ -129,9 +129,10 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * 775 once the transcript frame read its ancestry and its messages in one statement each, not one or two an entry;
  * 760 on the list transcript (c7d177a6d8); 681 once the sleep-time window read its entries' messages in one statement;
  * 663 once the workspace capability token was read once, not per hub call; 615 once the tile's fold skipped the
- * owed-work probes while a turn works, the only time it cannot show them.
+ * owed-work probes while a turn works, the only time it cannot show them; 600 once a sequence's terminal effects were
+ * claimed in one statement and the plan review was read only for an operator Build turn.
  */
-const TURN_STATEMENTS = 615;
+const TURN_STATEMENTS = 600;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
