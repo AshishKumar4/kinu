@@ -58,7 +58,12 @@ export function usePlanDecision({ plan, editable, handoffPending, rpc, save, fee
         onError(`Decision saved, but the next turn could not start${result.queueError ? `: ${result.queueError}` : "."}`);
       }
     }).pipe(
-      Effect.catchCause((cause) => Effect.sync(() => onError(renderThrownChain({ cause: Cause.squash(cause) })))),
+      // The owner reads the reason as the call gave it; `attempt`'s account of what the page was doing is ours.
+      Effect.catchCause((cause) => Effect.sync(() => {
+        const failure = Cause.squash(cause);
+
+        onError(renderThrownChain({ cause: failure instanceof KinuError && failure.cause !== undefined ? failure.cause : failure }));
+      })),
       Effect.ensuring(Effect.sync(() => {
         inFlight.current = false;
         setBusy(null);
