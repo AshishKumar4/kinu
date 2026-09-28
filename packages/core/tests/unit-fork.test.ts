@@ -40,7 +40,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt, { workspaceId: 'TGT' });
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     await chat.say({ id: 'm2', role: 'assistant', text: 'hello' });
     await chat.say({ id: 'm3', role: 'user', text: 'second' });
 
@@ -60,7 +60,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt, { workspaceId: 'TGT' });
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
 
     // A mid-turn swap of the file: the fork carries the owner's row through the resealed source.
     const kernel = (await src.bundle.session()).vfs.as(CRED_KERNEL);
@@ -74,16 +74,14 @@ describe('a workspace fork', () => {
     expect(await readSoul(tgt.vfs)).toBe('help with testing');
   });
 
-  test('a sibling branch of the cut is not inherited', async () => {
+  test('an entry after the cut is not inherited', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'root', parentId: null });
-    await chat.say({ id: 'm2', role: 'assistant', text: 'first child' });
-    // A second child of the same parent: a prefix cut cannot express this, and
-    // an ancestry cut must not carry it.
-    await chat.say({ id: 'sib', role: 'assistant', text: 'second child', parentId: 'm1' });
+    await chat.say({ id: 'm1', role: 'user', text: 'root' });
+    await chat.say({ id: 'm2', role: 'assistant', text: 'first' });
+    await chat.say({ id: 'later', role: 'assistant', text: 'after the cut' });
 
     await forkInto(src, tgt, { untilMessageId: 'm2' });
 
@@ -95,7 +93,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'keep me', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'keep me' });
     await chat.say({ id: 'm2', role: 'assistant', text: 'prune me' });
     chat.prune('m2');
     await chat.say({ id: 'm3', role: 'user', text: 'after the prune' });
@@ -117,7 +115,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'run the probe', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'run the probe' });
     // A step's call and result: the model reads them, the transcript does not
     // show them as entries of its own.
     await chat.toolExchange({
@@ -142,11 +140,11 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     // An answer mid-stream: its row is open and its parts live in stream_parts.
     chat.atomic(() => chat.messages.open('assistant', 'm2', 'output'));
     chat.messages.streamOpenPart('m2', { partNo: 0, kind: 'text', streamOrder: 0, descriptor: { json: '{"type":"text"}', path: null, digest: null }, text: 'partial' });
-    chat.transcript.record({ id: 'm2', parentId: 'm1', role: 'assistant', turnId: null, runId: null, metadata: null, parts: [{ messageId: 'm2', partNo: 0 }] });
+    chat.transcript.record({ id: 'm2', role: 'assistant', turnId: null, runId: null, metadata: null, parts: [{ messageId: 'm2', partNo: 0 }] });
 
     await expect(forkInto(src, tgt, { untilMessageId: 'm2' })).rejects.toThrow(/still open in the source/);
   });
@@ -157,7 +155,7 @@ describe('a workspace fork', () => {
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
     const spilled = 'p'.repeat(SPILLED_BYTES);
-    await chat.say({ id: 'm1', role: 'user', text: spilled, parentId: null, metadata: { note: 'q'.repeat(SPILLED_BYTES) } });
+    await chat.say({ id: 'm1', role: 'user', text: spilled, metadata: { note: 'q'.repeat(SPILLED_BYTES) } });
 
     const stored = src.sql<{ content_path: string | null }>`
       SELECT content_path FROM session_messages WHERE content_path IS NOT NULL`;
@@ -186,7 +184,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'p'.repeat(SPILLED_BYTES), parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'p'.repeat(SPILLED_BYTES) });
     void src.sql`UPDATE session_messages SET content_path = ${'/elsewhere/leaked.json'} WHERE content_path IS NOT NULL`;
 
     await expect(forkInto(src, tgt, { untilMessageId: 'm1' }))
@@ -202,7 +200,7 @@ describe('a workspace fork', () => {
     tgt.db.exec('PRAGMA foreign_keys = ON');
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     await chat.toolExchange({
       callId: 'call', resultId: 'result', toolName: 'probe', toolCallId: 'tc-1', output: { ok: true }, chain: false,
     });
@@ -220,12 +218,12 @@ describe('a workspace fork', () => {
     expect(inherited((await readChain(tgt)).ids)).toEqual(['m1', 'm2']);
   });
 
-  test('the fork marker is a public entry parented on the cut, readable as a message', async () => {
+  test('the fork marker is a public entry just after the cut, readable as a message', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src, { workspaceName: 'alpha' });
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     await chat.say({ id: 'm2', role: 'assistant', text: 'hi back' });
 
     await forkInto(src, tgt, { untilMessageId: 'm2', now: 5000 });
@@ -234,10 +232,10 @@ describe('a workspace fork', () => {
     const markerId = chain.ids[chain.ids.length - 1];
     expect(markerId?.startsWith('fork-marker-')).toBe(true);
 
-    const marker = tgt.sql<{ parent_id: string | null; role: string }>`
-      SELECT parent_id, role FROM conversation_entries WHERE id = ${markerId ?? ''}`[0];
+    const marker = tgt.sql<{ position: number; role: string }>`
+      SELECT position, role FROM conversation_entries WHERE id = ${markerId ?? ''}`[0];
 
-    expect(marker).toEqual({ parent_id: 'm2', role: 'system' });
+    expect(marker).toEqual({ position: 2, role: 'system' });
     expect(chain.text[chain.text.length - 1]).toContain('forked from workspace');
     expect(chain.text[chain.text.length - 1]).toContain('alpha');
     // The marker is a node of the chain, not a member of the working context.
@@ -253,7 +251,7 @@ describe('a workspace fork', () => {
       craftedTools: [{ name: 'doubleIt', description: 'doubles', code: 'async (n) => n * 2' }],
     });
 
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     void src.sql`UPDATE crafted_tools SET score = ${0.9}, uses = ${12} WHERE name = ${'doubleIt'}`;
 
     const result = await forkInto(src, tgt, { untilMessageId: 'm1' });
@@ -271,7 +269,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     const srcActor = openWorkspaceMainActor(src.sql).actorId;
     void src.sql`INSERT INTO search_nodes (actor_id, id, root_id, task, action, visits, value) VALUES (${srcActor}, ${'n1'}, ${'n1'}, ${'t'}, ${'a'}, ${3}, ${0.8})`;
     void src.sql`INSERT INTO evolution_events (actor_id, type, message) VALUES (${srcActor}, ${'reflection'}, ${'done'})`;
@@ -287,7 +285,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src, { memory: [{ path: 'memory/MEMORY.md', text: 'remembered' }] });
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     await src.vfs.mkdir('scaffold', { recursive: true });
     await src.vfs.writeFile('scaffold/agent.js', '// scaffold source');
 
@@ -302,7 +300,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     const at = (path: string) => `${WORKSPACE_ROOT}/${path}`;
     const mtime = Date.parse('2026-01-02T03:04:05.000Z');
     const binary = Uint8Array.from({ length: 300 }, (_, index) => index % 256);
@@ -334,7 +332,7 @@ describe('a workspace fork', () => {
   test('a file written while the fork copies it refuses the fork and names the file', async () => {
     const src = fresh();
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     await src.vfs.writeFile('notes.md', 'as the fork began');
 
     const frames = forkTransferFrames({
@@ -354,7 +352,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src, { workspaceId: 'SRC-UUID-123', workspaceName: 'source-alpha' });
-    await chat.say({ id: 'msgX', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'msgX', role: 'user', text: 'hi' });
 
     await forkInto(src, tgt, { untilMessageId: 'msgX', targetWorkspaceName: 'fork-beta', now: 9999 });
 
@@ -372,7 +370,7 @@ describe('a workspace fork', () => {
     await seedForkTarget(b, { workspaceId: 'B-ID' });
     await seedForkTarget(c, { workspaceId: 'C-ID' });
     const chat = await seedForkSource(a, { workspaceId: 'A-ID', workspaceName: 'agent-A' });
-    await chat.say({ id: 'a1', role: 'user', text: 'in A', parentId: null });
+    await chat.say({ id: 'a1', role: 'user', text: 'in A' });
     await chat.say({ id: 'a2', role: 'assistant', text: 'from A' });
 
     await forkInto(a, b, { untilMessageId: 'a2', targetWorkspaceId: 'B-ID', targetWorkspaceName: 'agent-B', now: 5000 });
@@ -398,7 +396,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
 
     await expect(forkInto(src, tgt, { untilMessageId: 'nope' }))
       .rejects.toThrow('fork point not found: message id "nope" does not exist in source');
@@ -411,7 +409,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt, { workspaceId: 'NEW-UUID' });
     const chat = await seedForkSource(src, { workspaceId: 'SRC-UUID' });
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
 
     await forkInto(src, tgt, {
       untilMessageId: 'm1', targetWorkspaceId: 'NEW-UUID', targetWorkspaceName: 'fork-name', now: 7777,
@@ -429,7 +427,7 @@ describe('a workspace fork', () => {
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
     chat.actor.config.setDisplayName('src');
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
 
     await forkInto(src, tgt, { untilMessageId: 'm1', targetWorkspaceName: 'forked-display' });
 
@@ -445,7 +443,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     // Read live by `ShellApprovalPolicy` before it decides whether to ask the owner.
     chat.actor.config.setShellApprovalMode('allow_all');
     chat.actor.config.set('shell_approval_grants', 'rm -rf *@sandbox,curl *@sandbox');
@@ -464,7 +462,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     tgt.execRaw('DROP TABLE memory_chunks_fts');
     tgt.execRaw('DROP TABLE memory_chunks');
     tgt.execRaw('CREATE TABLE memory_chunks (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, content TEXT NOT NULL)');
@@ -477,7 +475,7 @@ describe('a workspace fork', () => {
     const tgt = fresh();
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     tgt.execRaw('DROP TABLE actor_config');
 
     await expect(forkInto(src, tgt, { untilMessageId: 'm1' })).rejects.toThrow(/actor_config/);

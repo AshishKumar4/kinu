@@ -2658,7 +2658,7 @@ export class LocalAgentSession {
 
     if (!this.planReviewSurface()) return requested;
 
-    return workModeUnderReview(requested, authoredTurnMetadata(item), this.stores.planReviews.getActive(CHAT_SESSION_ID));
+    return workModeUnderReview(requested, authoredTurnMetadata(item), () => this.stores.planReviews.getActive(CHAT_SESSION_ID));
   }
 
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {

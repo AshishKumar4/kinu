@@ -5,12 +5,11 @@ import type { SharedCase } from '../cases';
 
 /** One question and its answer, as a settled turn records them. */
 async function exchange(history: SessionHistory, id: string, question: string, answer: string): Promise<void> {
-  const transcript = history.transcript(CHAT_SESSION_ID);
   await history.record(CHAT_SESSION_ID, {
-    id, parentId: transcript.newestId(), origin: 'input', message: { role: 'user', content: question },
+    id, origin: 'input', message: { role: 'user', content: question },
   });
   await history.record(CHAT_SESSION_ID, {
-    id: `${id}-answer`, parentId: id, origin: 'output', message: { role: 'assistant', content: answer },
+    id: `${id}-answer`, origin: 'output', message: { role: 'assistant', content: answer },
   });
 }
 

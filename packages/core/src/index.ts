@@ -100,7 +100,7 @@ export {
 } from './identity/fork-sink';
 
 export {
-  forkPointExists, answersForDrainTurns, conversationCount, conversationTurnPair,
+  forkPointExists, answersForDrainTurns, conversationTurnPair,
   type ConversationTurnPair,
 } from './identity/conversation-store';
 
@@ -1975,12 +1975,12 @@ export type {
 
 export { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
 
-export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
+export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
-export type { Page, PageRequest, SeekCursor } from './session/page';
+export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';
 
 export {
-  mergeTranscript, restoredRows, rowText, transcriptRole,
+  restoredRows, rowText, transcriptRole,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 
@@ -2209,7 +2209,7 @@ export {
 
 export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
-export { messagesUpTo, turnRows, unreadRows } from './read-models/fork-count';
+export { messagesUpTo, turnRows } from './read-models/fork-count';
 
 export {
   turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,

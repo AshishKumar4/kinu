@@ -121,7 +121,7 @@ import {
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   readDeviceRequestChannel, type DeviceRequestChannel,
   cancelCurrentWork, getStoredModelSpec, setModel, getChatHistoryPage,
-  type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest,
+  type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
   resolveTurnSkills, filterToolNamesBySkills,
@@ -583,10 +583,13 @@ export abstract class ActorAgent extends Agent<Env> {
    * Null before claim. Kept out of actor_config and never readable via RPC. */
   protected workspaceCapabilityToken(): string | null {
     // The constructor owns the table, so a failure here is real, never "no token".
-    const rows = this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`;
+    this.capabilityToken ??= this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`[0]?.token || null;
 
-    return rows[0]?.token || null;
+    return this.capabilityToken;
   }
+
+  /** Read once: {@link installWorkspaceCapability} is the row's only writer, and a destroy ends the isolate. */
+  private capabilityToken: string | null | undefined;
 
   /** Hash of the held token, or null. Safe to share; lets the UserDO detect a mismatch. */
   protected async workspaceCapabilityHash(): Promise<string | null> {
@@ -601,6 +604,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!token) throw new KinuError('denied', 'capability token required');
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
+    this.capabilityToken = token;
     this.invalidateModelCaches();
     // The first tile, so a workspace nobody opens still shows.
     this.overviewChanged();
@@ -1932,7 +1936,7 @@ export abstract class ActorAgent extends Agent<Env> {
       sql: this.boundSql,
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
-      history: (limit) => this.chatTranscript.history(undefined, limit),
+      history: (limit) => this.chatTranscript.history(limit),
       admitted: (id) => this.admittedSend(id),
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
       interrupt: () => {
@@ -3523,8 +3527,9 @@ export abstract class ActorAgent extends Agent<Env> {
    * The root's pane names none and reads this actor's conversation.
    */
   @callable()
-  async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<ChatHistoryPage> {
-    const { actor, ...page } = request ?? {};
+  async getChatHistoryPage(request: PositionPageRequest & { actor?: string } = {}): Promise<ChatHistoryPage> {
+    // Strict: a dropped id cursor from an old client re-reads the newest page forever.
+    const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
 
     return getChatHistoryPage(actor === undefined ? this.chatTranscript : this.subordinateChat(actor), page);
   }

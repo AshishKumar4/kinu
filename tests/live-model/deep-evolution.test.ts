@@ -89,9 +89,9 @@ async function solveProblem(
 
   // Store in DB
   const id = crypto.randomUUID();
-  await rt.stores.history.record('deep', { id, parentId: null, message: { role: 'user', content: problem.question }, origin: 'input' });
+  await rt.stores.history.record('deep', { id, message: { role: 'user', content: problem.question }, origin: 'input' });
   await rt.stores.history.record('deep', {
-    id: crypto.randomUUID(), parentId: id, message: { role: 'assistant', content: response }, origin: 'output',
+    id: crypto.randomUUID(), message: { role: 'assistant', content: response }, origin: 'output',
   });
 
   const turn: CompletedTurn = {

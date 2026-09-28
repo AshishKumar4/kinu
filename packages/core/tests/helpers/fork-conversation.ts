@@ -63,8 +63,6 @@ export class ForkConversation {
     readonly id: string;
     readonly message: ModelMessage;
     readonly origin?: MessageOrigin;
-    /** Omitted continues from the current leaf; `null` makes a root. */
-    readonly parentId?: string | null;
     readonly chain?: boolean;
     readonly working?: boolean;
     readonly metadata?: JsonObject;
@@ -90,7 +88,7 @@ export class ForkConversation {
 
     if (input.chain ?? true) {
       this.transcript.record({
-        id: input.id, parentId: input.parentId, role: input.message.role,
+        id: input.id, role: input.message.role,
         turnId: null, runId: null, metadata,
         parts: prepared.content.parts.map((part) => ({ messageId: published.messageId, partNo: part.partNo })),
       });
@@ -101,12 +99,12 @@ export class ForkConversation {
 
   async say(input: {
     readonly id: string; readonly role: 'user' | 'assistant'; readonly text: string;
-    readonly parentId?: string | null; readonly chain?: boolean; readonly working?: boolean;
+    readonly chain?: boolean; readonly working?: boolean;
     readonly metadata?: JsonObject;
   }): Promise<MessageReference> {
     return this.publish({
       id: input.id, message: { role: input.role, content: input.text },
-      parentId: input.parentId, chain: input.chain, working: input.working, metadata: input.metadata,
+      chain: input.chain, working: input.working, metadata: input.metadata,
     });
   }
 
@@ -201,7 +199,7 @@ export async function readChain(workspace: TestWorkspace): Promise<{
     workspace.sql, openWorkspaceMainActor(workspace.sql), CHAT_SESSION_ID, async () => workspace.vfs,
   );
 
-  const chain = reader.ancestry();
+  const chain = reader.entries();
   const text: string[] = [];
 
   for (const entry of chain) {

@@ -22,7 +22,7 @@ import {
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
-import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT } from "@kinu.run/core";
+import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema } from "@kinu.run/core";
 import type { ReasoningEffort } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
@@ -59,7 +59,7 @@ import { primePageDeployedBuildSha } from "@kinu.run/core";
 import { ChatLiveTail, DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
-import { usePagedScroll } from "@/hooks/use-paged-scroll";
+import { useChatThread } from "@/hooks/use-chat-thread";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
 import { useTheme } from "@/hooks/use-theme";
@@ -81,7 +81,7 @@ import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
   BUILTIN_PROFILE_CATALOG,
-  CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema, mergeTranscript,
+  CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type AdvisorSeverity, type JsonValue, type PlanReview, type ReviewAnnotation,
@@ -1732,7 +1732,7 @@ function historyRow(index: number): ChatHistoryEntry {
   const id = `hist-${String(index).padStart(5, "0")}`;
   const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
 
-  if (index % 2 === 0) return { id, role: "user", content: `Question ${index}: what changed in the pricing guard this time?`, createdAt };
+  if (index % 2 === 0) return { id, position: index, role: "user", content: `Question ${index}: what changed in the pricing guard this time?`, createdAt };
 
   const kind = index % 10;
   let content = `Answer ${index}. The guard now reads the campaign before it writes the cart.`;
@@ -1742,13 +1742,17 @@ function historyRow(index: number): ChatHistoryEntry {
   else if (kind === 5) content += `\n\n![chart ${index}](${HISTORY_PICTURE})`;
   else if (kind === 7) content += "\n\nslate://board";
 
-  return { id, role: "assistant", content, createdAt };
+  return { id, position: index, role: "assistant", content, createdAt };
 }
 
 async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
-  const request = v.parse(v.tuple([v.object({ cursor: v.optional(v.object({ after: v.string() })), limit: v.number() })]), args);
+  const request = v.parse(v.tuple([v.object({ cursor: v.optional(PositionCursorSchema), limit: v.number() })]), args);
   const { cursor, limit } = request[0];
-  const held = cursor?.after.startsWith("hist-") ? Number(cursor.after.slice(5)) : HISTORY_ROWS;
+  const asks = document.documentElement.dataset;
+
+  asks.historyAsks = String(Number(asks.historyAsks ?? 0) + 1);
+  asks.historyReads = `${asks.historyReads ?? ""} ${cursor === undefined ? "newest" : `${String(cursor.before - limit)}-${String(cursor.before)}`}`;
+  const held = Math.min(cursor?.before ?? HISTORY_ROWS, HISTORY_ROWS);
   const from = Math.max(0, held - limit);
   const items = Array.from({ length: held - from }, (_, offset) => historyRow(from + offset));
   const settled = Promise.withResolvers<void>();
@@ -1756,13 +1760,8 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
   if (HISTORY_HELD) window.addEventListener("gallery:release-page", () => { settled.resolve(); }, { once: true });
   else setTimeout(settled.resolve, HISTORY_LATENCY_MS);
   await settled.promise;
-  const first = items[0];
 
-  const walked = items.length;
-
-  return from === 0 || first === undefined
-    ? { status: "end", items, walked }
-    : { status: "more", items, next: { after: first.id }, walked };
+  return from === 0 ? { status: "end", items } : { status: "more", items, next: { before: from } };
 }
 
 const GALLERY_AGENTS: PanelAgent[] = [
@@ -3309,7 +3308,7 @@ function ModelPickerStates() {
   );
 }
 
-/* Chat infinite scroll: the real hooks, merge rule and HistoryBoundary over a stub page source. Params: ?latency=ms ?fail=1 (first fetch fails) ?depth=N (pages before exhaustion). */
+/* The real chat thread and scroll over a stub page source. ?latency=ms ?fail=1 (first fetch fails) ?depth=N (pages). */
 const HISTORY_PAGE = 12;
 
 const historyParams = new URLSearchParams(location.search);
@@ -3322,6 +3321,7 @@ const STORED_HISTORY: ChatHistoryEntry[] = Array.from(
   { length: HISTORY_PAGE * HISTORY_DEPTH },
   (_, i) => ({
     id: `h${i + 1}`,
+    position: i,
     role: i % 2 === 0 ? "user" as const : "assistant" as const,
     content: `Archived message ${i + 1} of ${HISTORY_PAGE * HISTORY_DEPTH}. `
       + "Long enough to occupy real vertical space, so the scroll anchoring is "
@@ -3336,37 +3336,30 @@ function ChatHistoryFrame() {
   const requests = useRef(0);
   const [calls, setCalls] = useState<string[]>([]);
 
-  const history = usePagedScroll<ChatHistoryEntry>({
-    grows: "up",
-    fetchPage: useCallback(async (cursor) => {
-      const request = ++requests.current;
-      setCalls((prev) => [...prev, cursor?.after ?? "newest"]);
-      const settled = Promise.withResolvers<void>();
-      setTimeout(settled.resolve, HISTORY_LATENCY);
-      await settled.promise;
+  const rpc: Rpc = useCallback(async <T,>(_method: string, args?: unknown[]): Promise<T> => {
+    const [{ cursor }] = v.parse(v.tuple([v.object({ cursor: v.optional(PositionCursorSchema) })]), args);
+    const request = ++requests.current;
+    setCalls((prev) => [...prev, cursor === undefined ? "newest" : String(cursor.before)]);
+    const settled = Promise.withResolvers<void>();
+    setTimeout(settled.resolve, HISTORY_LATENCY);
+    await settled.promise;
 
-      if (request === requests.current && failed.current) {
-        failed.current = false;
-        throw new Error("stub failure");
-      }
+    if (request === requests.current && failed.current) {
+      failed.current = false;
+      throw new Error("stub failure");
+    }
 
-      const end = cursor === undefined
-        ? STORED_HISTORY.length
-        : STORED_HISTORY.findIndex((row) => row.id === cursor.after);
+    const end = Math.min(cursor?.before ?? STORED_HISTORY.length, STORED_HISTORY.length);
+    const start = Math.max(0, end - HISTORY_PAGE);
+    const items = STORED_HISTORY.slice(start, end);
 
-      const from = end < 0 ? STORED_HISTORY.length : end;
-      const start = Math.max(0, from - HISTORY_PAGE);
-      const items = STORED_HISTORY.slice(start, from);
+    return rpcResult(start === 0 ? { status: "end", items } : { status: "more", items, next: { before: start } }).json<T>();
+  }, []);
 
-      return start === 0 ? { status: "end", items } : { status: "more", items, next: { after: items[0].id } };
-    }, []),
-    startFrom: useCallback(() => live[0] ? { after: live[0].id } : null, [live]),
-  });
-
-  const transcript = useMemo(() => mergeTranscript(history.fetched, live), [history.fetched, live]);
+  const { history, transcript } = useChatThread({ rpc, live, seeded: true });
 
   const messagesRef = useGrowingScroll({
-    grows: "up", content: transcript, fetched: history.fetched, loading: history.loading,
+    grows: "up", content: transcript, fetched: history.entries, loading: history.loading,
     onReachEdge: history.loadMore,
   });
 
@@ -3393,7 +3386,7 @@ function ChatHistoryFrame() {
           className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
           <HistoryBoundary
             loading={history.loading} error={history.error}
-            exhausted={history.exhausted} onRetry={history.loadMore} />
+            exhausted={history.exhausted} onRetry={history.retry} />
           {transcript.map((m) => (
             <div key={m.id} data-msg={m.id}>
               <MessageView message={m} />
@@ -3410,28 +3403,28 @@ function ChatHistoryFrame() {
   );
 }
 
+const NO_HISTORY_LIVE: readonly UIMessage[] = [];
+
 /** The first request is held until the browser releases it, then fails once; Retry answers the authoritative empty page. */
 function HistoryAuthorityFrame() {
   const [hold] = useState(() => Promise.withResolvers<void>());
   const failFirst = useRef(true);
   const requests = useRef(0);
 
-  const history = usePagedScroll<ChatHistoryEntry>({
-    grows: "up",
-    fetchPage: useCallback(async () => {
-      const request = ++requests.current;
-      await hold.promise;
+  const rpc: Rpc = useCallback(async <T,>(): Promise<T> => {
+    const request = ++requests.current;
+    await hold.promise;
 
-      // StrictMode can retire a held walk: only the latest request consumes the planned failure.
-      if (request === requests.current && failFirst.current) {
-        failFirst.current = false;
-        throw new Error("fixture could not read the first history page");
-      }
+    // StrictMode can retire a held walk: only the latest request consumes the planned failure.
+    if (request === requests.current && failFirst.current) {
+      failFirst.current = false;
+      throw new Error("fixture could not read the first history page");
+    }
 
-      return { status: "end" as const, items: [] };
-    }, [hold]),
-    startFrom: useCallback(() => "newest" as const, []),
-  });
+    return rpcResult({ status: "end", items: [] }).json<T>();
+  }, [hold]);
+
+  const { history } = useChatThread({ rpc, live: NO_HISTORY_LIVE, seeded: true });
 
   const loadMore = history.loadMore;
   useEffect(() => { loadMore(); }, [loadMore]);
@@ -3455,7 +3448,7 @@ function HistoryAuthorityFrame() {
 
             error={history.error}
             exhausted={history.exhausted}
-            onRetry={history.loadMore}
+            onRetry={history.retry}
             pending={<ConversationSkeleton />}
             empty={<EmptyConversation mission="Audit checkout history" />}
           />

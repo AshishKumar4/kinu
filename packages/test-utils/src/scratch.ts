@@ -23,7 +23,7 @@ export const SCRATCH_PREFIXES = [
   'deploy-isolation-',
   'dist-integrity-',
   'harness-wiring-',
-  // Not ours: the `opencode` CLI creates `$TMPDIR/opencode` when local-session.test.ts resolves models; listed so preflight ages it out.
+  // Not ours: the `opencode` CLI creates `$TMPDIR/opencode` when the local-session suites resolve models; listed so preflight ages it out.
   'opencode',
   'mutation-gate-',
   'nimbus-probe-',

@@ -38,15 +38,13 @@ async function workspace(): Promise<WorkspaceFixture> {
   });
 
   const said: string[] = [];
-  let parentId: string | null = null;
 
   for (let i = 0; i < MESSAGES; i++) {
     const content = `message ${i}`;
     await history.record(CHAT_SESSION_ID, {
-      id: `m${i}`, parentId, message: { role: 'user', content }, origin: 'input',
+      id: `m${i}`, message: { role: 'user', content }, origin: 'input',
     });
     said.push(content);
-    parentId = `m${i}`;
   }
 
   return { sql: archiveSqlFromDatabase(ws.db), db: ws.db, actor, vfs: ws.vfs, said };

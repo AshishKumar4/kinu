@@ -207,10 +207,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     if (this.countedTranscript !== transcript) {
       const history = transcript.history.bind(transcript);
 
-      transcript.history = async (leafId, limit) => {
+      transcript.history = async (limit) => {
         if (this.historyReads !== null) this.historyReads += 1;
 
-        return await history(leafId, limit);
+        return await history(limit);
       };
 
       this.countedTranscript = transcript;
@@ -289,7 +289,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   private async assistantTexts(): Promise<string[]> {
     const texts: string[] = [];
 
-    for (const entry of this.chatTranscript.ancestry()) {
+    for (const entry of this.chatTranscript.entries()) {
       if (entry.role !== 'assistant') continue;
       const projected = await this.chatTranscript.project(entry.id);
 
@@ -302,10 +302,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   private async conversationRows(): Promise<ParityRows['assistantMessages']> {
     const rows: ParityRows['assistantMessages'] = [];
 
-    for (const entry of this.chatTranscript.ancestry()) {
+    for (const entry of this.chatTranscript.entries()) {
       const message = await this.chatTranscript.message(entry.id);
 
-      if (message !== null) rows.push({ id: entry.id, parentId: entry.parentId, role: entry.role, content: JSON.stringify(message) });
+      if (message !== null) rows.push({ id: entry.id, position: entry.position, role: entry.role, content: JSON.stringify(message) });
     }
 
     return rows;

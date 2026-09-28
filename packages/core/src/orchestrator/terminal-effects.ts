@@ -467,27 +467,36 @@ export class TerminalEffectLedger {
   /** Separate from {@link drive} so the caller can commit the outer claim in the same unit; no transaction of its own. */
   claim(sequenceId: string, owed: readonly OwedEffect[]): void {
     this.deps.actor.assertCurrent();
-    const now = this.deps.now();
+
+    if (owed.length === 0) return;
+
+    // The first of a repeated name and scope wins, as the per-effect lookup it replaces did: the statement
+    // cannot see its own inserts.
+    const firsts = new Map<string, { key: string; name: string; scope: string; seq: number; input: string; lane: string }>();
 
     for (const [index, effect] of owed.entries()) {
-      const key = terminalEffectKey(effect.name, effect.scope);
+      const identity = JSON.stringify([effect.name, effect.scope]);
 
-      // Looked up by name and scope, not by the computed key, so an older-version row is not duplicated and
-      // routed two ways.
-      const existing = this.deps.sql<{ effect_key: string }>`
-        SELECT effect_key FROM terminal_effects
-        WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
-          AND effect_name = ${effect.name} AND scope = ${effect.scope}
-        LIMIT 1`[0];
-
-      if (existing !== undefined) continue;
-
-      const encoded = JSON.stringify(effect.input);
-      void this.deps.sql`INSERT INTO terminal_effects
-        (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts, next_attempt_at)
-        VALUES (${this.actorId}, ${sequenceId}, ${key}, ${effect.name}, ${effect.scope}, ${index},
-                ${encoded}, ${effect.lane}, 'pending', 0, ${now})`;
+      if (!firsts.has(identity)) {
+        firsts.set(identity, {
+          key: terminalEffectKey(effect.name, effect.scope), name: effect.name, scope: effect.scope, seq: index,
+          input: JSON.stringify(effect.input), lane: effect.lane,
+        });
+      }
     }
+
+    const rows = JSON.stringify([...firsts.values()]);
+
+    // One statement for the sequence. Matched by name and scope, not by the computed key, so an
+    // older-version row is not duplicated and routed two ways.
+    void this.deps.sql`INSERT INTO terminal_effects
+      (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts, next_attempt_at)
+      SELECT ${this.actorId}, ${sequenceId}, e.value ->> '$.key', e.value ->> '$.name', e.value ->> '$.scope', e.value ->> '$.seq',
+        e.value ->> '$.input', e.value ->> '$.lane', 'pending', 0, ${this.deps.now()}
+      FROM json_each(${rows}) AS e
+      WHERE NOT EXISTS (SELECT 1 FROM terminal_effects t WHERE t.actor_id = ${this.actorId} AND t.sequence_id = ${sequenceId}
+        AND t.effect_name = e.value ->> '$.name' AND t.scope = e.value ->> '$.scope')
+      ORDER BY e.key`;
   }
 
   async drive(sequenceId: string): Promise<TerminalSequenceRun> {

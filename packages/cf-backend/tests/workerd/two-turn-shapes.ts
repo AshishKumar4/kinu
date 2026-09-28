@@ -254,7 +254,7 @@ export type ParityFrame = v.InferOutput<typeof ParityFrameSchema>;
 /** Raw rows of the root at one point of the parity script; the test normalizes them. */
 export const ParityRowsSchema = v.object({
   assistantMessages: v.array(v.object({
-    id: v.string(), parentId: v.nullable(v.string()), role: v.string(), content: v.string(),
+    id: v.string(), position: v.number(), role: v.string(), content: v.string(),
   })),
   pendingSteers: v.array(PendingSteerSchema),
   pendingSteerFiles: v.array(PendingSteerFileSchema),

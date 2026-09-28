@@ -129,7 +129,7 @@ async function answered(
 async function userEntry(rt: CLIRuntime, text: string): Promise<string> {
   const transcript = rt.stores.history.transcript(CHAT_SESSION_ID);
 
-  for (const entry of transcript.ancestry()) {
+  for (const entry of transcript.entries()) {
     if (entry.role === 'user' && (await transcript.project(entry.id))?.content === text) return entry.id;
   }
 

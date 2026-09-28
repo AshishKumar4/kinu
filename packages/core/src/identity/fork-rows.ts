@@ -26,11 +26,11 @@ export const ForkSessionMessageRowSchema = v.object({
   content_digest: v.nullable(v.string()),
 });
 
-/** One entry of the carried chain, root first. Session and context columns do not cross;
+/** One entry of the carried chat, oldest first. Session and context columns do not cross;
  *  the write stamps the session and points the cut entry at the fork's fresh context. */
 export const ForkConversationEntryRowSchema = v.object({
   id: v.string(),
-  parent_id: v.nullable(v.string()),
+  position: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
   role: v.picklist(['user', 'assistant', 'system', 'tool']),
   turn_id: v.nullable(v.string()),
   run_id: v.nullable(v.string()),

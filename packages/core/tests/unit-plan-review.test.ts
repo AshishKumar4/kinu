@@ -89,7 +89,7 @@ describe('durable plan review lifecycle', () => {
   });
 
   test('only unresolved review states hold an operator Build turn', () => {
-    const held = (review: Parameters<typeof workModeUnderReview>[2]) => workModeUnderReview('build', { kinuAuthor: 'operator' }, review);
+    const held = (review: ReturnType<Parameters<typeof workModeUnderReview>[2]>) => workModeUnderReview('build', { kinuAuthor: 'operator' }, () => review);
 
     expect(held({ status: 'pending', handoffAccepted: false })).toBe('plan');
     expect(held({ status: 'changes_requested', handoffAccepted: false })).toBe('plan');
@@ -225,7 +225,7 @@ describe('durable plan review lifecycle', () => {
 
     const dismissed = store.dismiss('plan-1', 1);
     expect(dismissed).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
-    expect(workModeUnderReview('build', { kinuAuthor: 'operator' }, store.getActive('default'))).toBe('build');
+    expect(workModeUnderReview('build', { kinuAuthor: 'operator' }, () => store.getActive('default'))).toBe('build');
     expect(store.dismiss('plan-1', 1)).toMatchObject({ ok: true, plan: { status: 'dismissed' } });
     expect(store.decide('plan-1', 1, 'approve')).toMatchObject({ ok: false, error: expect.stringContaining('dismissed') });
 
@@ -259,20 +259,20 @@ describe('the plan lock holds only its own thread', () => {
   const pending = { status: 'pending', handoffAccepted: false } as const;
 
   test('an operator message with no explicit mode is held in Plan', () => {
-    expect(workModeUnderReview('build', { kinuAuthor: 'operator' }, pending)).toBe('plan');
+    expect(workModeUnderReview('build', { kinuAuthor: 'operator' }, () => pending)).toBe('plan');
   });
 
   test('an operator message sent in Auto runs as build', () => {
-    expect(workModeUnderReview('build', { kinuAuthor: 'operator', kinuMode: 'build' }, pending)).toBe('build');
+    expect(workModeUnderReview('build', { kinuAuthor: 'operator', kinuMode: 'build' }, () => pending)).toBe('build');
   });
 
   test('a harness turn (event drain, job, handoff) is outside the thread and keeps its mode', () => {
-    expect(workModeUnderReview('build', { kinuAuthor: 'harness' }, pending)).toBe('build');
-    expect(workModeUnderReview('build', { kinuAuthor: 'harness', kinuEvent: 'background_job', kinuMode: 'build' }, pending)).toBe('build');
+    expect(workModeUnderReview('build', { kinuAuthor: 'harness' }, () => pending)).toBe('build');
+    expect(workModeUnderReview('build', { kinuAuthor: 'harness', kinuEvent: 'background_job', kinuMode: 'build' }, () => pending)).toBe('build');
   });
 
   test('a dismissed plan holds nothing', () => {
-    expect(workModeUnderReview('build', { kinuAuthor: 'operator' }, { status: 'dismissed', handoffAccepted: false })).toBe('build');
+    expect(workModeUnderReview('build', { kinuAuthor: 'operator' }, () => ({ status: 'dismissed', handoffAccepted: false }))).toBe('build');
   });
 });
 
