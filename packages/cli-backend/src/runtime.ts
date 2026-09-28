@@ -753,22 +753,17 @@ async function buildCLIHeadRuntime(
  *  for the command, short enough that an orphaned grandchild's pipe is ignored. */
 const EXITED_COMMAND_DRAIN_MS = 250;
 
-const shellOptionsSchema = v.object({
-  stdin: v.optional(v.string()),
-  signal: v.optional(v.instance(AbortSignal)),
-});
-
 export function createHostShell(cwd: string, source: NodeJS.ProcessEnv = process.env): Shell {
   const env = unsandboxedCommandEnvironment(source, new Set([...HARNESS_CREDENTIAL_ENV, ...dotenvLoadedNames(process.cwd(), source)]));
 
   return {
     exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
       const { promise, resolve } = Promise.withResolvers<ShellExecResult>();
-      const stdinText = v.safeParse(v.string(), stdinOrOptions);
-      const options = v.safeParse(shellOptionsSchema, stdinOrOptions);
-      const optionsStdin = options.success ? options.output.stdin : undefined;
-      const stdin = stdinText.success ? stdinText.output : optionsStdin;
-      const signal = options.success ? options.output.signal : undefined;
+
+      const { stdin, signal }: { stdin?: string; signal?: AbortSignal } = v.is(v.string(), stdinOrOptions)
+        ? { stdin: stdinOrOptions }
+        : stdinOrOptions ?? {};
+
       const outputId = nanoid(10);
       let settled = false;
 
