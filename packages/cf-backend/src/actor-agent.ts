@@ -67,6 +67,8 @@ import {
   buildActorTools, buildBuiltinTools,
   buildMcpToolSet,
   type WebSearchProvider,
+  type BrowserSessions,
+  browserSessions,
   buildSystemPromptSync,
   type PromptIdentity,
   activePromptSectionOverrides,
@@ -500,7 +502,7 @@ const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable'
  * A hosted actor's binding reaches only its own files, tables, tasks and facts, never the
  * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
  */
-function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
+function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider, browsers: BrowserSessions) {
   // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
   const runtime = actor.runtime;
 
@@ -510,7 +512,7 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
 
   const providers: CodemodeProvider[] = [
     ...(runtime.executionRouter?.getProviders() ?? []),
-    createWebCodemodeProvider(webSearch),
+    createWebCodemodeProvider({ provider: webSearch, vfs: runtime.storage.vfs, sessions: { sessions: browsers } }),
     createDbCodemodeProvider(actor.stores.appData),
     createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
     createMemoryCodemodeProvider(() => ({
@@ -3126,7 +3128,7 @@ export abstract class ActorAgent extends Agent<Env> {
         throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
       }
 
-      const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider());
+      const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider(), this.browserSessionsFor(actor.handle.actorId));
       const providers = providersInWorkMode(mode, surface.providers);
       // Narrow by the child's own durable, per-actor role.
       const reach = slateToolReach(await this.hostedSlateReach(actor, providers, Object.keys(surface.native)));
@@ -3275,8 +3277,9 @@ export abstract class ActorAgent extends Agent<Env> {
     const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(this.workspaceName()), rt,
+      loader: this.env.LOADER, egress: codemodeEgress({ workspace: this.workspaceName(), actor: rt.actor.actorId }), rt,
       sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
+      browserSessions: this.browserSessionsFor(rt.actor.actorId),
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
     });
 
@@ -3346,6 +3349,11 @@ export abstract class ActorAgent extends Agent<Env> {
     return [...this.baseCodemodeProviders(), createDbCodemodeProvider(this.stores.appData), ...this.extraCodemodeProviders()];
   }
 
+  /** The Chrome sessions `actorId` opened; the table lives on the workspace object every actor shares. */
+  protected browserSessionsFor(actorId: string): BrowserSessions {
+    return browserSessions({ db: this.ctx.storage.sql, binding: this.env.BROWSER, actorId });
+  }
+
   /**
    * Namespaces a slate binding may reach: the build-turn sandbox surfaces minus `tools`/`state`.
    * Read per call: executors attach and detach while this object lives.
@@ -3353,7 +3361,10 @@ export abstract class ActorAgent extends Agent<Env> {
   protected slateNamespaces(): CodemodeProvider[] {
     return [
       ...(this.rt.executionRouter?.getProviders() ?? []),
-      createWebCodemodeProvider(this.ownedModelServices.getWebSearchProvider()),
+      createWebCodemodeProvider({
+        provider: this.ownedModelServices.getWebSearchProvider(), vfs: this.rt.storage.vfs,
+        sessions: { sessions: this.browserSessionsFor(this.rt.actor.actorId) },
+      }),
       createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
       ...this.turnCodemodeProviders(),
     ];
@@ -3370,8 +3381,9 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this._codemodeFactories.has(key)) {
       this._codemodeFactories.set(key, createCodemodeToolFactory({
         loader: this.env.LOADER,
-        egress: codemodeEgress(this.workspaceName()),
+        egress: codemodeEgress({ workspace: this.workspaceName(), actor: this.rt.actor.actorId }),
         rt: this.rt,
+        browserSessions: this.browserSessionsFor(this.rt.actor.actorId),
         reach: narrowing,
         sql: this.boundSql,
         workspace: this.workspaceName(),

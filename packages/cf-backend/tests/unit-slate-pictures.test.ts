@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { sha256Hex } from '@kinu.run/core';
-import { initSlatePictureTable, pictureKey, SlatePictures, type Camera, type PictureCapture } from '../src/slates/pictures';
+import { initSlatePictureTable, pictureKey, SlatePictures, type PictureCapture } from '../src/slates/pictures';
 import { durableSqlStorage } from './helpers/programmatic-host';
 import { memoryBucket, type MemoryBucket } from './helpers/r2';
 
@@ -30,30 +30,26 @@ function pictures(): SlatePictures {
   return new SlatePictures(sql);
 }
 
-/** A camera whose shots are `frames` in turn. */
-function shooting(...frames: Uint8Array[]): Camera {
-  return {
-    async shoot() {
-      const frame = frames.shift();
+type Shoot = PictureCapture['shoot'];
 
-      if (frame === undefined) throw new Error('no frame');
+/** Shots that are `frames` in turn. */
+function shooting(...frames: Uint8Array[]): Shoot {
+  return async () => {
+    const frame = frames.shift();
 
-      return frame;
-    },
-    async close() {},
+    if (frame === undefined) throw new Error('no frame');
+
+    return frame;
   };
 }
 
-/** A camera whose page never loads. */
-const failing: Camera = {
-  async shoot() { throw new Error('the page never loaded'); },
-  async close() {},
-};
+/** A page that never loads. */
+const failing: Shoot = async () => { throw new Error('the page never loaded'); };
 
-function capture(lens: Camera, bucket: MemoryBucket = memoryBucket(), live: readonly string[] = ['board']): PictureCapture {
+function capture(shoot: Shoot, bucket: MemoryBucket = memoryBucket(), live: readonly string[] = ['board']): PictureCapture {
   return {
     workspace: 'ledger', bucket, url: async (port, token) => `https://${String(port)}-${token}.preview.test/`,
-    slates: async () => new Set(live), camera: async () => lens,
+    slates: async () => new Set(live), shoot,
   };
 }
 
@@ -120,34 +116,20 @@ describe('a shot', () => {
     expect([...bucket.objects.keys()]).toEqual([pictureKey('ledger', 'board', sha256Hex(A))]);
   });
 
-  test('with no browser session free waits its backoff, so the wake is not due again at once', async () => {
-    const store = pictures();
-    store.rendered('board', PORT, T0);
-    setSystemTime(T0 + 30_000);
-
-    const busy: PictureCapture = { ...capture(shooting(A)), camera: async () => { throw new Error('no session is free'); } };
-
-    await expect(store.captureDue(busy, T0 + 30_000)).rejects.toThrow('no session is free');
-    expect(store.nextDueAt()).toBe(T0 + 90_000);
-  });
-
   test('opens its slate\'s port with a handle of its own, only while it shoots and for 2 minutes at most', async () => {
     const store = pictures();
     const handles: Array<{ handle: string; open: boolean; otherPort: boolean; pastItsLife: boolean }> = [];
 
-    const watching: Camera = {
-      async shoot(url) {
-        const handle = /^https:\/\/\d+-([a-f0-9]{24})\./u.exec(url)?.[1]?.slice(0, 10) ?? '';
-        handles.push({
-          handle,
-          open: store.captures(PORT, handle, T0 + 30_000),
-          otherPort: store.captures(PORT + 1, handle, T0 + 30_000),
-          pastItsLife: store.captures(PORT, handle, T0 + 150_000),
-        });
+    const watching: Shoot = async (url) => {
+      const handle = /^https:\/\/\d+-([a-f0-9]{24})\./u.exec(url)?.[1]?.slice(0, 10) ?? '';
+      handles.push({
+        handle,
+        open: store.captures(PORT, handle, T0 + 30_000),
+        otherPort: store.captures(PORT + 1, handle, T0 + 30_000),
+        pastItsLife: store.captures(PORT, handle, T0 + 150_000),
+      });
 
-        return A;
-      },
-      async close() {},
+      return A;
     };
 
     store.rendered('board', PORT, T0);
@@ -174,13 +156,10 @@ describe('a shot', () => {
     const store = pictures();
     const bucket = memoryBucket();
 
-    const removing: Camera = {
-      async shoot() {
-        await store.forget('ledger', 'board', bucket);
+    const removing: Shoot = async () => {
+      await store.forget('ledger', 'board', bucket);
 
-        return A;
-      },
-      async close() {},
+      return A;
     };
 
     store.rendered('board', PORT, T0);
@@ -227,7 +206,7 @@ describe("a removed slate's pictures", () => {
     await store.forget('ledger', 'board', { ...bucket, delete: async () => { throw new Error('R2 is unavailable'); } });
     expect(store.nextDueAt()).toBe(T0 + 90_000);
 
-    const unshot: PictureCapture = { ...capture(failing, bucket, []), camera: async () => { throw new Error('a gone slate was photographed'); } };
+    const unshot = capture(async () => { throw new Error('a gone slate was photographed'); }, bucket, []);
 
     expect(await store.captureDue(unshot, T0 + 90_000)).toBe(false);
     expect([...bucket.objects.keys()]).toEqual([]);

@@ -1,4 +1,4 @@
-// Map-backed VFS; `mkdir` surfaces EEXIST on repeat, like the real backends.
+// Map-backed VFS; `mkdir` surfaces EEXIST on repeat unless recursive, like the real backends.
 import type { VFS, VfsNativeReads } from '@kinu.run/core';
 
 export interface MemoryVfs {
@@ -43,7 +43,9 @@ export function createMemoryVfs(): MemoryVfs {
       return { size: content instanceof Uint8Array ? content.byteLength : new TextEncoder().encode(content).byteLength, mtimeMs: 0, isDir: false };
     },
     unlink: async (path) => { files.delete(path); },
-    mkdir: async (path) => {
+    mkdir: async (path, opts) => {
+      if (dirs.has(path) && opts?.recursive === true) return;
+
       if (dirs.has(path)) throw new Error(`EEXIST: directory exists ${path}`);
       dirs.add(path);
     },

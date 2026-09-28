@@ -26,6 +26,24 @@ export function unreachableKv(binding: string): KvStore {
   return { get: refuse('get'), put: refuse('put'), delete: refuse('delete') };
 }
 
+/** `ctx.exports` of a script exporting no entrypoint; a case binds the ones it reaches. */
+export function noEntrypoints(): Cloudflare.Exports {
+  // `Object.create(null)` has no members, as such a script's exports have none.
+  const entrypoints: Cloudflare.Exports = Object.create(null);
+
+  return entrypoints;
+}
+
+/** Browser Run, every member of which refuses by name. */
+export function unreachableBrowser(): BrowserRun {
+  // `Object.create(null)` has no members to type; the proxy answers every read.
+  const members: BrowserRun = Object.create(null);
+
+  return new Proxy(members, {
+    get: (_target, member) => () => { throw new Error(`BROWSER.${String(member)}: not reachable in this test`); },
+  });
+}
+
 export function unreachableAssets(): AssetFetcher {
   return {
     fetch: (input) => { throw new Error(`ASSETS.fetch(${input.url}): not reachable in this test`); },
@@ -47,6 +65,7 @@ export function workerEnv(reached: Partial<Env> = {}): Env {
     CodexEgress: unreachableObjects('CodexEgress'),
     DeployRunDO: unreachableObjects('DeployRunDO'),
     AUTH_KV: unreachableKvNamespace('AUTH_KV'),
+    BROWSER: unreachableBrowser(),
     ASSETS: unreachableFetcher('ASSETS'),
     AI_GATEWAY_URL: 'https://gateway.invalid/unreachable',
     PREVIEW_HOST_SUFFIX: '',
@@ -102,9 +121,13 @@ export function workerContext(): ExecutionContext & { readonly retained: Promise
     waitUntil(promise: Promise<unknown>) { retained.push(promise); },
     passThroughOnException() {},
     props: {},
+    exports: noEntrypoints(),
+    abort: () => { throw new Error('ctx.abort: not reachable in this test'); },
     tracing: {
       enterSpan: (_name, callback, ...args) => callback(new UntracedSpan(), ...args),
       startActiveSpan: (_name, callback, ...args) => callback(new UntracedSpan(), ...args),
+      startSpan: () => new UntracedSpan(),
+      getActiveSpan: () => undefined,
       Span: UntracedSpan,
     },
   };
@@ -112,7 +135,11 @@ export function workerContext(): ExecutionContext & { readonly retained: Promise
 
 class UntracedSpan {
   get isTraced(): boolean { return false; }
-  setAttribute(): void {}
+  setAttribute(): this { return this; }
+  setAttributes(): this { return this; }
+  recordException(): void {}
+  updateName(): this { return this; }
+  setStatus(): this { return this; }
   end(): void {}
 }
 

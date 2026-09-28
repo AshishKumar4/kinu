@@ -23,7 +23,8 @@ export const TASKS_MEMBER_EFFECTS = {
 } as const satisfies Readonly<Record<string, SlateMemberEffect>>;
 
 export const WEB_MEMBER_EFFECTS = {
-  search: 'read', fetch: 'read',
+  search: 'read', fetch: 'read', screenshot: 'read', browsers: 'read',
+  openBrowser: 'mutate', closeBrowser: 'mutate',
 } as const satisfies Readonly<Record<string, SlateMemberEffect>>;
 
 /** Tools with one undifferentiated `call` member have no read shape, so `call` is mutating. */

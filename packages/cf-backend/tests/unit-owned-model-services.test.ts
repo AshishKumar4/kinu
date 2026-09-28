@@ -49,6 +49,7 @@ function fakeEnv(stub: FakeUserDO = fakeUserDO(), extra: Partial<ProviderEnv> = 
       idFromName: (name) => name,
       get: () => stub,
     },
+    BROWSER: { quickAction: async () => new Response('this suite renders no page', { status: 500 }) },
     ...extra,
   };
 }

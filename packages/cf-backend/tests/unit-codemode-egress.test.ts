@@ -14,8 +14,36 @@ import { nimbusPreviewUrl } from '../src/nimbus-route';
 import { workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
+/** The gate's two bindings, recording what reached them. */
+function browserEnv(owned: ReadonlySet<string>) {
+  const reached: string[] = [];
+
+  const env = {
+    BROWSER: {
+      fetch: async (input: string) => {
+        reached.push(`fetch ${input}`);
+
+        return new Response('kitesurf socket');
+      },
+      connectSession: async (sessionId: string) => {
+        reached.push(`connect ${sessionId}`);
+
+        return { sessionId, webSocket: { fetch: async () => new Response(`socket of ${sessionId}`) } };
+      },
+    },
+    OrchestratorAgent: {
+      idFromName: (name: string): DurableObjectId => ({ name, toString: () => name, equals: (other) => other.toString() === name }),
+      get: (workspace: DurableObjectId) => ({
+        ownsBrowserSession: async (actor: string, sessionId: string) => owned.has(`${workspace.toString()}/${actor}/${sessionId}`),
+      }),
+    },
+  };
+
+  return { env, reached };
+}
+
 /** Its fetch override reads no instance state; `WorkerEntrypoint`'s constructor still takes the platform handle whole. */
-const entry = new CodemodeEgress(workerContext(), {});
+const entry = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1' } }, browserEnv(new Set()).env);
 
 const egressFetch = (url: string, init?: RequestInit): Promise<Response> =>
   entry.fetch(new Request(url, init));
@@ -159,7 +187,7 @@ function previewEgress(suffix: string) {
 
   return {
     env,
-    fetch: (url: string) => new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello' } }, env).fetch(new Request(url)),
+    fetch: (url: string) => new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1' } }, env).fetch(new Request(url)),
     // The Worker's own fetch, as `enable_ctx_exports` binds it.
     self: { fetch: (request: Request) => server.fetch(request, env, workerContext()) },
   };
@@ -196,5 +224,43 @@ describe("a program reaches its own workspace's previews, and no other's", () =>
 
     expect(response.status).toBe(403);
     expect(await response.text()).toContain('blocked internal host');
+  });
+});
+
+describe('a program reaches a browser session only through the gate, and only one its agent opened', () => {
+  const upgrade = { headers: { Upgrade: 'websocket' } };
+
+  const gate = (owned: ReadonlySet<string>, actor: string | null) => {
+    const { env, reached } = browserEnv(owned);
+    const egress = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor } }, env);
+
+    return { reached, fetch: (session: string, init?: RequestInit) => egress.fetch(new Request(`https://browser.kinu.invalid/v1/devtools/browser/${session}`, init)) };
+  };
+
+  test("another agent's session, or a slate's reach for one, is refused before Browser Run is asked", async () => {
+    for (const actor of ['a2', null]) {
+      const { reached, fetch } = gate(new Set(['hello/a1/s1']), actor);
+      const refused = await fetch('s1', upgrade);
+
+      expect(refused.status).toBe(403);
+      expect(refused.headers.get(EGRESS_FAILURE_HEADER)).toBe('1');
+      expect(reached).toEqual([]);
+    }
+  });
+
+  test("its own session's socket is piped from the binding; a new Kitesurf browser needs no owner", async () => {
+    const { reached, fetch } = gate(new Set(['hello/a1/s1']), 'a1');
+
+    expect(await (await fetch('s1', upgrade)).text()).toBe('socket of s1');
+    expect(await (await fetch('kitesurf', upgrade)).text()).toBe('kitesurf socket');
+    expect(reached).toEqual(['connect s1', 'fetch https://browser-run.invalid/v1/devtools/browser?browser=kitesurf']);
+  });
+
+  test('answers only a WebSocket upgrade, and never forwards to the network', async () => {
+    const { reached, fetch } = gate(new Set(['hello/a1/s1']), 'a1');
+
+    expect((await fetch('s1')).status).toBe(400);
+    expect(reached).toEqual([]);
+    expect(attempted).toEqual([]);
   });
 });

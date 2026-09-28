@@ -10,7 +10,6 @@ import type { CodexEgress } from "./src/egress/codex-egress";
 import type { SlateBinding } from "./src/slates/bindings";
 import type { MossaicShardDO, MossaicUserDO } from "./src/server";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
-import type { BrowserWorker } from "@cloudflare/puppeteer";
 import type { PictureBucket } from "./src/slates/pictures";
 
 // Top-level imports make this a module, so `Env` is declared global explicitly.
@@ -53,10 +52,10 @@ declare global {
     FEEDBACK_BUCKET?: R2Bucket;
     /** Worker release artifacts; absent ⇒ downloads answer 404 and self-deploy stops at the artifact. */
     RELEASES_BUCKET?: R2Bucket;
-    /** Slate pictures; absent, or with no BROWSER, a tile keeps its placeholder. */
+    /** Slate pictures; absent, a tile keeps its placeholder. */
     SLATE_PICTURES?: PictureBucket;
-    /** Browser Rendering, which photographs a slate for its tile. */
-    BROWSER?: BrowserWorker;
+    /** Browser Run: the `web` tool's rendered fetches and screenshots, agents' browser sessions, and slate pictures. */
+    BROWSER: BrowserRun;
     /** Analytics Engine datasets, optional; user-authored names are digested before indexing. */
     readonly AGENT_METRICS?: AnalyticsEngineDataset;
     readonly FEEDBACK_MARKERS?: AnalyticsEngineDataset;

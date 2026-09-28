@@ -23,7 +23,7 @@ const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['tasks', new Set(['add', 'update'])],
   ['memory', new Set(['save', 'remember', 'forget'])],
   ['agents', new Set(['swarm', 'hire', 'msg', 'dismiss'])],
-  ['web', new Set(['fetch'])],
+  ['web', new Set(['fetch', 'screenshot'])],
 ]);
 
 const READING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
@@ -271,6 +271,8 @@ function basename(path: string): string {
 
 function describeWeb(input: JsonObject): string {
   if (str(input, "action") === "fetch") return "Fetched a page";
+
+  if (str(input, "action") === "screenshot") return "Took a screenshot";
 
   return str(input, "query") ? "Searched the web" : "";
 }

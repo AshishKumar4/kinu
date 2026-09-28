@@ -1992,6 +1992,38 @@ export const PLATFORM_CATALOG = {
       + 'rides the process lane (startProcess + waitForExit installs no timer) instead of a '
       + 'bigger exec timeout: execution/sandbox.ts routes on exactly this entry.',
   },
+
+  'browser.session.keep_alive_ms': {
+    subject: 'Longest a Browser Run Chrome session may sit idle, with no connection, before it closes',
+    limit: { value: 1_200_000, unit: 'ms' },
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-probe',
+    provenance: '/mnt/scratch/kinu/kinu-logs/browser/PROBES-2026-09-28.md#keepalive',
+    date: '2026-09-28',
+    trigger: 'acquire({ keepAlive }) above 1,200,000; or a session idle longer than the keepAlive it was acquired with',
+    onBreach: 'acquire is refused with 400; an idle session closes and getSession answers null',
+    observable: [{ context: 'env.BROWSER.acquire', message: 'BrowserBindingError: Too big: expected number to be <=1200000 (status=400, code=2000)' }],
+    firstPartySignal: true,
+    notes:
+      'Kitesurf takes no keep_alive at all ("Options not supported with browser=kitesurf: keep_alive"): its session '
+      + 'is created on connect and ends with the connection, so web/browser-sessions.ts records Chrome sessions only.',
+  },
+
+  'browser.navigation.timeout_ms': {
+    subject: "Longest a Browser Run Quick Action waits for its page's navigation (`gotoOptions.timeout`)",
+    limit: { value: 60_000, unit: 'ms' },
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'documented',
+    provenance: 'https://developers.cloudflare.com/browser-run/quick-actions/screenshot-endpoint/ (BrowserRunBaseOptions.gotoOptions.timeout, "max 60 000", @cloudflare/workers-types 5.20260928.1)',
+    date: '2026-09-28',
+    trigger: "a page whose navigation event is not reached within gotoOptions.timeout",
+    onBreach: 'the Quick Action fails instead of answering',
+    observable: [],
+    firstPartySignal: true,
+    notes: 'Slate pictures ask for this ceiling; the puppeteer launch they replaced waited 120 s.',
+  },
 } as const satisfies Readonly<Record<string, PlatformFact>>;
 
 export type PlatformFactId = keyof typeof PLATFORM_CATALOG;

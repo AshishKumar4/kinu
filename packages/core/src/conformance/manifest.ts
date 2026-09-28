@@ -320,6 +320,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: { absent: 'a local slate has no tile to draw and no Browser Rendering to shoot one' },
     },
+    // Which actor opened which Chrome session, the owner `CodemodeEgress` checks before piping a socket.
+    browser_sessions: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local program holds no Browser Run socket, so the CLI opens no browser session' },
+    },
     // Container lifecycle announcement dedupe, keyed to the workspace's container.
     sandbox_lifecycle_incidents: {
       'cf-orchestrator': WIRED,

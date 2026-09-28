@@ -10,7 +10,7 @@ import type { ActorHandle, AgentsToolDeps, DeviceRequestChannel, SqlExecutor, Cr
 import {
   createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider,
   renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
-  type WebSearchProvider, type CodemodeProvider, type WorkMode,
+  type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type VFS, type WorkMode,
   currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode,
   selectInjectableCraftedTools,
   withCraftedToolDeclarations, codemodeInputSchema,
@@ -21,15 +21,18 @@ import { KinuError } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude,
 } from "./codemode-sandbox";
+import { BROWSER_PRELUDE } from './browser-prelude';
 
 export interface CodemodeFactoryOptions {
   loader: WorkerLoader;
   /** The loopback Fetcher the sandbox's `fetch` rides; null keeps it offline. */
   egress: Fetcher | null;
-  rt: { actor: ActorHandle; craftStore: Pick<CraftStore, 'list'>; executionRouter?: Pick<ExecutionRouter, 'getProviders'> };
+  rt: { actor: ActorHandle; craftStore: Pick<CraftStore, 'list'>; executionRouter?: Pick<ExecutionRouter, 'getProviders'>; storage: { vfs: VFS } };
   sql: SqlExecutor;
   workspace: string;
   webSearch: WebSearchProvider;
+  /** The actor's Chrome sessions, which `web.connectBrowser` in its programs reaches. */
+  browserSessions: BrowserSessions;
   /** Read per call so a re-bound model lands without a rebuild; omitted (heads) keeps `agents.*` out. */
   agents?: () => AgentsToolDeps;
   extraProviders?: () => CodemodeProvider[];
@@ -70,7 +73,10 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
   const stateProvider = createStateCodemodeProvider(rt.actor.programState);
   const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
-  const webProvider = createWebCodemodeProvider(webSearch);
+
+  const webProvider = createWebCodemodeProvider({
+    provider: webSearch, vfs: rt.storage.vfs, sessions: { sessions: options.browserSessions }, prelude: { source: BROWSER_PRELUDE },
+  });
 
   const executorProviders = (rt.executionRouter?.getProviders() ?? []).map((p) => {
     const wrapped: typeof p.tools = {};
@@ -135,7 +141,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       const build = (mode: WorkMode): Tool => {
         const executor = new KinuSandboxExecutor({ loader, egress: mode === 'plan' ? null : options.egress });
 
-        // No prelude here: createCodeTool drops it; the per-call executor below supplies it.
+        // No prelude here: createCodeTool drops every one; the per-call executor below restores them.
         const toolsProvider: CodemodeProvider = {
           name: CRAFTED_TOOL_NAMESPACE,
           tools: nativeToolFunctions(toolsInWorkMode(mode, reachable)),
@@ -163,16 +169,15 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
               const failures = Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute]));
 
               const live = Array.isArray(resolved)
-                ? resolved.map((provider) => provider.name === CRAFTED_TOOL_NAMESPACE
-                  ? {
-                    name: provider.name,
-                    fns: { ...provider.fns, ...failures },
-                    prelude: renderToolsPrelude(
-                      crafted,
-                      { workspace: options.workspace },
-                    ),
+                ? resolved.map((provider) => {
+                  if (provider.name === CRAFTED_TOOL_NAMESPACE) {
+                    return { name: provider.name, fns: { ...provider.fns, ...failures }, prelude: renderToolsPrelude(crafted, { workspace: options.workspace }) };
                   }
-                  : provider)
+
+                  const prelude = bound.find((declared) => declared.name === provider.name)?.prelude;
+
+                  return prelude === undefined ? provider : { ...provider, prelude };
+                })
                 : resolved;
 
               return executor.execute(code, live);

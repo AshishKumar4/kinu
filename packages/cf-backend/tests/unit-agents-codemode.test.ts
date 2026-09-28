@@ -14,6 +14,7 @@ import {
   type JsonValue,
   type SubordinateHandoff,
   type WebSearchProvider,
+  type BrowserSessions,
 } from '@kinu.run/core';
 import { ROOT_DELEGATION_BUDGET } from '@kinu.run/core';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
@@ -59,8 +60,12 @@ function webSearchProvider(): WebSearchProvider {
       retrievedAt: new Date(0).toISOString(),
       markdown: '',
     }),
+    render: async (url: string) => ({ url, retrievedAt: new Date(0).toISOString(), markdown: '' }),
+    screenshot: async (url: string) => ({ url, retrievedAt: new Date(0).toISOString(), bytes: new Uint8Array() }),
   };
 }
+
+const noBrowsers: BrowserSessions = { open: async () => { throw new Error('this suite opens no browser'); }, list: async () => [], close: async () => {} };
 
 /** The native surface handed to `toolFor` is one `file` tool, so `tools` has a member to assert on. */
 function buildCodemode(agents?: () => AgentsToolDeps) {
@@ -73,7 +78,7 @@ function buildCodemode(agents?: () => AgentsToolDeps) {
     rt,
     sql: testSql.sql,
     workspace: 'test-workspace',
-    webSearch: webSearchProvider(),
+    webSearch: webSearchProvider(), browserSessions: noBrowsers,
   };
 
   const native = {
@@ -191,7 +196,7 @@ describe('the eval docstring the model receives', () => {
     const description = codemodeDescription();
     expect(description).toContain('export declare const web: {');
     expect(description).toContain('search(query: string, opts?: { limit?: number })');
-    expect(description).toContain('fetch(url: string)');
+    expect(description).toContain('fetch(url: string, opts?: { render?: boolean');
     expect(description).not.toContain('type SearchInput = unknown');
   });
 
@@ -202,7 +207,7 @@ describe('the eval docstring the model receives', () => {
     initCraftedToolsTables(testSql.sql);
 
     const built = createCodemodeToolFactory({
-      loader: workerLoader(), egress: null, rt, sql: testSql.sql, workspace: 'test-workspace', webSearch: webSearchProvider(),
+      loader: workerLoader(), egress: null, rt, sql: testSql.sql, workspace: 'test-workspace', webSearch: webSearchProvider(), browserSessions: noBrowsers,
       extraProviders: () => [{ name: 'probe', tools: {}, types, positionalArgs: true }],
     }).toolFor({});
 

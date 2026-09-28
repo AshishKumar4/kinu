@@ -18,6 +18,7 @@ import {
   type AgentsToolAction,
 } from '../tools/registry';
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
+import { nearestField } from '../tools/field-names';
 import {
   PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
@@ -659,56 +660,6 @@ const AGENTS_INPUT_FIELDS: readonly string[] = Object.keys(AgentsInputEntries)
 
 function actionReads(action: AgentsToolAction, field: string): boolean {
   return fieldsOf(action).some((declared) => declared === field);
-}
-
-const MAX_FIELD_EDIT_DISTANCE = 2;
-
-/** Normalizes naming convention so `budgetUsd`, `budget-usd` and `Budget USD` reach `budget_usd`. */
-const FIELD_NAME_SEPARATORS = /[^a-z0-9]/gi;
-
-/** Levenshtein distance, abandoned once a row exceeds `limit`; returns `limit + 1` for "too far". */
-function editDistance(a: string, b: string, limit: number): number {
-  if (Math.abs(a.length - b.length) > limit) return limit + 1;
-  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
-
-  for (let i = 1; i <= a.length; i += 1) {
-    let diagonal = row[0];
-    row[0] = i;
-    let best = i;
-
-    for (let j = 1; j <= b.length; j += 1) {
-      const substitute = diagonal + (a[i - 1] === b[j - 1] ? 0 : 1);
-      diagonal = row[j];
-      const next = Math.min(substitute, row[j] + 1, row[j - 1] + 1);
-      row[j] = next;
-
-      if (next < best) best = next;
-    }
-
-    if (best > limit) return limit + 1;
-  }
-
-  return row[b.length];
-}
-
-/** The field `name` was probably meant to be (convention, then one or two edits), or undefined. */
-function nearestField(name: string, candidates: readonly string[]): string | undefined {
-  const target = name.replace(FIELD_NAME_SEPARATORS, '').toLowerCase();
-  let nearest: string | undefined;
-  let shortest = MAX_FIELD_EDIT_DISTANCE + 1;
-
-  for (const candidate of candidates) {
-    const collapsed = candidate.replace(FIELD_NAME_SEPARATORS, '').toLowerCase();
-    const distance = editDistance(target, collapsed, MAX_FIELD_EDIT_DISTANCE);
-
-    if (distance >= shortest) continue;
-    nearest = candidate;
-    shortest = distance;
-
-    if (distance === 0) break;
-  }
-
-  return nearest;
 }
 
 const FieldNamesSchema = v.record(v.string(), v.unknown());
