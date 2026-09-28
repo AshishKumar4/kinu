@@ -1432,10 +1432,11 @@ describe('LocalAgentHost', () => {
     const actorId = present(seed.query<{ actor_id: string }, []>('SELECT actor_id FROM actor_subordinates LIMIT 1').get(), 'the root').actor_id;
     const now = Date.now();
     seed.prepare(`INSERT INTO refinement_requests
-      (actor_id, id, trigger, scope, stage, claim, session_id, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
-      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
-    seed.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane, lane_request_id, task_event_id, answer_status, answer, created_at)
-      VALUES (?, 'ask-refiner-x1', 'refinement', 'refine-1', NULL, NULL, NULL, ?)`).run(actorId, now);
+      (actor_id, id, trigger, scope, stage, claim, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
+      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
+    seed.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
+      VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
+    seed.run(`UPDATE actor_subordinates SET created_by = 'evolution' WHERE name = 'ask-refiner-x1'`);
     seed.close();
 
     const stage = () => {
@@ -1862,7 +1863,7 @@ function evolutionRows(dbPath: string, actorId: string) {
 /** Read handle for any actor this database holds; presence is the fence, not lifecycle. */
 function readHandle(sql: SqlExecutor, actorId: string): ActorHandle {
   const row = sql<{ workspace_id: string; parent_actor_id: string | null; name: string; storage_key: string }>`
-    SELECT workspace_id, parent_actor_id, name, storage_key FROM workspace_actors WHERE actor_id = ${actorId}`[0];
+    SELECT (SELECT id FROM workspace_identity) AS workspace_id, parent_actor_id, name, storage_key FROM workspace_actors WHERE actor_id = ${actorId}`[0];
 
   if (row === undefined) throw new Error('The actor is not in this workspace.');
 

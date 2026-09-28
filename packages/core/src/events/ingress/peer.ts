@@ -232,7 +232,6 @@ export class PeerHub {
           event_id,
           kind: 'peer_back',
           holder_addr: JSON.stringify(holder),
-          payload_policy: 'full',
         }, now);
       },
     }, msg, now);

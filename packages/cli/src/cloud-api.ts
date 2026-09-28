@@ -223,7 +223,7 @@ export const CloudBackgroundJobSchema: v.GenericSchema<CloudBackgroundJob> = v.o
 });
 
 const CloudCredentialSummarySchema: v.GenericSchema<CloudCredentialSummary> = v.object({
-  key: v.string(), kind: v.string(), createdAt: v.number(), updatedAt: v.number(),
+  key: v.string(), kind: v.string(),
 });
 
 const CloudWebhookTriggerSchema: v.GenericSchema<CloudWebhookTrigger> = v.object({
@@ -423,8 +423,6 @@ export async function updateCloudProfile(
 export interface CloudCredentialSummary {
   key: string;
   kind: string;
-  createdAt: number;
-  updatedAt: number;
 }
 
 export async function listCloudCredentials(origin: string, token: string): Promise<CloudCredentialSummary[]> {

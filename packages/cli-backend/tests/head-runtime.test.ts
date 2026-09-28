@@ -391,7 +391,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
   test('a head neither advertises nor invokes workspace crafts its sandbox does not bind', async () => {
     const parent = makeParent();
-    parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-only echo', code: '(input) => input', params: null, scope: 'local' });
+    parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-only echo', code: '(input) => input' });
     let calls = 0;
 
     const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {

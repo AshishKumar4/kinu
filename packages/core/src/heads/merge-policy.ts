@@ -29,7 +29,7 @@ export interface HeadMergePolicyDeps {
   /** A thunk, asked per merge, so a moved deep tier takes effect without a new runtime. */
   readonly profile: () => Promise<ResolvedTurnProfile>;
   readonly bindMergeModel: HeadMergeModelBinder;
-  /** Required: merge spend is counted nowhere else (`summarizeCost` and `cost_total_tokens` sum only heads). */
+  /** Required: merge spend is counted nowhere else (`summarizeCost` sums only heads). */
   readonly reportModelCall: ModelCallSink;
   /** Rides beside the cost sink so a cost cannot be reported for an unopened operation. */
   readonly operations?: ModelOperationSink;

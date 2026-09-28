@@ -256,7 +256,6 @@ export interface ExplorationRecord {
   readonly floorValue: number | null;
   readonly floorProof: string | null;
   /** NULL when unreported: absent is not zero. */
-  readonly costUsd: number | null;
   readonly costTokens: number | null;
   readonly firstRecordedAt: number;
   /** How many times this cell's best has moved since this row was written. */

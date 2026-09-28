@@ -63,7 +63,6 @@ export interface ActorDirectoryResult {
 export function initWorkspaceActorTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS workspace_actors (
     actor_id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
     parent_actor_id TEXT REFERENCES workspace_actors(actor_id),
     name TEXT NOT NULL,
     storage_key TEXT NOT NULL,
@@ -74,17 +73,17 @@ export function initWorkspaceActorTable(execRaw: RawSqlExec): void {
     creation_id TEXT NOT NULL,
     retiring_at INTEGER,
     deleted_at INTEGER,
-    UNIQUE (workspace_id, parent_actor_id, creation_id),
-    UNIQUE (workspace_id, parent_actor_id, storage_key),
+    UNIQUE (parent_actor_id, creation_id),
+    UNIQUE (parent_actor_id, storage_key),
     CHECK ((kind = 'main' AND parent_actor_id IS NULL) OR (kind != 'main' AND parent_actor_id IS NOT NULL)),
     CHECK (kind = 'run' OR tool_profile = 'full')
   )`);
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_actors_main
-    ON workspace_actors(workspace_id) WHERE kind = 'main'`);
+    ON workspace_actors(kind) WHERE kind = 'main'`);
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_actors_names
-    ON workspace_actors(workspace_id, parent_actor_id, name) WHERE deleted_at IS NULL`);
+    ON workspace_actors(parent_actor_id, name) WHERE deleted_at IS NULL`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_workspace_actors_parent
-    ON workspace_actors(workspace_id, parent_actor_id, created_at, name)`);
+    ON workspace_actors(parent_actor_id, created_at, name)`);
 }
 
 function requiredIdentity(value: string): string {
@@ -129,15 +128,15 @@ export class WorkspaceActorDirectory {
   }
 
   private row(actorId: string): WorkspaceActor | null {
-    const rows = this.sql<WorkspaceActor>`SELECT actor_id AS actorId, workspace_id AS workspaceId,
+    const rows = this.sql<Omit<WorkspaceActor, 'workspaceId'>>`SELECT actor_id AS actorId,
       parent_actor_id AS parentActorId, name, storage_key AS storageKey, kind, tool_profile AS toolProfile, lifetime, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
-      FROM workspace_actors WHERE workspace_id = ${this.authority.workspaceId} AND actor_id = ${actorId}`;
+      FROM workspace_actors WHERE actor_id = ${actorId}`;
 
     const stored = rows[0];
 
     if (!stored) return null;
 
-    return v.parse(StoredActorSchema, stored);
+    return v.parse(StoredActorSchema, { ...stored, workspaceId: this.authority.workspaceId });
   }
 
   private issue(row: WorkspaceActor): ActorHandle {
@@ -206,9 +205,9 @@ export class WorkspaceActorDirectory {
 
     const rows = options?.retired === true
       ? this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-        WHERE workspace_id = ${this.authority.workspaceId} ORDER BY created_at, actor_id`
+        ORDER BY created_at, actor_id`
       : this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-        WHERE workspace_id = ${this.authority.workspaceId} AND deleted_at IS NULL AND retiring_at IS NULL
+        WHERE deleted_at IS NULL AND retiring_at IS NULL
         ORDER BY created_at, actor_id`;
 
     const actors: WorkspaceActor[] = [];
@@ -226,7 +225,7 @@ export class WorkspaceActorDirectory {
     this.requireOwnership();
 
     const row = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE workspace_id = ${this.authority.workspaceId} AND kind = 'main' AND deleted_at IS NULL`[0];
+      WHERE kind = 'main' AND deleted_at IS NULL`[0];
 
     if (!row) throw new KinuError('missing', 'The workspace has no registered main actor.');
 
@@ -238,7 +237,7 @@ export class WorkspaceActorDirectory {
     const name = requiredIdentity(input.name);
 
     const current = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE workspace_id = ${this.authority.workspaceId} AND kind = 'main'`[0];
+      WHERE kind = 'main'`[0];
 
     if (current) {
       const row = this.row(current.actor_id);
@@ -249,8 +248,8 @@ export class WorkspaceActorDirectory {
     }
 
     const actorId = crypto.randomUUID();
-    void this.sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
-      VALUES (${actorId}, ${this.authority.workspaceId}, NULL, ${name}, ${name}, 'main', 'full', 'durable', ${Date.now()}, ${this.authority.workspaceId})`;
+    void this.sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
+      VALUES (${actorId}, NULL, ${name}, ${name}, 'main', 'full', 'durable', ${Date.now()}, ${this.authority.workspaceId})`;
     const row = this.row(actorId);
 
     if (!row) throw new KinuError('io', 'The main actor was not recorded.');
@@ -267,7 +266,7 @@ export class WorkspaceActorDirectory {
     else if (!isExplorationActorKey(name)) throw new KinuError('bad_input', 'Exploration actor names must use the exploration address space.');
 
     const prior = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE workspace_id = ${this.authority.workspaceId} AND parent_actor_id = ${parent.actorId} AND creation_id = ${creationId}`[0];
+      WHERE parent_actor_id = ${parent.actorId} AND creation_id = ${creationId}`[0];
 
     if (prior) {
       const existing = this.row(prior.actor_id);
@@ -281,8 +280,8 @@ export class WorkspaceActorDirectory {
 
     if (this.childRow(parent.actorId, name)) throw new KinuError('denied', 'The sibling name already exists.');
     const actorId = crypto.randomUUID();
-    void this.sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
-      VALUES (${actorId}, ${this.authority.workspaceId}, ${parent.actorId}, ${name}, ${actorId}, ${input.kind}, ${input.toolProfile ?? 'full'}, ${input.lifetime}, ${Date.now()}, ${creationId})`;
+    void this.sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
+      VALUES (${actorId}, ${parent.actorId}, ${name}, ${actorId}, ${input.kind}, ${input.toolProfile ?? 'full'}, ${input.lifetime}, ${Date.now()}, ${creationId})`;
     const row = this.row(actorId);
 
     if (!row) throw new KinuError('io', 'The child actor was not recorded.');
@@ -302,7 +301,7 @@ export class WorkspaceActorDirectory {
 
   private childRow(parentActorId: string, name: string): WorkspaceActor | null {
     const row = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE workspace_id = ${this.authority.workspaceId} AND parent_actor_id = ${parentActorId} AND name = ${name} AND deleted_at IS NULL`[0];
+      WHERE parent_actor_id = ${parentActorId} AND name = ${name} AND deleted_at IS NULL`[0];
 
     return row ? this.row(row.actor_id) : null;
   }
@@ -340,7 +339,7 @@ export class WorkspaceActorDirectory {
     const parent = this.describe(input.parent);
 
     const selected = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE workspace_id = ${this.authority.workspaceId} AND parent_actor_id = ${parent.actorId} AND creation_id = ${input.creationId}`[0];
+      WHERE parent_actor_id = ${parent.actorId} AND creation_id = ${input.creationId}`[0];
 
     if (selected) {
       const row = this.row(selected.actor_id);
@@ -359,8 +358,8 @@ export class WorkspaceActorDirectory {
 
     const actorId = crypto.randomUUID();
     const now = Date.now();
-    void this.sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id, retiring_at, deleted_at)
-      VALUES (${actorId}, ${this.authority.workspaceId}, ${parent.actorId}, ${input.name}, ${actorId}, ${input.kind}, ${input.toolProfile ?? 'full'}, ${input.lifetime}, ${now}, ${input.creationId}, ${now}, ${now})`;
+    void this.sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id, retiring_at, deleted_at)
+      VALUES (${actorId}, ${parent.actorId}, ${input.name}, ${actorId}, ${input.kind}, ${input.toolProfile ?? 'full'}, ${input.lifetime}, ${now}, ${input.creationId}, ${now}, ${now})`;
     const row = this.row(actorId);
 
     if (!row) throw new KinuError('io', 'The cancelled creation was not recorded.');
@@ -399,7 +398,7 @@ export class WorkspaceActorDirectory {
       return result;
     } else if (input.action === 'resolveCreation') {
       const selected = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-        WHERE workspace_id = ${this.authority.workspaceId} AND parent_actor_id = ${parent.actorId} AND creation_id = ${input.creationId}`[0];
+        WHERE parent_actor_id = ${parent.actorId} AND creation_id = ${input.creationId}`[0];
 
       const row = selected ? this.row(selected.actor_id) : null;
 
@@ -446,7 +445,7 @@ export class WorkspaceActorDirectory {
     const owner = this.describe(parent);
 
     const selected = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE workspace_id = ${this.authority.workspaceId} AND parent_actor_id = ${owner.actorId} AND storage_key = ${storageKey}`[0];
+      WHERE parent_actor_id = ${owner.actorId} AND storage_key = ${storageKey}`[0];
 
     const row = selected ? this.row(selected.actor_id) : null;
 
@@ -466,7 +465,7 @@ export class WorkspaceActorDirectory {
   hasRetirements(): boolean {
     this.requireOwnership();
 
-    return this.sql`SELECT actor_id FROM workspace_actors WHERE workspace_id = ${this.authority.workspaceId} AND retiring_at IS NOT NULL AND deleted_at IS NULL LIMIT 1`.length > 0;
+    return this.sql`SELECT actor_id FROM workspace_actors WHERE retiring_at IS NOT NULL AND deleted_at IS NULL LIMIT 1`.length > 0;
   }
 
   retirements(): { caller: ActorReference; parentPath: string[]; name: string; reference: ActorReference }[] {
@@ -474,7 +473,7 @@ export class WorkspaceActorDirectory {
 
     const rows = this.sql<{ actor_id: string }>`SELECT child.actor_id FROM workspace_actors child
       JOIN workspace_actors parent ON parent.actor_id = child.parent_actor_id
-      WHERE child.workspace_id = ${this.authority.workspaceId} AND child.retiring_at IS NOT NULL AND child.deleted_at IS NULL
+      WHERE child.retiring_at IS NOT NULL AND child.deleted_at IS NULL
         AND parent.retiring_at IS NULL AND parent.deleted_at IS NULL ORDER BY child.created_at, child.actor_id`;
 
     return rows.map((entry) => {

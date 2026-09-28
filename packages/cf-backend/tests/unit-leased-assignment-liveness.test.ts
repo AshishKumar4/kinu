@@ -141,7 +141,7 @@ test('a turn cut off after its report-tool answer, mid-turn, is not run again an
   await nextActivation(workspace, gateway);
 
   expect(asked(gateway) - first).toBe(0);
-  expect(workspace.db.query(`SELECT status FROM actor_turn_claims WHERE actor_id = ?`).all(actorId)).toEqual([{ status: 'settled' }]);
+  expect(workspace.db.query(`SELECT outcome IS NOT NULL AS settled FROM actor_turn_claims WHERE actor_id = ?`).all(actorId)).toEqual([{ settled: 1 }]);
 });
 
 test('an evolution helper whose answer was stored for its lane is not run again after a reset', async () => {
@@ -150,7 +150,8 @@ test('an evolution helper whose answer was stored for its lane is not run again 
   const actorId = await hire(workspace, 'task');
 
   // A refiner's answer goes to its lane's durable inbox, never the root's rail.
-  rosterOver(workspace.db).helpers.record('summariser', { lane: 'refinement', requestId: 'refine-1' }, Date.now());
+  rosterOver(workspace.db).helpers.record('summariser', { requestId: 'refine-1' }, Date.now());
+  workspace.db.run(`UPDATE actor_subordinates SET created_by = 'evolution' WHERE name = 'summariser'`);
 
   const mark = Object.getOwnPropertyDescriptor(EventLog.prototype, 'markTurnCompleted');
 
@@ -164,7 +165,7 @@ test('an evolution helper whose answer was stored for its lane is not run again 
 
   const first = asked(gateway);
 
-  expect(rosterOver(workspace.db).helpers.answerFor({ lane: 'refinement', requestId: 'refine-1' })).toMatchObject({ state: 'answered' });
+  expect(rosterOver(workspace.db).helpers.answerFor({ requestId: 'refine-1' })).toMatchObject({ state: 'answered' });
   await nextActivation(workspace, gateway);
   expect(asked(gateway) - first).toBe(0);
 });

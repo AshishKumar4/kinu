@@ -8,12 +8,9 @@ import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type {
-  HeadId, HeadInput, HeadReport, HeadStep, Evidence,
-  HeadFileChangeSet, MergeResult, MergeStrategy, HeadRunView, HeadRunHeadView,
+  HeadId, HeadInput, HeadReport, HeadStep, HeadRunView, HeadRunHeadView, MergeStrategy,
 } from './types';
-import { EVIDENCE_KINDS } from './types';
 import { DecisionSchema } from './merge-schema';
-import { headProducedFindings } from './head-summary';
 import { USAGE_FIELDS, type Usage } from '../usage';
 import { HEAD_USAGE_COLUMNS, type StoredHeadUsage } from './schema';
 import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
@@ -25,27 +22,12 @@ export interface StepTotals {
   readonly toolCalls: number;
 }
 
-const EvidenceKindSchema = v.picklist(EVIDENCE_KINDS);
 
 const ToolCallSchema = v.object({
   toolCallId: v.optional(v.string()),
   name: v.string(),
   input: v.optional(v.unknown()),
   output: v.optional(v.unknown()),
-});
-
-const FileChangeSchema = v.object({
-  path: v.string(),
-  status: v.picklist(['added', 'removed', 'changed']),
-  added: v.number(),
-  removed: v.number(),
-  binary: v.optional(v.boolean()),
-});
-
-const ArtifactRefSchema = v.object({
-  kind: v.picklist(['file', 'port', 'memory', 'note']),
-  ref: v.string(),
-  description: v.optional(v.string()),
 });
 
 /** This module is the column's only writer, so any other shape is corruption and propagates, named. */
@@ -185,9 +167,6 @@ export class HeadJournal {
         summary = NULL,
         error_message = NULL,
         decisions_json = NULL,
-        artifacts_json = NULL,
-        tool_calls_json = NULL,
-        child_head_ids_json = NULL,
         file_changes_json = NULL,
         token_input = NULL,
         token_output = NULL,
@@ -215,15 +194,8 @@ export class HeadJournal {
       summary = ${report.summary},
       error_message = ${report.errorMessage ?? null},
       decisions_json = ${JSON.stringify(report.decisions)},
-      artifacts_json = ${JSON.stringify(report.artifactRefs)},
-      tool_calls_json = ${JSON.stringify(report.toolCalls)},
-      child_head_ids_json = ${JSON.stringify(report.childHeadIds)},
       file_changes_json = ${JSON.stringify(report.fileChanges ?? [])}
       WHERE actor_id = ${this.actorId} AND id = ${report.id}`;
-
-    for (const ev of report.evidence) {
-      this.insertEvidence(report.id, ev);
-    }
   }
 
   /**
@@ -395,14 +367,6 @@ export class HeadJournal {
     return row.seq;
   }
 
-  insertEvidence(headId: HeadId, ev: Evidence): void {
-    this.actor.assertCurrent();
-    void this.sql`INSERT OR REPLACE INTO head_evidence
-      (actor_id, id, head_id, kind, body, ref, confidence, created_at)
-      VALUES (${this.actorId}, ${ev.id}, ${headId}, ${ev.kind}, ${ev.body},
-              ${ev.ref ?? null}, ${ev.confidence ?? null}, ${Date.now()})`;
-  }
-
   readHead(id: HeadId): HeadJournalRow | null {
     this.actor.assertCurrent();
 
@@ -430,29 +394,11 @@ export class HeadJournal {
       ORDER BY depth, spawned_at`;
   }
 
-  readEvidence(headId: HeadId): Evidence[] {
-    this.actor.assertCurrent();
-
-    type Row = { id: string; kind: string; body: string; ref: string | null; confidence: number | null };
-
-    const rows = this.sql<Row>`
-      SELECT id, kind, body, ref, confidence
-      FROM head_evidence WHERE actor_id = ${this.actorId} AND head_id = ${headId}`;
-
-    return rows.map((r) => ({
-      id: r.id,
-      kind: v.parse(EvidenceKindSchema, r.kind),
-      body: r.body,
-      ref: r.ref ?? undefined,
-      confidence: r.confidence ?? undefined,
-    }));
-  }
-
   /**
    * The settlement: a cached merge closes the run, so every unfinished head is settled `aborted` in the same
    * transition, before the merge row exists. Idempotent in both halves.
    */
-  cacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): void {
+  cacheMerge(rootId: HeadId, narrative: string): void {
     this.actor.assertCurrent();
     void this.sql`UPDATE head_journal
       SET status = 'aborted', completed_at = ${Date.now()},
@@ -461,20 +407,8 @@ export class HeadJournal {
         AND root_id = ${rootId}
         AND id != ${rootId}
         AND (status = 'running' OR status = 'interrupted')`;
-    void this.sql`INSERT OR REPLACE INTO head_merge_results
-      (actor_id, root_id, merged_narrative, selected_decisions_json, unresolved_questions_json,
-       recommendations_json, blind_spots_json, cost_head_count, cost_total_tokens,
-       cost_total_wall_ms, cost_max_depth, merged_at, merge_strategy)
-      VALUES (${this.actorId}, ${rootId}, ${result.mergedNarrative},
-              ${JSON.stringify(result.selectedDecisions)},
-              ${JSON.stringify(result.unresolvedQuestions)},
-              ${JSON.stringify(result.recommendations)},
-              ${JSON.stringify(result.blindSpots)},
-              ${result.costSummary.headCount},
-              ${result.costSummary.totalTokens ?? null},
-              ${result.costSummary.totalWallClockMs},
-              ${result.costSummary.maxDepth},
-              ${Date.now()}, ${strategy})`;
+    void this.sql`INSERT OR REPLACE INTO head_merge_results (actor_id, root_id, merged_narrative)
+      VALUES (${this.actorId}, ${rootId}, ${narrative})`;
   }
 
   /** Read on every model step, so the `root_id IN (running)` subquery bounds the aggregate to open roots via `idx_head_journal_status` instead of scanning all history. */
@@ -613,97 +547,14 @@ export class HeadJournal {
     const named = [rootRow?.task, rationale, heads.at(0)?.task].find((candidate) => candidate !== undefined && candidate !== '');
     const task = named ?? '(head run)';
 
-    const mergeRow = this.sql<{ merged_narrative: string; cost_head_count: number; cost_total_tokens: number | null }>`
-      SELECT merged_narrative, cost_head_count, cost_total_tokens
+    const mergeRow = this.sql<{ merged_narrative: string }>`
+      SELECT merged_narrative
       FROM head_merge_results WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`[0];
 
-    const merge = mergeRow
-      ? { narrative: mergeRow.merged_narrative, headCount: mergeRow.cost_head_count, totalTokens: mergeRow.cost_total_tokens }
-      : null;
+    const merge = mergeRow ? { narrative: mergeRow.merged_narrative } : null;
 
     const status = rootRow?.status ?? runStatusOf(heads, merge !== null);
 
     return { rootId, task, rationale, status, spawnedAt, heads, merge };
-  }
-
-  /** Rebuilt from the journal, not cached, so a replay cannot disagree with the live run. */
-  readFileChanges(rootId: HeadId): HeadFileChangeSet[] {
-    this.actor.assertCurrent();
-
-    return this.sql<{ id: string; file_changes_json: string | null }>`
-      SELECT id, file_changes_json FROM head_journal
-      WHERE actor_id = ${this.actorId} AND root_id = ${rootId} ORDER BY depth, spawned_at`
-      .map((r) => ({ id: r.id, changes: parseArray(FileChangeSchema, r.file_changes_json) }))
-      .filter((set) => set.changes.length > 0);
-  }
-
-  readCachedMerge(rootId: HeadId): MergeResult | null {
-    this.actor.assertCurrent();
-
-    type Row = {
-      merged_narrative: string;
-      selected_decisions_json: string | null;
-      unresolved_questions_json: string | null;
-      recommendations_json: string | null;
-      blind_spots_json: string | null;
-      cost_head_count: number;
-      cost_total_tokens: number | null;
-      cost_total_wall_ms: number;
-      cost_max_depth: number;
-    };
-
-    const rows = this.sql<Row>`
-      SELECT merged_narrative, selected_decisions_json, unresolved_questions_json,
-             recommendations_json, blind_spots_json, cost_head_count, cost_total_tokens,
-             cost_total_wall_ms, cost_max_depth
-      FROM head_merge_results WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`;
-
-    const r = rows[0];
-
-    if (!r) return null;
-    const tree = this.readTree(rootId);
-    const evidence: Evidence[] = tree.flatMap((h) => this.readEvidence(h.id));
-    const headIds: HeadId[] = tree.filter((h) => h.parent_id == null || h.parent_id === '').map((h) => h.id);
-    const ids = headIds.length > 0 ? headIds : tree.map((h) => h.id);
-
-    return {
-      mergedNarrative: r.merged_narrative,
-      selectedDecisions: parseArray(DecisionSchema, r.selected_decisions_json),
-      unresolvedQuestions: parseArray(v.string(), r.unresolved_questions_json),
-      recommendations: parseArray(v.string(), r.recommendations_json),
-      blindSpots: parseArray(v.string(), r.blind_spots_json),
-      evidenceAggregate: evidence,
-      headIds: ids,
-      // Grounded scores are live-only; the cached read carries none.
-      headScores: [],
-      fileChanges: this.readFileChanges(rootId),
-      grounded: false,
-      costSummary: {
-        headCount: r.cost_head_count,
-        headsWithFindings: this.countHeadsWithFindings(ids),
-        // NULL back to an absent field, as the live merge reported it.
-        totalTokens: r.cost_total_tokens ?? undefined,
-        totalWallClockMs: r.cost_total_wall_ms,
-        maxDepth: r.cost_max_depth,
-      },
-    };
-  }
-
-  /** Derived through the same predicate as the merge path, not stored. */
-  private countHeadsWithFindings(headIds: readonly HeadId[]): number {
-    return headIds.filter((id) => {
-      const row = this.sql<{ status: string; decisions_json: string | null; artifacts_json: string | null }>`
-        SELECT status, decisions_json, artifacts_json FROM head_journal
-        WHERE actor_id = ${this.actorId} AND id = ${id}`[0];
-
-      if (!row) return false;
-
-      return headProducedFindings({
-        status: row.status === 'completed' ? 'completed' : 'aborted',
-        evidence: this.readEvidence(id),
-        decisions: parseArray(DecisionSchema, row.decisions_json),
-        artifactRefs: parseArray(ArtifactRefSchema, row.artifacts_json),
-      });
-    }).length;
   }
 }

@@ -7,9 +7,7 @@ import { diagnostics, toKinuError } from '../obs';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { HeadJournal } from './journal';
-import type {
-  Evidence, HeadId, HeadInput, HeadReport, HeadStep, MergeResult, MergeStrategy,
-} from './types';
+import type { HeadId, HeadInput, HeadReport, HeadStep } from './types';
 
 /** Told after a durable write lands, with the id whose ledger moved. */
 export type AnnounceHeadActivity = (headId: HeadId) => void;
@@ -40,14 +38,9 @@ export class LiveHeadJournal extends HeadJournal {
     this.announce(headId);
   }
 
-  override insertEvidence(headId: HeadId, ev: Evidence): void {
-    super.insertEvidence(headId, ev);
-    this.announce(headId);
-  }
-
   /** Keyed to the root, because what moved is the run. */
-  override cacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): void {
-    super.cacheMerge(rootId, result, strategy);
+  override cacheMerge(rootId: HeadId, narrative: string): void {
+    super.cacheMerge(rootId, narrative);
     this.announce(rootId);
   }
 

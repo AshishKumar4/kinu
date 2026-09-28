@@ -30,7 +30,7 @@ const StoredHashSchema = v.object({
 const EVENT_BASE = {
   id: 'eid', trace_id: 'tid', caused_by: null,
   trust: 'authenticated', priority: 'normal', received_at: 0,
-  schema_version: 1, reply_channel: null, dedupe_key: null,
+  reply_channel: null, dedupe_key: null,
 } satisfies Omit<BaseEvent, 'ingress' | 'variant' | 'payload_visibility'>;
 
 describe('applyVisibilityForStorage — full', () => {

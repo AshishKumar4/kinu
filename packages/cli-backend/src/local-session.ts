@@ -64,7 +64,7 @@ import { TierIdSchema,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
-  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial,
+  TerminalTransitions, initTerminalEffectTable, declareTerminalRoster, owesShadowTrial, readMission,
   takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
@@ -158,7 +158,7 @@ import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from './runtime';
-import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, localActorMission, type LocalActorBinding } from './actor-identity';
+import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from './actor-identity';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
@@ -1817,7 +1817,8 @@ export class LocalAgentSession {
   /** What this turn owes, via core's `declareTerminalRoster`; this session supplies values, never
    *  decisions, so the CLI cannot drift from the Durable Object. */
   private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
-    const mission = localActorMission(this.rt, makeSqlExec(this.db));
+    // A child titles from its brief, as a hosted actor does; the workspace mission names only the root.
+    const mission = this.rt.actor.parentActorId === null ? readMission(this.rt.storage.sql) : null;
 
     // Decided on the live turn: `shouldGate` reads RAM a restart lacks, so the row's existence carries it.
     const gated = this.rt.shell !== undefined

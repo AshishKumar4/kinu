@@ -33,7 +33,7 @@ function rows(norm: ParityNormalizer, raw: ParityRows): JsonValue {
     terminalEffects: raw.terminalEffects.map((row) => ({
       sequenceId: norm.text(row.sequenceId), effectKey: norm.text(row.effectKey), effectName: row.effectName,
       scope: norm.text(row.scope), seq: row.seq, input: norm.json(parse(row.input)), lane: row.lane, status: row.status,
-      outcome: row.outcome === null ? null : norm.text(row.outcome), attempts: row.attempts, settled: row.settled,
+      attempts: row.attempts,
     })),
     runEvents: raw.runEvents.map((row) => {
       const payload = v.parse(v.record(v.string(), JsonValueSchema), parse(row.payload));

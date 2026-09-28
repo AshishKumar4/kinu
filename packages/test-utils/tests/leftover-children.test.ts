@@ -31,7 +31,9 @@ async function runFile(body: string): Promise<FixtureRun> {
 
 /** Whether `pid` still holds memory: gone, a zombie, or a process past releasing it on its way out holds none. */
 function holdsMemory(pid: number): boolean {
-  const status = tolerate(() => readFileSync(`/proc/${String(pid)}/status`, 'utf8'), 'enoent');
+  // A process mid-exit answers ESRCH to the read; one fully gone has no /proc entry (ENOENT).
+  const read = () => tolerate(() => readFileSync(`/proc/${String(pid)}/status`, 'utf8'), 'enoent');
+  const status = tolerate(read, 'esrch');
 
   return status !== undefined && /^VmRSS:/mu.test(status);
 }

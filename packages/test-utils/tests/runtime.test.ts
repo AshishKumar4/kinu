@@ -17,7 +17,7 @@ describe('createTestRuntime refuses work it does not perform', () => {
     ['a memory write', () => rt.memory.write('MEMORY.md', 'kept?'), 'opts.memory'],
     ['a crafted-tool write', async () => {
       rt.craftStore.create({
-        name: 'double', description: 'doubles', params: null, code: 'async (n) => n * 2', scope: 'local',
+        name: 'double', description: 'doubles', code: 'async (n) => n * 2',
       });
     }, 'opts.craftStore'],
     ['a delayed callback', () => rt.schedule.after(10, async () => {}), 'opts.schedule'],

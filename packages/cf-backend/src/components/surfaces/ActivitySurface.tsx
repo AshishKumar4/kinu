@@ -109,6 +109,15 @@ function Warning({ children }: { children: React.ReactNode }) {
 }
 
 
+function servedBy({ modelId, route }: NonNullable<ActivitySnapshot["latest"]>): string {
+  let via = "";
+
+  if (route?.kind === "container") via = "via Kinu's container";
+  else if (route?.kind === "device") via = `via ${route.name ?? "a removed machine"}`;
+
+  return [modelId ?? "", via].filter(Boolean).join(" ");
+}
+
 function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
   const { latest, fill } = snap;
 
@@ -132,7 +141,7 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
       <BlockHeader
         icon={GaugeIcon}
         title="Context"
-        note={step === null ? `next request · ${at}` : `step ${step.stepIndex} · ${at}`}
+        note={step === null ? `next request · ${at}` : [`step ${step.stepIndex}`, at, servedBy(step)].filter(Boolean).join(" · ")}
       />
 
       <div className="flex items-end gap-2 mb-1">

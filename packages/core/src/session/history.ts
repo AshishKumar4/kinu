@@ -86,7 +86,7 @@ export class SessionHistory {
     const abandoned = () => this.dependencies.sql<{ message_id: string; origin: string }>`SELECT m.message_id,m.origin FROM session_messages m
       JOIN actor_requests r ON r.actor_id=m.actor_id AND r.request_id=m.request_id
       LEFT JOIN actor_turn_claims c ON c.actor_id=r.actor_id AND c.turn_id=r.turn_id
-      WHERE m.actor_id=${actorId} AND m.sealed_at IS NULL AND (c.turn_id IS NULL OR c.status!='admitted' OR c.epoch!=r.epoch) ORDER BY m.rowid`;
+      WHERE m.actor_id=${actorId} AND m.sealed_at IS NULL AND (c.turn_id IS NULL OR c.outcome IS NOT NULL OR c.epoch!=r.epoch) ORDER BY m.rowid`;
 
     for (const row of abandoned()) {
       const parts = await this.messages.openParts(row.message_id);
@@ -298,9 +298,9 @@ export class SessionHistory {
     const { proposalId, selection, status, turnId, events } = edit;
 
     if (events === null || turnId === null) return null;
-    const claim = this.dependencies.sql<{ run_id: string; status: string }>`SELECT run_id,status FROM actor_turn_claims WHERE actor_id=${this.dependencies.actor.actorId} AND turn_id=${turnId}`[0];
+    const claim = this.dependencies.sql<{ run_id: string; outcome: string | null }>`SELECT run_id,outcome FROM actor_turn_claims WHERE actor_id=${this.dependencies.actor.actorId} AND turn_id=${turnId}`[0];
 
-    if (claim?.status !== 'admitted') return null;
+    if (claim === undefined || claim.outcome !== null) return null;
     const proposal = this.proposals.inspect(proposalId);
 
     if (proposal === null) throw new KinuError('missing', 'context proposal disappeared before its audit event');
@@ -434,9 +434,9 @@ export class SessionHistory {
   epochCurrent(turnId: string, epoch: number): boolean {
     this.dependencies.actor.assertCurrent();
     const actorId = this.dependencies.actor.actorId;
-    const claim = this.dependencies.sql<{ epoch: number; status: string }>`SELECT epoch,status FROM actor_turn_claims WHERE actor_id=${actorId} AND turn_id=${turnId}`[0];
+    const claim = this.dependencies.sql<{ epoch: number; outcome: string | null }>`SELECT epoch,outcome FROM actor_turn_claims WHERE actor_id=${actorId} AND turn_id=${turnId}`[0];
 
-    return claim?.epoch === epoch && claim.status === 'admitted';
+    return claim?.epoch === epoch && claim.outcome === null;
   }
 
   assertEpoch(turnId: string, epoch: number): void {

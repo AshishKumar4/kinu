@@ -10,10 +10,10 @@ import { WorkSurface } from '@/components/surfaces/WorkSurface';
 import { PreviewFrame } from '@/components/PreviewFrame';
 import { SLATE_GALLERY_URL } from '@/gallery-slate-fallback';
 
-const ROOT_PLAN: PlanReview = { id: 'plan-dashboard', sessionId: 'default', revision: 2, content: '# Dashboard delivery\n\nImplement the dashboard and verify its refresh action.', status: 'pending', annotations: [], feedback: null, handoffAccepted: false, createdAt: 1, updatedAt: 2, decidedAt: null };
+const ROOT_PLAN: PlanReview = { id: 'plan-dashboard', sessionId: 'default', revision: 2, content: '# Dashboard delivery\n\nImplement the dashboard and verify its refresh action.', status: 'pending', annotations: [], feedback: null, handoffAccepted: false, createdAt: 1, updatedAt: 2 };
 
 /** Plan of an actor outside the budgeted plan walk's frontier: only the arrival hint reaches it. */
-const ARRIVAL_PLAN: PlanReview = { id: 'plan-courier', sessionId: 'default', revision: 3, content: '# Courier rollout\n\nStage the rollout and verify the receipt.', status: 'pending', annotations: [], feedback: null, handoffAccepted: false, createdAt: 30, updatedAt: 30, decidedAt: null };
+const ARRIVAL_PLAN: PlanReview = { id: 'plan-courier', sessionId: 'default', revision: 3, content: '# Courier rollout\n\nStage the rollout and verify the receipt.', status: 'pending', annotations: [], feedback: null, handoffAccepted: false, createdAt: 30, updatedAt: 30 };
 
 /** Built through the wire schema so fixture drift fails here, not as a later timeout. */
 const ARRIVAL_REFERENCE = v.parse(WorkspacePlanReferenceSchema, {
@@ -124,11 +124,11 @@ export function PreviewTabsGallery() {
           { owner: ownerOf('courier'), plan: ARRIVAL_PLAN, tasks: [] },
           {
             owner: ownerOf('worker'), plan: workerPlan,
-            tasks: [{ id: 't1', parentId: null, title: 'Deliver worker', status: 'active', createdAt: 1, updatedAt: 1, note: null, subtasks: [] }],
+            tasks: [{ id: 't1', parentId: null, title: 'Deliver worker', status: 'active', updatedAt: 1, note: null, subtasks: [] }],
           },
           {
             owner: ownerOf('nested'), plan: { ...ROOT_PLAN, revision: 1, content: '# Nested delivery', status: 'approved' as const, handoffAccepted: true },
-            tasks: [{ id: 't2', parentId: null, title: 'Deliver nested', status: 'done', createdAt: 1, updatedAt: 1, note: null, subtasks: [] }],
+            tasks: [{ id: 't2', parentId: null, title: 'Deliver nested', status: 'done', updatedAt: 1, note: null, subtasks: [] }],
           },
           { owner: ownerOf('archive', true), plan: { ...ROOT_PLAN, revision: 1, content: '# Archived delivery', status: 'approved' as const, handoffAccepted: true }, tasks: [] },
         ],

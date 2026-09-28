@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path';
 import { archiveSqlFromDatabase, initActorClaimTables, readWorkspaceArchivePage, type ArchiveCursor } from '@kinu.run/core';
 import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/core';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
+import { stampSchemaGenesis } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
 
 const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
@@ -34,8 +35,8 @@ const ACTOR = 'a1';
 /** Written straight to SQL: this suite covers what the archive copies, not how a turn publishes. */
 function seedEntry(db: Database, id: string, text: string, position: number): void {
   const content = JSON.stringify([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text } }]);
-  db.query(`INSERT INTO session_messages (actor_id, message_id, role, native_content_kind, origin, recorded_at, envelope_json, sealed_at, content_json)
-    VALUES (?, ?, 'user', 'parts', 'input', ?, '{}', ?, ?)`).run(ACTOR, id, 100 + position, 100 + position, content);
+  db.query(`INSERT INTO session_messages (actor_id, message_id, role, native_content_kind, origin, envelope_json, sealed_at, content_json)
+    VALUES (?, ?, 'user', 'parts', 'input', '{}', ?, ?)`).run(ACTOR, id, 100 + position, content);
   db.query(`INSERT INTO conversation_entries (actor_id, session_id, id, parent_id, role, recorded_at)
     VALUES (?, 'default', ?, NULL, 'user', ?)`).run(ACTOR, id, 100 + position);
   db.query(`INSERT INTO conversation_entry_parts (actor_id, session_id, entry_id, position, message_id, part_no)
@@ -59,6 +60,7 @@ function seedWorkspace(path: string): void {
   initActorClaimTables((ddl) => { db.exec(ddl); });
   db.exec(`CREATE TABLE vfs_files (path TEXT PRIMARY KEY, data BLOB)`);
   db.query(`INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)`).run('w1', 'scout', 100);
+  stampSchemaGenesis(db);
 
   for (let i = 0; i < 300; i++) seedEntry(db, `m${i}`, `note ${i} with "quotes"`, i);
 
@@ -266,6 +268,41 @@ describe('kinu export / import', () => {
     const db = restoredDb(home, 'oldbot');
     expect(db.query(`SELECT COUNT(*) AS n FROM conversation_entries`).get()).toEqual({ n: 301 });
     db.close();
+  });
+
+  test('a database or an archive an older Kinu made is refused by name, and no workspace is written', async () => {
+    const home = scratch('kinu-export-genesis-');
+    const out = scratch('kinu-export-genesis-out-');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
+    const current = join(mkdirp(home, 'scout'), 'agent.db');
+    seedWorkspace(current);
+
+    const archive = join(out, 'scout.kinu.jsonl');
+    expect((await result(runCli(home, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
+    const [header, ...records] = readFileSync(archive, 'utf8').split('\n');
+    const unstamped = { ...parseJsonObject(header ?? '') };
+    Reflect.deleteProperty(unstamped, 'schema_genesis');
+    writeFileSync(archive, [JSON.stringify(unstamped), ...records].join('\n'));
+
+    const older = join(out, 'older.agent.db');
+    seedWorkspace(older);
+    const aged = new Database(older);
+    aged.exec('PRAGMA user_version = 0');
+    aged.close();
+    const agedHere = new Database(current);
+    agedHere.exec('PRAGMA user_version = 0');
+    agedHere.close();
+
+    for (const args of [['import', archive, '--name', 'from-archive'], ['import', older], ['export', 'scout', '-o', join(out, 'again.kinu.jsonl')]]) {
+      const refused = await result(runCli(home, args));
+
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr).toContain('made by an older Kinu');
+      expect(refused.stderr).toContain('kinu create');
+    }
+
+    expect(() => restoredDb(home, 'from-archive')).toThrow('unable to open database file');
+    expect(() => restoredDb(home, 'older')).toThrow('unable to open database file');
   });
 
   test('a truncated archive leaves no workspace behind', async () => {

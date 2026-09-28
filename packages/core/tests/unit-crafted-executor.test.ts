@@ -8,9 +8,7 @@ function tool(patch: Partial<CraftedTool>): CraftedTool {
   return {
     name: 'summarize',
     description: 'Summarize text',
-    params: null,
     code: 'export default async (a) => a;',
-    scope: 'local',
     createdAt: 0,
     updatedAt: 0,
     ...patch,
@@ -41,12 +39,5 @@ describe('toCraftedToolSource', () => {
 
   test('an empty-string description is preserved, not replaced', () => {
     expect(toCraftedToolSource(tool({ description: '' }))?.description).toBe('');
-  });
-
-  test('params and scope are deliberately not carried into the executor shape', () => {
-    const source = toCraftedToolSource(tool({ params: { type: 'object' }, scope: 'shared' }));
-
-    if (!source) throw new Error('expected a compiled crafted-tool source');
-    expect(Object.keys(source).sort()).toEqual(['code', 'description', 'name']);
   });
 });

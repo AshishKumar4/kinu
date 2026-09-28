@@ -1,5 +1,3 @@
-/** Shared UI domain types for the agent RPC surface (@callable methods). */
-
 import type { ActivityLogEntry } from './identity/activity-log';
 import type { ContextComposition } from './context-meter';
 import type { ContextFill } from './read-models/context-fill';
@@ -149,6 +147,9 @@ export interface ActivitySnapshot {
 		usage: Usage;
 		/** Null for steps recorded before the meter existed or never measured. */
 		context: ContextComposition | null;
+		modelId: string | null;
+		/** A machine's `name` is read now: null once it is removed. */
+		route: { kind: 'device'; id: string; name: string | null } | { kind: 'container' } | null;
 	} | null;
 	/** Resolved model's context window; null when the catalog has not answered. */
 	contextWindow: number | null;

@@ -252,7 +252,6 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
       const accepted = await upsertCraftedTool(rt, {
         name: row.payload.name,
         description: row.payload.description,
-        params: row.payload.params,
         code: row.payload.code,
         score: row.payload.score,
       });

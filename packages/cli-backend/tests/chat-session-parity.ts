@@ -302,14 +302,13 @@ async function durableRows(db: Database, norm: ParityNormalizer, transcript: Ses
 
   const terminalEffects = db.query<{
     sequence_id: string; effect_key: string; effect_name: string; scope: string; seq: number;
-    input_json: string; lane: string; status: string; outcome: string | null; attempts: number; settled_at: number | null;
-  }, []>(`SELECT sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, outcome, attempts, settled_at
+    input_json: string; lane: string; status: string; attempts: number;
+  }, []>(`SELECT sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts
           FROM terminal_effects ORDER BY rowid`).all()
     .map((row) => ({
       sequenceId: norm.text(row.sequence_id), effectKey: norm.text(row.effect_key), effectName: row.effect_name,
       scope: norm.text(row.scope), seq: row.seq, input: parseJson(row.input_json), lane: row.lane,
-      status: row.status, outcome: row.outcome === null ? null : norm.text(row.outcome), attempts: row.attempts,
-      settled: row.settled_at !== null,
+      status: row.status, attempts: row.attempts,
     }));
 
   return { actorMessages, pendingSteers, pendingSteerFiles, agentLog, terminalEffects };

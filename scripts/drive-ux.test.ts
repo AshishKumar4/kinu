@@ -29,6 +29,7 @@ import { scratchDir } from '@kinu.run/test-utils';
 import type { Page } from 'puppeteer';
 
 import { contrast, rgba, withGallery, type Gallery } from './gallery-harness';
+import { TEST_REQUIREMENTS } from './test-requirements';
 
 const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'drive-ux');
 
@@ -75,7 +76,7 @@ async function waitForEntry(page: Page, name: string): Promise<void> {
   await page.waitForFunction((wanted) => document.querySelector(`[data-drive-entry="${wanted}"]`) !== null, {}, name);
 }
 
-const crumbs = (page: Page) => page.$$eval('nav[aria-label="Folder"] a', (anchors) => anchors.map((a) => a.textContent?.trim() ?? ''));
+const crumbs = (page: Page) => page.$$eval('nav[aria-label="Folder"] a', (anchors) => anchors.map((a) => a.getAttribute('href')));
 
 /** The Skills folder's tiles as drawn: name, whether built in, and the meta line. */
 function skillTiles(page: Page): Promise<{ name: string; builtin: boolean; meta: string }[]> {
@@ -151,18 +152,19 @@ describe('the Drive', () => {
         // A slate opens in its workspace, on its own tab.
         expect(await page.$eval('[data-drive-slate="issue-triage"] a', (a) => a.getAttribute('href')))
           .toBe('/workspace/checkout-fixes?slate=issue-triage');
-        expect(await page.$$eval('[data-drive-tab]', (tabs) => tabs.map((tab) => tab.textContent?.trim()))).toEqual(['My stuff', 'Shared']);
+        expect(await page.$$eval('[data-drive-tab]', (tabs) => tabs.map((tab) => [tab.getAttribute('data-drive-tab'), tab.getAttribute('aria-current')])))
+          .toEqual([['mine', 'page'], ['shared', null]]);
         await shoot(page, 'drive-mine-dark');
 
         // A folder is a link: the breadcrumb follows it.
         await page.click('[data-drive-entry="projects"] a');
         await waitForEntry(page, 'ops');
-        expect(await crumbs(page)).toEqual(['My stuff', 'projects']);
+        expect(await crumbs(page)).toEqual(['/drive', '/drive/projects']);
         // Below the root the owner's slates and blueprints are not repeated.
         expect((await sections(page)).map((section) => section.title)).toEqual(['Folders']);
         await page.click('[data-drive-entry="ops"] a');
         await waitForEntry(page, 'deploy');
-        expect(await crumbs(page)).toEqual(['My stuff', 'projects', 'ops']);
+        expect(await crumbs(page)).toEqual(['/drive', '/drive/projects', '/drive/projects/ops']);
 
         // Upload through the picker: the tile appears without a reload.
         const input = await page.$('input[data-drive-files-input]');
@@ -264,8 +266,7 @@ describe('the Drive', () => {
             getComputedStyle(bar.parentElement ?? bar).backgroundColor,
           ]);
 
-          // WCAG's floor for a graphic that carries meaning.
-          expect(contrast(rgba(sweep), rgba(ground))).toBeGreaterThanOrEqual(3);
+          expect(contrast(rgba(sweep), rgba(ground))).toBeGreaterThanOrEqual(TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum);
         } finally {
           await page.close();
         }
@@ -499,16 +500,20 @@ describe('the Drive', () => {
 
         // A flat skill file is read as discovery reads it: the folder beside review.md takes its name, slates.md
         // has a built-in's, and standup.md is a skill agents use.
-        const flat = await page.$$eval('[data-drive-kind="file"]', (tiles) => tiles.map((tile) => [
-          tile.getAttribute('data-drive-entry'),
-          tile.querySelector('[data-drive-tile-meta]')?.textContent?.trim() ?? '',
-          tile.querySelector('[data-drive-tile-meta] [title]')?.getAttribute('title') ?? null,
-        ]));
+        const flat = await page.$$eval('[data-drive-kind="file"]', (tiles) => tiles.map((tile) => {
+          const unused = tile.querySelector('[data-drive-unused]');
+
+          return [
+            tile.getAttribute('data-drive-entry'),
+            unused?.getAttribute('data-drive-unused') ?? null,
+            unused?.getAttribute('title') ?? tile.querySelector('[data-drive-tile-meta]')?.textContent?.trim() ?? '',
+          ];
+        }));
 
         expect(flat).toEqual([
-          ['review.md', 'Not used', 'Agents read skills/review/SKILL.md instead'],
-          ['slates.md', 'Not used', 'A built-in skill has this name, so agents use the built-in'],
-          ['standup.md', expect.stringMatching(/^\d+ B · /u), null],
+          ['review.md', 'shadowed', expect.stringContaining('skills/review/SKILL.md')],
+          ['slates.md', 'builtin', expect.any(String)],
+          ['standup.md', null, expect.stringMatching(/^\d+ B · /u)],
         ]);
         // The reserved folder is not renamed or deleted, and its skills say who uses them.
         // A built-in skill's tile reads as its page: its steps show none of Markdown's own marks.
@@ -559,7 +564,7 @@ describe('the Drive', () => {
         await page.type('[data-drive-skill-text]', '---\nname: triage\ndescription: Sort the inbox\n---\nSteps.');
         await page.click('[data-drive-add-skill-commit]');
         await waitForEntry(page, 'triage');
-        expect(await crumbs(page)).toEqual(['My stuff', 'Skills']);
+        expect(await crumbs(page)).toEqual(['/drive', '/drive/skills']);
       } finally {
         await page.close();
       }

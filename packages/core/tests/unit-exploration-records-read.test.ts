@@ -85,7 +85,6 @@ function write(over: Partial<ExplorationWrite>): ExplorationWrite {
     depth: 5,
     branches: 3,
     floor: null,
-    costUsd: null,
     costTokens: null,
     at: T0,
     ...over,

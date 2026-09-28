@@ -46,7 +46,6 @@ const EXPLORATION_RECORDS_DDL = `CREATE TABLE IF NOT EXISTS exploration_records 
   branches          INTEGER NOT NULL,
   floor_value       REAL,
   floor_proof       TEXT,
-  cost_usd          REAL,
   cost_tokens       INTEGER,
   first_recorded_at INTEGER NOT NULL,
   displacements     INTEGER NOT NULL DEFAULT 0,
@@ -63,7 +62,6 @@ const EXPLORATION_SEALS_DDL = `CREATE TABLE IF NOT EXISTS exploration_seals (
   objective_id TEXT NOT NULL,
   floor_digest TEXT NOT NULL,
   breach_json  TEXT NOT NULL,
-  sealed_at    INTEGER NOT NULL,
   PRIMARY KEY (actor_id, objective_id, floor_digest)
 )`;
 
@@ -122,7 +120,6 @@ export interface ExplorationWrite {
   readonly depth: number;
   readonly branches: number;
   readonly floor: Floor | null;
-  readonly costUsd: number | null;
   readonly costTokens: number | null;
   readonly at: number;
 }
@@ -170,7 +167,6 @@ interface Row {
   readonly branches: number;
   readonly floor_value: number | null;
   readonly floor_proof: string | null;
-  readonly cost_usd: number | null;
   readonly cost_tokens: number | null;
   readonly first_recorded_at: number;
   readonly displacements: number;
@@ -199,7 +195,6 @@ function decode(row: Row): ExplorationRecord {
     floorDigest: row.floor_digest,
     floorValue: row.floor_value,
     floorProof: row.floor_proof,
-    costUsd: row.cost_usd,
     costTokens: row.cost_tokens,
     firstRecordedAt: row.first_recorded_at,
     displacements: row.displacements,
@@ -400,13 +395,13 @@ export function cellOccupants(
 export function sealRecords(
   sql: SqlExecutor,
   actor: ActorHandle,
-  input: { readonly identity: ObjectiveIdentity; readonly breach: FloorBreach; readonly at: number },
+  input: { readonly identity: ObjectiveIdentity; readonly breach: FloorBreach },
 ): void {
-  const { identity, breach, at } = input;
+  const { identity, breach } = input;
   actor.assertCurrent();
-  void sql`INSERT INTO exploration_seals (actor_id, objective_id, floor_digest, breach_json, sealed_at)
+  void sql`INSERT INTO exploration_seals (actor_id, objective_id, floor_digest, breach_json)
     VALUES (${actor.actorId}, ${objectiveIdOf(identity)}, ${floorDigestOf(breach.floor)},
-      ${JSON.stringify(breach)}, ${at})
+      ${JSON.stringify(breach)})
     ON CONFLICT (actor_id, objective_id, floor_digest) DO NOTHING`;
 }
 
@@ -485,7 +480,7 @@ export function recordExploration(
         root_id = ${write.rootId}, config_digest = ${write.configDigest},
         depth = ${write.depth}, branches = ${write.branches},
         floor_value = ${write.floor?.value ?? null}, floor_proof = ${write.floor?.proof ?? null},
-        cost_usd = ${write.costUsd}, cost_tokens = ${write.costTokens},
+        cost_tokens = ${write.costTokens},
         metric = ${identity.metric}, unit = ${identity.unit}, direction = ${identity.direction},
         scale = ${identity.scale}, verifier_digest = ${identity.verifierDigest}
       WHERE actor_id = ${actorId} AND record_key = ${recordKey}`;
@@ -493,7 +488,7 @@ export function recordExploration(
     void sql`INSERT INTO exploration_records (
         actor_id, record_key, objective_id, floor_digest, descriptor, artifact_digest, artifact,
         value, detail, measured_json, preset, label, root_id, config_digest, depth,
-        branches, floor_value, floor_proof, cost_usd, cost_tokens, first_recorded_at,
+        branches, floor_value, floor_proof, cost_tokens, first_recorded_at,
         displacements, metric, unit, direction, scale, verifier_digest
       ) VALUES (
         ${actorId}, ${recordKey}, ${objectiveId}, ${floorDigest}, ${write.descriptor},
@@ -501,7 +496,7 @@ export function recordExploration(
         ${write.artifact}, ${write.value}, ${write.detail}, ${measuredJson}, ${write.preset},
         ${write.label}, ${write.rootId}, ${write.configDigest}, ${write.depth},
         ${write.branches}, ${write.floor?.value ?? null}, ${write.floor?.proof ?? null},
-        ${write.costUsd}, ${write.costTokens}, ${write.at}, 0,
+        ${write.costTokens}, ${write.at}, 0,
         ${identity.metric}, ${identity.unit}, ${identity.direction}, ${identity.scale},
         ${identity.verifierDigest}
       )`;

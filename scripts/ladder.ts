@@ -33,7 +33,7 @@
  * hooks installed at all.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import * as v from 'valibot';
@@ -840,7 +840,8 @@ export const LADDER: readonly Gate[] = [
     catches: 'a coupled test, by the axes a test review judges on. BANNED, whatever the lock holds: '
       + "an assertion over the implementation's TEXT, a test function or constant restating the "
       + "product's own, a reach into a member production declares non-public, and a mock of an "
-      + 'internal module. RATCHETED, the lock only shrinking: a matcher that cannot fail on the '
+      + 'internal module, or exact rendered wording or CSS values without a cited requirement. Unused '
+      + 'and uncited requirements fail too. RATCHETED, the lock only shrinking: a matcher that cannot fail on the '
       + 'defect its title names, keyed by category, file, TEST TITLE and finding shape, each locked '
       + 'key naming the plants that turn it red. It also refuses a STALE key, so a repaired '
       + 'coupling is recorded as repaired rather than left in the lock as budget for the next one.',
@@ -1678,32 +1679,28 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts scripts/*-ux.test.ts scripts/computed-style.test.ts',
+    run: 'bun test --timeout=0 scripts/account-ux.test.ts scripts/drive-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts',
+    label: 'UI gate self-tests: account, drive and slates',
+    tier: 'ci',
+    // Measured alone 2026-09-27: 144.69 s wall, 51.17 s CPU, 2525 MiB peak Pss, start load 1.98.
+    seconds: 144.69,
+    catches: 'account setup, provider settings, onboarding and deletion; Drive uploads, folders and files; '
+      + 'slate isolation and inline previews; shared libraries, blueprints and share dialogs. '
+      + 'The browser drives gallery fixtures at the suites\' declared widths and themes.',
+    blind: 'gallery fixtures, not deployed accounts, R2 uploads or public viewers; no pixel comparison.',
+    inputs: CLIENT_BUILD,
+  },
+  {
+    run: 'bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts '
+      + '--path-ignore-patterns=scripts/account-ux.test.ts --path-ignore-patterns=scripts/drive-ux.test.ts '
+      + '--path-ignore-patterns=scripts/slate-preview-ux.test.ts --path-ignore-patterns=scripts/slate-sharing-ux.test.ts '
+      + 'scripts/*-ux.test.ts scripts/computed-style.test.ts',
     label: 'UI gate self-tests',
     tier: 'ci',
-    // Measured 2026-09-18 alone on the 24-thread workstation under the wave's
-    // own wrapper, load 1.9 at start: 270.9s wall, 62.4s CPU, 2534 MiB peak
-    // over the sixteen files this row runs — fifteen `*-ux` suites and
-    // `computed-style`.
-    //
-    // The row is the `*-ux` FAMILY since 2026-09-15 rather than a list: a
-    // fifteenth suite joined on 2026-09-14 by a hand edit in three files, and
-    // a suite outside every family is what the orphan test below catches. The
-    // client-failure trio (45 s, measured 13.84 s on 2026-09-06) and
-    // `workspace-name-ux` fold in; their declared seconds are added here.
-    //
-    // Since 2026-09-18 it carves ONE suite back out of that family —
-    // `chat-and-files-ux`, the row above — with bun's own
-    // `--path-ignore-patterns`, so the family still claims every new `*-ux`
-    // suite and a file is in exactly one of the two rows. The two together
-    // are ~500s serial against the 480s shared deadline, which is a row that
-    // reports a hang wherever the defect is: this row died at 124 in the
-    // 2026-09-16 wave and again at 480.42s measured alone on 2026-09-18,
-    // while its declared 420 was never a measurement of the set it had grown
-    // into. Earlier figures for the unsplit row: 347.00s on 2026-09-14
-    // (293.62s with app-background alone, 324.74s with account-ux alone,
-    // 265.76s before either joined).
-    seconds: 300,
+    // Measured alone 2026-09-27: 131.47 s wall, 47.64 s CPU, 2836 MiB peak Pss, start load 1.88.
+    // The glob admits new suites; the exclusions keep the other two UI rows disjoint.
+    // The unsplit family ran 487 s under load on 2026-09-26 against its 480 s deadline.
+    seconds: 131.47,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1733,31 +1730,18 @@ export const LADDER: readonly Gate[] = [
       + 'narrow-container scrim actually CLOSING the rail rather than dimming a '
       + 'document with no way back, and the action strip collapsing on a settled plan '
       + 'instead of spending a margin on buttons nobody can press. The models '
-      + 'section\'s accessible names and the '
-      + 'Phase 1 sharing surfaces are read the same way: every tier row and '
-      + 'role field stays reachable by the name assistive technology announces, '
-      + 'and the shared library, the blueprint page, the share dialog and the '
-      + 'unmapped-bindings panel render at both widths in both themes with the '
-      + 'warning and fork copy they owe and no rate or spend anywhere. The '
+      + 'section\'s accessible names are read the same way: every tier row and '
+      + 'role field stays reachable by the name assistive technology announces. The '
       + 'living background is measured on the shipped shell itself: it sits '
       + 'behind the rail and the page with pointer-events none and a negative '
       + 'z-index, stops its clock when the document is hidden, draws one still '
       + 'under reduced motion and on a phone width, never mounts under a '
       + 'workspace route, and follows the overview read model through idle, '
-      + 'working and attention. The account surfaces '
-      + 'join here: the setup modal over the home chrome, the settings providers '
-      + 'section, the onboarding wizard at each of its four steps with only the '
-      + 'active panel reachable, the account section whose delete button wakes '
-      + 'only on the typed email, and the primary nav with the workspaces (list '
-      + 'and tiled, searched), plugins and four-list shared pages behind it — all '
-      + 'read through the shared account fixture at both widths in both themes.',
+      + 'working and attention.',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
       + '21 frames × 4 themes and stays a standalone run — a gate that fails because '
       + 'Chrome is missing fails for a reason unrelated to the change under test. Also '
-      + 'MOST OF THE GALLERY: only `shell`, `streaming` and `environment` carry any '
-      + 'assertion across the two UI rows, and the last two are the chat-and-files '
-      + 'row\'s, while gallery.tsx dispatches ~29 frames — so the rest are proven '
-      + 'to mount and nothing more. The three non-default themes are audited on `shell` '
+      + 'gallery frames these suites never open. The three non-default themes are audited on `shell` '
       + 'alone. The control-plane and feedback frames use authenticated gallery fixtures, not '
       + 'a deployed OAuth flow. Browser capture fidelity outside those fixed frames remains '
       + 'unmeasured rather than green. For the plan document: one gallery plan and '
@@ -2547,31 +2531,25 @@ export const LADDER: readonly Gate[] = [
     run: 'bash scripts/product-flows-tier.sh',
     label: 'Product flows in a browser, on the deployment',
     phase: 'post-publish',
-    deadline: {
-      seconds: 900,
-      why: 'six rows, four of them waiting on a real model turn over the public edge: 329s '
-        + 'against b220f59f8 on 2026-09-23, the slate turn alone 240s. About three times the '
-        + 'wall, so a slow model answers rather than being killed as a hang.',
-    },
     alone: 'runs in the post-publish wave, after the upload and the smoke gate, beside the '
-      + 'other tiers whose subject is the build that just shipped. Its workspaces carry the '
-      + 'eval prefix and are torn down by the row that made them, and it attaches no machine, '
-      + 'so it stands outside the device fleet the first-run tier counts.',
+      + 'other tiers whose subject is the build that just shipped. It acts as the `scripted` '
+      + 'eval account, as the first-run cases do; its workspaces carry the eval prefix and are '
+      + 'torn down by the row that made them, and it attaches no machine, so it stands outside '
+      + 'the device fleet the first-run tier counts.',
     tier: 'deploy',
-    // 329s against b220f59f8 on 2026-09-23 with the slate row (66s to 128s without
-    // it); the model turns are the spread.
-    seconds: 329,
+    // 47s to 51s against staging 7dd73e1ac9 on 2026-09-27, three runs, 18/18 each.
+    seconds: 51,
     catches: 'a flow a person runs in the page that breaks on the DEPLOYED build: the same rows '
       + 'the pre-publish run drives against `vite dev`, in real Chrome against the deployment '
-      + 'as the eval identity, asserting only what the page shows. The first-run tier reads '
+      + 'as the `scripted` eval account on the scripted model, asserting only what the page shows. The first-run tier reads '
       + 'the deployment over its API and socket and the eval suite drives the model, so '
       + 'neither loads the page a person loads; #13 was an API-green workspace whose reloaded '
       + 'page showed no agents.',
     blind: 'a flow no row drives, and the look of the page: rows read presence and text, never '
       + 'pixels. It reports on a build that is already serving, so a red here is a red users '
-      + 'have now. The model is real, so a row that needs an answer reads that one arrived, '
-      + 'never its words.',
-    inputs: { kind: 'live', why: 'drives the DEPLOYED build in real Chrome as the eval identity and spends real model turns.' },
+      + 'have now. The model is scripted, so whether a real model makes the calls a row names is '
+      + 'the evals\' question, not this tier\'s.',
+    inputs: { kind: 'live', why: 'drives the DEPLOYED build in real Chrome as the `scripted` eval account and the scripted model\'s Worker.' },
   },
 ];
 
@@ -3448,7 +3426,14 @@ function recordProof(
   return refused === undefined;
 }
 
+/** The scratch drive's temp root on the owner's box (AGENTS.md, Owner Preferences): unset, TMPDIR is the /tmp RAM
+ *  disk, where every hook and `bun run gate:*` wrote its scratch until 2026-09-27. */
+const SCRATCH_TMPDIR = '/mnt/scratch/kinu/tmp';
+
 if (import.meta.main) {
+  // Before any gate spawns: TMPDIR is a base name of every gate's environment (ladder-cache.ts), so each inherits it.
+  if (process.env.TMPDIR === undefined && existsSync(SCRATCH_TMPDIR)) process.env.TMPDIR = SCRATCH_TMPDIR;
+
   // A CLOSED REPORTING CHANNEL IS NOT A FAILED TIER.
   //
   // Gates run with `stdout: 'inherit'`, so under `git push` the whole tier

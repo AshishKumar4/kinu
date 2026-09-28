@@ -58,15 +58,6 @@ describe('listInstructionApprovals — metadata only', () => {
     expect(page.items[0]?.decision).toBe('approved');
   });
 
-  test('a carried-over file is distinguishable from one the owner chose', () => {
-    // Stands in for a stored 'grandfathered' row, which the listing must keep reporting.
-    const { db, actor, approvals } = store();
-    db.exec(`INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
-      VALUES ('${actor.actorId}', 'test', '${AGENTS}', '${instructionDigest(DOCTRINE)}', 'grandfathered')`);
-    const page = listInstructionApprovals({ sources: [meta()], decisions: approvals.list() });
-    expect(page.items[0]?.decision).toBe('grandfathered');
-  });
-
   test('a refusal stays visible', () => {
     const { approvals } = store();
     approvals.revoke(AGENTS);

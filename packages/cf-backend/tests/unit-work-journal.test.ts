@@ -19,7 +19,7 @@ function job(over: Partial<BackgroundJob> & { id: string }): BackgroundJob {
 }
 
 function task(id: string, updatedAt: number): AgentTaskTree {
-  return { id, parentId: null, title: id, status: 'done', createdAt: 0, updatedAt, note: null, subtasks: [] };
+  return { id, parentId: null, title: id, status: 'done', updatedAt, note: null, subtasks: [] };
 }
 
 const MAIN: WorkspaceWorkOwner = { actorId: 'actor-main', name: 'main', retired: false, path: [] };

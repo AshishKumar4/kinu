@@ -645,7 +645,7 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
     await client.connect();
     const { executeSlashCommand } = await import('../src/slash-commands');
 
-    rt.craftStore.create({ params: null, name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1', scope: 'local' });
+    rt.craftStore.create({ name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1' });
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
                    VALUES (${rt.actor.actorId}, 'favorite_shell', '"fish"', 1.0, NULL, ${Date.now() - 1000})`;
     void rt.storage.sql`INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)

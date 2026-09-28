@@ -52,7 +52,6 @@ export const TURN_OUTCOME_SOURCE_PRECEDENCE = [
 export interface TurnOutcomeRow {
   id: string;
   turnId: string | null;
-  sessionId: string;
   outcome: TurnOutcome;
   confidence: number;
   source: TurnOutcomeSource;

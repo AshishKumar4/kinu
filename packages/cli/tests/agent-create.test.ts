@@ -24,7 +24,6 @@ function recordingCreate(seen: RecordedCreate) {
       displayName: input.displayName ?? 'missing-display-name',
       createdAt: 1,
       lastVisited: 1,
-      archivedAt: null,
     };
   };
 }

@@ -33,8 +33,7 @@ export interface ActorTurnClaim {
 export interface StoredActorClaim {
   readonly actorId: string; readonly runId: string; readonly turnId: string; readonly epoch: number;
   readonly workMode: WorkMode; readonly program: ActorProgramIdentity;
-  readonly status: (typeof CLAIM_STATUSES)[number]; readonly outcome: ClaimOutcome | null;
-  readonly consumedRevision: number | null; readonly claimedAt: number;
+  readonly status: (typeof CLAIM_STATUSES)[number]; readonly outcome: ClaimOutcome | null; readonly claimedAt: number;
 }
 
 export interface ContextRevision {
@@ -51,11 +50,10 @@ export function initActorClaimTables(exec: RawSqlExec): void {
     work_mode TEXT NOT NULL CHECK(work_mode IN ('plan','build')),
     program_kind TEXT NOT NULL CHECK(program_kind IN (${sqlCheckList(PROGRAM_KINDS)})),
     program_version INTEGER NOT NULL, program_digest TEXT, program_build TEXT,
-    status TEXT NOT NULL CHECK(status IN (${sqlCheckList(CLAIM_STATUSES)})),
     outcome TEXT CHECK(outcome IS NULL OR outcome IN (${sqlCheckList(CLAIM_OUTCOMES)})),
-    consumed_revision INTEGER, claimed_at INTEGER NOT NULL, settled_at INTEGER,
+    claimed_at INTEGER NOT NULL,
     PRIMARY KEY(actor_id,turn_id))`);
-  exec(`CREATE INDEX IF NOT EXISTS idx_actor_claims_status ON actor_turn_claims(actor_id,status,claimed_at DESC)`);
+  exec(`CREATE INDEX IF NOT EXISTS idx_actor_claims_outcome ON actor_turn_claims(actor_id,outcome,claimed_at DESC)`);
   initSessionContextTables(exec);
   initSessionTranscriptTables(exec);
 }
@@ -66,7 +64,7 @@ export function programIdentityOf(program: ActorTurnProgram, installedBuild: str
     : { kind: 'builtin' as const, version: 0, digest: null, build: installedBuild });
 }
 
-interface ClaimRow { turn_id: string; run_id: string; epoch: number; work_mode: WorkMode; program_kind: ActorProgramIdentity['kind']; program_version: number; program_digest: string | null; program_build: string | null; status: StoredActorClaim['status']; outcome: ClaimOutcome | null; consumed_revision: number | null; claimed_at: number }
+interface ClaimRow { turn_id: string; run_id: string; epoch: number; work_mode: WorkMode; program_kind: ActorProgramIdentity['kind']; program_version: number; program_digest: string | null; program_build: string | null; outcome: ClaimOutcome | null; claimed_at: number }
 
 /** Execution fencing and immutable prepared-request references. It never owns message bodies. */
 export class ActorClaimStore {
@@ -104,10 +102,10 @@ export class ActorClaimStore {
       const admitted: ActorTurnClaim = Object.freeze({ actorId: this.actorId, runId: input.runId, turnId: input.turnId, epoch,
         workMode: input.workMode, program: Object.freeze({ ...input.program }), workingRevision: input.context.revision, workingContextId: input.context.contextId });
 
-      void this.sql`INSERT INTO actor_turn_claims(actor_id,turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,status,outcome,consumed_revision,claimed_at,settled_at)
-        VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},${input.program.kind},${input.program.version},${input.program.digest},${input.program.build},'admitted',NULL,NULL,${nowMs()},NULL)
+      void this.sql`INSERT INTO actor_turn_claims(actor_id,turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,outcome,claimed_at)
+        VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},${input.program.kind},${input.program.version},${input.program.digest},${input.program.build},NULL,${nowMs()})
         ON CONFLICT(actor_id,turn_id) DO UPDATE SET run_id=excluded.run_id,epoch=excluded.epoch,work_mode=excluded.work_mode,program_kind=excluded.program_kind,
-          program_version=excluded.program_version,program_digest=excluded.program_digest,program_build=excluded.program_build,status='admitted',outcome=NULL,consumed_revision=NULL,claimed_at=excluded.claimed_at,settled_at=NULL`;
+          program_version=excluded.program_version,program_digest=excluded.program_digest,program_build=excluded.program_build,outcome=NULL,claimed_at=excluded.claimed_at`;
       this.history.requests.record(admission, () => this.assertLive(admitted));
 
       return admitted;
@@ -140,7 +138,6 @@ export class ActorClaimStore {
 
       if (selected?.contextId !== source.contextId || selected.revision !== source.revision) throw new KinuError('denied', 'working selection changed during request preparation');
       this.history.requests.recordPrepared(prepared, () => this.assertLive(claim));
-      void this.sql`UPDATE actor_turn_claims SET consumed_revision=${prepared.request.revision} WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`;
 
       return { requestId: prepared.request.id, revision: prepared.request.revision };
     });
@@ -154,7 +151,8 @@ export class ActorClaimStore {
     const claim = this.read(turnId);
 
     if (claim === null) return null;
-    const request = this.history.requests.forTurn(turnId).find(item => item.epoch === claim.epoch && (stepIndex === undefined ? item.revision === (claim.consumedRevision ?? 0) : item.step === stepIndex));
+    const requests = this.history.requests.forTurn(turnId).filter(item => item.epoch === claim.epoch);
+    const request = stepIndex === undefined ? requests.at(-1) : requests.find(item => item.step === stepIndex);
 
     return request === undefined ? null : this.materialize(request.id);
   }
@@ -169,19 +167,19 @@ export class ActorClaimStore {
   }
 
   settle(claim: ActorTurnClaim, outcome: ClaimOutcome): void {
-    this.transactionSync(() => { this.assertLive(claim); void this.sql`UPDATE actor_turn_claims SET status='settled',outcome=${outcome},settled_at=${nowMs()} WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`; });
+    this.transactionSync(() => { this.assertLive(claim); void this.sql`UPDATE actor_turn_claims SET outcome=${outcome} WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`; });
     this.changed();
   }
 
   settleRecovered(turnId: string, epoch: number, outcome: ClaimOutcome): void {
     this.actor.assertCurrent();
-    void this.sql`UPDATE actor_turn_claims SET status='settled',outcome=${outcome},settled_at=${nowMs()} WHERE actor_id=${this.actorId} AND turn_id=${turnId} AND epoch=${epoch} AND status='admitted'`;
+    void this.sql`UPDATE actor_turn_claims SET outcome=${outcome} WHERE actor_id=${this.actorId} AND turn_id=${turnId} AND epoch=${epoch} AND outcome IS NULL`;
     this.changed();
   }
 
   read(turnId: string): StoredActorClaim | null {
     this.actor.assertCurrent();
-    const row = this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,status,outcome,consumed_revision,claimed_at FROM actor_turn_claims WHERE actor_id=${this.actorId} AND turn_id=${turnId}`[0];
+    const row = this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,outcome,claimed_at FROM actor_turn_claims WHERE actor_id=${this.actorId} AND turn_id=${turnId}`[0];
 
     return row === undefined ? null : this.claimOf(row);
   }
@@ -189,13 +187,13 @@ export class ActorClaimStore {
   turns(limit = 100): readonly StoredActorClaim[] {
     this.actor.assertCurrent();
 
-    return this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,status,outcome,consumed_revision,claimed_at FROM actor_turn_claims WHERE actor_id=${this.actorId} ORDER BY claimed_at DESC LIMIT ${limit}`.map(row => this.claimOf(row));
+    return this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,outcome,claimed_at FROM actor_turn_claims WHERE actor_id=${this.actorId} ORDER BY claimed_at DESC LIMIT ${limit}`.map(row => this.claimOf(row));
   }
   latestTurn(): StoredActorClaim | null { return this.turns(1)[0] ?? null; }
   unsettled(limit?: number): readonly StoredActorClaim[] {
     this.actor.assertCurrent();
 
-    return this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,status,outcome,consumed_revision,claimed_at FROM actor_turn_claims WHERE actor_id=${this.actorId} AND status='admitted' ORDER BY claimed_at DESC LIMIT ${limit ?? -1}`.map(row => this.claimOf(row));
+    return this.sql<ClaimRow>`SELECT turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,outcome,claimed_at FROM actor_turn_claims WHERE actor_id=${this.actorId} AND outcome IS NULL ORDER BY claimed_at DESC LIMIT ${limit ?? -1}`.map(row => this.claimOf(row));
   }
   private async materialize(id: string): Promise<ContextRevision> {
     const { request, messages } = await this.history.requests.materialize(id);
@@ -213,7 +211,7 @@ export class ActorClaimStore {
   private claimOf(row: ClaimRow): StoredActorClaim {
     return Object.freeze({ actorId: this.actorId, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, workMode: row.work_mode,
       program: Object.freeze({ kind: row.program_kind, version: row.program_version, digest: row.program_digest, build: row.program_build }),
-      status: row.status, outcome: row.outcome, consumedRevision: row.consumed_revision, claimedAt: row.claimed_at });
+      status: row.outcome === null ? 'admitted' : 'settled', outcome: row.outcome, claimedAt: row.claimed_at });
   }
   private assertLive(claim: ActorTurnClaim): void {
     this.actor.assertCurrent();

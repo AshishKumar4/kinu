@@ -48,10 +48,10 @@ import {
   type SleepTimeUpdate,
   type EgressSecretBinding,
 } from '@kinu.run/core';
-import { HARNESS_AGENT, harnessFibersRunning, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
+import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
-import { GATEWAY_MODEL, platformGatewayEnv, type StubbedAiBinding } from './platform-gateway';
+import { GATEWAY_MODEL, openingOf, platformGatewayEnv, type RecordedGatewayRun, type StubbedAiBinding } from './platform-gateway';
 import {
   TerminalEffectInterrupt,
   type TerminalEffectFault, type TerminalEffectName, type TerminalEffectPhase,
@@ -89,6 +89,25 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return this.maintenanceUnfinished || this.owedUntimedWork() || (due !== null && due <= now) || this._backgroundTasks.size > 0
       || reactionOwed;
+  }
+
+  /** Turns running now, the root's and every hosted actor's. */
+  harnessTurnsInFlight(): number {
+    const host = this.actorHost();
+    const hosted = host.list().filter((reference) => host.hosted(reference)?.session.inFlight === true).length;
+
+    return hosted + (this._inFlight || this.actorSession.inFlight ? 1 : 0);
+  }
+
+  /** Actors whose turn waits inside a task hire: a task helper of theirs is still working. */
+  harnessTurnsWaitingOnDelegates(): number {
+    return this.boundSql<{ n: number }>`
+      SELECT COUNT(DISTINCT actor_id) AS n FROM actor_subordinates WHERE lifetime = 'task' AND status != 'dismissed'`[0]?.n ?? 0;
+  }
+
+  /** The scripted gateway's calls still waiting on the script, when this object runs on one. */
+  harnessUnansweredModelCalls(): readonly RecordedGatewayRun[] {
+    return [...activationWorlds.get(this.ctx)?.aiGateway?.unanswered ?? []];
   }
 
   modelFactory?: () => LanguageModel;
@@ -557,8 +576,11 @@ export function nextTurn(): Promise<void> {
 }
 
 /**
- * Runs the object's wake until `holds()`, and throws `failure` once the object has nothing left to run: no owed work
- * and no fiber in flight. No lap count: a missing condition fails as soon as the object goes idle.
+ * Runs the object's wake until `holds()`. Detached work is observed by its effect, the way an operator would see it,
+ * and a condition that never holds fails by name rather than hanging the suite: `failure` is thrown once the object has
+ * nothing left to run (no owed work, no fiber in flight), or once every running turn waits either on the suite (a
+ * scripted model call not yet answered, a planted hold) or on a task helper of its own, so nothing else could move it.
+ * No lap count.
  */
 export async function driveUntil(
   workspace: ActorHarness<HarnessOrchestratorAgent>, failure: string, holds: () => boolean,
@@ -567,7 +589,20 @@ export async function driveUntil(
     await workspace.agent.terminalRetryPass();
     await nextTurn();
 
-    if (!holds() && !workspace.agent.harnessWorkRemains() && !harnessFibersRunning()) throw new Error(failure);
+    if (holds()) return;
+
+    if (!workspace.agent.harnessWorkRemains() && !harnessFibersRunning()) throw new Error(failure);
+
+    const suiteHeld = [
+      ...workspace.agent.harnessUnansweredModelCalls().map((run) => `model call ${JSON.stringify(openingOf(run).slice(0, 80))}`),
+      ...harnessHolds().map((name) => `hold ${JSON.stringify(name)}`),
+    ];
+
+    const running = workspace.agent.harnessTurnsInFlight();
+
+    if (running > 0 && suiteHeld.length > 0 && suiteHeld.length + workspace.agent.harnessTurnsWaitingOnDelegates() >= running) {
+      throw new Error(`${failure}: every running turn waits on the suite or on its own hire (${suiteHeld.join(', ')})`);
+    }
   }
 }
 
@@ -739,7 +774,7 @@ export function tapDiagnostics(logger: Logger): () => void {
   };
 }
 
-/** Replace, not update: `workspace_identity` has no primary key and `onStart` seeds its own row after its first await. */
+/** Replace, not update: `onStart` seeds its own row after its first await. */
 export function seedMission(db: Database, mission: string): void {
   db.prepare('DELETE FROM workspace_identity').run();
   db.prepare(
@@ -1605,8 +1640,8 @@ export async function reactivateOrchestratorHarness(
     const [key, update] = opts.sleepTimeAnswer;
     config.setSleepTimeComputeEnabled(true);
     db.prepare(
-      'INSERT INTO sleep_time_updates (effect_key, update_json, created_at) VALUES (?, ?, ?) ON CONFLICT(effect_key) DO NOTHING',
-    ).run(key, JSON.stringify(update), Date.now());
+      'INSERT INTO sleep_time_updates (effect_key, update_json) VALUES (?, ?) ON CONFLICT(effect_key) DO NOTHING',
+    ).run(key, JSON.stringify(update));
   } else {
     config.setSleepTimeComputeEnabled(false);
   }
