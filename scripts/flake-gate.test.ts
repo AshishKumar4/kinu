@@ -128,7 +128,7 @@ describe('a moved test', () => {
   });
 });
 
-describe('the sweep', () => {
+describe('the nightly sweep', () => {
   test('a planted flake comes out flaky under the seeds it was red with, a steady red red, a crash broken', async () => {
     const directory = scratchDir('flake-sweep-planted');
     const counter = join(directory, 'runs');

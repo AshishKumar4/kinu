@@ -5,18 +5,18 @@ import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor, VFS } from '../types/primitives';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
-import { diagnostics } from '../obs/log';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from './payload';
 import { rowText, turnAuthor } from '../utils/ui-message';
-import { seekPage, StaleCursorError, type Page, type PageRequest } from './page';
+import type { Page, PositionCursor, PositionPageRequest } from './page';
 import type { ContextSelection } from './context';
 
 export interface ConversationPartReference extends MessagePartReference { textRange?: { readonly start: number; readonly length: number } }
 
 export interface ConversationEntry {
   readonly id: string;
-  readonly parentId: string | null;
+  /** Its place in the chat, from 0; the chat is a list, so the newest position + 1 is its length. */
+  readonly position: number;
   readonly role: 'user' | 'assistant' | 'system' | 'tool';
   readonly turnId: string | null;
   readonly runId: string | null;
@@ -26,15 +26,46 @@ export interface ConversationEntry {
   readonly context?: ContextSelection | null;
 }
 
-export interface PreparedConversationEntry extends Omit<ConversationEntry, 'recordedAt' | 'parentId'> { readonly parentId: string | null | undefined }
+export type PreparedConversationEntry = Omit<ConversationEntry, 'recordedAt' | 'position'>;
 
-interface EntryRow { id: string; parent_id: string | null; role: ConversationEntry['role']; turn_id: string | null; run_id: string | null; recorded_at: number; metadata_json: string | null; metadata_path: string | null; metadata_digest: string | null; context_id: string | null; context_revision: number | null }
+interface EntryRow { id: string; position: number; role: ConversationEntry['role']; turn_id: string | null; run_id: string | null; recorded_at: number; metadata_json: string | null; metadata_path: string | null; metadata_digest: string | null; context_id: string | null; context_revision: number | null }
 
 interface EntryPartRow { message_id: string; part_no: number; text_start: number | null; text_length: number | null }
 
+type EntryWithPartRow = EntryRow & { [K in keyof EntryPartRow]: EntryPartRow[K] | null };
+
+/** Folds one row per part (a partless entry: one row of nulls) into entries, in row order. */
+function withParts(rows: readonly EntryWithPartRow[]): ConversationEntry[] {
+  const entries: Array<ConversationEntry & { parts: ConversationPartReference[] }> = [];
+
+  for (const row of rows) {
+    let entry = entries.at(-1);
+
+    if (entry?.id !== row.id) {
+      let metadata: SessionPayload | null = null;
+
+      if (row.metadata_json !== null) metadata = { json: row.metadata_json, path: null, digest: null };
+      else if (row.metadata_path !== null && row.metadata_digest !== null) metadata = { json: null, path: row.metadata_path, digest: row.metadata_digest };
+
+      entry = { id: row.id, position: row.position, role: row.role, turnId: row.turn_id, runId: row.run_id, recordedAt: row.recorded_at, metadata,
+        context: row.context_id === null || row.context_revision === null ? null : { contextId: row.context_id, revision: row.context_revision },
+        parts: [] };
+      entries.push(entry);
+    }
+
+    if (row.message_id === null || row.part_no === null) continue;
+    const reference: ConversationPartReference = { messageId: row.message_id, partNo: row.part_no };
+
+    if (row.text_start !== null && row.text_length !== null) reference.textRange = { start: row.text_start, length: row.text_length };
+    entry.parts.push(reference);
+  }
+
+  return entries;
+}
+
 export interface ConversationProjection {
   readonly id: string;
-  readonly parentId: string | null;
+  readonly position: number;
   readonly role: ConversationEntry['role'];
   readonly content: string;
   readonly recordedAt: number;
@@ -112,16 +143,18 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   async project(id: string): Promise<ConversationProjection | null> {
     const entry = this.read(id);
 
-    if (entry === null) return null;
+    return entry === null ? null : this.projectEntry(entry);
+  }
 
+  private async projectEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>): Promise<ConversationProjection> {
     if (!this.payloads.readsFiles && ((entry.metadata !== null && entry.metadata.path !== null)
       || [...new Set(entry.parts.map((part) => part.messageId))].some((messageId) => this.messages.spilled(messageId)))) {
-      return { id: entry.id, parentId: entry.parentId, role: entry.role, content: '', recordedAt: entry.recordedAt, toolCalls: [], unavailable: true };
+      return { id: entry.id, position: entry.position, role: entry.role, content: '', recordedAt: entry.recordedAt, toolCalls: [], unavailable: true };
     }
 
-    const parts = await this.parts(entry.parts);
+    const parts = await this.parts(entry.parts, cache);
     const toolCalls = parts.flatMap((part) => part.type === 'tool-call' ? [v.parse(v.string(), part.toolName)] : []);
-    const projection: ConversationProjection = { id: entry.id, parentId: entry.parentId, role: entry.role, content: rowText({ role: entry.role, parts }), recordedAt: entry.recordedAt, toolCalls };
+    const projection: ConversationProjection = { id: entry.id, position: entry.position, role: entry.role, content: rowText({ role: entry.role, parts }), recordedAt: entry.recordedAt, toolCalls };
 
     if (entry.metadata !== null) projection.metadata = v.parse(JsonObjectSchema, await this.payloads.read(entry.metadata));
     this.actor.assertCurrent();
@@ -129,48 +162,20 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return projection;
   }
 
-  /** The head's ancestry, newest first, one entry per row; a cursor resumes above its entry. */
-  /** `walked`: entries spanned, tool rows included. */
-  pageIds(request: PageRequest = {}): Page<{ readonly id: string }> & { readonly walked: number } {
+  /** Newest first, tool rows skipped; a cursor names a position, so any stretch is one indexed read. */
+  pageIds(request: PositionPageRequest = {}): Page<{ readonly id: string; readonly position: number }, PositionCursor> {
     this.actor.assertCurrent();
     const limit = Math.max(1, Math.min(200, Math.floor(request.limit ?? 100)));
-    const after = request.cursor?.after ?? null;
-    let id: string | null;
+    const before = request.cursor?.before ?? Number.MAX_SAFE_INTEGER;
 
-    if (after === null) id = this.newestId();
-    else {
-      const anchor = this.read(after);
+    const rows = this.sql<{ id: string; position: number }>`SELECT id,position FROM conversation_entries
+      WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND position < ${before} AND role != 'tool'
+      ORDER BY position DESC LIMIT ${limit + 1}`;
 
-      if (anchor === null) throw new StaleCursorError('conversation', after);
-      id = anchor.parentId;
-    }
+    if (rows.length <= limit) return { status: 'end', items: rows };
+    const items = rows.slice(0, limit);
 
-    const rows: { id: string }[] = [];
-    const spans: number[] = [];
-    let read = 0;
-
-    while (id !== null && rows.length <= limit) {
-      const chunk = this.walk(id, 2 * (limit + 1 - rows.length));
-
-      if (chunk.length === 0) throw new KinuError('missing', 'conversation ancestry entry is missing');
-
-      for (const entry of [...chunk].reverse()) {
-        read += 1;
-
-        if (entry.role !== 'tool') {
-          rows.push({ id: entry.id });
-          spans.push(read);
-        }
-
-        id = entry.parentId;
-
-        if (rows.length > limit) break;
-      }
-    }
-
-    const page = seekPage(rows, limit, row => row.id);
-
-    return { ...page, walked: page.status === 'end' ? read : spans[limit - 1] ?? read };
+    return { status: 'more', items, next: { before: items[items.length - 1]?.position ?? 0 } };
   }
 
   async metadata(id: string): Promise<JsonObject | undefined> {
@@ -181,7 +186,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return result;
   }
 
-  async page(request: PageRequest = {}): Promise<Page<ConversationProjection> & { readonly walked: number }> {
+  async page(request: PositionPageRequest = {}): Promise<Page<ConversationProjection, PositionCursor>> {
     const page = this.pageIds(request);
     const items: ConversationProjection[] = [];
 
@@ -202,108 +207,64 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND id=${id}`.length > 0;
   }
 
-  /** The head a revert set, else the newest leaf. A head naming a missing row refuses rather than truncating or re-rooting. */
-  newestId(): string | null {
+  /** The one read of the chat's newest entry: its id, and its position, which is the chat's length less one. */
+  private newest(): { readonly id: string; readonly position: number } | undefined {
     this.actor.assertCurrent();
-    const head = this.sql<{ entry_id: string | null }>`SELECT entry_id FROM conversation_heads WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}`[0];
 
-    if (head !== undefined) {
-      if (head.entry_id !== null && !this.has(head.entry_id)) this.refuseUnresolvedHead(head.entry_id);
-
-      return head.entry_id;
-    }
-
-    return this.sql<{ id: string }>`SELECT e.id FROM conversation_entries e WHERE e.actor_id=${this.actor.actorId} AND e.session_id=${this.sessionId}
-      AND NOT EXISTS(SELECT 1 FROM conversation_entries c WHERE c.actor_id=e.actor_id AND c.session_id=e.session_id AND c.parent_id=e.id)
-      ORDER BY e.rowid DESC LIMIT 1`[0]?.id ?? null;
+    return this.sql<{ id: string; position: number }>`SELECT id,position FROM conversation_entries
+      WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} ORDER BY position DESC LIMIT 1`[0];
   }
 
-  protected refuseUnresolvedHead(entryId: string): never {
-    const error = new KinuError('io', `conversation head names entry "${entryId}", which this conversation does not hold`);
-    diagnostics.failure('session.transcript_head_unresolvable', error, { actor: this.actor.actorId, session: this.sessionId, entry: entryId });
-
-    throw error;
+  newestId(): string | null {
+    return this.newest()?.id ?? null;
   }
 
   read(id: string): ConversationEntry | null {
-    return this.walk(id, 1)[0] ?? null;
-  }
-
-  /** The entry and up to `limit - 1` of its ancestors, oldest first, with their parts, in one statement. Stops at the
-   *  first parent no row holds. `CROSS JOIN` keeps the planner walking from the chain: left free, it scanned every
-   *  child row per step. */
-  private walk(leafId: string, limit: number): ConversationEntry[] {
     this.actor.assertCurrent();
     const { actorId } = this.actor;
 
-    const rows = this.sql<EntryRow & { depth: number } & { [K in keyof EntryPartRow]: EntryPartRow[K] | null }>`WITH RECURSIVE chain(id, depth) AS (
-        SELECT id, 0 FROM conversation_entries WHERE actor_id=${actorId} AND session_id=${this.sessionId} AND id=${leafId} AND ${limit} > 0
-        UNION ALL SELECT e.parent_id, chain.depth + 1 FROM chain CROSS JOIN conversation_entries e
-          ON e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=chain.id
-          WHERE e.parent_id IS NOT NULL AND chain.depth + 1 < ${limit})
-      SELECT e.id,e.parent_id,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,e.metadata_digest,e.context_id,e.context_revision,
-        chain.depth,p.message_id,p.part_no,p.text_start,p.text_length
-      FROM chain CROSS JOIN conversation_entries e ON e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=chain.id
-      LEFT JOIN conversation_entry_parts p ON p.actor_id=e.actor_id AND p.session_id=e.session_id AND p.entry_id=e.id
-      ORDER BY chain.depth DESC, p.position`;
-
-    const entries: Array<ConversationEntry & { parts: ConversationPartReference[] }> = [];
-
-    for (const row of rows) {
-      let entry = entries.at(-1);
-
-      if (entry?.id !== row.id) {
-        let metadata: SessionPayload | null = null;
-
-        if (row.metadata_json !== null) metadata = { json: row.metadata_json, path: null, digest: null };
-        else if (row.metadata_path !== null && row.metadata_digest !== null) metadata = { json: null, path: row.metadata_path, digest: row.metadata_digest };
-
-        entry = { id: row.id, parentId: row.parent_id, role: row.role, turnId: row.turn_id, runId: row.run_id, recordedAt: row.recorded_at, metadata,
-          context: row.context_id === null || row.context_revision === null ? null : { contextId: row.context_id, revision: row.context_revision },
-          parts: [] };
-        entries.push(entry);
-      }
-
-      if (row.message_id === null || row.part_no === null) continue;
-      const reference: ConversationPartReference = { messageId: row.message_id, partNo: row.part_no };
-
-      if (row.text_start !== null && row.text_length !== null) reference.textRange = { start: row.text_start, length: row.text_length };
-      entry.parts.push(reference);
-    }
-
-    return entries;
-  }
-
-
-  children(id: string): readonly string[] {
-    this.actor.assertCurrent();
-
-    return this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND parent_id=${id} ORDER BY rowid`.map(row => row.id);
+    return withParts(this.sql<EntryWithPartRow>`SELECT e.id,e.position,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,e.metadata_digest,
+        e.context_id,e.context_revision,p.message_id,p.part_no,p.text_start,p.text_length
+      FROM conversation_entries e LEFT JOIN conversation_entry_parts p ON p.actor_id=e.actor_id AND p.session_id=e.session_id AND p.entry_id=e.id
+      WHERE e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=${id} ORDER BY p.position`)[0] ?? null;
   }
 
   count(): number {
-    const leafId = this.newestId();
-
-    if (leafId === null) return 0;
-    const { actorId } = this.actor;
-
-    return this.sql<{ n: number }>`WITH RECURSIVE chain(id) AS (
-        SELECT ${leafId}
-        UNION ALL SELECT e.parent_id FROM chain CROSS JOIN conversation_entries e
-          ON e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=chain.id
-          WHERE e.parent_id IS NOT NULL)
-      SELECT COUNT(*) AS n FROM chain`[0]?.n ?? 0;
+    return (this.newest()?.position ?? -1) + 1;
   }
 
-  ancestry(leafId = this.newestId(), limit = 10_000): readonly ConversationEntry[] {
+  at(position: number): ConversationEntry | null {
+    this.actor.assertCurrent();
+    const row = this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND position=${position}`[0];
+
+    return row === undefined ? null : this.read(row.id);
+  }
+
+  /** The context the nearest entry at or before `position` recorded; null if none did. */
+  contextAt(position: number): ContextSelection | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ context_id: string; context_revision: number }>`SELECT context_id,context_revision FROM conversation_entries
+      WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND position <= ${position} AND context_id IS NOT NULL
+      ORDER BY position DESC LIMIT 1`[0];
+
+    return row === undefined ? null : { contextId: row.context_id, revision: row.context_revision };
+  }
+
+  /** The newest `limit` entries, oldest first, with their parts, in one statement. */
+  entries(limit = 10_000): readonly ConversationEntry[] {
+    this.actor.assertCurrent();
+
     if (!Number.isSafeInteger(limit) || limit < 0) throw new KinuError('bad_input', 'history limit must be a nonnegative integer');
+    const { actorId } = this.actor;
 
-    if (leafId === null || limit === 0) return [];
-    const chain = this.walk(leafId, limit);
-
-    if (chain.length === 0 || (chain.length < limit && chain[0]?.parentId !== null)) throw new KinuError('missing', 'conversation ancestry entry is missing');
-
-    return chain;
+    return withParts(this.sql<EntryWithPartRow>`WITH newest AS (SELECT id,position FROM conversation_entries
+        WHERE actor_id=${actorId} AND session_id=${this.sessionId} ORDER BY position DESC LIMIT ${limit})
+      SELECT e.id,e.position,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,e.metadata_digest,
+        e.context_id,e.context_revision,p.message_id,p.part_no,p.text_start,p.text_length
+      FROM newest CROSS JOIN conversation_entries e ON e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=newest.id
+      LEFT JOIN conversation_entry_parts p ON p.actor_id=e.actor_id AND p.session_id=e.session_id AND p.entry_id=e.id
+      ORDER BY e.position, p.position`);
   }
 
   /** Each text part among `references`, oldest first. */
@@ -338,10 +299,10 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return parts;
   }
 
-  async history(leafId = this.newestId(), limit = 10_000): Promise<UIMessage[]> {
+  async history(limit = 10_000): Promise<UIMessage[]> {
     const messages: UIMessage[] = [];
 
-    const entries = this.ancestry(leafId, limit);
+    const entries = this.entries(limit);
     const parts = await this.messages.materializePartsOf([...new Set(entries.flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
 
     for (const entry of entries) messages.push(await this.materializeEntry(entry, parts));
@@ -349,37 +310,24 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return messages;
   }
 
+  /** Entries and their messages in one statement each, however many entries. */
   async newestFirst(limit = 10_000): Promise<readonly ConversationProjection[]> {
+    const entries = [...this.entries(limit)].reverse().filter((entry) => entry.role === 'user' || entry.role === 'assistant');
+    const parts = await this.messages.materializePartsOf([...new Set(entries.flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
     const rows: ConversationProjection[] = [];
 
-    for (const entry of [...this.ancestry(this.newestId(), limit)].reverse()) {
-      if (entry.role !== 'user' && entry.role !== 'assistant') continue;
-      const projected = await this.project(entry.id);
-
-      if (projected !== null) rows.push(projected);
-    }
+    for (const entry of entries) rows.push(await this.projectEntry(entry, parts));
 
     return rows;
   }
 
-  /** Walks up from the leaf and stops at the first user entry: the newest user row is one or two hops
-   *  away, where materialising the whole ancestry cost two reads per entry (600 ms at 300 turns). */
   lastUserMetadataReference(): SessionPayload | null {
-    const seen = new Set<string>();
-    let id = this.newestId();
+    this.actor.assertCurrent();
 
-    while (id !== null) {
-      if (seen.has(id)) throw new KinuError('io', 'conversation ancestry contains a cycle');
-      seen.add(id);
-      const entry = this.read(id);
+    const newest = this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}
+      AND role = 'user' ORDER BY position DESC LIMIT 1`[0];
 
-      if (entry === null) throw new KinuError('missing', 'conversation ancestry entry is missing');
-
-      if (entry.role === 'user') return entry.metadata;
-      id = entry.parentId;
-    }
-
-    return null;
+    return newest === undefined ? null : this.read(newest.id)?.metadata ?? null;
   }
 
   async lastUserMetadata(): Promise<JsonObject | undefined> {
@@ -391,7 +339,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 
   async operatorSpoke(): Promise<boolean> {
-    for (const entry of this.ancestry()) {
+    for (const entry of this.entries()) {
       if (entry.role !== 'user') continue;
       const metadata = entry.metadata === null ? undefined : await this.payloads.read(entry.metadata);
       this.actor.assertCurrent();
@@ -482,7 +430,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 }
 
-/** Every row's parts point at `reference`; `parentId` is what the first hangs off. */
+/** Every row's parts point at `reference`. */
 interface SteerBatch {
   readonly rows: readonly {
     readonly id: string;
@@ -493,7 +441,6 @@ interface SteerBatch {
   readonly reference: MessageReference;
   readonly turnId: string;
   readonly runId: string;
-  readonly parentId: string | null;
 }
 
 interface TranscriptWriterStores extends TranscriptStores<ActorHandle, SessionPayloads> {
@@ -519,8 +466,6 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
     const textPart = rows.reduce((count, row) => count + (row.files?.length ?? 0), 0);
     let filePart = 0;
     let start = 0;
-    // Chained, not siblings, so the batch reads as the operator typed it.
-    let parentId = batch.parentId;
     const entries: PreparedConversationEntry[] = [];
 
     for (const row of rows) {
@@ -528,24 +473,23 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
 
       for (const _file of row.files ?? []) parts.push({ messageId: reference.messageId, partNo: filePart++ });
       parts.push({ messageId: reference.messageId, partNo: textPart, textRange: { start, length: row.text.length } });
-      entries.push({ id: row.id, parentId, role: 'user', turnId, runId, parts, metadata: await this.payloads.prepare(row.metadata) });
+      entries.push({ id: row.id, role: 'user', turnId, runId, parts, metadata: await this.payloads.prepare(row.metadata) });
       start += row.text.length + 2;
-      parentId = row.id;
     }
 
     return entries;
   }
 
-  async prepareUser(input: { readonly id: string; readonly parentId?: string | null; readonly turnId: string; readonly runId?: string; readonly message: MessageReference; readonly metadata?: JsonObject }): Promise<PreparedConversationEntry> {
+  async prepareUser(input: { readonly id: string; readonly turnId: string; readonly runId?: string; readonly message: MessageReference; readonly metadata?: JsonObject }): Promise<PreparedConversationEntry> {
     const parts = await this.messages.materializeParts(input.message);
 
-    return { id: input.id, parentId: input.parentId, role: 'user', turnId: input.turnId, runId: input.runId ?? null,
+    return { id: input.id, role: 'user', turnId: input.turnId, runId: input.runId ?? null,
       metadata: input.metadata === undefined ? null : await this.payloads.prepare(input.metadata),
       parts: parts.map(part => ({ messageId: input.message.messageId, partNo: part.partNo })) };
   }
 
   /** The row keeps every streamed part in order; a recorded answer replaces the trailing texts it is made of, else follows. */
-  async prepareAssistant(input: { readonly id: string; readonly parentId: string; readonly turnId: string; readonly runId: string; readonly parts: readonly MessagePartReference[]; readonly finalText: MessagePartReference | null; readonly metadata?: JsonObject }): Promise<PreparedConversationEntry> {
+  async prepareAssistant(input: { readonly id: string; readonly turnId: string; readonly runId: string; readonly parts: readonly MessagePartReference[]; readonly finalText: MessagePartReference | null; readonly metadata?: JsonObject }): Promise<PreparedConversationEntry> {
     const parts = [...input.parts];
     const finalText = input.finalText;
 
@@ -559,7 +503,7 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
       for (const index of continued) parts.splice(index, 1);
     }
 
-    return { id: input.id, parentId: input.parentId, role: 'assistant', turnId: input.turnId, runId: input.runId,
+    return { id: input.id, role: 'assistant', turnId: input.turnId, runId: input.runId,
       metadata: input.metadata === undefined ? null : await this.payloads.prepare(input.metadata), parts };
   }
 
@@ -577,39 +521,28 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
     this.atomic(() => {
       this.actor.assertCurrent();
       const actorId = this.actor.actorId;
-      const parentId = entry.parentId === undefined ? this.newestId() : entry.parentId;
       const context = entry.context === undefined ? this.selection() : entry.context;
-      void this.sql`INSERT INTO conversation_entries(actor_id,session_id,id,parent_id,role,turn_id,run_id,metadata_json,metadata_path,metadata_digest,recorded_at,context_id,context_revision)
-        VALUES(${actorId},${this.sessionId},${entry.id},${parentId},${entry.role},${entry.turnId},${entry.runId},${entry.metadata?.json ?? null},${entry.metadata?.path ?? null},${entry.metadata?.digest ?? null},${Date.now()},${context?.contextId ?? null},${context?.revision ?? null})`;
+      void this.sql`INSERT INTO conversation_entries(actor_id,session_id,id,position,role,turn_id,run_id,metadata_json,metadata_path,metadata_digest,recorded_at,context_id,context_revision)
+        VALUES(${actorId},${this.sessionId},${entry.id},${this.count()},${entry.role},${entry.turnId},${entry.runId},${entry.metadata?.json ?? null},${entry.metadata?.path ?? null},${entry.metadata?.digest ?? null},${Date.now()},${context?.contextId ?? null},${context?.revision ?? null})`;
 
       for (const [position, part] of entry.parts.entries()) {
         void this.sql`INSERT INTO conversation_entry_parts(actor_id,session_id,entry_id,position,message_id,part_no,text_start,text_length)
           VALUES(${actorId},${this.sessionId},${entry.id},${position},${part.messageId},${part.partNo},${part.textRange?.start ?? null},${part.textRange?.length ?? null})`;
       }
-
-      this.setHead(entry.id);
     });
   }
 
-  /** Entries beyond the head stay recorded but leave the ancestry. Unknown ids are refused: they would wedge later reads. */
-  setHead(entryId: string | null): void {
+  /** A rewind: `position` and everything after it is deleted, parts with it; the chat keeps no branch. */
+  truncate(position: number): void {
     this.atomic(() => {
       this.actor.assertCurrent();
-
-      if (entryId !== null && !this.has(entryId)) this.refuseUnresolvedHead(entryId);
-      void this.sql`INSERT INTO conversation_heads(actor_id,session_id,entry_id) VALUES(${this.actor.actorId},${this.sessionId},${entryId})
-        ON CONFLICT(actor_id,session_id) DO UPDATE SET entry_id=excluded.entry_id`;
+      void this.sql`DELETE FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND position >= ${position}`;
     });
   }
 
   /** Clear the public view, not execution history or model context. */
   clear(): void {
-    this.atomic(() => {
-      this.actor.assertCurrent();
-      void this.sql`PRAGMA defer_foreign_keys = ON`;
-      void this.sql`DELETE FROM conversation_heads WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}`;
-      void this.sql`DELETE FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}`;
-    });
+    this.truncate(0);
   }
 }
 

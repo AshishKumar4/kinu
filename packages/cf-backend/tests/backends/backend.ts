@@ -192,7 +192,7 @@ function scriptedResolver(): LocalModelResolver {
 function cli(): SharedBackend {
   const db = new Database(scratchPath('shared-backend', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: NO_ENDPOINT });
+  const rt = createCLIRuntime(db, { llm: NO_ENDPOINT });
   const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
   rt.checkpoints = checkpoints;
   const modelResolver = scriptedResolver();

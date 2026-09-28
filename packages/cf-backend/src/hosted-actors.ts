@@ -1,6 +1,6 @@
 /**
  * Every hosted non-root actor: hired subordinates and ask-by-role temporaries, and run actors (heads, swarm
- * nodes, steer and MCTS branches). Each is a `workspace_actors` row plus stores scoped over the root's one
+ * nodes and steer branches). Each is a `workspace_actors` row plus stores scoped over the root's one
  * `Storage`; a turn runs `runHeadInference` claimed on its actor's session (open-41), so a promotion landing
  * mid-run cannot take it over, and retirement is `host.retire`. `abort` is caller-requested only: no socket
  * close or eviction reaches it; an evicted run leaves an unsettled claim the root's activation resumes.

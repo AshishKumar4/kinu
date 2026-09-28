@@ -21,8 +21,8 @@ import { Loader } from "@cloudflare/kumo";
 
 // Split routes go through `lazyRoute`, not `lazy`, to recover from a chunk gone stale across a deploy.
 
-// MCTS explorer pulls d3.
-const MCTSExplorer = lazyRoute(() => import("./pages/MCTSExplorer"));
+// The swarm explorer pulls d3.
+const SwarmExplorer = lazyRoute(() => import("./pages/SwarmExplorer"));
 
 // Operator-only.
 const ControlPage = lazyRoute(() => import("./pages/ControlPage"));
@@ -95,9 +95,9 @@ export default function App() {
             <Route path={APP_ROUTES.workspaceAgent} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
             <Route path={APP_ROUTES.workspaceAgentPath} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
             <Route path={APP_ROUTES.explore} element={
-              <ErrorBoundary label="mcts-explorer">
+              <ErrorBoundary label="swarm-explorer">
                 <Suspense fallback={<LazyFallback />}>
-                  <MCTSExplorer />
+                  <SwarmExplorer />
                 </Suspense>
               </ErrorBoundary>
             } />

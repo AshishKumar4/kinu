@@ -18,7 +18,7 @@ declare module 'kinu:product' {
         acquire(reference: ActorReference): Promise<HostedActor>;
         release(reference: ActorReference): void;
       };
-      register(input: { readonly creationId: string; readonly toolProfile: 'full' }): Promise<ActorReference>;
+      register(input: { readonly creationId: string }): Promise<ActorReference>;
     };
   }
 

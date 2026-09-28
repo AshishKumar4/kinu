@@ -100,11 +100,11 @@ export {
 } from './identity/fork-sink';
 
 export {
-  forkPointExists, answersForDrainTurns, conversationCount, conversationTurnPair,
+  forkPointExists, answersForDrainTurns, conversationTurnPair,
   type ConversationTurnPair,
 } from './identity/conversation-store';
 
-export { CHAT_SESSION_ID, MCTS_SESSION_ID } from './session/transcript-schema';
+export { CHAT_SESSION_ID } from './session/transcript-schema';
 
 export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
@@ -573,6 +573,10 @@ export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
+export {
+  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, registerLocalNode, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
+} from './state/local-actors';
+
 // open-38: one physical workspace SQLite for every logical actor.
 export {
   createActorHost, recoverActorTurns, childContextResolver, registeredParent,
@@ -863,7 +867,7 @@ export { collectDynamicContext, subordinateDelegatesOf } from './state/dynamic-c
 
 export type { DynamicContextInput } from './state/dynamic-context';
 
-// MCTS
+// Search-tree primitives the swarm runs on
 export { selectNode } from './mcts/uct';
 
 export { backpropagate } from './mcts/backpropagation';
@@ -894,7 +898,7 @@ export {
   initAlternateTakesTable,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
   recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence, AlternateTakeCandidateSchema,
-  type AlternateTakeCandidate, type AlternateTakeSet, type AlternateTakeSource,
+  type AlternateTakeCandidate, type AlternateTakeSet,
   type TakePickRecord, type TakePickOutcome,
 } from './mcts/takes';
 
@@ -1573,7 +1577,7 @@ export type {
 export {
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
-  headStatusUnsettled, storedHeadReportStatus,
+  headStatusUnsettled, storedHeadReportStatus, OWNER_STOPPED, shownHeadStatus,
   initHeadsTables,
   HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
   LiveHeadJournal, type AnnounceHeadActivity,
@@ -1985,12 +1989,12 @@ export type {
 
 export { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
 
-export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
+export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
-export type { Page, PageRequest, SeekCursor } from './session/page';
+export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';
 
 export {
-  mergeTranscript, restoredRows, rowText, transcriptRole,
+  restoredRows, rowText, transcriptRole,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 
@@ -2219,7 +2223,7 @@ export {
 
 export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
-export { messagesUpTo, turnRows, unreadRows } from './read-models/fork-count';
+export { messagesUpTo, turnRows } from './read-models/fork-count';
 
 export {
   turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,

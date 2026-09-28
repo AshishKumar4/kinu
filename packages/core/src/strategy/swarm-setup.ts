@@ -685,7 +685,7 @@ export async function createRoot(input: {
       // The run's name, else a composed configuration's label, else empty (the read model derives from the task).
       action: resolved.name ?? resolved.label ?? '',
       observation: rootArtifact ?? resolved.task,
-      codeUsed: null, depth: 0, msgId: null,
+      depth: 0,
     });
   }
 

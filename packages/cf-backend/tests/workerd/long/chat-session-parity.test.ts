@@ -1,12 +1,12 @@
 /**
  * Parity net: the hosted root on core's ChatSession changes no durable row or frame against `fixtures/chat-session-parity.json`,
  * normalized like the local backend's parity test. Re-record from the logged `chat-session-parity snapshot` line only for a
- * change meant to alter the record, read field by field against the previous fixture (last: 2026-09-28, a turn claim moves the Agents panel's read).
+ * change meant to alter the record, read field by field against the previous fixture (last: 2026-09-28, read notices left out as timing).
  */
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
-import { DYNAMIC_CONTEXT_OPEN_TAG, JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { DYNAMIC_CONTEXT_OPEN_TAG, JsonValueSchema, READS_CHANGED_EVENT, type JsonValue } from '@kinu.run/core';
 import { parityNormalizer, type ParityNormalizer } from '@kinu.run/test-utils/parity-normalizer';
 import recorded from '../../fixtures/chat-session-parity.json';
 import {
@@ -19,7 +19,7 @@ const parse = (column: string): JsonValue => v.parse(JsonValueSchema, JSON.parse
 function rows(norm: ParityNormalizer, raw: ParityRows): JsonValue {
   return {
     assistantMessages: raw.assistantMessages.map((row) => ({
-      id: norm.text(row.id), parentId: row.parentId === null ? null : norm.text(row.parentId), role: row.role,
+      id: norm.text(row.id), position: row.position, role: row.role,
       content: norm.json(parse(row.content)),
     })),
     pendingSteers: raw.pendingSteers.map((row) => ({
@@ -45,13 +45,15 @@ function rows(norm: ParityNormalizer, raw: ParityRows): JsonValue {
   };
 }
 
-/** State syncs are compared by count: they are re-sent whenever state moves, so their position is timing, not protocol. */
+/** State syncs are compared by count: they are re-sent whenever state moves, so their position is timing, not protocol.
+ *  Read notices are left out: a timer batches them, so their count, position and which socket hears them are timing too
+ *  (unit-live-reads pins which reads a write names). */
 function frames(norm: ParityNormalizer, raw: readonly ParityFrame[]): JsonValue {
   const protocol = raw.filter((frame) => !frame.type.startsWith('cf_agent_session') && frame.type !== 'cf_agent_chat_messages'
-    && frame.type !== 'cf_agent_identity' && frame.type !== 'cf_agent_mcp_servers');
+    && frame.type !== 'cf_agent_identity' && frame.type !== 'cf_agent_mcp_servers' && frame.type !== READS_CHANGED_EVENT);
 
   const syncs = Object.fromEntries([...new Set(raw.map((frame) => frame.type))].sort()
-    .filter((type) => !protocol.some((frame) => frame.type === type))
+    .filter((type) => type !== READS_CHANGED_EVENT && !protocol.some((frame) => frame.type === type))
     .map((type) => [type, raw.filter((frame) => frame.type === type).length]));
 
   return {

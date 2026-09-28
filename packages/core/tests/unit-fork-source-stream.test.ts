@@ -10,6 +10,8 @@ import {
   FORK_ROW_SECTIONS, forkTransferFrames, type ForkFileFrame, type ForkFrame, type ForkRowFrame,
 } from '../src/identity/fork-transfer';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
+import { SessionHistory } from '../src/session/history';
+import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 
 function isRowFrame(frame: ForkFrame): frame is ForkRowFrame {
   return 'rows' in frame;
@@ -24,7 +26,7 @@ async function seedChain(ws: TestWorkspace): Promise<ForkConversation> {
     craftedTools: [{ name: 'tool', description: 'description', code: 'return 1' }],
   });
 
-  await chat.say({ id: 'm1', role: 'user', text: 'first', parentId: null });
+  await chat.say({ id: 'm1', role: 'user', text: 'first' });
   await chat.say({ id: 'm2', role: 'assistant', text: 'second' });
   await chat.say({ id: 'm3', role: 'user', text: 'third' });
   chat.actor.config.setShellApprovalMode('allow_all');
@@ -58,7 +60,7 @@ function rowPayloadBytes(frame: ForkFrame): number {
         + bytes(row.native_content_kind) + bytes(row.origin) + bytes(row.envelope_json)
         + bytes(row.content_json) + bytes(row.content_path) + bytes(row.content_digest), 0);
     case 'conversationEntries':
-      return frame.rows.reduce((total, row) => total + bytes(row.id) + bytes(row.parent_id) + bytes(row.role)
+      return frame.rows.reduce((total, row) => total + bytes(row.id) + bytes(row.role)
         + bytes(row.turn_id) + bytes(row.run_id)
         + bytes(row.metadata_json) + bytes(row.metadata_path) + bytes(row.metadata_digest), 0);
     case 'conversationEntryParts':
@@ -202,16 +204,26 @@ describe('forkTransferFrames source streamer', () => {
       .rejects.toThrow('fork point not found: message id "absent" does not exist in source');
   });
 
-  test('a cut past the tip of one branch does not carry the other branch', async () => {
+  // Owner 2026-09-28: a rewind deletes what it rewound, so a fork can neither land on it nor carry it.
+  test('a fork of a rewound chat carries what remained and refuses a rewound cut', async () => {
     const ws = createTestWorkspace();
     const chat = await seedChain(ws);
-    await chat.say({ id: 'sib', role: 'assistant', text: 'sibling', parentId: 'm1' });
-    const frames = await framesFor(ws, 2048, 'm3');
 
-    const entries = frames.filter(isRowFrame)
+    const history = new SessionHistory({
+      sql: ws.sql, actor: chat.actor, transactionSync: (write) => ws.db.transaction(write)(),
+      files: async () => ({ vfs: ws.vfs, artifactDirectory: SOURCE_ARTIFACTS }),
+    });
+
+    history.revertTo(CHAT_SESSION_ID, 'm2', () => {});
+    await chat.say({ id: 'm4', role: 'user', text: 'fourth' });
+
+    await expect(framesFor(ws, 2048, 'm3'))
+      .rejects.toThrow('fork point not found: message id "m3" does not exist in source');
+
+    const entries = (await framesFor(ws, 2048, 'm4')).filter(isRowFrame)
       .flatMap((frame) => (frame.kind === 'conversationEntries' ? frame.rows : []))
-      .map((row) => row.id);
+      .map((row) => [row.id, row.position]);
 
-    expect(entries).toEqual(['m1', 'm2', 'm3']);
+    expect(entries).toEqual([['m1', 0], ['m4', 1]]);
   });
 });

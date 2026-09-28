@@ -42,7 +42,8 @@ describe('a run under a deadline', () => {
     const pid = Number(outcome.stdout.trim());
 
     expect(outcome.exitCode).toBe(1);
-    expect(outcome.leftovers).toEqual([`${String(pid)} sleep 30`]);
+    // Named as it was when ended: the sleep, or, ended between its fork and its exec, the shell it was forked from.
+    expect([[`${String(pid)} sleep 30`], [`${String(pid)} sh -c sleep 30 & echo $!`]]).toContainEqual([...outcome.leftovers]);
     expect(outcome.stderr).toContain(leftoverLine({ label: 'leaves one' }, outcome.leftovers));
     expect(holdsMemory(pid)).toBe(false);
   });

@@ -4,12 +4,12 @@ import * as v from 'valibot';
 import { refusedResolution, assertSafeUrl, isSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
 import { decodeEntities, htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images, stripTags } from './markdown';
 import type { AuthResolution, AuthResolver } from '../providers/types';
+import { TAVILY_CRED_KEY } from '../credentials/validate';
 import { TOOL_REACH } from '../tools/registry';
 import { readExecSignal } from '../execution/signal';
 import { codemodeText } from '../tools/sandbox-contract';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
 
-const TAVILY_CRED_KEY = 'tavily';
 
 const TAVILY_API = 'https://api.tavily.com';
 

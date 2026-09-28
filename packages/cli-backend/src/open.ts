@@ -7,7 +7,7 @@ import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } fr
 import type { LocalProviderCredentials } from './model-resolver';
 import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
-import type { LocalActorConfig } from './actor-identity';
+import type { LocalActorConfig } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { requireSchemaGenesis } from './schema-genesis';
 
@@ -63,7 +63,7 @@ export async function openWorkspaceCLI(
   }
 
   initWorkspaceBaselineTable((ddl) => db.exec(ddl));
-  const rt = createCLIRuntime(db, { ...config, dbPath, agentName: identity.name });
+  const rt = createCLIRuntime(db, { ...config, agentName: identity.name });
 
   // SOUL belongs to the agent, not to the shared physical project directory.
   const soul = await (rt.ownerSoul?.() ?? readSoul(rt.agentStateVfs ?? rt.storage.vfs));

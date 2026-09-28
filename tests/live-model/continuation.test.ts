@@ -123,7 +123,7 @@ const db = new Database(scratchPath('continuation', 'agent.db'));
 
 initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
-const rt = createCLIRuntime(db, { dbPath: db.filename, llm: LLM });
+const rt = createCLIRuntime(db, { llm: LLM });
 
 afterAll(() => {
   if (TARGET) {

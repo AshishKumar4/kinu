@@ -919,7 +919,7 @@ describe('a feedback marker carries no report', () => {
 
   test('a route becomes a family, so no workspace slug reaches the index or a blob', () => {
     expect(feedbackRouteFamily('/workspace/help-me-with-my-taxes-9f2a')).toBe('workspace');
-    expect(feedbackRouteFamily('/mcts/abc?run=1')).toBe('explore');
+    expect(feedbackRouteFamily('/swarm/abc?run=1')).toBe('explore');
     expect(feedbackRouteFamily('/settings')).toBe('settings');
     expect(feedbackRouteFamily('/')).toBe('home');
     expect(feedbackRouteFamily('/user/settings')).toBe('settings');

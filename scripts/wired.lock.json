@@ -233,7 +233,6 @@
   "packages/core/src/read-models/files.ts#readExecutorFileBytes (unreached-export)",
   "packages/core/src/read-models/files.ts#statExecutorFile (unreached-export)",
   "packages/core/src/read-models/files.ts#writeExecutorFileOp (unreached-export)",
-  "packages/core/src/read-models/fork-tree-rows.ts#MctsRow.msg_id (unsupplied-field)",
   "packages/core/src/read-models/instruction-approvals.ts#previewInstruction (unreached-export)",
   "packages/core/src/read-models/instruction-approvals.ts#readInstructionSource (unreached-export)",
   "packages/core/src/read-models/swarm-resolution.ts#fanInArity (unreached-export)",

@@ -21,7 +21,7 @@ function setup() {
     const id = `m-${++row}`;
     const recordedAt = 1_000_000 + row * 1000;
     await stores.history.record(conversationId, {
-      id, parentId: null, message: { role, content },
+      id, message: { role, content },
       origin: role === 'user' ? 'input' : 'output',
     });
     void rt.storage.sql`UPDATE conversation_entries SET recorded_at = ${recordedAt}

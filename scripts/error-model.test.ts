@@ -93,6 +93,32 @@ test('the boundary file grows in the mechanisms it declares and in no other', ()
   expect(keysOf(outcome)).toEqual([{ key: `${outcome}#throw`, value: 1 }]);
 });
 
+test('`settleSync` as a transactionSync callback\'s whole return is a bridge; anywhere else in the callback it is a finding', () => {
+  const source = `
+import { settle, settleSync } from '../obs/index';
+declare const db: { transactionSync<T>(write: () => T): T };
+declare function transactionSync<T>(write: () => T): T;
+function commitA(): number { return db.transactionSync(() => settleSync(writeEffect())); }
+function commitB(): number { return transactionSync(() => { return settleSync(writeEffect()); }); }
+function midway(): number { return db.transactionSync(() => { const n = settleSync(writeEffect()); return n; }); }
+function wrapped(): number { return db.transactionSync(() => Number(settleSync(writeEffect()))); }
+function asyncRunner(): Promise<number> { return db.transactionSync(() => settle(writeEffect())); }
+function nested(): number { return db.transactionSync(() => [1].map(() => settleSync(writeEffect()))[0] ?? 0); }
+function ordinary(): number { const n = settleSync(writeEffect()); return n; }
+`;
+
+  expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
+    bridges: [`${FILE}:5`, `${FILE}:6`],
+    findings: [
+      `${FILE}:10: a runner returned outside an exported function or public member`,
+      `${FILE}:11: a runner called mid-body; the effect is run once, at the edge, as its return`,
+      `${FILE}:7: a runner called mid-body; the effect is run once, at the edge, as its return`,
+      `${FILE}:8: a runner called mid-body; the effect is run once, at the edge, as its return`,
+      `${FILE}:9: a runner returned outside an exported function or public member`,
+    ],
+  });
+});
+
 test('a bridge is `return settle(…)` or `return settleSync(…)` from an exported function or public member; elsewhere it is a finding', () => {
   const bridged = `
 import { settle, settleSync as run } from '../obs/index';

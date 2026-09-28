@@ -910,7 +910,7 @@ export const PLATFORM_CATALOG = {
       + 'at roughly 2,200,000 bytes against workerd util/sqlite.c++:1362-1380. So the one lost '
       + 'claim that mattered is the one claim that is now over-evidenced, and nothing in Kinu '
       + 'needs the dossier. '
-      + 'The whole chat transcript, plan documents and MCTS search nodes persist as rows here. '
+      + 'The whole chat transcript, plan documents and swarm search nodes persist as rows here. '
       + 'The agents SDK truncates a chat message to its own ROW_MAX_BYTES guard beneath this, '
       + 'but can only shrink TEXT parts: file parts ride through verbatim as base64, at 4/3 '
       + 'of raw, which is what CLOUD_MAX_INLINE_ATTACHMENT_BYTES is derived from.',

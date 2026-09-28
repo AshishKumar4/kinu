@@ -1,11 +1,11 @@
 [
   {
     "key": "packages/core/tests/e2e/scaffold-e2e.test.ts › E2E scaffold evolution › LLM generates valid scaffold code that passes 4-gate",
-    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: the model must emit scaffold code that survives the 4-gate, which is the measurement, so a mock cannot stand in. scripts/test-scratch-home.ts strips both variables at preload unless KINU_EVAL_LIVE=1, and live-tier.sh runs ./tests/live/ and does not reach packages/, so no arm runs it live today."
+    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: the model must emit scaffold code that survives the 4-gate, which is the measurement, so a mock cannot stand in. scripts/test-scratch-home.ts strips both variables at preload unless KINU_EVAL_LIVE=1, and live-tier.sh runs ./tests/live-model/ and does not reach packages/, so no arm runs it live today."
   },
   {
     "key": "packages/core/tests/e2e/scaffold-e2e.test.ts › E2E scaffold evolution › full scaffold lifecycle: bootstrap -> modify -> rollback",
-    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: bootstrap, a model-authored modification, then rollback across real versions. scripts/test-scratch-home.ts strips both variables at preload unless KINU_EVAL_LIVE=1, and live-tier.sh runs ./tests/live/ and does not reach packages/, so no arm runs it live today."
+    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: bootstrap, a model-authored modification, then rollback across real versions. scripts/test-scratch-home.ts strips both variables at preload unless KINU_EVAL_LIVE=1, and live-tier.sh runs ./tests/live-model/ and does not reach packages/, so no arm runs it live today."
   },
   {
     "key": "tests/live-model/continuation.test.ts › a real fold keeps the task › the live continuation of a folded episode recalls every fact the full one does",

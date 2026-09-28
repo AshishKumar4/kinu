@@ -100,6 +100,21 @@ describe('a decision on a plan revision', () => {
     await hook.unmount();
   });
 
+  // The owner reads the reason itself, as before the hook: no account of what the page was doing is put before it.
+  test('a refused decision shows the refusal as the server wrote it', async () => {
+    const errors: string[] = [];
+    const { input } = recorder(true, async () => ({ ok: false, error: 'revision 3 is no longer the latest', plan: PLAN }));
+    const hook = await mounted({ ...input, onError: (message) => { if (message !== null) errors.push(message); } });
+
+    try {
+      await act(async () => { await hook.current().decide('approve'); });
+
+      expect(errors).toEqual(['revision 3 is no longer the latest']);
+    } finally {
+      await hook.unmount();
+    }
+  });
+
   test('reports a failed decision and releases the plan for another attempt', async () => {
     let attempts = 0;
     const errors: string[] = [];
@@ -117,13 +132,13 @@ describe('a decision on a plan revision', () => {
     try {
       await act(async () => { await hook.current().decide('approve'); });
 
-      expect(errors).toEqual([expect.stringContaining('review-fixture-rpc-failed')]);
+      expect(errors).toEqual(['review-fixture-rpc-failed']);
       expect({ busy: hook.current().busy, inFlight: hook.current().inFlight() }).toEqual({ busy: null, inFlight: false });
 
       await act(async () => { await hook.current().decide('approve'); });
 
       expect(attempts).toBe(2);
-      expect(errors).toEqual([expect.stringContaining('review-fixture-rpc-failed')]);
+      expect(errors).toEqual(['review-fixture-rpc-failed']);
     } finally {
       await hook.unmount();
     }

@@ -127,7 +127,8 @@ export class SessionHistory {
     });
   }
 
-  /** Continue from before `entryId`: its nearest recorded ancestor's context branches; later entries leave the head. */
+  /** Continue from before `entryId`: the context of the nearest earlier entry that recorded one branches, and
+   *  `entryId` and everything after it is deleted. */
   revertTo(sessionId: string, entryId: string, assertIdle: () => void): ContextSelection {
     return this.dependencies.transactionSync(() => {
       this.dependencies.actor.assertCurrent();
@@ -136,20 +137,15 @@ export class SessionHistory {
       const entry = transcript.read(entryId);
 
       if (entry === null) throw new KinuError('missing', 'conversation entry does not exist');
-      let base: ContextSelection | null = null;
-
-      for (const ancestor of [...transcript.ancestry(entry.parentId)].reverse()) {
-        if (ancestor.context) { base = ancestor.context; break; }
-      }
-
+      const base = transcript.contextAt(entry.position - 1);
       const selected = this.context.selected() ?? this.context.initialize();
 
       for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
       const target = this.context.fork(base);
       this.context.select(selected, target, assertIdle);
-      transcript.setHead(entry.parentId);
-      // The only backwards head move; recorded so it is distinguishable from lost rows.
-      diagnostics.event('session.transcript_head_moved', { session: sessionId, from: entryId, to: entry.parentId ?? '' });
+      transcript.truncate(entry.position);
+      // The only deletion short of a clear; recorded so it is distinguishable from lost rows.
+      diagnostics.event('session.transcript_rewound', { session: sessionId, from: entryId, position: entry.position });
 
       return target;
     });
@@ -410,14 +406,14 @@ export class SessionHistory {
   }
 
   /** One message and its transcript entry, outside working context: search trajectories, other non-chat sessions. */
-  async record(sessionId: string, input: { readonly id: string; readonly parentId: string | null; readonly message: ModelMessage; readonly origin: MessageOrigin; readonly metadata?: JsonObject }): Promise<MessageReference> {
+  async record(sessionId: string, input: { readonly id: string; readonly message: ModelMessage; readonly origin: MessageOrigin; readonly metadata?: JsonObject }): Promise<MessageReference> {
     const prepared = await this.messages.prepare(input.message, input.id);
     const metadata = input.metadata === undefined ? null : await this.messages.payloads.prepare(input.metadata);
     const transcript = this.transcript(sessionId);
 
     return this.dependencies.transactionSync(() => {
       const reference = this.messages.insert(prepared, input.origin);
-      transcript.record({ id: input.id, parentId: input.parentId, role: input.message.role, turnId: null, runId: null, metadata, context: null,
+      transcript.record({ id: input.id, role: input.message.role, turnId: null, runId: null, metadata, context: null,
         parts: prepared.content.parts.map(part => ({ messageId: reference.messageId, partNo: part.partNo })) });
 
       return reference;

@@ -12,7 +12,7 @@ import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } fro
 import { tierIdsOf,
   DEFAULT_ROLE_ID, nextReasoningEffort, offeredReasoningEfforts,
   effectiveRoleCatalog,
-  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ReasoningEffort, type SeekCursor,
+  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type PositionCursor, type ReasoningEffort, type SeekCursor,
   type SubordinateChild, type TierId,
 } from '@kinu.run/core';
 import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, composerVisibleRows } from '@kinu.run/core/tui';
@@ -2254,7 +2254,7 @@ async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subord
 /** Pages arrive newest first. */
 async function readSubagentConversation(client: AgentClient, target: { path: string[]; actor?: string }): Promise<DisplayMessage[]> {
   const pages: DisplayMessage[][] = [];
-  let cursor: SeekCursor | undefined;
+  let cursor: PositionCursor | undefined;
 
   do {
     const result = await client.inspectSubordinate({ ...target, view: 'history', page: cursor === undefined ? {} : { cursor } });

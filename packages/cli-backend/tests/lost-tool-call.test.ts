@@ -55,7 +55,7 @@ async function until(holds: () => boolean): Promise<void> {
 test('a call cut off after its effect runs once, and the model is told it may have taken effect', async () => {
   const db = new Database(scratchPath('lost-tool-call', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
   const marks = scratchPath('lost-tool-call', 'marks.txt');
   const lines = () => existsSync(marks) ? readFileSync(marks, 'utf8').split('\n').filter(Boolean).length : 0;
 

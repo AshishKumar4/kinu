@@ -22,7 +22,7 @@ export class OrchestratorAgent extends Product {
     const references = [];
 
     for (let at = 0; at < count; at++) {
-      const reference = await seams.register({ creationId: `${tag}-${String(at)}`, toolProfile: 'full' });
+      const reference = await seams.register({ creationId: `${tag}-${String(at)}` });
       await seams.host.acquire(reference);
       references.push(reference);
     }

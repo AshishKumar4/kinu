@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-28",
-  "files": 2815,
-  "functions": 69804,
+  "files": 2822,
+  "functions": 70973,
   "ceiling": 87,
   "line": 29,
   "inventory": [
@@ -154,7 +154,7 @@
       "complexity": 32
     },
     {
-      "key": "packages/cf-backend/src/pages/MCTSExplorer.tsx#ExplorerBody",
+      "key": "packages/cf-backend/src/pages/SwarmExplorer.tsx#ExplorerBody",
       "complexity": 32
     },
     {

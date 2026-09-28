@@ -1,4 +1,4 @@
-import { startTransition, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
+import { Fragment, startTransition, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
 import { useParams, useLocation, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -14,10 +14,9 @@ import {
 import type { AlternateTakeSet, DiffAnchor, FileRestoreChange, Rpc, TakePickOutcome } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
-import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useAutogrow } from "@/hooks/use-autogrow";
 import { useChatThread } from "@/hooks/use-chat-thread";
-import { HistoryReserve, useHistoryReserve } from "@/hooks/use-history-reserve";
+import { HistoryReserve, useReservedScroll } from "@/hooks/use-history-reserve";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
@@ -287,7 +286,7 @@ function ForkModal({
           <li>Conversation: the {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"} up to this one</li>
           <li>Files: the project, SOUL.md and memory as they are now, not as they were at this message</li>
           <li>Also copied: learned tools and settings</li>
-          <li>Starts fresh: MCTS tree, evolution events, scaffold, installed runtimes</li>
+          <li>Starts fresh: swarm trees, evolution events, scaffold, installed runtimes</li>
           <li>Source workspace is unaffected</li>
         </ul>
       </div>
@@ -491,18 +490,18 @@ function SubordinateChatColumn({
   const setInput = ui.setDraft;
   usePlanApprovedMode(state.activePlan, ui.setMode);
 
-  // History reads name this pane's actor; the default actor is the workspace's own chat.
-  const { history, transcript, thread } = useChatThread({
+  const { history, transcript, thread, reserves } = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded,
     steerRuns: state.steerRuns, actor: state.paneActorId,
   });
 
-  const messagesRef = useGrowingScroll({
+  const { ref: messagesRef, rowPx } = useReservedScroll({
     grows: "up",
     content: transcript,
-    fetched: history.fetched,
+    fetched: history.entries,
     loading: history.loading,
     onReachEdge: history.loadMore,
+    onReserve: history.read,
     initialScroll: ui.savedScroll,
     onScrollPosition: ui.rememberScroll,
     settled: state.transcriptSeeded,
@@ -542,12 +541,13 @@ function SubordinateChatColumn({
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
       <ErrorBoundary label="Agent chat">
         <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column py-5 space-y-5">
+          <HistoryReserve range={reserves.top} rowPx={rowPx} />
           {thread.entries.length > 0 && (
             <HistoryBoundary
               loading={history.loading}
               error={history.error}
               exhausted={history.exhausted}
-              onRetry={history.loadMore}
+              onRetry={history.retry}
             />
           )}
           <ConversationStartBoundary
@@ -555,7 +555,7 @@ function SubordinateChatColumn({
             streaming={live}
             error={history.error}
             exhausted={history.exhausted}
-            onRetry={history.loadMore}
+            onRetry={history.retry}
             pending={<ConversationSkeleton />}
             empty={
               <div className="flex h-full flex-col items-center justify-center text-center">
@@ -565,13 +565,16 @@ function SubordinateChatColumn({
             }
           />
           {thread.entries.map(({ message: msg, steers }, i) => (
-            <MessageView
-              key={msg.id}
-              message={msg}
-              steers={steers}
-              liveTail={i === thread.entries.length - 1 ? tail : null}
-            />
+            <Fragment key={msg.id}>
+              <HistoryReserve range={reserves.before.get(msg.id)} rowPx={rowPx} />
+              <MessageView
+                message={msg}
+                steers={steers}
+                liveTail={i === thread.entries.length - 1 ? tail : null}
+              />
+            </Fragment>
           ))}
+          <HistoryReserve range={reserves.tail} rowPx={rowPx} />
           <ChatLiveTail tail={tail} />
           {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
           {state.chatError && (
@@ -747,21 +750,19 @@ export default function WorkspacePage() {
   const [forkFor, setForkFor] = useState<string | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
-  // `state.messages` is the SDK's bounded newest window plus streamed messages; older history is
-  // paged from storage. An empty seed still starts the walk: an activation may fail to rebuild the window.
-  const { history, transcript, thread, unread } = useChatThread({
+  // `state.messages` is the SDK's newest window with streamed messages; older history pages from storage.
+  const { history, transcript, thread, reserves } = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, steerRuns: state.steerRuns,
     total: state.agentStatus?.messageCount,
   });
 
-  const reserve = useHistoryReserve(unread);
-
-  const messagesRef = useGrowingScroll({
+  const { ref: messagesRef, rowPx } = useReservedScroll({
     grows: "up",
     content: transcript,
-    fetched: history.fetched,
+    fetched: history.entries,
     loading: history.loading,
     onReachEdge: history.loadMore,
+    onReserve: history.read,
     initialScroll: ui.savedScroll,
     onScrollPosition: ui.rememberScroll,
     settled: state.transcriptSeeded,
@@ -866,7 +867,7 @@ export default function WorkspacePage() {
     });
   }, [state.connectionStatus, state.rpc, reportSide]);
 
-  // Refreshed when a turn settles: a think convergence may have produced a fresh near-tied set.
+  // Refreshed when a turn settles: a settled /branch redirect may have produced a fresh set.
   const [takesByTurn, setTakesByTurn] = useState<Record<string, AlternateTakeSet>>({});
 
   // A signal that started a turn renders on its message; one spliced into a running turn
@@ -1085,38 +1086,41 @@ export default function WorkspacePage() {
                 streaming={live}
                 error={history.error}
                 exhausted={history.exhausted}
-                onRetry={history.loadMore}
+                onRetry={history.retry}
                 pending={<ConversationSkeleton />}
                 empty={<EmptyConversation mission={as?.purpose ?? ""} />}
               />
-              <HistoryReserve reserve={reserve} />
+              <HistoryReserve range={reserves.top} rowPx={rowPx} />
               {thread.entries.length > 0 && (
                 <HistoryBoundary
                   loading={history.loading} error={history.error}
-                  exhausted={history.exhausted} onRetry={history.loadMore} />
+                  exhausted={history.exhausted} onRetry={history.retry} />
               )}
               {thread.entries.map(({ message: msg, steers }, i) => {
                 const takes = takesByTurn[msg.id];
                 const signalId = messageSignalId({ metadata: msg.metadata });
 
                 return (
-                  <MessageView
-                    key={msg.id}
-                    message={msg}
-                    steers={steers}
-                    liveTail={i === thread.entries.length - 1 ? mainTail : null}
-                    onFork={onForkMessage}
-                    onFeedback={onMessageFeedback}
-                    feedback={feedbackByMessage[msg.id] ?? null}
-                    onRevert={setRevertFor}
-                    takesChip={hasComparableTakes(takes)
-                      ? <TakesChip set={takes} onPick={onPickTake} />
-                      : undefined}
-                    signalState={signalId === null ? undefined : cardStates.get(signalId)}
-                    onOpenChangeNote={openChangeNote}
-                  />
+                  <Fragment key={msg.id}>
+                    <HistoryReserve range={reserves.before.get(msg.id)} rowPx={rowPx} />
+                    <MessageView
+                      message={msg}
+                      steers={steers}
+                      liveTail={i === thread.entries.length - 1 ? mainTail : null}
+                      onFork={onForkMessage}
+                      onFeedback={onMessageFeedback}
+                      feedback={feedbackByMessage[msg.id] ?? null}
+                      onRevert={setRevertFor}
+                      takesChip={hasComparableTakes(takes)
+                        ? <TakesChip set={takes} onPick={onPickTake} />
+                        : undefined}
+                      signalState={signalId === null ? undefined : cardStates.get(signalId)}
+                      onOpenChangeNote={openChangeNote}
+                    />
+                  </Fragment>
                 );
               })}
+              <HistoryReserve range={reserves.tail} rowPx={rowPx} />
               <ChatLiveTail tail={mainTail} />
               {looseCards.map(({ card, turn }) => (
                 <ProgrammaticTurnCard key={card.id} turn={turn} text={card.text} state={card.state} />

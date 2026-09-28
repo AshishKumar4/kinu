@@ -195,13 +195,11 @@ const TAKES_SET: AlternateTakeSet = {
   turnId: 'turn-9',
   sessionId: 'sess-1',
   task: 'Decide how to fix the flaky retry test without masking real races.',
-  source: 'branch',
   winnerNodeId: 'node-b',
   chosenNodeId: null,
   candidates: [
-    { nodeId: 'node-b', text: 'Retry only network-class errors with backoff, keep assertion failures fatal.', score: 0.87, visits: 12, depth: 2 },
-    { nodeId: 'node-a', text: 'Mark the test flaky-tolerant and rerun once on any failure.', score: 0.85, visits: 10, depth: 2 },
-    { nodeId: 'node-c', text: 'Split the test: transport retries covered separately from handler logic.', score: 0.84, visits: 9, depth: 3 },
+    { nodeId: 'node-b', text: 'Retry only network-class errors with backoff, keep assertion failures fatal.', origin: 'live' },
+    { nodeId: 'node-a', text: 'Mark the test flaky-tolerant and rerun once on any failure.', origin: 'branch' },
   ],
   createdAt: 1755700000000,
 };

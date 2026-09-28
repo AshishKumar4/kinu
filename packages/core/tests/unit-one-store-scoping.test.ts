@@ -423,6 +423,24 @@ describe('two actors, one database: fibers, evolution_events, executor_output, a
 });
 
 describe('two actors, one database: terminal_effects', () => {
+  // 2026-09-28: the claim became one statement, which cannot see its own inserts; the first of a repeat wins, as before.
+  test('a sequence that names one effect twice claims it once, with the first input', () => {
+    const w = world();
+    initTerminalEffectTable(w.execRaw);
+
+    const ledger = new TerminalEffectLedger({
+      sql: w.sql, actor: w.a, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
+    });
+
+    ledger.claim('turn-1', [
+      { name: 'turn_record', scope: '', input: 'first', lane: 'inline' },
+      { name: 'turn_record', scope: '', input: 'second', lane: 'inline' },
+    ]);
+
+    expect(w.sql<{ input_json: string; seq: number }>`SELECT input_json, seq FROM terminal_effects`).toEqual([{ input_json: '"first"', seq: 0 }]);
+    w.close();
+  });
+
   test('one sequence id is a separate suffix for each actor', async () => {
     const w = world();
     initTerminalEffectTable(w.execRaw);

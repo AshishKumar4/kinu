@@ -85,11 +85,11 @@ async function persistedDrainTurn(
   answer: string | null,
 ): Promise<void> {
   const history = historyOver(harness);
-  await history.record(CHAT_SESSION_ID, { id: `u-${drainTurnId}`, parentId: history.transcript(CHAT_SESSION_ID).newestId(), origin: 'input',
+  await history.record(CHAT_SESSION_ID, { id: `u-${drainTurnId}`, origin: 'input',
     message: { role: 'user', content: '1 event arrived while you were idle.' }, metadata: { kinuEvent: 'event_drain', drainTurnId } });
 
   if (answer === null) return;
-  await history.record(CHAT_SESSION_ID, { id: `a-${drainTurnId}`, parentId: `u-${drainTurnId}`, origin: 'output',
+  await history.record(CHAT_SESSION_ID, { id: `a-${drainTurnId}`, origin: 'output',
     message: { role: 'assistant', content: answer } });
 }
 

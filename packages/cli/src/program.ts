@@ -24,7 +24,7 @@ import {
   executorsCommand,
   gepaCommand,
   headsCommand,
-  mctsCommand,
+  swarmCommand,
   memoryCommand,
   actorsCommand,
   stateCommand,
@@ -353,17 +353,17 @@ export function buildProgram(): Command {
   program
     .command('timeline <name>')
     .helpGroup(INSPECT)
-    .description('List a workspace\'s runs, evolutions and MCTS searches in order')
+    .description('List a workspace\'s runs, evolutions and swarm searches in order')
     .option('--limit <n>', 'Timeline row limit')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(timelineCommand));
 
   program
-    .command('mcts <name> [nodeId]')
+    .command('swarm <name> [nodeId]')
     .helpGroup(INSPECT)
-    .description('Show a workspace\'s MCTS search history')
+    .description('Show a workspace\'s swarm search history')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(mctsCommand));
+    .action(wrapAction(swarmCommand));
 
   program
     .command('heads <name>')
@@ -377,7 +377,7 @@ export function buildProgram(): Command {
     .command('debug <name>')
     .helpGroup(INSPECT)
     .description('Save everything about a workspace to one file: identity, messages, runs and '
-      + 'their events, heads, MCTS searches, background jobs, evolution state, memory and facts')
+      + 'their events, heads, swarm searches, background jobs, evolution state, memory and facts')
     .option('-o, --out <file>', 'Bundle output path (default: <name>.debug.jsonl)')
     .option('--runs <n>', 'How many recent runs, head runs and searches to include')
     .option('--limit <n>', 'Row limit for the smaller sections (messages, jobs, facts and so on)')
@@ -514,7 +514,7 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['memory', 'kinu memory jarvis deploy steps'],
   ['events', 'kinu events jarvis --since 2026-09-01 --limit 20'],
   ['timeline', 'kinu timeline jarvis --limit 20'],
-  ['mcts', 'kinu mcts jarvis'],
+  ['swarm', 'kinu swarm jarvis'],
   ['heads', 'kinu heads jarvis --limit 5'],
   ['debug', 'kinu debug jarvis -o jarvis.debug.jsonl'],
   ['gepa', 'kinu gepa jarvis --run --iterations 3'],

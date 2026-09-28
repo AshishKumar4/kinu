@@ -1,6 +1,6 @@
 /**
  * One branch's transcript across both stores: `head` (tool loop, journalled per step) or `rollout`
- * (one toolless MCTS proposal; `search_nodes.observation` is its whole output, no step trace).
+ * (one search node's proposal; `search_nodes.observation` is its whole output, no step trace).
  * Null means neither store knows the node.
  */
 
@@ -51,7 +51,6 @@ export interface NodeTranscriptView {
   readonly errorMessage: string | null;
   /** Root to this node, inclusive. */
   readonly path: readonly NodeTranscriptCrumb[];
-  readonly codeUsed: string | null;
 }
 
 /** A node id alone is ambiguous: a workspace accumulates every tree it grew. */
@@ -137,7 +136,6 @@ function readHeadTranscript(
     decisions: head.decisions,
     errorMessage: head.errorMessage,
     path,
-    codeUsed: null,
   };
 }
 
@@ -152,7 +150,7 @@ function readRolloutTranscript(
 
   if (!node) return null;
 
-  // The root crumb uses the run name: MCTS records the root with `action: ''`.
+  // The root crumb uses the run name: a search records its root with `action: ''`.
   const path = ancestorCrumbs(
     node, nodes,
     (row) => (row.parent_id === null ? runName(row.action, row.task) : row.action),
@@ -177,6 +175,5 @@ function readRolloutTranscript(
     decisions: [],
     errorMessage: null,
     path,
-    codeUsed: node.code_used,
   };
 }

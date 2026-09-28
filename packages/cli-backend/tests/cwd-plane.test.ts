@@ -17,7 +17,7 @@ import {
   type CLIRuntime,
 } from '../src/runtime';
 import { createHeadRuntime } from './actor-fixture';
-import { registerLocalActor } from '../src/actor-identity';
+import { registerLocalActor } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
 import { PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV } from '../src/model-resolver';
 
@@ -49,7 +49,7 @@ function agentRuntime(state: string, name: string, cwd?: string): LocalAgent {
   mkdirSync(dirname(dbPath), { recursive: true });
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
-    dbPath, llm: DUMMY_LLM, agentName: name,
+    llm: DUMMY_LLM, agentName: name,
   };
 
   if (cwd !== undefined) config.cwd = cwd;
@@ -139,7 +139,7 @@ describe('peers over one directory', () => {
     const physicalName = subordinateAgentName(binding.storageKey);
 
     const child = await shareLocalWorkspacePlane(
-      createCLIRuntime(parent.db, { dbPath: parent.dbPath, llm: null, cwd: project, facet: physicalName, actorBinding: binding }),
+      createCLIRuntime(parent.db, { llm: null, cwd: project, facet: physicalName, actorBinding: binding }),
       parent, physicalName,
     );
 

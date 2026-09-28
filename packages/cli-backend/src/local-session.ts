@@ -158,7 +158,7 @@ import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from './runtime';
-import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from './actor-identity';
+import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
@@ -424,7 +424,7 @@ export class LocalAgentSession {
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
   private readonly clock: Clock;
-  /** Durable MCTS checkpoint, so an interrupted think(mcts) resumes instead of losing its budget. */
+  /** Durable swarm checkpoint, so an interrupted swarm resumes instead of losing its budget. */
   private readonly mctsSearchStore: MctsSearchStore;
   private readonly factsStore: FactsStore;
   private readonly config: AgentConfigStore;
@@ -1096,7 +1096,7 @@ export class LocalAgentSession {
     return this._headRuntime;
   }
 
-  /** Heads are grounded with the same executor and judge MCTS scores branches with. */
+  /** Heads are grounded with the same executor and judge the swarm scores nodes with. */
   private buildHeadGrounding(): HeadGrounding {
     if (this.rt.judgeModel) return {
       executor: this.rt.executor,
@@ -2659,7 +2659,7 @@ export class LocalAgentSession {
 
     if (!this.planReviewSurface()) return requested;
 
-    return workModeUnderReview(requested, authoredTurnMetadata(item), this.stores.planReviews.getActive(CHAT_SESSION_ID));
+    return workModeUnderReview(requested, authoredTurnMetadata(item), () => this.stores.planReviews.getActive(CHAT_SESSION_ID));
   }
 
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {

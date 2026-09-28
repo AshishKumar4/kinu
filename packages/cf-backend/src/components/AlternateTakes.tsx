@@ -10,7 +10,6 @@ import { branchHeadId, takeEvidence } from "@kinu.run/core";
 import type { BranchRun } from "@/hooks/use-kinu";
 import type { Rpc } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
-import { ScoreBar } from "@/components/ui/score-bar";
 import { MarkdownContent } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { TranscriptBody, useNodeTranscript } from "@/components/NodeTranscript";
@@ -31,7 +30,7 @@ export function TakesChip({ set, onPick }: {
         type="button"
         onClick={() => setOpen(true)}
         className="inline-flex items-center gap-1 p-t-control p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm border p-border p-card-hover transition-colors"
-        title="The agent explored near-tied approaches. Compare and pick one."
+        title="Your mid-turn redirect ran as a parallel branch. Compare both answers and pick one."
       >
         <GitBranchIcon size={11} />
         {takeChipLabel(set)}
@@ -106,14 +105,9 @@ function TakesComparison({ set, onPick, onClose }: {
       </>}
     >
       <p className="text-xs p-text-3 leading-relaxed">
-        {set.source === "branch" ? (
-          <>You redirected mid-turn with{" "}
-            <span className="p-text-2">{set.task.length > 120 ? `${set.task.slice(0, 120)}…` : set.task}</span>{" "}
-            and it ran as a parallel branch. Compare both answers.</>
-        ) : (
-          <>The agent explored {count} near-tied approaches for{" "}
-            <span className="p-text-2">{set.task.length > 120 ? `${set.task.slice(0, 120)}…` : set.task}</span>.</>
-        )}{" "}
+        You redirected mid-turn with{" "}
+        <span className="p-text-2">{set.task.length > 120 ? `${set.task.slice(0, 120)}…` : set.task}</span>{" "}
+        and it ran as a parallel branch. Compare both answers.{" "}
         Your pick becomes a preference signal the agent learns from.
       </p>
 
@@ -142,14 +136,7 @@ function TakesComparison({ set, onPick, onClose }: {
         </div>
       </div>
 
-      {candidate.origin ? (
-        <div className="p-meta p-text-3">{takeEvidence(candidate)}</div>
-      ) : (
-        <div className="space-y-1">
-          <ScoreBar value={candidate.score} />
-          <div className="p-meta p-text-3">{takeEvidence(candidate)} · execution-grounded branch value</div>
-        </div>
-      )}
+      <div className="p-meta p-text-3">{takeEvidence(candidate)}</div>
 
       {notice && (
         <div className="text-xs rounded-md px-3 py-2 p-notice-success">

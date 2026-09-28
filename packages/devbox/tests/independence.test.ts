@@ -66,15 +66,25 @@ function declaredEntries(): readonly string[] {
   return [...new Set([...exported, ...production, ...workers].map((entry) => join(PACKAGE_DIR, entry)))].sort();
 }
 
+/**
+ * Every module of the package that is not a test: an entry of the graph too. A module only scripts or tests import
+ * (`bench/c3-result.ts`, `bench/seeded.ts`) is reached by no declared entry, and it still must not import the core.
+ */
+function everyModule(): readonly string[] {
+  return [...new Bun.Glob('**/*.{ts,tsx}').scanSync({ cwd: PACKAGE_DIR })]
+    .filter((path) => !/\.(test|spec)\.tsx?$/u.test(path) && !path.startsWith('tests/') && !path.includes('node_modules/'))
+    .map((path) => join(PACKAGE_DIR, path));
+}
+
 describe('package independence', () => {
   const scope = forbiddenScope();
 
   test('nothing any entry of the package reaches imports the product core', async () => {
-    const entries = declaredEntries();
+    const entries = [...new Set([...declaredEntries(), ...everyModule()])].sort();
     const crossing: Record<string, readonly string[]> = {};
 
-    // The manifest's main entry is among them, so an empty reading of the configuration cannot pass.
-    expect(entries).toContain(join(PACKAGE_DIR, 'src', 'index.ts'));
+    // The manifest's main entry and a module only scripts import are among them, so an empty reading cannot pass.
+    expect(entries).toEqual(expect.arrayContaining([join(PACKAGE_DIR, 'src', 'index.ts'), join(PACKAGE_DIR, 'bench', 'seeded.ts')]));
 
     for (const entry of entries) {
       const core = (await bundledSpecifiers(entry)).filter((specifier) => specifier === scope || specifier.startsWith(`${scope}/`));

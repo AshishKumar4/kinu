@@ -67,12 +67,10 @@ function risingJudge(seedCalls: number): () => Promise<string> {
 }
 
 async function setup(judge: () => Promise<string>) {
-  // The declared path, not `:memory:`: `createCLIRuntime` refuses a mismatched path (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('gepa-local', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const rt = createCLIRuntime(db, {
-    dbPath: db.filename,
     llm: DUMMY_LLM,
   });
 
