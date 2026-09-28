@@ -12,7 +12,7 @@ import {
 import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import {
-  partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, isWorkMode, INTERRUPTED_TURN,
+  flushSignal, partialFlushCadence, type PartialFlushCadence, isWorkMode, INTERRUPTED_TURN,
   type ChatTransport, type ObservedCall, type PromptFile, type SendLanding, type SessionEvent, type SqlExecutor, type WorkMode,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
@@ -70,13 +70,6 @@ interface LiveStream {
   broken: boolean;
   /** Why the turn failed, sent as the frame that ends it. */
   failure: string | null;
-}
-
-/** A chunk's meaning to `partialFlushCadence`: reconnects and continuations read the same amount. */
-function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
-  if (chunk.type === 'tool-output-available' || chunk.type === 'tool-output-error' || chunk.type === 'tool-output-denied') return 'settled';
-
-  return chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' || chunk.type === 'tool-input-available' ? 'content' : 'none';
 }
 
 /**
@@ -414,8 +407,11 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         if (resume !== null) {
           resume.resumable.storeChunk(live.streamId, body);
 
+          // The stream buffer flushes at these same positions, so a resumed step and this replay agree on what survived.
           if (live.cadence.flushes(flushSignal(chunk))) resume.resumable.flushBuffer();
         }
+
+        if (chunk.type === 'finish-step') live.cadence.reset();
 
         // A joining tab reads it in its replay; sent now, it would run ahead of the parts the replay opens.
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume]);

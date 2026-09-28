@@ -2,32 +2,34 @@ import type { ModelMessage, ProviderMetadata, TextStreamPart, ToolSet } from 'ai
 import * as v from 'valibot';
 import type { ChatEvent } from '../chat';
 import { SessionHistory } from '../session/history';
-import type { MessageReference, StoredPart, StreamPartInput, PreparedContent } from '../session/messages';
+import type { ClaimFence, MessageReference, StoredPart, StreamPartInput, PreparedContent } from '../session/messages';
 import type { SessionPayload } from '../session/payload';
 import { isParsedJsonObject, jsonObjectElements, projectJsonValue, type JsonObject } from '../utils/json';
 import { encodeModelMessage } from '../session/message-codec';
 import { diagnostics, renderThrownChain, KinuError } from '../obs/index';
 import { serialQueue } from '@kinu.run/agent-utils';
+import { flushSignal, partialFlushCadence, type PartialFlushSignal } from './flush-cadence';
+
+/** Reasoning reaches the row in windows, not per token (D23): a reasoning model streams tens of thousands. */
+const REASONING_WINDOW_DELTAS = 64;
+
+/** UTF-8 bytes, what the row takes; not UTF-16 units. */
+const REASONING_WINDOW_BYTES = 4096;
+
+const utf8 = new TextEncoder();
 
 interface StreamPart {
   readonly number: number;
   readonly kind: string;
   opened: boolean;
-  /** Written before the part's next non-delta update, or dropped by the step's seal. */
+  /** Written at the part's next non-delta update, at the cadence's flush (text) or a full window (reasoning), or
+   *  dropped by the step's seal. */
   buffered: string;
   bufferedDeltas: number;
   bufferedBytes: number;
   readonly streamOrder: number;
   startMetadata: JsonObject | null;
 }
-
-/** Deltas reach the row in windows, not per token (D23). */
-const COALESCE_DELTAS = 64;
-
-/** UTF-8 bytes, what the row takes; not UTF-16 units. */
-const COALESCE_BYTES = 4096;
-
-const utf8 = new TextEncoder();
 
 function toolOutput(output: { readonly value: unknown }): JsonObject {
   if (v.is(v.string(), output.value)) return { type: 'text', value: output.value };
@@ -122,6 +124,10 @@ export class SessionStream {
   /** Writers run one at a time in arrival order, so two cannot reach one container's seal together. */
   private readonly exclusive = serialQueue();
   private readonly calls = new Map<string, { messageId: string; part: number }>();
+  /** Text reaches the row where a tab's replay store cuts it, so a resumed step and that replay agree on what survived;
+   *  a crash loses at most one cadence interval of text. */
+  private readonly cadence = partialFlushCadence();
+  private readonly claim: ClaimFence;
   private readonly durableCalls = new Map<string, DurableCall>();
   private sourceOrder = 0;
   private requestId: string;
@@ -131,6 +137,7 @@ export class SessionStream {
 
   constructor(private readonly history: SessionHistory, private readonly turnId: string, private readonly epoch: number) {
     this.requestId = `${turnId}:${epoch}:admission`;
+    this.claim = { turnId, epoch, assert: () => this.history.assertEpoch(turnId, epoch) };
     this.assistant = this.container('assistant');
     this.tool = this.container('tool');
     this.ui = this.container('assistant', 2);
@@ -149,10 +156,25 @@ export class SessionStream {
 
   nativePart(part: TextStreamPart<ToolSet>): Promise<void> {
     this.nativeProducer = true;
+    const signal = flushSignal(part);
 
-    if (isLifecyclePart(part)) return Promise.resolve();
+    if (isLifecyclePart(part)) return signal === 'none' ? Promise.resolve() : this.exclusive(async () => { this.tick(signal); });
 
-    return this.witnessCall(part.type === 'tool-call' ? part.toolCallId : null, this.exclusive(() => this.writePart(part)));
+    return this.witnessCall(part.type === 'tool-call' ? part.toolCallId : null, this.exclusive(async () => {
+      await this.writePart(part);
+      this.tick(signal);
+    }));
+  }
+
+  /** At the cadence's flush, every text window the step holds is written. */
+  private tick(signal: PartialFlushSignal): void {
+    if (!this.cadence.flushes(signal)) return;
+
+    for (const part of this.assistant.parts.values()) {
+      const text = part.kind !== 'text' || part.buffered === '' ? null : this.window(part, null, false, false);
+
+      if (text !== null && text !== '') this.history.atomic(() => this.history.messages.streamAppend(this.assistant.id, part.number, text, this.claim));
+    }
   }
 
   /** Resolves once the call's part is durable. */
@@ -300,11 +322,14 @@ export class SessionStream {
     if (event.type === 'text-delta' || event.type === 'reasoning-delta') {
       const kind = event.type === 'text-delta' ? 'text' : 'reasoning';
       await this.publish({ container: this.assistant, key: kind, descriptor: { type: kind }, delta: event.delta });
+      this.tick('content');
     } else if (event.type === 'tool-call') {
       await this.publish({ container: this.assistant, key: `call:${event.toolCallId}`, descriptor: { type: 'tool-call', toolCallId: event.toolCallId, toolName: event.toolName, input: event.args }, delta: null });
+      this.tick('content');
     } else if (event.type === 'tool-result') {
       const output = event.success ? { type: 'text', value: event.result } : { type: 'error-text', value: event.error ?? event.result };
       await this.publish({ container: this.tool, key: `result:${event.toolCallId}`, descriptor: { type: 'tool-result', toolCallId: event.toolCallId, toolName: event.toolName, output }, delta: null });
+      this.tick('settled');
     } else if (event.type === 'step-finish') {
       await this.finishStep(event.responseMessages);
       await this.nextStep();
@@ -321,6 +346,7 @@ export class SessionStream {
   /** A container streamed into without a final message still commits what it holds. */
   private async nextStep(): Promise<void> {
     for (const container of [this.assistant, this.tool, this.ui]) await this.sealOpen(container);
+    this.cadence.reset();
     this.step += 1;
     this.sourceOrder = 0;
     this.assistant = this.container('assistant');
@@ -390,7 +416,7 @@ export class SessionStream {
       part.bufferedDeltas += 1;
       part.bufferedBytes += utf8.encode(pending).byteLength;
 
-      if (part.bufferedDeltas < COALESCE_DELTAS && part.bufferedBytes < COALESCE_BYTES) return null;
+      if (part.kind === 'text' || (part.bufferedDeltas < REASONING_WINDOW_DELTAS && part.bufferedBytes < REASONING_WINDOW_BYTES)) return null;
       pending = null;
     }
 
@@ -555,7 +581,7 @@ export class SessionStream {
       part.buffered = '';
       part.bufferedDeltas = 0;
       part.bufferedBytes = 0;
-      this.fenced(() => this.history.messages.streamAppend(container.id, part.number, window));
+      this.history.atomic(() => this.history.messages.streamAppend(container.id, part.number, window, this.claim));
     }
 
     return this.history.messages.openParts(container.id);
