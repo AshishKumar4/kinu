@@ -302,6 +302,9 @@
     // test debris out of the workspace list. Pinned as EVAL_SERVICE_EMAIL in
     // packages/test-utils/src/eval-identity.ts.
     "DEV_USER_EMAIL": "eval-service@kinu.run",
+    // Workers AI through this Worker's own AI binding, for every user; the eval
+    // identity's email above decides nothing about it.
+    "WORKERS_AI_VIA_BINDING": "on",
     "CLOUDFLARE_OAUTH_CLIENT_ID": "edb106782fc08e60480306cf39411d90",
     // The sign-in providers this deployment must offer. The monitor's login probe
     // fails when one is not configured or not on /login, and infra-verify refuses
@@ -579,6 +582,7 @@
         "CLI_PUBLIC_ORIGIN": "https://staging.kinu.run",
         "CLI_APPROVAL_ORIGIN": "https://staging.kinu.run",
         "DEV_USER_EMAIL": "eval-service@kinu.run",
+        "WORKERS_AI_VIA_BINDING": "on",
         "CLOUDFLARE_OAUTH_CLIENT_ID": "",
         "SIGN_IN_PROVIDERS": "",
         "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
