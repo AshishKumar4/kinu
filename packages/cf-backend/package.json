@@ -67,7 +67,7 @@
     "@ai-sdk/provider": "3.0.12",
     "@cloudflare/vite-plugin": "^1.53.1",
     "@cloudflare/vitest-pool-workers": "^0.22.0",
-    "@cloudflare/workers-types": "^4.20260414.1",
+    "@cloudflare/workers-types": "^5.20260928.1",
     "@jridgewell/remapping": "2.3.5",
     "@kinu.run/test-utils": "workspace:*",
     "@rolldown/plugin-babel": "^0.2.3",

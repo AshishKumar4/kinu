@@ -103,7 +103,7 @@ export interface WorkersAiEmbedding {
 }
 
 export type WorkersAiMarkdownConversion = (files: { name: string; blob: Blob }[]) => Promise<
-  ({ format: 'markdown'; data: string } | { format: 'error' })[]
+  ({ format: 'markdown' | 'text'; data: string } | { format: 'error' })[]
 >;
 
 export interface WorkersAiMarkdown {
