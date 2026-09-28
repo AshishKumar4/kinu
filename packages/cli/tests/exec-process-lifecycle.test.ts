@@ -7,8 +7,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { JsonObjectSchema, decodeJsonValue, parseJsonObject, type JsonObject, type JsonValue } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
-import { present, scratchDir } from '@kinu.run/test-utils';
+import { killAndAwaitExit, present, recordedIn, scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const repoRoot = resolve(import.meta.dir, "../../..");
@@ -27,18 +26,14 @@ function newProjectDir(): string {
 /** Pid file of the writer {@link heartbeatCommand} backgrounds, so cleanup can stop it. */
 const HEARTBEAT_PID = 'heartbeat.pid';
 
-afterEach(() => {
+// Leftover processes write into the directory until they exit.
+afterEach(async () => {
   for (const home of homes.splice(0)) {
-    // Stop leftover processes before removing the directory they write into.
     for (const pidfile of ['daemon.pid', HEARTBEAT_PID]) {
-      const recorded = tolerate(() => readFileSync(join(home, pidfile), "utf-8"), 'enoent');
+      const recorded = recordedIn(join(home, pidfile));
 
-      if (recorded === undefined) continue;
-      const pid = parseInt(recorded.trim(), 10);
-
-      if (Number.isInteger(pid) && pid > 1) tolerate(() => process.kill(pid, "SIGTERM"), 'esrch');
+      if (recorded !== null) await killAndAwaitExit(recorded);
     }
-
   }
 });
 

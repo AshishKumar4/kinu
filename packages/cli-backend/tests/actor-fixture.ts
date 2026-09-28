@@ -11,8 +11,7 @@ import {
 } from '@kinu.run/core';
 import { bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '../src/actor-identity';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
-import type { HostedHeadSeat } from '../src/head-runtime';
-import { unobservedSpend } from '@kinu.run/test-utils';
+import type { HeadSeat } from '@kinu.run/core';
 
 /** A head's runtime over its parent's database; a head has no store of its own. */
 export async function createHeadRuntime(parent: CLIRuntime, id: string, observer?: WriteObserver) {
@@ -59,7 +58,7 @@ export function localTestActorHost(
         turnInFlight: () => false,
         setTimer: () => { throw new Error('this fixture host must not schedule background work'); },
       },
-      engine: new EvolutionEngine(bound.runtime, bound.stores.history, { reportModelCall: unobservedSpend, enabled: false }),
+      engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: false }),
       eventLog: new EventLog(exec, bound.handle),
     }),
     contextEvents: (bound) => bound.stores.eventRecorder,
@@ -75,7 +74,7 @@ export function headSeatFactory(
   host: ActorHost,
   runId = 'fixture-run',
   writes?: Map<string, WriteObserver>,
-): (input: HeadInput, observer: WriteObserver) => Promise<HostedHeadSeat> {
+): (input: HeadInput, observer: WriteObserver) => Promise<HeadSeat> {
   return async (input, observer) => {
     const binding = registerLocalActor(parent.actor, {
       name: explorationActorKey(input.id), creationId: input.id, kind: 'run', lifetime: 'task',
@@ -163,7 +162,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
       turnInFlight: () => session.inFlight,
       setTimer: () => { throw new Error('this fixture session must not schedule background work'); },
     },
-    engine: new EvolutionEngine(rt, stores.history, { reportModelCall: unobservedSpend, enabled: false }),
+    engine: new EvolutionEngine(rt, stores.history, { enabled: false }),
     eventLog: new EventLog(execOver(rt), handle),
   }, });
 
@@ -209,7 +208,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
       subordinateDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),
     }),
-  } satisfies Omit<HostedHeadSeat, 'release'>;
+  } satisfies Omit<HeadSeat, 'release'>;
 }
 
 /** Per-node seat factory: each call registers its own node actor, so wave children never share a claim ledger. */

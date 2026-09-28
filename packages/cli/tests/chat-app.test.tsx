@@ -10,7 +10,7 @@ import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat, type FixtureWorkspace } from './helpers/chat-app-fixture';
-import { executeSlashCommand } from '../src/slash-commands';
+import { commandsForClient, executeSlashCommand } from '../src/slash-commands';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
 import { SelectRenderable, TextareaRenderable } from '@opentui/core';
 import { flushSync } from '@opentui/react';
@@ -745,11 +745,49 @@ test('the header shows the size the gate measured the last request at, not the s
   await screen.waitFor('an unmeasured context', () => screen.frame().includes('ctx —/'));
 
   agent.emit({ type: 'turn-start', kind: 'user', text: 'long' });
-  agent.emit({ type: 'broadcast', event: { type: 'context_admitted', requestTokens: 1_500, contextWindow: 200_000 } });
+  agent.emit({ type: 'broadcast', event: { type: 'context_fill', contextTokens: 1_500, contextWindow: 200_000 } });
   agent.emit({ type: 'text-delta', delta: 'word '.repeat(40_000) });
   agent.emit({ type: 'turn-end', turn: TURN });
 
   await screen.waitFor('the measured size', () => screen.frame().includes('ctx ~1.5k/200k'));
+});
+
+test('/compact shows its progress while the fold runs, and a failed fold says why', async () => {
+  for (const ends of ['folded', 'failed'] as const) {
+    const fold = Promise.withResolvers<void>();
+    const agent = fakeClient({ name: `compact-${ends}` });
+    const local = agent.client.localControls;
+
+    if (!local) throw new Error('the fixture is local');
+    local.compact = () => fold.promise;
+    const working = commandsForClient(agent.client).find((command) => command.name === '/compact')?.working ?? '';
+    const screen = await mountChat(agent.client);
+
+    await screen.mockInput.typeText('/compact');
+    flushSync(() => screen.mockInput.pressEnter());
+    await screen.waitFor('the fold in progress', () => screen.frame().includes(working));
+
+    if (ends === 'folded') fold.resolve();
+    else fold.reject(new Error('the summarizer is out of credit'));
+
+    await screen.waitFor('the fold settled', () => !screen.frame().includes(working));
+
+    if (ends === 'failed') expect(screen.frame()).toContain('the summarizer is out of credit');
+  }
+});
+
+test('a reopened chat shows the recorded context number before any turn runs', async () => {
+  const agent = fakeClient({
+    name: 'recorded',
+    status: async () => ({
+      name: 'recorded', purpose: 'p', model: 'openai/gpt-5.5', reasoningEffort: 'medium',
+      context: { tokens: 42_000, window: 200_000, source: 'provider', at: '2026-09-27T00:00:00.000Z' },
+    }),
+  });
+
+  const screen = await mountChat(agent.client);
+
+  await screen.waitFor('the recorded number', () => screen.frame().includes('ctx ~42k/200k'));
 });
 
 test('a turn waiting on a rate limit names the provider, not thinking', async () => {

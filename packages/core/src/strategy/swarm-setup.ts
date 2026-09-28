@@ -680,7 +680,7 @@ export async function createRoot(input: {
 
   if (!reentry) {
     insertSearchNode(sql, actor, {
-      nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
+      nodeId: rootId, parentNodeId: null, rootId,
       task: resolved.task,
       // The run's name, else a composed configuration's label, else empty (the read model derives from the task).
       action: resolved.name ?? resolved.label ?? '',

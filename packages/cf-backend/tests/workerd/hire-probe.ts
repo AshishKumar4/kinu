@@ -12,7 +12,7 @@ import { diagnostics } from '@kinu.run/core/obs';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
-import { HIRE_CHILD_MODEL, type ActorRow, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
+import { HIRE_CHILD_MODEL, REPORT_MARK, type ActorRow, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 
 export { UserDO } from '../../src/user/user-do';
 
@@ -27,13 +27,13 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    for (const name of ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'stopHosted']) {
+    for (const name of ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled']) {
       Reflect.deleteProperty(this, name);
     }
 
     sealRpcSurface(this, [
       ...ORCHESTRATOR_RPC_SURFACE,
-      'rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'stopHosted',
+      'rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled',
     ]);
   }
 
@@ -177,7 +177,16 @@ export class HireOrchestrator extends ProductionOrchestrator {
    *  claimed, so a wake that ran before the hire, or one that ran the child to its end, cannot satisfy it. */
   override async _kinuTerminalRetryTick(...args: Parameters<ProductionOrchestrator['_kinuTerminalRetryTick']>): Promise<void> {
     await super._kinuTerminalRetryTick(...args);
+    this.countReturnedWake();
+  }
 
+  /** The wake's own pass, run in-request while a delegated turn is parked: it must return, not hold the turn. */
+  async wakeWhileRunning(): Promise<void> {
+    await this.terminalRetryPass();
+    this.countReturnedWake();
+  }
+
+  private countReturnedWake(): void {
     const inFlight = this.probeState.storage.sql.exec<{ n: number }>(
       `SELECT COUNT(*) AS n FROM actor_turn_claims c JOIN workspace_actors a ON a.actor_id = c.actor_id
        WHERE a.kind = 'subordinate' AND c.outcome IS NULL`).one().n;
@@ -194,6 +203,12 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     if (wire === null) throw new Error(`no hosted chat wire for ${name}`);
     wire.interrupt();
+  }
+
+  /** Every delegated turn ended and every task agent its answer retired: a hirer no longer waits on either. */
+  async settled(): Promise<void> {
+    await this.delegatedTurns.idle();
+    await this.settleBackgroundTasks();
   }
 
   /** Settles when a terminal-retry wake returned while a delegated turn was still in flight. */
@@ -234,7 +249,7 @@ export class HireAI extends WorkerEntrypoint {
 }
 
 const WireLogSchema = v.looseObject({
-  calls: v.array(v.looseObject({ toolResults: v.optional(v.array(v.unknown())) })),
+  calls: v.array(v.looseObject({ toolResults: v.optional(v.array(v.unknown())), lastUser: v.optional(v.string()) })),
 });
 
 interface HireRunOptions {
@@ -246,7 +261,7 @@ interface HireRunOptions {
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
   & Pick<HireOrchestrator,
-    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'stopHosted'>;
+    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -334,8 +349,16 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     return (await target.dismissSubordinate(child.name, true)).name;
   }
 
+  async settled(workspace: string): Promise<void> {
+    await (await this.target(workspace)).settled();
+  }
+
   async wakeReturned(workspace: string): Promise<void> {
-    await (await this.target(workspace)).wakeReturned();
+    const target = await this.target(workspace);
+
+    // A hirer's turn ends at once now, so no later wake comes on its own while the child parks: drive one.
+    await target.wakeWhileRunning();
+    await target.wakeReturned();
   }
 
   async openHire(workspace: string, prompt: string): Promise<void> {
@@ -366,17 +389,20 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     );
 
     const toolResults: string[] = [];
+    const reports: string[] = [];
 
     for (const call of wire.calls) {
       for (const result of call.toolResults ?? []) {
         if (v.is(v.string(), result)) toolResults.push(result);
       }
+
+      if (call.lastUser?.includes(REPORT_MARK) === true) reports.push(call.lastUser);
     }
 
     const transcript: string[] = [];
 
     for (const row of roster) transcript.push(...await target.childTranscript(row.name));
 
-    return { rootActorId, roster, actors, log, turns, toolResults, transcript };
+    return { rootActorId, roster, actors, log, turns, toolResults, reports, transcript };
   }
 }

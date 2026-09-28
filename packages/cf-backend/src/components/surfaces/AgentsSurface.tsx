@@ -15,6 +15,7 @@ const ACTIVITY = {
   waiting: { word: "Needs you", dot: "bg-[var(--c-warning)]" },
   idle: { word: "Idle", dot: "bg-[var(--c-text-3)] opacity-50" },
   done: { word: "Done", dot: "bg-[var(--c-success)]" },
+  stopped: { word: "Stopped", dot: "bg-[var(--c-text-3)]" },
   failed: { word: "Failed", dot: "bg-[var(--c-danger)]" },
   dismissed: { word: "Dismissed", dot: "bg-[var(--c-text-3)] opacity-30" },
 } satisfies Record<PanelAgent["activity"], { word: string; dot: string }>;

@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-09-27",
+  "measuredAt": "2026-09-28",
   "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
   "method": "each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> /usr/bin/time -v bash -c <run>`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)",
   "rows": {
@@ -487,7 +487,7 @@
       "loadAtStart": 5.02,
       "exit": 0
     },
-    "bun test --timeout=0 ./tests/": {
+    "bun test --timeout=0 ./tests/live-model/ ./tests/first-run/": {
       "wallSeconds": 16.57,
       "cpuSeconds": 44.94,
       "peakRssMb": 3786.49,
@@ -509,7 +509,7 @@
       "loadAtStart": 6.09,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/public-pages.test.ts scripts/plan-demo-film.test.ts": {
+    "bun test --timeout=0 tests/browser/public-pages.test.ts scripts/plan-demo-film.test.ts": {
       "wallSeconds": 42.06,
       "cpuSeconds": 38.24,
       "peakRssMb": 2457.07,
@@ -520,7 +520,7 @@
       "loadAtStart": 2.71,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/react-runtime-identity.test.ts": {
+    "bun test --timeout=0 tests/browser/react-runtime-identity.test.ts": {
       "wallSeconds": 12.46,
       "cpuSeconds": 20.77,
       "peakRssMb": 3003.52,
@@ -542,7 +542,7 @@
       "loadAtStart": 2.86,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/swarm-tree-geometry.test.ts": {
+    "bun test --timeout=0 tests/browser/swarm-tree-geometry.test.ts": {
       "wallSeconds": 29.41,
       "cpuSeconds": 30.35,
       "peakRssMb": 2395.86,
@@ -553,7 +553,7 @@
       "loadAtStart": 2.84,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/chat-scroll.test.ts": {
+    "bun test --timeout=0 tests/browser/chat-scroll.test.ts": {
       "wallSeconds": 21.18,
       "cpuSeconds": 12.69,
       "peakRssMb": 2343.68,
@@ -707,7 +707,7 @@
       "loadAtStart": 3.26,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/account-ux.test.ts scripts/drive-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts": {
+    "bun test --timeout=0 tests/browser/account-ux.test.ts tests/browser/drive-ux.test.ts tests/browser/slate-preview-ux.test.ts tests/browser/slate-sharing-ux.test.ts": {
       "wallSeconds": 144.69,
       "cpuSeconds": 51.17,
       "peakRssMb": 2524.28,
@@ -718,7 +718,7 @@
       "loadAtStart": 1.98,
       "exit": 0
     },
-    "bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts --path-ignore-patterns=scripts/account-ux.test.ts --path-ignore-patterns=scripts/drive-ux.test.ts --path-ignore-patterns=scripts/slate-preview-ux.test.ts --path-ignore-patterns=scripts/slate-sharing-ux.test.ts scripts/*-ux.test.ts scripts/computed-style.test.ts": {
+    "bun test --timeout=0 --path-ignore-patterns=tests/browser/chat-and-files-ux.test.ts --path-ignore-patterns=tests/browser/account-ux.test.ts --path-ignore-patterns=tests/browser/drive-ux.test.ts --path-ignore-patterns=tests/browser/slate-preview-ux.test.ts --path-ignore-patterns=tests/browser/slate-sharing-ux.test.ts tests/browser/*-ux.test.ts tests/browser/computed-style.test.ts": {
       "wallSeconds": 131.47,
       "cpuSeconds": 47.64,
       "peakRssMb": 2835.54,
@@ -729,7 +729,7 @@
       "loadAtStart": 1.88,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/chat-and-files-ux.test.ts": {
+    "bun test --timeout=0 tests/browser/chat-and-files-ux.test.ts": {
       "wallSeconds": 155.64,
       "cpuSeconds": 34.35,
       "peakRssMb": 2355.5,
@@ -762,7 +762,7 @@
       "loadAtStart": 70.66,
       "exit": 0
     },
-    "bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts": {
+    "bun scripts/with-dev-server.ts bun test --timeout=0 tests/browser/product-flows.test.ts": {
       "wallSeconds": 209,
       "cpuSeconds": 193.66,
       "peakRssMb": 5271.07,
@@ -804,17 +804,6 @@
       "meanThreads": 1.28,
       "samples": 290,
       "loadAtStart": 4.05,
-      "exit": 0
-    },
-    "bun scripts/publication-egress.ts": {
-      "wallSeconds": 0.11,
-      "cpuSeconds": 0.02,
-      "peakRssMb": 2.59,
-      "peakRunnable": 0,
-      "peakCpuThreads": 0,
-      "meanThreads": 0.18,
-      "samples": 1,
-      "loadAtStart": 18.46,
       "exit": 0
     },
     "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts": {
@@ -949,7 +938,7 @@
       "loadAtStart": 52.16,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/live-app-turns.test.ts": {
+    "bun test --timeout=0 tests/browser/live-app-turns.test.ts": {
       "wallSeconds": 132.98,
       "cpuSeconds": 139.23,
       "peakRssMb": 4355.02,
@@ -960,7 +949,7 @@
       "loadAtStart": 2.89,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/live-app-sleep.test.ts": {
+    "bun test --timeout=0 tests/browser/live-app-sleep.test.ts": {
       "wallSeconds": 133.14,
       "cpuSeconds": 148.72,
       "peakRssMb": 4192.75,
@@ -971,7 +960,7 @@
       "loadAtStart": 3.71,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/live-app-plans.test.ts": {
+    "bun test --timeout=0 tests/browser/live-app-plans.test.ts": {
       "wallSeconds": 167.92,
       "cpuSeconds": 135.52,
       "peakRssMb": 4408.82,
@@ -982,7 +971,7 @@
       "loadAtStart": 2.72,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/live-app-layout.test.ts": {
+    "bun test --timeout=0 tests/browser/live-app-layout.test.ts": {
       "wallSeconds": 120.31,
       "cpuSeconds": 116.45,
       "peakRssMb": 4435.58,
@@ -1004,15 +993,15 @@
       "loadAtStart": 8.38,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts scripts/error-model.test.ts": {
-      "wallSeconds": 50.06,
-      "cpuSeconds": 77.75,
-      "peakRssMb": 5500.91,
-      "peakRunnable": 24,
-      "peakCpuThreads": 9.46,
+    "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts": {
+      "wallSeconds": 49.47,
+      "cpuSeconds": 76.68,
+      "peakRssMb": 6107.33,
+      "peakRunnable": 19,
+      "peakCpuThreads": 11.96,
       "meanThreads": 1.55,
-      "samples": 221,
-      "loadAtStart": 7.58,
+      "samples": 217,
+      "loadAtStart": 6.79,
       "exit": 0
     }
   }

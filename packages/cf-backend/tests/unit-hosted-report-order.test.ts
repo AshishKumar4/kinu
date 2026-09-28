@@ -5,7 +5,7 @@
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
 import { GATEWAY_CATALOG, driveUntil, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask } from './helpers/actor-harness';
-import { abandonHarnessFibers } from './helpers/agents-sdk';
+import { abandonHarnessFibers, joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 // One turn slot (DELEGATED_TURN_SLOTS): a helper waiting on its task hire frees the slot; its durable hire must not
@@ -185,4 +185,60 @@ test("a report its durable hire made during a helper's turn is taken up though t
 
   await driveUntil(second, 'the helper never took up the report after the reset', () => takenUp);
   expect(takenUp).toBe(true);
+});
+
+// Review P1 (integration/0963): a hosted hirer's drain was only an in-memory debounce, so a reset right after its
+// hire's report landed left that report pending with no wake that would ever take it up.
+test("a report to an idle helper survives a reset before its drain: the durable wake takes it up", async () => {
+  let takenUp = false;
+
+  const script = (run: RecordedGatewayRun): Response => {
+    const { messages } = requestOf(run);
+    const users = messages.filter((message) => message.role === 'user').map((message) => JSON.stringify(message));
+    const results = messages.filter((message) => message.role === 'tool').length;
+
+    if (users.some((user) => user.includes('Durable done.'))) {
+      takenUp = true;
+
+      return chatCompletion(run, 'Noted.');
+    }
+
+    if (users.some((user) => user.includes('Middle task.'))) {
+      return results === 0
+        ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable')
+        : chatCompletion(run, 'Middle waits.');
+    }
+
+    return chatCompletion(run, 'Durable done.');
+  };
+
+  const world = { versionId: 'build-idle-report-reset' };
+  const first = gatewayWorkspace(stubAiBinding(script), world);
+  await first.agent.setSoul('# Purpose\n\nDo each task asked.');
+
+  const middle = await hostedSubordinateHarness(first, {
+    name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
+  });
+
+  const sql = sqlOver(first.db);
+  const middleId = middle.actor.handle.actorId;
+
+  const pendingReports = (): number => sql<{ n: number }>`
+    SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ${middleId} AND variant = 'subordinate_report' AND turn_id IS NULL`[0]?.n ?? 0;
+
+  await wakeForDelegatedTask(first, middleId, 'Middle task.');
+  await driveUntil(first, 'the durable hire never reported', () => pendingReports() > 0);
+  abandonHarnessFibers();
+
+  const second = await reactivateOrchestratorHarness(first.db, undefined, {
+    world: { ...world, aiGateway: stubAiBinding(script) },
+    beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
+  });
+
+  // The wake the activation armed for owed work, fired as the alarm fires it.
+  await second.agent._kinuTimerTick();
+  await joinHarnessFibers();
+  expect(pendingReports()).toBe(0);
+
+  await driveUntil(second, 'the helper never took up the report after the reset', () => takenUp);
 });

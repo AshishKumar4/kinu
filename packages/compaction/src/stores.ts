@@ -52,10 +52,10 @@ export function createVfsTranscriptStore(getVfs: () => VFS): VfsTranscriptStore 
  * Durable per-session plan snapshot and last prompt-token measurement. A measurement taken against a
  * longer history than the current one reads as absent: history is append-only, so shorter means rewritten.
  */
-/** 1: overflow recovery (as before); 2: the owner's /compact. */
-const ARMED_CODES: Readonly<Record<ArmedCompaction, number>> = { force: 1, user: 2 };
+/** 1: overflow. */
+const ARMED_CODES: Readonly<Record<ArmedCompaction, number>> = { force: 1 };
 
-const ARMED_KINDS: readonly ArmedCompaction[] = ['force', 'user'];
+const ARMED_KINDS: readonly ArmedCompaction[] = ['force'];
 
 export interface CompactionStateStore {
   plans: PlanStore;
@@ -63,7 +63,6 @@ export interface CompactionStateStore {
   /** Null when none reported or `historyLength` is shorter than at measurement. */
   loadPromptTokens(sessionKey: string, historyLength: number): number | null;
   savePromptTokens(sessionKey: string, tokens: number, historyLength: number): void;
-  /** The next turn assembly runs with this trigger. */
   armCompaction(sessionKey: string, kind: ArmedCompaction): void;
   /** At most once per arm, so a rebuild cannot loop. */
   takeArmedCompaction(sessionKey: string): ArmedCompaction | null;

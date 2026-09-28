@@ -79,20 +79,3 @@ describe('assertExecutableRuntime', () => {
       .toThrow(/^hard-task eval:/);
   });
 });
-
-describe('the birth runtime refuses to fabricate an exploration result', () => {
-  test('spawnBranch THROWS and names the runtime that implements it', async () => {
-    const { dbPath } = scratch();
-    const db = new Database(dbPath);
-
-    try {
-      db.exec('PRAGMA journal_mode = WAL');
-      const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', llm: LLM });
-      // A `{ text: 'exploration result' }` answer is indistinguishable from a real exploration.
-      expect(() => rt.spawnBranch('any')).toThrow(/does not implement spawnBranch/);
-      expect(() => rt.spawnBranch('any')).toThrow(/openWorkspaceCLI/);
-    } finally {
-      db.close();
-    }
-  });
-});

@@ -20,6 +20,8 @@ export interface SlashCommandInfo {
   usage?: string;
   /** Only offered when the client exposes this capability surface. */
   requires?: 'localControls' | 'consents' | 'checkpoints' | 'rename' | 'plans';
+  /** The phase line while it runs. */
+  working?: string;
 }
 
 interface SlashContext {
@@ -59,14 +61,14 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/changelog', description: 'Review what the agent changed about itself; revert one by number', usage: '/changelog [revert <n>]', run: changelogCommand },
   { name: '/refine', description: 'Review fixes staged from corrected turns; approve or reject each', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]', run: refineCommand },
   { name: '/takes', description: 'Compare the latest alternate takes; pick one by number', usage: '/takes [n]', run: takesCommand },
-  { name: '/tree', description: 'Show the MCTS search tree', aliases: ['/mcts'], run: treeCommand },
+  { name: '/tree', description: 'Show the swarm search tree', aliases: ['/mcts'], run: treeCommand },
   { name: '/jobs', description: 'List background jobs', run: jobsCommand },
   { name: '/connect', description: 'Connect this computer so the agent can run commands on it', requires: 'consents', run: connectCommand },
   { name: '/stop', description: 'Stop the running turn', run: stopCommand },
   { name: '/copy', description: 'Copy the last answer to the clipboard', run: copyCommand },
   { name: '/export', description: 'Write this conversation to a Markdown file', usage: '/export [path]', run: exportCommand },
   { name: '/resume', description: 'Open another workspace and continue its conversation', run: resumeCommand },
-  { name: '/compact', description: 'Fold this conversation into a summary, keeping its last exchanges, before the next turn', requires: 'localControls', run: compactCommand },
+  { name: '/compact', description: 'Fold this conversation into a summary now, keeping its last exchanges', requires: 'localControls', working: 'summarizing the conversation', run: compactCommand },
   { name: '/clear', description: 'Start a new conversation in this workspace; files and memory stay', aliases: ['/new'], requires: 'localControls', run: clearCommand },
   { name: '/queue', description: 'Send a message after the running turn ends', usage: '/queue <text>', run: queueCommand },
   { name: '/branch', description: 'Try another direction alongside the running turn', usage: '/branch <text>', run: branchCommand },
@@ -464,10 +466,10 @@ async function treeCommand({ client }: SlashContext): Promise<SlashOutcome> {
   const nodes = await client.searchNodes();
 
   if (nodes.length === 0) {
-    return { kind: 'text', text: 'No MCTS nodes yet. Ask something that needs a search, or run kinu evolve <name> from a shell.' };
+    return { kind: 'text', text: 'No search nodes yet. Ask for a swarm to build one.' };
   }
 
-  return { kind: 'text', text: `MCTS Tree (${nodes.length} nodes):\n${renderSearchTreeLines(nodes).join('\n')}` };
+  return { kind: 'text', text: `Search tree (${nodes.length} nodes):\n${renderSearchTreeLines(nodes).join('\n')}` };
 }
 
 async function jobsCommand({ client }: SlashContext): Promise<SlashOutcome> {
@@ -520,11 +522,11 @@ function resumeCommand(): SlashOutcome {
   };
 }
 
-function compactCommand({ client, command }: SlashContext): SlashOutcome {
+async function compactCommand({ client, command }: SlashContext): Promise<SlashOutcome> {
   if (!client.localControls) return { kind: 'unknown', command };
-  client.localControls.compactNow();
+  await client.localControls.compact();
 
-  return { kind: 'text', text: 'The next turn starts from a summary of this conversation and its last exchanges.', contextChanged: true };
+  return { kind: 'text', text: 'Folded this conversation into a summary; its last exchanges stay as they were.', contextChanged: true };
 }
 
 function stopCommand({ client }: SlashContext): SlashOutcome {
@@ -1156,7 +1158,6 @@ export function renderStatusLines(status: AgentClientStatus): string[] {
     row('Scaffold:', status.scaffoldVersion === undefined ? undefined : `v${status.scaffoldVersion}`),
     row('Messages:', status.messageCount),
     row('MCTS:', status.searchNodeCount === undefined ? undefined : `${status.searchNodeCount} nodes`),
-    row('Tasks:', status.taskCount),
     row('Tools:', status.toolCount),
     row('Memory:', status.memorySize === undefined ? undefined : `${status.memorySize} B`),
     row('Database:', status.dbSize === undefined ? undefined : `${(status.dbSize / 1024).toFixed(1)} KB`),

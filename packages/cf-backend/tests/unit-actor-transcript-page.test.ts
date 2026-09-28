@@ -168,7 +168,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
   test('a hosted actor with no chat pane is refused', async () => {
     const workspace = orchestratorHarness();
     await workspace.agent.activateActor();
-    const head = await hostedExplorationHarness(workspace, 'full', 'head-without-a-pane');
+    const head = await hostedExplorationHarness(workspace, 'head-without-a-pane');
 
     await expect(workspace.agent.getChatHistoryPage({ limit: 10, actor: head.actor.handle.actorId }))
       .rejects.toThrow(/does not name a chat/);

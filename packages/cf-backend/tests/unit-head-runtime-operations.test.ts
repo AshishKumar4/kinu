@@ -11,6 +11,7 @@ import {
   type ModelCallReport,
   type ModelOperationEvent,
   type ReasoningEffort,
+  LiveWorkers,
 } from '@kinu.run/core';
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_SPEND_SOURCE, mergePolicyProfile,
@@ -68,7 +69,6 @@ const neverHost: HostedActorSeams = {
   publishDelta() { throw new Error('mergeLLM published a head stream frame'); },
   mission() { throw new Error('mergeLLM read the mission ledger'); },
   split() { throw new Error('mergeLLM reached the recursive split'); },
-  get sql(): never { throw new Error('mergeLLM read the workspace SQL'); },
   get exec(): never { throw new Error('mergeLLM read the workspace executor'); },
   get directory(): never { throw new Error('mergeLLM read the actor directory'); },
   transaction() { throw new Error('mergeLLM opened a transaction'); },
@@ -82,7 +82,6 @@ const neverHost: HostedActorSeams = {
   armWake() { throw new Error('mergeLLM armed a wake'); },
   temporary() { throw new Error('mergeLLM reached the task-hire port'); },
   rederiveWake() { throw new Error('mergeLLM re-derived the wake'); },
-  whileWaiting() { throw new Error('mergeLLM freed a turn slot'); },
 };
 
 function runtimeWith(text: string) {
@@ -93,6 +92,7 @@ function runtimeWith(text: string) {
 
   const runtime = createHeadRuntime({
     host: neverHost,
+    workers: new LiveWorkers(),
     models: {
       resolveModelWithEffort: (spec, effort) => {
         resolved.push({ spec, effort });

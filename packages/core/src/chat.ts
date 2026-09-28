@@ -65,7 +65,6 @@ export type ChatEvent =
   | {
     type: 'step-finish'; stepIndex: number; responseMessages: readonly ModelMessage[]; usage?: Usage;
     finishReason?: string;
-    /** Read off the SDK step here: its fields are prototype getters a spread would drop. */
     text?: string;
     toolCalls?: ReadonlyArray<{ toolName: string }>;
     toolResults?: ReadonlyArray<unknown>;
@@ -610,16 +609,14 @@ function* admittedEvent(tokens: number | undefined, contextWindow: number): Gene
   if (tokens !== undefined) yield { type: 'context-admitted', tokens, contextWindow };
 }
 
-export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
+async function admitRequest(opts: ChatOptions) {
   const extensions = opts.extensions;
 
   // Extension tools never shadow a caller tool of the same name.
   const tools = traceTools(opts.trace, extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools);
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
-
-  let stepCount = 0;
   const window = turnWindow(opts);
-  const { contextWindow, modelOutputLimit } = window;
+  const { contextWindow } = window;
 
   // Shared turn-context assembly (orchestrator/turn-context.ts); cf's beforeTurn runs the same function.
   const assembly: Parameters<typeof assembleTurnMessages>[0] = {
@@ -653,9 +650,25 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   // Blocks born at the turn's first step ride right before its input, so the request stays the last user-role
   // content.
-  const { messages: turnMessages, turnStart, admittedTokens } = await assembleTurnMessages({
+  const admitted = await assembleTurnMessages({
     ...assembly, history: initialContext?.messages ?? assembly.history, turnStart: initialContext?.turnStart,
   });
+
+  return { extensions, tools, window, assembly, primary, stepContext, initialContext, admitted };
+}
+
+/** Only the transform's own fold may call a model. */
+export async function measureTurnRequest(opts: ChatOptions): Promise<{ readonly tokens: number; readonly contextWindow: number } | null> {
+  const { admitted, window } = await admitRequest({ ...opts, stepContext: undefined });
+
+  return admitted.admittedTokens === undefined ? null : { tokens: admitted.admittedTokens, contextWindow: window.contextWindow };
+}
+
+export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
+  let stepCount = 0;
+  const { extensions, tools, window, assembly, primary, stepContext, initialContext, admitted } = await admitRequest(opts);
+  const { contextWindow, modelOutputLimit } = window;
+  const { messages: turnMessages, turnStart, admittedTokens } = admitted;
 
   yield* admittedEvent(admittedTokens, contextWindow);
 

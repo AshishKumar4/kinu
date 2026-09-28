@@ -617,8 +617,8 @@ ${hold.body}
     const real = present(SOURCES.get(file), `the ${file} source`);
 
     const widened = real.replace(
-      '      await this.hostedWorkspace().bundle.session();',
-      '      await this.hostedWorkspace().bundle.session();\n      await this.runDueSessionEvolution();',
+      '    await this.hostedWorkspace().bundle.session();',
+      '    await this.hostedWorkspace().bundle.session();\n    await this.runDueSessionEvolution();',
     );
 
     expect(widened).not.toBe(real);

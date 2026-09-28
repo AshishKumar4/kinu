@@ -83,7 +83,6 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
   cwd?: string;
   /** Discovered AGENTS.md sources, root-most first, plus the ones too large to carry. */
   agentsMd?: AgentsMdSources;
-  /** Date-only (see currentDateForPrompt) so the prompt cache prefix survives the day. */
   currentDate?: string;
   /** Promoted section replacements, read by the backend once per activation; this builder does no I/O. Absent
    *  renders built-in sources, which the layergate prefix digest is locked against. */
@@ -184,11 +183,11 @@ function renderExecutorLine(
   render: RenderSection,
   backend?: PromptBackend,
 ): string {
-  const cliLocal = backend === 'cli-local';
-
   switch (exec.name) {
       case 'workspace':
-        return render(WORKSPACE_EXECUTOR_LINE, { cliLocal, memoryMb: String(WORKSPACE_MEMORY_MB) });
+        return render(WORKSPACE_EXECUTOR_LINE, {
+          cliLocal: backend === 'cli-local', cliVfs: backend === 'cli-vfs', memoryMb: String(WORKSPACE_MEMORY_MB),
+        });
       case 'sandbox':
         return render(SANDBOX_EXECUTOR_LINE, {});
       case 'device':
@@ -296,7 +295,6 @@ function hasUnverifiedInstructions(opts: SystemPromptOptions): boolean {
   return opts.activeSkills?.active.some((skill) => skill.trust === 'unverified') ?? false;
 }
 
-/** Workspace instruction files whose contents no owner approved. */
 export interface UnverifiedInstructions {
   readonly agentsMd?: AgentsMdSources;
   readonly activeSkills?: ActiveSkillSet;

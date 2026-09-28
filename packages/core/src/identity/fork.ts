@@ -1,6 +1,8 @@
 /** The fork's lineage row and the files a fork inherits, which fork-transfer.ts streams. Spec: docs/WORKSPACES.md. */
 
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import { isSystemManaged } from '../vfs/workspace-path';
 import type { SqlExecutor } from '../types/primitives';
 import { compareCodeUnits } from '../utils/text';
@@ -82,16 +84,16 @@ export function snapshotForkFiles(
   if (soul?.kind === 'file') entries.push(fileEntry(SOUL_PATH, soul, false));
 
   // Post-order: a directory's mode and mtime land after its contents.
-  const walk = (directory: string): void => {
+  const walk = (directory: string): Effect.Effect<void> => Effect.gen(function* () {
     for (const name of tree.readdir(directory).sort(compareCodeUnits)) {
       if (isSystemManaged(name) || (directory === '' && (NOT_CARRIED_AT_ROOT.has(name) || name === SOUL_PATH))) continue;
       const path = directory === '' ? name : `${directory}/${name}`;
       const stat = tree.lstat(path);
 
-      if (stat === null) throw new Error(`fork could not stat ${JSON.stringify(path)}, which its directory listed`);
+      if (stat === null) return yield* Effect.die(new Error(`fork could not stat ${JSON.stringify(path)}, which its directory listed`));
 
       if (stat.kind === 'directory') {
-        walk(path);
+        yield* walk(path);
         entries.push({ kind: 'directory', path, mode: stat.mode, mtimeMs: stat.mtimeMs });
       } else if (stat.kind === 'symlink') {
         entries.push({ kind: 'symlink', path, target: tree.readlink(path) });
@@ -99,24 +101,27 @@ export function snapshotForkFiles(
         entries.push(fileEntry(path, stat, false));
       }
     }
-  };
+  });
 
-  walk('');
   const payloads = new Map<string, string>();
 
-  for (const artifact of artifacts) {
-    if (payloads.has(artifact.relative)) continue;
-    payloads.set(artifact.relative, artifact.path);
-    const stat = tree.lstat(artifact.path);
+  const carried = Effect.gen(function* () {
+    yield* walk('');
 
-    if (stat?.kind !== 'file') {
-      throw new KinuError('missing', `fork cannot carry payload ${JSON.stringify(artifact.path)}: the conversation references it and it is not a file`);
+    for (const artifact of artifacts) {
+      if (payloads.has(artifact.relative)) continue;
+      payloads.set(artifact.relative, artifact.path);
+      const stat = tree.lstat(artifact.path);
+
+      if (stat?.kind !== 'file') {
+        return yield* new KinuError('missing', `fork cannot carry payload ${JSON.stringify(artifact.path)}: the conversation references it and it is not a file`);
+      }
+
+      entries.push(fileEntry(artifact.relative, stat, true));
     }
+  });
 
-    entries.push(fileEntry(artifact.relative, stat, true));
-  }
-
-  return {
+  return settleSync(Effect.as(carried, {
     entries,
     read(file, offset, length) {
       const at = file.artifact ? payloads.get(file.path) ?? file.path : file.path;
@@ -124,17 +129,17 @@ export function snapshotForkFiles(
 
       // Same synchronous step as the read: no write lands between them.
       if (tree.revision(at) > clock) {
-        throw new KinuError('unavailable', `${JSON.stringify(file.path)} changed while the fork was copying the workspace, `
-          + 'so the copy would not be one snapshot and no fork was created. Fork again once whatever is writing it has stopped.');
+        return settleSync(Effect.fail(new KinuError('unavailable', `${JSON.stringify(file.path)} changed while the fork was copying the workspace, `
+          + 'so the copy would not be one snapshot and no fork was created. Fork again once whatever is writing it has stopped.')));
       }
 
       if (bytes.byteLength !== length) {
-        throw new Error(`fork read ${bytes.byteLength} bytes of ${JSON.stringify(file.path)} where ${length} were asked for`);
+        return settleSync(Effect.die(new Error(`fork read ${bytes.byteLength} bytes of ${JSON.stringify(file.path)} where ${length} were asked for`)));
       }
 
       return bytes;
     },
-  };
+  } satisfies ForkSnapshot));
 }
 
 function fileEntry(path: string, stat: ForkTreeStat, artifact: boolean): ForkFileEntry {

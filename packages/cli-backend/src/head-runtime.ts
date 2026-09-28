@@ -4,31 +4,20 @@
 
 import type { LanguageModel, ToolSet } from 'ai';
 import {
-  type HeadRuntime, type HeadGrounding, type SpawnedHead, type HeadInput, type HeadReport,
+  type HeadRuntime, type HeadGrounding, type HeadInput, type HeadSeat,
   type WebSearchProvider, type CodemodeProvider,
   type HeadMergeModelBinder, type ResolvedTurnProfile,
   type PublishHeadStream,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
-  type DynamicContext, type HostedActor, type ProfileAuthorityInputs, type WorkMode, type WriteObserver,
-  HeadCapture, runHeadInference, runHeadSplit, buildHeadToolSet, HeadController, REAL_CLOCK, type HeadJournal,
+  type HostedActor, type WriteObserver,
+  runHeadSplit, HeadController, REAL_CLOCK, type HeadJournal,
   createDbCodemodeProvider, createStateCodemodeProvider,
-  headMergeLLM,
+  headMergeLLM, spawnSeatedHead,
   localMissionScope,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { CLIRuntime } from './runtime';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
-
-/** One head's seat: the runtime objects its claimed loop runs on. Local twin of core's `HostedNodeSeat`. */
-export interface HostedHeadSeat {
-  readonly actor: HostedActor;
-  readonly runId: string;
-  readonly profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
-  => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
-  readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
-  /** Drop this head's runtime objects and retire its directory row. */
-  release: () => Promise<void>;
-}
 
 export interface CLIHeadRuntimeDeps {
   /** Read per spawn: a resolver session claims its model on first turn, so it may
@@ -61,20 +50,21 @@ export interface CLIHeadRuntimeDeps {
    * would share one claim ledger. `writes` is the run's `HeadCapture.files`; without
    * it `fileChanges` reports nothing for a head that rewrote the tree.
    */
-  hostHead: (input: HeadInput, writes: WriteObserver) => Promise<HostedHeadSeat>;
+  hostHead: (input: HeadInput, writes: WriteObserver) => Promise<HeadSeat>;
 }
 
 export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
-    async spawnHead(input: HeadInput): Promise<SpawnedHead> {
-      const abort = new AbortController();
-
-      return {
-        id: input.id,
-        run: () => runLocalHead(input, deps, abort.signal),
-        async abort(reason: string) { abort.abort(new Error(reason)); },
-      };
-    },
+    spawnHead: async (input) => spawnSeatedHead(input, {
+      seat: deps.hostHead,
+      model: async () => ({ model: headModel(input, deps), spec: null }),
+      codemodeTool: (seat) => hostedCodemodeTool(seat.actor, deps.codemodeExtras()),
+      webSearch: deps.webSearch,
+      split: () => (request) => runHeadSplit(new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK), input, request),
+      mission: () => localMissionScope(deps.governor(), input.missionLabels ?? []),
+      reportStep: (headId, seq, step) => deps.journal().appendStep(headId, seq, step),
+      reportDelta: (kind, delta) => deps.publishHeadStream?.({ headId: input.id, kind, delta }),
+    }),
     mergeLLM: headMergeLLM({
       profile: deps.profile,
       bindMergeModel: deps.bindMergeModel,
@@ -125,49 +115,4 @@ export function hostedCodemodeTool(actor: HostedActor, extras: readonly Codemode
     craftedTools: () => ({}),
     providers: actor.runtime.executionRouter?.getProviders() ?? [],
   });
-}
-
-/** Run one head in-process on a seat from the root's host; release keeps its rows. */
-async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: AbortSignal): Promise<HeadReport> {
-  const capture = new HeadCapture();
-  // `HeadReport.fileChanges` comes only from this observer, so the seat must wrap it.
-  const seat = await deps.hostHead(input, capture.files);
-
-  try {
-    const rt = seat.actor.runtime;
-
-    const tools = buildHeadToolSet({
-      input,
-      capture,
-      rt,
-      history: seat.actor.stores.history,
-      codemodeTool: hostedCodemodeTool(seat.actor, deps.codemodeExtras()),
-      webSearch: deps.webSearch,
-      split: (request) => runHeadSplit(new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK), input, request),
-    });
-
-    const mission = localMissionScope(deps.governor(), input.missionLabels ?? []);
-    const journal = deps.journal();
-
-    const inferenceOptions: Parameters<typeof runHeadInference>[1] = {
-      actor: seat.actor,
-      clock: REAL_CLOCK,
-      runId: seat.runId,
-      profile: seat.profile,
-      dynamic: seat.dynamic,
-      model: headModel(input, deps), tools, capture,
-      workspaceLayout: 'shared-workspace',
-      signal,
-      isAborted: () => signal.aborted,
-      abortReason: () => signal.aborted ? renderThrownChain({ cause: signal.reason }) : null,
-      reportStep: (seq, step) => journal.appendStep(input.id, seq, step),
-      reportDelta: (kind, delta) => deps.publishHeadStream?.({ headId: input.id, kind, delta }),
-    };
-
-    if (mission) inferenceOptions.mission = mission;
-
-    return await runHeadInference(input, inferenceOptions);
-  } finally {
-    await seat.release();
-  }
 }

@@ -4,8 +4,9 @@ import { ActorClaimStore, JsonValueSchema, type JsonValue } from '@kinu.run/core
 import * as v from 'valibot';
 import { makeSql } from '../../core/tests/helpers';
 import {
-  catalogTurn, gatewayWorkspace, historyOver, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
+  catalogTurn, gatewayWorkspace, historyOver, until, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
+import { socketConnection } from './helpers/bindings';
 import { answeringGateway, requestOf, scriptedGateway } from './helpers/platform-gateway';
 
 function latestTurnId(harness: ActorHarness<HarnessOrchestratorAgent>): string {
@@ -70,6 +71,39 @@ function canonicalFromWire(message: v.InferOutput<typeof WireMessageSchema>): Ca
     result: null,
   };
 }
+
+describe('the context number a page reads back', () => {
+  test('the web snapshot and the status read show the prompt size the last step reported', async () => {
+    const harness = gatewayWorkspace(answeringGateway('Noted.'));
+    expect((await harness.agent.getActivitySnapshot()).fill).toBeNull();
+
+    await catalogTurn(harness.agent, 'Remember the word heron.');
+
+    const { fill } = await harness.agent.getActivitySnapshot();
+    // The stub provider reports one prompt token per request.
+    expect(fill).toMatchObject({ tokens: 1, source: 'provider' });
+    expect((await harness.agent.getAgentStatus()).context).toEqual(fill);
+  });
+
+  test('a clear from the tab measures the emptied request, and both reads show that number', async () => {
+    const harness = gatewayWorkspace(answeringGateway('Noted.'));
+    await catalogTurn(harness.agent, 'Remember the word heron.');
+    await catalogTurn(harness.agent, 'And the word egret.');
+
+    const gateRows = (): number[] => harness.db.query<{ tokens: number }, []>(
+      "SELECT json_extract(payload, '$.tokens') AS tokens FROM run_events WHERE type = 'context_admitted' ORDER BY rowid",
+    ).all().map((row) => row.tokens);
+
+    const lastTurn = gateRows().at(-1) ?? 0;
+    await harness.agent.onMessage(socketConnection({ id: 'tab-1', send: () => {} }), JSON.stringify({ type: 'cf_agent_chat_clear' }));
+    await until(() => gateRows().length === 3, 'the measure the clear owes');
+
+    const { fill } = await harness.agent.getActivitySnapshot();
+    expect(fill).toMatchObject({ tokens: gateRows().at(-1), source: 'gate' });
+    expect(fill?.tokens).toBeLessThan(lastTurn);
+    expect((await harness.agent.getAgentStatus()).context).toEqual(fill);
+  });
+});
 
 describe('a turn read back request by request', () => {
   test('each step reads as the list the provider received, paired with what came back', async () => {

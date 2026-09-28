@@ -63,7 +63,6 @@ kinu <command> [options]
 
 | Command | What it does |
 | --- | --- |
-| [`kinu evolve <name>`](#kinu-evolve-name) | Run an MCTS search for one improvement to a local workspace |
 | [`kinu jobs <name> [action] [id]`](#kinu-jobs-name-action-id) | List or cancel background jobs |
 | [`kinu actors <name> [actorId]`](#kinu-actors-name-actorid) | List every actor a workspace holds, or show one by id |
 | [`kinu state <name>`](#kinu-state-name) | Show the workspace state snapshot |
@@ -466,23 +465,6 @@ Create a webhook trigger for a cloud workspace.
 
 ```bash
 kinu webhook jarvis github-push --auth-mode hmac --secret "$HOOK_SECRET"
-```
-
-### kinu evolve <name>
-
-Run an MCTS search for one improvement to a local workspace.
-
-| Option | What it does |
-| --- | --- |
-| `--budget <n>` | MCTS iterations (default: the engine default) |
-| `--branches <n>` | Branches per expansion (default: the engine default) |
-| `--max-cost <usd>` | Cost limit in USD (default: the engine default) |
-| `--model <id>` | Model ID (env: KINU_MODEL) |
-| `--base-url <url>` | Base URL of your own model endpoint (env: KINU_BASE_URL) |
-| `--auth <header>` | Auth header value for that endpoint (env: KINU_AUTH) |
-
-```bash
-kinu evolve jarvis --budget 4
 ```
 
 ### kinu jobs <name> [action] [id]

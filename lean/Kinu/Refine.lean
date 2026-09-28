@@ -7,7 +7,6 @@
 
 import Kinu.Refine.Json
 import Kinu.Refine.UctCases
-import Kinu.Refine.ConvergenceCases
 import Kinu.Refine.RecordsCases
 import Kinu.Refine.CredentialCases
 import Kinu.Refine.DeviceViewCases

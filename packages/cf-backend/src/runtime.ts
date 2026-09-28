@@ -4,7 +4,7 @@
  */
 
 import type {
-  AgentRuntime, ActorHandle, BranchHandle,
+  AgentRuntime, ActorHandle,
   VFS as CoreVFS, LLM, Schedule, Identity,
   SqlExecutor, SqlValue, RawSqlExec,
   FiberCtx, ExecutionRouter,
@@ -42,7 +42,7 @@ import { mountActorFiles } from './workspace-host';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
-import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { kinuEgressParams } from "./egress/configure";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox, openSandbox } from "./sandbox-exec-lane";
@@ -223,11 +223,6 @@ export interface CFRuntimeHooks {
     /** Null until the `context_edit` run-event variant exists; not a stub. */
     events(): ContextEventRecorder | null;
     readonly children: ChildContextResolver;
-  };
-  /** Omitted leaves `spawnBranch`/`abortBranch` refusing, since `AgentRuntime` requires them. */
-  branches?: {
-    spawn(branchId: string): Promise<BranchHandle>;
-    abort(branchId: string): Promise<void>;
   };
 }
 
@@ -529,8 +524,6 @@ export function createCFRuntime(
     get judgeModel() { return profileLane('judge'); },
     get fastLlm() { return profileLane('fast'); },
     get advisorLlm() { return profileLane('advisor'); },
-    spawnBranch: (branchId) => requireBranches(hooks).spawn(branchId),
-    abortBranch: (branchId) => requireBranches(hooks).abort(branchId),
     executionRouter,
     shell,
     localVfs: baseWorkspaceVfs,
@@ -668,15 +661,5 @@ function createIdentity(
     // `.vN` files are canonical; reads resolve pointer-first so a stale live view is healed.
     scaffold: createScaffoldSurface({ vfs, sql, actor, path: scaffoldPath }),
   };
-}
-
-function requireBranches(hooks: CFRuntimeHooks): NonNullable<CFRuntimeHooks['branches']> {
-  const branches = hooks.branches;
-
-  if (!branches) {
-    throw new KinuError('missing', 'This actor runtime was built without a branch host, so it cannot run MCTS rollouts.');
-  }
-
-  return branches;
 }
 

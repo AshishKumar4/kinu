@@ -268,7 +268,7 @@ fi
 #
 # Every gate is a plain argv of words — the plan carries no quotes — and
 # `flush_gates` splits it on whitespace; bash expands a glob word against the
-# tree, which is how the UI row's `scripts/*-ux.test.ts` reaches its family.
+# tree, which is how the UI row's `tests/browser/*-ux.test.ts` reaches its family.
 # Its `--path-ignore-patterns=<suite>` word holds no glob character, so bash
 # passes it through and bun subtracts the suite that is a row of its own.
 PLAN_PHASE=()
@@ -613,7 +613,11 @@ echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
 echo "Build sha:    $KINU_SHA"
 # The tiers' scripted model answers only this bearer (Step 4a); without it every
 # post-publish tier would fail after the upload, so it is asked for before any.
-if [ "$KINU_GATES_ONLY" != "1" ] && [ -z "${KINU_SCRIPTED_MODEL_KEY:-}" ]; then
+# Trimmed here, once: the Worker's secret and the key the tiers store are both
+# this exported value, so whitespace in a key file cannot split them.
+KINU_SCRIPTED_MODEL_KEY="$(printf '%s' "${KINU_SCRIPTED_MODEL_KEY:-}" | tr -d '[:space:]')"
+export KINU_SCRIPTED_MODEL_KEY
+if [ "$KINU_GATES_ONLY" != "1" ] && [ -z "$KINU_SCRIPTED_MODEL_KEY" ]; then
   echo -e "${RED}KINU_SCRIPTED_MODEL_KEY is not set: the tiers' scripted model answers only that bearer. Nothing was deployed.${NC}"
   exit 1
 fi

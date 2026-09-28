@@ -107,7 +107,7 @@ import { galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGallery
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
-// Declared before the shell mounts so the app background attaches its stepping controls here only (scripts/app-background-ux.test.ts).
+// Declared before the shell mounts so the app background attaches its stepping controls here only (tests/browser/app-background-ux.test.ts).
 window.__kinuGalleryStepping = true;
 
 const squareButtonVariant = "square";
@@ -1040,7 +1040,6 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
   },
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
-  getMctsConfig: { explorationConstant: 1.41, maxIterations: 12, branchBudget: 3 },
   getEvolutionChangelog: { entries: [], unseen: 0 },
 });
 
@@ -1385,7 +1384,8 @@ packages/
 The same request either applies one valid coupon atomically or returns \`coupon_ineligible\` without changing the cart.`;
 
 /* `?plan=late-heading` (mid-document h1) and `?plan=annotated-heading` (anchor on the leading h1): the header must promote
-   neither. `?plan=read-only` is a settled plan. */
+   neither. `?plan=read-only` is a settled plan. `?plan=code-path` names a file and line inline, the text Plannotator's own
+   inline renderer turns into a hover preview that fetches `/api/doc`. */
 const GALLERY_PLAN_VARIANT = new URLSearchParams(location.search).get("plan");
 
 const GALLERY_PLAN_LATE_HEADING = `The guard runs after the discount lands, so an archived coupon still applies.
@@ -1410,9 +1410,29 @@ const GALLERY_PLAN_TITLE_NOTE: ReviewAnnotation = {
   author: "Owner",
 };
 
-const GALLERY_PLAN_CONTENT = GALLERY_PLAN_VARIANT === "late-heading"
-  ? GALLERY_PLAN_LATE_HEADING
-  : GALLERY_PLAN_MARKDOWN;
+const GALLERY_PLAN_CODE_PATH = `# Repair the \`applyCoupon\` eligibility guard
+
+Move the eligibility check in \`packages/core/src/checkout/apply-coupon.ts:42\` ahead of the cart update.
+
+[Reference](https://example.test/reference) [Jump](#details) [Local](/readme.md) [Unsafe](javascript:alert(1))
+
+4. First operation
+5. Second operation
+
+| Name | Value |
+| --- | --- |
+| Separator | alpha\\|beta |
+
+\`\`\`mermaid
+graph TD; A-->B
+\`\`\``;
+
+const GALLERY_PLAN_CONTENTS = new Map([
+  ["late-heading", GALLERY_PLAN_LATE_HEADING],
+  ["code-path", GALLERY_PLAN_CODE_PATH],
+]);
+
+const GALLERY_PLAN_CONTENT = GALLERY_PLAN_CONTENTS.get(GALLERY_PLAN_VARIANT ?? "") ?? GALLERY_PLAN_MARKDOWN;
 
 const GALLERY_PLAN_ANNOTATIONS: readonly ReviewAnnotation[] =
   GALLERY_PLAN_VARIANT === "annotated-heading" ? [GALLERY_PLAN_TITLE_NOTE] : [];
@@ -1551,6 +1571,18 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   listWorkspaceAgents: () => (AGENTS_PANEL ? GALLERY_AGENTS : []),
+  // As the server does: the stopped worker settles aborted, which the panel reads as stopped, and the roster read moves.
+  stopSwarmWorker: (args?: unknown[]) => {
+    const [headId] = v.parse(v.tuple([v.string()]), args);
+    const at = GALLERY_AGENTS.findIndex((agent) => agent.open.kind === "node" && agent.open.nodeId === headId && agent.activity === "working");
+    const agent = GALLERY_AGENTS[at];
+
+    if (agent === undefined) return { stopped: false };
+    GALLERY_AGENTS[at] = { ...agent, activity: "stopped" };
+    queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents"] })); });
+
+    return { stopped: true };
+  },
   // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
   // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture.
@@ -1740,6 +1772,8 @@ const GALLERY_AGENTS: PanelAgent[] = [
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false },
   { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "Main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false },
+  { key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "Main",
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h3", owner: null }, tab: false, input: false },
   { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "Main", open: { kind: "chat", path: "refiner" }, tab: false, input: false },
 ];
 
@@ -2612,7 +2646,6 @@ function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
     action: row.action,
     observation: row.observation ?? "",
     code_used: row.code_used ?? null,
-    code_language: row.code_used ? "typescript" : null,
     visits: row.visits,
     value: row.value,
     own_score: row.own_score,
@@ -2620,8 +2653,6 @@ function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
     // `running` is a merged-head status the search_nodes CHECK constraint cannot hold.
     status: row.status === "running" ? "open" : row.status,
     msg_id: row.msg_id ?? null,
-    branch_agent_key: row.branch_agent_key ?? null,
-    evaluation_json: null,
     created_at: row.created_at ?? NOW,
   };
 }
@@ -5044,7 +5075,7 @@ const ACTIVITY_PRODUCERS: ProducerSpend[] = [
     usage: { input: 288_004, output: 31_902 }, usd: 0.86, unpricedCalls: 0,
   },
   {
-    source: "mcts", calls: 28, callsWithoutUsage: 0,
+    source: "swarm", calls: 28, callsWithoutUsage: 0,
     usage: { input: 96_210, output: 12_004, neurons: 12_986 },
     unpricedCalls: 28,
   },
@@ -5179,6 +5210,7 @@ const ACTIVITY_ACCOUNTS: readonly AccountSpend[] = [
 const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
   latest: ACTIVITY_LATEST,
   contextWindow: 200_000,
+  fill: { tokens: ACTIVITY_LATEST.usage.input, window: 200_000, source: "provider", at: new Date(ACTIVITY_LATEST.at).toISOString() },
   telemetry: {
     steps: 344, windowLimit: 2000, tokens: AGENT_TOKENS_METERED, cacheHit: ACTIVITY_CACHE_HIT,
     usd: 11.98, pricedSteps: 344, unpricedSteps: 0, stepsWithoutUsage: 0,
@@ -5231,6 +5263,7 @@ const ACTIVITY_CLEAN: ActivitySnapshot = {
 const ACTIVITY_FRESH: ActivitySnapshot = {
   latest: null,
   contextWindow: null,
+  fill: null,
   telemetry: {
     steps: 0, windowLimit: 2000, tokens: {}, usd: 0, pricedSteps: 0, unpricedSteps: 0,
     stepsWithoutUsage: 0,

@@ -13,14 +13,6 @@ export function parsePositiveInt(value: string, label: string): number {
   return parsed;
 }
 
-export function parsePositiveNumber(value: string, label: string): number {
-  const parsed = Number(value);
-
-  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${label} must be a positive number`);
-
-  return parsed;
-}
-
 export function parseTime(value: string, label: string): number {
   if (/^\d+$/.test(value)) return Number(value);
   const parsed = Date.parse(value);

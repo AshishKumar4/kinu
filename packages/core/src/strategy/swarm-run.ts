@@ -8,6 +8,7 @@
  * `Exploration/Isolation.lean`'s `agent_node_is_not_a_branch_explore` shows it does not reach
  * agent nodes, so nodes are graded on what they report, never on a tree diff.
  */
+import type { LiveWorkers } from './live-workers';
 import type { Clock } from '../types/clock';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { DEFAULT_CONFIG } from '../config';
@@ -68,6 +69,8 @@ export interface SwarmRunDeps {
   readonly model: LanguageModel;
   readonly mode: WorkMode;
   readonly signal?: AbortSignal;
+  /** Each running worker's own stop, by head id; absent where nothing can stop one worker. */
+  readonly workers?: LiveWorkers;
   /** See HeadInferenceDeps.clock. */
   readonly clock?: Clock;
   readonly reportModelCall: ModelCallSink;
@@ -284,11 +287,7 @@ export async function runSwarm(
     searchLedger.begin({
       rootId,
       task: resolved.task,
-      engine: 'swarm',
-      // A swarm's root is the workspace as found, not a message in a conversation.
-      rootMsgId: null,
       config: ledgerConfig,
-      budget: expansionBudget,
       now: Date.now(),
     });
   }
@@ -333,6 +332,7 @@ export async function runSwarm(
     // Empty for the unrouted default; `expandChild` then falls back to `nodeModel`.
     nodeModels,
     signal: deps.signal,
+    workers: deps.workers,
     nodeDeps,
     budget,
     rootId,
@@ -566,14 +566,12 @@ export async function runSwarm(
 
     // Retire unpromising nodes. Its visit gate protects single-visit leaves, so a flat run is unaffected.
     if (isTreeAdvance(resolved.config.advance.kind)) {
-      await pruneLowValueBranches(
-        deps.rt, rootId, resolved.config.pruneThreshold, resolved.config.minVisitsForPrune,
-      );
+      pruneLowValueBranches(deps.rt, rootId, resolved.config.pruneThreshold, resolved.config.minVisitsForPrune);
     }
 
     // The level barrier is the run's heartbeat (`updated_at`), fenced on this run's lease.
     searchLedger.touch(rootId, ledgerEpoch, Date.now());
-    // Logged like `mcts.checkpoint_reached`, so a working search is distinguishable from a hung one.
+    // Logged so a working search is distinguishable from a hung one.
     log.event('swarm.checkpoint_reached', {
       preset: resolved.preset,
       root_id: rootId,

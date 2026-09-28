@@ -348,12 +348,8 @@ async function askRefiner(
   const held = refiner.reclaim(lane);
 
   if (held?.state === 'running') return 'running';
-  let answer: string;
 
-  if (held) {
-    if (held.status !== 'completed') return { ok: false, error: `the refiner did not answer (unavailable): ${held.answer}` };
-    answer = held.answer;
-  } else {
+  if (!held) {
     const contextRefs = await presentContextRefs(deps);
 
     // Annotated, not inlined: this is the only production site supplying
@@ -368,21 +364,22 @@ async function askRefiner(
       lane,
     };
 
-    const outcome = await refiner.run(brief);
+    const outcome = await refiner.start(brief);
 
     if (!('status' in outcome)) {
       return { ok: false, error: `the refiner could not start: ${outcome.error}` };
     }
 
-    if (outcome.status !== 'completed') {
-      return {
-        ok: false,
-        error: `the refiner did not answer (${outcome.reason ?? 'unknown'}): ${outcome.answer}`,
-      };
+    if (outcome.status === 'failed') {
+      return { ok: false, error: `the refiner could not start (${outcome.reason ?? 'unknown'}): ${outcome.answer}` };
     }
 
-    answer = outcome.answer;
+    // A later pass reclaims its answer.
+    return 'running';
   }
+
+  if (held.status !== 'completed') return { ok: false, error: `the refiner did not answer (unavailable): ${held.answer}` };
+  const answer = held.answer;
 
   const parsed = v.safeParse(
     RefinementProposalSchema,

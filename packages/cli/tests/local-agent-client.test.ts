@@ -11,6 +11,7 @@ import {
   NO_COUNT_ENDPOINT, openWorkspaceMainActor, profileCatalogDigest, type LLMProviderConfig, type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { createCLIRuntime, makeSql, type LocalModelResolver , makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { LocalAgentClient } from '../src/local-agent-client';
@@ -23,13 +24,25 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'openai-compat', baseURL: 'http://localhost:0', headers: { Authorization: 'x' }, model: 'fake-model',
 };
 
-function fakeModel(answer: string, onPrompt?: (prompt: LanguageModelV2Prompt) => void): LanguageModel {
+interface SummaryScript {
+  readonly onCall?: () => void | Promise<void>;
+  readonly fail?: Error;
+}
+
+function fakeModel(answer: string, onPrompt?: (prompt: LanguageModelV2Prompt) => void, summary: SummaryScript = {}): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const [a, b] = [answer.slice(0, answer.length >> 1), answer.slice(answer.length >> 1)];
 
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
+    doGenerate: async () => {
+      await summary.onCall?.();
+
+      if (summary.fail) throw summary.fail;
+
+      return { content: [{ type: 'text', text: '## Decisions\n- the parts were looked into in order' }], finishReason: 'stop', usage, warnings: [] };
+    },
     doStream: async (options) => {
       onPrompt?.(options.prompt);
 
@@ -119,6 +132,43 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
   };
 }
 
+function nextContextFill(client: LocalAgentClient): Promise<number> {
+  const fill = Promise.withResolvers<number>();
+
+  const unsubscribe = client.subscribe((event) => {
+    if (event.type === 'broadcast' && event.event.type === 'context_fill' && event.event.contextTokens !== undefined) {
+      unsubscribe();
+      fill.resolve(event.event.contextTokens);
+    }
+  });
+
+  return fill.promise;
+}
+
+function gateMeasures(home: string): number {
+  const db = new Database(join(home, 'agent.db'), { readonly: true });
+  const rows = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_events WHERE type = 'context_admitted'").get()?.n ?? 0;
+  db.close();
+
+  return rows;
+}
+
+function asksSentWith(prompts: readonly LanguageModelV2Prompt[], ask: string): string[] {
+  return (prompts.filter((prompt) => JSON.stringify(prompt.at(-1)).includes(ask)).at(-1) ?? [])
+    .flatMap((message) => (message.role === 'user' ? message.content : []))
+    .flatMap((part) => (part.type === 'text' && part.text.startsWith('look into part') ? [part.text] : []));
+}
+
+function gateSizes(client: LocalAgentClient): number[] {
+  const sizes: number[] = [];
+
+  client.subscribe((event) => {
+    if (event.type === 'run-event' && event.event.type === 'context_admitted') sizes.push(event.event.tokens);
+  });
+
+  return sizes;
+}
+
 function setup(model: LanguageModel, profileAuthority: CliProfileSource = async () => null) {
   const home = scratchDir('client');
   const dbPath = join(home, 'agent.db');
@@ -131,7 +181,7 @@ function setup(model: LanguageModel, profileAuthority: CliProfileSource = async 
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
-    searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
+    searchNodeCount: 0, memorySize: 0, createdAt: Date.now(),
   };
 
   const client = new LocalAgentClient({
@@ -166,7 +216,7 @@ function openPersistentClient(
 
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
-    searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
+    searchNodeCount: 0, memorySize: 0, createdAt: Date.now(),
   };
 
   return new LocalAgentClient({
@@ -558,7 +608,7 @@ describe('LocalAgentClient', () => {
     await client.close();
   });
 
-  test('/compact folds all but the last exchange out of the next prompt; without it every turn is sent', async () => {
+  test('/compact folds all but its last exchanges out of the next prompt; without it every turn is sent', async () => {
     // Folded turns survive only inside the summary; as messages of their own, only the kept tail is sent.
     const turnsSentAsMessages = async (compact: boolean): Promise<string[]> => {
       const prompts: LanguageModelV2Prompt[] = [];
@@ -567,7 +617,7 @@ describe('LocalAgentClient', () => {
 
       for (let turn = 0; turn < 5; turn++) await client.send(`turn ${String(turn)}: ${'context '.repeat(200)}`, { cwd: '/work' });
 
-      if (compact) client.localControls.compactNow();
+      if (compact) await client.localControls.compact();
       await client.send('what came first?', { cwd: '/work' });
       await client.close();
       const asked = prompts.filter((prompt) => JSON.stringify(prompt.at(-1)).includes('what came first?')).at(-1) ?? [];
@@ -577,24 +627,176 @@ describe('LocalAgentClient', () => {
     };
 
     expect(await turnsSentAsMessages(false)).toEqual(['turn 0', 'turn 1', 'turn 2', 'turn 3', 'turn 4']);
-    expect(await turnsSentAsMessages(true)).toEqual(['turn 4']);
+    // Folded before the next ask exists: the kept tail is the last two exchanges.
+    expect(await turnsSentAsMessages(true)).toEqual(['turn 3', 'turn 4']);
   });
 
-  test('each turn reports the size the admission gate measured its request at, and /compact shrinks the next one', async () => {
+  test('/compact folds at once: the number is the folded request, and the next turn sends the fold without a second one', async () => {
+    let summaries = 0;
+    const prompts: LanguageModelV2Prompt[] = [];
+    const { client } = setup(fakeModel('findings '.repeat(600), (prompt) => prompts.push(prompt), { onCall: () => { summaries += 1; } }));
+    await client.connect();
+    const turns = gateSizes(client);
+
+    for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+    const lastTurn = turns.at(-1) ?? 0;
+    const measured = nextContextFill(client);
+    await client.localControls.compact();
+    const tokens = await measured;
+    const folds = summaries;
+
+    expect(folds).toBeGreaterThan(0);
+    expect((await client.status()).context).toMatchObject({ tokens, source: 'gate' });
+    expect(tokens).toBeLessThan(lastTurn);
+
+    await client.send('what came first?', { cwd: '/work' });
+    await client.send('and after that?', { cwd: '/work' });
+    await client.close();
+
+    expect(asksSentWith(prompts, 'what came first?')).toEqual(['look into part 3', 'look into part 4']);
+    expect(asksSentWith(prompts, 'and after that?')).toEqual(['look into part 3', 'look into part 4']);
+    expect(summaries).toBe(folds);
+  });
+
+  test('a /compact whose summary fails says why, leaves the conversation as it was and arms nothing', async () => {
+    const prompts: LanguageModelV2Prompt[] = [];
+    const { client } = setup(fakeModel('findings '.repeat(600), (prompt) => prompts.push(prompt), { fail: new Error('the summarizer is out of credit') }));
+    await client.connect();
+
+    for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+    const before = await client.history();
+    let refusal = '';
+
+    try {
+      await client.localControls.compact();
+    } catch (err) {
+      refusal = renderThrownChain({ cause: err });
+    }
+
+    expect(refusal).toContain('the summarizer is out of credit');
+    expect(await client.history()).toEqual(before);
+
+    await client.send('what came first?', { cwd: '/work' });
+    await client.close();
+
+    expect(asksSentWith(prompts, 'what came first?')).toHaveLength(5);
+  });
+
+  test('a turn sent while /compact folds waits for the fold and runs on it', async () => {
+    const order: string[] = [];
+    const summarizing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+
+    const model = fakeModel('findings '.repeat(600), (prompt) => {
+      if (JSON.stringify(prompt.at(-1)).includes('what came first?')) order.push('turn');
+    }, {
+      onCall: async () => {
+        summarizing.resolve();
+        await release.promise;
+        order.push('summary');
+      },
+    });
+
+    const { client } = setup(model);
+    await client.connect();
+
+    for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+    const folding = client.localControls.compact();
+    await summarizing.promise;
+    const sent = client.send('what came first?', { cwd: '/work' });
+    release.resolve();
+    await folding;
+    await sent;
+    await client.close();
+
+    expect(order.at(-1)).toBe('turn');
+    expect(order.filter((step) => step === 'turn')).toHaveLength(1);
+    expect(order.indexOf('turn')).toBe(order.lastIndexOf('summary') + 1);
+  });
+
+  test('a new session shows the gate\'s measure of its first request before any turn, measured once', async () => {
+    let calls = 0;
+    const { client, home } = setup(fakeModel('noted', () => { calls += 1; }));
+    const measured = nextContextFill(client);
+    await client.connect();
+    const tokens = await measured;
+
+    expect((await client.status()).context).toMatchObject({ tokens, source: 'gate' });
+    await client.close();
+
+    const reopened = openPersistentClient(home, fakeModel('noted', () => { calls += 1; }), { noTranscript: true });
+    await reopened.connect();
+    expect((await reopened.status()).context).toMatchObject({ tokens, source: 'gate' });
+    await reopened.close();
+
+    expect(calls).toBe(0);
+    expect(gateMeasures(home)).toBe(1);
+  });
+
+  test('after /clear, before any turn, the number is the gate\'s measure of the emptied request', async () => {
+    const { client } = setup(fakeModel('findings '.repeat(600)));
+    await client.connect();
+    const turns = gateSizes(client);
+
+    for (let turn = 0; turn < 3; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+    const lastTurn = turns.at(-1) ?? 0;
+    const measured = nextContextFill(client);
+    await client.localControls.clearConversation();
+    const tokens = await measured;
+    const status = await client.status();
+    await client.close();
+
+    expect(status.context).toMatchObject({ tokens, source: 'gate' });
+    expect(tokens).toBeLessThan(lastTurn);
+  });
+
+  test('a model switch records the gate\'s measure of the next request against the new model', async () => {
+    const { client, home } = setup(fakeModel('noted'));
+    await client.connect();
+    await client.send('remember the word heron', { cwd: '/work' });
+    const before = gateMeasures(home);
+
+    const measured = nextContextFill(client);
+    await client.setModel('fake/big-model');
+    const tokens = await measured;
+    const status = await client.status();
+    await client.close();
+
+    expect(status.context).toMatchObject({ tokens, source: 'gate' });
+    expect(gateMeasures(home)).toBe(before + 1);
+  });
+
+  test('a reconnect shows the prompt size the last step reported, and asks no model for it', async () => {
+    const { client, home } = setup(fakeModel('noted'));
+    await client.connect();
+    await client.send('remember the word heron', { cwd: '/work' });
+    await client.close();
+
+    let calls = 0;
+    const reopened = openPersistentClient(home, fakeModel('noted', () => { calls += 1; }), { noTranscript: true });
+    await reopened.connect();
+    const status = await reopened.status();
+    await reopened.close();
+
+    // The fake provider reports 5 prompt tokens for every step.
+    expect(status.context).toMatchObject({ tokens: 5, source: 'provider' });
+    expect(calls).toBe(0);
+  });
+
+  test('each turn records the size the admission gate measured its request at, and /compact shrinks the next one', async () => {
     // Short asks and long answers, as a working session reads: the fold keeps each ask and summarizes the answers.
     const admittedSizes = async (compact: boolean): Promise<number[]> => {
       const { client } = setup(fakeModel('findings '.repeat(600)));
-      const sizes: number[] = [];
-
-      client.subscribe((event) => {
-        if (event.type === 'broadcast' && event.event.type === 'context_admitted') sizes.push(event.event.requestTokens ?? -1);
-      });
-
+      const sizes = gateSizes(client);
       await client.connect();
 
       for (let turn = 0; turn < 5; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
 
-      if (compact) client.localControls.compactNow();
+      if (compact) await client.localControls.compact();
       await client.send('what came first?', { cwd: '/work' });
       await client.close();
 
@@ -679,30 +881,24 @@ describe('/takes — Alternate Takes over a real local client', () => {
     client.subscribe((event) => events.push(event));
     await client.connect();
     const { executeSlashCommand } = await import('../src/slash-commands');
-    const { initSearchTables, initAlternateTakesTable, captureAlternateTakes } = await import('@kinu.run/core');
+    const { initAlternateTakesTable, recordBranchTakeSet } = await import('@kinu.run/core');
 
     const empty = await executeSlashCommand(client, '/takes');
 
     if (empty.kind !== 'text') throw new Error(`expected text outcome, got ${empty.kind}`);
     expect(empty.text).toContain('No alternate takes yet');
 
-    initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
-        VALUES (${rt.actor.actorId}, 'r', 'win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
-        VALUES (${rt.actor.actorId}, 'r', 'alt', 'choose a plan', 'B', 'plan B instead', 0.84, 2, 1, 'open')`;
-    // Seeded before send(), so stamped past any turn's start: the claim purges unclaimed captures older than its turn.
-    captureAlternateTakes(rt.storage.sql, rt.actor, {
-      rootId: 'r', task: 'choose a plan', winnerId: 'win', epsilon: 0.1, now: Number.MAX_SAFE_INTEGER,
-    });
     await client.send('solve it');
+    // A steer branch's take set on the turn that answered.
+    recordBranchTakeSet(rt.storage.sql, rt.actor, {
+      task: 'choose a plan', turnId: 'turn-answered', sessionId: 'default', liveText: 'plan A wins', branchText: 'plan B instead',
+    });
 
     const set = await client.latestTakes();
 
-    if (set === null || set.turnId === null) throw new Error('expected alternate takes bound to the just-run turn');
-    expect(set.turnId.length).toBeGreaterThan(0);
-    expect(set.candidates.map((c) => c.nodeId)).toEqual(['win', 'alt']);
+    if (set === null || set.turnId === null) throw new Error('expected alternate takes bound to a turn');
+    expect(set.candidates.map((c) => c.text)).toEqual(['plan A wins', 'plan B instead']);
 
     const listing = await executeSlashCommand(client, '/takes');
 
@@ -719,10 +915,6 @@ describe('/takes — Alternate Takes over a real local client', () => {
 
     if (row === undefined) throw new Error('expected a take_pick outcome row');
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', turn_id: set.turnId });
-    const altNode = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0];
-
-    if (altNode === undefined) throw new Error('expected the sibling take node');
-    expect(altNode.status).toBe('terminal');
 
     const deadline = Date.now() + 2000;
 

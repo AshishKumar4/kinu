@@ -14,7 +14,7 @@ import type {
   DeferredApproval, DeferredApprovalAnswer,
   PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
   SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
-  ModelTestResult,
+  ModelTestResult, ContextFill,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
@@ -81,13 +81,13 @@ export interface AgentClientStatus {
   scaffoldVersion?: number;
   messageCount?: number;
   searchNodeCount?: number;
-  taskCount?: number;
   memorySize?: number;
   dbSize?: number;
   toolCount?: number;
   autoEvolve?: boolean;
   roleId?: string;
   tierId?: string;
+  context?: ContextFill | null;
 }
 
 interface AgentToolDescription {
@@ -257,7 +257,7 @@ export interface LocalSessionControls {
   approveInstruction(path: string, digest: string): Promise<AdmittedInstructionDecision>;
   revokeInstruction(path: string): Promise<AdmittedInstructionDecision>;
   clearConversation(): Promise<void>;
-  compactNow(): void;
+  compact(): Promise<void>;
 }
 
 /** The owner's half of Plan mode; both backends serve core's `PlanReviewStore`. */

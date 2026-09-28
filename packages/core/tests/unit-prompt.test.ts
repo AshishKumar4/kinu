@@ -71,7 +71,6 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/Helper agents are one tool: `agents`/);
     expect(prompt).toMatch(/Its schema says what each action does/);
     expect(prompt).toMatch(/`swarm` runs parallel nodes over this workspace/);
-    expect(prompt).toMatch(/`hire` with `lifetime:"task"` runs one agent for one question and returns its answer here/);
     expect(prompt).toMatch(/`hire` creates a persistent subordinate in this workspace/);
     expect(prompt).toMatch(/Subordinates share this workspace's files and sandbox/);
     expect(prompt).not.toContain('Delegate once the shape of the work is settled');
@@ -308,7 +307,7 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const withTemporary = buildSystemPromptSync(rt, { backend: 'cf', temporaryAsk: true });
     expect(withTemporary).toMatch(/## Delegation/);
-    expect(withTemporary).toContain('`hire` with `lifetime:"task"` runs one agent for one question');
+    expect(withTemporary).toContain('`hire` with `lifetime:"task"`');
     expect(withTemporary).toMatch(/Code execution and learned capabilities/);
     expect(withTemporary).not.toContain('agents.ask(');
     expect(withTemporary).not.toContain('context_ref');
@@ -316,13 +315,13 @@ describe('buildSystemPromptSync', () => {
 
     const withoutTemporary = buildSystemPromptSync(rt, { backend: 'cli-local' });
     expect(withoutTemporary).toMatch(/Code execution and learned capabilities/);
-    expect(withoutTemporary).not.toContain('`hire` with `lifetime:"task"` runs one agent for one question');
+    expect(withoutTemporary).not.toContain('`hire` with `lifetime:"task"`');
     expect(withoutTemporary).toContain('`agent.*` namespace inside eval');
     expect(withoutTemporary).toMatch(/scaffold proposals/);
     expect(withoutTemporary).not.toContain('agent.proposeScaffold(');
     expect(agentSelfTypes()).toContain('proposeScaffold');
     const cliWithTemporary = buildSystemPromptSync(rt, { backend: 'cli-local', temporaryAsk: true });
-    expect(cliWithTemporary).toContain('`hire` with `lifetime:"task"` runs one agent for one question');
+    expect(cliWithTemporary).toContain('`hire` with `lifetime:"task"`');
   });
 
   test('does not advertise removed context tools or blocks', () => {

@@ -11,7 +11,7 @@ import type {
   Schedule,
   Shell,
 } from './types/primitives';
-import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch, RequestShellApproval } from './types/agent-runtime';
+import type { AgentRuntime, CraftStore, RequestShellApproval } from './types/agent-runtime';
 import type { ExecutionRouter } from './execution/types';
 import type { FileCheckpoints } from './checkpoints/types';
 import type { TurnFileLedger } from './vfs/file-ledger';
@@ -41,8 +41,6 @@ export interface RuntimeComponents {
   memory: Memory;
   /** Judge/fast/advisor lanes routed through MODEL_ROUTE_POLICY from the live turn profile. */
   modelLanes?: ModelLaneComponents;
-  spawnBranch: SpawnBranch;
-  abortBranch: AbortBranch;
   executionRouter?: ExecutionRouter;
   /** Required by the `shell` tool's workspace fast path and the `eval` new-Function fallback. */
   shell?: Shell;
@@ -101,8 +99,6 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     set fastLlm(model: LLM | undefined) { pinned.fast = model; },
     get advisorLlm() { return pinned.advisor ?? routed.advisor; },
     set advisorLlm(model: LLM | undefined) { pinned.advisor = model; },
-    spawnBranch: components.spawnBranch,
-    abortBranch: components.abortBranch,
     executionRouter: components.executionRouter,
     shell: components.shell,
     checkpoints: components.checkpoints,

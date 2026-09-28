@@ -682,7 +682,7 @@ describe('createAttemptSandbox', () => {
     write('packages/core/package.json', JSON.stringify({ name: '@kinu.run/core', main: 'src/index.ts' }));
     write(target, readFileSync(join(REPO_ROOT, target), 'utf8'));
     write('bench/corpus/tasks.jsonl', '{"taskId":"a-sealed-task"}\n');
-    write('tests/live/keep.txt', 'the unsealed checks stay');
+    write('tests/live-model/keep.txt', 'the unsealed checks stay');
     write(join(ARTIFACT_DIRNAME, 'attempts.jsonl'), '{"taskId":"a-sealed-task"}\n');
     write('node_modules/ai/package.json', JSON.stringify({ name: 'ai', main: 'index.js' }));
     // Every workspace-link shape the real tree has (measured 2026-09-15):
@@ -729,7 +729,7 @@ describe('createAttemptSandbox', () => {
     expect(existsSync(join(repo, 'bench', 'corpus', 'tasks.jsonl'))).toBe(true);
     expect(existsSync(join(sandbox.dir, 'bench', 'corpus'))).toBe(false);
     // The checks under tests/ are still there, so they can run.
-    expect(existsSync(join(sandbox.dir, 'tests', 'live'))).toBe(true);
+    expect(existsSync(join(sandbox.dir, 'tests', 'live-model'))).toBe(true);
     sandbox.dispose();
   });
 

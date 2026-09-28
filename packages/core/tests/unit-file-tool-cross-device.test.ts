@@ -18,7 +18,7 @@ const RIG: DeviceFleetEntry = { id: 'dev-rig', name: 'mrwhite@rig', os: 'linux',
 interface Frame { readonly method: string; readonly path: JsonValue | undefined; readonly deviceId: string | undefined }
 
 /** Two machines holding different bytes at the same path; every frame records the machine it was sent to. */
-function fleet(): DeviceTransport & { readonly frames: Frame[] } {
+function fleet(written: JsonValue): DeviceTransport & { readonly frames: Frame[] } {
   const frames: Frame[] = [];
   const status = (): DeviceStatus => ({ connected: true, registered: true, toolchain: null, devices: [STUDIO, RIG] });
   const bytesOn = (deviceId: string | undefined) => Buffer.from(`notes kept on ${deviceId ?? 'no machine'}`);
@@ -35,7 +35,7 @@ function fleet(): DeviceTransport & { readonly frames: Frame[] } {
 
       if (method === 'statPath') return { size: bytes.length, mtimeMs: 0, isDir: false };
 
-      if (method === 'writeFile') return { success: true };
+      if (method === 'writeFile') return written;
 
       if (method === 'readRange') {
         const offset = Number(params[1]);
@@ -48,8 +48,8 @@ function fleet(): DeviceTransport & { readonly frames: Frame[] } {
   };
 }
 
-function fileToolOverTheFleet() {
-  const transport = fleet();
+function fileToolOverTheFleet(written: JsonValue = { success: true }) {
+  const transport = fleet(written);
   const { rt } = createTestRuntime();
   const router = new DefaultExecutionRouter();
 
@@ -88,5 +88,20 @@ describe('a file on another machine', () => {
       .toMatchObject({ ok: true, reference: 'ashish@studio://home/notes.md' });
     expect(transport.frames.filter((frame) => frame.method === 'writeFile'))
       .toEqual([{ method: 'writeFile', path: '/home/notes.md', deviceId: 'dev-studio' }]);
+  });
+
+  test('written where no checkpoint covers it, says undo cannot restore the write', async () => {
+    const why = 'it is the owner\'s home folder itself, too much to copy before every command';
+
+    const { file } = fileToolOverTheFleet({ success: true, uncheckpointed: { dir: '/home', why } });
+    const undo = `No checkpoint covers /home: ${why}, so undo cannot restore what this write changed there.`;
+
+    await file({ action: 'read', path: '/pc/ashish@studio/home/notes.md' });
+    expect(await file({ action: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
+      .toMatchObject({ ok: true, undo });
+    // This fleet never keeps a write, so the edit reads the machine's own bytes first.
+    await file({ action: 'read', path: '/pc/ashish@studio/home/notes.md' });
+    expect(await file({ action: 'edit', path: '/pc/ashish@studio/home/notes.md', edits: [{ old_text: 'kept', new_text: 'moved' }] }))
+      .toMatchObject({ ok: true, undo });
   });
 });

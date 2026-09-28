@@ -1,7 +1,7 @@
 /**
  * Defends: the signed-out pages (self-contained, no `index.css`) shipping a broken stylesheet, pre-paint
  * theme or Kinu identity. Whether their palette and radii match the app's is asked of Chromium in
- * scripts/public-shell-palette-ux.test.ts.
+ * tests/browser/public-shell-palette-ux.test.ts.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -45,7 +45,7 @@ describe('the shell stylesheet', () => {
   });
 
   test('both faces lead with the shipped webfonts, preloaded', () => {
-    // The app's faces match these files in Chromium: scripts/public-shell-palette-ux.test.ts.
+    // The app's faces match these files in Chromium: tests/browser/public-shell-palette-ux.test.ts.
     const page = publicPage({ title: 't', body: '' });
     expect(page).toContain('@font-face{font-family:"Schibsted Grotesk"');
     expect(page).toContain('@font-face{font-family:"Fragment Mono"');

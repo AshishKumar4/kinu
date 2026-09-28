@@ -2,15 +2,15 @@
 
 exports[`every registered section reaches a rendered prompt the Markdown extraction preserves every rendered byte of the surface matrix 1`] = `
 {
-  "cf-full-surface": "d870a6f53d7fca733469034d5a959e621dd5083b7f95a4c0fc385e6d8ade0a42",
-  "cli-local-full-surface": "e83cb601e897c660735cbdefae87ff7a4becb4aa8b0ed318fc8ce43ef3eae5bf",
+  "cf-full-surface": "2b5000c935131342196d6b2e9db1b9d248fc4a74334eab962e96752b8e2fe22a",
+  "cli-local-full-surface": "cbb0e00c6a29701d9ab5c8236c3a4634dd78a0a1a9b97bd06b8193e9535e3fb5",
   "code-execution": "2fd8b20f91cfaa83eda57c9fc27d5e662ae61f582e2d2861779c5083cd159731",
   "defaults": "8ee97f986d584725519e92894c1ee2f65c1468b54c69f3742fbcb7606a8919fc",
   "delegation-hire-only": "8ecdc45332dad5536296b5057a0b30201f90358221d78159a5610cc530697b7f",
   "delegation-report-subordinate": "0a7229a06cce6cbd0978960c0624a443379a83a66d69080e78e24186398a2808",
   "delegation-swarm-only": "371797f27b66254e803e42bdda90f557bdf4131582fa1e9161af18ba91ebb870",
   "delegation-swarm-with-codemode": "4af1a72aea73358c18578a4b6a64c0058adc0fcee3224c8a78ec1f9630248101",
-  "delegation-task-lifetime": "fac12683e6cce92a31bcb5321ef64055b4b0a15799abfb34ec256f78961e40e2",
+  "delegation-task-lifetime": "16619225e38d7d23b44099ffcbdf1217a7cdacd451551b92b0eb5d7be5d70177",
   "executors-offline-device": "9e2f5baec4fc55d525e4c0c4158c769a65e81c9ca915ee817c19187fd764e1e1",
   "executors-preview-capable": "3a6cae53e8e54507e55ae1cbb185f480ceb8f4f30d5712c658f9bf5614930b5d",
   "executors-unnamed-namespace": "029a622c2f967616a176cfd0a90bba8dcfaffe0a620888b570248a1138c1a090",

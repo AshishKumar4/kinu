@@ -19,12 +19,11 @@ import {
 import { createHeadRuntime } from './actor-fixture';
 import { registerLocalActor } from '../src/actor-identity';
 import { openWorkspaceCLI } from '../src/open';
-import { BRANCH_CREDENTIAL_ENV } from '../src/branch-process';
 import { PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV } from '../src/model-resolver';
 
 /** Every name the harness reads a credential from, as the declaring modules name them. */
 const HARNESS_CREDENTIAL_NAMES: readonly string[] = [
-  ...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV,
+  ...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV,
 ];
 
 const DevicePlanSchema = v.object({ env: v.record(v.string(), v.string()) });
@@ -311,6 +310,20 @@ describe('addressing the bound directory', () => {
     expect(existsSync(created)).toBe(false);
   });
 
+  test('a standing deny_all refuses the agent\'s change there, and nobody is asked', async () => {
+    const { state, project } = roots('cwd-plane-outside-deny');
+    const notes = join(dirname(project), 'notes.txt');
+    writeFileSync(notes, 'kept\n');
+    const rt = agentRuntime(state, `outside-deny-${basename(dirname(state))}`, project);
+    rt.actor.config.setShellApprovalMode('deny_all');
+    const { file, asked } = agentTools(rt, () => 'allow');
+
+    await file({ action: 'read', path: notes });
+    await expect(file({ action: 'write', path: notes, content: 'replaced' })).rejects.toMatchObject({ code: 'denied' });
+    expect(asked).toEqual([]);
+    expect(readFileSync(notes, 'utf8')).toBe('kept\n');
+  });
+
   test('a file that looks like a secret is read under the shell\'s rule for `cat`', async () => {
     const { state, project } = roots('cwd-plane-secret-read');
     writeFileSync(join(project, '.env'), 'TOKEN=planted\n');
@@ -458,7 +471,6 @@ describe('the shell over the bound directory', () => {
   test('what a command may have changed is snapshotted, and the snapshot names that directory', async () => {
     const { state, project } = roots('cwd-plane-checkpoints');
     writeFileSync(join(project, 'before.txt'), 'the state to restore\n');
-    // Checkpoint storage is global per agent name; a stable name would read stores from prior runs.
     const rt = agentRuntime(state, `checkpointer-${basename(dirname(state))}`, project);
     rt.actor.config.setShellApprovalMode('allow_all');
     const checkpoints = rt.checkpoints;
@@ -517,6 +529,29 @@ describe('what an opened workspace puts where', () => {
     expect(await agentState.exists('SOUL.md')).toBe(true);
     expect(await agentState.exists('memory/MEMORY.md')).toBe(true);
     expect(await agentState.exists('scaffold/agent.js')).toBe(true);
+  });
+});
+
+describe('the agent\'s own state in a placed workspace', () => {
+  test('memory, SOUL.md and the scaffold read at /agent, and nothing writes through it', async () => {
+    const { state, project } = roots('cwd-plane-agent-view');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
+    await rt.identity.scaffold.write('// evolved\n');
+    const soul = String(await present(rt.agentStateVfs, 'the agent state plane').readFile('SOUL.md', { encoding: 'utf8' }));
+
+    expect([...await rt.storage.vfs.readdir('/agent')].sort()).toEqual(['SOUL.md', 'memory', 'scaffold']);
+    expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
+    expect(await readText(rt, '/agent/memory/MEMORY.md')).toContain('learned something');
+    expect(await readText(rt, '/agent/scaffold/agent.js')).toBe('// evolved\n');
+    expect(await rt.storage.vfs.exists('/agent/workspace.db')).toBe(false);
+
+    expect(await refusalOf(() => rt.storage.vfs.writeFile('/agent/memory/MEMORY.md', 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.writeFile('/agent/SOUL.md', 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.unlink('/agent/scaffold/agent.js'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.mkdir('/agent/memory/more', { recursive: true }))).toBe('EROFS');
+    expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
+    expect(readdirSync(project)).toEqual([]);
   });
 });
 

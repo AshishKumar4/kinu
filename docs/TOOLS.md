@@ -188,9 +188,8 @@ under `JUDGE_MARGINALISATION_MIN`. `score:"none"` returns unranked candidates.
 Only measured search needs `objective`.
 
 `fork` is gone. Its 2 to 6 caller-written briefs became measured search
-candidates, and the five-action picklist rejects it. MCTS stays in
-`core/src/mcts/engine.ts` but has no model-facing route; the durable search
-store and eval suites call it. See [MCTS.md](./MCTS.md).
+candidates, and the five-action picklist rejects it. MCTS folded into swarm
+(2026-09-27): swarm's tree search is the one search engine.
 
 Which of the five actions an actor holds follows from the deps its backend
 wires. `agentsActionsFor` is the one gate, read by the tool's action enum, the

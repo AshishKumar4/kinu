@@ -20,7 +20,7 @@ export { WakeArms } from './orchestrator/wake-arms';
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
-  takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
+  branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
   terminalEffectKey, keyedScope, TerminalEffectInterrupt,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
@@ -258,7 +258,7 @@ export {
   canonicalConversationId,
   AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
   DEFAULT_GEPA_EVAL_BUDGET, clampGepaEvalBudget,
-  type AgentConfigStore, type MctsOverrides, type ShellApprovalMode,
+  type AgentConfigStore, type ShellApprovalMode,
 } from './config/index';
 
 export type * from './types/primitives';
@@ -571,7 +571,7 @@ export { drainAssignments, type AdmittedAssignment, type DrainAssignmentsOptions
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
 // open-38: one physical workspace SQLite for every logical actor.
 export {
@@ -640,6 +640,7 @@ export {
   TEMPORARY_LIFETIME,
   TASK_TURN_ENDINGS,
   createTemporaryAgentPort,
+  taskAnswerIsLater,
   temporaryRunSettles,
   taskTurnEnding,
   terminalTaskReport,
@@ -862,40 +863,24 @@ export { collectDynamicContext, subordinateDelegatesOf } from './state/dynamic-c
 
 export type { DynamicContextInput } from './state/dynamic-context';
 
-export { runMCTS, SEARCH_FIBER_NAME, BranchExplorationSchema, BranchReflectionSchema } from './mcts/engine';
-
+// MCTS
 export { selectNode } from './mcts/uct';
 
 export { backpropagate } from './mcts/backpropagation';
-
-export { recordNode } from './mcts/record-node';
-
-export type { SessionWriter, SessionMessage, SessionMessagePart } from './mcts/record-node';
-
-export { converge } from './mcts/convergence';
 
 export { pruneLowValueBranches } from './mcts/pruning';
 
 export { diversityDirective, diversityAngle, siblingAngles } from './mcts/diversity';
 
 export {
-  explorePrompt, reflectionPrompt,
+  explorePrompt,
   type ExplorePrompt, type ExplorePromptInput, type ExploreToolHint,
 } from './mcts/explore-prompt';
-
-export { branchCompletion, exploreRollout, reflectRollout, type BranchRoute } from './mcts/rollout';
 
 export {
   canonicalLanguage, fencedBlocks, readProposalCode,
   type FencedBlock, type ProposalCode,
 } from './execution/code-fence';
-
-export {
-  formatInheritedContext, DEFAULT_INHERITED_MESSAGES,
-  type InheritedMessage,
-} from './mcts/inherited-context';
-
-export { selectWinnerByTest, type TestSelectionDeps } from './mcts/test-selection';
 
 export {
   evaluateWithMultiModelJudging, median,
@@ -904,12 +889,9 @@ export {
 
 export type { EvaluationGrounding } from './types/evaluation';
 
-export { estimateCost } from './mcts/cost';
-
 // Alternate Takes
 export {
-  initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
-  purgeUnclaimedAlternateTakes, unclaimedAlternateTakeIds,
+  initAlternateTakesTable,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
   recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence, AlternateTakeCandidateSchema,
   type AlternateTakeCandidate, type AlternateTakeSet, type AlternateTakeSource,
@@ -950,9 +932,6 @@ export { initSwarmNodeRecords } from './strategy/swarm-resume';
 export {
   MctsSearchStore,
   initMctsSearchTable,
-  persistableMCTSConfig,
-  type PersistedMCTSConfig,
-  type ResumableSearch,
   type MctsSearchRunSummary,
 } from './mcts/search-store';
 
@@ -1043,7 +1022,6 @@ export {
   attributeCraftedFailure,
 } from './craft/attribution';
 
-export { maybeStoreCraftedTool } from './craft/discovery';
 
 export { periodicCraftConsolidation } from './craft/consolidation';
 
@@ -1220,6 +1198,8 @@ export {
 // Memory writes
 export { memoryBytes } from './memory/note';
 
+export { agentViewMount } from './vfs/agent-view';
+
 export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
 
 export {
@@ -1300,7 +1280,10 @@ export {
   type RunEventQuery,
   type BoundedRunEventQuery,
   type StoredRunEvent,
+  type ContextMeasures,
 } from './events/index';
+
+export { contextFill, type ContextFill } from './read-models/context-fill';
 
 // Durable retry outbox; spec: `events/outbox.ts`.
 export {
@@ -1609,7 +1592,7 @@ export {
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
   type HeadInferenceDeps, type HeadWorkspaceLayout,
-  buildHeadToolSet, HEAD_BUILTIN_TOOLS,
+  buildHeadToolSet, HEAD_BUILTIN_TOOLS, spawnSeatedHead, type HeadSeat, type SeatedHeadDeps,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
   HeadFileChanges,
 } from './heads/index';
@@ -1663,7 +1646,7 @@ export {
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
 export {
-  ChatSession, turnInputMessage, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
+  ChatSession, turnInputMessage, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
@@ -1733,8 +1716,6 @@ export {
 export {
   wrapToolsForBackground, CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool,
 } from './jobs/background-wrap';
-
-export { createDurableMctsSession } from './orchestrator/mcts-session';
 
 export {
   resolveTurnSkills, steerSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
@@ -2037,14 +2018,14 @@ export type {
 } from './read-models/background-jobs';
 
 export {
-  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getProviderAccounts, getReasoningEffort,
+  getAlwaysActiveSkills, getEvolutionConfig, getProviderAccounts, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
-  setMctsConfig, setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
+  setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
 } from './read-models/config-plane';
 
 export type {
-  EvolutionConfigView, MctsConfigView, SetModelDeps,
+  EvolutionConfigView, SetModelDeps,
 } from './read-models/config-plane';
 
 export {
@@ -2521,19 +2502,6 @@ export {
   type DriverLeaseDeps,
   DriverLeaseHold,
 } from './execution/driver-lease';
-
-export {
-  BRANCH_EXPLORE,
-  BRANCH_REFLECT,
-  BRANCH_READY,
-  BranchCallSchema,
-  BranchReplySchema,
-  BranchCallAttributionSchema,
-  type BranchCall,
-  type BranchReply,
-  type BranchMethod,
-  type BranchCallReply,
-} from './protocol/branch';
 
 export {
   type OrphanedFiber,

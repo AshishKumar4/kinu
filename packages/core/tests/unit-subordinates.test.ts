@@ -676,16 +676,15 @@ describe('team action routing', () => {
     expect(h.tasks).toHaveLength(1);
   });
 
-  test('the durable verbs refuse a task-lifetime row before trying anything', async () => {
+  test('assign and message refuse a task-lifetime row before trying anything', async () => {
     const h = makeTeamHarness();
-    // A temporary run's report resolves a waiter on this id; retargeting the row would orphan it.
+    // A task agent answers its one brief and retires; more work belongs to a durable hire.
     h.roster.create({ name: 'ask-auditor-a1b2c3', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
     const before = h.roster.get('ask-auditor-a1b2c3');
 
     const attempts: Array<() => Promise<object>> = [
       () => h.team.assign({ mode: 'build', name: 'ask-auditor-a1b2c3', task: 'Other work' }),
       () => h.team.message({ mode: 'build', name: 'ask-auditor-a1b2c3', content: 'More context' }),
-      () => h.team.dismiss({ name: 'ask-auditor-a1b2c3' }),
     ];
 
     for (const attempt of attempts) {

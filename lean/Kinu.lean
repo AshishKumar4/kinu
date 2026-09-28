@@ -5,7 +5,7 @@
 
   Core: Types
   Safety: Credentials, DeviceView, DeviceToken
-  MCTS: StorageIsolation, Backpropagation, Uct, Convergence
+  MCTS: StorageIsolation, Backpropagation, Uct
   Evolution: Timescales, CraftStore, Scaffold, FullCraftLifecycle
   Agent: Lifecycle, FiberDurability, TurnQueue
   Storage: FTS5Search, SqliteFSCorrectness, CostModel, SnapshotChain, BlockLayer, LossWindow
@@ -28,7 +28,6 @@ import Kinu.Safety.DeviceToken
 import Kinu.MCTS.StorageIsolation
 import Kinu.MCTS.Backpropagation
 import Kinu.MCTS.Uct
-import Kinu.MCTS.Convergence
 
 -- Evolution proofs
 import Kinu.Evolution.Timescales

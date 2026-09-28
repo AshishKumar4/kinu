@@ -57,6 +57,7 @@ export const AGENT_RPC_ACCESS = {
   applyScaffoldDecision: 'interactive',
   branchTurn: 'interactive',
   cancelBackgroundJob: 'interactive',
+  stopSwarmWorker: 'interactive',
   cancelTrigger: 'interactive',
   checkpointStatus: 'interactive',
   getEvolutionChangelog: 'interactive',
@@ -107,7 +108,6 @@ export const AGENT_RPC_ACCESS = {
   getExposedPorts: 'interactive',
   getFacts: 'interactive',
   getEvolutionConfig: 'interactive',
-  getMctsConfig: 'interactive',
   getReplayEvals: 'interactive',
   // Raw unredacted event payloads; a workspace.read token gets only the read models.
   getRunEvents: 'interactive',
@@ -149,7 +149,6 @@ export const AGENT_RPC_ACCESS = {
   setCurriculumTaskStatus: 'interactive',
   setDisplayName: 'interactive',
   setEvolutionConfig: 'interactive',
-  setMctsConfig: 'interactive',
   setModel: 'interactive',
   setActorModel: 'interactive',
   setRole: 'interactive',

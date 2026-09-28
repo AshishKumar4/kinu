@@ -80,7 +80,7 @@ This is a terminal tier, never a commit, push, CI, or deploy gate. The tier prin
 
 ### What it runs
 
-`scripts/live-tier.sh` runs `bun test ./tests/live/` once:
+`scripts/live-tier.sh` runs `bun test ./tests/live-model/` once:
 
 | Suite | What it measures |
 |---|---|
@@ -89,13 +89,13 @@ This is a terminal tier, never a commit, push, CI, or deploy gate. The tier prin
 | `exploration.test.ts` | whether the agent reaches for a search and leaves a durably ranked winner |
 | `live-smoke.test.ts` | one real turn per backend; under `--backend cloud`, the deployed worker |
 
-`tests/live/harness.ts` builds the agent surface through the production roots and holds the refusals that stop a runtime which cannot execute. `tests/live/target-local.ts` provisions the in-process target.
+`tests/live-model/harness.ts` builds the agent surface through the production roots and holds the refusals that stop a runtime which cannot execute. `tests/live-model/target-local.ts` provisions the in-process target.
 
 The live swarm grade (`tests/evals/swarm.eval.ts`: one `agents({action:'swarm'})` search graded on the caller's own `exec-ratio` instrument by winner/baseline ratio, fan-in and keyed records) was retired with the old eval framework on 2026-09-24. It never produced a settled run: its one credentialed run (1,338 s, 2.45M input tokens) stopped `aborted` after three expansions with no winner, and `exec-ratio` cannot run on the deployment (below), so it could only ever grade the in-process runtime. The swarm is covered by `exploration.test.ts` (a search is reached for, branched and durably ranked, in-process), `tests/first-run/exploration.first-run.ts` (a swarm started on the deployment settles every node and shows on the Swarms pane), and core's unit tests of fan-in (`unit-swarm-depth.test.ts`) and record keying (`unit-exploration-records.test.ts`). Its step-cap probe runs on every eval turn (see Evals).
 
 ### Which agent it runs against (`--backend local | cloud`)
 
-`--backend` sets `KINU_EVAL_BACKEND` (`packages/test-utils/src/eval-target.ts`). `tests/live/target-local.ts` provisions the local runtime.
+`--backend` sets `KINU_EVAL_BACKEND` (`packages/test-utils/src/eval-target.ts`). `tests/live-model/target-local.ts` provisions the local runtime.
 
 ```bash
 bun run test:live                        # local target: the in-process cli-backend runtime
@@ -121,11 +121,11 @@ The cloud arm needs `--backend cloud` on top of the live-tier requirements, so n
 | the deployment is unreachable | the transport failure verbatim. The status code is the whole evidence for calling it infrastructure |
 | credential fronts a model, not a deployment | an AI Gateway creates nothing, so there is no workspace API. Mint an eval-service credential |
 
-Workspaces use the `eval-` prefix and `finally` calls `teardown`. `infraBoundary` marks a cold start or 5xx `INFRA FAILURE`. Under `--backend cloud` the tier runs `tests/live/live-smoke.test.ts` alone: the other suites drive a `CLIRuntime`, which no deployed workspace hands out.
+Workspaces use the `eval-` prefix and `finally` calls `teardown`. `infraBoundary` marks a cold start or 5xx `INFRA FAILURE`. Under `--backend cloud` the tier runs `tests/live-model/live-smoke.test.ts` alone: the other suites drive a `CLIRuntime`, which no deployed workspace hands out.
 
 #### The five-turn conversation
 
-`tests/live/e2e-lifecycle.test.ts` certifies the core loop: soul and memory reach the model, tools round-trip, history accumulates, evolution and MCTS run. It is an inner API, without turn assembly, reactor, wakes, or prompt cache. The eval suite covers those paths on the deployment.
+`tests/live-model/e2e-lifecycle.test.ts` certifies the core loop: soul and memory reach the model, tools round-trip, history accumulates, evolution and MCTS run. It is an inner API, without turn assembly, reactor, wakes, or prompt cache. The eval suite covers those paths on the deployment.
 
 It once sent `messages: [user]`: five one-turn conversations. Turn 5 asked "Summarize what we discussed", received "nothing", and passed on `length > 0`. Threading the history is not enough to prove it works. Measured 2026-08-20: the `memory` builtin searches the same conversation store (`packages/core/src/tools/memory-tool.ts`, `packages/core/src/memory/conversation-search.ts`). An unthreaded turn 5 reproduced turn 1's code and said "Here's a summary of our previous discussion" from 118 characters holding only turn 3's note. Two runs scored 6/0 and 5/1.
 
@@ -145,11 +145,11 @@ Every figure comes from a logged run. An undated row is the run whose spend file
 |---|---|---|---|
 | bun suites, credentialed | 2,745 s | 48 | 601.6k |
 | bun suites, credentialed (second run) | 3,843 s | 49 | 600.8k |
-| `tests/live/live-smoke.test.ts` alone | 74 s | 3 | 55.6k |
+| `tests/live-model/live-smoke.test.ts` alone | 74 s | 3 | 55.6k |
 
 `scripts/ladder.ts` declares 3,228 s from a lost third artifact: budget ceiling, not typical. The 3,843 s run includes 1,200 s of killed tests (900 s exploration, 300 s MCTS). Both are fixed; the same steps now take 437 s and 456 s. Do not derive post-fix cost from that run. The five-turn e2e measured 5 calls / 20.0k input, then 9 / 39.8k.
 
-The account allows 300 requests/minute. Run one live tier per account: concurrent tiers yield `orchestrator.detached_work_failed / Request Timeout` and zero-step turns, the same shape as an outage. For one proof, `KINU_EVAL_LIVE=1 bun test ./tests/live/live-smoke.test.ts` takes 74 s and proves a real turn on both the deployed worker and the local session spine.
+The account allows 300 requests/minute. Run one live tier per account: concurrent tiers yield `orchestrator.detached_work_failed / Request Timeout` and zero-step turns, the same shape as an outage. For one proof, `KINU_EVAL_LIVE=1 bun test ./tests/live-model/live-smoke.test.ts` takes 74 s and proves a real turn on both the deployed worker and the local session spine.
 
 ### What a failure means
 
@@ -380,35 +380,6 @@ test('sends Authorization: Bearer', async () => {
   // call the model via AI SDK generateText
   // …
   expect(mock.requests[0].headers['authorization']).toBe('Bearer sk-x');
-});
-```
-
-### Test for a new search engine
-
-Drive the engine, not an adapter over it, and assert on what it wrote. The
-durable tree is what a later reader sees, and an in-memory return value that
-disagrees with the store is the defect worth catching.
-
-```ts
-import { describe, test, expect } from 'bun:test';
-import { runMCTS } from '../src/mcts/engine';
-import { createTestRuntime, createMockSession } from './helpers';
-
-test('budget and branches decide how much tree gets written', async () => {
-  const { rt } = createTestRuntime();
-  rt.spawnBranch = async () => ({
-    explore: async () => ({ text: 'explored' }),
-    generateReflection: async () => ({ text: 'n/a' }),
-  });
-  initTables(rt);
-
-  await runMCTS(rt, createMockSession(), 'tuned task', {
-    mode: 'build', budget: 2, branches: 1,
-  });
-
-  // 1 root + 2 iterations x 1 branch = 3 nodes.
-  const nodes = rt.storage.sql`SELECT * FROM search_nodes WHERE task = 'tuned task'`;
-  expect(nodes.length).toBe(3);
 });
 ```
 

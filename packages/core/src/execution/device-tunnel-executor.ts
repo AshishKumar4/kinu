@@ -10,7 +10,7 @@ import type { VfsNativeReads } from '../vfs/mounts';
 import { makeVfsError, vfsErrorFromText, type VfsError } from '../vfs/errno';
 import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { commandResult, type CommandResult } from './exec-result';
+import { commandResult, uncheckpointedSentence, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { settle, toWire } from '../obs/effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
@@ -135,7 +135,10 @@ const DeviceExecResultSchema = v.object({
   stdout: v.string(),
   stderr: v.string(),
   exitCode: v.number(),
+  uncheckpointed: v.optional(v.object({ dir: v.string(), why: v.string() })),
 });
+
+const WriteReportSchema = v.object({ uncheckpointed: v.object({ dir: v.string(), why: v.string() }) });
 
 const DeviceListResultSchema = v.array(JsonValueSchema);
 
@@ -366,10 +369,16 @@ export function createDeviceTunnelExecutor(
 
           const written = Effect.andThen(
             approveOverwrite(policy, transport, target.deviceId, { view, path, content }),
-            Effect.promise(async () => { await view.writeFile(path, content); }),
+            Effect.promise(() => view.writeFileWithReport(path, content)),
           );
 
-          return await settle(Effect.map(toWire(written, refusalOf), (answer) => (answer.ok ? `Written ${content.length} bytes to ${path}` : answer.error)));
+          const said = `Written ${content.length} bytes to ${path}`;
+
+          return await settle(Effect.map(toWire(written, refusalOf), (answer) => {
+            if (!answer.ok) return answer.error;
+
+            return answer.value ? `${said}\n${uncheckpointedSentence(answer.value.uncheckpointed, 'this write')}` : said;
+          }));
         } catch (err) {
           if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
@@ -575,7 +584,7 @@ const ALWAYS_CONSENTED: DeviceFileConsent = {
 
 const AGENT_TMP_PATHS = ['/tmp', '/var/tmp'] as const;
 
-export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
+export type DeviceVFS = VFS & Required<Pick<VFS, 'writeFileWithReport'>> & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
 
 /** The machine's files in its own absolute paths: the daemon resolves root and path, this guard only rejects lexical
  *  escapes, and `homeDir` is HELLO's, never an `exec`'s. */
@@ -684,6 +693,23 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
   const guarded = (path: string, op: string) => Effect.promise(() => guard(path, op));
 
+  const writeReported = (path: string, data: string | Uint8Array) => Effect.gen(function* () {
+    const root = yield* guarded(path, 'open');
+    const text = v.is(v.string(), data) ? data : asLosslessText(data);
+
+    const result = yield* text !== null
+      ? call('writeFile', [path, text, { root }], path)
+      : call('writeFile', [path, bytesToBase64(v.parse(v.instance(Uint8Array), data)), { encoding: 'base64', root }], path);
+
+    const ok = result === 'ok'
+      || (result !== undefined && isJsonObject(result) && result.success === true);
+
+    if (!ok) return yield* Effect.fail(makeVfsError('EIO', `writeFile failed on the device: ${JSON.stringify(result)}`, path));
+    const report = v.safeParse(WriteReportSchema, result);
+
+    return report.success ? report.output : null;
+  });
+
   return {
     homeDir: openingDir,
     readFile: (path, opts) => settle(Effect.gen(function* () {
@@ -700,19 +726,9 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       return settle(Effect.flatMap(guarded(path, 'open'), (root) => readChunked(path, root, offset, length)));
     },
 
-    writeFile: (path, data) => settle(Effect.gen(function* () {
-      const root = yield* guarded(path, 'open');
-      const text = v.is(v.string(), data) ? data : asLosslessText(data);
+    writeFile: (path, data) => settle(Effect.asVoid(writeReported(path, data))),
 
-      const result = yield* text !== null
-        ? call('writeFile', [path, text, { root }], path)
-        : call('writeFile', [path, bytesToBase64(v.parse(v.instance(Uint8Array), data)), { encoding: 'base64', root }], path);
-
-      const ok = result === 'ok'
-        || (result !== undefined && isJsonObject(result) && result.success === true);
-
-      if (!ok) return yield* Effect.fail(makeVfsError('EIO', `writeFile failed on the device: ${JSON.stringify(result)}`, path));
-    })),
+    writeFileWithReport: (path, data) => settle(writeReported(path, data)),
 
     readdir: (path) => settle(Effect.gen(function* () {
       const root = yield* guarded(path, 'scandir');
@@ -850,6 +866,9 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     },
     async writeFile(path, data) {
       await dispatch(path, (view, native) => view.writeFile(native, data));
+    },
+    async writeFileWithReport(path, data) {
+      return dispatch(path, (view, native) => view.writeFileWithReport(native, data));
     },
     async readdir(path) {
       if (isFleetRoot(path)) return routes().map((route) => route.segment);

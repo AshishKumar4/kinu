@@ -149,8 +149,6 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
     schedule: opts.schedule ?? noSchedule(),
     identity: { id: workspaceId, name: 'test', scaffold: noScaffold() },
     craftStore: opts.craftStore ?? emptyCraftStore(),
-    spawnBranch: async () => refuse('a branch exploration', 'a runtime that spawns branches'),
-    abortBranch: async () => refuse('a branch abort', 'a runtime that spawns branches'),
     executionRouter: opts.executionRouter ?? new DefaultExecutionRouter(),
   };
 

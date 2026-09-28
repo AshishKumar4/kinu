@@ -1,7 +1,8 @@
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import * as v from 'valibot';
 import { isPlaceholderMission } from './soul';
-import { tolerate } from '../obs/index';
+import { Effect } from 'effect';
+import { settleSync, tolerate } from '../obs/index';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from './actor-handle';
 import { nanoid } from '../utils/nanoid';
@@ -401,6 +402,6 @@ export function isWorkspaceName(name: string): boolean {
 
 export function validateWorkspaceName(name: string): void {
   if (!isWorkspaceName(name)) {
-    throw new Error('Invalid workspace name. Use alphanumerics, dot, underscore and dash only (max 64 chars).');
+    return settleSync(Effect.die(new Error('Invalid workspace name. Use alphanumerics, dot, underscore and dash only (max 64 chars).')));
   }
 }

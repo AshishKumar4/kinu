@@ -16,7 +16,7 @@ import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellAp
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, rmSync, chmodSync, writeSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
-import { join, resolve as resolvePath } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
@@ -56,8 +56,7 @@ import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS, directoryFileReach } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
-import { createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
-import { BRANCH_CREDENTIAL_ENV, createBranchSpawner } from './branch-process';
+import { agentViewMount, createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
   createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV,
@@ -74,7 +73,7 @@ import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalAc
 import * as v from 'valibot';
 import { stampSchemaGenesis } from './schema-genesis';
 
-const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV];
+const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV];
 
 interface CLIRuntimeOptions {
   dbPath: string;
@@ -120,7 +119,7 @@ export interface CLIRuntime extends AgentRuntime {
    */
   profiles?: LocalProfileAuthority;
   /**
-   * Override seam for measurement harnesses (`tests/live/harness.ts`); `null`
+   * Override seam for harnesses (`tests/live-model/harness.ts`); `null`
    * withholds resolution so an unrouted lane says so rather than inventing a model.
    */
   setProfileResolver?(resolve: (() => Promise<ResolvedTurnProfile>) | null): void;
@@ -254,7 +253,7 @@ export function createCLIRuntime(
       new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
     }
 
-    actor = openLocalRootActor(db, sql);
+    actor = openLocalRootActor(sql);
   }
 
   // After the branch binds an actor: an unscoped sweep would resume a sibling's lane.
@@ -346,15 +345,6 @@ export function createCLIRuntime(
     fiber: createSqlFiber(sql, actor),
   };
 
-  // `:memory:` is SQLite's in-memory sentinel, not a path.
-  const rootDbPath = config.dbPath === ':memory:' ? null : config.dbPath;
-
-  const { spawn: spawnBranch, abort: abortBranch } = createBranchSpawner(rootDbPath, {
-    parent: actor, llm: config.llm,
-    providerCredentials: config.providerCredentials,
-    oauthConfigPath: config.oauthConfigPath,
-  });
-
   const storage = inlineWorkspaceStorage(db);
 
   const workspace = createWorkspaceFilesystem({
@@ -367,7 +357,6 @@ export function createCLIRuntime(
   const agentStateVfs = workspace.vfs;
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
   const cwd = config.cwd ? resolvePath(config.cwd) : null;
-  const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints) : agentStateVfs;
 
   const memoryStore = new MemoryStore(agentStateVfs, sql);
   memoryStore.ensureSchema();
@@ -385,6 +374,8 @@ export function createCLIRuntime(
     requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
     get deferrals() { return approvalDeferrals ?? undefined; },
   };
+
+  const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints) : agentStateVfs;
 
   // A directory-bound shell runs on the user's machine and may mutate the tree, so it
   // snapshots first; the in-SQLite shell is the agent's own and serves the mount table.
@@ -442,6 +433,7 @@ export function createCLIRuntime(
   const agentVfs = withMountTable(fileVfs, [
     sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
+    ...(cwd === null ? [] : [agentViewMount(agentStateVfs, 'scaffold')]),
     // `/context`: this actor's own working history, keyed on its own id.
     contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
@@ -490,8 +482,6 @@ export function createCLIRuntime(
     memory,
     craftStore,
     modelLanes,
-    spawnBranch,
-    abortBranch,
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
@@ -573,7 +563,6 @@ function facetShellEnv(cwd: string, facet: string): NodeJS.ProcessEnv {
   return { ...process.env, HOME: home, TMPDIR: tmp };
 }
 
-/** Remove one facet's scratch root, and only that root. */
 export function cleanupFacetCwdScratch(cwd: string, facet: string): void {
   rmSync(facetScratchRoot(cwd, facet), { recursive: true, force: true });
 }
@@ -594,7 +583,7 @@ export async function buildLocalActorRuntime(
   const binding = bindLocalActorReference(parent.actor, bound.reference);
   adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
 
-  const run = binding.kind === 'run' && binding.toolProfile === 'full';
+  const run = binding.kind === 'run';
 
   if (run && swarmSeat === true) {
     if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
@@ -637,7 +626,7 @@ async function buildCLIHeadRuntime(
   const { parentRuntime: parent } = opts;
   const sql = parent.storage.sql;
 
-  if (opts.actorBinding.kind !== 'run' || opts.actorBinding.toolProfile !== 'full') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
+  if (opts.actorBinding.kind !== 'run') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
   const physicalName = headAgentName(actor.storageKey);
 
@@ -716,6 +705,7 @@ async function buildCLIHeadRuntime(
   const agentVfs = withMountTable(vfs, [
     sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     skillsMount((): VFS => agentVfs),
+    ...(cwdPlane === null ? [] : [agentViewMount(agentStateVfs, dirname(actorScaffoldPath(opts.actorBinding)))]),
     contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
     }),
@@ -733,7 +723,6 @@ async function buildCLIHeadRuntime(
     workspaceIsMachine: parent.workspaceIsMachine,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     memory: parent.memory, craftStore: parent.craftStore,
-    spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
     executionRouter, shell,
   };
 

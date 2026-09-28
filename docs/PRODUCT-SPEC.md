@@ -478,7 +478,7 @@ Kinu improves tools, instructions, working context and loop versions through obs
 5. Which actor/owner authority permitted activation.
 6. Which later outcome supports or contradicts the claimed benefit.
 
-Tool fitness updates, turn lessons, session reflection and lifetime search are different operations. Having them does not prove they improve task success.
+Tool fitness updates, turn lessons, session reflection and craft consolidation are different operations. Having them does not prove they improve task success.
 
 Model agreement is never labelled human ground truth. The recovered approval for ensemble calibration was: a human reference pass, blind model second opinions, measured agreement and confusion, then recurring automation with a human audit. A transcript corpus alone does not replace the human reference.
 
@@ -916,7 +916,7 @@ The document is maintained through source-grounded review. It creates no prose-s
 - [TOOLS.md](TOOLS.md): tool, delegation and owner-inspection surfaces.
 - [EXECUTION-LAYER-SPEC.md](EXECUTION-LAYER-SPEC.md): execution environments and result contracts.
 - [CONTEXT-BUDGET.md](CONTEXT-BUDGET.md): context preparation and measurement.
-- [EXPLORATION.md](EXPLORATION.md), [MCTS.md](MCTS.md): configured exploration and journals.
+- [EXPLORATION.md](EXPLORATION.md): configured exploration and journals.
 - [EVOLUTION.md](EVOLUTION.md), [CRAFT-ARCHITECTURE.md](CRAFT-ARCHITECTURE.md): learning, trials and tool versions.
 - [LIVE-UI.md](LIVE-UI.md): authored slates and adoption boundaries.
 - [USER-GUIDE.md](USER-GUIDE.md), [CLI.md](CLI.md), [CONFIG.md](CONFIG.md): user entry points and configuration.

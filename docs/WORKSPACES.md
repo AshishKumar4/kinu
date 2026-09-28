@@ -82,7 +82,13 @@ A workspace holds the state. Agents are the actors that work inside it.
   workspace plane that `file`, `shell`, `eval` and AGENTS.md address binds to
   the directory on the agent's ref (`CLIRuntimeConfig.cwd`, never
   `process.cwd()`). With no directory bound, both planes are the one in-SQLite
-  tree an isolated fixture or eval episode gets. Relative paths resolve at
+  tree an isolated fixture or eval episode gets. With a directory bound, the
+  agent reads its own memory, SOUL.md and scaffold at `/agent`, a read-only view
+  of that state (`core/src/vfs/agent-view.ts`), and the `file` tool reaches an
+  absolute path outside the directory as the shell does: each operation is
+  reviewed as the command it amounts to (`cat`, `tee`, `rm -rf`, ...) under the
+  shell's approval mode and grants. A relative or aliased path that climbs out,
+  or any path with a `..` segment, stays refused. Relative paths resolve at
   `/home/main` (`WORKSPACE_ROOT`, `packages/core/src/vfs/workspace-path.ts:2`). A
   workspace made when the root was `/home/user` has its tree moved there on its
   first boot, and `/home/user` stays a link to `/home/main`, so a path written

@@ -321,7 +321,7 @@ describe('the offline drain is what executes trials', () => {
 
 describe('auto-evolution off runs no trial and leaves no trial to run', () => {
   function hostEngine(rt: AgentRuntime, control: ScaffoldControl, enabled: boolean): EvolutionEngine {
-    return new EvolutionEngine(rt, storesFor(rt).history, { reportModelCall: unobservedSpend,
+    return new EvolutionEngine(rt, storesFor(rt).history, {
       enabled,
       shadowTrialQueue: (turn, opts) => queueTurnShadowTrial(control, turn, opts),
       shadowTrialRunner: () => runQueuedShadowTrials(control),

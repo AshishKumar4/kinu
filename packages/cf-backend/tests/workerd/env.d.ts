@@ -138,6 +138,8 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   msgSent(): Promise<void>;
   reenter(workspace: string): Promise<void>;
   wakeReturned(workspace: string): Promise<void>;
+  /** Every delegated turn ended and every answered task agent retired. */
+  settled(workspace: string): Promise<void>;
   stopChild(workspace: string): Promise<void>;
   dismissChild(workspace: string): Promise<string>;
   observe(workspace: string): Promise<HireObservation>;

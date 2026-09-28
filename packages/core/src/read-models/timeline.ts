@@ -44,8 +44,6 @@ export function classifyEvolutionType(type: string): TimelineKind {
 
   if (type.startsWith('scaffold')) return 'scaffold';
 
-  if (type.startsWith('mcts')) return 'mcts';
-
   if (type === 'consolidation' || type === 'craft_discovered') return 'craft';
 
   if (type === 'fiber_recovered') return 'recovery';
@@ -86,6 +84,7 @@ type DiagnosisOnlyEvent = Extract<RunEvent, { type:
   | 'approval_consumed'
   | 'execution_escalation'
   | 'budget_exhausted'
+  | 'context_admitted'
 }>;
 
 const DIAGNOSIS_ONLY_EVENTS: ReadonlySet<string> = new Set<DiagnosisOnlyEvent['type']>([
@@ -105,6 +104,7 @@ const DIAGNOSIS_ONLY_EVENTS: ReadonlySet<string> = new Set<DiagnosisOnlyEvent['t
   'approval_consumed',
   'execution_escalation',
   'budget_exhausted',
+  'context_admitted',
 ]);
 
 function isDiagnosisOnly(e: RunEvent): e is DiagnosisOnlyEvent {

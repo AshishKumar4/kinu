@@ -335,15 +335,15 @@ class ActivityVersusEvolutionTest(unittest.TestCase):
 
     def test_real_evolution_is_recorded_as_evolution(self) -> None:
         activity, evolution = events.split_activity([
-            {"type": "evolution", "event": "mcts_started", "message": "4 branches"},
-            {"type": "evolution", "event": "mcts_complete", "message": "settled"},
+            {"type": "evolution", "event": "reflection", "message": "one lesson"},
+            {"type": "evolution", "event": "consolidation", "message": "merged"},
             {"type": "evolution", "event": "scaffold_promotion", "message": "promoted"},
             {"type": "evolution", "event": "bg_job_started", "message": "run -> bgjob-x"},
         ])
         self.assertEqual(len(activity), 4)
         self.assertEqual(
             [e["event"] for e in evolution],
-            ["mcts_started", "mcts_complete", "scaffold_promotion"],
+            ["reflection", "consolidation", "scaffold_promotion"],
         )
 
     def test_non_activity_events_are_ignored_entirely(self) -> None:

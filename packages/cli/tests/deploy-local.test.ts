@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { LocalConfigSchema } from '@kinu.run/core/deploy';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { runToExit } from '@kinu.run/test-utils';
+import { killAndAwaitExit, recordedIn, runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -50,9 +50,9 @@ const strangers: Bun.Subprocess[] = [];
 
 afterEach(async () => {
   for (const instance of started.splice(0)) {
-    const pid = readPid(instance.home);
+    const workerd = recordedIn(join(instance.home, 'local/workerd.pid'));
 
-    if (pid !== null) tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
+    if (workerd !== null) await killAndAwaitExit(workerd);
   }
 
   for (const stranger of strangers.splice(0)) stranger.kill('SIGKILL');

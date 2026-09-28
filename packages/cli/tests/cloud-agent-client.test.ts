@@ -781,7 +781,7 @@ describe('CloudAgentClient protocol', () => {
 
     const set = {
       id: 'take-1', turnId: 'm2', sessionId: 'default', task: 'choose a plan',
-      source: 'mcts',
+      source: 'branch',
       winnerNodeId: 'win', chosenNodeId: null, createdAt: 1,
       candidates: [
         { nodeId: 'win', text: 'plan A', score: 0.9, visits: 3, depth: 1 },

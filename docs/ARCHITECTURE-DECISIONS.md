@@ -814,7 +814,7 @@ hypothesis until a wave is measured green under one shape and red under the
 other.
 
 The three reds are one defect: the plan-review surface never mounts.
-`scripts/plan-review-ux.test.ts` alone hangs past 240 s (exit 124,
+`tests/browser/plan-review-ux.test.ts` alone hangs past 240 s (exit 124,
 2026-09-18), its first test waiting on `[data-plan-review-root]`. The live-app
 row reports `the turn beat never landed … #inspector [data-plan-status]` with
 the plan submitted in the transcript. Public pages render hangs in

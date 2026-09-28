@@ -202,7 +202,7 @@ const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({
   turnId: v.nullable(v.string()),
   sessionId: v.nullable(v.string()),
   task: v.string(),
-  source: v.picklist(['mcts', 'branch', 'heads']),
+  source: v.picklist(['branch', 'heads']),
   winnerNodeId: v.string(),
   chosenNodeId: v.nullable(v.string()),
   candidates: v.array(AlternateTakeCandidateSchema),
@@ -274,7 +274,7 @@ const BranchStatusEventSchema = v.variant('status', [
 const BroadcastFrameSchema = v.union([
   BranchStatusEventSchema,
   v.object({ type: v.literal('model_fallback'), message: v.string() }),
-  v.object({ type: v.literal('context_admitted'), requestTokens: v.number(), contextWindow: v.number() }),
+  v.object({ type: v.literal('context_fill'), contextTokens: v.number(), contextWindow: v.optional(v.number()) }),
 ]);
 
 interface CloudAgentClientOptions {
@@ -627,6 +627,7 @@ export class CloudAgentClient implements AgentClient {
       scaffoldVersion: status.scaffoldVersion,
       messageCount: status.messageCount,
       searchNodeCount: status.searchNodeCount,
+      context: status.context ?? null,
     };
   }
 

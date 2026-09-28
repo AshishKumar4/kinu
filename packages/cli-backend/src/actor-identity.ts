@@ -4,9 +4,8 @@
  */
 import { resolve } from 'node:path';
 import type { Database } from 'bun:sqlite';
-import * as v from 'valibot';
 import {
-  ActorReferenceSchema, WorkspaceActorDirectory, bindActorHandle, explorationActorKey,
+  WorkspaceActorDirectory, bindActorHandle, explorationActorKey,
   type ActorHandle, type ActorReference, type CreateWorkspaceActor, type SqlExecutor,
   type WorkspaceActor, type NodeIdentity,
 } from '@kinu.run/core';
@@ -14,7 +13,6 @@ import { KinuError } from '@kinu.run/core/obs';
 
 interface LocalActorScope {
   readonly directory: WorkspaceActorDirectory;
-  readonly rootDbPath: string;
   readonly path: readonly string[];
 }
 
@@ -24,7 +22,6 @@ export interface LocalActorBinding {
   readonly name: string;
   readonly storageKey: string;
   readonly kind: WorkspaceActor['kind'];
-  readonly toolProfile: WorkspaceActor['toolProfile'];
   readonly createdAt: number;
 }
 
@@ -35,24 +32,6 @@ export type LocalActorConfig =
    * since release revokes that handle. Absent for the process-bootstrapped facet, which binds its own.
    */
   | { readonly facet: string; readonly actorBinding: LocalActorBinding; readonly actor?: ActorHandle };
-
-export const LocalActorProcessBootstrapSchema = v.strictObject({
-  reference: ActorReferenceSchema, parent: ActorReferenceSchema, rootDbPath: v.string(),
-  parentStoragePath: v.array(v.string()), name: v.string(), storageKey: v.string(),
-});
-
-type LocalActorProcessBootstrap = v.InferOutput<typeof LocalActorProcessBootstrapSchema>;
-
-/**
- * Binding for a local actor in another OS process. `rootDbPath` is the workspace's one database;
- * the process opens it itself (WAL) since a `bun:sqlite` handle cannot cross processes.
- */
-export function localActorProcessBootstrap(parent: ActorHandle, binding: LocalActorBinding): LocalActorProcessBootstrap {
-  const scope = scopeFor(parent);
-
-  return { reference: binding.reference, parent: { actorId: parent.actorId, workspaceId: parent.workspaceId, parentActorId: parent.parentActorId },
-    rootDbPath: scope.rootDbPath, parentStoragePath: [...scope.path], name: binding.name, storageKey: binding.storageKey };
-}
 
 const actors = new WeakMap<ActorHandle, LocalActorScope>();
 
@@ -67,7 +46,7 @@ export function requireLocalDatabasePath(db: Database, path: string): void {
 }
 
 /** Open only. Root birth registers the main actor before calling this function. */
-export function openLocalRootActor(db: Database, sql: SqlExecutor): ActorHandle {
+export function openLocalRootActor(sql: SqlExecutor): ActorHandle {
   const rows = sql<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`;
   const identity = rows[0];
 
@@ -76,7 +55,7 @@ export function openLocalRootActor(db: Database, sql: SqlExecutor): ActorHandle 
   if (rows.length !== 1) throw new KinuError('denied', 'The database has more than one workspace identity.');
   const directory = new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id });
   const actor = directory.main();
-  actors.set(actor, { directory, path: [], rootDbPath: databasePath(db.filename) });
+  actors.set(actor, { directory, path: [] });
 
   return actor;
 }
@@ -87,7 +66,7 @@ export function localActorDirectory(root: ActorHandle) {
 
   if (root.parentActorId !== null) throw new KinuError('denied', 'Only the local root owns the actor directory.');
 
-  return { directory: scope.directory, rootDbPath: scope.rootDbPath };
+  return { directory: scope.directory };
 }
 
 function scopeFor(actor: ActorHandle): LocalActorScope {
@@ -103,7 +82,7 @@ function bindScoped(scope: LocalActorScope, reference: ActorReference): LocalAct
   const path = scope.directory.storagePath(reference);
   const actor = scope.directory.validate(reference, path);
   const row = scope.directory.describe(actor);
-  const binding = Object.freeze({ reference: Object.freeze(reference), name: row.name, storageKey: row.storageKey, kind: row.kind, toolProfile: row.toolProfile, createdAt: row.createdAt });
+  const binding = Object.freeze({ reference: Object.freeze(reference), name: row.name, storageKey: row.storageKey, kind: row.kind, createdAt: row.createdAt });
   bindings.set(binding, { ...scope, path });
 
   return binding;
@@ -141,7 +120,7 @@ type LocalActorCreation = Omit<CreateWorkspaceActor, 'parent'>;
 
 export function registerLocalActor(parent: ActorHandle, input: LocalActorCreation): LocalActorBinding {
   const scope = scopeFor(parent);
-  const entry = scope.directory.apply(parent, scope.path, { action: 'register', creationId: input.creationId, name: input.name, kind: input.kind, lifetime: input.lifetime, ...(input.toolProfile !== undefined && { toolProfile: input.toolProfile }) });
+  const entry = scope.directory.apply(parent, scope.path, { action: 'register', creationId: input.creationId, name: input.name, kind: input.kind, lifetime: input.lifetime });
 
   return bindChild(scope, entry.reference, input.name);
 }

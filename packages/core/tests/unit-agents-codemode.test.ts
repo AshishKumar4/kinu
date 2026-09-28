@@ -146,16 +146,15 @@ function makeTeam() {
     deps: {
       delegation: ROOT_DELEGATION_BUDGET,
       temporary: {
-        run: async () => ({
-          status: 'completed' as const,
+        start: async () => ({
+          status: 'working' as const,
           agent: 'ask-auditor-x',
           lifetime: 'task' as const,
           role: 'auditor',
           answer: 'answered',
           transcript: 'kept' as const,
-          elapsed_ms: 1,
         }),
-        settle: () => false,
+        release: async () => {},
         reclaim: () => null,
       },
       snapshot: () => [rosterEntry],

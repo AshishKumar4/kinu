@@ -19,8 +19,7 @@ works at class level. `KinuExtension` works per turn and has its own document,
 ## Registration is not reachability
 
 An importable implementation is not automatically model-facing. Production
-reaches each exploration engine through its own path. Lifetime evolution calls
-`runMCTS` from `packages/core/src/evolution/engine.ts`. Branching work runs through
+reaches each exploration engine through its own path. Branching work runs through
 `HeadController`. `agents.swarm()` calls `runSwarm` and resolves a named preset
 before it spends anything.
 
@@ -172,8 +171,7 @@ There is no strategy registry, and no tool field selects a search policy. A
 new engine needs a dispatcher, as the shipped ones have. The swarm dispatcher
 is the closed preset-and-validity system
 (`packages/core/src/strategy/swarm-presets.ts`), which resolves a named preset
-to a configuration before anything spends. The MCTS dispatcher is `runMCTS`,
-called directly by lifetime evolution. An engine with no dispatcher reaches
+to a configuration before anything spends. An engine with no dispatcher reaches
 only callers that import it.
 
 ## Replacing the inference loop
@@ -250,15 +248,15 @@ import { effortFor, generateReported } from '@kinu.run/core';
 // User-facing chat → medium (default): the turn loop, core/src/chat.ts
 streamText({ model, prompt, ...effortFor('chat') });
 
-// MCTS rollouts → low (many cheap samples): core/src/mcts/rollout.ts
-generateText({ model, prompt, ...effortFor('mcts_rollout') });
+// Memory compression → low (many cheap calls)
+generateText({ model, prompt, ...effortFor('memory_compress') });
 
 // Scaffold mutation → high (rare; must be good), reported as `reflection` spend
 generateReported({ model, prompt, ...effortFor('scaffold_mutation') }, { spend });
 ```
 
-`chat`, `judge`, `mcts_judge` and `head_merge` use medium. `reflection`,
-`mcts_rollout` and `memory_compress` use low. `scaffold_mutation` uses high.
+`chat`, `judge` and `head_merge` use medium. `reflection` and
+`memory_compress` use low. `scaffold_mutation` uses high.
 Effort is the cheapness lever on most paths, not an output-token cap.
 
 ## The agent's runtime surface

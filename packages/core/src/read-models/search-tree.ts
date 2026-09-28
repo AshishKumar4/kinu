@@ -11,8 +11,8 @@ export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): Sear
   actor.assertCurrent();
 
   return sql<SearchTreeRow>`
-    SELECT id, parent_id, root_id, task, action, observation, code_used, code_language,
-           visits, value, own_score, depth, status, msg_id, branch_agent_key, created_at
+    SELECT id, parent_id, root_id, task, action, observation, code_used,
+           visits, value, own_score, depth, status, msg_id, created_at
     FROM search_node_scores
     WHERE actor_id = ${actor.actorId} AND root_id = (
       SELECT root_id FROM search_nodes WHERE actor_id = ${actor.actorId}
@@ -27,8 +27,8 @@ export function readSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: str
   actor.assertCurrent();
 
   return sql<SearchTreeRow>`
-    SELECT id, parent_id, root_id, task, action, observation, code_used, code_language,
-           visits, value, own_score, depth, status, msg_id, branch_agent_key, created_at
+    SELECT id, parent_id, root_id, task, action, observation, code_used,
+           visits, value, own_score, depth, status, msg_id, created_at
     FROM search_node_scores WHERE actor_id = ${actor.actorId} AND root_id = ${rootId}
     ORDER BY depth, created_at`;
 }
@@ -48,7 +48,6 @@ export interface SearchNodeDetail extends SearchNodeSummary {
   task: string;
   observation: string;
   codeUsed: string | null;
-  branchAgentKey: string | null;
   msgId: string | null;
   /** Root first, this node last. */
   path: SearchNodeSummary[];
@@ -67,7 +66,6 @@ interface DetailRow {
   task: string;
   observation: string;
   code_used: string | null;
-  branch_agent_key: string | null;
   msg_id: string | null;
   created_at: number;
 }
@@ -92,7 +90,7 @@ export function readSearchNodeDetail(
 
   const readNode = (id: string): DetailRow | undefined => sql<DetailRow>`
     SELECT id, parent_id, depth, visits, value, status, action,
-           task, observation, code_used, branch_agent_key, msg_id, created_at
+           task, observation, code_used, msg_id, created_at
     FROM search_nodes WHERE actor_id = ${actor.actorId} AND id = ${id} LIMIT 1`[0];
 
   const node = readNode(nodeId);
@@ -110,7 +108,7 @@ export function readSearchNodeDetail(
 
   const children = sql<DetailRow>`
     SELECT id, parent_id, depth, visits, value, status, action,
-           task, observation, code_used, branch_agent_key, msg_id, created_at
+           task, observation, code_used, msg_id, created_at
     FROM search_nodes WHERE actor_id = ${actor.actorId} AND parent_id = ${nodeId}
     ORDER BY value DESC, visits DESC, created_at`;
 
@@ -119,7 +117,6 @@ export function readSearchNodeDetail(
     task: node.task,
     observation: node.observation,
     codeUsed: node.code_used,
-    branchAgentKey: node.branch_agent_key,
     msgId: node.msg_id,
     path,
     children: children.map(summarize),

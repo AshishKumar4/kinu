@@ -30,12 +30,8 @@ export interface TerminalTurnFacts {
 }
 
 export interface TerminalTurnParts {
-  /** `credited` null: captures cannot be attributed and must be purged. */
-  readonly takes?: {
-    readonly credited: string | null;
-    readonly startedAt: number;
-    readonly takeIds: readonly string[];
-  };
+  /** The turn a settled branch's take set is attributed to; null when the turn earned no credit. */
+  readonly credited?: string | null;
   readonly craftedToolsUsed?: readonly string[];
   /** Each with the request id its reply is dispatched under. */
   readonly eventReplies?: {
@@ -71,6 +67,8 @@ export interface TerminalTurnParts {
     readonly status: SubordinateReportStatus;
     /** The parent's ingress dedupes on it. */
     readonly sequenceId: string;
+    /** A Stop: wakes no one. */
+    readonly quiet?: true;
   };
 }
 
@@ -82,18 +80,6 @@ export function declareTerminalRoster(
   // One gate, "durable answer": the stream alone must not mark an unanswered event answered.
   const durablyAnswered = completed && messageId !== '';
   const owed: OwedEffect[] = [];
-
-  if (parts.takes) {
-    owed.push({
-      name: 'takes', scope: messageId, lane: 'inline',
-      input: {
-        credited: parts.takes.credited,
-        startedAt: parts.takes.startedAt,
-        // Read here at declaration: a retry re-selecting would claim or purge a later turn's captures.
-        takeIds: [...parts.takes.takeIds],
-      },
-    });
-  }
 
   const craftNames = durablyAnswered ? parts.craftedToolsUsed ?? [] : [];
 
@@ -124,7 +110,7 @@ export function declareTerminalRoster(
       input: {
         id: branch.id,
         task: branch.task,
-        turnId: completed ? parts.takes?.credited ?? null : null,
+        turnId: completed ? parts.credited ?? null : null,
         liveText: completed ? assistantText : '',
       },
     });
@@ -200,6 +186,7 @@ export function declareTerminalRoster(
         sequenceId: parts.parentReport.sequenceId,
         // The mode travels: a replay must not turn a Plan report into a Build one.
         mode: facts.workMode,
+        quiet: parts.parentReport.quiet === true,
       },
     });
   }

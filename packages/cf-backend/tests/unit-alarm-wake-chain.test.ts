@@ -87,6 +87,7 @@ function breakScheduleWrites(agent: HarnessOrchestratorAgent): void {
 
 describe('a refiner answer stored with no waiter', () => {
   test('arms the Kinu wake at once, and the tick routes it so the workspace owes nothing after', async () => {
+    // After an eviction the answer used to wait for the owner's next message.
     const workspace = orchestratorHarness();
     const now = Date.now();
     const { requests } = await workspace.agent.listRefinements(1);
@@ -448,9 +449,9 @@ describe('the workspace keeps exactly one wake row', () => {
     const insertRun = (root: string, createdAt: number): void => {
       db.prepare(
         `INSERT INTO mcts_search_runs
-           (actor_id, root_id, root_msg_id, task, engine, status, config_json, budget, created_at, updated_at)
-         VALUES (?, ?, ?, 'search the space', 'swarm', 'running', '{}', 4, ?, ?)`,
-      ).run(actorId, root, `msg-${root}`, createdAt, createdAt);
+           (actor_id, root_id, task, status, config_json, created_at, updated_at)
+         VALUES (?, ?, 'search the space', 'running', '{}', ?, ?)`,
+      ).run(actorId, root, createdAt, createdAt);
     };
 
     const status = (root: string): string => present(db

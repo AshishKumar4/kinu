@@ -7,6 +7,8 @@ import {
   headMergeLLM,
   type HeadGrounding,
   type HeadRuntime,
+  liveHead,
+  type LiveWorkers,
   type ModelCallSink,
   type ModelOperationSink,
   type ResolvedTurnProfile,
@@ -18,6 +20,8 @@ interface HeadRuntimeDeps {
   /** The workspace's one actor host. Children read owner, token and workspace from the seams, so an
      *  intermediate head can never become its subtree's workspace. */
   readonly host: HostedActorSeams;
+  /** Where a running head registers, so the owner can stop it alone. */
+  readonly workers: LiveWorkers;
   /** Never a second registry. */
   readonly models: Pick<OwnedModelServices, 'resolveModelWithEffort'>;
   /** A profile, not a spec: the merge files spend as `judge` (deep tier), which the caller's chat model
@@ -32,7 +36,7 @@ interface HeadRuntimeDeps {
 
 export function createHeadRuntime(deps: HeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
-    spawnHead: (input) => hostHead(deps.host, input),
+    spawnHead: async (input) => liveHead(deps.workers, await hostHead(deps.host, input)),
     mergeLLM: headMergeLLM({
       profile: deps.profile,
       // Specs are normalised against the owner's provider registry, so core hands the route over.
