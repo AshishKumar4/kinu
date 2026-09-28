@@ -129,8 +129,6 @@ export interface ProviderProxyFetchOptions {
   forwardURL: string;
   /** Caller's `authorization` to the server (a Kinu CLI bearer), not a provider credential. */
   authorization: string;
-  /** Extra headers to attach to proxied requests only (e.g. session affinity). */
-  headers?: Record<string, string>;
   fetch?: typeof fetch;
 }
 
@@ -148,8 +146,6 @@ export function createProviderProxyFetch(opts: ProviderProxyFetchOptions): typeo
     const headers = copyHeaders(request.headers);
     headers.set('authorization', opts.authorization);
     headers.set(PROXY_TARGET_HEADER, request.url);
-
-    for (const [name, value] of Object.entries(opts.headers ?? {})) headers.set(name, value);
 
     return baseFetch(opts.forwardURL, { ...init, method: request.method, headers });
   });

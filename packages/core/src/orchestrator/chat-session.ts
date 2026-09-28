@@ -1394,12 +1394,5 @@ interface PromptInputParts {
 function normalizePromptInput(
   input: string | { text: string; files: ReadonlyArray<PromptFile> },
 ): PromptInputParts {
-  const text = v.safeParse(v.string(), input);
-
-  if (text.success) return { text: text.output };
-
-  return v.parse(v.object({
-    text: v.string(),
-    files: v.array(v.object({ filename: v.string(), mediaType: v.string(), url: v.string() })),
-  }), input);
+  return v.is(v.string(), input) ? { text: input } : input;
 }
