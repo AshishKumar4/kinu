@@ -214,6 +214,25 @@ function unawaited(work: Promise<unknown>, lost: string): void {
   });
 }
 
+const DESTROYED_START = 'this devbox was destroyed; only a caller or a host starts it again';
+
+const DESTROYED_AFTER_ARRIVAL = 'this devbox was destroyed after this request arrived, so the request did not run';
+
+type StartArgs = Parameters<Sandbox['startAndWaitForPorts']>;
+
+const PortsSchema = v.union([v.number(), v.array(v.number())]);
+
+function cancellable(args: StartArgs, signal: AbortSignal): Exclude<NonNullable<StartArgs[0]>, number | number[]> {
+  const [first, cancellationOptions, startOptions] = args;
+  const options = first === undefined || v.is(PortsSchema, first) ? { ports: first, cancellationOptions, startOptions } : first;
+  const own = options.cancellationOptions?.abort;
+
+  return {
+    ...options,
+    cancellationOptions: { ...options.cancellationOptions, abort: own === undefined ? signal : AbortSignal.any([own, signal]) },
+  };
+}
+
 export class Devbox<Env = unknown> extends Sandbox<Env> {
   #storage: DevboxStorage | undefined;
   #gateRestore: Flight | undefined;
@@ -224,10 +243,12 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  attempt's result is already discarded. */
   #startup: Flight | undefined;
   #disarmAdmission: (() => void) | undefined;
+  /** `destroy` cancels and awaits these. */
   readonly #admissions = new Set<{ readonly abort: () => void; readonly settled: Promise<void> }>();
   #refused: { readonly generation: number; readonly reason: string } | undefined;
   /** Set by `destroy`, cleared by a caller or a host (D36). */
   #closed = false;
+  #teardowns = 0;
   /** Opened by the attempt on its hook; every phase stamp reads it until the attempt settles.
    *  Memory only: a witness needing stamps past a reset keeps them via `onRestorePhase`. */
   #phaseClock: RestoreClock | undefined;
@@ -429,7 +450,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return REAL_START_CLOCK;
   }
 
-  /** Plain SDK starts reopen a destroyed box, and prove the control listener before our hook. */
+  /** Reopens a destroyed box; proves the control listener before our hook. */
   override start(...args: Parameters<Sandbox<Env>['start']>): Promise<void> {
     this.#closed = false;
 
@@ -445,11 +466,25 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     });
   }
 
-  /** Every start, the SDK's own included, is decided here, after any destroy (D36). */
+  /** Every start passes here, the SDK's own included (D36). */
   override startAndWaitForPorts(...args: Parameters<Sandbox<Env>['startAndWaitForPorts']>): Promise<void> {
-    if (this.#closed) return Promise.reject(new Error('this devbox was destroyed; only a caller or a host starts it again'));
+    if (this.#closed) return Promise.reject(new Error(DESTROYED_START));
 
-    return super.startAndWaitForPorts(...args);
+    return this.#tracked(args);
+  }
+
+  async #tracked(args: Parameters<Sandbox<Env>['startAndWaitForPorts']>): Promise<void> {
+    const cancel = new AbortController();
+    const settled = super.startAndWaitForPorts(cancellable(args, cancel.signal));
+    const admission = { abort: () => { cancel.abort(); }, settled };
+
+    this.#admissions.add(admission);
+
+    try {
+      await settled;
+    } finally {
+      this.#admissions.delete(admission);
+    }
   }
 
   /** Runs inside the SDK's start block (D26): nothing else reaches the object until it settles.
@@ -918,9 +953,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     try {
       await this.#dispatch(STARTUP_CALLBACK, async () => {
-        // A buffered row reopens neither a destroyed box nor a settled running generation (D12).
         if (this.#closed) return;
 
+        // A stale buffered startup row cannot reopen a settled running generation (D12).
         if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
         await this.#startContainer();
 
@@ -1006,21 +1041,17 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     this.#disarmAdmission = disarm;
 
-    const admitting = this.startAndWaitForPorts({
-      ports: this.defaultPort,
-      cancellationOptions: {
-        instanceGetTimeoutMS: this.policy.portWaitMs,
-        portReadyTimeoutMS: this.policy.portWaitMs,
-        waitInterval: ADMISSION_POLL_INTERVAL_MS,
-        abort: window.signal,
-      },
-    });
-
-    const admission = { abort: () => { window.abort(); }, settled: admitting };
-    this.#admissions.add(admission);
-
     try {
-      await admitting;
+      await this.startAndWaitForPorts({
+        ports: this.defaultPort,
+        cancellationOptions: {
+          instanceGetTimeoutMS: this.policy.portWaitMs,
+          portReadyTimeoutMS: this.policy.portWaitMs,
+          waitInterval: ADMISSION_POLL_INTERVAL_MS,
+          abort: window.signal,
+        },
+      });
+
       this.#refused = undefined;
       this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation) });
     } catch (cause) {
@@ -1041,7 +1072,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         console.error(`[devbox] superseded admission refused: ${reason}`);
       }
     } finally {
-      this.#admissions.delete(admission);
       disarm();
 
       if (this.#disarmAdmission === disarm) this.#disarmAdmission = undefined;
@@ -1462,6 +1492,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** Requests may start a stopped box, then adopt the hook's settled generation (D26). */
   async resolveReadiness(): Promise<RestoreReadiness> {
+    return await this.#resolveReadiness(this.#teardowns);
+  }
+
+  async #resolveReadiness(arrived: number): Promise<RestoreReadiness> {
+    if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
     this.#closed = false;
     const wasRunning = this.ctx.container?.running === true;
     this.#trace('readiness.enter', { generation: this.#generation, running: wasRunning, phase: this.#restoration.phase });
@@ -1472,6 +1507,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // Allocation can report running before the SDK opens onStart. The same
     // generation-owned coordinator covers that gap and still proves the port.
     if (wasRunning && this.#restoration.phase === 'unstarted') await this.#startContainer();
+
+    if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
     const admission = this.#admission();
 
     if (admission !== undefined) return admission;
@@ -1500,7 +1537,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** Strict {@link resolveReadiness}: `pending` is a refusal, never permission. */
   async ensureReady(): Promise<RestoreAdmission> {
-    const readiness = await this.resolveReadiness();
+    return await this.#ensureReady(this.#teardowns);
+  }
+
+  async #ensureReady(arrived: number): Promise<RestoreAdmission> {
+    const readiness = await this.#resolveReadiness(arrived);
 
     if (readiness.kind === 'pending') throw new Error(readiness.reason);
     // Every operation route and only callers pass here (maintenance uses `#rawExec` and
@@ -1534,6 +1575,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** The only transition that clears a terminal refusal; keeps the `replace` stage, so a failed
    *  retry refuses again instead of destroying. Also re-runs an incomplete restoration. */
   async attachNow(): Promise<AttachOutcome> {
+    const arrived = this.#teardowns;
     this.#closed = false;
     this.stampInteraction();
 
@@ -1549,7 +1591,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         }
       }
 
-      await this.ensureReady();
+      await this.#ensureReady(arrived);
     }
 
     return await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY)
@@ -1749,6 +1791,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** Also ends the box's own starts (D36). */
   override async destroy(): Promise<void> {
     this.#closed = true;
+    this.#teardowns += 1;
     this.#invalidateGeneration();
     const admissions = [...this.#admissions];
 
@@ -1815,11 +1858,13 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** The spec goes only on a confirmed kill or PROCESS_NOT_FOUND; any other failure keeps it,
    *  since it alone names the process and restoration walks specs to retry that id. */
   async stopSupervised(processId: string): Promise<{ stopped: boolean }> {
-    return await this.#resources.run(processScope(processId), () => this.#stopSupervised(processId));
+    const arrived = this.#teardowns;
+
+    return await this.#resources.run(processScope(processId), () => this.#stopSupervised(processId, arrived));
   }
 
-  async #stopSupervised(processId: string): Promise<{ stopped: boolean }> {
-    await this.ensureReady();
+  async #stopSupervised(processId: string, arrived: number): Promise<{ stopped: boolean }> {
+    await this.#ensureReady(arrived);
     let thrown: { readonly cause: unknown } | undefined;
 
     try {
@@ -1970,10 +2015,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const scopes = pathScopes({ path });
 
     if (options !== undefined && options.encoding === 'none') {
+      const arrived = this.#teardowns;
       const release = await this.#resources.hold(scopes);
 
       try {
-        await this.ensureReady();
+        await this.#ensureReady(arrived);
         const result = await super.readFile(path, options);
 
         return { ...result, content: heldUntilDrained(result.content, release) };
@@ -1988,10 +2034,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** The file stays claimed until the stream's bytes are drained, not until this resolves. */
   override async readFileStream(path: string, options?: { sessionId?: string }) {
+    const arrived = this.#teardowns;
     const release = await this.#resources.hold(pathScopes({ path }));
 
     try {
-      await this.ensureReady();
+      await this.#ensureReady(arrived);
 
       return heldUntilDrained(await super.readFileStream(path, options), release);
     } catch (failure) {
@@ -2035,8 +2082,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   }
 
   #claimed<Result>(scopes: readonly ResourceScope[], operation: () => Promise<Result>): Promise<Result> {
+    const arrived = this.#teardowns;
+
     return this.#resources.run(scopes, async () => {
-      await this.ensureReady();
+      await this.#ensureReady(arrived);
 
       return await operation();
     });

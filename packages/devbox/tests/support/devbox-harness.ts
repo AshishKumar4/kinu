@@ -349,6 +349,8 @@ export class FakeSandbox {
   execDelayMs = 0;
   stampGate: Gate | undefined;
   exposeGate: Gate | undefined;
+  /** Parks a file write inside the container, while its caller still holds the path. */
+  writeGate: Gate | undefined;
   destroyFault: Error | undefined;
   stopFault: Error | undefined;
   destroys = 0;
@@ -927,6 +929,14 @@ export class FakeSandbox {
   /** A write under the work directory also lands in the overlay upper, where an overlayfs
    *  write really goes and what the chain's delta archiver walks. */
   async writeFile(path: string, content: string): Promise<{ success: true; path: string; timestamp: string }> {
+    const held = this.writeGate;
+
+    if (held !== undefined) {
+      this.writeGate = undefined;
+      held.enter();
+      await held.promise;
+    }
+
     this.files.set(path, content);
     this.changeVersion += 1;
 

@@ -488,10 +488,9 @@ describe('a destroyed box starts nothing of its own until it is asked again', ()
       .toEqual({ running: false, rows: [], stamps: 0 });
   });
 
-  test('a beat past its running check when the box is torn down starts no container', async () => {
+  test('a beat past its running check when the box is torn down leaves nothing running', async () => {
     const { box, container } = harness(TestBox);
     await box.devboxStartup();
-    const starts = container.containerStarts;
     const reading = gate();
     container.stateReadGate = reading;
     // The beat saw the container running and issued its first command. The SDK is still reading
@@ -503,8 +502,70 @@ describe('a destroyed box starts nothing of its own until it is asked again', ()
     reading.release();
     await beat;
 
-    expect({ starts: container.containerStarts, running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
-      .toEqual({ starts, running: false, rows: [] });
+    expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
+      .toEqual({ running: false, rows: [] });
+  });
+
+  // Review, 2026-09-28: a start already past the refusal ran on after the destroy, which had not
+  // waited for it, so the container it launched stayed up with nothing watching it.
+  test('a start past the refusal when the box is torn down leaves nothing running once destroy returns', async () => {
+    const { box, container } = harness(TestBox);
+    await box.devboxStartup();
+    await container.stop();
+    const granted = gate();
+    container.containerStartGate = granted;
+    const starting = box.start();
+    await granted.reached;
+    const destroying = box.destroy();
+    granted.release();
+    await destroying;
+    await Promise.allSettled([starting]);
+
+    expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
+      .toEqual({ running: false, rows: [] });
+  });
+
+  test('a beat whose command is starting a container when the box is torn down leaves nothing running', async () => {
+    const { box, container } = harness(TestBox);
+    await box.devboxStartup();
+    const reading = gate();
+    container.stateReadGate = reading;
+    const beat = box.devboxHeartbeat();
+    await reading.reached;
+    // The container stops under the beat, so its command starts one, and the teardown lands
+    // inside that start.
+    await container.stop();
+    const granted = gate();
+    container.containerStartGate = granted;
+    reading.release();
+    await granted.reached;
+    const destroying = box.destroy();
+    granted.release();
+    await destroying;
+    await beat;
+
+    expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
+      .toEqual({ running: false, rows: [] });
+  });
+
+  // Review, 2026-09-28: a file write queued on its path before the teardown got the path after it,
+  // and its readiness check reopened the box and started a container.
+  test('a request that waited for its lane through the teardown is refused, and starts nothing', async () => {
+    const { box, container } = harness(TestBox);
+    await box.devboxStartup();
+    const writing = gate();
+    container.writeGate = writing;
+    const first = box.writeFile('/workspace/notes.md', 'before the teardown');
+    await writing.reached;
+    const queued = box.writeFile('/workspace/notes.md', 'queued behind it');
+    await box.discardState();
+    await box.destroy();
+    writing.release();
+    await Promise.allSettled([first]);
+
+    await expect(queued).rejects.toThrow('destroyed after this request arrived');
+    expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
+      .toEqual({ running: false, rows: [] });
   });
 
   test('a startup row the platform delivers after the teardown starts nothing', async () => {
