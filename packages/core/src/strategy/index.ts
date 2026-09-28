@@ -19,3 +19,6 @@ export * from './node-workspace';
 
 // A backend answering `nodeArbitrate` must name the `BranchDecision` it returns.
 export * from './swarm-budget';
+
+// A backend owns one registry and stops a worker through it.
+export * from './live-workers';

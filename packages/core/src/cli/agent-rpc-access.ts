@@ -57,6 +57,7 @@ export const AGENT_RPC_ACCESS = {
   applyScaffoldDecision: 'interactive',
   branchTurn: 'interactive',
   cancelBackgroundJob: 'interactive',
+  stopSwarmWorker: 'interactive',
   cancelTrigger: 'interactive',
   checkpointStatus: 'interactive',
   getEvolutionChangelog: 'interactive',

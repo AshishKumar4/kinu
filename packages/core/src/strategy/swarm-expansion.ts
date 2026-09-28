@@ -35,6 +35,7 @@ import { runNodeAgent, type NodeAgentDeps } from './node-agent';
 import type { RoutedNodeModel } from './swarm-setup';
 import type { SwarmBudget } from './swarm-budget';
 import type { BranchAssignment } from './swarm-level';
+import { workerSignal, type LiveWorkers } from './live-workers';
 
 /** Ends an answer to request a branch; a line, not a fence, so code fences cannot match it. */
 const PROPOSAL_MARKER = 'PROPOSE-BRANCH';
@@ -389,6 +390,7 @@ export interface ExpandChildCtx {
      */
   readonly nodeModels: readonly RoutedNodeModel[];
   readonly signal?: AbortSignal;
+  readonly workers?: LiveWorkers;
   readonly nodeDeps: NodeAgentDeps;
   readonly budget: SwarmBudget;
   readonly rootId: string;
@@ -420,7 +422,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
   }): Promise<Expansion> {
   const {
     resolved, mode, languages, measured, baseline, verifier, carriedBest, agentNodes,
-    maxDepth, nodeModel, nodeModels, signal, nodeDeps, budget, rootId, log, charge,
+    maxDepth, nodeModel, nodeModels, signal, workers, nodeDeps, budget, rootId, log, charge,
     reportModelCall,
   } = ctx;
 
@@ -482,6 +484,13 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     inheritedCompacted,
   });
 
+  // The worker's own signal, so the owner can stop it and leave its siblings running.
+  const own = workerSignal(signal);
+  const release = workers?.register(id, own.stop);
+  // A per-child copy, so `nodeDeps` keeps the run-level model and the search's signal.
+  const perChild = agentNodes && routed !== undefined ? { ...nodeDeps, model: assignedModel } : { ...nodeDeps };
+  perChild.signal = own.signal;
+
   const run = await runNodeAgent({
     nodeId: id, rootId, parentId: parent.id, depth: atDepth,
     task: input.task,
@@ -501,10 +510,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
         config: resolved.config, caps: resolved.caps, atDepth, proposal,
       })
       : null,
-  }, agentNodes && routed !== undefined
-    // A per-child copy, so `nodeDeps` keeps the run-level model.
-    ? { ...nodeDeps, model: assignedModel }
-    : nodeDeps);
+  }, perChild).finally(() => { release?.(); });
 
   log.event('swarm.node_settled', {
     preset: resolved.preset, node: id, depth: atDepth,

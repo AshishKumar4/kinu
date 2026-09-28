@@ -1550,6 +1550,18 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   listWorkspaceAgents: () => (AGENTS_PANEL ? GALLERY_AGENTS : []),
+  // As the server does: the stopped worker settles aborted, which the panel reads as stopped, and the roster read moves.
+  stopSwarmWorker: (args?: unknown[]) => {
+    const [headId] = v.parse(v.tuple([v.string()]), args);
+    const at = GALLERY_AGENTS.findIndex((agent) => agent.open.kind === "node" && agent.open.nodeId === headId && agent.activity === "working");
+    const agent = GALLERY_AGENTS[at];
+
+    if (agent === undefined) return { stopped: false };
+    GALLERY_AGENTS[at] = { ...agent, activity: "stopped" };
+    queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents"] })); });
+
+    return { stopped: true };
+  },
   // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
   // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture.
@@ -1739,6 +1751,8 @@ const GALLERY_AGENTS: PanelAgent[] = [
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false },
   { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "Main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false },
+  { key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "Main",
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h3", owner: null }, tab: false, input: false },
   { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "Main", open: { kind: "chat", path: "refiner" }, tab: false, input: false },
 ];
 
