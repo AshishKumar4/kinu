@@ -145,7 +145,7 @@ function armOf<Hit>(
   doing: string,
   otherwise: ErrorCode,
 ): Effect.Effect<ArmOutcome<Hit>> {
-  return Effect.tryPromise({ try: async () => run(), catch: (cause) => toKinuError({ doing, cause, otherwise }) }).pipe(
+  return Effect.tryPromise({ try: () => Promise.resolve(run()), catch: (cause) => toKinuError({ doing, cause, otherwise }) }).pipe(
     Effect.match({
       onSuccess: (hits): ArmOutcome<Hit> => ({ kind: 'answered', hits }),
       onFailure: (error): ArmOutcome<Hit> => ({ kind: 'failed', error }),
