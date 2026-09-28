@@ -9,7 +9,8 @@ import { REAL_CLOCK, type Clock } from '../types/clock';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { oneOf } from '../tools/tool-schema';
-import { HEAD_BUILTIN_TOOLS } from '../heads/types';
+import { HEAD_BUILTIN_TOOLS, OWNER_STOPPED } from '../heads/types';
+import { stoppedByOwner } from './live-workers';
 import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { HeadInferenceDeps } from '../heads/head-inference';
@@ -453,7 +454,11 @@ async function runNodeLoop(
     workspaceLayout: spec.isolation === 'private-home' ? 'private-scratch' : 'shared-workspace',
     capture,
     isAborted: () => deps.signal?.aborted ?? false,
-    abortReason: () => (deps.signal?.aborted ? 'the search was aborted' : null),
+    abortReason: () => {
+      if (stoppedByOwner(deps.signal)) return OWNER_STOPPED;
+
+      return deps.signal?.aborted ? 'the search was aborted' : null;
+    },
     framing: {
       system: nodeSystemPrompt({
         base: spec.base,
@@ -557,7 +562,7 @@ export async function runNodeAgent(
   } catch (cause) {
     if (deps.signal?.aborted) {
       // Cancelled while the runtime was being built; the signal is authoritative over the rejection.
-      const reason = renderCauseChain(toKinuError({
+      const reason = stoppedByOwner(deps.signal) ? OWNER_STOPPED : renderCauseChain(toKinuError({
         doing: `cancel node ${input.nodeId} of this search`, cause: abortCause(deps.signal), otherwise: 'cancelled',
       }));
 

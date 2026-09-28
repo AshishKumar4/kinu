@@ -269,9 +269,9 @@ describe('durable delegated turn opening', () => {
     try {
       for (const [ask, answer, text] of [['ask-1', 'answer-1', 'one'], ['ask-2', 'answer-2', 'two']] as const) {
         const input = await stores.history.append({ id: ask, message: { role: 'user', content: text }, origin: 'input', turnId: ask, assertOwner });
-        chat.record({ ...await chat.prepareUser({ id: ask, turnId: ask, message: input }), parentId: undefined });
+        chat.record({ ...await chat.prepareUser({ id: ask, turnId: ask, message: input }) });
         await stores.history.append({ id: answer, message: { role: 'assistant', content: `${text} answered` }, origin: 'output', turnId: ask, assertOwner });
-        chat.appendAssistant(await chat.prepareAssistant({ id: answer, parentId: ask, turnId: ask, runId: ask, parts: [{ messageId: answer, partNo: 0 }], finalText: null }));
+        chat.appendAssistant(await chat.prepareAssistant({ id: answer, turnId: ask, runId: ask, parts: [{ messageId: answer, partNo: 0 }], finalText: null }));
       }
 
       await session.restoreWorkingHistory();
@@ -283,11 +283,11 @@ describe('durable delegated turn opening', () => {
       // The host's own idle condition is raised inside the same transaction: nothing moves.
       await expect(session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => { throw new Error('a queued turn holds the loop'); }))
         .rejects.toThrow('a queued turn holds the loop');
-      expect(chat.ancestry().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2']);
+      expect(chat.entries().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2']);
       expect(session.dynamic.size).toBe(1);
 
       await session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => {});
-      expect(chat.ancestry().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1']);
+      expect(chat.entries().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1']);
       expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered']);
       expect((await stores.history.materialize()).messages.map((message) => message.content)).toEqual(['one', 'one answered']);
       expect(session.dynamic.size).toBe(0);
@@ -528,14 +528,11 @@ async function seededTranscript(count: number, extra?: (history: SessionHistory)
     files: async () => ({ vfs, artifactDirectory: '/actor/.kinu/context' }),
   });
 
-  let parentId: string | null = null;
-
   for (let i = 0; i < count; i++) {
     await history.record(CHAT_SESSION_ID, {
-      id: `m${i}`, parentId, origin: i % 2 === 0 ? 'input' : 'output',
+      id: `m${i}`, origin: i % 2 === 0 ? 'input' : 'output',
       message: { role: i % 2 === 0 ? 'user' : 'assistant', content: `body ${i}` },
     });
-    parentId = `m${i}`;
   }
 
   await extra?.(history);
@@ -569,7 +566,7 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
   const bound = cap + 80;
 
   const seededStoredBody = async (content: string) => seededTranscript(0, async (history) => {
-    await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'output', message: { role: 'assistant', content } });
+    await history.record(CHAT_SESSION_ID, { id: 'r1', origin: 'output', message: { role: 'assistant', content } });
   });
 
   test('the transcript read caps each stored body as it builds the digest', async () => {
@@ -587,7 +584,7 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
 
   test('a body within budget passes through byte-identical', async () => {
     const seeded = await seededTranscript(0, async (history) => {
-      await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'input', message: { role: 'user', content: 'short body' } });
+      await history.record(CHAT_SESSION_ID, { id: 'r1', origin: 'input', message: { role: 'user', content: 'short body' } });
     });
 
     expect((await inheritedContextFromTranscript(seeded.transcript))[0].content).toBe('short body');
@@ -626,7 +623,7 @@ describe('inheritedContextFromTranscript — the canonical store, read once for 
 
     // Another session's row: neither inherited nor counted as omitted.
     const seeded = await seededTranscript(cap + 5, async (history) => {
-      await history.record('side', { id: 'other', parentId: null, origin: 'input', message: { role: 'user', content: 'elsewhere' } });
+      await history.record('side', { id: 'other', origin: 'input', message: { role: 'user', content: 'elsewhere' } });
     });
 
     const ctx = await inheritedContextFromTranscript(seeded.transcript);

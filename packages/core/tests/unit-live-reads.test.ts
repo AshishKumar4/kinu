@@ -16,6 +16,12 @@ test('a swarm worker added or removed moves tab presence; its status moves only 
   expect(readsWrittenBy('UPDATE head_journal SET status = ? WHERE id = ?')).toEqual(['listWorkspaceAgents']);
 });
 
+// 2026-09-28: the workerd parity record held these notices and flaked with the timer's latency; the mapping is pinned here.
+test('a turn claim taken or released moves the Agents panel', () => {
+  expect(readsWrittenBy('INSERT INTO actor_turn_claims (actor_id, turn_id) VALUES (?, ?)')).toContain('listWorkspaceAgents');
+  expect(readsWrittenBy('DELETE FROM actor_turn_claims WHERE turn_id = ?')).toContain('listWorkspaceAgents');
+});
+
 test('many writes in one tick send one frame naming each moved read once', () => {
   const frames: string[] = [];
   const owed: (() => void)[] = [];

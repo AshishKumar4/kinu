@@ -84,8 +84,17 @@
     "packages/cli-backend/tests/fixtures/echo-mcp-server.mjs": {
       "sleep": 1
     },
-    "packages/cli-backend/tests/local-session.test.ts": {
-      "sleep": 8,
+    "packages/cli-backend/tests/helpers/local-session.ts": {
+      "sleep": 1
+    },
+    "packages/cli-backend/tests/local-session-lifecycle.test.ts": {
+      "sleep": 3
+    },
+    "packages/cli-backend/tests/local-session-steering.test.ts": {
+      "sleep": 1
+    },
+    "packages/cli-backend/tests/local-session-turns.test.ts": {
+      "sleep": 3,
       "clock-compare": 1
     },
     "packages/cli-backend/tests/loop-admission.test.ts": {

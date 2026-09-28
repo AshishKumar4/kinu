@@ -289,7 +289,7 @@
     "actor_id TEXT NOT NULL",
     "session_id TEXT NOT NULL",
     "id TEXT NOT NULL",
-    "parent_id TEXT",
+    "position INTEGER NOT NULL CHECK(position >= 0)",
     "role TEXT NOT NULL CHECK(role IN ('user','assistant','system','tool'))",
     "turn_id TEXT",
     "run_id TEXT",
@@ -300,11 +300,10 @@
     "context_id TEXT",
     "context_revision INTEGER",
     "PRIMARY KEY(actor_id,session_id,id)",
+    "UNIQUE(actor_id,session_id,position)",
     "FOREIGN KEY(actor_id) REFERENCES workspace_actors(actor_id)",
-    "FOREIGN KEY(actor_id,session_id,parent_id) REFERENCES conversation_entries(actor_id,session_id,id)",
     "FOREIGN KEY(actor_id,context_id,context_revision) REFERENCES context_revisions(actor_id,context_id,revision)",
     "CHECK((context_id IS NULL) = (context_revision IS NULL))",
-    "CHECK(parent_id IS NULL OR parent_id != id)",
     "CHECK((metadata_json IS NULL AND metadata_path IS NULL AND metadata_digest IS NULL) OR (metadata_json IS NOT NULL AND metadata_path IS NULL AND metadata_digest IS NULL) OR (metadata_json IS NULL AND metadata_path IS NOT NULL AND metadata_digest IS NOT NULL))"
   ],
   "conversation_entry_parts@packages/core/src/session/transcript-schema.ts": [
@@ -329,13 +328,6 @@
     "synced_rev INTEGER NOT NULL DEFAULT -1",
     "synced_purges INTEGER NOT NULL DEFAULT -1",
     "synced_rowid INTEGER NOT NULL DEFAULT 0"
-  ],
-  "conversation_heads@packages/core/src/session/transcript-schema.ts": [
-    "actor_id TEXT NOT NULL",
-    "session_id TEXT NOT NULL",
-    "entry_id TEXT",
-    "PRIMARY KEY(actor_id,session_id)",
-    "FOREIGN KEY(actor_id,session_id,entry_id) REFERENCES conversation_entries(actor_id,session_id,id)"
   ],
   "cp_audit@packages/core/src/control-plane/store.ts": [
     "id TEXT PRIMARY KEY",

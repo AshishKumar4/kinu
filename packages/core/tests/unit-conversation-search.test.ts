@@ -12,7 +12,7 @@ function setup() {
   const record = async (sessionId: string, role: 'user' | 'assistant', text: string): Promise<string> => {
     const id = `entry-${++seq}`;
     await stores.history.record(sessionId, {
-      id, parentId: null, message: { role, content: text },
+      id, message: { role, content: text },
       origin: role === 'user' ? 'input' : 'output',
     });
 

@@ -48,7 +48,7 @@ async function scriptedTurn(actor: HostedActor, text: string): Promise<string> {
 
   // Through the canonical writer: the archive must bring back the transcript, not just a working context.
   await actor.stores.history.record(CHAT_SESSION_ID, {
-    id: `${turnId}:said`, parentId: null, message: { role: 'user', content: text }, origin: 'input',
+    id: `${turnId}:said`, message: { role: 'user', content: text }, origin: 'input',
   });
 
   return turnId;

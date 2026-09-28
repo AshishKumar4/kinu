@@ -179,7 +179,7 @@ erDiagram
         TEXT actor_id PK "Actor whose conversation this is"
         TEXT session_id PK "Session ('default' chat, 'mcts' search)"
         TEXT id PK "Entry ID"
-        TEXT parent_id "Parent entry. These edges are the session tree"
+        INTEGER position UK "Place in the chat from 0; the chat is a list"
         TEXT role "user/assistant/system/tool"
         TEXT turn_id "Turn that wrote the entry"
         TEXT run_id "Run that wrote the entry"
@@ -192,11 +192,6 @@ erDiagram
         INTEGER position PK "Order within the entry"
         TEXT message_id "Message whose part it shows"
         INTEGER part_no "Part of that message"
-    }
-    conversation_heads {
-        TEXT actor_id PK "Actor"
-        TEXT session_id PK "Session"
-        TEXT entry_id "The entry the next turn chains from"
     }
     conversation_fts {
         TEXT content "Derived FTS5 transcript index"
@@ -251,7 +246,6 @@ erDiagram
     session_messages ||--o{ stream_parts : "an open message's accumulating parts"
     conversation_entries ||--o{ conversation_entry_parts : "parts the entry shows"
     session_messages ||--o{ conversation_entry_parts : "message_id, part_no"
-    conversation_entries ||--o| conversation_heads : "one head per session"
     conversation_entries ||--o{ conversation_fts : "local transcript index"
     search_nodes ||--o{ search_nodes : "parent_id"
 ```
@@ -382,14 +376,15 @@ relational store under `packages/core/src/session` (`SessionHistory`, built by
   segment, extended in place by windows of deltas, and seals once at the end of
   its step. The seal deletes the stream rows. A reader folds the stream rows of
   an open message and reads the content row of a sealed one.
-- The conversation: `conversation_entries` is the public chain (`id`,
-  `parent_id`, `role`, `turn_id`, `run_id`, `recorded_at`, and the working
+- The conversation: `conversation_entries` is the public chat, a list (`id`,
+  `position`, `role`, `turn_id`, `run_id`, `recorded_at`, and the working
   context the entry recorded), keyed by actor and session. `default` is the
   chat. `mcts` holds lifetime-search trajectories and is never browsed as
   chat. `conversation_entry_parts` references the message parts each entry
-  displays. `conversation_heads` names the entry the next turn chains from. A
-  walk-back moves the head without deleting anything
-  (`SessionHistory.revertTo`). A fork carries the chain to the cut:
+  displays. An entry appends at the next position, so the newest position + 1
+  is the chat's length, and a page is one range read by position. A walk-back
+  deletes the entry it names and everything after it
+  (`SessionHistory.revertTo`). A fork carries the chat up to the cut:
   `ForkTargetWriter` (`identity/fork-writer.ts`) stages it, then publishes it in
   one transaction.
 

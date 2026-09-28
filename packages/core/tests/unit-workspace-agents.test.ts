@@ -13,6 +13,7 @@ import { SubordinateRosterStore } from '../src/subordinates/roster';
 import { actorReferenceOf, type ActorHandle } from '../src/identity/actor-handle';
 import type { SubordinateRosterEntry } from '../src/delegation/agents-tool';
 import { agentActive, readWorkspaceAgents, type PanelAgent } from '../src/read-models/workspace-agents';
+import { OWNER_STOPPED } from '../src/heads/types';
 
 function workspace() {
   const db = new Database(':memory:');
@@ -92,19 +93,21 @@ describe('the Agents panel lists every agent in the workspace', () => {
     expect(read().filter(agentActive).map((agent) => agent.label)).toEqual(['Try the PEG parser']);
   });
 
-  test('a worker the owner stopped reads stopped, not failed; one that errored still reads failed', () => {
+  test('only a worker its owner stopped reads stopped; one cut off with its search or that errored reads failed', () => {
     const { db, main, read } = workspace();
     db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)').run(main.actorId, 'run-1', 'compare two parsers', 10);
 
-    const head = db.query(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
-      VALUES (?, ?, NULL, 'run-1', 0, ?, 'r', ?, ?, 'synthesize')`);
+    const head = db.query(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, error_message, spawned_at, merge_strategy)
+      VALUES (?, ?, NULL, 'run-1', 0, ?, 'r', ?, ?, ?, 'synthesize')`);
 
-    head.run(main.actorId, 'h-a', 'Try the PEG parser', 'aborted', 11);
-    head.run(main.actorId, 'h-b', 'Try the Pratt parser', 'errored', 12);
+    head.run(main.actorId, 'h-a', 'Try the PEG parser', 'aborted', OWNER_STOPPED, 11);
+    head.run(main.actorId, 'h-b', 'Try the Pratt parser', 'aborted', 'the search was aborted', 12);
+    head.run(main.actorId, 'h-c', 'Try a hand-written parser', 'errored', 'the model refused', 13);
 
     expect(read().filter((agent) => agent.category === 'swarm').map((agent) => [agent.label, agent.activity])).toEqual([
       ['Try the PEG parser', 'stopped'],
       ['Try the Pratt parser', 'failed'],
+      ['Try a hand-written parser', 'failed'],
     ]);
   });
 

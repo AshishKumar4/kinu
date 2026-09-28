@@ -40,7 +40,7 @@ import {
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import type { AgentModelMenu, AgentRpcMethod } from '@kinu.run/core';
-import { hostedWindowCalls, pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
+import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
@@ -103,7 +103,7 @@ const CloudPlanReviewResultSchema: v.GenericSchema<unknown, PlanReviewResult> = 
   v.object({ ok: v.literal(false), error: v.string(), plan: CloudPlanReviewSchema }),
 ]);
 
-const CloudChatPageSchema = pageSchema(ChatHistoryEntrySchema);
+const CloudChatPageSchema = positionPageSchema(ChatHistoryEntrySchema);
 
 const BranchTurnResultSchema = v.nullable(v.object({
   accepted: v.optional(v.boolean()),
@@ -600,7 +600,7 @@ export class CloudAgentClient implements AgentClient {
 
     return readConversation((request) => this.callHttp(
       'getChatHistoryPage', CloudChatPageSchema,
-      [request.cursor === undefined ? {} : { cursor: { after: request.cursor.after } }],
+      [request.cursor === undefined ? {} : { cursor: { before: request.cursor.before } }],
     ));
   }
 
