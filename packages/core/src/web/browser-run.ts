@@ -14,7 +14,7 @@ export type QuickAction = 'content' | 'screenshot';
 
 /**
  * Kitesurf renders the agent's one-shot actions: 3-7x less CPU and memory than Chrome for the same page
- * (developers.cloudflare.com/browser-run/kitesurf, 2026-09-28). It answers 501 for a webp screenshot; slate pictures use Chrome.
+ * (developers.cloudflare.com/browser-run/kitesurf, 2026-09-28). It answers 501 for a webp screenshot, so Kinu asks for PNG.
  */
 export type QuickActionEngine = 'kitesurf' | 'chrome';
 

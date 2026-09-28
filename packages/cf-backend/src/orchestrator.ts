@@ -40,7 +40,7 @@ import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-r
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
-import { initSlatePictureTable, quickActionPicture, SlatePictures, type PictureCapture } from "./slates/pictures";
+import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import {
@@ -551,7 +551,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return new Set([...listing.slates, ...listing.problems].map((slate) => slate.id));
       },
-      shoot: (url) => quickActionPicture(browser, url),
+      camera: () => browserCamera(browser),
     };
   }
 

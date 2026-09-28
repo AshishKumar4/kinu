@@ -1,5 +1,6 @@
 /** Shared chat engine for server and CLI; returns the full ModelMessage array, tool calls and results included. */
 
+import { withToolResultImages } from './providers/tool-result-images';
 import {
   NoOutputGeneratedError,
   streamText,
@@ -776,8 +777,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     const call = new ProviderCall(servingFallback);
 
+    // The turn knows the primary model's media; a fallback keeps the registry's no-knowledge rule.
+    const accepts = servingFallback === undefined ? opts.attachments?.accepts : undefined;
+
     const result = streamText({
-      model: current.model,
+      model: accepts === undefined ? current.model : withToolResultImages(current.model, accepts),
       system: cache.system,
       maxRetries: route.callRetries,
       messages: [...request],

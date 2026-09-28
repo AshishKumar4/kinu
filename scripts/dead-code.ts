@@ -655,11 +655,6 @@ export const DEPENDENCY_REASONS = {
     + 'imports it (its chain is KinuSandbox -> Devbox -> Sandbox from @cloudflare/sandbox), '
     + 'and the root override pinning 0.3.7 hangs off @cloudflare/sandbox\'s own ^0.3.5 '
     + 'edge, enforced by scripts/nested-container-resolution.test.ts:573.',
-  'packages/cf-backend/package.json#@cloudflare/puppeteer (unused-dependency)':
-    'bundled, not imported: packages/cf-backend/slate-vendor.ts hands esbuild the '
-    + 'specifier as stdin text, and the eval sandbox loads the result as the module '
-    + '`web.connectBrowser` imports (src/browser-prelude.ts). No module edge names it, '
-    + 'so this census cannot see the one use it has.',
 } satisfies Record<string, string>;
 
 /** The recorded reason for one dependency row, or `undefined` when the row is

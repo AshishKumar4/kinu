@@ -1,5 +1,6 @@
+import type { Browser, BrowserWorker } from '@cloudflare/puppeteer';
 import * as v from 'valibot';
-import { bindingQuickActions, PLATFORM_CATALOG, quickAction, sha256Hex, type BrowserRunQuickActions, type RawSqlExec, type SqlExec } from '@kinu.run/core';
+import { sha256Hex, type RawSqlExec, type SqlExec } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from '../workspace-host';
 
@@ -8,6 +9,8 @@ const AFTER_LAST_RENDER_MS = 30_000;
 const AFTER_FIRST_RENDER_MS = 120_000;
 
 const RETRY_MS = 30_000;
+
+const LOCAL_DEV_ZONE = '.localhost';
 
 const ATTEMPTS = 3;
 
@@ -126,23 +129,39 @@ export class SlatePictures {
       if (!live.has(picture.slate)) await this.forget(capture.workspace, picture.slate, capture.bucket);
     }
 
+    const shots = due.filter((picture) => live.has(picture.slate));
+
+    if (shots.length === 0) return false;
+    let camera: Camera;
+
+    try {
+      camera = await capture.camera();
+    } catch (cause) {
+      for (const picture of shots) this.failed(picture, Date.now());
+      throw cause;
+    }
+
     let changed = false;
 
-    for (const picture of due.filter((candidate) => live.has(candidate.slate)).slice(0, SHOTS_PER_TICK)) {
-      try {
-        changed = await this.shoot(capture, picture) || changed;
-      } catch (cause) {
-        this.failed(picture, Date.now());
-        diagnostics.failure('slate.picture_failed', toKinuError({
-          doing: `photographing slate ${picture.slate}`, cause, otherwise: 'unavailable',
-        }), { workspace: capture.workspace, slate: picture.slate, attempts: picture.attempts + 1 });
+    try {
+      for (const picture of shots.slice(0, SHOTS_PER_TICK)) {
+        try {
+          changed = await this.shoot(camera, capture, picture) || changed;
+        } catch (cause) {
+          this.failed(picture, Date.now());
+          diagnostics.failure('slate.picture_failed', toKinuError({
+            doing: `photographing slate ${picture.slate}`, cause, otherwise: 'unavailable',
+          }), { workspace: capture.workspace, slate: picture.slate, attempts: picture.attempts + 1 });
+        }
       }
+    } finally {
+      await camera.close();
     }
 
     return changed;
   }
 
-  private async shoot(capture: PictureCapture, picture: DuePicture): Promise<boolean> {
+  private async shoot(camera: Camera, capture: PictureCapture, picture: DuePicture): Promise<boolean> {
     const token = captureToken();
     this.openCapture(picture.slate, token.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH), Date.now() + CAPTURE_HANDLE_LIFE_MS);
 
@@ -150,7 +169,7 @@ export class SlatePictures {
       const url = await capture.url(picture.port, token);
 
       if (url === null) throw new Error('this deployment has no preview host');
-      const shot = await capture.shoot(url);
+      const shot = await camera.shoot(url);
       const digest = sha256Hex(shot);
       const changed = digest !== picture.digest;
 
@@ -176,6 +195,11 @@ export class SlatePictures {
   }
 }
 
+export interface Camera {
+  shoot(url: string): Promise<Uint8Array>;
+  close(): Promise<void>;
+}
+
 export interface PictureBucket {
   get(key: string): Promise<{ readonly body: ReadableStream; readonly httpEtag: string } | null>;
   put(key: string, value: Uint8Array, options: { httpMetadata: { contentType: string } }): Promise<void>;
@@ -189,31 +213,44 @@ export interface PictureCapture {
   url(port: number, token: string): Promise<string | null>;
   /** With broken ones. */
   slates(): Promise<ReadonlySet<string>>;
-  shoot(url: string): Promise<Uint8Array>;
+  camera(): Promise<Camera>;
 }
 
-/**
- * One Quick Action per picture, on Chrome: pixel-faithful, and Kitesurf answers 501 for webp. Measured 2026-09-28
- * against the puppeteer launch it replaced (the same viewport, load wait and webp q80): the same image within 2
- * bytes, in 0.95-1.75 s instead of 3.4-5.6 s. `cacheTTL: 0`, since a slate re-renders under the same URL.
- */
-export async function quickActionPicture(binding: BrowserRunQuickActions, url: string): Promise<Uint8Array> {
-  const response = await quickAction({
-    transport: bindingQuickActions(binding), action: 'screenshot', engine: 'chrome',
-    options: {
-      url, cacheTTL: 0,
-      viewport: { width: 1280, height: 800, deviceScaleFactor: 0.5 },
-      // Load, not the network: a streaming slate never idles.
-      gotoOptions: { waitUntil: 'load', timeout: PLATFORM_CATALOG['browser.navigation.timeout_ms'].limit.value },
-      screenshotOptions: { type: 'webp', quality: 80 },
-    },
-  });
+/** Loaded on first capture, not at cold start. */
+export async function browserCamera(binding: Pick<BrowserRun, 'fetch'>): Promise<Camera> {
+  const { default: puppeteer } = await import('@cloudflare/puppeteer');
+  // Puppeteer types the binding's fetch as the global one, whose `preconnect` is a hint it never gives.
+  const worker: BrowserWorker = { fetch: Object.assign((input: RequestInfo | URL, init?: RequestInit) => binding.fetch(input, init), { preconnect: () => undefined }) };
+  const browser = await puppeteer.launch(worker);
 
-  return new Uint8Array(await response.arrayBuffer());
+  return { shoot: (url) => photograph(browser, url), close: () => browser.close() };
 }
 
 function captureToken(): string {
   return [...crypto.getRandomValues(new Uint8Array(12))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** Waits on load, not the network: a streaming slate never idles. */
+async function photograph(browser: Browser, url: string): Promise<Uint8Array> {
+  const page = await browser.newPage();
+
+  try {
+    if (new URL(url).hostname.endsWith(LOCAL_DEV_ZONE)) {
+      await (await page.createCDPSession()).send('Security.setIgnoreCertificateErrors', { ignore: true });
+    }
+
+    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 0.5 });
+    const response = await page.goto(url, { waitUntil: 'load', timeout: CAPTURE_HANDLE_LIFE_MS });
+
+    if (response === null || !response.ok()) throw new Error(`the preview answered ${String(response?.status() ?? 'nothing')}`);
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
+    }));
+
+    return await page.screenshot({ type: 'webp', quality: 80 });
+  } finally {
+    await page.close();
+  }
 }
 
 export function pictureKey(workspace: string, slate: string, digest: string): string {

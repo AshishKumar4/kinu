@@ -15,7 +15,6 @@ export {
 } from './provider';
 
 export {
-  bindingQuickActions,
   restBrowserRunAccess,
   quickAction,
   type BrowserRunAccess,

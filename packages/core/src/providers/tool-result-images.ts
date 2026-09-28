@@ -1,49 +1,114 @@
 /**
- * Images in tool results, per wire API. Anthropic Messages and OpenAI Responses carry an image inside a tool
- * result. Chat Completions has no image in a tool message: `@ai-sdk/openai-compatible` 2.x and `@ai-sdk/openai`'s
- * chat model send a `content` tool output as its JSON text, so a screenshot would reach the model as some 140,000
- * characters of base64. On those APIs each image part becomes a note naming what was left out.
+ * Images in tool results, per model and wire API.
+ * - Anthropic Messages and OpenAI Responses carry an image inside a tool result.
+ * - Chat Completions has none in a tool message: `@ai-sdk/openai-compatible` 2.x and `@ai-sdk/openai`'s chat model
+ *   send a `content` tool output as its JSON text, a screenshot as some 140,000 characters of base64. There, as
+ *   oh-my-pi does (packages/ai/src/providers/openai-completions.ts:2589-2660), the tool message keeps the text and
+ *   one user message after the batch of tool results carries the images.
+ * - A model that takes no image (its accepted media, `attachment-sanitizer.ts`) gets a note in the image's place,
+ *   and so does a Chat Completions model whose media the caller does not know.
  */
 import { wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
-import type { LanguageModelV3Message } from '@ai-sdk/provider';
+import type { LanguageModelV3Message, LanguageModelV3ToolResultOutput } from '@ai-sdk/provider';
 import * as v from 'valibot';
+import type { ModelInputModality } from './types';
 
 /** `LanguageModelV3.provider` ends with the wire API: `anthropic.messages`, `openai.responses`, `<name>.chat`. */
 const IMAGE_CARRYING_APIS = ['.messages', '.responses'];
 
-const OMITTED = '[image omitted: this model\'s API carries no image in a tool result]';
+const OMITTED = '[image omitted: this model takes no image input]';
 
-function withoutToolImages(message: LanguageModelV3Message): LanguageModelV3Message {
+const ATTACHED = '(image attached in the next message)';
+
+type ContentItem = Extract<LanguageModelV3ToolResultOutput, { type: 'content' }>['value'][number];
+
+type ImageItem = Extract<ContentItem, { type: 'image-data' }>;
+
+function isImage(item: ContentItem): item is ImageItem {
+  return item.type === 'image-data';
+}
+
+/** Each image a note: the model cannot see it on any API. */
+function withoutImages(message: LanguageModelV3Message): LanguageModelV3Message {
   if (message.role !== 'tool') return message;
 
   return {
     ...message,
-    content: message.content.map((part) => {
-      if (part.type !== 'tool-result' || part.output.type !== 'content') return part;
-
-      return {
-        ...part,
-        output: {
-          type: 'content',
-          value: part.output.value.map((item) => (item.type === 'image-data' || item.type === 'image-url' || item.type === 'image-file-id'
-            ? { type: 'text', text: OMITTED }
-            : item)),
-        },
-      };
-    }),
+    content: message.content.map((part) => (part.type !== 'tool-result' || part.output.type !== 'content'
+      ? part
+      : { ...part, output: { type: 'content', value: part.output.value.map((item) => (isImage(item) ? { type: 'text', text: OMITTED } : item)) } })),
   };
 }
 
-const toolImagesAsText: LanguageModelMiddleware = {
-  specificationVersion: 'v3',
-  transformParams: async ({ params, model }) => (IMAGE_CARRYING_APIS.some((api) => model.provider.endsWith(api))
-    ? params
-    : { ...params, prompt: params.prompt.map(withoutToolImages) }),
-};
+/**
+ * Chat Completions: each tool message as text, and, where the model takes images, its images in one user message
+ * after the batch; otherwise a note in each image's place.
+ */
+function chatToolResults(prompt: readonly LanguageModelV3Message[], moveImages: boolean): LanguageModelV3Message[] {
+  const out: LanguageModelV3Message[] = [];
+  let pending: ImageItem[] = [];
 
-/** Every resolved model, so no provider path sends an image its API would flatten into text. */
-export function withToolResultImages(model: LanguageModel): LanguageModel {
+  const flush = (): void => {
+    if (pending.length === 0) return;
+    out.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Attached image(s) from tool result:' },
+        ...pending.map((image) => ({ type: 'file' as const, data: image.data, mediaType: image.mediaType })),
+      ],
+    });
+    pending = [];
+  };
+
+  for (const message of prompt) {
+    if (message.role !== 'tool') {
+      flush();
+      out.push(message);
+      continue;
+    }
+
+    out.push({
+      ...message,
+      content: message.content.map((part) => {
+        if (part.type !== 'tool-result' || part.output.type !== 'content') return part;
+        const images = part.output.value.filter(isImage);
+
+        if (images.length === 0) return part;
+
+        if (moveImages) pending.push(...images);
+        const texts = part.output.value.flatMap((item) => (item.type === 'text' ? [item.text] : []));
+        const note = moveImages ? ATTACHED : images.map(() => OMITTED).join('\n');
+
+        return { ...part, output: { type: 'text', value: [...texts, note].join('\n') } };
+      }),
+    });
+  }
+
+  flush();
+
+  return out;
+}
+
+/** `accepts` undefined: the caller does not know the model's media, so only an image-carrying API sends one. */
+function toolImages(accepts: ReadonlySet<ModelInputModality> | undefined): LanguageModelMiddleware {
+  return {
+    specificationVersion: 'v3',
+    transformParams: async ({ params, model }) => {
+      const carries = IMAGE_CARRYING_APIS.some((api) => model.provider.endsWith(api));
+
+      if (!carries) return { ...params, prompt: chatToolResults(params.prompt, accepts?.has('image') === true) };
+
+      return accepts === undefined || accepts.has('image') ? params : { ...params, prompt: params.prompt.map(withoutImages) };
+    },
+  };
+}
+
+/**
+ * `model` as it sends a tool result's images. The registry wraps every model knowing nothing of its media; a turn
+ * that knows them (`AttachmentPolicy.accepts`) wraps it again outside, and that wrapper decides first.
+ */
+export function withToolResultImages(model: LanguageModel, accepts?: ReadonlySet<ModelInputModality>): LanguageModel {
   if (v.is(v.string(), model) || model.specificationVersion !== 'v3') return model;
 
-  return wrapLanguageModel({ model, middleware: toolImagesAsText });
+  return wrapLanguageModel({ model, middleware: toolImages(accepts) });
 }
