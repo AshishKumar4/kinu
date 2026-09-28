@@ -13,7 +13,10 @@ export {
   type InvocationKind,
   type SpanActor,
   type TracedInvocation,
+  type TurnIdentity,
+  type TurnTrace,
   type TurnTracing,
+  type TurnUnitTimer,
 } from './agent-tracing';
 
 export {

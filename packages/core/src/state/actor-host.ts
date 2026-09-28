@@ -193,6 +193,14 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       () => deps.filesFor(binding),
     );
 
+    const tracing = deps.tracing;
+
+    if (tracing !== undefined) {
+      stores.claims.observeRecovered((claim) => {
+        tracing().turns({ id: record.actorId, kind: record.kind }).recovered(claim, claim.outcome);
+      });
+    }
+
     return { bound: { ...binding, stores }, fence };
   };
 
