@@ -94,7 +94,7 @@ export interface DeviceCodeTokens {
   idToken?: string;
 }
 
-/** One device-code poll answer; `pending` means ask again, anything else ends the wait. */
+/** `pending` means ask again; anything else ends the wait. */
 export type DeviceCodePoll =
   | { status: 'pending' }
   | { status: 'expired'; message: string }

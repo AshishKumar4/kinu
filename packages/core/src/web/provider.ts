@@ -50,10 +50,7 @@ export interface DefaultWebSearchProviderDeps {
   getAuth?: AuthResolver;
   /** Falls back to the local converter when absent or throwing. */
   htmlToMarkdown?: (html: string, opts?: { url?: string }) => Promise<string>;
-  /**
-   * Judges the addresses each fetched name resolves to. Absent on a Worker, where the platform itself refuses a name
-   * resolving to a private address (see `url-safety.ts`); the CLI passes the OS resolver.
-   */
+  /** Absent on a Worker, whose platform refuses a name resolving inward (`url-safety.ts`). */
   resolve?: HostResolver;
   /** Per-request budget in ms; absent means no local timeout. */
   timeoutMs?: number;
@@ -227,7 +224,6 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     });
   }
 
-  /** Every hop, the first and each redirect, is judged before it is fetched. */
   const judged = async (url: string): Promise<URL> => {
     let parsed: URL;
 

@@ -2,8 +2,7 @@
  * Pure hostname classifier for destinations untrusted code must never reach. Shared by backend
  * egress (`cf-backend/src/egress/outbound.ts`) and `assertSafeUrl` so both refuse the same set.
  * Literal-based on WHATWG-canonical hostnames; a name that resolves to a private address is not
- * caught here. A Worker's platform refuses it (measured, docs/CRAFT-ARCHITECTURE.md); the CLI judges the
- * resolved addresses with this classifier (`web/url-safety.ts` refusedResolution).
+ * caught here; see `web/url-safety.ts`.
  */
 
 import { refusalOf, KinuError, type Refusal } from '../obs/error';

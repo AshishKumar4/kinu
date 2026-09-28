@@ -375,7 +375,6 @@ function scopeList(input: { value: unknown }): string[] | undefined {
   return undefined;
 }
 
-/** Non-empty text; blank is absent. */
 function stringField(obj: JsonObject, key: string): string | undefined {
   return nonEmptyString({ value: obj[key] });
 }

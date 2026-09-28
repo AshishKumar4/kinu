@@ -1,4 +1,3 @@
-// Shared provider internals: the auth-injecting fetch wrapper and catalog parse helpers.
 import type { LanguageModelV3Message } from '@ai-sdk/provider';
 import type { LanguageModelMiddleware } from 'ai';
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
@@ -13,7 +12,6 @@ import {
 } from '../obs/index';
 
 export interface AuthedFetchOptions {
-  /** Credential key passed to the AuthResolver on every request. */
   credKey: string;
   /** Named in rate-limit wait notices. */
   provider: string;
@@ -27,7 +25,7 @@ export interface AuthedFetchOptions {
   mutate?: (ctx: { url: string; headers: Headers; auth: AuthResolution }) => string | void;
 }
 
-/** Auth-injecting fetch; auth is re-resolved per request so credential changes apply live. */
+/** Auth is re-resolved per request so credential changes apply live. */
 export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions): typeof globalThis.fetch {
   const waitListener = deps.onProviderWait;
 
@@ -89,7 +87,6 @@ function withoutItemIds(message: LanguageModelV3Message): LanguageModelV3Message
   };
 }
 
-/** Credential identity for keying catalog caches. */
 export function authCacheKey(auth: AuthResolution): string {
   return JSON.stringify([auth.headers, auth.baseURL ?? null]);
 }
@@ -153,7 +150,6 @@ export function positiveInteger(input: { value: unknown }): number | undefined {
   return parsed.success ? Math.floor(parsed.output) : undefined;
 }
 
-/** What a user may be shown of a provider failure (KINU-043). */
 export interface ProviderFailureFacts {
   readonly said?: string;
   readonly providerCode?: string;
@@ -211,7 +207,6 @@ function codeForStatus(status: number): ErrorCode | null {
 export function toProviderError(input: {
   doing: string;
   cause: unknown;
-  /** The provider the request was sent to, when the caller resolved one. */
   provider?: string;
 }): KinuError {
   const facts = providerFailureFacts({ cause: input.cause });
@@ -224,7 +219,6 @@ export function toProviderError(input: {
 
   if (input.provider !== undefined) tags.push(input.provider);
 
-  /** The fields the diagnostics record carries beside the error itself. */
   interface ProviderFailureFields {
     detail: string;
     status?: number;
