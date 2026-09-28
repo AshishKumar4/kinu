@@ -13,7 +13,6 @@ export const OPENROUTER_CRED_KEY = 'openrouter.bearer';
 export interface OpenRouterOptions {
   refererURL?: string;
   appTitle?: string;
-  catalogTtlMs?: number;
 }
 
 /** `GET /models` rows; `reasoning.supported_efforts` lists accepted `reasoning.effort`
@@ -29,7 +28,7 @@ const OpenRouterCatalogSchema = v.object({
 });
 
 export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelProvider {
-  const ttl = opts.catalogTtlMs ?? 5 * 60_000;
+  const ttl = 5 * 60_000;
   // Keyed by credential so a key change invalidates the catalog.
   let catalogCache: { at: number; authKey: string; models: ModelInfo[] } | null = null;
 

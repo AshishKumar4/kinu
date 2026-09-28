@@ -72,12 +72,7 @@ describe('withRateLimitRetry', () => {
   test('uses exponential full jitter bounded by the per-wait cap', async () => {
     const harness = retryHarness(
       [...Array.from({ length: 8 }, () => new Response('limited', { status: 429 })), new Response('ok')],
-      {
-        baseDelayMs: 2_000,
-        backoffFactor: 2,
-        maxDelayMs: 60_000,
-        random: () => 0.999,
-      },
+      { random: () => 0.999 },
     );
 
     await harness.wrapped('https://api.example.com/v1/chat', { body: '{}', headers: { [PROVIDER_RETRIES_HEADER]: '8' } });
