@@ -82,7 +82,7 @@ import {
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
   TurnAccumulator, AgentOrchestrator, ActorSession, ChatSession, type AgentOrchestratorDeps, type BackendHost,
-  type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type ActorTurnLease, type ActorExecutionInput,
+  type ChatTurnInput, type ComposedRequest, type PreparedTurn, type OwedTerminalEffectsInput, type ActorTurnLease, type ActorExecutionInput,
   type KinuExtension, type OwedEffect,
   type InlineSteer,
   type AgentsToolAction,
@@ -263,7 +263,17 @@ interface TurnAssemblyInput {
 
 /** The pieces of core's `ChatOptions` only this backend can supply, plus readings the
  * turn's settlement and per-step assembly re-use. */
-interface AssembledTurn {
+interface TurnCompositionInput extends TurnAssemblyInput {
+  readonly requestedWorkMode: WorkMode;
+  readonly cliCwd: string | null;
+  readonly item: ChatTurnInput | null;
+}
+
+interface AssembledTurn extends ComposedTurn {
+  readonly measured: ReturnType<typeof measureCompactionTrigger>;
+}
+
+interface ComposedTurn {
   readonly profile: ResolvedTurnProfile;
   readonly profileInputs: ProfileAuthorityInputs;
   readonly system: string;
@@ -277,7 +287,8 @@ interface AssembledTurn {
   readonly rawMessages: readonly ModelMessage[];
   /** The unapproved instruction files as one message, null for none. */
   readonly instructions: string | null;
-  readonly measured: ReturnType<typeof measureCompactionTrigger>;
+  readonly activeSkills: ActiveSkillSet | null;
+  readonly operation: OperationProfile;
   /** Window for admission, compaction and pruning; records whether figures are the
    * catalog's or the static table's stand-in. */
   readonly window: ResolvedModelWindow;
@@ -692,8 +703,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Plan this turn implements when it is a plan approval's handoff; honoured only while the row
    *  still says approved. Null otherwise. */
-  private approvedTaskPlan(): TaskPlan | null {
-    const item = this._turnItem;
+  private approvedTaskPlan(item: ChatTurnInput | null): TaskPlan | null {
 
     if (item === null || item.kind !== 'programmatic') return null;
     const parsed = v.safeParse(PlanApprovalMetadataSchema, item.metadata);
@@ -1850,7 +1860,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._actorSession;
   }
 
-  /** The core turn loop; see {@link ChatSession} for the invariants. */
   private _chatLoop: ChatSession | null = null;
   protected get chatLoop(): ChatSession {
     if (!this._chatLoop) {
@@ -1868,6 +1877,7 @@ export abstract class ActorAgent extends Agent<Env> {
         mintAnswerId: () => this.mintAnswerId(),
         ports: {
           prepareTurn: (item, lease) => this.prepareTurn(item, lease),
+          composeRequest: () => this.composeNextRequest(),
           owedTerminalEffects: (input) => this.owedTerminalEffects(input),
           answerMetadata: (turnId, texts) => this.answerMetadata(turnId, texts),
           terminal: () => this.terminal,
@@ -3566,12 +3576,17 @@ export abstract class ActorAgent extends Agent<Env> {
    * `config.getRoleSelection()` (core profiles/role-change.ts:1-5). */
   @callable() async setRole(roleId: string): Promise<{ role: string }> {
     const { envelope } = await this.profileInputs();
+    const changed = changeRoleAsOwner({ config: this.config, envelope, to: roleId, active: this.activeRoleLabel() });
+    this.chatLoop.reviseContext({ counted: true });
 
-    return changeRoleAsOwner({ config: this.config, envelope, to: roleId, active: this.activeRoleLabel() });
+    return changed;
   }
   @callable()
   async setModel(spec: string) {
-    return setModel(this.modelSetting(this.config, () => this.invalidateModelCaches()), spec);
+    return setModel(this.modelSetting(this.config, () => {
+      this.invalidateModelCaches();
+      this.chatLoop.reviseContext({ counted: true });
+    }), spec);
   }
 
   /** How a model pin is set on `config`: this workspace's registry normalizes the spec. */
@@ -3960,7 +3975,11 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Uses the resolved spec: the raw stored id is null on default-configured agents,
    *  which would leave model-family guidance inert. */
   protected promptModelContext(): PromptModelContext {
-    const spec = this.effectiveModelSpec();
+    return this.promptModelContextFor(this.effectiveModelSpec());
+  }
+
+  private promptModelContextFor(named: string): PromptModelContext {
+    const spec = named === '' ? '' : this.providerRegistry().normalizeSpecSync(named);
 
     if (!spec) return {};
 
@@ -4039,65 +4058,80 @@ export abstract class ActorAgent extends Agent<Env> {
     this._turnDurableLength = assembled.rawMessages.length;
     // Bound exactly once before execution; the CLI adapter binds it at the same point.
     this.actorSession.bindProfile(lease, assembled.profile, assembled.profileInputs);
+    const execution = await this.executionFor(assembled);
+    const chat: ActorExecutionInput['chat'] = { ...execution.chat, transformTrigger: assembled.measured.trigger };
 
+    if (assembled.measured.providerReportedTokens !== undefined) {
+      chat.providerReportedTokens = assembled.measured.providerReportedTokens;
+    }
+
+    return {
+      execution: { ...execution, chat },
+      sessionKey: this.name,
+      contextWindow: assembled.window.contextWindow,
+      historyLength: assembled.rawMessages.length,
+    };
+  }
+
+  private async composeNextRequest(): Promise<ComposedRequest> {
+    const tools = this.getTools();
+    const reads = await this.readTurnInputs(tools);
+    const { messages: history } = await this.stores.history.materialize();
+
+    const composed = await this.composeTurn({
+      history, tools, body: {}, reads, requestedWorkMode: await this.preparedWorkMode(), cliCwd: this._cliCwd, item: null,
+    });
+
+    return { execution: await this.executionFor(composed), profile: composed.profile };
+  }
+
+  private async executionFor(composed: ComposedTurn): Promise<Omit<ActorExecutionInput, 'task'>> {
     const liveTurn: ActorExecutionInput['chat'] = {
-      model: assembled.model,
+      model: composed.model,
       modelContext: {
-        id: assembled.promptModel.id,
-        contextWindow: assembled.window.contextWindow,
-        windowMeasured: assembled.window.windowMeasured,
-        modelOutputLimit: assembled.window.modelOutputLimit,
+        id: composed.promptModel.id,
+        contextWindow: composed.window.contextWindow,
+        windowMeasured: composed.window.windowMeasured,
+        modelOutputLimit: composed.window.modelOutputLimit,
       },
-      system: assembled.system,
+      system: composed.system,
       attachments: {
         accepts: this.modelCatalog.acceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
       },
-      tools: assembled.tools,
-      activeTools: assembled.activeTools,
+      tools: composed.tools,
+      activeTools: composed.activeTools,
       // No step cap: the loop is bounded by the budget governor and the caller's cancel
       // (see core chat.ts, UNBOUNDED_STEPS).
       stopWhen: UNBOUNDED_STEPS,
-      transformTrigger: assembled.measured.trigger,
       cache: {
-        providerId: assembled.promptModel.provider,
-        modelId: assembled.promptModel.id,
+        providerId: composed.promptModel.provider,
+        modelId: composed.promptModel.id,
         sessionKey: this.ownedModelServices.affinityKey,
         retention: this.config.getCacheRetention(),
       },
       budget: this.budget,
-      countInputTokens: assembled.countInputTokens,
+      countInputTokens: composed.countInputTokens,
       observeStream: (chunks, call) => this.chatTransport.observe(chunks, call),
     };
 
-    if (assembled.measured.providerReportedTokens !== undefined) {
-      liveTurn.providerReportedTokens = assembled.measured.providerReportedTokens;
-    }
-
-    if (assembled.reasoningOptions) liveTurn.providerOptions = assembled.reasoningOptions;
+    if (composed.reasoningOptions) liveTurn.providerOptions = composed.reasoningOptions;
 
     const providers = this.providerRegistry();
-    liveTurn.modelSpec = providers.normalizeSpecSync(assembled.profile.tier.model);
+    liveTurn.modelSpec = providers.normalizeSpecSync(composed.profile.tier.model);
     liveTurn.credentialOf = (spec) => this.ownedModelServices.credentialFor(spec);
-    liveTurn.fallbacks = assembled.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
+    liveTurn.fallbacks = composed.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
       spec: providers.normalizeSpecSync(spec),
       bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),
     }));
 
-    const runtime = this.rt;
-
     return {
-      execution: {
-        loopVersion: await runtime.identity.scaffold.version(),
-        chat: liveTurn,
-        // All registered extensions; the turn adds the orchestrator's inbox extension itself.
-        extensions: this.extensions.list(),
-        dynamic: (profile, turnTools) => this.dynamicContextSnapshot(profile, turnTools, assembled.memoryTail),
-        instructions: assembled.instructions,
-        scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-      },
-      sessionKey: this.name,
-      contextWindow: assembled.window.contextWindow,
-      historyLength: assembled.rawMessages.length,
+      loopVersion: await this.rt.identity.scaffold.version(),
+      chat: liveTurn,
+      // All registered extensions; the turn adds the orchestrator's inbox extension itself.
+      extensions: this.extensions.list(),
+      dynamic: (profile, turnTools) => this.dynamicContextSnapshot(profile, turnTools, composed.memoryTail, composed.activeSkills),
+      instructions: composed.instructions,
+      scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
     };
   }
 
@@ -4119,6 +4153,8 @@ export abstract class ActorAgent extends Agent<Env> {
         otherwise: 'io',
       }), { workspace: this.name });
     }
+
+    this.chatLoop.reviseContext({ counted: true });
   }
 
   /** Awaited ahead of `orch.beginTurn`: the turn is not in flight until these reads are back,
@@ -4161,16 +4197,15 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.ownedModelServices.resolveModel(spec);
   }
 
-  private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn> {
+  /** Effect-free: a measure between turns uses it. */
+  private async composeTurn(input: TurnCompositionInput): Promise<ComposedTurn> {
     const { profileInputs, mcpTools, identity } = input.reads;
     const activeRoleId = this.activeRoleLabel();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
-    this._workspaceInstructionApprovals = null;
-    this._turnActiveSkills = null;
     // Deps-gated builtins (report) are advertised only when this actor class wires them; the
     // agents ladder renders only actions this profile supports, then the active skills' union.
     const turnActorDeps = this.actorToolDeps();
-    const requestedWorkMode = this.turnWorkMode();
+    const { requestedWorkMode } = input;
     let activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
     const trust = this.instructionTrust();
 
@@ -4183,12 +4218,7 @@ export abstract class ActorAgent extends Agent<Env> {
       limits: this.modelCatalog.window(),
     });
 
-    if (activeSetForPrompt) {
-      this._turnActiveSkills = activeSetForPrompt;
-      activeTools = filterToolNamesBySkills(activeTools, activeSetForPrompt);
-      this.logActivity('skills_active',
-        activeSetForPrompt.active.map(s => s.name).join(',') || '(none)');
-    }
+    if (activeSetForPrompt) activeTools = filterToolNamesBySkills(activeTools, activeSetForPrompt);
 
     const mcpToolNames = Object.keys(mcpTools);
 
@@ -4227,9 +4257,7 @@ export abstract class ActorAgent extends Agent<Env> {
       runId: this._currentRunId || WORKSPACE_RUN_ID, turnId: this.durableTurnId() ?? this._currentRunId,
     });
 
-    this._turnOperation = operation;
     const workMode = profile.workMode;
-    this.orch.restrictTurnWorkMode(workMode);
     const modeTools = workMode === requestedWorkMode ? input.tools : this.getRawToolsForWorkMode(workMode);
     const allowedTools = new Set(profile.allowedTools);
     const toolAllowed = (name: string): boolean => allowedTools.has(name);
@@ -4264,7 +4292,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // The cache prefix changes only on real agent events (soul, model, skills, tools, AGENTS.md);
     // live state rides the dynamic ledger instead.
     const execs = this.rt.executionRouter?.listExecutors() ?? [];
-    const model = this.promptModelContext();
+    const model = this.promptModelContextFor(profile.tier.model);
 
     const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {
       soulOverride: this.getSoulText(),
@@ -4288,22 +4316,15 @@ export abstract class ActorAgent extends Agent<Env> {
     if (activeSetForPrompt) promptOptions.activeSkills = activeSetForPrompt;
     promptOptions.agentsMd = agentsMd;
     const systemOverride = buildSystemPromptSync(this.rt, promptOptions);
-    this.recordSystemPromptHash(systemOverride);
 
     const languageModel = this.turnModel(profile.tier.model);
 
     // Attachment sanitization is per-part copy-on-write, so the raw count equals the sanitized
     // durable length; recordTurnTelemetry measures against the same number.
-    const rawMessages = this._cliCwd ? withCliCwdContext(input.history, this._cliCwd) : input.history;
-    this._turnDurableLength = rawMessages.length;
+    const rawMessages = input.cliCwd ? withCliCwdContext(input.history, input.cliCwd) : input.history;
     // Must be awaited before submission: synchronous catalog reads return static stand-in values
     // while the lookup is in flight (#20).
     const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model))]);
-    this._turnContextWindow = window.contextWindow;
-    const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
-
-    // Forced rebuild is armed by overflow recovery (onChatResponse) or by agent.compactNow.
-    if (measured.trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
     // The reflection loop assumes the model sees its latest MEMORY.md lessons in-turn; read once
     // here since it is the one dynamic-context input needing an await.
     const memoryTail = await readMemoryTail(this.rt.memory);
@@ -4326,7 +4347,7 @@ export abstract class ActorAgent extends Agent<Env> {
       accountDeps(providers.deps, tierModel.provider, tierModel.account), request,
     );
 
-    const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan() });
+    const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(input.item) });
     const tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan), operation);
 
     // Shares `promptCachePlan` with the other loop. Request cache routing rides
@@ -4348,9 +4369,32 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return {
       profile, profileInputs, system: systemOverride, model: languageModel, tools, activeTools: effectiveActiveTools, activeToolSurface,
-      rawMessages, instructions, measured, window, memoryTail, countInputTokens,
-      cacheOptions, reasoningOptions, promptModel: model,
+      rawMessages, instructions, window, memoryTail, countInputTokens,
+      cacheOptions, reasoningOptions, promptModel: model, activeSkills: activeSetForPrompt ?? null, operation,
     };
+  }
+
+  private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn> {
+    this._workspaceInstructionApprovals = null;
+    this._turnActiveSkills = null;
+    const composed = await this.composeTurn({ ...input, requestedWorkMode: this.turnWorkMode(), cliCwd: this._cliCwd, item: this._turnItem });
+
+    if (composed.activeSkills !== null) {
+      this._turnActiveSkills = composed.activeSkills;
+      this.logActivity('skills_active', composed.activeSkills.active.map((skill) => skill.name).join(',') || '(none)');
+    }
+
+    this._turnOperation = composed.operation;
+    this.orch.restrictTurnWorkMode(composed.profile.workMode);
+    this.recordSystemPromptHash(composed.system);
+    this._turnDurableLength = composed.rawMessages.length;
+    this._turnContextWindow = composed.window.contextWindow;
+    const measured = measureCompactionTrigger(this.compactionState, this.name, composed.rawMessages.length);
+
+    // Forced rebuild is armed by overflow recovery (onChatResponse).
+    if (measured.trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
+
+    return { ...composed, measured };
   }
 
   /** Set in beforeTurn; read by beforeStep's prune budget every step. */
@@ -4366,7 +4410,10 @@ export abstract class ActorAgent extends Agent<Env> {
    * The live state of this agent, read fresh for one model step; holds no state of its own.
    * Nothing clock-derived: a wall-clock field would re-fingerprint the block every request.
    */
-  protected dynamicContextSnapshot(profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>, tools: ToolSet, memoryTail: string | undefined): DynamicContext {
+  protected dynamicContextSnapshot(
+    profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>, tools: ToolSet, memoryTail: string | undefined,
+    activeSkills: ActiveSkillSet | null = this._turnActiveSkills,
+  ): DynamicContext {
     const extras = this.extraDynamicContext();
 
     return collectDynamicContext({
@@ -4375,7 +4422,7 @@ export abstract class ActorAgent extends Agent<Env> {
       profile,
       tools,
       turn: this.turnReason(),
-      ...(this._turnActiveSkills !== null && { activeSkills: this._turnActiveSkills }),
+      ...(activeSkills !== null && { activeSkills }),
       memoryTail,
       missingCapabilities: [
         ...this._mcpUnavailable,

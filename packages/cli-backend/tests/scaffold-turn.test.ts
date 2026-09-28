@@ -61,13 +61,18 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   }
 
   const events: SessionEvent[] = [];
+  const started = Promise.withResolvers<void>();
 
   // Auto-evolution on: the promotion gate is auto-evolution, so off would leave the deadlock tests proving nothing.
   const session = new LocalAgentSession({
-    rt, db, model: fakeModel(defaultAnswer), onEvent: (e) => events.push(e),
+    rt, db, model: fakeModel(defaultAnswer), onEvent: (e) => {
+      events.push(e);
+
+      if (e.type === 'run-event' && e.event.type === 'context_admitted') started.resolve();
+    },
   });
 
-  return { db, rt, session, events };
+  return { db, rt, session, events, started: started.promise };
 }
 
 async function installScaffold(
@@ -84,7 +89,8 @@ async function installScaffold(
 
 for (const mode of ['promote', 'auto', 'veto'] as const) {
   test(`scaffold ${mode} shares the live and retained session event stream`, async () => {
-    const { db, rt, session, events } = await setup('unused');
+    const { db, rt, session, events, started } = await setup('unused');
+    await started;
     await installScaffold(rt, {
       version: 1, status: 'pending',
       code: mode === 'veto'
@@ -108,10 +114,10 @@ for (const mode of ['promote', 'auto', 'veto'] as const) {
       const live = events.flatMap((event) => event.type === 'run-event' ? [event.event] : []);
 
       expect(retained.map((event) => event.type)).toEqual([
-        'model_call', mode === 'veto' ? 'scaffold_rollback' : 'scaffold_promotion', 'model_call',
+        'context_admitted', 'model_call', mode === 'veto' ? 'scaffold_rollback' : 'scaffold_promotion', 'model_call',
       ]);
       expect(live).toEqual(retained);
-      expect(new Set(retained.map((event) => event.eventIndex)).size).toBe(3);
+      expect(new Set(retained.map((event) => event.eventIndex)).size).toBe(4);
     } finally {
       await session.end();
       db.close();

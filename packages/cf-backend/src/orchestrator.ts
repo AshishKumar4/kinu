@@ -2074,6 +2074,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.invalidateModelCaches();
       await this.ensureOwnedScaffold();
 
+      // Detached: the loop is never built inside the init gate.
+      if (exists.length === 0) this.detachOwned(async () => { this.chatLoop.measureSessionStart(); });
+
       return { owner: userId, capabilityHash };
     }
 

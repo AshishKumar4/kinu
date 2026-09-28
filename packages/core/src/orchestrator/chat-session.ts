@@ -9,16 +9,19 @@
 
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import type { ChatEvent } from '../chat';
+import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { PartialToolCall, RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, type Refusal } from '../obs/index';
 import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
+import type { ResolvedTurnProfile } from '../profiles';
 import type { CacheWarmingLane } from '../providers/cache-warming';
 import { DEFAULT_CACHE_RETENTION } from '../providers/types';
 import type { ToolOutcome } from '../tools/outcome';
@@ -237,10 +240,17 @@ async function answerMetadata(
   return Object.keys(metadata).length === 0 ? null : metadata;
 }
 
+export interface ComposedRequest {
+  readonly execution: Omit<ActorExecutionInput, 'task'>;
+  readonly profile: ResolvedTurnProfile;
+}
+
 /** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
   prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn>;
+  /** Never consumes an armed compaction. */
+  composeRequest(): Promise<ComposedRequest>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
   answerMetadata?(turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
@@ -271,7 +281,6 @@ export interface ChatSessionOptions {
   readonly actorSession: ActorSession;
   readonly sessionId: string;
   readonly transcript: SessionTranscript;
-  /** Core's PendingSendStore, bound to the session's own actor id. */
   readonly pendingSends: PendingSendStore;
   readonly eventLog: EventLog;
   readonly eventRecorder: RunEventRecorder;
@@ -315,6 +324,7 @@ export class ChatSession {
   /** Settled where the fate is decided, never at admission. A send admitted via `admit` has no entry: its fate goes out as steer_status. */
   private readonly landings = new Map<string, SendLandingWaiter>();
   private readonly eventLog: EventLog;
+  private revision: Promise<void> | null = null;
   private readonly unobserveMeasures: () => void;
   private readonly eventRecorder: RunEventRecorder;
   private readonly compactionState: CompactionTriggerState;
@@ -629,6 +639,36 @@ export class ChatSession {
     await this.actorSession.clearConversation(this.sessionId, () => {
       if (this.turnInFlight()) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
     });
+    this.reviseContext({ counted: true });
+  }
+
+  reviseContext(options: { readonly counted: boolean }): void {
+    const measuring = (this.revision ?? Promise.resolve()).then(() => this.measureContextRevision(options));
+    this.revision = measuring;
+    this.actorSession.orchestrator.track(measuring.then(() => { if (this.revision === measuring) this.revision = null; }), 'measuring the revised context');
+  }
+
+  /** Uncounted, on an empty conversation, so it folds nothing. */
+  measureSessionStart(): void {
+    const { provider, gate } = this.eventRecorder.readContextMeasures();
+
+    if (provider === null && gate === null && this.actorSession.history.length === 0) this.reviseContext({ counted: false });
+  }
+
+  measureContextRevision(options: { readonly counted: boolean }): Promise<void> {
+    return settleEffect(this.pumpActive || this.queue.length > 0 ? Effect.void : attempt(
+      { doing: 'measuring the next request after the context changed', otherwise: 'unavailable' },
+      () => this.measureNextRequest(options),
+    ).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('context.revision_measure_failed', failure); }))));
+  }
+
+  private async measureNextRequest(options: { readonly counted: boolean }): Promise<void> {
+    const { execution, profile } = await this.ports.composeRequest();
+    const { countInputTokens, ...uncounted } = execution.chat;
+    const counted = options.counted && countInputTokens !== undefined ? { ...uncounted, countInputTokens } : uncounted;
+    const measured = await this.actorSession.measureNextRequest({ ...execution, chat: { ...counted, transformTrigger: 'auto' } }, profile);
+
+    if (measured !== null) this.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'context_admitted', ...measured });
   }
 
   /** Bypasses the debounce, for a batch tick that ends the session right after. Interactive sessions keep the debounced path. */
@@ -708,6 +748,8 @@ export class ChatSession {
       let item: QueueItem | undefined;
 
       while ((item = this.queue.shift())) {
+        // So the turn's own measure is the newer.
+        await this.revision;
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
         // compensates.
         const refusal = this.ports.driverGate();

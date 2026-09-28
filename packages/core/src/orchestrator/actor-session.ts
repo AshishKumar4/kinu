@@ -1,6 +1,6 @@
 import type { ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
-import { INTERRUPTED_TURN, type ChatEvent, type ChatOptions } from '../chat';
+import { INTERRUPTED_TURN, measureTurnRequest, type ChatEvent, type ChatOptions } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile, ProfileAuthorityInputs } from '../profiles';
 import type { WorkMode } from '../types/turn';
@@ -84,7 +84,6 @@ export interface ActorExecutionInput {
   /** Re-checked before each model call, for kinds whose liveness is owned elsewhere (heads, swarm nodes). */
   readonly assertActive?: () => void;
   readonly scaffoldStreamOptions?: ScaffoldBridgeOpts['streamOptions'];
-  /** A warming lane's cover. */
   readonly cacheKeptAliveUntil?: number | null;
   /** Steps a resumed turn keeps from its dead activation's run. */
   readonly resumedSteps?: number;
@@ -612,6 +611,31 @@ export class ActorSession {
     return claim;
   }
 
+  private turnToolset(input: Omit<ActorExecutionInput, 'task'>, profile: ResolvedTurnProfile) {
+    const allowedTools = new Set(profile.allowedTools);
+    const tools = Object.fromEntries(Object.entries(input.chat.tools ?? {}).filter(([name]) => allowedTools.has(name)));
+    const extensions = new ExtensionHost();
+
+    for (const extension of input.extensions) extensions.register(extension);
+    extensions.register(this.orchestrator.turnExtension);
+
+    return { tools, extensions };
+  }
+
+  /** Null mid-turn: that turn measures its own. */
+  async measureNextRequest(
+    input: Omit<ActorExecutionInput, 'task'>, profile: ResolvedTurnProfile,
+  ): Promise<{ readonly tokens: number; readonly contextWindow: number } | null> {
+    if (this.inFlight) return null;
+    const { tools, extensions } = this.turnToolset(input, profile);
+    const { messages } = await this.canonical.materialize();
+
+    return measureTurnRequest({
+      ...input.chat, tools, history: messages, extensions,
+      dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
+    });
+  }
+
   private turnEvents(turn: {
     readonly lease: ActorTurnLease;
     readonly active: ActiveTurn;
@@ -624,12 +648,7 @@ export class ActorSession {
     readonly tally: TurnTally;
   }): AsyncIterable<ChatEvent> {
     const { lease, active, profile, input, program, claim, stream, tally } = turn;
-    const allowedTools = new Set(profile.allowedTools);
-    const tools = Object.fromEntries(Object.entries(input.chat.tools ?? {}).filter(([name]) => allowedTools.has(name)));
-    const extensions = new ExtensionHost();
-
-    for (const extension of input.extensions) extensions.register(extension);
-    extensions.register(this.orchestrator.turnExtension);
+    const { tools, extensions } = this.turnToolset(input, profile);
     // Activation names the input's entry after its message; an edit keeps the entry.
     const turnInput = this.canonical.admittedInput(claim.turnId);
     const assertClaim = () => this.canonical.assertEpoch(claim.turnId, claim.epoch);

@@ -119,6 +119,27 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
   };
 }
 
+function nextContextFill(client: LocalAgentClient): Promise<number> {
+  const fill = Promise.withResolvers<number>();
+
+  const unsubscribe = client.subscribe((event) => {
+    if (event.type === 'broadcast' && event.event.type === 'context_fill' && event.event.contextTokens !== undefined) {
+      unsubscribe();
+      fill.resolve(event.event.contextTokens);
+    }
+  });
+
+  return fill.promise;
+}
+
+function gateMeasures(home: string): number {
+  const db = new Database(join(home, 'agent.db'), { readonly: true });
+  const rows = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_events WHERE type = 'context_admitted'").get()?.n ?? 0;
+  db.close();
+
+  return rows;
+}
+
 function setup(model: LanguageModel, profileAuthority: CliProfileSource = async () => null) {
   const home = scratchDir('client');
   const dbPath = join(home, 'agent.db');
@@ -578,6 +599,63 @@ describe('LocalAgentClient', () => {
 
     expect(await turnsSentAsMessages(false)).toEqual(['turn 0', 'turn 1', 'turn 2', 'turn 3', 'turn 4']);
     expect(await turnsSentAsMessages(true)).toEqual(['turn 4']);
+  });
+
+  test('a new session shows the gate\'s measure of its first request before any turn, measured once', async () => {
+    let calls = 0;
+    const { client, home } = setup(fakeModel('noted', () => { calls += 1; }));
+    const measured = nextContextFill(client);
+    await client.connect();
+    const tokens = await measured;
+
+    expect((await client.status()).context).toMatchObject({ tokens, source: 'gate' });
+    await client.close();
+
+    const reopened = openPersistentClient(home, fakeModel('noted', () => { calls += 1; }), { noTranscript: true });
+    await reopened.connect();
+    expect((await reopened.status()).context).toMatchObject({ tokens, source: 'gate' });
+    await reopened.close();
+
+    expect(calls).toBe(0);
+    expect(gateMeasures(home)).toBe(1);
+  });
+
+  test('after /clear, before any turn, the number is the gate\'s measure of the emptied request', async () => {
+    const { client } = setup(fakeModel('findings '.repeat(600)));
+    await client.connect();
+    const turns: number[] = [];
+
+    client.subscribe((event) => {
+      if (event.type === 'run-event' && event.event.type === 'context_admitted') turns.push(event.event.tokens);
+    });
+
+    for (let turn = 0; turn < 3; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+    const lastTurn = turns.at(-1) ?? 0;
+    const measured = nextContextFill(client);
+    await client.localControls.clearConversation();
+    const tokens = await measured;
+    const status = await client.status();
+    await client.close();
+
+    expect(status.context).toMatchObject({ tokens, source: 'gate' });
+    expect(tokens).toBeLessThan(lastTurn);
+  });
+
+  test('a model switch records the gate\'s measure of the next request against the new model', async () => {
+    const { client, home } = setup(fakeModel('noted'));
+    await client.connect();
+    await client.send('remember the word heron', { cwd: '/work' });
+    const before = gateMeasures(home);
+
+    const measured = nextContextFill(client);
+    await client.setModel('fake/big-model');
+    const tokens = await measured;
+    const status = await client.status();
+    await client.close();
+
+    expect(status.context).toMatchObject({ tokens, source: 'gate' });
+    expect(gateMeasures(home)).toBe(before + 1);
   });
 
   test('a reconnect shows the prompt size the last step reported, and asks no model for it', async () => {
