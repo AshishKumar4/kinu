@@ -80,7 +80,7 @@ import {
 import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, toWire, type Wire } from '@kinu.run/core/obs';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
-  buildLocalActorRuntime, cleanupFacetCwdScratch,
+  buildLocalActorRuntime, cleanupFacetCwdScratch, writeTransaction,
   type CLIRuntime,
 } from '../runtime';
 import type { CLIOpenConfig } from '../open';
@@ -476,7 +476,7 @@ export class LocalAgentHost {
       tracing: undefined,
       storage: {
         sql,
-        transactionSync: (write) => db.transaction(write)(),
+        transactionSync: (write) => writeTransaction(db, write),
         exec: (query, ...bindings) => hubSql.exec(query, ...bindings),
       },
       directory,
@@ -1051,7 +1051,7 @@ export class LocalAgentHost {
       vfs: parent.ws.rt.storage.vfs,
       // One transaction: core's replay fast path answers `already_held` off the dedupe key, so an
       // interruption between insert and roster update would leave the child `working` forever.
-      transaction: (body) => parent.tree.db.transaction(body)(),
+      transaction: (body) => writeTransaction(parent.tree.db, body),
       announce: (report: AdmittedSubordinateReport) => {
         const metadata: JsonObject = {
           kind: 'report',
@@ -1266,7 +1266,7 @@ export class LocalAgentHost {
     const sql = makeSql(tree.db);
 
     try {
-      tree.db.transaction(() => {
+      writeTransaction(tree.db, () => {
         // The child's own handle; stores below are scoped to it, so one database holds N descriptors.
         const actor = bindLocalActor(sql, binding);
         actor.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
@@ -1275,7 +1275,7 @@ export class LocalAgentHost {
         const inheritedModel = parent.config.getModel();
 
         if (inheritedModel) actor.config.setModel(inheritedModel);
-      })();
+      });
       const actor = await tree.host.acquire(binding.reference);
       const rt = tree.runtimes.get(binding.reference.actorId);
 

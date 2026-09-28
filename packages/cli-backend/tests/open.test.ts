@@ -26,6 +26,32 @@ describe('openWorkspaceCLI', () => {
     db.close();
   });
 
+  test('opening waits out another process\'s write instead of failing on the lock', async () => {
+    const dir = scratchDir('open-locked');
+    const dbPath = join(dir, 'agent.db');
+    const made = new Database(dbPath);
+    await createWorkspace(made, { name: 'jarvis', purpose: 'Run the lab.', llm: DUMMY_LLM });
+    made.close();
+
+    // Another process (the daemon) is mid-write when this one opens the workspace.
+    const holder = Bun.spawn([process.execPath, '-e', `
+      const { Database } = require('bun:sqlite');
+      const daemon = new Database(${JSON.stringify(dbPath)});
+      daemon.exec('PRAGMA journal_mode = WAL');
+      daemon.exec('BEGIN IMMEDIATE');
+      console.log('held');
+      setTimeout(() => daemon.exec('COMMIT'), 300);
+    `], { stdout: 'pipe' });
+
+    const reader = holder.stdout.getReader();
+    await reader.read();
+    const db = new Database(dbPath);
+
+    expect((await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM })).info.purpose).toBe('Run the lab.');
+    db.close();
+    await holder.exited;
+  });
+
   test('a database an older Kinu made is refused by name before any schema runs over it', async () => {
     const dir = scratchDir('open-older');
     const dbPath = join(dir, 'agent.db');

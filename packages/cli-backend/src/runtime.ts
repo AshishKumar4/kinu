@@ -177,7 +177,7 @@ export function makeSqlExec(db: Pick<Database, 'prepare'>): SqlExec {
 
 /** All onto one database, so no caller can pair a DDL handle with another file's reads. */
 export function makeWorkspaceSchemaSql(db: LocalDb): WorkspaceSchemaSql {
-  return { execRaw: makeExecRaw(db), sql: makeSql(db), exec: makeSqlExec(db), transactionSync: (write) => db.transaction(write)() };
+  return { execRaw: makeExecRaw(db), sql: makeSql(db), exec: makeSqlExec(db), transactionSync: (write) => writeTransaction(db, write) };
 }
 
 /** The tail reads via the plane's stat + ranged read, which MemoryStore's seam lacks. */
@@ -212,14 +212,23 @@ function actorFacetName(record: WorkspaceActor): string {
 /** A lock held longer than this is a hung opener, and the write fails naming the lock. */
 const SHARED_WRITE_WAIT_MS = 30_000;
 
+/** The daemon and a chat share one workspace file, and bun:sqlite fails a write meeting the other's at once, so
+ *  a write waits. Set first: opening itself writes. */
+export function waitOnSharedWrites(db: Database): void {
+  db.exec(`PRAGMA busy_timeout = ${String(SHARED_WRITE_WAIT_MS)}`);
+}
+
+/** IMMEDIATE: a deferred one that read first fails at once on another process's write, busy timeout or not. */
+export function writeTransaction<T>(db: Pick<Database, 'transaction'>, body: () => T): T {
+  return db.transaction(body).immediate();
+}
+
 export function createCLIRuntime(
   db: Database,
   config: CLIRuntimeConfig,
 ): CLIRuntime {
+  waitOnSharedWrites(db);
   db.exec('PRAGMA foreign_keys = ON');
-  // The daemon and an interactive chat open one workspace file; bun:sqlite fails a write that meets the other's
-  // transaction at once. Each holds a write only for one statement batch, so a write waits for it.
-  db.exec(`PRAGMA busy_timeout = ${String(SHARED_WRITE_WAIT_MS)}`);
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
 
@@ -426,7 +435,7 @@ export function createCLIRuntime(
     return { vfs: plane.vfs, artifactDirectory: agentArtifactDirectory(home.home) };
   };
 
-  const stores = createAgentStores(() => sql, () => actor, (write) => db.transaction(write)(), () => filesForActor(actor));
+  const stores = createAgentStores(() => sql, () => actor, (write) => writeTransaction(db, write), () => filesForActor(actor));
   let childContext: ChildContextResolver | null = null;
 
   const agentVfs = withMountTable(fileVfs, [
@@ -468,7 +477,7 @@ export function createCLIRuntime(
   executionRouter.register(createInlineExecutor(inlineOptions));
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
-    transactionSync: write => db.transaction(write)(),
+    transactionSync: write => writeTransaction(db, write),
     workspaceIsMachine: cwd !== null,
     actor, sql,
     execRaw,
