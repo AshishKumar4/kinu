@@ -315,6 +315,7 @@ export type ShellApprovalHandler =
 
 export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
+  onStop?: () => void;
   db: LocalSessionDb;
   /** Required on a static session (no modelResolver); otherwise only the pre-claim fallback. */
   model?: LanguageModel;
@@ -486,8 +487,11 @@ export class LocalAgentSession {
   private readonly workspaceTitleSource: (() => string | null) | null;
   private readonly ancestors: (() => readonly PinnedProfile[]) | undefined;
 
+  private readonly onStop: (() => void) | undefined;
+
   constructor(opts: LocalAgentSessionOpts) {
     this.db = opts.db;
+    this.onStop = opts.onStop;
     this.rt = opts.rt;
     this.clock = opts.clock ?? REAL_CLOCK;
     this.oneShot = opts.oneShot === true;
@@ -1146,7 +1150,10 @@ export class LocalAgentSession {
 
   /** Abort the in-flight turn; returns dropped steer texts. */
   interrupt(): string[] {
-    return this.chat.interrupt();
+    const dropped = this.chat.interrupt();
+    this.onStop?.();
+
+    return dropped;
   }
 
   /** Continue from before `entryId`; refused while a turn is held. */

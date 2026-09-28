@@ -5,6 +5,8 @@
  */
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
+import { actorConnectionTag } from '@kinu.run/core';
+import { asPane } from './helpers/agents-sdk';
 import { catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
@@ -173,4 +175,113 @@ test("a task agent does not settle while more input is queued for it: its answer
 
   expect(rootTold().join(' ')).toContain('second answer');
   expect(rootTold().join(' ')).not.toContain('first answer');
+});
+
+test("an agent the owner added keeps its own Stop: a root Stop skips it, and its own Stop reaches its hires", async () => {
+  let durableAsked = false;
+  let held: AbortSignal | undefined;
+
+  const gateway = stubAiBinding((run) => {
+    const opening = openingOf(run);
+
+    if (opening.includes('Durable task.')) {
+      durableAsked = true;
+      held = run.signal;
+
+      return heldUntilAborted(run);
+    }
+
+    return toolResults(run) === 0
+      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable')
+      : chatCompletion(run, 'Added agent waits.');
+  });
+
+  const workspace = gatewayWorkspace(gateway);
+  const sql = sqlOver(workspace.db);
+  await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
+  const { subordinate } = await workspace.agent.createSubordinateAgent();
+  const added = subordinate.actorId ?? '';
+
+  const ended = (actorId: string): number => sql<{ n: number }>`
+    SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n ?? 0;
+
+  await wakeForDelegatedTask(workspace, added, 'Added task.');
+  await driveUntil(workspace, 'the added agent\'s hire never started its turn', () => durableAsked);
+  const hired = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE parent_actor_id = ${added}`[0]?.id ?? '';
+
+  // A root Stop interrupts every agent it reaches before it returns; the added agent's hire is not one.
+  await workspace.agent.cancelCurrentWork();
+  expect(held?.aborted).toBe(false);
+
+  await asPane([actorConnectionTag(added)], () => workspace.agent.cancelCurrentWork());
+  await driveUntil(workspace, 'the added agent\'s Stop never reached its hire', () => ended(hired) > 0);
+});
+
+// Review P1 (integration/0963): archiving a middle agent kept its durable hires running under a retired hirer.
+test("archiving an agent the owner added retires the durable agent it hired", async () => {
+  let held: AbortSignal | undefined;
+
+  const gateway = stubAiBinding((run) => {
+    const opening = openingOf(run);
+
+    if (opening.includes('Durable task.')) {
+      held = run.signal;
+
+      return heldUntilAborted(run);
+    }
+
+    return toolResults(run) === 0
+      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable')
+      : chatCompletion(run, 'Added agent waits.');
+  });
+
+  const workspace = gatewayWorkspace(gateway);
+  const sql = sqlOver(workspace.db);
+  await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
+  const { subordinate } = await workspace.agent.createSubordinateAgent();
+  const added = subordinate.actorId ?? '';
+
+  await wakeForDelegatedTask(workspace, added, 'Added task.');
+  await driveUntil(workspace, 'the added agent\'s hire never started its turn', () => held !== undefined);
+  const hired = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE parent_actor_id = ${added}`[0]?.id ?? '';
+
+  await workspace.agent.dismissSubordinate(subordinate.name, true);
+
+  expect(held?.aborted).toBe(true);
+  expect(sql<{ at: number | null }>`SELECT retiring_at AS at FROM workspace_actors WHERE actor_id = ${hired}`[0]?.at).not.toBeNull();
+});
+
+// Review P1 (integration/0963): a Stop interrupted a running descendant but left input already queued for it, which
+// then ran as a fresh turn after the Stop.
+test("a Stop discards the input already queued for a descendant it interrupts", async () => {
+  let durableAsked = false;
+  let queuedAsked = false;
+
+  const { workspace, middleId, hired } = await helperWorkspace((run) => {
+    const opening = openingOf(run);
+
+    if (opening.includes('Queued input.')) {
+      queuedAsked = true;
+
+      return chatCompletion(run, 'Ran after the Stop.');
+    }
+
+    if (opening.includes('Durable task.')) {
+      durableAsked = true;
+
+      return heldUntilAborted(run);
+    }
+
+    return toolResults(run) === 0
+      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable')
+      : chatCompletion(run, 'Middle waits.');
+  });
+
+  await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
+  await driveUntil(workspace, 'the durable hire never started its turn', () => durableAsked);
+  await wakeForDelegatedTask(workspace, hired() ?? '', 'Queued input.');
+
+  await workspace.agent.cancelCurrentWork();
+
+  await expect(driveUntil(workspace, 'the queued input never ran', () => queuedAsked)).rejects.toThrow('the queued input never ran');
 });

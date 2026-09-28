@@ -94,6 +94,20 @@ export function harnessHolds(): readonly string[] {
 }
 
 /** Whether a `runFiber` body started so far is still running. */
+/** The connection a call runs under while {@link asPane} holds it. */
+let paneConnection: { readonly id: string; readonly tags: readonly string[] } | undefined;
+
+/** Runs `call` as a socket carrying `tags` would: the product reads which pane addressed it. */
+export async function asPane<T>(tags: readonly string[], call: () => Promise<T>): Promise<T> {
+  paneConnection = { id: crypto.randomUUID(), tags };
+
+  try {
+    return await call();
+  } finally {
+    paneConnection = undefined;
+  }
+}
+
 export function harnessFibersRunning(): boolean {
   return harnessFiberBodies.size > 0;
 }
@@ -647,8 +661,8 @@ export function mockAgentsSdk(): void {
       readonly name: string = '';
     },
     callable: () => <Method>(method: Method): Method => method,
-    // No socket carries a harness call into a method, so a call has no connection, as a route's or a stub's has none.
-    getCurrentAgent: () => ({ agent: undefined, connection: undefined, request: undefined, email: undefined }),
+    // A harness call has no connection, as a route's or a stub's has none, unless the suite opens one as a pane would.
+    getCurrentAgent: () => ({ agent: undefined, connection: paneConnection, request: undefined, email: undefined }),
     getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>
       namespace.get(namespace.idFromName(name)),
     /** Undefined is the SDK's "not my path", which drops the request to the SPA fallback. */

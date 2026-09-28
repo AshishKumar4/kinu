@@ -18,6 +18,7 @@ import {
   createAgentsCodemodeProvider,
   createTeamToolDeps,
   createTemporaryAgentPort,
+  taskAnswerIsLater,
   deriveChildDelegationBudget, delegationDepthRefusal,
   receiveSubordinateEvent,
   type SubordinateEventResult,
@@ -95,6 +96,8 @@ interface Scene {
   deps: AgentsToolDeps;
   temporary: TemporaryAgentPort;
   roster: SubordinateRosterStore;
+  /** The hirer's own rail. */
+  log: EventLog;
   recover(clearFailure?: boolean): Promise<boolean>;
   /** Every child-substrate operation, in order. */
   calls: string[];
@@ -235,6 +238,7 @@ function makeScene(options: {
     deps,
     temporary,
     roster,
+    log,
     calls,
     briefs,
     assignments,
@@ -395,6 +399,33 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     await scene.report({ status: 'blocked', content: 'The ledger export is missing for March.' });
     expect(scene.lastReport()).toMatchObject({ status: 'blocked', content: 'The ledger export is missing for March.' });
     expect(scene.roster.list()).toEqual([]);
+  });
+
+  // Review P1 (integration/0963): the hire had settled and left the roster, but its answer was still unread on the
+  // hirer's rail, and a task hirer answered from the turn it spent on something else.
+  test('a task hirer\'s answer is a later turn\'s while a hire\'s report waits unread on its rail', async () => {
+    const scene = makeScene();
+    await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
+    expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(true);
+
+    await scene.report({ content: 'Totals reconcile.' });
+    expect(scene.roster.list()).toEqual([]);
+    expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(true);
+
+    // Read by the turn that takes it up: nothing is owed any more.
+    for (const row of scene.log.pending({ variant: 'subordinate_report' })) scene.log.markConsumed(row.id, 'turn-read', 0, NOW);
+    expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(false);
+  });
+
+  // Review P1 (integration/0963): the durable-only guard was the waiter's, and it kept the owner from deleting one.
+  test('the owner deletes a working task hire, and it leaves the roster', async () => {
+    const scene = makeScene();
+    await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
+
+    await present(scene.deps.team, 'the scene\'s team port').dismiss({ name: TEMP_NAME, keepHistory: false, requestedBy: 'user' });
+
+    expect(scene.roster.list()).toEqual([]);
+    expect(scene.calls).toContain(`dismiss:${TEMP_NAME}:false`);
   });
 
   test('a mid-work progress note does not settle the task agent; its answer is the second message', async () => {

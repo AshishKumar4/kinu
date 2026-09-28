@@ -82,7 +82,6 @@ const neverHost: HostedActorSeams = {
   armWake() { throw new Error('mergeLLM armed a wake'); },
   temporary() { throw new Error('mergeLLM reached the task-hire port'); },
   rederiveWake() { throw new Error('mergeLLM re-derived the wake'); },
-  whileWaiting() { throw new Error('mergeLLM freed a turn slot'); },
 };
 
 function runtimeWith(text: string) {

@@ -18,7 +18,7 @@ import {
   classifyRunEnd, closeTurnRun, openTurnRun,
   collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute,
   storedHeadReportStatus, subordinateDelegatesOf,
-  registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, CHAT_SESSION_ID,
+  registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, CHAT_SESSION_ID,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
   type BranchExploration, type BranchHandle, type BranchReflection, type CraftedTool,
   type DelegationBudget,
@@ -112,14 +112,11 @@ export interface HostedActorSeams {
   dynamic(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext;
   announce(actor: BoundActor): void;
   /** Drain on a reaction (a child's report). Never for an assignment: `wakesADrain` excludes it. */
-  scheduleDrain(actor: HostedActor): void;
+  scheduleDrain(actor: BoundActor): void;
   /** Arm the wake chain that reaches the delegation runners; the admitting request must not run it. */
   armWake(): void;
   rederiveWake(): void;
-  /** Lives on the parent: `ask` parks a waiter and the report ingress resolves it. */
   temporary(actor: BoundActor): TemporaryAgentPort;
-  /** An actor's turn slot is free while it waits on another actor's queue. */
-  whileWaiting<T>(actorId: string, waited: Promise<T>): Promise<T>;
 }
 
 export function hostedDelegationBudget(
@@ -259,8 +256,8 @@ export async function relayHostedReport(
     if (answers !== undefined) new EventLog(seams.exec, child.handle).markAnswered(answers);
   };
 
-  // Not the hirer's queue: it may wait on this child's.
-  const hirer = await seams.host.acquire(parent);
+  // Neither the hirer's queue (it may wait on this child's) nor its session (an idle hirer holds none).
+  const hirer = seams.host.hosted(parent) ?? seams.host.bindStores(parent);
 
   return await receiveSubordinateEvent({
     log: new EventLog(seams.exec, hirer.handle),
@@ -273,7 +270,7 @@ export async function relayHostedReport(
       return written;
     }),
     announce: () => { seams.announce(hirer); },
-    onAdmitted: () => { if (hirer.record.parentActorId === null || !hirer.session.inFlight) seams.scheduleDrain(hirer); },
+    onAdmitted: () => { if (seams.host.hosted(parent)?.session.inFlight !== true) seams.scheduleDrain(hirer); },
     onEvolutionAnswer: () => { seams.rederiveWake(); },
     temporary: seams.temporary(hirer),
   }, { fromSubordinate: name, ...event }, Date.now());
@@ -432,9 +429,7 @@ export async function runHostedTask(
   ): Promise<{ readonly status: SubordinateReportStatus; readonly content: string; readonly quiet?: true } | null> => {
     const owed = reports.settled ? null : await terminalTaskReport({
       lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary,
-      // Hires still working, or input still queued.
-      delegating: seams.roster(actor).list().some((hire) => hire.status === 'working')
-        || new EventLog(seams.exec, actor.handle).pending({ variant: 'subordinate_task' }).some((row) => row.id !== task.sequenceId),
+      delegating: taskAnswerIsLater({ roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle), turnTaskId: task.sequenceId }),
       narration: () => actor.stores.history.transcript(CHAT_SESSION_ID).narration(report.canonicalCompletion?.outputPartReferences ?? []),
     });
 
@@ -503,8 +498,6 @@ export function hostedSubordinateRuntime(
       .pipe(Effect.as(entry.reference));
   });
 
-  // A child's queue can be held by a turn that waits on a delegate: the hirer frees its own slot meanwhile.
-  const outsideSlot = <T>(waited: Promise<T>): Promise<T> => seams.whileWaiting(parent().record.actorId, waited);
 
   /** Runs `body` as the named hire. */
   const asHire = <Result>(name: string, body: (reference: ActorReference) => Promise<Result>): Effect.Effect<Result, KinuError> =>
@@ -522,10 +515,10 @@ export function hostedSubordinateRuntime(
         return Promise.resolve();
       }))))),
     cancelBirth: (input) => settle(registerChild(input, 'cancelCreation')),
-    assign: (name, input) => settle(asHire(name, (reference) => outsideSlot(admitHostedTask(seams, reference, { kind: 'task' as const, ...input })))),
-    status: (name) => settle(asHire(name, (reference) => outsideSlot(seams.host.run(reference, async (actor) =>
-      readSubordinateLiveStatus(seams.exec, actor.handle))))),
-    message: (name, content, mode) => settle(asHire(name, (reference) => outsideSlot(admitHostedTask(seams, reference, { kind: 'message', body: content, mode })))),
+    assign: (name, input) => settle(asHire(name, (reference) => admitHostedTask(seams, reference, { kind: 'task' as const, ...input }))),
+    status: (name) => settle(asHire(name, (reference) => seams.host.run(reference, async (actor) =>
+      readSubordinateLiveStatus(seams.exec, actor.handle)))),
+    message: (name, content, mode) => settle(asHire(name, (reference) => admitHostedTask(seams, reference, { kind: 'message', body: content, mode }))),
     rename: (name, displayName, nameOrigin) => settle(asHire(name, (reference) => seams.host.run(reference, async (actor) => {
       actor.stores.config.setDisplayNameOrigin(displayName, nameOrigin);
     }))),
@@ -538,15 +531,13 @@ export function hostedSubordinateRuntime(
       const request: ActorRetirementRequest = { reference, name, keepHistory, interrupt };
 
       if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
-      await outsideSlot(seams.host.retire(parent().reference, actorRetirementFor(request)));
+      await seams.host.retire(parent().reference, actorRetirementFor(request));
     },
   };
 }
 
-/** `keepHistory` spares durable ones. */
 async function retireDescendants(seams: HostedActorSeams, below: ActorReference, keepHistory: boolean): Promise<void> {
   for (const descendant of subordinateDescendants(seams.directory.list(), below.actorId)) {
-    if (keepHistory && descendant.lifetime !== TEMPORARY_LIFETIME) continue;
     const hirer = seams.directory.retained(descendant.parentActorId ?? '');
 
     if (hirer === null) continue;

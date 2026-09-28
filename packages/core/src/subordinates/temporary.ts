@@ -3,6 +3,7 @@
  */
 
 import type { SubordinateReportStatus } from '../events/hub/types';
+import type { EventLog } from '../events/hub/log';
 import { renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
@@ -25,6 +26,17 @@ export {
 export const SUBORDINATE_LIFETIMES = ['durable', 'task'] as const;
 
 export type SubordinateLifetime = (typeof SUBORDINATE_LIFETIMES)[number];
+
+/** Later while a hire works, input is queued, or a settled hire's report waits unread. */
+export function taskAnswerIsLater(input: {
+  readonly roster: SubordinateRosterStore;
+  readonly log: EventLog;
+  readonly turnTaskId?: string;
+}): boolean {
+  return input.roster.list().some((hire) => hire.status === 'working')
+    || input.log.pending({ variant: 'subordinate_task' }).some((row) => row.id !== input.turnTaskId)
+    || input.log.pending({ variant: 'subordinate_report' }).length > 0;
+}
 
 /** How a task child's turn ended. The set must stay closed: the hirer is owed exactly one report. */
 export const TASK_TURN_ENDINGS = [
@@ -77,11 +89,10 @@ export function taskTurnEnding(completed: boolean, interrupted: boolean): TaskTu
 export async function terminalTaskReport(input: {
   readonly lifetime: SubordinateLifetime;
   readonly ending: TaskTurnEnding;
-  /** The child's own closing words, when it had any. */
   readonly assistantText: string;
   /** Each step's words, oldest first; read only for a task that did not answer. */
   readonly narration: () => Promise<readonly string[]>;
-  /** Its hires still work or more input is queued for it: a later turn's reply is its answer. */
+  /** A later turn's reply is its answer ({@link taskAnswerIsLater}). */
   readonly delegating?: boolean;
 }): Promise<OwedReport | null> {
   const text = input.assistantText.trim();
@@ -111,10 +122,7 @@ export async function terminalTaskReport(input: {
   return input.ending === 'interrupted' ? { status: 'blocked', content, quiet: true } : { status: 'blocked', content };
 }
 
-/**
- * Whether this report ends the run. Shared by the port's `settle` and the roster's
- * `applyReport`; only a deliberate mid-work note is progress.
- */
+/** Whether this report ends the run; only a deliberate mid-work note is progress. */
 export function temporaryRunSettles(input: {
   readonly status: SubordinateReportStatus;
   readonly origin: 'report_tool' | 'turn_end';

@@ -167,6 +167,64 @@ async function taskHire(
   return { agent: v.parse(v.object({ agent: v.string() }), outcome).agent, report };
 }
 
+/**
+ * A model keyed on the prompt: `park` briefs hold their call until the turn is aborted (as a stopped provider call
+ * ends), `hire` briefs make one durable hire of `hire` with mission `mission`, every other call answers `ok`.
+ */
+function treeModel(script: { readonly park: string; readonly hire?: { readonly brief: string; readonly mission: string } }) {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  const parked = Promise.withResolvers<void>();
+  const aborted = Promise.withResolvers<void>();
+  let hired = false;
+
+  const model = new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doGenerate: async () => textAnswer('acknowledged', usage),
+    doStream: async (options) => {
+      const prompt = JSON.stringify(options.prompt);
+
+      if (prompt.includes(script.park)) {
+        parked.resolve();
+
+        return {
+          stream: new ReadableStream<LanguageModelV2StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              options.abortSignal?.addEventListener('abort', () => {
+                aborted.resolve();
+                controller.error(options.abortSignal?.reason);
+              }, { once: true });
+            },
+          }),
+        };
+      }
+
+      if (script.hire !== undefined && prompt.includes(script.hire.brief) && !hired) {
+        hired = true;
+
+        return {
+          stream: new ReadableStream<LanguageModelV2StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({
+                type: 'tool-call', toolCallId: 'call_hire', toolName: 'agents',
+                input: JSON.stringify({ action: 'hire', role: 'task', mission: script.hire?.mission }),
+              });
+              controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              controller.close();
+            },
+          }),
+        };
+      }
+
+      return { stream: textStream('ok', usage) };
+    },
+  });
+
+  return { model, parked: parked.promise, aborted: aborted.promise };
+}
+
 function reportingChildModel(content: string, status: 'completed' | 'failed' = 'completed') {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let calls = 0;
@@ -1353,6 +1411,38 @@ describe('LocalAgentHost', () => {
   });
 
   /** Once the task agent settles its row is released: its one failure is the only message, and it takes no further work. */
+  // Review P1 (integration/0963): with the in-call waiter gone, a Stop on the root reached nothing it had hired.
+  test('a Stop on the root interrupts the task agent it hired, and the stopped agent wakes no one', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const tree = treeModel({ park: 'Find the root cause.' });
+    const { host } = makeHost(state, tree.model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const team = await host.team('root');
+
+    await present(team.temporary, 'the temporary hire port').start({ role: 'researcher', roleLabel: 'researcher', task: 'Find the root cause.', mode: 'build' });
+    await tree.parked;
+    (await host.acquire('root')).interrupt();
+    await tree.aborted;
+    await host.close();
+
+    expect(eventCount(dbPath, 'pending')).toBe(0);
+  });
+
+  // Review P1 (integration/0963): removing a middle agent ended only its own session; its hires kept streaming.
+  test('deleting a middle agent ends the agent it hired too', async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const tree = treeModel({ park: 'Grandchild brief.', hire: { brief: 'Middle brief.', mission: 'Grandchild brief.' } });
+    const { host } = makeHost(state, tree.model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const team = await host.team('root');
+
+    const middle = await team.spawn({ role: 'task', mission: 'Middle brief.', mode: 'build' });
+    await tree.parked;
+    await team.dismiss({ name: middle.name, keepHistory: false, requestedBy: 'user' });
+    await tree.aborted;
+    await host.close();
+  });
+
   test('a settled task agent delivers its failure once and refuses further work', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');

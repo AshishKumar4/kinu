@@ -195,9 +195,8 @@ export interface TeamToolDeps {
     ok: true; name: string; historyKept: boolean;
   }>;
   /**
-   * The `lifetime:'task'` half of `hire`: runs one child to completion inside the call and archives its
-   * row on answer. Required wherever a child substrate is wired; unwired, `hire` has no `lifetime` field
-   * and every hire is durable.
+   * The `lifetime:'task'` half of `hire`: starts one child and returns; the child retires once it answers.
+   * Required wherever a child substrate is wired; unwired, `hire` has no `lifetime` field and every hire is durable.
    */
   readonly temporary?: TemporaryAgentPort;
 }

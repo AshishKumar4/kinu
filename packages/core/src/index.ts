@@ -640,6 +640,7 @@ export {
   TEMPORARY_LIFETIME,
   TASK_TURN_ENDINGS,
   createTemporaryAgentPort,
+  taskAnswerIsLater,
   temporaryRunSettles,
   taskTurnEnding,
   terminalTaskReport,
