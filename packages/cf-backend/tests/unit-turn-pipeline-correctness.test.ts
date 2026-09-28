@@ -770,7 +770,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     const config = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
 
-    expect(config?.system ?? '').toContain('`hire` with `lifetime:"task"` runs one agent for one question');
+    expect(config?.system ?? '').toContain('`hire` with `lifetime:"task"`');
   });
 
   test('the role the agent set is in the next prompt the DO builds', async () => {

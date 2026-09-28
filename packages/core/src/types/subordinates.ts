@@ -1,7 +1,6 @@
 /** Temporary-agent port and run contract; the subordinates plane implements it. */
 
 import type { ErrorCode } from '../obs/error';
-import type { SubordinateReportStatus } from '../events/hub/types';
 import type { WorkMode } from './turn';
 import type { RoleId } from './profile';
 import * as v from 'valibot';
@@ -45,22 +44,17 @@ export interface TemporaryRunRequest {
   readonly mode: WorkMode;
   /** An evolution helper: it answers this lane request only. */
   readonly lane?: EvolutionLaneRequest;
-  readonly signal?: AbortSignal;
 }
 
-/**
- * One shape once the child exists, whether it answered, failed, or was cancelled; `reason`
- * appears only on failure.
- */
+/** A task hire's result, returned at once; `failed` only when the child could not start. */
 export interface TemporaryRunOutcome {
-  readonly status: 'completed' | 'failed';
+  readonly status: 'working' | 'failed';
   readonly agent: string;
   readonly lifetime: typeof TEMPORARY_LIFETIME;
   readonly role: string;
   readonly answer: string;
   /** `none` means the child was never created; `kept` history is read via the agent name. */
   readonly transcript: 'kept' | 'none';
-  readonly elapsed_ms: number;
   readonly reason?: ErrorCode;
 }
 
@@ -73,22 +67,9 @@ export interface TemporaryRunRefusal {
 /** No `active()`/`history()`: the one roster (`agents.list`) already answers both. Required wherever a backend
  *  wires a roster. */
 export interface TemporaryAgentPort {
-  /**
-   * Provision a child, run it to its single answer, release it. No elapsed bound: it ends on the
-   * answer or `signal`. A task child emits exactly one run-settling report per way its turn can
-   * end; a mid-task `progress` note ({@link temporaryRunSettles}) must not discharge it.
-   */
-  run(request: TemporaryRunRequest): Promise<TemporaryRunOutcome | TemporaryRunRefusal>;
-  /**
-   * Hand one report to the run waiting on it. `false` means no live caller, so the ingress
-   * publishes it as an ordinary `subordinate_report` event.
-   */
-  settle(input: {
-    readonly name: string;
-    readonly taskEventId: string | null;
-    readonly status: SubordinateReportStatus;
-    readonly content: string;
-    readonly origin: 'report_tool' | 'turn_end';
-  }): boolean;
+  /** Start a child on its brief and return; its settling report reaches the hirer's rail. */
+  start(request: TemporaryRunRequest): Promise<TemporaryRunOutcome | TemporaryRunRefusal>;
+  /** Called inside the child's turn, so it only schedules the retire. */
+  release(name: string): void;
   reclaim(request: EvolutionLaneRequest): EvolutionHelperAnswer | null;
 }

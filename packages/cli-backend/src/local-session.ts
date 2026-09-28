@@ -301,6 +301,7 @@ export interface LocalParentRelay {
     readonly status: SubordinateReportStatus;
     readonly mode: WorkMode;
     readonly sequenceId: string;
+    readonly quiet?: true;
   }) => Promise<string>;
 }
 
@@ -312,6 +313,7 @@ export type ShellApprovalHandler =
 
 export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
+  onStop?: () => void;
   db: LocalSessionDb;
   /** Required on a static session (no modelResolver); otherwise only the pre-claim fallback. */
   model?: LanguageModel;
@@ -483,8 +485,11 @@ export class LocalAgentSession {
   private readonly workspaceTitleSource: (() => string | null) | null;
   private readonly ancestors: (() => readonly PinnedProfile[]) | undefined;
 
+  private readonly onStop: (() => void) | undefined;
+
   constructor(opts: LocalAgentSessionOpts) {
     this.db = opts.db;
+    this.onStop = opts.onStop;
     this.rt = opts.rt;
     this.clock = opts.clock ?? REAL_CLOCK;
     this.oneShot = opts.oneShot === true;
@@ -1143,7 +1148,10 @@ export class LocalAgentSession {
 
   /** Abort the in-flight turn; returns dropped steer texts. */
   interrupt(): string[] {
-    return this.chat.interrupt();
+    const dropped = this.chat.interrupt();
+    this.onStop?.();
+
+    return dropped;
   }
 
   /** Continue from before `entryId`; refused while a turn is held. */
@@ -1885,6 +1893,7 @@ export class LocalAgentSession {
         text: input.owedReport.content,
         status: input.owedReport.status,
         sequenceId: relay.sequenceId(input.messageId),
+        ...(input.owedReport.quiet === true && { quiet: true as const }),
       };
     }
 
@@ -2006,11 +2015,11 @@ export class LocalAgentSession {
       parent_report: terminalEffect({
         input: v.object({
           text: v.string(), status: v.picklist(SUBORDINATE_REPORT_STATUSES),
-          sequenceId: v.string(), mode: WorkModeSchema,
+          sequenceId: v.string(), mode: WorkModeSchema, quiet: v.optional(v.boolean()),
         }),
-        run: async ({ text, status, sequenceId, mode }) => ({
+        run: async ({ text, status, sequenceId, mode, quiet }) => ({
           status: 'completed',
-          detail: await relay.send({ text, status, mode, sequenceId }),
+          detail: await relay.send({ text, status, mode, sequenceId, ...(quiet === true && { quiet }) }),
         }),
       }),
     };

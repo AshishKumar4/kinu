@@ -894,11 +894,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._subordinateRuntime;
   }
 
-  /** The host's one port for this actor: a waiter is found only through the port that parked it. */
-  /** A turn waiting on a delegate it hired; the workspace root frees the waiting turn's slot. */
-  protected whileWaitingOnDelegate<T>(_actorId: string, waited: Promise<T>): Promise<T> {
-    return waited;
-  }
+  protected stopSubtree(_actorId: string): void {}
 
   protected temporaryAgentPort(reference: ActorReference = actorReferenceOf(this.actorHandle())): TemporaryAgentPort {
     return this.actorHost().temporary(reference, (bound) => {
@@ -908,7 +904,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return createTemporaryAgentPort({
         roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
-        whileWaiting: (waited) => this.whileWaitingOnDelegate(bound.record.actorId, waited),
+        afterTurn: (child, work) => {
+          this.detachOwned(async () => {
+            await this.actorHost().run(child, () => Promise.resolve());
+            await work();
+          });
+        },
       });
     });
   }
@@ -1924,7 +1925,10 @@ export abstract class ActorAgent extends Agent<Env> {
       history: (limit) => this.chatTranscript.history(undefined, limit),
       admitted: (id) => this.admittedSend(id),
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
-      interrupt: () => { this.chatLoop.interrupt(); },
+      interrupt: () => {
+        this.chatLoop.interrupt();
+        this.stopSubtree(this.actorHandle().actorId);
+      },
       clear: () => this.clearConversation(),
     });
 
@@ -3593,6 +3597,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return { ok: true, abortedTools: 0, deviceCommands: [] };
     }
+
+    this.stopSubtree(this.actorHandle().actorId);
 
     const turnId = this.durableTurnId();
 

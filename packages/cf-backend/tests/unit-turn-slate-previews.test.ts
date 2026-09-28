@@ -12,7 +12,7 @@ import { captureOperationProfile, CHAT_SESSION_ID, runOperationProfile, slatesCh
 import { SlateInlineContext } from '../src/components/slates/context';
 import { MessageView } from '../src/components/MessageView';
 import {
-  chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
+  actorOver, chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
   workspaceMainActor,
 } from './helpers/actor-harness';
 import { scriptedGateway } from './helpers/platform-gateway';
@@ -87,7 +87,7 @@ test("a hire's slate edit is previewed on the hire's answer, and nowhere else", 
   transcript.appendUser(await transcript.prepareUser({ id: 'u-1', turnId: 'u-1', message: opened }));
   await runDelegatedTask(workspace, hire.actor.handle.actorId, 'Add an expiry column to the board.');
 
-  const hireAnswers = (await storedChat(workspace, hire.actor.handle)).filter((message) => message.role === 'assistant');
+  const hireAnswers = (await storedChat(workspace, actorOver(workspace.db, hire.actor.handle.actorId))).filter((message) => message.role === 'assistant');
 
   expect(hireAnswers.map((message) => slatesChanged({ metadata: message.metadata }))).toEqual([['board']]);
   expect(await workspace.agent.readWorkspaceFile('/slates/board/client.tsx')).toMatchObject({ ok: true });
@@ -259,7 +259,7 @@ test("a hire whose report quotes the slate's line gets no second preview", async
   transcript.appendUser(await transcript.prepareUser({ id: 'u-1', turnId: 'u-1', message: opened }));
   await runDelegatedTask(workspace, hire.actor.handle.actorId, 'Add an expiry column to the board.');
 
-  const answer = (await storedChat(workspace, hire.actor.handle)).filter((message) => message.role === 'assistant').at(-1);
+  const answer = (await storedChat(workspace, actorOver(workspace.db, hire.actor.handle.actorId))).filter((message) => message.role === 'assistant').at(-1);
 
   expect(slatesChanged({ metadata: answer?.metadata })).toEqual([]);
   expect(previewsDrawn(answer)).toEqual(['board']);

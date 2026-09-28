@@ -12,7 +12,7 @@ import {
   createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
-  recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf,
+  recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
@@ -40,7 +40,7 @@ import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCaptur
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import {
-  createWorkspaceActorHost, provisionHostedActorHome, type WorkspaceHostSeams,
+  actorRetirementFor, createWorkspaceActorHost, provisionHostedActorHome, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
   admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
@@ -225,7 +225,7 @@ import {
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
-import { authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderThrownChain, settle, toKinuError, toWire, type Refusal, type Wire } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork } from "./user/workspace-fork";
@@ -712,10 +712,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       taskProfile: (turn) => this.hostedTaskProfile(turn),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       announce: () => { this.broadcastSubordinatesChanged(); },
-      scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
+      // The root's turns run on this object's own chat loop, not its hosted slot.
+      scheduleDrain: (actor) => {
+        if (actor.record.parentActorId === null) {
+          this.orch.scheduleDrain();
+
+          return;
+        }
+
+        // One not hosted is opened by the durable wake, which also outlives a reset.
+        this.actorHost().hosted(actor.reference)?.session.orchestrator.scheduleDrain();
+        this.armDurableWake();
+      },
       armWake: () => { this.armDelegationWake(); },
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
-      whileWaiting: (actorId, waited) => this.delegatedTurns.whileWaiting(actorId, waited),
       rederiveWake: () => { this.armDurableWake(); },
       register: async ({ creationId, loop }) => {
         const entry = await this.actorDirectory({
@@ -1147,7 +1157,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  private readonly delegatedTurns = new DelegatedTurnRunners({
+  protected readonly delegatedTurns = new DelegatedTurnRunners({
     slots: DELEGATED_TURN_SLOTS,
     pass: (record) => this.drainActorAssignments(record),
     holdLane: async (body) => {
@@ -1165,8 +1175,107 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Admitted delegated turns run on a fiber, off the wake: inside it a turn held the alarm to its
    * 15-minute wall, whose reset closed every socket (warm-forge-4d6acc02, 2026-09-25).
    */
-  protected override whileWaitingOnDelegate<T>(actorId: string, waited: Promise<T>): Promise<T> {
-    return this.delegatedTurns.whileWaiting(actorId, waited);
+  /** One the owner added has its own Stop. */
+  protected override stopSubtree(actorId: string): void {
+    const seams = this.hostedSeams();
+    const directory = this.actorDirectoryStore();
+
+    const rosterOf = (actor: WorkspaceActor) => {
+      const hirer = directory.retained(actor.parentActorId ?? '');
+
+      return hirer === null ? null : { hirer, roster: seams.roster(this.actorHost().bindStores(actorReferenceOf(hirer))) };
+    };
+
+    const ownerMade = (actor: WorkspaceActor): boolean => {
+      for (let step: WorkspaceActor | null = actor; step !== null && step.actorId !== actorId; step = directory.retained(step.parentActorId ?? '')) {
+        if (rosterOf(step)?.roster.get(step.name)?.createdBy === 'user') return true;
+      }
+
+      return false;
+    };
+
+    const below = subordinateDescendants(this.workspaceActors().list(), actorId).filter((actor) => !ownerMade(actor));
+
+    if (below.length === 0) return;
+    this.delegatedTurns.cancelQueued(below.map((actor) => actor.actorId));
+
+    this.detachOwned(async () => {
+      for (const actor of below) {
+        const reference = actorReferenceOf(actor);
+        const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
+
+        for (const pending of log.pending({ variant: 'subordinate_task' })) log.dismiss(pending.id, 'stopped by the owner', 'system');
+        const live = this.actorHost().hosted(reference);
+
+        if (live?.session.inFlight === true) {
+          live.session.interrupt();
+          continue;
+        }
+
+        const held = rosterOf(actor);
+
+        if (held === null) continue;
+        const { hirer, roster } = held;
+
+        if (roster.get(actor.name)?.status !== 'working') continue;
+        roster.applyReport(actor.name, 'blocked', 'turn_end', Date.now());
+
+        if (actor.lifetime === TEMPORARY_LIFETIME) {
+          await this.actorHost().retire(actorReferenceOf(hirer), actorRetirementFor({ reference, name: actor.name, keepHistory: true, interrupt: true }));
+        }
+      }
+    });
+  }
+
+  /** A waiting hired agent holds no transcript; its rows reopen it. */
+  private releaseIdleHosted(reference: ActorReference): void {
+    const live = this.actorHost().hosted(reference);
+
+    if (live !== null && !live.session.inFlight) this.actorHost().release(reference);
+  }
+
+  private hostedReactionsDueAt(now: number): number | null {
+    const due = this.workspaceActors().list()
+      .filter((record) => record.kind === 'subordinate' && record.retiringAt === null)
+      .map((record) => new EventLog(this.boundExec(), this.actorHost().bindStores(actorReferenceOf(record)).handle).nextPendingDrainAt(now) ?? Infinity);
+
+    const at = Math.min(Infinity, ...due);
+
+    return Number.isFinite(at) ? at : null;
+  }
+
+  private async drainHostedReactions(now: number): Promise<void> {
+    for (const record of this.workspaceActors().list()) {
+      if (record.kind !== 'subordinate' || record.retiringAt !== null) continue;
+      const reference = actorReferenceOf(record);
+      const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
+      const dueAt = log.nextPendingDrainAt(now);
+
+      if (dueAt === null || dueAt > now) continue;
+
+      const drained = await this.drainHostedActor(reference);
+
+      if (!drained.ok) diagnostics.failure('event.hosted_wake_drain_failed', drained.error, { workspace: this.name, actor: record.name });
+    }
+  }
+
+  /** One hired agent's due reactions, drained; a failure is the outcome. */
+  drainHostedActor(reference: ActorReference): Promise<Wire<void, KinuError>> {
+    return settle(toWire(attempt({ doing: 'draining a hired agent\'s reactions this wake was armed for', otherwise: 'io' }, async () => {
+      await (await this.actorHost().acquire(reference)).session.orchestrator.drainPendingEvents({ rethrow: true });
+      this.releaseIdleHosted(reference);
+    }), (failure) => failure));
+  }
+
+  private settledTaskAgent(record: WorkspaceActor): boolean {
+    const directory = this.actorDirectoryStore();
+
+    if (directory.retained(record.actorId)?.retiringAt !== null) return true;
+
+    if (record.lifetime !== TEMPORARY_LIFETIME) return false;
+    const hirer = directory.retained(record.parentActorId ?? '');
+
+    return hirer !== null && this.hostedSeams().roster(this.actorHost().bindStores(actorReferenceOf(hirer))).get(record.name)?.status === 'dismissed';
   }
 
   private startDelegationDrain(): void {
@@ -1216,8 +1325,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           throw cause;
         } finally {
           await room?.closeTurn();
+
           // Mid-turn reports drain here, a reset's re-run too.
-          (await this.actorHost().acquire(reference)).session.orchestrator.scheduleDrain();
+          if (!this.settledTaskAgent(record)) this.hostedSeams().scheduleDrain(this.actorHost().bindStores(reference));
+
+          this.releaseIdleHosted(reference);
         }
       }),
       onFailure: ({ cause }) => {
@@ -1514,13 +1626,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** The next wake owed across triggers, peer outbox, email outbox and pending reactions.
    * Every source folded here must have a phase in {@link _kinuTimerTick} (D6); delegation is not. */
-  private nextWakeAt(now: number): number | null {
+  protected nextWakeAt(now: number): number | null {
     return nextAlarmTime(
       now,
       this.triggerRegistry.list({ state: 'active' }).map((t) => t.next_fire_at),
       this.peerHub.nextRetryAt(),
       this.emailOutbox.nextRetryAt(),
       this.eventLog.nextPendingDrainAt(now),
+      this.hostedReactionsDueAt(now),
       nextEvolutionAnswerAt(this.boundSql, this.actorHandle().actorId),
       this.cacheWarming.nextWarmAt(),
       // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
@@ -1901,7 +2014,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return handoff.delivery === 'starts_now' ? 'turn' : 'mid-turn';
       },
-      interrupt: () => { this.actorHost().hosted(reference)?.session.interrupt(); },
+      interrupt: () => {
+        this.actorHost().hosted(reference)?.session.interrupt();
+        this.stopSubtree(actorId);
+      },
       clear: () => {
         history.clearConversation(CHAT_SESSION_ID, () => {
           if (this.actorHost().hosted(reference)?.session.inFlight === true) {
@@ -3126,6 +3242,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       await tick.span('alarm.event_drain', async (span) => {
         const dueAt = this.eventLog.nextPendingDrainAt(now);
         span.setAttribute('kinu.drain_due', dueAt !== null && dueAt <= now);
+        await this.drainHostedReactions(now);
 
         if (dueAt === null || dueAt > now) return;
 
@@ -4793,7 +4910,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       } finally {
         this.overviewPushing = false;
 
-        for (const settle of this.overviewSettlers.splice(0)) settle(failed);
+        for (const settleWaiter of this.overviewSettlers.splice(0)) settleWaiter(failed);
       }
     });
   }

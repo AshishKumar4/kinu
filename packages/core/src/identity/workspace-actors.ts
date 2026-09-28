@@ -430,6 +430,23 @@ export class WorkspaceActorDirectory {
 }
 
 /** Keyed by the immutable storage key, never the name, so renames and reused names never share a directory. */
+/** Hired agents below `actorId`, deepest first. */
+export function subordinateDescendants(actors: readonly WorkspaceActor[], actorId: string): readonly WorkspaceActor[] {
+  const below: WorkspaceActor[] = [];
+
+  const visit = (parentId: string): void => {
+    for (const actor of actors) {
+      if (actor.kind !== 'subordinate' || actor.parentActorId !== parentId) continue;
+      visit(actor.actorId);
+      below.push(actor);
+    }
+  };
+
+  visit(actorId);
+
+  return below;
+}
+
 export function actorStateRoot(storageKey: string): string {
   return `.kinu/agents/${encodeURIComponent(storageKey)}`;
 }

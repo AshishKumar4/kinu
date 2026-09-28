@@ -20,7 +20,8 @@ function childAdmissions(observed: HireObservation): readonly LogRow[] {
 }
 
 describe('hire', () => {
-  it('a task hire returns the child\'s answer to its caller', async () => {
+  // Owner, 2026-09-27 (SUBAGENTS.md §4): every hire returns at once; its answer arrives as a message.
+  it('a task hire returns at once, and the child\'s answer opens its caller\'s next turn', async () => {
     const workspace = 'hire-answer';
 
     await probe(workspace).setup(workspace, 'hire-root', 'answer');
@@ -29,7 +30,9 @@ describe('hire', () => {
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
 
-    expect(observed.toolResults.join(' ')).toContain(CHILD_ANSWER);
+    expect(observed.toolResults.join(' ')).toContain('"status":"working"');
+    expect(observed.toolResults.join(' ')).not.toContain(CHILD_ANSWER);
+    expect(observed.reports.join(' ')).toContain(CHILD_ANSWER);
 
     // A task hire's lifetime is the task.
     const hired = observed.roster.filter((row) => row.lifetime === 'task');
@@ -49,7 +52,7 @@ describe('hire', () => {
     await probe(workspace).callerObserved();
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
-    const answers = observed.toolResults.join(' ');
+    const answers = observed.reports.join(' ');
 
     expect(answers).toContain(NEST_RELAY);
     expect(answers).toContain(CHILD_ANSWER);
@@ -61,18 +64,19 @@ describe('hire', () => {
     expect(hired.every((row) => row.status === 'dismissed')).toBe(true);
   });
 
-  it('a helper\'s own task child that notes its progress still answers the helper waiting on it', async () => {
+  it('a helper\'s own task child that notes its progress still answers the helper, which answers only then', async () => {
     const workspace = 'hire-nested-progress';
 
     await probe(workspace).setup(workspace, 'hire-root', 'nest-progress');
-    // Hangs while the note queues behind the helper that waits on the child: nothing else answers it.
     await probe(workspace).openHire(workspace, 'Hire one auditor that hires one of its own, which notes its progress.');
     await probe(workspace).callerObserved();
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
+    const toRoot = observed.reports.filter((report) => report.includes(NEST_RELAY));
 
-    expect(observed.toolResults.join(' ')).toContain(NEST_RELAY);
-    expect(observed.toolResults.join(' ')).toContain(CHILD_ANSWER);
+    // The helper's turn on the progress note is not its answer: its own hire still works.
+    expect(toRoot.every((report) => report.includes(CHILD_ANSWER))).toBe(true);
+    expect(toRoot.length).toBeGreaterThan(0);
   });
 
   it('a chain of helpers each hiring its own stops at the depth cap and still answers the root', async () => {
@@ -86,10 +90,10 @@ describe('hire', () => {
     const hired = observed.actors.filter((row) => row.kind === 'subordinate');
 
     expect(hired).toHaveLength(DELEGATION_MAX_DEPTH);
-    expect(observed.toolResults.join(' ').split(NEST_RELAY).length - 1).toBeGreaterThanOrEqual(DELEGATION_MAX_DEPTH);
+    expect(observed.reports.join(' ')).toContain(NEST_RELAY);
   });
 
-  it('dismissing a helper while it waits on its own task hire interrupts the helper it hired', async () => {
+  it('dismissing a helper retires the task agent it hired, mid-turn', async () => {
     const workspace = 'hire-nested-dismiss';
 
     await probe(workspace).setup(workspace, 'hire-root', 'nest-park');
@@ -101,11 +105,11 @@ describe('hire', () => {
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
 
-    expect(observed.toolResults.join(' ')).not.toContain(CHILD_ANSWER);
+    expect(observed.reports.join(' ')).not.toContain(CHILD_ANSWER);
     expect(observed.roster.every((row) => row.status === 'dismissed')).toBe(true);
   });
 
-  it('a child whose turn throws still settles its caller', async () => {
+  it('a child whose turn throws delivers its failure to its caller', async () => {
     const workspace = 'hire-throw';
 
     await probe(workspace).setup(workspace, 'hire-root', 'throw');
@@ -113,7 +117,7 @@ describe('hire', () => {
     await probe(workspace).callerObserved();
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
-    const answer = observed.toolResults.join(' ');
+    const answer = observed.reports.join(' ');
 
     expect(answer).toMatch(/failed|blocked|unavailable/i);
     expect(answer).not.toContain(CHILD_ANSWER);
@@ -146,7 +150,7 @@ describe('hire', () => {
 
     // The interrupted `agents` call was claimed before the abort, so recovery settles it as the lost-call
     // refusal (effect-claim.ts), which is a settled caller too.
-    expect(observed.toolResults.join(' ')).toMatch(
+    expect([...observed.toolResults, ...observed.reports].join(' ')).toMatch(
       /failed|blocked|unavailable|interrupt|recovered|taken effect|CHILD-ANSWER/i,
     );
   });
@@ -168,7 +172,7 @@ describe('hire', () => {
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
 
-    expect(observed.toolResults.join(' ')).toContain(CHILD_ANSWER);
+    expect(observed.reports.join(' ')).toContain(CHILD_ANSWER);
   });
 
   it('the owner\'s Stop ends a parked delegated turn, and a restart does not run it again', async () => {
@@ -179,15 +183,16 @@ describe('hire', () => {
 
     await probe(workspace).childSpoke();
     await probe(workspace).stopChild(workspace);
-    // Hangs while the parked turn outlives the Stop: nothing below releases it.
     await hiring;
+    // Hangs while the parked turn outlives the Stop: nothing below releases it.
+    await probe(workspace).settled(workspace);
     await abortAllDurableObjects();
     await probe(workspace).reenter(workspace);
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
     const childTurns = observed.turns.filter((row) => row.actorId !== observed.rootActorId);
 
-    expect(observed.toolResults.join(' ')).not.toContain(CHILD_ANSWER);
+    expect(observed.reports).toEqual([]);
     expect(childTurns).toHaveLength(1);
     expect(childTurns[0]?.runs).toBe(1);
   });
@@ -211,25 +216,25 @@ describe('hire', () => {
     const childTurns = observed.turns.filter((row) => row.actorId !== observed.rootActorId);
 
     expect(observed.roster.find((row) => row.name === dismissed)?.status).toBe('dismissed');
-    expect(observed.toolResults.join(' ')).not.toContain(CHILD_ANSWER);
+    expect(observed.reports.join(' ')).not.toContain(CHILD_ANSWER);
     expect(childTurns[0]?.runs).toBe(1);
   });
 
-  it('an eviction between the child\'s answer and the caller\'s wait still settles the caller', async () => {
+  it('an eviction while the child works still delivers its answer', async () => {
     const workspace = 'hire-evict';
 
     await probe(workspace).setup(workspace, 'hire-root', 'answer');
     await probe(workspace).openHire(workspace, 'Hire one auditor across an eviction.');
 
-    // The in-memory waiter dies here, so whatever settles the caller must be durable.
     await probe(workspace).childSpoke();
     await abortAllDurableObjects();
     await probe(workspace).reenter(workspace);
+    await probe(workspace).callerObserved();
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
 
     const durable = [
-      observed.toolResults.join(' '),
+      observed.reports.join(' '),
       observed.transcript.join(' '),
       observed.log
         .filter((row) => row.variant === 'subordinate_report')
@@ -251,13 +256,14 @@ describe('hire', () => {
     await probe(workspace).setup(workspace, 'hire-root', 'answer');
     await probe(workspace).openHire(workspace, `Hire one auditor with ${HIRE_MISSION}.`);
     await probe(workspace).callerObserved();
+    await probe(workspace).settled(workspace);
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
 
     expect(observed.rootActorId).not.toBe('');
     expect(observed.roster.filter((row) => row.lifetime === 'task')).toHaveLength(1);
 
-    // The child retires inside the turn that answers, so counts read rows a retired actor left behind.
+    // The child retires after the turn that answers, so counts read rows a retired actor left behind.
     const child = observed.actors.filter((row) => row.kind === 'subordinate');
 
     expect(child).toHaveLength(1);
@@ -303,7 +309,8 @@ describe('hire', () => {
 
     const childTurns = observed.turns.filter((row) => row.actorId !== observed.rootActorId);
 
+    // The message runs as its own turn, or steers the brief's when that one is still running: never more.
     expect(childTurns).toHaveLength(1);
-    expect(childTurns[0]?.runs).toBe(2);
+    expect(childTurns[0]?.runs).toBeLessThanOrEqual(2);
   });
 });

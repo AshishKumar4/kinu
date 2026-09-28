@@ -34,26 +34,17 @@ test('no more delegated turns run at once than there are slots', async () => {
   expect(peak).toBe(SLOTS);
 });
 
-test('a turn waiting on the delegate it hired frees its slot, so the delegate runs and answers it', async () => {
-  // One slot, held by the hirer: the delegate can run only in the slot the wait frees.
+test('a Stop skips the turns an actor has queued for a slot, and not later ones', async () => {
   const pool = runners(1);
-  const order: string[] = [];
+  const ran: string[] = [];
+  const gate = Promise.withResolvers<void>();
+  const holder = pool.turn('holder', async () => { await gate.promise; });
+  const queued = pool.turn('stopped', async () => { ran.push('queued before the Stop'); });
 
-  const answer = Promise.withResolvers<string>();
+  pool.cancelQueued(['stopped']);
+  const later = pool.turn('stopped', async () => { ran.push('queued after the Stop'); });
+  gate.resolve();
+  await Promise.all([holder, queued, later]);
 
-  const parent = pool.turn('parent', async () => {
-    order.push('parent hires');
-
-    const child = pool.turn('child', async () => {
-      order.push('child runs');
-      answer.resolve('found');
-    });
-
-    const got = await pool.whileWaiting('parent', answer.promise);
-    order.push(`parent resumes with ${got}`);
-    await child;
-  });
-
-  await parent;
-  expect(order).toEqual(['parent hires', 'child runs', 'parent resumes with found']);
+  expect(ran).toEqual(['queued after the Stop']);
 });

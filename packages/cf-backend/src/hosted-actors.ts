@@ -7,7 +7,7 @@
  * Not facets: `do.facet.cpu_shared` means hosted actors serialise as in one isolate.
  */
 
-import { REAL_CLOCK, type HeadReport, type ObserveStream } from '@kinu.run/core';
+import { INTERRUPTED_TURN, REAL_CLOCK, type HeadReport, type ObserveStream } from '@kinu.run/core';
 import type { LanguageModel, Tool, ToolSet } from 'ai';
 import {
   EventLog, HeadCapture, runHeadInference, titleActorFromMessage, spawnSeatedHead,
@@ -18,7 +18,7 @@ import {
   classifyRunEnd, closeTurnRun, openTurnRun,
   collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute,
   storedHeadReportStatus, subordinateDelegatesOf,
-  registeredParent, terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, CHAT_SESSION_ID,
+  registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, CHAT_SESSION_ID,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
   type DelegationBudget,
   type DynamicContext, type HeadId, type HeadInferenceDeps, type HeadInput, type HeadSplitRequest, type HeadSplitResult,
@@ -110,14 +110,11 @@ export interface HostedActorSeams {
   dynamic(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext;
   announce(actor: BoundActor): void;
   /** Drain on a reaction (a child's report). Never for an assignment: `wakesADrain` excludes it. */
-  scheduleDrain(actor: HostedActor): void;
+  scheduleDrain(actor: BoundActor): void;
   /** Arm the wake chain that reaches the delegation runners; the admitting request must not run it. */
   armWake(): void;
   rederiveWake(): void;
-  /** Lives on the parent: `ask` parks a waiter and the report ingress resolves it. */
   temporary(actor: BoundActor): TemporaryAgentPort;
-  /** An actor's turn slot is free while it waits on another actor's queue. */
-  whileWaiting<T>(actorId: string, waited: Promise<T>): Promise<T>;
 }
 
 export function hostedDelegationBudget(
@@ -240,6 +237,8 @@ export async function relayHostedReport(
     readonly handoff?: SubordinateReportHandoff;
     /** The assignment this report answers; closed on delivery. */
     readonly answers?: string;
+    /** A Stop: wakes no one. */
+    readonly quiet?: true;
   },
 ): Promise<SubordinateEventResult> {
   // Past depth 1 the hiring parent is not the workspace.
@@ -255,9 +254,8 @@ export async function relayHostedReport(
     if (answers !== undefined) new EventLog(seams.exec, child.handle).markAnswered(answers);
   };
 
-  // Not the hirer's queue: it may wait on this child's.
-  const hirer = await seams.host.acquire(parent);
-  const temporary = seams.temporary(hirer);
+  // Neither the hirer's queue (it may wait on this child's) nor its session (an idle hirer holds none).
+  const hirer = seams.host.hosted(parent) ?? seams.host.bindStores(parent);
 
   return await receiveSubordinateEvent({
     log: new EventLog(seams.exec, hirer.handle),
@@ -270,19 +268,9 @@ export async function relayHostedReport(
       return written;
     }),
     announce: () => { seams.announce(hirer); },
-    onAdmitted: () => { if (hirer.record.parentActorId === null || !hirer.session.inFlight) seams.scheduleDrain(hirer); },
+    onAdmitted: () => { if (seams.host.hosted(parent)?.session.inFlight !== true) seams.scheduleDrain(hirer); },
     onEvolutionAnswer: () => { seams.rederiveWake(); },
-    // A task child's answer goes first to its waiter, and closes before the waiter retires the child.
-    temporary: {
-      ...temporary,
-      settle: (input) => {
-        const settled = temporary.settle(input);
-
-        if (settled) answered();
-
-        return settled;
-      },
-    },
+    temporary: seams.temporary(hirer),
   }, { fromSubordinate: name, ...event }, Date.now());
 }
 
@@ -308,9 +296,7 @@ export async function retireStalledTask(
 }
 
 /**
- * One delegated turn via `runHeadInference`. A `task` child owes a terminal answer on every ending
- * (an `agents.ask` is blocked on it); a `durable` child relays only a completed turn. A report that
- * already settled the run suppresses both.
+ * One delegated turn via `runHeadInference`; a report that already settled the run suppresses the terminal one.
  */
 export interface HostedTaskResult {
   readonly text: string;
@@ -410,7 +396,10 @@ export async function runHostedTask(
       }),
     });
 
-    const ending: TaskTurnEnding = TASK_TURN_ENDING[report.status];
+    // An owner's Stop reaches the model call as an interrupted stream, which the head records as a failure.
+    const ending: TaskTurnEnding = report.status === 'errored' && report.errorMessage?.includes(INTERRUPTED_TURN) === true
+      ? 'interrupted'
+      : TASK_TURN_ENDING[report.status];
 
     await chat?.answered({
       completion: report.canonicalCompletion,
@@ -435,14 +424,16 @@ export async function runHostedTask(
   const owedReport = async (
     actor: HostedActor,
     { report, ending, reports }: Awaited<ReturnType<typeof runTurn>>,
-  ): Promise<{ readonly status: SubordinateReportStatus; readonly content: string } | null> => {
+  ): Promise<{ readonly status: SubordinateReportStatus; readonly content: string; readonly quiet?: true } | null> => {
     const owed = reports.settled ? null : await terminalTaskReport({
       lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary,
+      delegating: taskAnswerIsLater({ roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle), turnTaskId: task.sequenceId }),
       narration: () => actor.stores.history.transcript(CHAT_SESSION_ID).narration(report.canonicalCompletion?.outputPartReferences ?? []),
     });
 
+    // A task agent reports only its terminal answer.
     const relayed = owed ?? (
-      ending === 'answered' && subordinateRelaysTurnEnd({
+      ending === 'answered' && hostedLifetime(actor.record) !== TEMPORARY_LIFETIME && subordinateRelaysTurnEnd({
         reportedThisTurn: reports.spoke, ownerDriven: false, assistantText: report.summary,
       })
         ? { status: 'progress' as const, content: report.summary }
@@ -471,6 +462,7 @@ export async function runHostedTask(
     relayed: await relayHostedReport(seams, ran.actor, {
       status: ran.relayed.status, content: ran.relayed.content, origin: 'turn_end',
       mode: task.mode, sequenceId: task.sequenceId, answers: task.sequenceId,
+      ...(ran.relayed.quiet === true && { quiet: true }),
     }),
   };
 }
@@ -504,8 +496,6 @@ export function hostedSubordinateRuntime(
       .pipe(Effect.as(entry.reference));
   });
 
-  // A child's queue can be held by a turn that waits on a delegate: the hirer frees its own slot meanwhile.
-  const outsideSlot = <T>(waited: Promise<T>): Promise<T> => seams.whileWaiting(parent().record.actorId, waited);
 
   /** Runs `body` as the named hire. */
   const asHire = <Result>(name: string, body: (reference: ActorReference) => Promise<Result>): Effect.Effect<Result, KinuError> =>
@@ -523,24 +513,40 @@ export function hostedSubordinateRuntime(
         return Promise.resolve();
       }))))),
     cancelBirth: (input) => settle(registerChild(input, 'cancelCreation')),
-    assign: (name, input) => settle(asHire(name, (reference) => outsideSlot(admitHostedTask(seams, reference, { kind: 'task' as const, ...input })))),
-    status: (name) => settle(asHire(name, (reference) => outsideSlot(seams.host.run(reference, async (actor) =>
-      readSubordinateLiveStatus(seams.exec, actor.handle))))),
-    message: (name, content, mode) => settle(asHire(name, (reference) => outsideSlot(admitHostedTask(seams, reference, { kind: 'message', body: content, mode })))),
+    assign: (name, input) => settle(asHire(name, (reference) => admitHostedTask(seams, reference, { kind: 'task' as const, ...input }))),
+    status: (name) => settle(asHire(name, (reference) => seams.host.run(reference, async (actor) =>
+      readSubordinateLiveStatus(seams.exec, actor.handle)))),
+    message: (name, content, mode) => settle(asHire(name, (reference) => admitHostedTask(seams, reference, { kind: 'message', body: content, mode }))),
     rename: (name, displayName, nameOrigin) => settle(asHire(name, (reference) => seams.host.run(reference, async (actor) => {
       actor.stores.config.setDisplayNameOrigin(displayName, nameOrigin);
     }))),
     /** Wipe removes rows, home and state subtree; archive keeps them. `observed` lets the host settle a live claim. */
     dismiss: async (name, { keepHistory, interrupt }, reference) => {
+      await retireDescendants(seams, reference, keepHistory);
       const live = seams.host.hosted(reference);
       const claim = live === null ? null : live.session.turnClaim;
       // `observed` only when a claim was seen: the host's refusal depends on absent vs present.
       const request: ActorRetirementRequest = { reference, name, keepHistory, interrupt };
 
       if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
-      await outsideSlot(seams.host.retire(parent().reference, actorRetirementFor(request)));
+      await seams.host.retire(parent().reference, actorRetirementFor(request));
     },
   };
+}
+
+async function retireDescendants(seams: HostedActorSeams, below: ActorReference, keepHistory: boolean): Promise<void> {
+  for (const descendant of subordinateDescendants(seams.directory.list(), below.actorId)) {
+    const hirer = seams.directory.retained(descendant.parentActorId ?? '');
+
+    if (hirer === null) continue;
+    const roster = seams.roster(seams.host.bindStores(actorReferenceOf(hirer)));
+
+    if (roster.get(descendant.name)?.status !== 'dismissed') roster.dismiss(descendant.name, Date.now());
+
+    await seams.host.retire(actorReferenceOf(hirer), actorRetirementFor({
+      reference: actorReferenceOf(descendant), name: descendant.name, keepHistory, interrupt: true,
+    }));
+  }
 }
 
 /** Core's predicate at the one place a hosted child's report is admitted. */

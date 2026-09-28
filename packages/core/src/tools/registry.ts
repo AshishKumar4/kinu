@@ -203,8 +203,8 @@ export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 /** `agents` notes by the wiring each needs; `renderAgentsToolDescription` keeps the wired ones. */
 export const AGENTS_TOOL_NOTES = {
   swarm: '`swarm` runs short-lived nodes in parallel over this workspace and returns what they found, judged, or measured by your verifier when you give an `objective`. It takes minutes; on a live session it runs in the background and its result wakes you.',
-  hire: '`hire` gives one workstream to one agent: a new one from `role` and `mission`, or an existing `agent` with `message`. A hired subordinate stays in your roster, with its context, after it reports.',
-  task: '`lifetime:"task"` creates an agent for one question: the call waits for its answer, returns it, and archives the agent.',
+  hire: '`hire` gives one workstream to one agent: a new one from `role` and `mission`, or an existing `agent` with `message`. It returns at once; the agent\'s report, or its failure, arrives later as a message that opens your next turn, so end your turn when you have nothing else to do. A hired subordinate stays in your roster, with its context, after it reports.',
+  task: '`lifetime:"task"` creates an agent for one question: the call returns at once, its answer arrives later as a message, and the agent is archived once it answers.',
   converse: '`msg` messages an agent without handing it a workstream; `list` reads the roster. A subordinate\'s report and a peer\'s reply arrive later as events.',
   peers: '`hire` with `scope:"workspace"` creates a specialist workspace; `msg` with `event_id` answers an incoming agent message.',
 } as const;
