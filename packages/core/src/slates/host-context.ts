@@ -18,17 +18,6 @@ export interface SlateHostContext {
   readonly origin: string;
 }
 
-const SlateHostContextSchema = v.strictObject({
-  theme: v.picklist(['dark', 'light']),
-  styles: v.strictObject({ variables: v.record(v.string(), v.string()) }),
-  containerDimensions: v.strictObject({
-    width: v.number(),
-    height: v.optional(v.number()),
-  }),
-  display: v.picklist(['inline', 'pane']),
-  origin: v.string(),
-});
-
 export const SLATE_HOST_CONTEXT_MESSAGE = 'host-context';
 
 export const SLATE_SIZE_CHANGED_MESSAGE = 'size-changed';
@@ -77,10 +66,10 @@ export function buildSlateHostContext(input: {
   return context;
 }
 
-/** The query carries context before the first postMessage can arrive; malformed context fails here, not in the frame. */
+/** The query carries context before the first postMessage can arrive. */
 export function slateFrameSrc(url: string, context: SlateHostContext): string {
   const base = new URL(url);
-  base.searchParams.set(SLATE_QUERY_PARAM, JSON.stringify(v.parse(SlateHostContextSchema, context)));
+  base.searchParams.set(SLATE_QUERY_PARAM, JSON.stringify(context));
 
   return base.toString();
 }

@@ -4,7 +4,7 @@ import type { SlateLiveShareStore } from './live-shares';
 import type { ShareUser } from './shares';
 import * as v from 'valibot';
 import {
-  SlateCapabilityGraphSchema, ViewerRequestRecordSchema,
+  ViewerRequestRecordSchema,
   type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type SlateCapabilityGraph, type ViewerRequestRecord,
 } from './sharing';
 import { nanoid } from '../utils/nanoid';
@@ -26,7 +26,7 @@ export class WorkspaceLiveShares {
   constructor(private readonly deps: WorkspaceLiveSharesDeps) {}
 
   async graph(slate: string): Promise<SlateCapabilityGraph> {
-    return v.parse(SlateCapabilityGraphSchema, slateCapabilityGraph({ slate, workspace: this.deps.workspace, catalog: await this.deps.catalog() }));
+    return slateCapabilityGraph({ slate, workspace: this.deps.workspace, catalog: await this.deps.catalog() });
   }
 
   async share(
