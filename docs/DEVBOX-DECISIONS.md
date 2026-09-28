@@ -106,6 +106,23 @@ day (Workers Logs, `containers` dataset): the heartbeat's read of a boot id, a
 NUL and a running sync's `alive` came back as one 41-character line
 (`stdoutLen 41`) on both running boxes (D33).
 
+P7. A container application can refuse a start as over `max_instances`, with
+fewer instances running than that, for about a minute and a half after a
+sibling instance is destroyed. The refusal reads `Maximum number of running
+container instances exceeded. Try again later, or try configuring a higher
+value for max_instances`. Measured in Workers Logs on staging's sandbox
+(`max_instances` 3), 2026-09-27 and 2026-09-28. In the 30 minutes before each
+refusal, one other box's container ran: `fb30af5d…`, granted 15:55:46Z and
+destroyed 15:56:33.965Z on 09-27, and `7de7d8f4…`, granted 00:27:24Z and
+destroyed 00:28:11.620Z on 09-28. The next box's admission was refused on
+every attempt until 73.6 s (09-27) and 73.5 s (09-28) after that destroy.
+Its next attempt was granted, and that admission settled 93.8 s and 96.8 s
+after the destroy, cold start and restore included. One destroyed sibling
+against three slots does not explain the refusal. The Containers docs read
+2026-09-28 (FAQ, Limits, Scaling and Routing, Rollouts) say neither what else
+counts toward `max_instances` nor how long a destroyed instance holds its
+place. Staging now takes production's 10 (D36).
+
 ## Decisions
 
 D1. Admission is port-proven. The container-start path proves the control
@@ -1446,6 +1463,58 @@ use. No container was ever left idle, so the idle path never ran. The window
 did confirm D34: each stopped box took one heartbeat that armed nothing
 (`devbox.schedule.exit` with no `nextSeconds`). There were 81 `KinuSandbox`
 alarm invocations in all, and none of the 58 boxes looped.
+
+D36. A destroyed box starts nothing of its own, a refused box says so, and a
+box no caller used rests (2026-09-28). Staging's first-run case
+`sandbox-mount-write` failed on 2026-09-27 and 2026-09-28 with `this devbox
+is not ready: no restoration has run for this container yet`. No call reached
+the box before its restoration settled. The platform refused the box a
+container on every admission (P7), and each of the case's three tool calls
+waited inside those refusals, for 10, 19 and 20 s. Three defects sat in that
+chain.
+
+- The caller was told no restoration had run, and the platform's refusal went
+  only to the incident ledger. A pending or failed answer now names it (`the
+  platform refused this box a container: …`) until an admission is granted.
+  The refusal is kept per generation, so a later generation never shows it.
+- The case's teardown (`discardState`, then `destroy`) did not stop the box's
+  own start. Each refusal had armed a startup row. On 09-28 that row won a
+  container at 00:29:48Z, 22 s after the teardown, and the container was
+  restored and watched. It still ran hours later, holding one of staging's
+  three slots; the 09-27 one ran 3 h 15 min. `destroy` now closes the box. It
+  aborts and awaits every admission in flight, then deletes the startup,
+  heartbeat and checkpoint rows before the SDK's destroy. Incident delivery,
+  which never reaches a container, carries on. Until a
+  caller or a host asks again (`resolveReadiness`, `attachNow`,
+  `kickStartup`), a start hook restores nothing, and neither a buffered
+  startup row nor a poll (`devboxState`) starts a container. The flag lives
+  in memory only. A start in flight and an alarm pass's buffered rows die with
+  the isolate, and a fresh isolate arms nothing, since activation only adopts
+  a running container. `#replaceContainer` keeps the SDK's destroy: a
+  replaced identity is restarted, not closed. Every bench drive that destroys
+  a box asks again through `/create` or `/wake`.
+- A box no caller used never rested: its idle clock fell back to each beat's
+  `now`. It now falls back to when its container last started
+  (`devbox:started-at`, written as the start hook settles).
+
+Staging's sandbox takes production's `max_instances` of 10 (was 3). Open: a
+beat already past its running check when `destroy` lands can still exec, and
+the SDK starts a stopped container on exec.
+
+Tests, red on cbfd32def6 and green after:
+- `tests/restoration-visibility.test.ts`: a caller of a refused box learns the
+  refusal, then is restored once granted. Red: `no restoration has run`.
+- `tests/lifecycle-generation.test.ts`: a start in flight at teardown leaves no
+  container, no row and no restore. Red: running, heartbeat armed, one stamp.
+  A startup row delivered after the teardown starts nothing. Red: one start,
+  running, two rows. A caller and a host's kick still reopen the box, green
+  before and after.
+- `tests/terminal-activity.test.ts`: a box its own startup started rests after
+  the idle window. Red: still running with its alarm armed after 120 passes.
+
+Deployed re-proof owed: `sandbox-mount-write` passes on a staging cold start,
+and no staging box logs `devbox.alarm.enter` with `running: true` after its
+workspace's `sandbox.destroy`.
 
 ## Measurement contract for a strategy comparison
 

@@ -32,7 +32,8 @@ on every call.
 
 1. Admission proves the SDK's control listener answers, through
    `startAndWaitForPorts`, before the SDK calls `onStart`. A failed admission
-   records an incident and arms the `devboxStartup` row to try again.
+   records an incident and arms the `devboxStartup` row to try again. A caller
+   asking meanwhile is told the platform's refusal in its own words.
 2. `onStart` adopts the running instance when it is already restored, or
    restores it (attach, workload restart, port exposure) under one raced
    budget. The SDK runs it inside its start block, so nothing else reaches the
@@ -40,11 +41,17 @@ on every call.
    the container's own sync, and retires the startup row.
 3. Operations wait on attachment. A failed attach refuses with its reason and
    walks one bounded recovery ladder instead of resetting the object.
-4. A heartbeat holds the lease. Three gates must agree before a stop.
+4. A heartbeat holds the lease. Three gates must agree before a stop. A box
+   no caller has used counts its idle time from its container's start.
 5. A graceful stop takes a final checkpoint through the container's sync, ends
    the sync, disables keep-alive, then sends `SIGTERM`.
 6. A lifecycle failure is stored before delivery retries until the host accepts
    it.
+7. `destroy` closes the box. It aborts and awaits a start in flight, and
+   deletes its startup, heartbeat and checkpoint rows before the SDK's
+   destroy. Until a caller or a host asks again, a start hook restores
+   nothing, and neither a buffered startup row nor a poll (`devboxState`)
+   starts a container (D36).
 
 `DevboxStorage` hides durable bytes behind the three methods every strategy
 needs:
