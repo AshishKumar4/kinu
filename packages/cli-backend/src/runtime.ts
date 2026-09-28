@@ -118,7 +118,7 @@ export interface CLIRuntime extends AgentRuntime {
    */
   profiles?: LocalProfileAuthority;
   /**
-   * Override seam for measurement harnesses (`tests/live/harness.ts`); `null`
+   * Override seam for harnesses (`tests/live-model/harness.ts`); `null`
    * withholds resolution so an unrouted lane says so rather than inventing a model.
    */
   setProfileResolver?(resolve: (() => Promise<ResolvedTurnProfile>) | null): void;

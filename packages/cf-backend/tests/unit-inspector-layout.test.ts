@@ -1,6 +1,6 @@
 /**
  * Inspector layout policy through the hook's pure half. React is never mocked: `mock.module('react')`
- * is process-global under Bun; the effects are covered in scripts/chat-and-files-ux.test.ts.
+ * is process-global under Bun; the effects are covered in tests/browser/chat-and-files-ux.test.ts.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 

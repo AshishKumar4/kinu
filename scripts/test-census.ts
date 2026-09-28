@@ -2834,7 +2834,7 @@ export function runnerClaims(tracked: readonly string[]): RunnerClaim[] {
     ['test', 'root `bun run test` — the partly disjoint agent-utils/core/compaction set'],
     ['test:cli', 'the full CLI suite runner'],
     ['test:workerd', 'the workerd layer, both roots'],
-    ['test:live', 'the live tier: the end-to-end suites under tests/live'],
+    ['test:live', 'the live tier: the end-to-end suites under tests/live-model'],
     ['evals', 'the eval suite: every task under evals/tasks, on the deployment'],
     ['test:anti-slop', 'the vendored plugin suites, under Node'],
   ];

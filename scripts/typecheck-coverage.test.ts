@@ -100,7 +100,7 @@ describe('this tree', () => {
     const coverage = testCoverage(tests, programs);
 
     expect(tests.length).toBeGreaterThan(0);
-    expect(tests).toContain('tests/live/deep-evolution.test.ts');
+    expect(tests).toContain('tests/live-model/deep-evolution.test.ts');
     expect(tests).toContain('evals/tasks/order-book.eval.ts');
     expect(coverage).toEqual({ governed: tests, missing: [], staleExceptions: [] });
 

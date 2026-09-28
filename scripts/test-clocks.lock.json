@@ -185,13 +185,13 @@
     "scripts/bench.test.ts": {
       "sleep": 2
     },
-    "scripts/computed-style.test.ts": {
+    "tests/browser/computed-style.test.ts": {
       "sleep": 1
     },
     "scripts/devbox-e2e.test.ts": {
       "clock-compare": 1
     },
-    "scripts/public-pages.test.ts": {
+    "tests/browser/public-pages.test.ts": {
       "sleep": 4
     },
     "tests/first-run/background-settle.first-run.ts": {
