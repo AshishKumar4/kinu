@@ -28,101 +28,7 @@ import {
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
-export interface CliAuthStart {
-  deviceToken: string;
-  userCode: string;
-  verificationUrl: string;
-  expiresAt: string;
-  intervalSeconds: number;
-}
-
-export interface CliAuthPoll {
-  status: 'pending' | 'approved' | 'expired';
-  message?: string;
-  origin?: string;
-  token?: string;
-  expiresAt?: string;
-  user?: { id: string; email: string };
-}
-
-/** Complete active list, names only; the wide bounded listing is the web surface's contract. */
-export interface CloudAgent {
-  name: string;
-  displayName: string;
-  createdAt: number;
-}
-
-export interface CloudDeviceRegistration {
-  deviceId: string;
-  token: string;
-  userId: string;
-  origin: string;
-}
-
-export interface CloudDevice {
-  id: string;
-  label: string;
-  os: string | null;
-  hostname: string | null;
-  connected: boolean;
-  createdAt: number;
-  lastSeenAt: number | null;
-  /** Per-workspace home and roots live on the runtime status; the registry knows nothing per workspace. */
-  sandbox: CloudDeviceSandbox;
-  wholeMachine: boolean;
-}
-
 export type CloudDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
-
-export interface CloudAgentConnectTicket {
-  ticket: string;
-  expiresAt: number;
-}
-
-export interface CloudAgentStatus {
-  name: string;
-  displayName?: string;
-  purpose: string;
-  soul: string;
-  createdAt: number;
-  scaffoldVersion: number;
-  searchNodeCount: number;
-  messageCount: number;
-  model?: string | null;
-  reasoningEffort?: ReasoningEffort | null;
-  roleId?: string;
-  tierId?: string;
-}
-
-export interface CloudToolDescriptions {
-  builtIn: Array<{ name: string; description: string }>;
-  crafted: Array<{ name: string; description: string; isLearned?: boolean; qualityScore?: number; usageCount?: number }>;
-  executors: JsonValue[];
-}
-
-export interface CloudTriggerList {
-  triggers: Array<{
-    id: string;
-    kind: string;
-    spec: JsonValue;
-    state: string;
-    created_at: number;
-    next_fire_at?: number | null;
-    last_fire_at?: number | null;
-    fire_count?: number;
-    /** Relative: the origin belongs to whoever renders it. */
-    url?: string;
-  }>;
-}
-
-export interface CloudBackgroundJob {
-  id: string;
-  kind: string;
-  status: string;
-  createdAt?: number;
-  settledAt?: number | null;
-  error?: string | null;
-}
 
 export interface CloudWebhookTriggerInput {
   label: string;
@@ -132,34 +38,36 @@ export interface CloudWebhookTriggerInput {
   rate_limit_per_min?: number;
 }
 
-export interface CloudWebhookTrigger {
-  trigger_id: string;
-  url: string;
-  auth_mode: 'hmac' | 'bearer' | 'mtls';
-  secret: string | null;
-}
-
 const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
 
-const CliAuthStartSchema: v.GenericSchema<CliAuthStart> = v.object({
+const CliAuthStartSchema = v.object({
   deviceToken: v.string(), userCode: v.string(), verificationUrl: v.string(),
   expiresAt: v.string(), intervalSeconds: v.number(),
 });
 
-const CliAuthPollSchema: v.GenericSchema<CliAuthPoll> = v.object({
+export type CliAuthStart = v.InferOutput<typeof CliAuthStartSchema>;
+
+const CliAuthPollSchema = v.object({
   status: v.picklist(['pending', 'approved', 'expired']),
   message: v.optional(v.string()), origin: v.optional(v.string()), token: v.optional(v.string()),
   expiresAt: v.optional(v.string()),
   user: v.optional(v.object({ id: v.string(), email: v.string() })),
 });
 
-const CloudAgentSchema: v.GenericSchema<CloudAgent> = v.object({
+export type CliAuthPoll = v.InferOutput<typeof CliAuthPollSchema>;
+
+const CloudAgentSchema = v.object({
   name: v.string(), displayName: v.string(), createdAt: v.number(),
 });
 
-const CloudDeviceRegistrationSchema: v.GenericSchema<CloudDeviceRegistration> = v.object({
+/** Complete active list, names only; the wide bounded listing is the web surface's contract. */
+export type CloudAgent = v.InferOutput<typeof CloudAgentSchema>;
+
+const CloudDeviceRegistrationSchema = v.object({
   deviceId: v.string(), token: v.string(), userId: v.string(), origin: v.string(),
 });
+
+export type CloudDeviceRegistration = v.InferOutput<typeof CloudDeviceRegistrationSchema>;
 
 const CloudDeviceSandboxSchema = v.object({
   tier: v.picklist(DEVICE_TIERS),
@@ -174,27 +82,33 @@ const UNREPORTED_SANDBOX: CloudDeviceSandbox = {
   tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [],
 };
 
-const CloudDeviceSchema: v.GenericSchema<unknown, CloudDevice> = v.object({
+const CloudDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()),
   sandbox: v.optional(CloudDeviceSandboxSchema, UNREPORTED_SANDBOX),
   wholeMachine: v.optional(v.boolean(), false),
 });
 
-const CloudAgentConnectTicketSchema: v.GenericSchema<CloudAgentConnectTicket> = v.object({
+export type CloudDevice = v.InferOutput<typeof CloudDeviceSchema>;
+
+const CloudAgentConnectTicketSchema = v.object({
   ticket: v.string(), expiresAt: v.number(),
 });
 
-export const CloudAgentStatusSchema: v.GenericSchema<CloudAgentStatus> = v.object({
-  name: v.string(), displayName: v.optional(v.string()), purpose: v.string(), soul: v.string(),
+export type CloudAgentConnectTicket = v.InferOutput<typeof CloudAgentConnectTicketSchema>;
+
+export const CloudAgentStatusSchema = v.object({
+  name: v.string(), displayName: v.optional(v.string()), purpose: v.string(),
   createdAt: v.number(), scaffoldVersion: v.number(), searchNodeCount: v.number(),
   messageCount: v.number(), model: v.optional(v.nullable(v.string())), reasoningEffort: v.optional(v.nullable(ReasoningEffortSchema)),
   roleId: v.optional(v.string()), tierId: v.optional(v.string()),
 });
 
+export type CloudAgentStatus = v.InferOutput<typeof CloudAgentStatusSchema>;
+
 const ToolDescriptionSchema = v.object({ name: v.string(), description: v.string() });
 
-export const CloudToolDescriptionsSchema: v.GenericSchema<CloudToolDescriptions> = v.object({
+export const CloudToolDescriptionsSchema = v.object({
   builtIn: v.array(ToolDescriptionSchema),
   crafted: v.array(v.object({
     name: v.string(), description: v.string(), isLearned: v.optional(v.boolean()),
@@ -206,27 +120,36 @@ export const CloudToolDescriptionsSchema: v.GenericSchema<CloudToolDescriptions>
 const CloudTriggerSchema = v.object({
   id: v.string(), kind: v.string(), spec: JsonValueSchema, state: v.string(), created_at: v.number(),
   next_fire_at: v.optional(v.nullable(v.number())), last_fire_at: v.optional(v.nullable(v.number())),
-  fire_count: v.optional(v.number()), url: v.optional(v.string()),
+  fire_count: v.optional(v.number()),
+  /** Relative: the origin belongs to whoever renders it. */
+  url: v.optional(v.string()),
 });
 
-export const CloudTriggerListSchema: v.GenericSchema<CloudTriggerList> = v.object({ triggers: v.array(CloudTriggerSchema) });
+export const CloudTriggerListSchema = v.object({ triggers: v.array(CloudTriggerSchema) });
 
-export const CloudBackgroundJobSchema: v.GenericSchema<CloudBackgroundJob> = v.object({
+export const CloudBackgroundJobSchema = v.object({
   id: v.string(), kind: v.string(), status: v.string(), createdAt: v.optional(v.number()),
   settledAt: v.optional(v.nullable(v.number())), error: v.optional(v.nullable(v.string())),
 });
 
-const CloudCredentialSummarySchema: v.GenericSchema<CloudCredentialSummary> = v.object({
+const CloudCredentialSummarySchema = v.object({
   key: v.string(), kind: v.string(),
 });
 
-const CloudWebhookTriggerSchema: v.GenericSchema<CloudWebhookTrigger> = v.object({
+/** No read-back: a submitted secret is never viewable again. */
+export type CloudCredentialSummary = v.InferOutput<typeof CloudCredentialSummarySchema>;
+
+const CloudWebhookTriggerSchema = v.object({
   trigger_id: v.string(), url: v.string(), auth_mode: v.picklist(['hmac', 'bearer', 'mtls']), secret: v.nullable(v.string()),
 });
 
-const CloudAccessTokenSchema: v.GenericSchema<CloudAccessToken> = v.object({
+export type CloudWebhookTrigger = v.InferOutput<typeof CloudWebhookTriggerSchema>;
+
+const CloudAccessTokenSchema = v.object({
   tokenHash: v.string(), name: v.string(), scopes: v.array(v.string()), createdAt: v.number(), lastUsedAt: v.nullable(v.number()),
 });
+
+export type CloudAccessToken = v.InferOutput<typeof CloudAccessTokenSchema>;
 
 const OkSchema = v.object({ ok: v.boolean() });
 
@@ -314,18 +237,12 @@ export async function logout(origin: string, token: string): Promise<{ ok: boole
   return cloudJson(OkSchema, origin, '/api/cli/logout', { method: 'POST', token });
 }
 
-export interface CloudCliSession {
-  tokenHash: string;
-  label: string;
-  createdAt: number;
-  expiresAt: number;
-  lastUsedAt: number | null;
-}
-
-const CloudCliSessionSchema: v.GenericSchema<CloudCliSession> = v.object({
+const CloudCliSessionSchema = v.object({
   tokenHash: v.string(), label: v.string(),
   createdAt: v.number(), expiresAt: v.number(), lastUsedAt: v.nullable(v.number()),
 });
+
+export type CloudCliSession = v.InferOutput<typeof CloudCliSessionSchema>;
 
 /** Makes an orphaned bearer reachable by something other than its own raw token. */
 export async function listCliSessions(
@@ -413,12 +330,6 @@ export async function updateCloudProfile(
   return { ok: true, envelope: v.parse(ProfileCatalogEnvelopeSchema, body) };
 }
 
-/** No read-back: a submitted secret is never viewable again. */
-export interface CloudCredentialSummary {
-  key: string;
-  kind: string;
-}
-
 export async function listCloudCredentials(origin: string, token: string): Promise<CloudCredentialSummary[]> {
   return cloudJson(v.array(CloudCredentialSummarySchema), origin, '/api/cli/credentials', { token });
 }
@@ -474,14 +385,6 @@ export async function createCloudWebhookTrigger(
     token,
     body: decodeJsonValue({ value: input }),
   });
-}
-
-export interface CloudAccessToken {
-  tokenHash: string;
-  name: string;
-  scopes: string[];
-  createdAt: number;
-  lastUsedAt: number | null;
 }
 
 export async function createCliAccessToken(

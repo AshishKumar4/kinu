@@ -16,7 +16,6 @@ import {
   OPENROUTER_BASE_URL,
   JsonObjectSchema, accountCredentialKey, credentialToHeaders, openWorkspaceMainActor, discoverOpenAICompatibleModels, specWithoutAccount,
   ProfileCatalogEnvelopeSchema,
-  type JsonObject,
   type LLMProviderConfig,
   type ModelInfo,
   type ProfileCatalogEnvelope,
@@ -81,75 +80,16 @@ const RESERVED_ALIASES = new Set([
 
 const DEFAULT_ORIGIN = 'https://kinu.run';
 
-export type AgentMode = 'local' | 'cloud';
+export type KinuAgentConfig = v.InferOutput<typeof KinuAgentConfigSchema>;
 
-export interface KinuAgentConfig {
-  name: string;
-  mode: AgentMode;
-  /** Cloud workspaces only; a local agent's title lives in its own database (`actor_config.display_name`). */
-  displayName?: string;
-  alias?: string;
-  localName?: string;
-  cloudName?: string;
-  /** Canonical project directory; the agent's file and shell plane binds here. */
-  cwd?: string;
-  /** Label grouping peer agents inside `cwd`, never a directory: state stays at `~/.kinu/<name>`. */
-  workspaceId?: string;
-  /** `workspace_identity.id` of the addressed database, so a reused name cannot re-point the ref. */
-  identityId?: string;
-  createdAt: string;
-  updatedAt: string;
-}
+export type AgentMode = KinuAgentConfig['mode'];
 
-export interface KinuConfig {
-  origin?: string;
-  accessToken?: string;
-  tokenExpiresAt?: string;
-  user?: { id: string; email: string; displayName?: string | null };
-  agents?: Record<string, KinuAgentConfig>;
-  aliases?: Record<string, string>;
-  updateCheck?: boolean;
-  updateCheckedAt?: number;
-  updateLatestSeen?: string;
-  providers?: {
-    openai?: LocalApiKeyProvider;
-    anthropic?: LocalApiKeyProvider;
-    openrouter?: LocalApiKeyProvider;
-    codex?: LocalOAuthSession & { accounts?: Record<string, LocalOAuthSession> };
-    claude?: LocalOAuthSession & { accounts?: Record<string, LocalOAuthSession> };
-    openaiCompat?: Record<string, {
-      baseURL: string;
-      apiKey?: string;
-      headers?: Record<string, string>;
-      extraHeaders?: Record<string, string>;
-    }>;
-  };
-  mcpServers?: Record<string, McpServerConfig>;
-  deviceConnectPromptDismissed?: boolean;
-  /** Shadow-git checkpoints kept per working directory (default 50). */
-  checkpointKeep?: number;
-  /**
-   * Bumped on every provider change so resident sessions in other processes know to re-sweep their cached listing.
-   * Only inequality is read; absent reads as 0.
-   */
-  providerRevision?: number;
-  /** Failed server-side logout. The raw token is the only copy (the server stores a hash); kept until a retry confirms revocation. */
-  pendingRevocation?: { token: string; origin: string; at: number };
-  /** Signed-out profile authority; never holds account data. */
-  localProfile?: ProfileCatalogEnvelope;
-}
+/** `localProfile` keeps core's readonly envelope type; the schema's output is its mutable twin. */
+export type KinuConfig = Omit<v.InferOutput<typeof KinuConfigSchema>, 'localProfile'> & { localProfile?: ProfileCatalogEnvelope };
 
-export interface LocalApiKeyProvider {
-  apiKey?: string;
-  accounts?: Record<string, { apiKey: string }>;
-}
+export type LocalApiKeyProvider = v.InferOutput<typeof LocalApiKeyProviderSchema>;
 
-export interface LocalOAuthSession {
-  accessToken?: string;
-  refreshToken?: string;
-  expiresAt?: number;
-  metadata?: JsonObject;
-}
+export type LocalOAuthSession = v.InferOutput<typeof LocalOAuthSessionSchema>;
 
 export interface CloudAuthConfig {
   origin: string;
@@ -162,12 +102,16 @@ const StringMapSchema = v.record(v.string(), v.string());
 const KinuAgentConfigSchema = v.object({
   name: v.string(),
   mode: v.picklist(['local', 'cloud']),
+  /** Cloud workspaces only; a local agent's title lives in its own database (`actor_config.display_name`). */
   displayName: v.optional(v.string()),
   alias: v.optional(v.string()),
   localName: v.optional(v.string()),
   cloudName: v.optional(v.string()),
+  /** Canonical project directory; the agent's file and shell plane binds here. */
   cwd: v.optional(v.string()),
+  /** Label grouping peer agents inside `cwd`, never a directory: state stays at `~/.kinu/<name>`. */
   workspaceId: v.optional(v.string()),
+  /** `workspace_identity.id` of the addressed database, so a reused name cannot re-point the ref. */
   identityId: v.optional(v.string()),
   createdAt: v.string(),
   updatedAt: v.string(),
@@ -199,7 +143,7 @@ const LocalOAuthSessionSchema = v.object({
   metadata: v.optional(JsonObjectSchema),
 });
 
-const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
+const KinuConfigSchema = v.object({
   origin: v.optional(v.string()),
   accessToken: v.optional(v.string()),
   tokenExpiresAt: v.optional(v.string()),
@@ -229,13 +173,20 @@ const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
   })),
   mcpServers: v.optional(v.record(v.string(), McpServerConfigSchema)),
   deviceConnectPromptDismissed: v.optional(v.boolean()),
+  /** Shadow-git checkpoints kept per working directory (default 50). */
   checkpointKeep: v.optional(v.number()),
+  /**
+   * Bumped on every provider change so resident sessions in other processes know to re-sweep their cached listing.
+   * Only inequality is read; absent reads as 0.
+   */
   providerRevision: v.optional(v.number()),
+  /** Failed server-side logout. The raw token is the only copy (the server stores a hash); kept until a retry confirms revocation. */
   pendingRevocation: v.optional(v.object({
     token: v.string(),
     origin: v.string(),
     at: v.number(),
   })),
+  /** Signed-out profile authority; never holds account data. */
   localProfile: v.optional(ProfileCatalogEnvelopeSchema),
 });
 

@@ -49,10 +49,6 @@ type LocalActorProcessBootstrap = v.InferOutput<typeof LocalActorProcessBootstra
  */
 export function localActorProcessBootstrap(parent: ActorHandle, binding: LocalActorBinding): LocalActorProcessBootstrap {
   const scope = scopeFor(parent);
-  const child = bindings.get(binding);
-
-  if (!child || child.directory !== scope.directory || binding.reference.parentActorId !== parent.actorId) throw new KinuError('denied', 'The process bootstrap has a different parent.');
-  scope.directory.validate(binding.reference, child.path);
 
   return { reference: binding.reference, parent: { actorId: parent.actorId, workspaceId: parent.workspaceId, parentActorId: parent.parentActorId },
     rootDbPath: scope.rootDbPath, parentStoragePath: [...scope.path], name: binding.name, storageKey: binding.storageKey };

@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 type TimeoutHandle = ReturnType<typeof setTimeout>;
 
+const FLUSH_INTERVAL_MS = 50;
+
 interface StreamingBufferController {
   start(): void;
   append(delta: string): void;
-  finish(finalText?: string): void;
+  finish(): void;
   clear(): void;
   dispose(): void;
 }
@@ -18,7 +20,6 @@ interface StreamingBufferTimers {
 
 export function createStreamingBufferController(
   setStreamingText: (value: string | null) => void,
-  intervalMs = 50,
   timers: StreamingBufferTimers = { setTimeout, clearTimeout },
 ): StreamingBufferController {
   let buffer = '';
@@ -38,7 +39,7 @@ export function createStreamingBufferController(
 
   const schedule = () => {
     if (timer) return;
-    timer = timers.setTimeout(flush, intervalMs);
+    timer = timers.setTimeout(flush, FLUSH_INTERVAL_MS);
   };
 
   const reset = () => {
@@ -53,22 +54,16 @@ export function createStreamingBufferController(
       buffer += delta;
       schedule();
     },
-    finish(finalText?: string) {
-      if (finalText !== undefined) buffer = finalText;
-      flush();
-    },
+    finish: flush,
     clear: reset,
     dispose: cancelTimer,
   };
 }
 
-export function useStreamingBuffer(
-  setStreamingText: (value: string | null) => void,
-  intervalMs = 50,
-) {
+export function useStreamingBuffer(setStreamingText: (value: string | null) => void) {
   const controllerRef = useRef<StreamingBufferController | null>(null);
 
-  controllerRef.current ??= createStreamingBufferController(setStreamingText, intervalMs);
+  controllerRef.current ??= createStreamingBufferController(setStreamingText);
 
   const start = useCallback(() => {
     controllerRef.current?.start();
@@ -78,8 +73,8 @@ export function useStreamingBuffer(
     controllerRef.current?.append(delta);
   }, []);
 
-  const finish = useCallback((finalText?: string) => {
-    controllerRef.current?.finish(finalText);
+  const finish = useCallback(() => {
+    controllerRef.current?.finish();
   }, []);
 
   const clear = useCallback(() => {
@@ -87,11 +82,11 @@ export function useStreamingBuffer(
   }, []);
 
   useEffect(() => {
-    const controller = createStreamingBufferController(setStreamingText, intervalMs);
+    const controller = createStreamingBufferController(setStreamingText);
     controllerRef.current = controller;
 
     return () => controller.dispose();
-  }, [intervalMs, setStreamingText]);
+  }, [setStreamingText]);
 
   return useMemo(() => ({ start, append, finish, clear }), [append, clear, finish, start]);
 }
