@@ -11,8 +11,8 @@ import { GATE_DEADLINE_SECONDS, LADDER, scriptDeadline } from './ladder';
 const HANG = join(import.meta.dir, 'fixtures', 'deadline', 'hang.ts');
 
 /** Whether `pid` still holds memory: gone, a zombie, or a process past releasing it on its way out holds none. */
-function holdsMemory(pid: number): boolean {
-  const status = tolerate(() => readFileSync(`/proc/${String(pid)}/status`, 'utf8'), 'enoent');
+function holdsMemory(pid: number, read = (path: string) => readFileSync(path, 'utf8')): boolean {
+  const status = tolerate(() => tolerate(() => read(`/proc/${String(pid)}/status`), 'esrch'), 'enoent');
 
   return status !== undefined && /^VmRSS:/mu.test(status);
 }
@@ -46,6 +46,13 @@ describe('a run under a deadline', () => {
     expect([[`${String(pid)} sleep 30`], [`${String(pid)} sh -c sleep 30 & echo $!`]]).toContainEqual([...outcome.leftovers]);
     expect(outcome.stderr).toContain(leftoverLine({ label: 'leaves one' }, outcome.leftovers));
     expect(holdsMemory(pid)).toBe(false);
+  });
+
+  // The read that CI lost the race on (bd4c10f239): the process exited between its lookup and the read.
+  test('a process gone in the middle of the status read holds no memory', () => {
+    const exited = (): string => { throw Object.assign(new Error('ESRCH: no such process, read'), { code: 'ESRCH' }); };
+
+    expect(holdsMemory(process.pid, exited)).toBe(false);
   });
 
   test('a process the run ended before it exited is not a leftover', async () => {
