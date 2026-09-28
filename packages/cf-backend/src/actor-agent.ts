@@ -2503,6 +2503,9 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this._claimsObserved) {
       this._claimsObserved = true;
       claims.observe(() => { this.turnClaimChanged(); });
+      claims.observeRecovered((claim) => {
+        this.tracing.turns({ id: this.actorHandle().actorId, kind: 'main' }).recovered(claim, claim.outcome);
+      });
     }
 
     return claims;
