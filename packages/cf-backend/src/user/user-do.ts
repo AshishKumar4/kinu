@@ -3291,7 +3291,7 @@ export class UserDO extends Agent<Env> {
       throw new KinuError('bad_input', `${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
     }
 
-    const cred = validateCredential({ value: credentialJson });
+    const cred = validateCredential({ key, value: credentialJson });
 
     if (subscriptionIssuer(key) !== null && cred.kind === 'oauth' && !cred.refreshToken) {
       throw new KinuError('bad_input', `${key} requires an OAuth refresh token.`);
@@ -3409,7 +3409,7 @@ export class UserDO extends Agent<Env> {
 
     if (decoded === undefined) throw new KinuError('bad_input', `the stored credential ${key} did not decode as JSON`);
 
-    return { cred: validateCredential({ value: decoded }), revision };
+    return { cred: validateCredential({ key, value: decoded }), revision };
   }
 
   /** Writes nothing, so {@link commitCredential} can be paired with a fence read in one turn. */

@@ -413,7 +413,6 @@ function clampLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(MAX_SEARCH_LIMIT, Math.floor(limit)));
 }
 
-/** Parses `result__a` / `result__snippet` anchors from DuckDuckGo's HTML endpoint. */
 function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResult[] {
   const results: WebSearchResult[] = [];
   const linkRe = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
