@@ -21,17 +21,18 @@ import type { AgentConfigStore } from '../config/store';
 import type { NameOrigin } from '../identity/naming';
 
 const ROSTER_COLUMNS =
-  'actor_id, name, created_by, status, current_task, created_at, dismissed_at, lifetime, task_event_id, actor_reference, birth_request, delete_requested';
+  'actor_id, name, status, current_task, created_at, dismissed_at, lifetime, task_event_id, actor_reference, birth_request, delete_requested';
 
+/** Who made the hire is its actor's `origin`; before birth confirms an actor, the birth's seed carries it. */
 const ROSTER_PROJECTION =
-  'name, created_by AS createdBy, status, current_task AS currentTask, '
+  'name, COALESCE((SELECT origin FROM workspace_actors WHERE actor_id = json_extract(actor_subordinates.actor_reference, \'$.actorId\')), '
+  + 'json_extract(birth_request, \'$.seed.origin\')) AS origin, status, current_task AS currentTask, '
   + 'created_at AS createdAt, dismissed_at AS dismissedAt, '
   + 'lifetime, task_event_id AS taskEventId, actor_reference AS actorReference, birth_request AS birth, delete_requested AS deleteRequested';
 
 /** Every column a compensating restore overwrites, except the conflict key. */
 const ROSTER_RESTORE_CONFLICT = `
        ON CONFLICT(actor_id, name) DO UPDATE SET
-         created_by = excluded.created_by,
          status = excluded.status,
          current_task = excluded.current_task,
          created_at = excluded.created_at,
@@ -45,7 +46,7 @@ export const SubordinateRosterEntrySchema = v.object({
   actorReference: v.nullable(ActorReferenceSchema),
   birth: v.nullable(SubordinateBirthSchema),
   deleteRequested: v.boolean(),
-  createdBy: v.picklist(['orchestrator', 'user', 'evolution']),
+  origin: v.picklist(['user', 'agent', 'evolution']),
   status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
   currentTask: v.nullable(v.string()),
   createdAt: v.number(),
@@ -71,6 +72,9 @@ function parseStoredRosterRow(row: SqlExecRow): SubordinateRosterEntry {
     throw new KinuError('io', 'Stored subordinate roster data is malformed.', { cause });
   }
 }
+
+/** What a roster write stores; `origin` is read from the actor, never written here. */
+type RosterRow = Omit<SubordinateRosterEntry, 'origin'>;
 
 export interface SubordinateTitle {
   readonly displayName: string;
@@ -103,7 +107,6 @@ export function initSubordinateRosterTable(sql: SqlExec): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS actor_subordinates (
     actor_id      TEXT NOT NULL,
     name          TEXT NOT NULL,
-    created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user','evolution')),
     status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
     current_task  TEXT,
     created_at    INTEGER NOT NULL,
@@ -137,13 +140,12 @@ export class SubordinateRosterStore {
   }
 
   /** `onConflict` is empty for a first insert and the upsert clause for a compensating restore. */
-  private writeRow(entry: SubordinateRosterEntry, onConflict: string): void {
+  private writeRow(entry: RosterRow, onConflict: string): void {
     this.actor.assertCurrent();
     this.sql.exec(
-      `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${onConflict}`,
+      `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${onConflict}`,
       this.actorId,
       entry.name,
-      entry.createdBy,
       entry.status,
       entry.currentTask,
       entry.createdAt,
@@ -155,12 +157,12 @@ export class SubordinateRosterStore {
     );
   }
 
-  create(entry: SubordinateRosterEntry): void {
+  create(entry: RosterRow): void {
     this.writeRow(entry, '');
   }
 
   /** Exact upsert used only for compensating a failed facet operation. */
-  restore(entry: SubordinateRosterEntry): void {
+  restore(entry: RosterRow): void {
     this.writeRow(entry, ROSTER_RESTORE_CONFLICT);
   }
 

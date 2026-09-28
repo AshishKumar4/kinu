@@ -40,7 +40,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
   /** Read, not assumed: child counts are "not this id", and a guessed literal would count the root's rows. */
   async rootActorId(): Promise<string> {
     const rows = this.probeState.storage.sql.exec<{ actor_id: string }>(
-      `SELECT actor_id FROM workspace_actors WHERE kind = 'main' LIMIT 1`).toArray();
+      `SELECT actor_id FROM workspace_actors WHERE origin = 'system' LIMIT 1`).toArray();
 
     return rows[0]?.actor_id ?? '';
   }
@@ -189,7 +189,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
   private countReturnedWake(): void {
     const inFlight = this.probeState.storage.sql.exec<{ n: number }>(
       `SELECT COUNT(*) AS n FROM actor_turn_claims c JOIN workspace_actors a ON a.actor_id = c.actor_id
-       WHERE a.kind = 'subordinate' AND c.outcome IS NULL`).one().n;
+       WHERE a.origin IN ('user','agent','evolution') AND c.outcome IS NULL`).one().n;
 
     diagnostics.event('probe.wake_returned', { delegatedTurnsInFlight: inFlight });
 

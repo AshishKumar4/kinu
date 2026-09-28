@@ -164,7 +164,7 @@ test("a task agent does not settle while more input is queued for it: its answer
 
   await driveUntil(workspace, 'the task helper never started', () => gateway.runs.some((run) => openingOf(run).includes('Helper brief.')));
   await turn;
-  const helperId = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE kind = 'subordinate'`[0]?.id ?? '';
+  const helperId = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE origin IN ('user','agent','evolution')`[0]?.id ?? '';
   // More input queues for the helper while its first turn is still out.
   await wakeForDelegatedTask(workspace, helperId, 'Queued note.');
   release.resolve();

@@ -29,14 +29,14 @@ function setup() {
 
   const runtime: SubordinateRuntime = {
     spawn: async (seed) => {
-      const entry = directory.apply(main, [], { action: 'register', name: seed.name, creationId: seed.creationId, kind: 'subordinate', lifetime: seed.lifetime });
+      const entry = directory.apply(main, [], { action: 'register', name: seed.name, creationId: seed.creationId, origin: 'agent', lifetime: seed.lifetime });
 
       if (interruptSeed) { interruptSeed = false; throw new KinuError('unavailable', 'Seed acknowledgement lost.'); }
 
       return entry.reference;
     },
     cancelBirth: async (seed) => {
-      const actor = directory.apply(main, [], { action: 'cancelCreation', name: seed.name, creationId: seed.creationId, kind: 'subordinate', lifetime: seed.lifetime });
+      const actor = directory.apply(main, [], { action: 'cancelCreation', name: seed.name, creationId: seed.creationId, origin: 'agent', lifetime: seed.lifetime });
 
       if (actor.state !== 'deleted') directory.apply(main, [], { action: 'release', name: seed.name, reference: actor.reference });
 
@@ -64,8 +64,8 @@ function setup() {
 
   const admit = (creationId: string, assignment: SubordinateBirth['assignment'] = { body: 'Read the source.', mode: 'plan' }) => roster.create({
     name: 'reader', actorReference: null, deleteRequested: false,
-    birth: { creationId, seed: { name: 'reader', displayName: '', nameOrigin: 'auto', role: 'researcher', mission: 'Read the source.', lifetime: 'durable' }, assignment },
-    createdBy: 'orchestrator', status: 'working', currentTask: 'Read the source.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null,
+    birth: { creationId, seed: { name: 'reader', displayName: '', nameOrigin: 'auto', role: 'researcher', mission: 'Read the source.', lifetime: 'durable', origin: 'agent' }, assignment },
+    status: 'working', currentTask: 'Read the source.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null,
   });
 
   return { database, child, childActor, directory, main, roster, runtime, admit, events,

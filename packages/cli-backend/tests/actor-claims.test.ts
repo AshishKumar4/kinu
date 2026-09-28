@@ -66,7 +66,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
 
   const bind = (name: string): Bound => {
     const handle = directory.create({
-      parent, name, kind: 'subordinate', lifetime: 'durable', creationId: 'claimed-' + name,
+      parent, name, origin: 'agent', lifetime: 'durable', creationId: 'claimed-' + name,
     });
 
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };

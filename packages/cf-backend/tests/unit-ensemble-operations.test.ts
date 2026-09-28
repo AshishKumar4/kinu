@@ -67,7 +67,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
     const first = await agent.runOutcomeEnsemble([...JUDGES]);
     expect(first.run?.judged.map((row) => row.stored)).toEqual([3, 3]);
     declareShadowCandidate(harness.db);
-    await workspaceFiles(agent).writeFile(`${actorScaffoldPath({ kind: 'main', storageKey: MAIN_AGENT })}.v1`,
+    await workspaceFiles(agent).writeFile(`${actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT })}.v1`,
       'async function* run(rt, task) { yield { type: "chunk", data: "candidate" }; }');
     expect(await agent.applyScaffoldDecision('promote')).toMatchObject({ ok: true, action: 'promote' });
 

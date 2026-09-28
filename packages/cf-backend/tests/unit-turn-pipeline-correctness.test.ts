@@ -340,7 +340,7 @@ describe('turn-pipeline correctness wiring', () => {
     const rootFiles = workspaceFiles(workspace.agent);
     await rootFiles.writeFile('/home/main/shared-proof.md', 'registered workspace bytes');
     const head = await hostedExplorationHarness(workspace, 'head-a1');
-    expect(head.actor.record.kind).toBe('run');
+    expect(head.actor.record.origin).toBe('swarm');
     const headFiles = head.actor.runtime.storage.vfs;
     expect(await headFiles.readFile('/home/main/shared-proof.md', { encoding: 'utf8' }))
       .toBe('registered workspace bytes');
@@ -529,8 +529,6 @@ describe('turn-pipeline correctness wiring', () => {
     expect(recorded[0].turn).toContain('partial');
   });
 
-  // Core's `creditedTurnId` decides; this pins that the orchestrator honours it. A completed plan
-  // turn is not an answer the captures competed against, so it purges them (as the CLI does).
   // `onStart`'s sweep re-pends every open lease, so the settle must close a lease for every drain
   // path, and only once the answer is durable.
   describe('a settled turn closes the delivery leases it answered, and only those', () => {

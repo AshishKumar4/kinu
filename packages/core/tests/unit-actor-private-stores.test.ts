@@ -53,7 +53,7 @@ function headInput(id: string, rootId: string, task: string, spawnedAt: number):
     id, parentId: null, rootId, depth: 1, task, rationale: task,
     mode: 'build', inheritedContext: [], mergeStrategy: 'synthesize',
     budget: { spawnedAt, maxDepth: 2 },
-    loop: defaultLoopOrigin('run'),
+    loop: defaultLoopOrigin('swarm'),
   };
 }
 

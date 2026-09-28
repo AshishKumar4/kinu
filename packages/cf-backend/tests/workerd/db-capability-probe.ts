@@ -56,7 +56,7 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
       const main = directory.createMain({ name: 'db-probe' });
       this.main = main;
       this.scout = directory.create({
-        parent: main, name: 'scout', kind: 'subordinate', lifetime: 'durable', creationId: 'scout',
+        parent: main, name: 'scout', origin: 'agent', lifetime: 'durable', creationId: 'scout',
       });
       this.ready = true;
     }

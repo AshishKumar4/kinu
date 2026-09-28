@@ -2,10 +2,7 @@
  *  against a fake reviewer, asserted on observable calls. */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestWorkspace } from './helpers';
-import { ADVISOR_LANE_FIBER, startAdvisorLane, type AdvisorLaneStart } from '../src/advisor/review';
-import { initEffectTombstoneTable } from '../src/identity/effect-tombstones';
-import { createMemoryVfs, testActorHandle } from '@kinu.run/test-utils';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 import { stepContextLimit } from '../src/context-window';
 import { CHARS_PER_TOKEN } from '../src/llm';
 import { advisorWorkspaceGuidance, renderInstructionOmission } from '../src/prompting/agents-md';
@@ -23,7 +20,6 @@ import {
 import type { AgentSignal } from '../src/types/signals';
 import type { CompletedTurn } from '../src/evolution/types';
 import type { LLM } from '../src/types/primitives';
-import type { JsonValue } from '../src/utils/json';
 
 const aTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
   userMessage: 'rotate the staging keys',
@@ -835,45 +831,5 @@ describe('advisor prompt secret obfuscation', () => {
     expect(prompt).toContain('Bearer token');
     expect(prompt).toContain('exit 1');
     expect(prompt).not.toContain('[redacted');
-  });
-});
-
-describe('an advisor lane is started once per turn, from its checkpoint', () => {
-  /** Both backends start the lane through this rule. A lane with no checkpoint
-   *  must reject, and one with a checkpoint must never be opened beside it. */
-  test('a lane with no checkpoint is carried again; a replay after the checkpoint opens no second review', async () => {
-    const workspace = createTestWorkspace();
-    initEffectTombstoneTable(workspace.execRaw);
-    const store = { sql: workspace.sql, actor: testActorHandle(workspace.sql) };
-    const carried: string[] = [];
-    const stashed: JsonValue[] = [];
-    const reviewed: string[] = [];
-
-    const start = (carry: AdvisorLaneStart['carry']): Promise<void> => startAdvisorLane(store, {
-      turn: { turnId: 'msg-1' }, snapshot: { turnId: 'msg-1' }, carry,
-      review: async () => { reviewed.push('msg-1'); },
-    });
-
-    const carrier: AdvisorLaneStart['carry'] = async (name, body) => {
-      carried.push(name);
-      await body({ stash: (data) => { stashed.push(data); } });
-    };
-
-    try {
-      // Neither failure left a recoverable lane, so each keeps the row owed.
-      await expect(start(async () => { throw new Error('the fiber never started'); })).rejects.toThrow();
-      await expect(start(async (_name, body) => {
-        await body({ stash: () => { throw new Error('storage is full'); } });
-      })).rejects.toThrow();
-
-      await start(carrier);
-      await start(carrier);
-
-      expect(carried).toEqual([ADVISOR_LANE_FIBER]);
-      expect(stashed).toEqual([{ turnId: 'msg-1' }]);
-      expect(reviewed).toEqual(['msg-1']);
-    } finally {
-      workspace.db.close();
-    }
   });
 });

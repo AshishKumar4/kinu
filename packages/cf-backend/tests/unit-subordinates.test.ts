@@ -34,7 +34,7 @@ describe('subordinate wiring', () => {
   /** A temporary agent's caller is blocked on one report, so every terminal state must produce one. */
   test('registered task lifetime supplies a terminal report for each non-answer ending', async () => {
     const { agent } = orchestratorHarness();
-    const actor = await agent.actorDirectory({ action: 'register', creationId: 'temporary-proof', name: 'temporary-child', kind: 'subordinate', lifetime: 'task' });
+    const actor = await agent.actorDirectory({ action: 'register', creationId: 'temporary-proof', name: 'temporary-child', origin: 'agent', lifetime: 'task' });
     const identity = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: actor.reference });
 
     if ('reason' in identity) throw new Error(identity.error);
@@ -49,7 +49,7 @@ describe('subordinate wiring', () => {
 
   test('a child bootstrap retains root ownership and refuses a foreign parent reference', async () => {
     const { agent } = orchestratorHarness();
-    const actor = await agent.actorDirectory({ action: 'register', creationId: 'lineage-proof', name: 'lineage-child', kind: 'subordinate', lifetime: 'durable' });
+    const actor = await agent.actorDirectory({ action: 'register', creationId: 'lineage-proof', name: 'lineage-child', origin: 'agent', lifetime: 'durable' });
     const identity = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: actor.reference });
     expect(identity).toMatchObject({ parentWorkspace: agent.name, ownerUserId: 'harness-owner', depth: 1, name: 'lineage-child' });
     const refused = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: { ...actor.reference, parentActorId: 'foreign-parent' } });
@@ -58,7 +58,7 @@ describe('subordinate wiring', () => {
 
   test('native bootstrap reads disclose lineage without disclosing the capability token', async () => {
     const { agent } = orchestratorHarness();
-    const actor = await agent.actorDirectory({ action: 'register', creationId: 'bootstrap-contract', name: 'bootstrap-child', kind: 'subordinate', lifetime: 'durable' });
+    const actor = await agent.actorDirectory({ action: 'register', creationId: 'bootstrap-contract', name: 'bootstrap-child', origin: 'agent', lifetime: 'durable' });
     const bootstrap = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: actor.reference });
     expect(bootstrap).toMatchObject({ name: 'bootstrap-child', depth: 1, ownerUserId: 'harness-owner' });
     expect(JSON.stringify(bootstrap)).not.toContain('harness-capability');
@@ -144,7 +144,7 @@ describe('a dismissed agent keeps its conversation reachable', () => {
   });
 
   const rosterRow = (name: string, fields: Partial<SubordinateRosterEntry>): SubordinateRosterEntry => ({
-    name, actorId: `actor-${name}`, displayName: name, role: 'task', nameOrigin: 'user', createdBy: 'user', lifetime: 'durable',
+    name, actorId: `actor-${name}`, displayName: name, role: 'task', nameOrigin: 'user', origin: 'user', lifetime: 'durable',
     status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, ...fields,
   });
 
@@ -153,10 +153,10 @@ describe('a dismissed agent keeps its conversation reachable', () => {
     rosterRow('hello', { displayName: 'hello', createdAt: 2 }),
     rosterRow('quiet-harbor-1a4e20', { displayName: 'Quiet Harbor', status: 'dismissed', createdAt: 3, dismissedAt: 200 }),
     // Internal helpers: an evolution lane's refiner, and one-question helpers running and finished.
-    rosterRow('ask-refiner-fb0gr9', { displayName: 'Quiet Ash', nameOrigin: 'auto', createdBy: 'evolution', lifetime: 'task', status: 'working', createdAt: 4 }),
-    rosterRow('ask-reviewer-a1', { displayName: 'reviewing', nameOrigin: 'auto', createdBy: 'orchestrator', lifetime: 'task', status: 'working', createdAt: 5 }),
+    rosterRow('ask-refiner-fb0gr9', { displayName: 'Quiet Ash', nameOrigin: 'auto', origin: 'evolution', lifetime: 'task', status: 'working', createdAt: 4 }),
+    rosterRow('ask-reviewer-a1', { displayName: 'reviewing', nameOrigin: 'auto', origin: 'agent', lifetime: 'task', status: 'working', createdAt: 5 }),
     ...['ask-reviewer-b2', 'ask-reviewer-c3', 'ask-reviewer-d4'].map((name, index) => rosterRow(name, {
-      displayName: 'reviewing', nameOrigin: 'auto', createdBy: 'orchestrator', lifetime: 'task', status: 'dismissed', createdAt: 6 + index, dismissedAt: 300,
+      displayName: 'reviewing', nameOrigin: 'auto', origin: 'agent', lifetime: 'task', status: 'dismissed', createdAt: 6 + index, dismissedAt: 300,
     })),
   ];
 

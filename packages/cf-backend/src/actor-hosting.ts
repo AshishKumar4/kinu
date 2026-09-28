@@ -27,6 +27,7 @@ import {
   type SlateCallResult, type SlateOperation, type SqlExec, type SqlExecutor,
   type SqlValue, type WorkMode,
   type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver,
+  isSubordinateOrigin,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError, type AgentTracing } from '@kinu.run/core/obs';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
@@ -97,14 +98,14 @@ export interface WorkspaceHostSeams {
 function hostedHomeName(record: WorkspaceActor): string {
   const id = parseActorKey(record.storageKey).id;
 
-  return record.kind === 'subordinate' ? subordinateAgentName(id) : headAgentName(id);
+  return isSubordinateOrigin(record.origin) ? subordinateAgentName(id) : headAgentName(id);
 }
 
 /** Kind-prefixed so a head's and a subordinate's shell state cannot collide on one id. */
 function hostedActorShellId(record: WorkspaceActor): string {
-  if (record.kind === 'main') return `agent:${record.name}`;
+  if (record.origin === 'system') return `agent:${record.name}`;
 
-  return `${record.kind}:${record.storageKey}`;
+  return `${isSubordinateOrigin(record.origin) ? 'subordinate' : 'run'}:${record.storageKey}`;
 }
 
 /**
@@ -130,7 +131,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
   let host: ActorHost | null = null;
 
   const homeFor = (record: WorkspaceActor, reference: ActorReference): Promise<HostedNodeHome> | null => {
-    if (record.kind === 'main') return null;
+    if (record.origin === 'system') return null;
     const held = homes.get(record.actorId);
 
     if (held) return held;
@@ -172,7 +173,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
       const box = seams.workspaceBox(hostedActorShellId(bound.record));
 
       if (provisioning === null) {
-        if (bound.record.kind !== 'main') throw new KinuError('denied', 'Actor has no credentialed artifact home');
+        if (bound.record.origin !== 'system') throw new KinuError('denied', 'Actor has no credentialed artifact home');
 
         return { vfs: nimbusSessionFiles(box), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) };
       }
@@ -227,7 +228,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         actor: bound.handle,
         // Not this actor's name: a self-named child derives a second, empty filesystem.
         workspaceName: seams.workspaceName,
-        rootActor: bound.record.kind === 'main',
+        rootActor: bound.record.origin === 'system',
         ownerUserId: () => seams.ownerUserId(),
         shellId: hostedActorShellId(bound.record),
         scaffoldPath: actorScaffoldPath(bound.record),
@@ -245,7 +246,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
      * parent must be live, else the guard refuses rather than silently starting builtin.
      */
     loopFor: async (bound) => {
-      const origin = seams.chosenLoopOrigin(bound.record) ?? defaultLoopOrigin(bound.record.kind);
+      const origin = seams.chosenLoopOrigin(bound.record) ?? defaultLoopOrigin(bound.record.origin);
 
       if (origin.kind !== 'inherit' || bound.record.parentActorId === null || host === null) {
         return { origin, parent: null };
@@ -329,7 +330,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
     /** Releases the home and state subtree on destroy only; an archived actor keeps its files. */
     discardBytes: async (record: WorkspaceActor): Promise<void> => {
-      if (record.kind !== 'main') await facetHomeReleaser(seams.homeHost())(hostedHomeName(record));
+      if (record.origin !== 'system') await facetHomeReleaser(seams.homeHost())(hostedHomeName(record));
 
       homes.delete(record.actorId);
       const box = seams.workspaceBox(hostedActorShellId(record));

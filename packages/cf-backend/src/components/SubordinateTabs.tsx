@@ -115,7 +115,7 @@ export function SubordinateTabs({
                   type="button"
                   disabled={deleting === subordinate.name}
                   onClick={async () => {
-                    if (subordinate.createdBy === "user") {
+                    if (subordinate.origin === "user") {
                       setDeleteError(null);
                       setDeleting(subordinate.name);
 
@@ -137,8 +137,8 @@ export function SubordinateTabs({
                   }}
                   data-tab-delete
                   className="absolute right-[7.5px] top-[calc(50%-1px)] -translate-y-1/2 rounded-sm p-0.5 opacity-0 p-text-3 transition-all hover:p-danger focus-visible:opacity-100 group-hover/tab:opacity-70 disabled:opacity-40"
-                  title={subordinate.createdBy === "user" ? `Delete ${title}` : `Dismiss ${title}`}
-                  aria-label={subordinate.createdBy === "user" ? `Delete ${title}` : `Dismiss ${title}`}
+                  title={subordinate.origin === "user" ? `Delete ${title}` : `Dismiss ${title}`}
+                  aria-label={subordinate.origin === "user" ? `Delete ${title}` : `Dismiss ${title}`}
                 >
                   <TrashIcon size={11} />
                 </button>
@@ -197,7 +197,7 @@ export function SubordinateTabs({
         </div>
       )}
 
-      {dismissTarget && dismissTarget.createdBy !== "user" && (
+      {dismissTarget && dismissTarget.origin !== "user" && (
         <Modal
           title={`Dismiss ${agentTitle(dismissTarget)}?`}
           icon={<TrashIcon size={18} className="p-danger" />}

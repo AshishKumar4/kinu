@@ -33,6 +33,7 @@ import {
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
   type WorkspaceActor,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, nanoid, SPILL_DIRS, unsandboxedCommandEnvironment,
+  isSubordinateOrigin,
 } from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -199,9 +200,9 @@ function adaptMemory(store: MemoryStore, vfs: VFS & Pick<VfsNativeReads, 'readRa
 /** Heads, nodes and branches are named by storage key: roster names are not
  *  unique across expansions. */
 function actorFacetName(record: WorkspaceActor): string {
-  if (record.kind === 'main') return MAIN_AGENT;
+  if (record.origin === 'system') return MAIN_AGENT;
 
-  if (record.kind === 'subordinate') return subordinateAgentName(record.name);
+  if (isSubordinateOrigin(record.origin)) return subordinateAgentName(record.name);
 
   return headAgentName(record.storageKey);
 }
@@ -574,7 +575,7 @@ export async function buildLocalActorRuntime(
   const binding = bindLocalActorReference(parent.actor, bound.reference);
   adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
 
-  const run = binding.kind === 'run';
+  const run = binding.origin === 'swarm';
 
   if (run && swarmSeat === true) {
     if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
@@ -595,7 +596,7 @@ export async function buildLocalActorRuntime(
     return await buildCLIHeadRuntime(opts);
   }
 
-  throw new KinuError('denied', `A ${binding.kind} actor's runtime is not built by this workspace's own session.`);
+  throw new KinuError('denied', `A ${binding.origin} actor's runtime is not built by this workspace's own session.`);
 }
 
 
@@ -617,7 +618,7 @@ async function buildCLIHeadRuntime(
   const { parentRuntime: parent } = opts;
   const sql = parent.storage.sql;
 
-  if (opts.actorBinding.kind !== 'run') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
+  if (opts.actorBinding.origin !== 'swarm') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
   const physicalName = headAgentName(actor.storageKey);
 
