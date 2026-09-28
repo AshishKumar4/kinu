@@ -1,6 +1,8 @@
 // Public OAuth client with PKCE (docs/SELF-DEPLOY.md): each deployment renews its own
 // refresh token, so no client secret can be shared. The verifier never leaves run storage.
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { settle } from '../obs/index';
 import { JsonObjectSchema } from '../utils/json';
 
 const CLOUDFLARE_AUTHORIZE_URL = 'https://dash.cloudflare.com/oauth2/auth';
@@ -72,17 +74,17 @@ export interface TokenExchange {
 }
 
 /** Refuses an answer without a refresh token: the deployment could never update itself. */
-export async function exchangeDeployCode(
+export function exchangeDeployCode(
   exchange: TokenExchange,
   fetchImpl: typeof fetch = fetch,
 ): Promise<DeployToken> {
-  return tokenGrant(new URLSearchParams({
+  return settle(tokenGrant(new URLSearchParams({
     grant_type: 'authorization_code',
     client_id: exchange.clientId,
     redirect_uri: exchange.redirectUri,
     code: exchange.code,
     code_verifier: exchange.verifier,
-  }), fetchImpl);
+  }), fetchImpl));
 }
 
 /** Cloudflare may rotate the refresh token; callers must keep the returned one. */
@@ -90,39 +92,43 @@ export function refreshDeployToken(
   refresh: { readonly clientId: string; readonly refreshToken: string },
   fetchImpl: typeof fetch = fetch,
 ): Promise<DeployToken> {
-  return tokenGrant(new URLSearchParams({
+  return settle(tokenGrant(new URLSearchParams({
     grant_type: 'refresh_token',
     client_id: refresh.clientId,
     refresh_token: refresh.refreshToken,
-  }), fetchImpl);
+  }), fetchImpl));
 }
 
-async function tokenGrant(body: URLSearchParams, fetchImpl: typeof fetch): Promise<DeployToken> {
-  const response = await fetchImpl(CLOUDFLARE_TOKEN_URL, {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-    body,
+function tokenGrant(body: URLSearchParams, fetchImpl: typeof fetch): Effect.Effect<DeployToken> {
+  return Effect.gen(function* () {
+    const response = yield* Effect.promise(() => fetchImpl(CLOUDFLARE_TOKEN_URL, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    }));
+
+    const answer = v.parse(TokenAnswerSchema, v.parse(JsonObjectSchema, yield* Effect.promise(() => response.json())));
+
+    if (answer.error !== undefined || !response.ok) {
+      return yield* Effect.die(new DeployAuthError(
+        answer.error ?? `http_${response.status}`,
+        answer.error_description ?? answer.error ?? `the token endpoint answered HTTP ${response.status}`,
+      ));
+    }
+
+    if (answer.access_token === undefined || answer.refresh_token === undefined) {
+      return yield* Effect.die(new DeployAuthError(
+        'no_refresh_token',
+        'the token endpoint returned no refresh token, so the deployment could not own its own key',
+      ));
+    }
+
+    const token: DeployToken = {
+      accessToken: answer.access_token,
+      refreshToken: answer.refresh_token,
+      expiresInSeconds: answer.expires_in ?? 0,
+    };
+
+    return token;
   });
-
-  const answer = v.parse(TokenAnswerSchema, v.parse(JsonObjectSchema, await response.json()));
-
-  if (answer.error !== undefined || !response.ok) {
-    throw new DeployAuthError(
-      answer.error ?? `http_${response.status}`,
-      answer.error_description ?? answer.error ?? `the token endpoint answered HTTP ${response.status}`,
-    );
-  }
-
-  if (answer.access_token === undefined || answer.refresh_token === undefined) {
-    throw new DeployAuthError(
-      'no_refresh_token',
-      'the token endpoint returned no refresh token, so the deployment could not own its own key',
-    );
-  }
-
-  return {
-    accessToken: answer.access_token,
-    refreshToken: answer.refresh_token,
-    expiresInSeconds: answer.expires_in ?? 0,
-  };
 }

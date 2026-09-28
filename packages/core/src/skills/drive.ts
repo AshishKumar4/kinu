@@ -7,8 +7,10 @@
  * Failures are values: the DO's RPC boundary carries no error class, so
  * {@link driveFailure} folds errors into a closed `code`.
  */
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { classifyErrorCode, KinuError, renderThrownChain, type ErrorCode } from '../obs/error';
+import { settle, settleSync } from '../obs/effect';
 import { DRIVE_RESERVED_DIRS, DRIVE_SKILLS_DIR } from '../vfs/shared-drive';
 import { isVfsError, type VfsErrorCode } from '../vfs/errno';
 import type { MossaicVfs } from '../vfs/mossaic-vfs';
@@ -111,18 +113,22 @@ function hasControlCharacter(segment: string): boolean {
  * than repaired: a path the UI cannot spell is a UI bug.
  */
 export function normalizeDrivePath(raw: string): string {
-  if (!raw.startsWith('/')) throw new KinuError('bad_input', `drive path must be absolute: ${JSON.stringify(raw)}`);
+  return settleSync(drivePath(raw));
+}
+
+function drivePath(raw: string): Effect.Effect<string, KinuError> {
+  if (!raw.startsWith('/')) return Effect.fail(new KinuError('bad_input', `drive path must be absolute: ${JSON.stringify(raw)}`));
   const segments = raw.split('/').slice(1);
 
-  if (segments.length === 1 && segments[0] === '') return '/';
+  if (segments.length === 1 && segments[0] === '') return Effect.succeed('/');
 
   for (const segment of segments) {
     if (segment === '' || segment === '.' || segment === '..' || hasControlCharacter(segment)) {
-      throw new KinuError('bad_input', `drive path has an illegal segment: ${JSON.stringify(raw)}`);
+      return Effect.fail(new KinuError('bad_input', `drive path has an illegal segment: ${JSON.stringify(raw)}`));
     }
   }
 
-  return `/${segments.join('/')}`;
+  return Effect.succeed(`/${segments.join('/')}`);
 }
 
 /** `/skills` and the root are never renamed or deleted from the UI. */
@@ -154,77 +160,79 @@ async function skillFolderProblem(drive: MossaicVfs, folder: string, name = vfsB
   return null;
 }
 
-async function linkTarget(drive: MossaicVfs, path: string): Promise<string | undefined> {
-  try {
-    return await drive.readlink(path);
-  } catch (cause) {
-    if (isVfsError(cause) && (cause.code === 'EIO' || cause.code === 'ENOENT')) return undefined;
-    throw cause;
-  }
+function linkTarget(drive: MossaicVfs, path: string): Effect.Effect<string | undefined> {
+  return Effect.tryPromise({ try: () => drive.readlink(path), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => (isVfsError(failed.cause) && (failed.cause.code === 'EIO' || failed.cause.code === 'ENOENT')
+      ? Effect.succeed(undefined)
+      : Effect.die(failed.cause))),
+  );
 }
 
 /** A reserved folder lists as empty until something lands, never absent. */
-async function reservedTolerant(drive: MossaicVfs, path: string): Promise<VfsListedEntry[]> {
-  try {
-    return await drive.readdirStats(path);
-  } catch (cause) {
-    if (isReservedDrivePath(path) && isVfsError(cause) && cause.code === 'ENOENT') return [];
-    throw cause;
-  }
+function reservedTolerant(drive: MossaicVfs, path: string): Effect.Effect<VfsListedEntry[]> {
+  return Effect.tryPromise({ try: () => drive.readdirStats(path), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => (isReservedDrivePath(path) && isVfsError(failed.cause) && failed.cause.code === 'ENOENT'
+      ? Effect.succeed<VfsListedEntry[]>([])
+      : Effect.die(failed.cause))),
+  );
 }
 
 /** The root always lists the reserved folders, whether present on the tenant or not. */
-export async function listDrive(drive: MossaicVfs, rawPath: string): Promise<DriveListing> {
-  const path = normalizeDrivePath(rawPath);
-  const listed = await reservedTolerant(drive, path);
-  const entries: DriveEntry[] = [];
+export function listDrive(drive: MossaicVfs, rawPath: string): Promise<DriveListing> {
+  return settle(Effect.gen(function* () {
+    const path = yield* drivePath(rawPath);
+    const listed = yield* reservedTolerant(drive, path);
+    const entries: DriveEntry[] = [];
 
-  const refused = path === DRIVE_SKILLS_DIR ? await refusedSkillFiles(drive, path) : new Map<string, SkillFileRefusal>();
+    const refused = path === DRIVE_SKILLS_DIR ? yield* Effect.promise(() => refusedSkillFiles(drive, path)) : new Map<string, SkillFileRefusal>();
 
-  if (path === '/') {
-    for (const reserved of DRIVE_RESERVED_DIRS) {
-      const name = reserved.slice(1);
+    if (path === '/') {
+      for (const reserved of DRIVE_RESERVED_DIRS) {
+        const name = reserved.slice(1);
 
-      if (!listed.some((entry) => entry.name === name)) listed.push({ name, stat: { size: 0, mtimeMs: 0, isDir: true } });
+        if (!listed.some((entry) => entry.name === name)) listed.push({ name, stat: { size: 0, mtimeMs: 0, isDir: true } });
+      }
     }
-  }
 
-  for (const { name, stat } of listed) {
-    const full = path === '/' ? `/${name}` : `${path}/${name}`;
-    // `readdirStats` follows links; the kind comes from whether `readlink` answers.
-    const target = await linkTarget(drive, full);
-    const isDir = stat?.isDir ?? false;
+    for (const { name, stat } of listed) {
+      const full = path === '/' ? `/${name}` : `${path}/${name}`;
+      // `readdirStats` follows links; the kind comes from whether `readlink` answers.
+      const target = yield* linkTarget(drive, full);
+      const isDir = stat?.isDir ?? false;
 
-    const skillProblem = await listedSkillProblem(drive, { path: full, name, isDir, target });
-    const kind = listedKind(isDir, target);
-    const unused = refused.get(kind === 'file' ? full : `${full}/${SKILL_FOLDER_FILE}`);
+      const skillProblem = yield* Effect.promise(() => listedSkillProblem(drive, { path: full, name, isDir, target }));
+      const kind = listedKind(isDir, target);
+      const unused = refused.get(kind === 'file' ? full : `${full}/${SKILL_FOLDER_FILE}`);
 
-    const entry: DriveEntry = {
-      name,
-      kind,
-      size: stat?.size ?? 0,
-      mtimeMs: stat?.mtimeMs ?? 0,
-      skill: skillProblem === null,
-      target,
-      skillProblem: skillProblem === null || kind === 'file' ? undefined : skillProblem,
-      ...(unused !== undefined && { unused }),
-    };
+      const entry: DriveEntry = {
+        name,
+        kind,
+        size: stat?.size ?? 0,
+        mtimeMs: stat?.mtimeMs ?? 0,
+        skill: skillProblem === null,
+        target,
+        skillProblem: skillProblem === null || kind === 'file' ? undefined : skillProblem,
+        ...(unused !== undefined && { unused }),
+      };
 
-    entries.push(entry);
-  }
+      entries.push(entry);
+    }
 
-  entries.sort((a, b) => {
-    const aDir = a.kind !== 'file' ? 0 : 1;
-    const bDir = b.kind !== 'file' ? 0 : 1;
+    entries.sort((a, b) => {
+      const aDir = a.kind !== 'file' ? 0 : 1;
+      const bDir = b.kind !== 'file' ? 0 : 1;
 
-    if (aDir !== bDir) return aDir - bDir;
+      if (aDir !== bDir) return aDir - bDir;
 
-    if (a.name < b.name) return -1;
+      if (a.name < b.name) return -1;
 
-    return a.name > b.name ? 1 : 0;
-  });
+      return a.name > b.name ? 1 : 0;
+    });
 
-  return { path, entries };
+    const listing: DriveListing = { path, entries };
+
+    return listing;
+  }));
 }
 
 /** A link shows as a link whatever it points at. */
@@ -251,86 +259,100 @@ async function listedSkillProblem(
 }
 
 /** An existing entry of that name is refused, never reused. */
-export async function makeDriveFolder(drive: MossaicVfs, rawPath: string): Promise<void> {
-  const path = normalizeDrivePath(rawPath);
+export function makeDriveFolder(drive: MossaicVfs, rawPath: string): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const path = yield* drivePath(rawPath);
 
-  if (path === '/') throw new KinuError('bad_input', 'the root already exists');
+    if (path === '/') return yield* new KinuError('bad_input', 'the root already exists');
 
-  if (await drive.exists(path)) throw new KinuError('bad_input', `${path} already exists`);
-  await drive.mkdir(path, { recursive: true });
+    if (yield* Effect.promise(() => drive.exists(path))) return yield* new KinuError('bad_input', `${path} already exists`);
+    yield* Effect.promise(() => drive.mkdir(path, { recursive: true }));
+  }));
 }
 
 /** Reserved folders never move, nothing is overwritten, and the destination folder must exist. */
-export async function renameDriveEntry(drive: MossaicVfs, rawFrom: string, rawTo: string): Promise<void> {
-  const from = normalizeDrivePath(rawFrom);
-  const to = normalizeDrivePath(rawTo);
+export function renameDriveEntry(drive: MossaicVfs, rawFrom: string, rawTo: string): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const from = yield* drivePath(rawFrom);
+    const to = yield* drivePath(rawTo);
 
-  if (isReservedDrivePath(from)) throw new KinuError('denied', `${from} is a reserved Drive folder`);
+    if (isReservedDrivePath(from)) return yield* reservedRefusal(from);
 
-  if (isReservedDrivePath(to)) throw new KinuError('denied', `${to} is a reserved Drive folder`);
+    if (isReservedDrivePath(to)) return yield* reservedRefusal(to);
 
-  if (to === from || to.startsWith(`${from}/`)) throw new KinuError('bad_input', `cannot move ${from} into itself`);
+    if (to === from || to.startsWith(`${from}/`)) return yield* new KinuError('bad_input', `cannot move ${from} into itself`);
 
-  if (await drive.exists(to)) throw new KinuError('bad_input', `${to} already exists`);
-  const parent = parentOf(to);
+    if (yield* Effect.promise(() => drive.exists(to))) return yield* new KinuError('bad_input', `${to} already exists`);
+    const parent = parentOf(to);
 
-  if (parent !== '/' && !(await drive.stat(parent))?.isDir) throw new KinuError('missing', `${parent} is not a folder`);
-  await drive.rename(from, to);
+    if (parent !== '/' && !(yield* Effect.promise(() => drive.stat(parent)))?.isDir) return yield* new KinuError('missing', `${parent} is not a folder`);
+    yield* Effect.promise(() => drive.rename(from, to));
+  }));
 }
 
 /** Remove a file, link, or folder; reserved folders stay. */
-export async function deleteDriveEntry(drive: MossaicVfs, rawPath: string): Promise<void> {
-  const path = normalizeDrivePath(rawPath);
+export function deleteDriveEntry(drive: MossaicVfs, rawPath: string): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const path = yield* drivePath(rawPath);
 
-  if (isReservedDrivePath(path)) throw new KinuError('denied', `${path} is a reserved Drive folder`);
+    if (isReservedDrivePath(path)) return yield* reservedRefusal(path);
 
-  if (await linkTarget(drive, path) !== undefined) {
-    await drive.unlink(path);
+    if ((yield* linkTarget(drive, path)) !== undefined) return yield* Effect.promise(() => drive.unlink(path));
+    const stat = yield* Effect.promise(() => drive.stat(path));
 
-    return;
-  }
+    if (stat === null) return yield* new KinuError('missing', `no such entry: ${path}`);
 
-  const stat = await drive.stat(path);
+    yield* Effect.promise(() => (stat.isDir ? drive.removeRecursive(path) : drive.unlink(path)));
+  }));
+}
 
-  if (stat === null) throw new KinuError('missing', `no such entry: ${path}`);
-
-  if (stat.isDir) await drive.removeRecursive(path);
-  else await drive.unlink(path);
+function reservedRefusal(path: string): KinuError {
+  return new KinuError('denied', `${path} is a reserved Drive folder`);
 }
 
 /**
  * Mark a folder as a skill: under `/skills` by position, otherwise via a
  * `/skills/<name>` symlink. A taken name is refused, not replaced.
  */
-export async function markAsSkill(drive: MossaicVfs, rawPath: string): Promise<MarkedSkill> {
-  const folder = normalizeDrivePath(rawPath);
+export function markAsSkill(drive: MossaicVfs, rawPath: string): Promise<MarkedSkill> {
+  return settle(Effect.gen(function* () {
+    const folder = yield* drivePath(rawPath);
 
-  if (isReservedDrivePath(folder)) throw new KinuError('denied', `${folder} is a reserved Drive folder, not a skill`);
-  const problem = await skillFolderProblem(drive, folder);
+    if (isReservedDrivePath(folder)) return yield* new KinuError('denied', `${folder} is a reserved Drive folder, not a skill`);
+    const problem = yield* Effect.promise(() => skillFolderProblem(drive, folder));
 
-  if (problem !== null) throw new KinuError('bad_input', `${folder} is not a skill: ${problem}`);
-  const name = vfsBasename(folder);
+    if (problem !== null) return yield* new KinuError('bad_input', `${folder} is not a skill: ${problem}`);
+    const name = vfsBasename(folder);
 
-  if (folder.startsWith(`${DRIVE_SKILLS_DIR}/`)) return { name, linked: folder };
-  const linked = `${DRIVE_SKILLS_DIR}/${name}`;
+    if (folder.startsWith(`${DRIVE_SKILLS_DIR}/`)) return { name, linked: folder };
+    const linked = `${DRIVE_SKILLS_DIR}/${name}`;
 
-  if (await drive.exists(linked)) throw new KinuError('denied', `a skill named "${name}" already exists at ${linked}`);
-  await drive.mkdir(DRIVE_SKILLS_DIR, { recursive: true });
-  await drive.symlink(folder, linked);
+    if (yield* Effect.promise(() => drive.exists(linked))) return yield* skillTaken(name, linked);
+    yield* Effect.promise(() => drive.mkdir(DRIVE_SKILLS_DIR, { recursive: true }));
+    yield* Effect.promise(() => drive.symlink(folder, linked));
 
-  return { name, linked };
+    const marked: MarkedSkill = { name, linked };
+
+    return marked;
+  }));
 }
 
-async function putDriveFiles(drive: MossaicVfs, folder: string, files: readonly ZipEntry[]): Promise<void> {
-  await drive.mkdir(folder, { recursive: true });
+function skillTaken(name: string, at: string): KinuError {
+  return new KinuError('denied', `a skill named "${name}" already exists at ${at}`);
+}
 
-  for (const file of files) {
-    const relative = normalizeDrivePath(`/${file.path}`);
-    const parent = parentOf(relative);
+function putDriveFiles(drive: MossaicVfs, folder: string, files: readonly ZipEntry[]): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    yield* Effect.promise(() => drive.mkdir(folder, { recursive: true }));
 
-    if (parent !== '/') await drive.mkdir(`${folder}${parent}`, { recursive: true });
-    await drive.writeFile(`${folder}${relative}`, file.bytes);
-  }
+    for (const file of files) {
+      const relative = yield* drivePath(`/${file.path}`);
+      const parent = parentOf(relative);
+
+      if (parent !== '/') yield* Effect.promise(() => drive.mkdir(`${folder}${parent}`, { recursive: true }));
+      yield* Effect.promise(() => drive.writeFile(`${folder}${relative}`, file.bytes));
+    }
+  });
 }
 
 /**
@@ -338,87 +360,101 @@ async function putDriveFiles(drive: MossaicVfs, folder: string, files: readonly 
  * `/skills/<name>/`. Name from front matter, else `fallbackName`; an existing
  * skill is refused.
  */
-export async function addSkill(
+export function addSkill(
   drive: MossaicVfs,
   files: readonly ZipEntry[],
   fallbackName: string | null,
 ): Promise<MarkedSkill> {
-  const skillFile = files.find((file) => file.path === SKILL_FOLDER_FILE || file.path.endsWith(`/${SKILL_FOLDER_FILE}`));
+  return settle(skillAdded(drive, files, fallbackName));
+}
 
-  if (skillFile === undefined) throw new KinuError('bad_input', `a skill needs a ${SKILL_FOLDER_FILE}`);
-  // Files are rooted at the SKILL.md's own folder.
-  const root = skillFile.path.slice(0, skillFile.path.length - SKILL_FOLDER_FILE.length);
-  const parsed = parseSkillFile(new TextDecoder().decode(skillFile.bytes), 'shared', fallbackName ?? undefined);
+function skillAdded(drive: MossaicVfs, files: readonly ZipEntry[], fallbackName: string | null): Effect.Effect<MarkedSkill, KinuError> {
+  return Effect.gen(function* () {
+    const skillFile = files.find((file) => file.path === SKILL_FOLDER_FILE || file.path.endsWith(`/${SKILL_FOLDER_FILE}`));
 
-  if (!parsed.ok) throw new KinuError('bad_input', `${SKILL_FOLDER_FILE}: ${parsed.error}`);
-  const name = parsed.skill.name;
-  const folder = `${DRIVE_SKILLS_DIR}/${name}`;
+    if (skillFile === undefined) return yield* new KinuError('bad_input', `a skill needs a ${SKILL_FOLDER_FILE}`);
+    // Files are rooted at the SKILL.md's own folder.
+    const root = skillFile.path.slice(0, skillFile.path.length - SKILL_FOLDER_FILE.length);
+    const parsed = parseSkillFile(new TextDecoder().decode(skillFile.bytes), 'shared', fallbackName ?? undefined);
 
-  if (await drive.exists(folder)) throw new KinuError('denied', `a skill named "${name}" already exists at ${folder}`);
-  await putDriveFiles(drive, folder, files
-    .filter((file) => file.path.startsWith(root))
-    .map((file) => ({ path: file.path.slice(root.length), bytes: file.bytes })));
+    if (!parsed.ok) return yield* new KinuError('bad_input', `${SKILL_FOLDER_FILE}: ${parsed.error}`);
+    const name = parsed.skill.name;
+    const folder = `${DRIVE_SKILLS_DIR}/${name}`;
 
-  return { name, linked: folder };
+    if (yield* Effect.promise(() => drive.exists(folder))) return yield* skillTaken(name, folder);
+    yield* putDriveFiles(drive, folder, files
+      .filter((file) => file.path.startsWith(root))
+      .map((file) => ({ path: file.path.slice(root.length), bytes: file.bytes })));
+
+    const added: MarkedSkill = { name, linked: folder };
+
+    return added;
+  });
 }
 
 export type DriveUploadOutcome = { readonly ok: true; readonly skill?: MarkedSkill };
 
 /** A skill arrives as a zip or as the bare text of one `SKILL.md`. */
-export async function receiveDriveUpload(drive: MossaicVfs, target: DriveUploadTarget, bytes: Uint8Array): Promise<DriveUploadOutcome> {
-  switch (target.kind) {
-    case 'file': {
-      const path = normalizeDrivePath(target.path);
+export function receiveDriveUpload(drive: MossaicVfs, target: DriveUploadTarget, bytes: Uint8Array): Promise<DriveUploadOutcome> {
+  return settle(Effect.gen(function* () {
+    const received: DriveUploadOutcome = { ok: true };
 
-      if (isReservedDrivePath(path)) throw new KinuError('denied', `${path} is a reserved Drive folder`);
-      const parent = parentOf(path);
+    switch (target.kind) {
+      case 'file': {
+        const path = yield* drivePath(target.path);
 
-      if (parent !== '/') await drive.mkdir(parent, { recursive: true });
-      await drive.writeFile(path, bytes);
+        if (isReservedDrivePath(path)) return yield* reservedRefusal(path);
+        const parent = parentOf(path);
 
-      return { ok: true };
-    }
+        if (parent !== '/') yield* Effect.promise(() => drive.mkdir(parent, { recursive: true }));
+        yield* Effect.promise(() => drive.writeFile(path, bytes));
 
-    case 'zip': {
-      if (!looksLikeZip(bytes)) throw new KinuError('bad_input', 'the upload is not a zip archive');
-      const folder = normalizeDrivePath(target.folder);
-      await putDriveFiles(drive, folder, await unpackZip(bytes));
-
-      return { ok: true };
-    }
-
-    case 'skill': {
-      const files = looksLikeZip(bytes) ? await unpackZip(bytes) : [{ path: SKILL_FOLDER_FILE, bytes }];
-
-      return { ok: true, skill: await addSkill(drive, files, target.name) };
-    }
-  }
-}
-
-export async function packDriveFolder(drive: MossaicVfs, rawPath: string, limit: number): Promise<Uint8Array> {
-  const folder = normalizeDrivePath(rawPath);
-  const files: ZipEntry[] = [];
-  let total = 0;
-
-  const walk = async (dir: string, prefix: string): Promise<void> => {
-    for (const { name, stat } of await drive.readdirStats(dir)) {
-      const full = dir === '/' ? `/${name}` : `${dir}/${name}`;
-
-      if (stat?.isDir === true) {
-        await walk(full, `${prefix}${name}/`);
-        continue;
+        return received;
       }
 
-      const raw = await drive.readFile(full);
-      const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw);
-      total += bytes.byteLength;
+      case 'zip': {
+        if (!looksLikeZip(bytes)) return yield* new KinuError('bad_input', 'the upload is not a zip archive');
+        const folder = yield* drivePath(target.folder);
+        yield* putDriveFiles(drive, folder, yield* Effect.promise(() => unpackZip(bytes)));
 
-      if (total > limit) throw new KinuError('budget', `${folder} exceeds the ${String(Math.floor(limit / (1024 * 1024)))} MiB transfer limit`);
-      files.push({ path: `${prefix}${name}`, bytes });
+        return received;
+      }
+
+      case 'skill': {
+        const files = looksLikeZip(bytes) ? yield* Effect.promise(() => unpackZip(bytes)) : [{ path: SKILL_FOLDER_FILE, bytes }];
+
+        return { ...received, skill: yield* skillAdded(drive, files, target.name) };
+      }
     }
-  };
+  }));
+}
 
-  await walk(folder, '');
+export function packDriveFolder(drive: MossaicVfs, rawPath: string, limit: number): Promise<Uint8Array> {
+  return settle(Effect.gen(function* () {
+    const folder = yield* drivePath(rawPath);
+    const files: ZipEntry[] = [];
+    let total = 0;
 
-  return packZip(files);
+    const walk = (dir: string, prefix: string): Effect.Effect<void, KinuError> => Effect.gen(function* () {
+      for (const { name, stat } of yield* Effect.promise(() => drive.readdirStats(dir))) {
+        const full = dir === '/' ? `/${name}` : `${dir}/${name}`;
+
+        if (stat?.isDir === true) {
+          yield* walk(full, `${prefix}${name}/`);
+          continue;
+        }
+
+        const raw = yield* Effect.promise(() => drive.readFile(full));
+        const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw);
+        total += bytes.byteLength;
+
+        if (total > limit) return yield* new KinuError('budget', `${folder} exceeds the ${String(Math.floor(limit / (1024 * 1024)))} MiB transfer limit`);
+        files.push({ path: `${prefix}${name}`, bytes });
+      }
+    });
+
+    yield* walk(folder, '');
+
+    return packZip(files);
+  }));
 }
