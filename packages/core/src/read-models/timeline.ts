@@ -13,7 +13,7 @@ import { safeJsonParse, type JsonValue } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
 
 export type TimelineKind =
-  | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'mcts' | 'scaffold' | 'shadow-eval'
+  | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'swarm' | 'scaffold' | 'shadow-eval'
   | 'craft' | 'reflection' | 'head-split' | 'head-merge' | 'gepa'
   | 'curriculum' | 'trigger' | 'event-ingress' | 'background' | 'error' | 'abort' | 'recovery' | 'other';
 
@@ -26,7 +26,7 @@ export interface TimelineSpan {
   elapsedMs?: number;
   /** Preserved structured payload (e.g. evolution_events.data). */
   data?: JsonValue;
-  source: 'shell' | 'evolution' | 'mcts' | 'background';
+  source: 'shell' | 'evolution' | 'swarm' | 'background';
   /** Node id, run-event id, root id… */
   refId?: string;
   rawType?: string;
@@ -209,9 +209,9 @@ export function getRunTimeline(
 
   for (const n of nodes) {
     spans.push({
-      ts: n.created_at, kind: 'mcts', label: n.action || `node ${n.id.slice(0, 8)}`,
+      ts: n.created_at, kind: 'swarm', label: n.action || `node ${n.id.slice(0, 8)}`,
       detail: `value ${Number(n.value).toFixed(2)} · ${n.status}`,
-      source: 'mcts', refId: n.id,
+      source: 'swarm', refId: n.id,
     });
   }
 

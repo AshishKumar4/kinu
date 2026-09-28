@@ -255,8 +255,7 @@ nothing later runs read.
 
 Implemented by `PublicationState`, `PUBLICATION_SURFACES`, `admitsPublication`,
 and `carrySuppression`; `packages/core/tests/contract-publication-seal.test.ts` holds the set
-equality in both directions, and the `scripts/publication-egress.ts` gate holds the settle path's
-writer census.
+equality in both directions.
 
 ## The records store
 

@@ -1,12 +1,11 @@
 import { Database } from 'bun:sqlite';
 import { explorationActorKey, facetHomeProvisioner, headAgentName, subordinateAgentName, type AgentRuntime } from '@kinu.run/core';
 import { createCLIRuntime } from '../packages/cli-backend/src/runtime';
-import { bindLocalActor, registerLocalActor, registerLocalNode } from '../packages/cli-backend/src/actor-identity';
+import { bindLocalActor, registerLocalActor, registerLocalNode } from '@kinu.run/core';
 
 const database = new Database(':memory:');
 
 const config = {
-  dbPath: database.filename,
   llm: { name: 'probe', baseURL: 'http://localhost:0', headers: {}, model: 'unused' },
   hostRoot: null,
 };

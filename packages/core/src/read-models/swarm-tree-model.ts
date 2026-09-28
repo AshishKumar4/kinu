@@ -1,4 +1,4 @@
-/** MCTS tree read model: the non-drawing decisions shared by both tree surfaces. */
+/** Swarm tree read model: the non-drawing decisions shared by both tree surfaces. */
 import { type ForkNode } from '../protocol';
 
 /** One score ladder for bar grades and swarm-node fills. */
@@ -59,7 +59,7 @@ export function isCompeted(root: ForkNode): boolean {
 	return root.value !== null || root.children.some((child) => child.value !== null);
 }
 
-/** MCTS principal variation: most-visited child, ties by value. Empty for an unscored fork. */
+/** Principal variation: most-visited child, ties by value. Empty for an unscored fork. */
 export function principalVariation(root: ForkNode): Set<string> {
 	if (!isCompeted(root)) return new Set<string>();
 	const ids = new Set<string>([root.id]);

@@ -59,7 +59,6 @@ const RESERVED_ALIASES = new Set([
   'exec',
   'tokens',
   'chat',
-  'evolve',
   'status',
   'effort',
   'list',

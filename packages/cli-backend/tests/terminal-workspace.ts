@@ -21,7 +21,7 @@ const USAGE = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 export function openTerminalWorkspace(dbPath: string) {
   const db = new Database(dbPath);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
   initSearchTables(rt.storage.execRaw);
   initAlternateTakesTable(rt.storage.execRaw);
   initScaffoldTables(rt.storage.execRaw);

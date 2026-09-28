@@ -24,7 +24,7 @@ import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
-import { openLocalActor } from '../src/actor-identity';
+import { openLocalActor } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 
 // A head owns no store: its rows are actor-keyed in the parent's one database.
@@ -62,7 +62,6 @@ function makeParent(cwd?: string): LocalParent {
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
-    dbPath,
     llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' },
   };
 

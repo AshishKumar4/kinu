@@ -11,7 +11,7 @@ export interface MCTSDefaults {
   maxEvalLLMCalls: number;
 }
 
-/** Per-head scoring reuses the MCTS judge knobs; only the merge ensemble size is heads-specific. */
+/** Per-head scoring reuses the `mcts` judge knobs; only the merge ensemble size is heads-specific. */
 export interface HeadsDefaults {
   /** Merge-synthesis samples; the median-scored one is kept. */
   mergeSamples: number;

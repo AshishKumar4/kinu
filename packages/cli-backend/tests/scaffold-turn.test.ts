@@ -45,10 +45,9 @@ function fakeModel(answer: string): LanguageModel {
 }
 
 async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean } = {}) {
-  // `createCLIRuntime` refuses a `dbPath` its handle is not open on (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('scaffold-turn', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
   // What `kinu create` provisions (workspace-birth.ts), minus the shadow-rollout ledger,
   // which LocalAgentSession must provision itself.
   initScaffoldTables(rt.storage.execRaw);

@@ -43,7 +43,7 @@ function answer(): ReadableStream<LanguageModelV2StreamPart> {
 test('a turn whose slow first call was cut by two quits is resumed and answers', async () => {
   const db = new Database(scratchPath('quit-mid-step', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
   let calls = 0;
 
   const model = new TestLanguageModelV2({

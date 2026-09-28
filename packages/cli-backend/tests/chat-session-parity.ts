@@ -317,7 +317,7 @@ async function durableRows(db: Database, norm: ParityNormalizer, transcript: Ses
 export async function runParityScenario(interruptRecovery = false): Promise<ParitySnapshot> {
   const db = new Database(scratchPath('chat-session-parity', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
   const transcript = rt.stores.history.transcript('default');
 
   const eventsA: SessionEvent[] = [];

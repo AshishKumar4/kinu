@@ -66,7 +66,7 @@ export function AgentSurface(
               ["Mission", as.purpose],
               ["Model", as.model],
               ["Scaffold", `v${as.scaffoldVersion}`],
-              ["MCTS Nodes", String(as.searchNodeCount)],
+              ["Swarm nodes", String(as.searchNodeCount)],
               ["Messages", String(as.messageCount)],
               ["Created", new Date(as.createdAt).toLocaleString()],
             ]).map(([l, value]) => (

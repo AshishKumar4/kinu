@@ -510,7 +510,7 @@ describe('what the endpoint stores', () => {
 
   test('a screenshot report writes R2 under the user’s prefix, then the row that points at it', async () => {
     const rec = recorder();
-    const request = submit({ note: 'here', route: '/mcts/checkout-fixes', workspace: 'checkout-fixes', screenshot: pngPart(realPng()) });
+    const request = submit({ note: 'here', route: '/swarm/checkout-fixes', workspace: 'checkout-fixes', screenshot: pngPart(realPng()) });
     const response = await answerFeedback(request, ME, rec.deps);
 
     expect(response?.status).toBe(201);
@@ -649,7 +649,7 @@ describe('the analytics marker', () => {
     const seen: string[] = [];
     const slug = 'zzslugzz';
 
-    for (const route of ['/', `/workspace/${slug}`, `/mcts/${slug}`, `/settings/${slug}`, '/user/settings', `/triggers/${slug}`]) {
+    for (const route of ['/', `/workspace/${slug}`, `/swarm/${slug}`, `/settings/${slug}`, '/user/settings', `/triggers/${slug}`]) {
       const rec = recorder();
       await answerFeedback(submit({ note: 'x', route }), ME, rec.deps);
       seen.push(present(rec.marks.at(-1), 'the last analytics mark').routeFamily);

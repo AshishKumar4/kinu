@@ -354,7 +354,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     let observed: PromptMessage[] = [];
     const db = new Database(scratchPath('local-session-placed-prompt', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM, cwd: scratchDir('local-session-placed-prompt') });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: scratchDir('local-session-placed-prompt') });
     const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }), { rt, db });
     await session.send('hi', { id: crypto.randomUUID() });
 

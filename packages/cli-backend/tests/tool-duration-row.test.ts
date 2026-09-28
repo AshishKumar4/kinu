@@ -56,7 +56,7 @@ describe('tool_call_end', () => {
   test('carries the call\'s duration on the shared loop', async () => {
     const db = new Database(scratchPath('tool-duration-row', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
     const session = new LocalAgentSession({ rt, db, model: searchingModel(), noAutoEvolve: true, onEvent: () => {} });
 
     await session.send('What do you remember?', { id: crypto.randomUUID() });

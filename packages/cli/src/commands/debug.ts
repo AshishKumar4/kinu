@@ -1,5 +1,5 @@
 /**
- * `kinu debug <name>`: assembles the read models (run ledger, MCTS, jobs, changelog, memory, ...) into one
+ * `kinu debug <name>`: assembles the read models (run ledger, swarm searches, jobs, changelog, memory, ...) into one
  * redacted narrative. Unlike `kinu export` it never touches the raw archive. `DebugSource` is the backend seam;
  * `debugCommand` alone walks, redacts, pages and renders.
  */
@@ -813,7 +813,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
   }
 
   if (summary.mctsSearches.length > 0) {
-    console.log(`\n${ACCENT('MCTS searches')} (${summary.mctsSearches.length}, newest first)`);
+    console.log(`\n${ACCENT('Swarm searches')} (${summary.mctsSearches.length}, newest first)`);
 
     for (const s of summary.mctsSearches.slice(0, 5)) {
       const depthTag = s.nodeCount <= 1 ? WARN('single node, no depth') : `${s.nodeCount} nodes, depth ${s.maxDepth}`;

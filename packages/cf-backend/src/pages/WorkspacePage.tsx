@@ -286,7 +286,7 @@ function ForkModal({
           <li>Conversation: the {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"} up to this one</li>
           <li>Files: the project, SOUL.md and memory as they are now, not as they were at this message</li>
           <li>Also copied: learned tools and settings</li>
-          <li>Starts fresh: MCTS tree, evolution events, scaffold, installed runtimes</li>
+          <li>Starts fresh: swarm trees, evolution events, scaffold, installed runtimes</li>
           <li>Source workspace is unaffected</li>
         </ul>
       </div>
@@ -867,7 +867,7 @@ export default function WorkspacePage() {
     });
   }, [state.connectionStatus, state.rpc, reportSide]);
 
-  // Refreshed when a turn settles: a think convergence may have produced a fresh near-tied set.
+  // Refreshed when a turn settles: a settled /branch redirect may have produced a fresh set.
   const [takesByTurn, setTakesByTurn] = useState<Record<string, AlternateTakeSet>>({});
 
   // A signal that started a turn renders on its message; one spliced into a running turn

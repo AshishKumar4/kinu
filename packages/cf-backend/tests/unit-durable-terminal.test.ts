@@ -564,8 +564,7 @@ describe('mid-turn captures are credited to the turn only when it answered', () 
     await turns(harness).settle({ messageId: 'a-credit', text: 'the live answer' });
     await joinHarnessFibers();
 
-    expect(harness.db.query('SELECT turn_id, source FROM alternate_takes').all())
-      .toEqual([{ turn_id: 'a-credit', source: 'branch' }]);
+    expect(harness.db.query('SELECT turn_id FROM alternate_takes').all()).toEqual([{ turn_id: 'a-credit' }]);
   });
 
   test('a turn that failed credits nothing: its branch is aborted and no take set is written', async () => {

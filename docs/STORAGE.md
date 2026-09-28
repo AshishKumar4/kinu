@@ -6,8 +6,8 @@ the workspace files and execution state. The same SQLite database holds the
 relational actor state. Each subsystem owns its tables and creates them
 idempotently. No shadow VFS or sync path runs between files and actor state.
 
-Only `OrchestratorAgent` holds actors. Every subordinate, head, swarm node, and
-MCTS branch is a logical actor, one `workspace_actors` row inside the
+Only `OrchestratorAgent` holds actors. Every subordinate, head and swarm node
+is a logical actor, one `workspace_actors` row inside the
 workspace's own SQLite (`packages/cf-backend/src/hosted-actors.ts`). None is a second object or a
 second database. The other Durable Object classes in `wrangler.jsonc` keep
 databases of their own. The one with user data is `UserDO`: it holds the
@@ -119,18 +119,13 @@ erDiagram
         TEXT id PK "Node ID (nanoid)"
         TEXT parent_id FK "Parent node"
         TEXT root_id "The search run this node belongs to"
-        TEXT task "MCTS task"
+        TEXT task "Swarm task"
         TEXT action "Approach taken"
         TEXT observation "Result"
-        TEXT code_used "Runnable source from exploration"
-        TEXT code_language "Executor language for code_used"
-        INTEGER depth "Tree depth"
         INTEGER visits "Backprop count (default 0)"
         REAL value "Running mean score (default 0)"
+        INTEGER depth "Tree depth"
         TEXT status "open/terminal/pruned/failed"
-        TEXT msg_id "Session message ID"
-        TEXT branch_agent_key "Branch actor key"
-        TEXT evaluation_json "Evaluation of the node"
         INTEGER created_at "Epoch ms"
     }
     evolution_events {
@@ -177,7 +172,7 @@ erDiagram
     }
     conversation_entries {
         TEXT actor_id PK "Actor whose conversation this is"
-        TEXT session_id PK "Session ('default' chat, 'mcts' search)"
+        TEXT session_id PK "Session ('default' is the chat)"
         TEXT id PK "Entry ID"
         INTEGER position UK "Place in the chat from 0; the chat is a list"
         TEXT role "user/assistant/system/tool"
@@ -379,7 +374,6 @@ relational store under `packages/core/src/session` (`SessionHistory`, built by
 - The conversation: `conversation_entries` is the public chat, a list (`id`,
   `position`, `role`, `turn_id`, `run_id`, `recorded_at`, and the working
   context the entry recorded), keyed by actor and session. `default` is the
-  chat. `mcts` holds lifetime-search trajectories and is never browsed as
   chat. `conversation_entry_parts` references the message parts each entry
   displays. An entry appends at the next position, so the newest position + 1
   is the chat's length, and a page is one range read by position. A walk-back
@@ -433,7 +427,8 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Refinement | `refinement_requests` | `core/src/evolution/refinement.ts` |
 | GEPA | `gepa_runs`, `gepa_candidates` | `core/src/evolution/gepa/persistence.ts` |
 | Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |
-| MCTS | `mcts_search_runs` (durable checkpoints), `alternate_takes` | `core/src/mcts/search-store.ts`, `takes.ts` |
+| Swarm search | `search_nodes`, `mcts_search_runs` (durable checkpoints) | `core/src/mcts/schemas.ts`, `search-store.ts` |
+| Alternate takes | `alternate_takes` (a settled `/branch` redirect) | `core/src/mcts/takes.ts` |
 | Swarm leaderboard | `exploration_records` (cumulative across runs) | `core/src/strategy/records.ts` |
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
 | Scaffold shadow mode | `scaffold_evaluations`, `scaffold_trial_queue` | `core/src/scaffold/shadow.ts` |

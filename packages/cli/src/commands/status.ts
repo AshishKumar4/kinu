@@ -97,7 +97,7 @@ function printCloudStatus(
   console.log(`${DIM('Effort')}     ${status.reasoningEffort ?? 'medium (chat default)'}`);
   console.log(`${DIM('Messages')}   ${status.messageCount}`);
   console.log(`${DIM('Scaffold')}   v${status.scaffoldVersion}`);
-  console.log(`${DIM('MCTS')}       ${plural(status.searchNodeCount, 'node')}`);
+  console.log(`${DIM('Swarm')}      ${plural(status.searchNodeCount, 'node')}`);
   console.log(`${DIM('Tools')}      ${counts.builtInTools} built-in, ${counts.craftedTools} crafted, ${plural(counts.executorCount, 'executor')}`);
   console.log(`${DIM('Triggers')}   ${counts.triggerCount}`);
   console.log(`${DIM('Jobs')}       ${counts.runningJobs} running, ${counts.jobCount} recent`);

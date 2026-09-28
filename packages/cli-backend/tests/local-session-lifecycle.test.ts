@@ -109,7 +109,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     mkdirSync(join(project, 'dist'));
     const db = new Database(scratchPath('local-session-placed', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM, cwd: project });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM, cwd: project });
     const session = new LocalAgentSession({ rt, db, model: fakeModel('noted'), onEvent: () => {}, noAutoEvolve: true });
     const shell = present(rt.shell, 'the placed shell');
 
@@ -1342,7 +1342,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
   ) {
     const db = new Database(scratchPath('local-session-review', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
     // The classifier and reflection ride rt.llm.complete; stub it so the review
     const completions: string[] = [];
 

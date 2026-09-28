@@ -136,16 +136,6 @@ describe('ConversationSearchStore.browse', () => {
 });
 
 describe('the derived index', () => {
-  test('excludes the mcts session from search and browse, and still anchors a scroll there', async () => {
-    const { store, record } = setup();
-    const node = await record('mcts', 'assistant', 'topicword inside the search tree');
-    await record('chat', 'user', 'topicword in the conversation');
-
-    expect((await store.search('topicword')).map((hit) => hit.conversationId)).toEqual(['chat']);
-    expect((await store.browse()).map((conversation) => conversation.conversationId)).toEqual(['chat']);
-    expect(present(await store.scroll(node), 'the window around the tree node').conversationId).toBe('mcts');
-  });
-
   test('invalidation discards the index and rebuilds it from the canonical store', async () => {
     const { rt, store, record } = setup();
     await record('chat', 'user', 'canonical subject matter');

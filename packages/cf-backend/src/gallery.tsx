@@ -901,7 +901,7 @@ window.WebSocket = new Proxy(window.WebSocket, {
 });
 
 
-/** A real MCTS tree at the size the view must survive; rows, not a tree, so it enters through `buildTree` like the socket payload. */
+/** A real swarm tree at the size the view must survive; rows, not a tree, so it enters through `buildTree` like the socket payload. */
 const MCTS_ACTIONS = [
   "Backfill coupon.kind from the discount table",
   "Add a NOT NULL default and re-run the migration",
@@ -989,7 +989,6 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
         observation: status === "failed"
           ? "Branch errored: the staging DB refused the ALTER while checkout held the lock."
           : `Scored ${score.toFixed(2)} — ${status === "pruned" ? "below the prune floor, dropped" : "kept for the next round"}.`,
-        code_used: onWinningLine ? "await db.exec(`UPDATE coupons SET kind = ...`)" : null,
         created_at: NOW - 36e5 + rows.length * 9e3,
       });
 
@@ -1891,7 +1890,6 @@ const PROVE_ROWS: MctsRow[] = [
     id: "pv005", parent_id: "pv003", depth: 3, visits: 5, value: 0.94, own_score: 0.94, status: "terminal",
     action: "Discharge the null case from the guard",
     observation: "Checker accepted 3 of 3 goals. No sorries remain.",
-    code_used: "theorem applyCoupon_terminates : ∀ c, Terminates (applyCoupon c) := by",
     created_at: NOW - 75e5,
   },
 ];
@@ -1940,7 +1938,6 @@ const SWARM_ROWS: MctsRow[] = [
     id: "sw007", parent_id: "sw004", depth: 3, visits: 6, value: 0.93, own_score: 0.93, status: "terminal",
     action: "Drop the redundant second lookup",
     observation: "p95 = 188ms. The guard's fixture still passes.",
-    code_used: "const kind = cached ?? inferKind(coupon);",
     created_at: NOW - 19e5,
   },
   {
@@ -2148,7 +2145,7 @@ const FORK_RUNS: ForkRunSummary[] = [
     // Derived: `forkbig` generates 520 rows for this same run.
     id: "n000", name: "SAVE20 500s",
     task: "Find why the SAVE20 coupon 500s", startedAt: NOW - 36e5,
-    // From the same stores as each row's halves: an MCTS search has the tree only, a swarm has both.
+    // From the same stores as each row's halves: a swarm writes both.
     status: "completed", hasSearchTree: true, hasNodeTranscripts: false,
     branches: MCTS_ROWS.length - 1, winnerScore: 0.91,
   },
@@ -2355,7 +2352,6 @@ const TRANSCRIPTS = {
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
       { id: "root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", depth: 1, status: "completed" },
     ],
-    codeUsed: null,
   },
   "root-merge-1-h1": {
     origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h1",
@@ -2375,7 +2371,6 @@ const TRANSCRIPTS = {
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "running" },
       { id: "root-merge-1-h1", label: "packages/cart/src/serializer.ts", depth: 1, status: "running" },
     ],
-    codeUsed: null,
   },
   "root-merge-1-h2": {
     origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h2",
@@ -2389,7 +2384,6 @@ const TRANSCRIPTS = {
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
       { id: "root-merge-1-h2", label: "packages/admin/src/coupon-report.ts", depth: 1, status: "errored" },
     ],
-    codeUsed: null,
   },
   // A competed branch: no tool loop, its `observation` is the whole output.
   n003: {
@@ -2405,7 +2399,6 @@ const TRANSCRIPTS = {
       { id: "n001", label: "Look at the coupon rules table", depth: 1, status: "open" },
       { id: "n003", label: "Guard the kind lookup at the reader", depth: 2, status: "terminal" },
     ],
-    codeUsed: "const rule = rules[coupon.kind ?? inferKind(coupon)];\nif (!rule) throw new BadCoupon(coupon.code);\nreturn rule.apply(cart, coupon);",
   },
   // A Steer-as-Branch run: one head, its id derived from the run id.
   "steer-b7f21-head": {
@@ -2435,7 +2428,6 @@ const TRANSCRIPTS = {
     path: [
       { id: "steer-b7f21-head", label: "Check the staging snapshot first", depth: 0, status: "completed" },
     ],
-    codeUsed: null,
   },
   // Two nodes of the live run, reachable from the run pane's node list.
   lv001: {
@@ -2480,7 +2472,6 @@ const TRANSCRIPTS = {
       { id: "lv000", label: "Audit every reader of coupon.kind", depth: 0, status: "running" },
       { id: "lv001", label: "Walk the cart serializer's null path", depth: 1, status: "completed" },
     ],
-    codeUsed: null,
   },
   lv003: {
     origin: "head", runId: "lv000", nodeId: "lv003",
@@ -2517,7 +2508,6 @@ const TRANSCRIPTS = {
       { id: "lv000", label: "Audit every reader of coupon.kind", depth: 0, status: "running" },
       { id: "lv003", label: "Trace the pricing refactor's readers", depth: 1, status: "running" },
     ],
-    codeUsed: null,
   },
 } satisfies Record<string, NodeTranscriptView>;
 
@@ -2645,14 +2635,12 @@ function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
     task: row.task ?? "",
     action: row.action,
     observation: row.observation ?? "",
-    code_used: row.code_used ?? null,
     visits: row.visits,
     value: row.value,
     own_score: row.own_score,
     depth: row.depth,
     // `running` is a merged-head status the search_nodes CHECK constraint cannot hold.
     status: row.status === "running" ? "open" : row.status,
-    msg_id: row.msg_id ?? null,
     created_at: row.created_at ?? NOW,
   };
 }
@@ -2881,10 +2869,10 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
 }
 
 /* Shared so the wide and narrow frames photograph the same affordance. */
-const MCTS_NOTICE: readonly ComposerNotice[] = [{
-  id: "mcts",
+const REFRESH_NOTICE: readonly ComposerNotice[] = [{
+  id: "jobs",
   tone: "danger",
-  text: "Could not refresh MCTS.",
+  text: "Could not refresh background jobs.",
   action: { label: "Retry", onClick: () => {} },
 }];
 
@@ -3054,7 +3042,7 @@ function ChatFrame() {
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
         <GalleryChatTabs />
         <ChatMessages />
-        <GalleryComposer notices={MCTS_NOTICE} />
+        <GalleryComposer notices={REFRESH_NOTICE} />
       </div>
     </div>
   );
@@ -3249,7 +3237,7 @@ function ComposerFrame() {
         </div>
         <div className="space-y-1">
           <div className="p-eyebrow px-4">With a status row</div>
-          <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={MCTS_NOTICE} />
+          <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={REFRESH_NOTICE} />
         </div>
         <ModelPickerStates />
       </div>
@@ -4891,7 +4879,7 @@ const SUPERVISE_JOBS: BackgroundJob[] = [
     workMode: "build", result: null, error: null, createdAt: NOW - 4 * 60e3, settledAt: null,
   },
   {
-    id: "bgjob-70bd19f7", kind: "mcts", label: "Pick a migration-backfill approach",
+    id: "bgjob-70bd19f7", kind: "agents", label: "Pick a migration-backfill approach",
     workMode: "build", status: "completed", result: "Settled on the backfill-on-read approach", error: null,
     createdAt: NOW - 50 * 60e3, settledAt: NOW - 41 * 60e3,
   },
@@ -5852,7 +5840,7 @@ function fixtureFailure(): Error {
   return new URLSearchParams(location.search).get("failure") === "app"
     ? new TypeError("Cannot read properties of undefined (reading 'kind')")
     : new TypeError(
-      `Failed to fetch dynamically imported module: ${location.origin}/assets/MCTSExplorer-a1b2c3.js`,
+      `Failed to fetch dynamically imported module: ${location.origin}/assets/SwarmExplorer-a1b2c3.js`,
     );
 }
 
@@ -5881,7 +5869,7 @@ function LazyRouteScene() {
           and reloading is the whole fix — once, and only when the origin really has moved.
         </p>
         <div className="p-group max-w-2xl" style={{ height: 260 }}>
-          <ErrorBoundary label="mcts-explorer">
+          <ErrorBoundary label="swarm-explorer">
             <Suspense fallback={<p data-lazy-pending className="p-6 text-sm p-text-3">Loading…</p>}>
               <StaleChunkRoute />
             </Suspense>
@@ -6082,10 +6070,10 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
 
 /** The only dynamic import in this dispatch: the page pulls d3 and the tree renderer. It reads through `useKinu`, resolved to `gallery-agent-stub` here. */
 async function mctsExplorerFrame(run: string): Promise<MountedFrame> {
-  const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
+  const { default: SwarmExplorer } = await import("@/pages/SwarmExplorer");
   serveGalleryRpc(focusRun(run));
 
-  return routedPage(`/mcts/checkout-fixes?run=${run}`, "/mcts/:agentId", <MCTSExplorer />);
+  return routedPage(`/swarm/checkout-fixes?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
 }
 
 function routedPage(entry: string, path: string, page: React.ReactNode, height = "h-screen"): MountedFrame {

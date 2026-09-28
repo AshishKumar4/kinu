@@ -49,7 +49,7 @@ async function createLocalAgent(home: string, name: string): Promise<void> {
     await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     // `search_nodes` and `agent_log` are actor-private: seed under the main actor `createWorkspace` issued;
-    // rows under any other id are silently invisible to `kinu mcts` and `kinu events`.
+    // rows under any other id are silently invisible to `kinu swarm` and `kinu events`.
     const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
     db.run("INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text) VALUES (?, ?, ?, ?, ?, ?)",
       ["c1", "memory/MEMORY.md", 0, 2, "h", "# Memory\n\nhello local memory\n"]);
@@ -119,7 +119,7 @@ describe("CLI inspection commands", () => {
     expect(memory.exitCode).toBe(0);
     expect(memory.stdout).toContain("hello local memory");
 
-    const mcts = await runCli(home, ["mcts", "localtest", "--json"]);
+    const mcts = await runCli(home, ["swarm", "localtest", "--json"]);
     expect(mcts.exitCode).toBe(0);
     expect(JSON.parse(mcts.stdout)).toEqual([
       expect.objectContaining({ id: "root", value: 0.7, status: "terminal" }),

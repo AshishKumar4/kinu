@@ -46,10 +46,9 @@ const RATIONALE = 'four angles on the research question';
 
 /** Four head rows still `running` while the fork's job is already `cancelled by operator`, as `kinu stop` leaves it. */
 function interruptedWorkspace() {
-  // A file, not `:memory:`: `createCLIRuntime` refuses a mismatched `dbPath` (actor-identity.ts `requireLocalDatabasePath`).
   const db = new Database(scratchPath('local-session-fork-resume', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
   const execRaw = makeExecRaw(db);
   initHeadsTables(execRaw);
   initBackgroundJobsTable(execRaw);
@@ -113,7 +112,7 @@ describe('resuming a workspace whose fork was interrupted', () => {
   test('a clean workspace resumes silently', async () => {
     const db = new Database(scratchPath('local-session-fork-clean', 'agent.db'), { create: true });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
     const events: SessionEvent[] = [];
 
     const session = new LocalAgentSession({

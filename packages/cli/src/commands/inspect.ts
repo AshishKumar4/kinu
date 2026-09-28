@@ -81,10 +81,8 @@ const AlignmentConvergenceSchema: v.GenericSchema<AlignmentConvergence> = v.obje
 const SearchNodeSchema: v.GenericSchema<SearchNode> = v.object({
   id: v.string(), parent_id: v.nullable(v.string()), root_id: v.string(),
   task: v.string(), action: v.string(), observation: v.string(),
-  code_used: v.nullable(v.string()),
   visits: v.number(), value: v.number(), depth: v.number(),
   status: v.picklist(['open', 'terminal', 'failed', 'pruned']),
-  msg_id: v.nullable(v.string()),
   created_at: v.number(),
 });
 
@@ -333,7 +331,7 @@ export async function timelineCommand(name: string, opts: InspectOpts = {}): Pro
   printRows(data, opts, formatTimelineRow);
 }
 
-export async function mctsCommand(name: string, nodeId: string | undefined, opts: InspectOpts = {}): Promise<void> {
+export async function swarmCommand(name: string, nodeId: string | undefined, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
 
   const data = await readTarget(target, {

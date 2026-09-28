@@ -123,7 +123,7 @@ async function main(): Promise<void> {
     initCraftedToolsTables(sql);
   }
 
-  const rt = createCLIRuntime(db, { dbPath: input.dbPath, llm: analyst });
+  const rt = createCLIRuntime(db, { llm: analyst });
   const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
   const byIndex = new Map(panel.map((config, index) => [forkSpec(index), config]));
 

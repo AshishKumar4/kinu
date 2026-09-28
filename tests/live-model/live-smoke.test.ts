@@ -27,8 +27,7 @@
  *
  * COST. Both turns run on `@cf/deepseek-ai/deepseek-v4-pro-0813` through the
  * owner's Workers AI allocation, which his plan includes — the marginal USD cost
- * is zero and the billed unit is neurons. `mcts/cost.ts` cannot say that (one
- * blended per-token rate for every model), which is why nothing here asserts a
+ * is zero and the billed unit is neurons, which is why nothing here asserts a
  * dollar figure.
  *
  * WHAT IT DOES NOT MEASURE, AND WHY THAT IS NOT PAPERED OVER. The cloud
