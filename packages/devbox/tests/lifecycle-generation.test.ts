@@ -488,6 +488,25 @@ describe('a destroyed box starts nothing of its own until it is asked again', ()
       .toEqual({ running: false, rows: [], stamps: 0 });
   });
 
+  test('a beat past its running check when the box is torn down starts no container', async () => {
+    const { box, container } = harness(TestBox);
+    await box.devboxStartup();
+    const starts = container.containerStarts;
+    const reading = gate();
+    container.stateReadGate = reading;
+    // The beat saw the container running and issued its first command. The SDK is still reading
+    // its own state when the teardown lands, and then finds the container gone.
+    const beat = box.devboxHeartbeat();
+    await reading.reached;
+    await box.discardState();
+    await box.destroy();
+    reading.release();
+    await beat;
+
+    expect({ starts: container.containerStarts, running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
+      .toEqual({ starts, running: false, rows: [] });
+  });
+
   test('a startup row the platform delivers after the teardown starts nothing', async () => {
     const { box, container } = harness(TestBox);
     container.startFaultBeforeRunning = failure('CONTAINER_UNAVAILABLE');

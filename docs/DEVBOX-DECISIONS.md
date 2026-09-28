@@ -1484,31 +1484,43 @@ chain.
   three slots; the 09-27 one ran 3 h 15 min. `destroy` now closes the box. It
   aborts and awaits every admission in flight, then deletes the startup,
   heartbeat and checkpoint rows before the SDK's destroy. Incident delivery,
-  which never reaches a container, carries on. Until a
-  caller or a host asks again (`resolveReadiness`, `attachNow`,
-  `kickStartup`), a start hook restores nothing, and neither a buffered
-  startup row nor a poll (`devboxState`) starts a container. The flag lives
-  in memory only. A start in flight and an alarm pass's buffered rows die with
-  the isolate, and a fresh isolate arms nothing, since activation only adopts
-  a running container. `#replaceContainer` keeps the SDK's destroy: a
-  replaced identity is restarted, not closed. Every bench drive that destroys
-  a box asks again through `/create` or `/wake`.
+  which never reaches a container, carries on. Until a caller or a host asks
+  again (any Devbox operation, `attachNow`, `kickStartup` or `start`),
+  nothing starts a container. Every path starts one through
+  `startAndWaitForPorts`, the SDK's own included (`containerFetch`,
+  `startContainerForRPC`). Devbox decides it there, against the flag `destroy`
+  sets before anything else. A beat or a checkpoint whose command was already
+  under way when the destroy landed reaches that decision only after the
+  SDK's state read (`getState()`), so it is refused, and the box arms none of
+  the three rows. Raw traffic to the object (`fetch`, a preview, a terminal)
+  starts nothing either, as the orchestrator's preview revocation already
+  assumes. A start already in flight still reaches the start hook, which
+  restores nothing. The flag lives in memory only. A start in flight and an
+  alarm pass's buffered rows die with the isolate, and a fresh isolate arms
+  nothing, since activation only adopts a running container.
+  `#replaceContainer` keeps the SDK's destroy: a replaced identity is
+  restarted, not closed. Every bench drive that destroys a box asks again
+  through `/create` or `/wake`.
 - A box no caller used never rested: its idle clock fell back to each beat's
   `now`. It now falls back to when its container last started
   (`devbox:started-at`, written as the start hook settles).
 
-Staging's sandbox takes production's `max_instances` of 10 (was 3). Open: a
-beat already past its running check when `destroy` lands can still exec, and
-the SDK starts a stopped container on exec.
+Staging's sandbox takes production's `max_instances` of 10 (was 3).
 
 Tests, red on cbfd32def6 and green after:
 - `tests/restoration-visibility.test.ts`: a caller of a refused box learns the
   refusal, then is restored once granted. Red: `no restoration has run`.
 - `tests/lifecycle-generation.test.ts`: a start in flight at teardown leaves no
   container, no row and no restore. Red: running, heartbeat armed, one stamp.
-  A startup row delivered after the teardown starts nothing. Red: one start,
-  running, two rows. A caller and a host's kick still reopen the box, green
-  before and after.
+  A beat past its running check, whose first command is still in the SDK's
+  state read when the teardown lands, starts no container. Red at f1d4b5bc40,
+  which lacked the start decision: the command restarted the container
+  (starts 1 to 2) and the beat re-armed itself. A startup row delivered after
+  the teardown starts nothing. Red: one start, running, two rows. A caller and
+  a host's kick still reopen the box, green before and after. The harness's
+  session exec now reads its state and starts a stopped container through
+  `startAndWaitForPorts`, as the SDK does; the rest of the suite passed
+  unchanged under it (492 of 492).
 - `tests/terminal-activity.test.ts`: a box its own startup started rests after
   the idle window. Red: still running with its alarm armed after 120 passes.
 

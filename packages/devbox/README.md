@@ -49,9 +49,10 @@ on every call.
    it.
 7. `destroy` closes the box. It aborts and awaits a start in flight, and
    deletes its startup, heartbeat and checkpoint rows before the SDK's
-   destroy. Until a caller or a host asks again, a start hook restores
-   nothing, and neither a buffered startup row nor a poll (`devboxState`)
-   starts a container (D36).
+   destroy. Until a caller or a host asks again, no container starts: every
+   start, the SDK's own included, passes `startAndWaitForPorts`, which
+   refuses, so a beat or a checkpoint already under way cannot revive one,
+   and a start hook still in flight restores nothing (D36).
 
 `DevboxStorage` hides durable bytes behind the three methods every strategy
 needs:
