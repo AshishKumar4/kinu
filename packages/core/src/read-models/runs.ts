@@ -3,7 +3,9 @@
  * presentation, so a truncated window is never summed as the workspace's spend.
  */
 
+import { Effect } from 'effect';
 import { boundRunEventQuery } from '../events/recorder';
+import { settleSync } from '../obs/index';
 import type { RunEventQuery, RunEventRecorder, RunListEntry, StoredRunEvent } from '../events/recorder';
 import type { RunEvent } from '../events/types';
 import { boundedInt } from '../utils/bounds';
@@ -53,7 +55,7 @@ export function listRuns(
   // A negative limit would reach SQL as `LIMIT 0`, an empty page that reads as exhausted history.
   const page = boundedInt(limit, DEFAULT_RUN_PAGE, 1, MAX_RUN_PAGE);
 
-  return seekPage(events.listRunsBefore(anchorSeq(events, cursor), page + 1), page, (run) => run.runId);
+  return settleSync(Effect.map(anchorSeq(events, cursor), (seq) => seekPage(events.listRunsBefore(seq, page + 1), page, (run) => run.runId)));
 }
 
 /** {@link listRuns} folded with each run's `run_start` provenance and `turn_end` usage. */
@@ -106,11 +108,9 @@ function summarize(events: RunEventRecorder, run: RunListEntry): RunSummary {
 }
 
 /** A vanished anchor throws rather than returning an empty page that reads as exhausted history. */
-function anchorSeq(events: RunEventRecorder, cursor: SeekCursor | null): number | null {
-  if (cursor === null) return null;
+function anchorSeq(events: RunEventRecorder, cursor: SeekCursor | null): Effect.Effect<number | null> {
+  if (cursor === null) return Effect.succeed(null);
   const seq = events.runSeq(cursor.after);
 
-  if (seq === null) throw new StaleCursorError('run history', cursor.after);
-
-  return seq;
+  return seq === null ? Effect.die(new StaleCursorError('run history', cursor.after)) : Effect.succeed(seq);
 }

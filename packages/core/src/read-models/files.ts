@@ -13,7 +13,8 @@ import { isVfsError } from '../vfs/errno';
 import { inlineFileType } from './file-types';
 import { isSystemManaged } from '../vfs/workspace-path';
 import type { VFS, VfsRevision } from '../types/primitives';
-import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, type Refusal } from '../obs/index';
+import { Effect } from 'effect';
+import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
 import { canonicalWorkspacePath, workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
@@ -342,34 +343,41 @@ export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
  * Where a mount point's tree starts: `/pc/<name>` lands on that machine's consented root
  * (`homeDir(segment)`), since the device guard refuses its `/`. Bare `/pc` is the roster.
  */
-async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<string> {
+function mountLanding(router: ExecutorFileLookup, dir: string): Effect.Effect<string, Failed> {
   const machine = /^\/pc\/([^/]+)\/?$/.exec(dir)?.[1];
   const executor = MOUNT_EXECUTORS[machine === undefined ? dir : '/pc'];
 
-  if (executor === undefined) return dir;
+  if (executor === undefined) return Effect.succeed(dir);
   const provider = router.getProvider(executor);
 
-  if (!provider) return dir;
-  // Any failure keeps the bare mount, so the listing shows the mount's own refusal
-  // (e.g. "no device connected").
-  let home: string | null;
-
-  try {
-    home = await provider.homeDir(machine);
-  } catch (cause) {
-    diagnostics.event('files.mount_home_unavailable',
-      { executor, mount: dir, error: renderThrownChain({ cause }) });
-    home = null;
-  }
-
+  if (!provider) return Effect.succeed(dir);
   const landing = dir.replace(/\/+$/, '');
 
-  return home !== null && home.startsWith('/') && home !== '/' ? `${landing}${home}` : landing;
+  // Any failure keeps the bare mount, so the listing shows the mount's own refusal
+  // (e.g. "no device connected").
+  return step(() => provider.homeDir(machine)).pipe(
+    Effect.catch((failed) => Effect.sync((): string | null => {
+      diagnostics.event('files.mount_home_unavailable', { executor, mount: dir, error: renderThrownChain(failed) });
+
+      return null;
+    })),
+    Effect.map((home) => (home !== null && home.startsWith('/') && home !== '/' ? `${landing}${home}` : landing)),
+  );
+}
+
+interface Failed {
+  readonly cause: unknown;
+}
+
+const step = <A>(run: () => Promise<A>): Effect.Effect<A, Failed> => Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) });
+
+function orError<R>(body: Effect.Effect<R, Failed>): Effect.Effect<R | { error: string }> {
+  return Effect.catch(body, (failed) => Effect.succeed({ error: renderThrownChain(failed) }));
 }
 
 /** Typed directory listing. Empty `path` means the environment's start; the answer always carries
  *  the absolute directory listed. */
-export async function getExecutorFiles(
+export function getExecutorFiles(
   router: ExecutorFileLookup,
   executorId: string,
   path: string,
@@ -377,13 +385,14 @@ export async function getExecutorFiles(
   const provider = router.getProvider(executorId);
   const vfs = provider?.files;
 
-  if (!provider || !vfs) return { error: `Executor "${executorId}" has no file plane` };
+  if (!provider || !vfs) return Promise.resolve({ error: `Executor "${executorId}" has no file plane` });
 
-  try {
+  return settle(orError(Effect.gen(function* () {
     const dir = path === ''
-      ? await provider.homeDir()
-      : await mountLanding(router, normalizeDir(path));
+      ? yield* step(() => provider.homeDir())
+      : yield* mountLanding(router, normalizeDir(path));
 
+    return yield* step(async () => {
     const listed = await listWithVfsOps(vfs, dir);
 
     // A null `stat` is one unreadable child, not a failed listing.
@@ -404,24 +413,23 @@ export async function getExecutorFiles(
     }
 
     return { path: dir, entries: sortDirEntries(entries) };
-  } catch (err) {
-    return { error: renderThrownChain({ cause: err }) };
-  }
+    });
+  })));
 }
 
 /** One file's text, bounded before it is read. A revision is returned only with native
  *  compare-and-write; size/mtime never grants edit authority. */
-export async function readExecutorFile(
+export function readExecutorFile(
   router: ExecutorFileLookup,
   executorId: string,
   path: string,
 ): Promise<ExecutorTextFile> {
-  if (!path) return { error: 'path required' };
+  if (!path) return Promise.resolve({ error: 'path required' });
   const vfs = executorFiles(router, executorId);
 
-  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  if (!vfs) return Promise.resolve({ error: `Executor "${executorId}" has no file plane` });
 
-  try {
+  return settle(orError(step(async (): Promise<ExecutorTextFile> => {
     const stat = await vfs.stat(path);
 
     if (stat?.isDir) return { error: 'path is a directory' };
@@ -451,9 +459,7 @@ export async function readExecutorFile(
     }
 
     return result;
-  } catch (err) {
-    return { error: renderThrownChain({ cause: err }) };
-  }
+  })));
 }
 
 /** No expected revision writes unconditionally. */
@@ -463,84 +469,75 @@ export interface ExecutorFileWrite {
 }
 
 /** No size cap here: `ExecutorFileUpload` bounds what reaches this write. */
-export async function writeExecutorFileOp(
+export function writeExecutorFileOp(
   router: ExecutorFileLookup,
   executorId: string,
   path: string,
   upload: ExecutorFileWrite,
 ): Promise<ExecutorWriteResult> {
-  if (!path || path.endsWith('/')) return { error: 'file path required' };
+  if (!path || path.endsWith('/')) return Promise.resolve({ error: 'file path required' });
   const vfs = executorFiles(router, executorId);
 
-  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  if (!vfs) return Promise.resolve({ error: `Executor "${executorId}" has no file plane` });
   const { bytes, expectedRevision } = upload;
   const conditional = vfs.writeFileIfRevision?.bind(vfs);
 
   if (expectedRevision === undefined) {
-    try {
+    return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
       await vfs.writeFile(path, bytes);
 
       return { ok: true };
-    } catch (err) {
-      return { error: renderThrownChain({ cause: err }) };
-    }
+    })));
   }
 
   if (conditional === undefined) {
-    return {
+    return Promise.resolve({
       unsupported: true,
       error: CONDITIONAL_WRITE_UNSUPPORTED,
-    };
+    });
   }
 
-  try {
-    const result = await conditional(path, bytes, expectedRevision);
-
-    return result.ok
+  return settle(step(() => conditional(path, bytes, expectedRevision)).pipe(Effect.match({
+    onSuccess: (result): ExecutorWriteResult => (result.ok
       ? { ok: true, revision: result.revision }
-      : { conflict: true, revision: result.revision };
-  } catch (err) {
-    if (isVfsError(err) && err.code === 'ENOTSUP') {
-      return { unsupported: true, error: CONDITIONAL_WRITE_UNSUPPORTED };
-    }
-
-    return { error: renderThrownChain({ cause: err }) };
-  }
+      : { conflict: true, revision: result.revision }),
+    onFailure: (failed): ExecutorWriteResult => (isVfsError(failed.cause) && failed.cause.code === 'ENOTSUP'
+      ? { unsupported: true, error: CONDITIONAL_WRITE_UNSUPPORTED }
+      : { error: renderThrownChain(failed) }),
+  })));
 }
 
-export async function readExecutorFileBytes(
+export function readExecutorFileBytes(
   router: ExecutorFileLookup,
   executorId: string,
   path: string,
 ): Promise<{ bytes: Uint8Array } | { error: string }> {
-  if (!path) return { error: 'path required' };
+  if (!path) return Promise.resolve({ error: 'path required' });
   const vfs = executorFiles(router, executorId);
 
-  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  if (!vfs) return Promise.resolve({ error: `Executor "${executorId}" has no file plane` });
 
-  try {
+  return settle(orError(step(async (): Promise<{ bytes: Uint8Array } | { error: string }> => {
     const stat = await vfs.stat(path);
 
     if (stat?.isDir) return { error: 'path is a directory' };
     const raw = await vfs.readFile(path);
 
     return { bytes: raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw) };
-  } catch (err) {
-    return { error: renderThrownChain({ cause: err }) };
-  }
+  })));
 }
 
-export async function statExecutorFile(
+export function statExecutorFile(
   router: ExecutorFileLookup,
   executorId: string,
   path: string,
 ): Promise<{ size: number } | { error: string }> {
-  if (!path) return { error: 'path required' };
+  if (!path) return Promise.resolve({ error: 'path required' });
   const vfs = executorFiles(router, executorId);
 
-  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  if (!vfs) return Promise.resolve({ error: `Executor "${executorId}" has no file plane` });
 
-  try {
+  return settle(orError(step(async (): Promise<{ size: number } | { error: string }> => {
     const stat = await vfs.stat(path);
 
     if (!stat) return { error: `no such file: ${path}` };
@@ -548,9 +545,7 @@ export async function statExecutorFile(
     if (stat.isDir) return { error: 'path is a directory' };
 
     return { size: stat.size };
-  } catch (err) {
-    return { error: renderThrownChain({ cause: err }) };
-  }
+  })));
 }
 
 function nativeMutations(vfs: VFS): Partial<VfsNativeMutations> {
@@ -561,25 +556,25 @@ function nativeMutations(vfs: VFS): Partial<VfsNativeMutations> {
 
 /** Native rename where available, else a confirmed byte carry for files (directories refused).
  *  Never overwrites. */
-export async function renameExecutorPathOp(
+export function renameExecutorPathOp(
   router: ExecutorFileLookup,
   executorId: string,
   from: string,
   to: string,
 ): Promise<ExecutorWriteResult> {
-  if (!from || !to || to.endsWith('/')) return { error: 'both source and target paths are required' };
+  if (!from || !to || to.endsWith('/')) return Promise.resolve({ error: 'both source and target paths are required' });
 
-  if (from === to) return { ok: true };
+  if (from === to) return Promise.resolve({ ok: true });
 
   if (isWorkspaceSoul(executorId, from) || isWorkspaceSoul(executorId, to)) {
-    return { error: 'SOUL.md is set from Settings, not by moving files' };
+    return Promise.resolve({ error: 'SOUL.md is set from Settings, not by moving files' });
   }
 
   const vfs = executorFiles(router, executorId);
 
-  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  if (!vfs) return Promise.resolve({ error: `Executor "${executorId}" has no file plane` });
 
-  try {
+  return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
     if (await vfs.exists(to)) return { error: `${to} already exists` };
     const native = nativeMutations(vfs).rename;
 
@@ -597,27 +592,25 @@ export async function renameExecutorPathOp(
     await carryFileWithVfsOps({ files: vfs, path: from }, { files: vfs, path: to });
 
     return { ok: true };
-  } catch (err) {
-    return { error: renderThrownChain({ cause: err }) };
-  }
+  })));
 }
 
 /** Non-native tree removal stops at the first failure and refuses with what was removed and what
  *  remains. */
-export async function deleteExecutorPathOp(
+export function deleteExecutorPathOp(
   router: ExecutorFileLookup,
   executorId: string,
   path: string,
 ): Promise<ExecutorWriteResult> {
-  if (!path || normalizeDir(path) === '/') return { error: 'a real path is required' };
+  if (!path || normalizeDir(path) === '/') return Promise.resolve({ error: 'a real path is required' });
 
-  if (isWorkspaceSoul(executorId, path)) return { error: 'SOUL.md is set from Settings, not by deleting it' };
+  if (isWorkspaceSoul(executorId, path)) return Promise.resolve({ error: 'SOUL.md is set from Settings, not by deleting it' });
 
   const vfs = executorFiles(router, executorId);
 
-  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  if (!vfs) return Promise.resolve({ error: `Executor "${executorId}" has no file plane` });
 
-  try {
+  return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
     const stat = await vfs.stat(path);
 
     if (!stat) return { error: `no such file or directory: ${path}` };
@@ -650,7 +643,5 @@ export async function deleteExecutorPathOp(
     }
 
     return { ok: true };
-  } catch (err) {
-    return { error: renderThrownChain({ cause: err }) };
-  }
+  })));
 }
