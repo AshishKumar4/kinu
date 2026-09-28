@@ -192,6 +192,26 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     return { row, parts };
   }
 
+  /** Each named message's parts, its rows in one statement; a message no row holds is absent. */
+  async materializePartsOf(messageIds: readonly string[]): Promise<Map<string, readonly StoredPart[]>> {
+    this.actor.assertCurrent();
+
+    const rows = this.sql<MessageRow & { message_id: string }>`SELECT message_id,origin,role,native_content_kind,envelope_json,sealed_at,content_json,content_path,content_digest
+      FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id IN (SELECT value FROM json_each(${JSON.stringify(messageIds)}))`;
+
+    const parts = new Map<string, readonly StoredPart[]>();
+
+    for (const row of rows) {
+      parts.set(row.message_id, row.sealed_at === null
+        ? await this.streamed(row.message_id)
+        : storedParts(await this.payloads.read(payloadOf(row.content_json, row.content_path, row.content_digest))));
+    }
+
+    this.actor.assertCurrent();
+
+    return parts;
+  }
+
   async projection(reference: MessageReference): Promise<JsonObject> {
     const { row, parts } = await this.stored(reference);
     const envelope = v.parse(JsonObjectSchema, JSON.parse(row.envelope_json));
