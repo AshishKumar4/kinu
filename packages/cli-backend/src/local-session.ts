@@ -157,7 +157,7 @@ import { TierIdSchema,
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
-import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from './runtime';
+import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
@@ -621,7 +621,7 @@ export class LocalAgentSession {
       eventRecorder: this.eventRecorder,
       compactionState: this.compactionState,
       // `rt.storage.sql` and `db` are the same connection.
-      transaction: (body) => this.db.transaction(body)(),
+      transaction: (body) => writeTransaction(this.db, body),
       transport: { deliver: (event) => { opts.onEvent(event); } },
       ports: {
         prepareTurn: (item, lease) => this.prepareTurn(item, lease),
@@ -2033,7 +2033,7 @@ export class LocalAgentSession {
         now: () => Date.now() + this.terminalClockSkewMs,
         fault: () => this.terminalEffectFault,
         // A real transaction on the same connection, so an interruption leaves a suffix, never a prefix.
-        transaction: <T,>(body: () => T): T => this.db.transaction(body)(),
+        transaction: <T,>(body: () => T): T => writeTransaction(this.db, body),
         // A re-announced turn keeps its id, so two responses can share a `turnId`; without this a close
         // deleted the live claim.
         turnIsLive: (turnId) => this.chat.pumping && this.chat.currentTurnId === turnId,

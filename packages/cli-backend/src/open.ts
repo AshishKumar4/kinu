@@ -3,7 +3,7 @@ import {
   initWorkspaceBaselineTable, initWorkspaceSchema, initActorStateSchema, readSoul, summarizeSoul,
   getCurrentScaffoldVersion, memoryBytes,
 } from '@kinu.run/core';
-import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from './runtime';
+import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, waitOnSharedWrites, type CLIRuntime } from './runtime';
 import type { LocalProviderCredentials } from './model-resolver';
 import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
@@ -28,7 +28,6 @@ interface CLIOpenOptions {
   providerCredentials?: LocalProviderCredentials;
   oauthStore?: LocalOAuthStore;
   oauthConfigPath?: string;
-  /** See CLIRuntimeConfig.cwd. */
   cwd?: string | null;
   checkpointKeep?: number;
 }
@@ -37,12 +36,12 @@ export type CLIOpenConfig = CLIOpenOptions & LocalActorConfig;
 
 interface OpenedWorkspaceIdentity { readonly id: string; readonly name: string; readonly created_at: number }
 
-/** Open an existing workspace with the full CLI backend runtime. */
 export async function openWorkspaceCLI(
   db: Database,
   dbPath: string,
   config: CLIOpenConfig,
 ): Promise<{ rt: CLIRuntime; info: WorkspaceInfo }> {
+  waitOnSharedWrites(db);
   const sql = makeSql(db);
   // Set on open, not at creation: `kinu create` publishes the file with no sidecars,
   // and a WAL database is unreadable without its `-shm`.
