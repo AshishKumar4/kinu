@@ -3,7 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
   FloppyDiskIcon, BrainIcon, CheckIcon, ArrowLeftIcon,
-  ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon,
+  ShieldIcon, KeyIcon, PlugIcon, SparkleIcon,
   DownloadSimpleIcon, EyeIcon,
 } from "@phosphor-icons/react";
 import {
@@ -51,13 +51,6 @@ const APPROVAL_LABEL: Record<ApprovalMode, string> = {
   allow_all: "Allow all",
   deny_all: "Deny all",
 };
-
-interface MctsConfig {
-  explorationConstant: number;
-  maxIterations: number;
-  maxDepth: number;
-  branchBudget: number;
-}
 
 type AdvisorConfig = Pick<EvolutionConfigView, "advisorEnabled" | "advisorMinSeverity">;
 
@@ -128,7 +121,6 @@ export default function SettingsPage() {
   const displayName = useSettingField<string>();
   const soul = useSettingField<string>();
   const approval = useSettingField<ApprovalMode>();
-  const mcts = useSettingField<MctsConfig>();
   const advisor = useSettingField<AdvisorConfig>();
 
   const [saving, setSaving] = useState(false);
@@ -149,25 +141,19 @@ export default function SettingsPage() {
   }, [agentStatus, snapshotError, hydrateDisplayName, hydrateSoul, failDisplayName, failSoul]);
 
   const { hydrate: hydrateApproval, fail: failApproval } = approval;
-  const { hydrate: hydrateMcts, fail: failMcts } = mcts;
   const { hydrate: hydrateAdvisor, fail: failAdvisor } = advisor;
 
   // A failed field is recorded in place rather than given a value Save could write over the stored setting.
   const loadRpcFields = useCallback((): void => {
     startTransition(async () => {
       try {
-        const [mode, config, evolution] = await Promise.allSettled([
+        const [mode, evolution] = await Promise.allSettled([
           rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []),
-          rpc<MctsConfig>("getMctsConfig", []),
           rpc<EvolutionConfigView>("getEvolutionConfig", []),
         ]);
 
         if (mode.status === "rejected") failApproval({ cause: mode.reason });
         else hydrateApproval(mode.value?.mode ?? "strict");
-
-        if (config.status === "rejected") failMcts({ cause: config.reason });
-        else if (config.value) hydrateMcts(config.value);
-        else failMcts({ cause: "the agent returned no MCTS config" });
 
         if (evolution.status === "rejected") failAdvisor({ cause: evolution.reason });
         else hydrateAdvisor({
@@ -175,11 +161,11 @@ export default function SettingsPage() {
           advisorMinSeverity: evolution.value?.advisorMinSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
         });
       } catch (cause) {
-        failApproval({ cause }); failMcts({ cause }); failAdvisor({ cause });
+        failApproval({ cause }); failAdvisor({ cause });
       }
     });
   }, [
-    rpc, hydrateApproval, failApproval, hydrateMcts, failMcts,
+    rpc, hydrateApproval, failApproval,
     hydrateAdvisor, failAdvisor,
   ]);
 
@@ -190,8 +176,7 @@ export default function SettingsPage() {
     loadRpcFields();
   }, [connectionStatus, loadRpcFields]);
 
-  const dirty = displayName.dirty || soul.dirty || approval.dirty || mcts.dirty
-    || advisor.dirty;
+  const dirty = displayName.dirty || soul.dirty || approval.dirty || advisor.dirty;
 
   const save = useCallback(async () => {
     // Only edited fields are written; the form has no authority over fields still loading or failed.
@@ -209,7 +194,6 @@ export default function SettingsPage() {
     write(displayName, (name) => rpc("setDisplayName", [name]));
     write(soul, (text) => rpc("setSoul", [text]));
     write(approval, (mode) => rpc("setShellApprovalMode", [mode]));
-    write(mcts, (config) => rpc("setMctsConfig", [config]));
     write(advisor, (config) => rpc("setEvolutionConfig", [config]));
 
     if (writes.length === 0) return;
@@ -228,7 +212,7 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [rpc, displayName, soul, approval, mcts, advisor]);
+  }, [rpc, displayName, soul, approval, advisor]);
 
   if (connectionStatus !== "connected") {
     return (
@@ -360,18 +344,6 @@ export default function SettingsPage() {
         <StandingApprovalsCard rpc={rpc} />
         <InstructionApprovalsCard rpc={rpc} />
 
-        <Card title="MCTS settings" icon={TreeStructureIcon}>
-          <FieldState field={mcts} what="the MCTS settings" onRetry={loadRpcFields}>
-            {(value) => (
-              <div className="grid grid-cols-2 gap-3">
-                <NumField label="Exploration constant" value={value.explorationConstant} step={0.1} onChange={(next) => mcts.edit({ ...value, explorationConstant: next })} />
-                <NumField label="Max iterations" value={value.maxIterations} step={1} onChange={(next) => mcts.edit({ ...value, maxIterations: next })} />
-                <NumField label="Branch budget" value={value.branchBudget} step={1} onChange={(next) => mcts.edit({ ...value, branchBudget: next })} />
-              </div>
-            )}
-          </FieldState>
-        </Card>
-
 
         <AlwaysActiveSkillsCard rpc={rpc} />
 
@@ -383,7 +355,6 @@ export default function SettingsPage() {
     </div>
   );
 }
-
 
 /** A grant is scoped to one rule on one executor: it stops the asking, never widens reach, and cannot soften a refused rule. */
 export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
@@ -446,7 +417,6 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
     </Card>
   );
 }
-
 
 const DECISION_WORD: Record<InstructionSourceRow["decision"], string> = {
   approved: "approved",
@@ -608,7 +578,6 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
   );
 }
 
-
 /** The export RPC answers one bounded page at a time, so the browser walks the cursor and assembles the archive. */
 function WorkspaceBackupCard({
   rpc, workspace,
@@ -676,7 +645,6 @@ function WorkspaceBackupCard({
     </Card>
   );
 }
-
 
 const GEPA_DOT = {
   completed: 'p-dot-success', running: 'p-dot-warning', aborted: 'p-dot-neutral',
@@ -764,8 +732,6 @@ function GepaOptimizationCard({
     </Card>
   );
 }
-
-
 
 function AlwaysActiveSkillsCard({
   rpc,
@@ -858,19 +824,3 @@ function AlwaysActiveSkillsCard({
   );
 }
 
-
-
-function NumField({ label, value, step, onChange }: { label: string; value: number; step: number; onChange: (v: number) => void }) {
-  return (
-    <div className="space-y-1">
-      <label className="p-meta p-text-2">{label}</label>
-      <input
-        type="number"
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className={inputCls}
-      />
-    </div>
-  );
-}

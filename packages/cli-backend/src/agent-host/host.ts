@@ -18,6 +18,7 @@ import {
   MAIN_AGENT,
   type SubordinateInheritedContext,
   actorReferenceOf,
+  subordinateDescendants,
   canonicalConversationId,
   childContextResolver,
   createActorHost,
@@ -44,6 +45,7 @@ import {
   SOUL_PATH,
   temporaryRunSettles,
   terminalTaskReport,
+  taskAnswerIsLater,
   type ActorHost,
   type ActorReference,
   type AgentRuntime,
@@ -74,7 +76,7 @@ import {
   type WorkspaceActorDirectory,
   readWorkspaceWork, type WorkspaceWork,
 } from '@kinu.run/core';
-import { KinuError, diagnostics, refusalOf, toKinuError } from '@kinu.run/core/obs';
+import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, toWire, type Wire } from '@kinu.run/core/obs';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
   buildLocalActorRuntime, cleanupFacetCwdScratch,
@@ -85,7 +87,7 @@ import {
   bindLocalActor, bindLocalActorReference, localActorDirectory,
   adoptLocalActorHandle, cancelLocalCreation, openLocalActor, recoverLocalActorRetirements, registerLocalActor,
   requireLocalActorWorkspace, type LocalActorBinding,
-} from '../actor-identity';
+} from '@kinu.run/core';
 import { OS_LEASE_PROCESS } from './lease-process';
 import {
   DriverLeaseHold, REAL_CLOCK,
@@ -157,7 +159,6 @@ interface LocalTickResult {
  * per file, so a hold per entry would have siblings invalidate each other's tokens.
  */
 interface HostTree {
-  readonly dbPath: string;
   readonly db: Database;
   readonly host: ActorHost;
   /** The root's actor directory, held: `localActorDirectory` refuses a non-root handle. */
@@ -214,6 +215,7 @@ interface ChildReportRelay {
   sequenceId: string;
   /** The `report` tool's structured handoff; absent on the automatic turn-end relay. */
   handoff?: SubordinateReportHandoff;
+  quiet?: true;
 }
 
 type AgentEventListener = (agent: string, event: SessionEvent) => void;
@@ -227,7 +229,7 @@ export class LocalAgentHost {
   private readonly opening = new Map<string, Promise<HostEntry>>();
   private readonly trees = new Map<string, HostTree>();
   private closed = false;
-  /** Passes a stored refiner answer started; close() joins them before ending the sessions they use. */
+  /** Passes started outside a turn; close() joins them before ending the sessions they use. */
   private readonly answerPasses = new Set<Promise<void>>();
 
   constructor(private readonly opts: LocalAgentHostOptions) {}
@@ -270,6 +272,11 @@ export class LocalAgentHost {
   }
 
   /** Session events stay live after an interactive client disconnects. */
+  /** A task child's retire; a failure is the outcome. */
+  retireTaskChild(work: () => Promise<void>): Promise<Wire<void, KinuError>> {
+    return settle(toWire(attempt({ doing: 'retiring a task child after its answer', otherwise: 'io' }, work), (failure) => failure));
+  }
+
   subscribe(listener: AgentEventListener): () => void {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
     this.listeners.add(listener);
@@ -424,7 +431,7 @@ export class LocalAgentHost {
 
     try {
       const ws = await this.opts.open(ref, db, dbPath);
-      const tree = this.createTree(ref, db, dbPath, ws);
+      const tree = this.createTree(ref, db, ws);
       this.trees.set(name, tree);
 
       try {
@@ -455,7 +462,6 @@ export class LocalAgentHost {
   private createTree(
     ref: HostedAgentRef,
     db: Database,
-    dbPath: string,
     ws: LocalHostedAgent,
   ): HostTree {
     const { directory } = localActorDirectory(ws.rt.actor);
@@ -475,7 +481,7 @@ export class LocalAgentHost {
       directory,
       // No build identity for the builtin loop: a `bun`-run checkout has no build stamp.
       installedBuild: null,
-      runtimeFor: (bound) => this.runtimeFor(runtimes, dbPath, db, bound),
+      runtimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
       filesFor: async (bound) => {
         if (!ws.rt.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
 
@@ -520,7 +526,7 @@ export class LocalAgentHost {
     });
 
     return {
-      dbPath, db, host, directory, runtimes, orchestrations, driving: 0,
+      db, host, directory, runtimes, orchestrations, driving: 0,
       hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: OS_LEASE_PROCESS }, this.driverKind),
     };
   }
@@ -531,7 +537,6 @@ export class LocalAgentHost {
    */
   private async runtimeFor(
     runtimes: Map<string, CLIRuntime>,
-    dbPath: string,
     db: Database,
     bound: BoundActor,
   ): Promise<AgentRuntime> {
@@ -560,7 +565,7 @@ export class LocalAgentHost {
     const openConfig = this.childOpenConfig(parent, binding);
 
     const built = createCLIRuntime(db, {
-      ...openConfig, dbPath, agentName: binding.name, actor: bound.handle,
+      ...openConfig, agentName: binding.name, actor: bound.handle,
     });
 
     const shared = await shareLocalWorkspacePlane(built, parent.ws.rt, openConfig.facet);
@@ -575,9 +580,6 @@ export class LocalAgentHost {
     ws: LocalHostedAgent,
     record: WorkspaceActor,
   ): Promise<void> {
-    // A toolless run actor has no home to release.
-    if (record.toolProfile === 'toolless') return;
-
     const agentName = record.kind === 'run'
       ? headAgentName(record.storageKey)
       : subordinateAgentName(record.storageKey);
@@ -625,6 +627,7 @@ export class LocalAgentHost {
       },
       cwd: input.ref.cwd,
       onEvent: (event) => this.onSessionEvent(input.key, event),
+      onStop: () => { this.stopSubtree(input.key); },
       clock: REAL_CLOCK,
     };
 
@@ -661,6 +664,7 @@ export class LocalAgentHost {
         runtime: this.childRuntime(input.key),
         now: () => Date.now(),
         createName: mintSubordinateName,
+        afterTurn: (_child, work) => { this.retireOffTurn(input.key, work); },
       }),
       team: null,
       peers: null,
@@ -837,7 +841,7 @@ export class LocalAgentHost {
     }
   }
 
-  /** The parent's provider wiring with the directory forced to the parent's ref, so a child cannot bind a different plane. */
+  /** The parent's provider wiring, directory forced to the parent's ref: a child binds no other plane. */
   private childOpenConfig(parent: HostEntry, binding: LocalActorBinding): CLIOpenConfig & { facet: string } {
     if (binding.kind !== 'subordinate') throw new KinuError('denied', 'The roster path is not a subordinate actor.');
 
@@ -915,7 +919,7 @@ export class LocalAgentHost {
     return outcome.ran ? { ran: true, nextAt } : { ran: false, nextAt, heldBy: outcome.heldBy };
   }
 
-  /** One pass's converting steps; the lease is re-checked between steps since an interactive process may preempt. */
+  /** One pass's converting steps; the lease is re-checked between them: an interactive process may preempt. */
   private async runPass(entry: HostEntry, now: number): Promise<number | null> {
     const hold = entry.tree.hold;
     const lifecyclePending = await recoverSubordinateLifecycles(entry.roster, this.childRuntime(entry.key));
@@ -994,12 +998,17 @@ export class LocalAgentHost {
 
         // Suppressed only by a run-settling report, never a progress note.
         if (state === null || state.settledRun) return null;
-        // A task child always reports its ending, even an empty one: its caller asked.
-        const task = await terminalTaskReport({ lifetime: child.actor.record.lifetime, ending, assistantText, narration });
 
-        if (task) return task;
+        // A task child always reports its ending, and any child its failure.
+        const terminal = await terminalTaskReport({
+          lifetime: child.actor.record.lifetime, ending, assistantText, narration,
+          delegating: taskAnswerIsLater({ roster: child.roster, log: child.eventLog }),
+        });
 
-        if (ending !== 'answered') return null;
+        if (terminal) return terminal;
+
+        // A task agent reports only its terminal answer.
+        if (ending !== 'answered' || child.actor.record.lifetime === 'task') return null;
 
         return subordinateRelaysTurnEnd({
           reportedThisTurn: state.reportedThisTurn,
@@ -1010,7 +1019,7 @@ export class LocalAgentHost {
           : null;
       },
       sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
-      send: async ({ text, status, mode, sequenceId }) => {
+      send: async ({ text, status, mode, sequenceId, quiet }) => {
         // Recorded before the send, so a second terminal path on this turn is suppressed.
         if (child.relay) {
           child.relay.reportedThisTurn = true;
@@ -1018,7 +1027,7 @@ export class LocalAgentHost {
         }
 
         const relayed = await this.relayToParent({
-          child, content: text, mode, status, origin: 'turn_end', sequenceId,
+          child, content: text, mode, status, origin: 'turn_end', sequenceId, ...(quiet === true && { quiet }),
         });
 
         return relayed.disposition;
@@ -1026,9 +1035,9 @@ export class LocalAgentHost {
     };
   }
 
-  /** Publish one child report into its parent's rail. `status` is the child's own word; it moves the parent's roster row. */
+  /** Publish one child report into its parent's rail; `status` moves the parent's roster row. */
   private async relayToParent(relay: ChildReportRelay): Promise<SubordinateEventResult> {
-    const { child, content, mode, status, origin, sequenceId, handoff } = relay;
+    const { child, content, mode, status, origin, sequenceId, handoff, quiet } = relay;
 
     if (!child.parentKey) return { id: '', disposition: 'not_awaited' };
     const parent = this.entries.get(child.parentKey);
@@ -1056,7 +1065,6 @@ export class LocalAgentHost {
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
       onEvolutionAnswer: () => this.answerWake(parent),
-      // A temporary child's answer goes to the waiting `agents.ask` port, never as an event waking this parent.
       temporary: parent.temporary,
     }, {
       fromSubordinate: child.name,
@@ -1066,10 +1074,11 @@ export class LocalAgentHost {
       sequenceId,
       mode,
       handoff,
+      ...(quiet === true && { quiet }),
     }, Date.now());
   }
 
-  /** The report spine for one subordinate; roots get none. The session limits it to parent-assigned turns. */
+  /** The report spine for one subordinate; roots get none. The session limits it to assigned turns. */
   private buildReport(child: HostEntry): ReportToolDeps {
     return {
       report: async ({ status, content, handoff }) => {
@@ -1376,10 +1385,100 @@ export class LocalAgentHost {
     return reference;
   }
 
+  private hirerRoster(tree: HostTree, actor: WorkspaceActor): SubordinateRosterStore | null {
+    const hirer = actor.parentActorId === null ? null : tree.directory.retained(actor.parentActorId);
+
+    if (hirer === null) return null;
+
+    return this.byActor.get(hirer.actorId)?.roster
+      ?? new SubordinateRosterStore(makeSqlExec(tree.db), tree.host.bindStores(actorReferenceOf(hirer)).handle);
+  }
+
+  /** Stops the unsettled agents below `key`; one the owner added has its own Stop. */
+  private stopSubtree(key: string): void {
+    const entry = this.entries.get(key);
+
+    if (entry === undefined || this.closed) return;
+    const { tree } = entry;
+
+    const ownerMade = (actor: WorkspaceActor): boolean => {
+      for (let step: WorkspaceActor | null = actor; step !== null && step.actorId !== entry.actor.reference.actorId;
+        step = tree.directory.retained(step.parentActorId ?? '')) {
+        if (this.hirerRoster(tree, step)?.get(step.name)?.createdBy === 'user') return true;
+      }
+
+      return false;
+    };
+
+    for (const actor of subordinateDescendants(tree.directory.list(), entry.actor.reference.actorId)) {
+      if (ownerMade(actor)) continue;
+      const reference = actorReferenceOf(actor);
+      const log = new EventLog(makeSqlExec(tree.db), tree.host.bindStores(reference).handle);
+
+      for (const pending of log.pending({ variant: 'subordinate_task' })) log.dismiss(pending.id, 'stopped by the owner', 'system');
+      const live = this.byActor.get(actor.actorId);
+
+      if (live?.actor.session.inFlight === true) {
+        live.session.interrupt();
+        continue;
+      }
+
+      const roster = this.hirerRoster(tree, actor);
+
+      if (roster?.get(actor.name)?.status !== 'working') continue;
+      roster.applyReport(actor.name, 'blocked', 'turn_end', Date.now());
+
+      if (actor.lifetime === 'task') this.retireStopped(tree, actor);
+    }
+  }
+
+  private retireStopped(tree: HostTree, actor: WorkspaceActor): void {
+    const reference = actorReferenceOf(actor);
+    const hirer = this.byActor.get(actor.parentActorId ?? '');
+    const hirerRecord = tree.directory.retained(actor.parentActorId ?? '');
+
+    this.retireOffTurn(actor.name, async () => {
+      if (hirer !== undefined) await this.removeChild(hirer, actor.name, { keepHistory: true, interrupt: true }, reference);
+      else if (hirerRecord !== null) await tree.host.retire(actorReferenceOf(hirerRecord), { reference, name: actor.name, destroy: false, interrupt: true });
+    });
+  }
+
+  /** A task agent's retire, off its turn and joined by close(). */
+  private retireOffTurn(agent: string, work: () => Promise<void>): void {
+    const pass: Promise<void> = this.retireTaskChild(work).then((outcome) => {
+      if (!outcome.ok) diagnostics.failure('host.task_child_release_failed', outcome.error, { agent });
+      this.answerPasses.delete(pass);
+    });
+
+    this.answerPasses.add(pass);
+  }
+
+  private async removeDescendants(tree: HostTree, reference: ActorReference, keepHistory: boolean): Promise<void> {
+    for (const descendant of subordinateDescendants(tree.directory.list(), reference.actorId)) {
+      const roster = this.hirerRoster(tree, descendant);
+
+      if (roster !== null && roster.get(descendant.name)?.status !== 'dismissed') roster.dismiss(descendant.name, Date.now());
+      const hirer = this.byActor.get(descendant.parentActorId ?? '');
+      const hirerRecord = tree.directory.retained(descendant.parentActorId ?? '');
+
+      if (hirer !== undefined) {
+        await this.removeChild(hirer, descendant.name, { keepHistory, interrupt: true, subtree: false }, actorReferenceOf(descendant));
+      } else if (hirerRecord !== null) {
+        await tree.host.retire(actorReferenceOf(hirerRecord), {
+          reference: actorReferenceOf(descendant), name: descendant.name, destroy: !keepHistory, interrupt: true,
+        });
+      }
+    }
+  }
+
   private async removeChild(
-    parent: HostEntry, name: string, { keepHistory, interrupt }: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference,
+    parent: HostEntry, name: string,
+    { keepHistory, interrupt, subtree = true }: { readonly keepHistory: boolean; readonly interrupt: boolean; readonly subtree?: boolean },
+    reference: ActorReference,
   ): Promise<void> {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
+
+    if (subtree) await this.removeDescendants(parent.tree, reference, keepHistory);
     const candidate = parent.children.get(name) ?? this.entries.get(`${parent.key}/${name}`);
     const child = candidate?.ws.rt.actor.actorId === reference.actorId ? candidate : undefined;
 

@@ -124,7 +124,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     fork_transfer: EVERYWHERE,
     fork_staged_files: EVERYWHERE,
     scaffold_versions: EVERYWHERE,
-    task_history: EVERYWHERE,
     scaffold_evaluations: EVERYWHERE,
     scaffold_trial_queue: EVERYWHERE,
 
@@ -387,7 +386,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     actor_requests: EVERYWHERE,
     request_renders: EVERYWHERE,
     conversation_entries: EVERYWHERE,
-    conversation_heads: EVERYWHERE,
     conversation_entry_parts: EVERYWHERE,
     // Created per root before any read: `actor-agent.ts` on cf, `local-session.ts` on the CLI.
     terminal_effects: EVERYWHERE,

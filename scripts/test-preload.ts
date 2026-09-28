@@ -44,8 +44,8 @@ if (!('WebSocketRequestResponsePair' in globalThis)) {
 // is ended first, so it holds no memory and writes into no released scratch.
 // Under `--parallel` this runs per file; without it, once for the run. The
 // run's own check (`scripts/deadline.ts`) finds what outlived its parent.
-afterAll(() => {
-  const left = endChildren(process.pid);
+afterAll(async () => {
+  const left = await endChildren(process.pid);
 
   release();
 

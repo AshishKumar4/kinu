@@ -182,7 +182,7 @@ describe('owner reads of retained subordinate paths', () => {
     const child = fixture.child(fixture.main, 'child');
     const leaf = fixture.child(child, 'leaf');
     await fixture.history(leaf).record(CHAT_SESSION_ID, {
-      id: 'answer', parentId: null, origin: 'input', message: { role: 'user', content: 'kept answer' },
+      id: 'answer', origin: 'input', message: { role: 'user', content: 'kept answer' },
     });
 
     for (const action of ['retire', 'release'] as const) {
@@ -237,14 +237,11 @@ describe('owner reads of retained subordinate paths', () => {
     const child = fixture.child(fixture.main, 'child');
     const events = new RunEventRecorder(fixture.sql, child);
 
-    let parentId: string | null = null;
-
     for (const id of ['one', 'two', 'three']) {
       events.emit(id, { type: 'run_start', agentId: 'child', userMessage: id });
       await fixture.history(child).record(CHAT_SESSION_ID, {
-        id, parentId, origin: 'input', message: { role: 'user', content: id },
+        id, origin: 'input', message: { role: 'user', content: id },
       });
-      parentId = id;
     }
 
     const runs = await read(fixture, { path: ['child'], view: 'runs', page: { limit: 2 } });
@@ -270,7 +267,7 @@ describe('owner reads of retained subordinate paths', () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, name);
     await fixture.history(child).record(CHAT_SESSION_ID, {
-      id: 'message', parentId: null, origin: 'input', message: { role: 'user', content: 'retained answer' },
+      id: 'message', origin: 'input', message: { role: 'user', content: 'retained answer' },
     });
     expect(await read(fixture, { path: [name], view: 'history', page: {} })).toMatchObject({
       view: 'history', path: [name], page: { status: 'end', items: [{ content: 'retained answer' }] },

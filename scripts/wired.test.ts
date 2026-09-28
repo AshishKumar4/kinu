@@ -675,12 +675,8 @@ describe('entrypoint discovery', () => {
   });
 
   describe('a forked script', () => {
-    // `cli-backend/src/branch-worker.ts` is `fork(workerPath, [dbPath])`-ed from
-    // `branch-process.ts` and imported by nothing, so the module graph ended at
-    // the spawn call: `exploreRollout`, `reflectRollout`,
-    // `LocalActorProcessBootstrapSchema`, `BranchCallSchema` and
-    // `BranchCallAttributionSchema` all read as reached by nothing. Five false
-    // positives, which is the direction that gets a gate switched off.
+    // A forked worker is imported by nothing, so the module graph ends at the
+    // spawn call and its imports read as reached by nothing.
     const worker = `
       import { provisionHome } from './strategy/provisioner';
       export function unusedInTheChild(): string { return 'nobody calls this'; }

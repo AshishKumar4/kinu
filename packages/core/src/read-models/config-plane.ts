@@ -1,7 +1,6 @@
 /** Agent config writes validate here because each is a trust boundary; `onChanged` is the per-backend part. */
 
 import * as v from 'valibot';
-import { DEFAULT_CONFIG } from '../config';
 import type { AgentConfigStore, ShellApprovalMode } from '../config/store';
 import type { ApprovalGrant } from '../safety/approval-gate';
 import type { JsonValue } from '../utils/json';
@@ -26,14 +25,6 @@ export interface SetModelDeps {
   readonly normalize: (spec: string) => string;
   /** Drop whatever the old model bound (tool cache, model-bound session). */
   readonly onChanged: () => void;
-}
-
-/** MCTS knobs a user may set. No depth field: a depth cap beside a budget spells the same limit
- * twice; depth is owned by {@link DEFAULT_CONFIG} and, for a swarm, its preset. */
-export interface MctsConfigView {
-  explorationConstant: number;
-  maxIterations: number;
-  branchBudget: number;
 }
 
 export interface EvolutionConfigView {
@@ -148,28 +139,6 @@ export function setAlwaysActiveSkills(config: AgentConfigStore, names: JsonValue
   config.setAlwaysActiveSkills(parsed.output);
 
   return { ok: true, names: config.getAlwaysActiveSkills() };
-}
-
-export function getMctsConfig(config: AgentConfigStore): MctsConfigView {
-  const o = config.getMctsOverrides();
-  const d = DEFAULT_CONFIG.mcts;
-
-  return {
-    explorationConstant: o.explorationWeight ?? d.explorationWeight,
-    maxIterations: o.budget ?? d.budget,
-    branchBudget: o.branches ?? d.branches,
-  };
-}
-
-/** Returns the effective config: what a clamped value became. */
-export function setMctsConfig(config: AgentConfigStore, view: Partial<MctsConfigView>): MctsConfigView {
-  config.setMctsOverrides({
-    explorationWeight: view.explorationConstant,
-    budget: view.maxIterations,
-    branches: view.branchBudget,
-  });
-
-  return getMctsConfig(config);
 }
 
 export function getEvolutionConfig(config: AgentConfigStore): EvolutionConfigView {

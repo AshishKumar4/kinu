@@ -1,6 +1,6 @@
 /**
  * The surface strip's focus policy through `useSurfaceFocus`. Strip chrome is covered in
- * scripts/chat-and-files-ux.test.ts and scripts/slate-preview-ux.test.ts.
+ * tests/browser/chat-and-files-ux.test.ts and tests/browser/slate-preview-ux.test.ts.
  */
 import { describe, expect, test } from 'bun:test';
 import { createElement, useState } from 'react';

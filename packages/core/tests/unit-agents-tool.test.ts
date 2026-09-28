@@ -163,16 +163,15 @@ const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHando
 
 /** Temporary rung port stub; its behaviour is covered by unit-temporary-agents. */
 const temporaryPortStub = {
-  run: async () => ({
-    status: 'completed' as const,
+  start: async () => ({
+    status: 'working' as const,
     agent: 'ask-auditor-x',
     lifetime: 'task' as const,
     role: 'auditor',
     answer: 'answered',
     transcript: 'kept' as const,
-    elapsed_ms: 1,
   }),
-  settle: () => false,
+  release: async () => {},
   reclaim: () => null,
 };
 
@@ -542,7 +541,7 @@ describe('agents tool — subordinate actions', () => {
       ...team.deps,
       temporary: {
         ...temporaryPortStub,
-        run: async (request) => {
+        start: async (request) => {
           const tools = buildToolSurface({ rt, workMode: request.mode, history: storesFor(rt).history });
           const file = tools.file;
 
@@ -554,17 +553,17 @@ describe('agents tool — subordinate actions', () => {
           if (request.mode === 'plan') {
             await expect(pending).rejects.toMatchObject({ code: 'denied' });
 
-            return { ...await temporaryPortStub.run(), answer: 'denied' };
+            return { ...await temporaryPortStub.start(), answer: 'denied' };
           }
 
-          return { ...await temporaryPortStub.run(), answer: JSON.stringify(await pending) };
+          return { ...await temporaryPortStub.start(), answer: JSON.stringify(await pending) };
         },
       },
     };
 
     const parent = agentsTool({ mode: 'build', team: childTransport, profile: () => testProfile() });
     const planned = await inWorkMode('plan', () => parent.execute({ action: 'hire', lifetime: 'task', role: 'researcher', mission: 'Inspect' }));
-    expect(planned).toMatchObject({ status: 'completed', answer: expect.stringContaining('denied') });
+    expect(planned).toMatchObject({ status: 'working', answer: expect.stringContaining('denied') });
     expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('original');
     await expect(inWorkMode('plan', () => parent.execute({ action: 'hire', role: 'researcher', mission: 'Create a permanent worker' })))
       .rejects.toMatchObject({ code: 'denied' });
@@ -902,7 +901,7 @@ describe('agents tool — peer workspace actions', () => {
 // names what it dropped. It is also the detach gate (orchestrator/background-tools.ts).
 
 describe('agents tool — resuming a stored delegation row', () => {
-  /** `diagnostics` writes JSON lines to console.error with no injection seam; see unit-mcts-resume.test.ts. */
+  /** `diagnostics` writes JSON lines to console.error with no injection seam. */
   function captureEvents<Result>(run: () => Result) {
     const original = console.error;
     const lines: string[] = [];

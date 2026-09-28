@@ -40,7 +40,7 @@ import type {
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, RefinementProposalSchema,
   createRefinementStore, evolutionDebt, initRefinementTables, nextEvolutionAnswerAt, refinementStagingPath,
-  type RefinementDeps, type RefinementEdit, type RefinementProposal, type RefinementRoute,
+  type RefinementDeps, type RefinementEdit, type RefinementProposal, type RefinementRequestView, type RefinementRoute,
 } from '../src/evolution/refinement';
 import { extractJsonObject } from '../src/providers/structured';
 import { renderIssues } from '../src/utils/json';
@@ -49,8 +49,9 @@ import { renderIssues } from '../src/utils/json';
 const MIN_REFINEMENT_DEBT = 3;
 
 import {
-  advanceRefinementLane, refinementDebtRequest, requestRefinement,
+  advanceRefinementLane as advanceLane, refinementDebtRequest, requestRefinement, type RefinementLaneStep,
 } from '../src/evolution/refinement-lane';
+import type { EvolutionHelperAnswer } from '../src/identity/evolution-helpers';
 import {
   decideRefinementRoute, showRefinementRoute,
 } from '../src/evolution/refinement-skill';
@@ -137,23 +138,22 @@ function scriptedRefiner(answer: string | ((request: TemporaryRunRequest) => str
   return {
     requests,
     port: {
-      run: async (request: TemporaryRunRequest) => {
+      // Started, it answers onto its helper row, which a later pass reclaims.
+      start: async (request: TemporaryRunRequest) => {
         requests.push(request);
 
         const outcome: TemporaryRunOutcome = {
-          status: 'completed',
-          agent: 'refiner-1',
-          lifetime: 'task',
-          role: 'task',
-          answer: answerOf(request),
-          transcript: 'kept',
-          elapsed_ms: 1,
+          status: 'working', agent: 'refiner-1', lifetime: 'task', role: 'task', answer: 'working', transcript: 'kept',
         };
 
         return outcome;
       },
-      settle: () => false,
-      reclaim: () => null,
+      release: async () => {},
+      reclaim: (): EvolutionHelperAnswer | null => {
+        const asked = requests.at(-1);
+
+        return asked === undefined ? null : { state: 'answered', name: 'refiner-1', status: 'completed', answer: answerOf(asked) };
+      },
     },
   };
 }
@@ -163,37 +163,60 @@ function proposalText(proposal: RefinementProposal): string {
 }
 
 /**
- * Only the first ask waits for the test's release. One answer per ask, the last
+ * Only the first ask's start waits for the test's release. One answer per ask, the last
  * repeating; different answers make a second pass's owner writes visible.
  */
 function deferredRefiner(...answers: readonly RefinementProposal[]) {
   let asks = 0;
-  let open: () => void = () => undefined;
-  const gate = new Promise<void>((resolve) => { open = resolve; });
+  let answered: RefinementProposal | null = null;
+  const gate = Promise.withResolvers<void>();
 
   return {
     asks: () => asks,
-    release: () => { open(); },
+    release: () => { gate.resolve(); },
     port: {
-      run: async () => {
+      start: async () => {
         asks += 1;
-        // Bound before the wait: the held pass answers what it was asked.
-        const mine = Math.min(asks, answers.length) - 1;
+        // Bound before the wait: the held pass's child answers what it was asked.
+        const mine = answers[Math.min(asks, answers.length) - 1] ?? null;
 
-        if (asks === 1) await gate;
-        const answer = answers[mine];
+        if (asks === 1) await gate.promise;
+        answered = mine;
 
         const outcome: TemporaryRunOutcome = {
-          status: 'completed', agent: 'refiner-1', lifetime: 'task', role: 'task',
-          answer: proposalText(answer), transcript: 'kept', elapsed_ms: 1,
+          status: 'working', agent: 'refiner-1', lifetime: 'task', role: 'task', answer: 'working', transcript: 'kept',
         };
 
         return outcome;
       },
-      settle: () => false,
-      reclaim: () => null,
+      release: async () => {},
+      reclaim: (): EvolutionHelperAnswer | null => answered === null
+        ? null
+        : { state: 'answered', name: 'refiner-1', status: 'completed', answer: proposalText(answered) },
     },
   };
+}
+
+/** A refiner whose child answers `answer()` onto its helper row once started; a throw is the start's own failure. */
+function answeringPort(answer: () => string): TemporaryAgentPort {
+  let stored: string | null = null;
+
+  return {
+    start: async () => {
+      stored = answer();
+
+      return { status: 'working', agent: 'refiner', lifetime: 'task', role: 'task', answer: 'working', transcript: 'kept' };
+    },
+    release: async () => {},
+    reclaim: () => stored === null ? null : { state: 'answered', name: 'refiner', status: 'completed', answer: stored },
+  };
+}
+
+/** One pass that starts the refiner, then the pass that takes its answer. */
+async function advanceRefinementLane(deps: RefinementDeps): Promise<RefinementLaneStep> {
+  const first = await advanceLane(deps);
+
+  return first.step === 'idle' ? await advanceLane(deps) : first;
 }
 
 interface Fixture {
@@ -557,8 +580,8 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const deps: RefinementDeps = {
       ...fx.deps(scriptedRefiner('{}').port),
       refiner: {
-        run: async () => ({ reason: 'unavailable', error: 'no roster substrate here' }),
-        settle: () => false,
+        start: async () => ({ reason: 'unavailable', error: 'no roster substrate here' }),
+        release: async () => {},
         reclaim: () => null,
       },
     };
@@ -1100,19 +1123,11 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     seedGradedTurns(fx.rt, 3);
     let runs = 0;
 
-    const port: TemporaryAgentPort = {
-      run: async () => {
-        runs += 1;
+    const port = answeringPort(() => {
+      runs += 1;
 
-        return {
-          status: 'completed', agent: 'refiner', lifetime: 'task', role: 'task',
-          answer: proposalText(FACT_PROPOSAL),
-          transcript: 'kept', elapsed_ms: 1,
-        };
-      },
-      settle: () => false,
-      reclaim: () => null,
-    };
+      return proposalText(FACT_PROPOSAL);
+    });
 
     const deps = fx.deps(port);
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
@@ -1148,22 +1163,14 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     let runs = 0;
 
     // A second answer that differs: re-asking on recovery would route a different plan.
-    const port: TemporaryAgentPort = {
-      run: async () => {
-        runs += 1;
+    const port = answeringPort(() => {
+      runs += 1;
 
-        return {
-          status: 'completed', agent: 'refiner', lifetime: 'task', role: 'task',
-          answer: proposalText(runs === 1 ? FACT_PROPOSAL : {
-            ...FACT_PROPOSAL,
-            edits: [{ ...FACT_EDIT, key: 'user.something_else' }],
-          }),
-          transcript: 'kept', elapsed_ms: 1,
-        };
-      },
-      settle: () => false,
-      reclaim: () => null,
-    };
+      return proposalText(runs === 1 ? FACT_PROPOSAL : {
+        ...FACT_PROPOSAL,
+        edits: [{ ...FACT_EDIT, key: 'user.something_else' }],
+      });
+    });
 
     const deps = fx.deps(port);
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
@@ -1286,7 +1293,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(store.get(opened.id)?.stage).toBe('planning');
 
     // The real recovery caller: an engine built after the nudge started.
-    const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { reportModelCall: unobservedSpend, enabled: false });
+    const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { enabled: false });
     // It recovered its empty review queue and left the live claim alone.
     expect(recovery.sessionWindow.countQueuedReviews()).toBe(0);
     expect(store.get(opened.id)?.stage).toBe('planning');
@@ -1345,20 +1352,13 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     let asks = 0;
 
     // The port rejects mid-call: the pass unwinds without refusing or recording.
-    const port: TemporaryAgentPort = {
-      run: async () => {
-        asks += 1;
+    const port = answeringPort(() => {
+      asks += 1;
 
-        if (asks === 1) throw new Error('the refiner host went away');
+      if (asks === 1) throw new Error('the refiner host went away');
 
-        return {
-          status: 'completed', agent: 'refiner-1', lifetime: 'task', role: 'task',
-          answer: proposalText(EVERY_OWNER_PROPOSAL), transcript: 'kept', elapsed_ms: 1,
-        };
-      },
-      settle: () => false,
-      reclaim: () => null,
-    };
+      return proposalText(EVERY_OWNER_PROPOSAL);
+    });
 
     const deps = fx.deps(port);
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
@@ -2272,8 +2272,14 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
     rename: async () => undefined,
   };
 
-  /** A fresh port is a fresh activation: the previous one's in-memory waiter is gone. */
-  const port = () => createTemporaryAgentPort({ roster, runtime, createName: (role) => `${role}-a1b2c3`, now: () => SEED_EPOCH });
+  const retires: Promise<void>[] = [];
+
+  /** A fresh port is a fresh activation. */
+  const port = () => createTemporaryAgentPort({
+    roster, runtime, createName: (role) => `${role}-a1b2c3`, now: () => SEED_EPOCH,
+    // The rail's runtime dismisses synchronously; a failure would fail the test through the rejected promise it returns.
+    afterTurn: (_child, work) => { retires.push(work()); },
+  });
 
   return {
     root,
@@ -2293,35 +2299,22 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
   };
 }
 
-/** A port whose activation dies once its refiner is assigned: the run it started, and its waiter, outlive it. */
-function evictedAfterAssign(rail: ReturnType<typeof refinerRail>, evicted: TemporaryAgentPort): TemporaryAgentPort {
-  const lost: Promise<unknown>[] = [];
+/** A pass that starts the refiner and returns at once, its helper still working. */
+async function startRefiner(fx: ReturnType<typeof fixture>, rail: ReturnType<typeof refinerRail>): Promise<RefinementRequestView> {
+  const port = rail.port();
+  const opened = await requestRefinement(fx.deps(port), { trigger: 'explicit', scope: 'workspace' });
 
-  return {
-    ...evicted,
-    run: async (request) => {
-      const run = evicted.run(request);
-      lost.push(run);
-      // A run that settles before it is assigned ends the wait too: a broken hire fails with its own error.
-      await Promise.race([rail.assigned, run]);
-      throw new Error('the activation was evicted');
-    },
-  };
+  expect((await advanceLane(fx.deps(port))).step).toBe('idle');
+
+  return opened;
 }
 
-describe('a refiner answer that outlives its waiter returns to the lane, never to the root', () => {
+describe('a refiner answer returns to the lane, never to the root', () => {
   test('after an eviction the answer is stored, the row released, and the next pass routes it', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail();
-    const evicted = rail.port();
-
-    // The activation dies once the refiner is assigned: its pass unwinds, and the run it started
-    // (with its waiter) is held by nothing that survives.
-    const dying = evictedAfterAssign(rail, evicted);
-
-    const opened = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    const opened = await startRefiner(fx, rail);
     expect(rail.roster.get(rail.helper)?.createdBy).toBe('evolution');
 
     let asks = 0;
@@ -2329,10 +2322,10 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
 
     const counted: TemporaryAgentPort = {
       ...resumed,
-      run: (request) => {
+      start: (request) => {
         asks += 1;
 
-        return resumed.run(request);
+        return resumed.start(request);
       },
     };
 
@@ -2360,11 +2353,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
     const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
-    const evicted = rail.port();
-    const dying = evictedAfterAssign(rail, evicted);
-
-    await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    await startRefiner(fx, rail);
     expect(owed()).toBeNull();
 
     const resumed = rail.port();
@@ -2383,11 +2372,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
-    const evicted = rail.port();
-    const dying = evictedAfterAssign(rail, evicted);
-
-    await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    await startRefiner(fx, rail);
     await rail.deliver(rail.port(), proposalText(FACT_PROPOSAL));
     createRefinementStore(fx.rt.storage.sql, fx.rt.actor).open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 });
 
@@ -2398,9 +2383,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
-    const dying = evictedAfterAssign(rail, rail.port());
-    const opened = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    const opened = await startRefiner(fx, rail);
     const resumed = rail.port();
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
 
@@ -2420,9 +2403,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
     const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
-    const dying = evictedAfterAssign(rail, rail.port());
-    await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    await startRefiner(fx, rail);
     const resumed = rail.port();
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
     expect(owed()).not.toBeNull();
@@ -2443,10 +2424,7 @@ describe('a refiner answer that outlives its waiter returns to the lane, never t
     const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
     const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
-    const dying = evictedAfterAssign(rail, rail.port());
-
-    const answered = await requestRefinement(fx.deps(dying), { trigger: 'explicit', scope: 'workspace' });
-    await failsFrom(advanceRefinementLane(fx.deps(dying)), 'the activation was evicted');
+    const answered = await startRefiner(fx, rail);
     const resumed = rail.port();
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
     const stuck = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 }).request;

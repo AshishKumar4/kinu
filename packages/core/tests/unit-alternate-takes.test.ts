@@ -1,13 +1,10 @@
-/** Alternate Takes: near-tie capture, the turn claim, and the pick written to turn_outcomes ('take_pick'). */
+/** Alternate Takes: a steer branch's take set and the pick written to turn_outcomes ('take_pick'). */
 import { describe, test, expect } from 'bun:test';
 import { makeSql, createTestActor, createTestWorkspace } from './helpers';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
-import type { ActorHandle } from '../src/identity/actor-handle';
 import {
-  initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
-  purgeUnclaimedAlternateTakes,
-  listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
+  initAlternateTakesTable, recordBranchTakeSet, latestAlternateTakeSet, recordTakePick,
   buildTakeContinuationPrompt,
 } from '../src/mcts/takes';
 import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
@@ -31,139 +28,27 @@ function setup() {
   return { db, sql, execRaw, actor, history, transcript: history.transcript(CHAT_SESSION_ID) };
 }
 
-/** `search_nodes` is keyed `(actor_id, id)`; omitting the actor hides the row from readers. */
-function insertNode(
-  sql: ReturnType<typeof makeSql>,
-  actor: ActorHandle,
-  node: { id: string; parentId?: string | null; value: number; depth?: number; status?: string; text?: string; visits?: number },
-) {
-  void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, action, observation, value, visits, depth, status, evaluation_json)
-      VALUES (${actor.actorId}, 'r', ${node.id}, ${node.parentId ?? null}, ${'the task'}, ${node.text ?? node.id},
-              ${node.text ?? `proposal ${node.id}`}, ${node.value}, ${node.visits ?? 1},
-              ${node.depth ?? 1}, ${node.status ?? 'open'}, ${JSON.stringify({ score: node.value })})`;
-}
-
-describe('captureAlternateTakes — the near-tie epsilon rule', () => {
-  test('a dominant winner with no near-tied rival captures nothing', () => {
-    const { sql, actor } = setup();
-    insertNode(sql, actor, { id: 'win', value: 0.9 });
-    insertNode(sql, actor, { id: 'far', value: 0.5 });
-    expect(captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 })).toBeNull();
-    expect(listAlternateTakeSets(sql, actor)).toHaveLength(0);
+/** The live answer and a steer branch's, claimed against the turn that answered. */
+async function capturedSet(sql: ReturnType<typeof makeSql>, actor: ReturnType<typeof setup>['actor'], history: SessionHistory) {
+  recordBranchTakeSet(sql, actor, {
+    task: 'the task', turnId: 'msg-9', sessionId: 'default',
+    liveText: 'winning approach', branchText: 'alternative approach',
   });
-
-  test('near-tied rivals become a take set: winner first, then by descending score', () => {
-    const { sql, actor } = setup();
-    insertNode(sql, actor, { id: 'win', value: 0.9, text: 'approach A' });
-    insertNode(sql, actor, { id: 'close1', value: 0.85, text: 'approach B' });
-    insertNode(sql, actor, { id: 'close2', value: 0.88, text: 'approach C' });
-    insertNode(sql, actor, { id: 'far', value: 0.4, text: 'approach D' });
-    const id = captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
-    expect(id).toBeTruthy();
-    const set = present(latestAlternateTakeSet(sql, actor), 'the latest take set');
-    expect(set.winnerNodeId).toBe('win');
-    expect(set.turnId).toBeNull();
-    expect(set.chosenNodeId).toBeNull();
-    expect(set.candidates.map((c) => c.nodeId)).toEqual(['win', 'close2', 'close1']);
-    expect(set.candidates[0]).toMatchObject({ text: 'approach A', score: 0.9, depth: 1 });
-  });
-
-  test('the winner’s own ancestors/descendants and the root are not rivals', () => {
-    const { sql, actor } = setup();
-    insertNode(sql, actor, { id: 'root', value: 0.9, depth: 0, text: 'the task' });
-    insertNode(sql, actor, { id: 'parent', parentId: 'root', value: 0.89, depth: 1, text: 'same path parent' });
-    insertNode(sql, actor, { id: 'win', parentId: 'parent', value: 0.9, depth: 2, text: 'winning leaf' });
-    insertNode(sql, actor, { id: 'child', parentId: 'win', value: 0.87, depth: 3, text: 'refinement of winner' });
-    insertNode(sql, actor, { id: 'rival', parentId: 'root', value: 0.86, depth: 1, text: 'genuinely different' });
-    captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
-    const set = present(latestAlternateTakeSet(sql, actor), 'the latest take set');
-    expect(set.candidates.map((c) => c.nodeId)).toEqual(['win', 'rival']);
-  });
-
-  test('duplicate proposal texts dedupe and the set caps at 4 candidates', () => {
-    const { sql, actor } = setup();
-    insertNode(sql, actor, { id: 'win', value: 0.9, text: 'same text' });
-    insertNode(sql, actor, { id: 'dup', value: 0.89, text: 'same text' });
-
-    for (let i = 0; i < 6; i++) insertNode(sql, actor, { id: `r${i}`, value: 0.88 - i * 0.001, text: `rival ${i}` });
-    captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
-    const set = present(latestAlternateTakeSet(sql, actor), 'the latest take set');
-    expect(set.candidates).toHaveLength(4);
-    expect(set.candidates.map((c) => c.nodeId)).toEqual(['win', 'r0', 'r1', 'r2']);
-  });
-});
-
-describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn', () => {
-  test('claims only unclaimed sets', () => {
-    const { sql, actor } = setup();
-    insertNode(sql, actor, { id: 'w1', value: 0.9, text: 'a' });
-    insertNode(sql, actor, { id: 'r1', value: 0.88, text: 'b' });
-    captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
-    expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-1', sessionId: 'default', startedAt: 500 })).toBe(1);
-    expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ turnId: 'msg-1', sessionId: 'default' });
-    expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-2', sessionId: 'default', startedAt: 2_000 })).toBe(0);
-    expect(present(latestAlternateTakeSet(sql, actor), 'the latest take set').turnId).toBe('msg-1');
-  });
-
-  test('never claims captures left over from an earlier turn that did not settle', () => {
-    const { sql, actor } = setup();
-    insertNode(sql, actor, { id: 'w1', value: 0.9, text: 'a' });
-    insertNode(sql, actor, { id: 'r1', value: 0.88, text: 'b' });
-    captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the doomed task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
-    // The next completed turn started later: it must purge, not adopt.
-    expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-2', sessionId: 'default', startedAt: 2_000 })).toBe(0);
-    expect(latestAlternateTakeSet(sql, actor)).toBeNull();
-  });
-
-  test('an explicit-id replay after the claim counts nothing and keeps the first turn', () => {
-    const { sql, actor } = setup();
-    insertNode(sql, actor, { id: 'w1', value: 0.9, text: 'a' });
-    insertNode(sql, actor, { id: 'r1', value: 0.88, text: 'b' });
-    const id = captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
-
-    if (!id) throw new Error('expected captureAlternateTakes to produce a take set');
-    expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-1', sessionId: 'default', startedAt: 500 })).toBe(1);
-    expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-2', sessionId: 'default', startedAt: 500, takeIds: [id] })).toBe(0);
-    expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-2', sessionId: 'default', startedAt: 500, takeIds: ['take-nope'] })).toBe(0);
-    expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ turnId: 'msg-1', sessionId: 'default' });
-  });
-
-  test('purgeUnclaimedAlternateTakes drops unclaimed sets and keeps claimed ones', () => {
-    const { sql, actor } = setup();
-    insertNode(sql, actor, { id: 'w1', value: 0.9, text: 'a' });
-    insertNode(sql, actor, { id: 'r1', value: 0.88, text: 'b' });
-    captureAlternateTakes(sql, actor, { rootId: 'r', task: 'claimed task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
-    claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-1', sessionId: 'default', startedAt: 500 });
-
-    insertNode(sql, actor, { id: 'w2', value: 0.9, text: 'c' });
-    insertNode(sql, actor, { id: 'r2', value: 0.88, text: 'd' });
-    captureAlternateTakes(sql, actor, { rootId: 'r', task: 'aborted task', winnerId: 'w2', epsilon: 0.1, now: 2_000 });
-
-    purgeUnclaimedAlternateTakes(sql, actor);
-    const remaining = listAlternateTakeSets(sql, actor);
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0]).toMatchObject({ turnId: 'msg-1', task: 'claimed task' });
-  });
-});
-
-async function capturedSet(sql: ReturnType<typeof makeSql>, actor: ActorHandle, history: SessionHistory) {
-  insertNode(sql, actor, { id: 'win', value: 0.9, text: 'winning approach' });
-  insertNode(sql, actor, { id: 'alt', value: 0.85, text: 'alternative approach' });
-  captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
-  claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-9', sessionId: 'default', startedAt: 0 });
-  await history.record(CHAT_SESSION_ID, { id: 'u-9', parentId: null, origin: 'input',
+  await history.record(CHAT_SESSION_ID, { id: 'u-9', origin: 'input',
     message: { role: 'user', content: 'please solve it' } });
-  await history.record(CHAT_SESSION_ID, { id: 'msg-9', parentId: 'u-9', origin: 'output',
+  await history.record(CHAT_SESSION_ID, { id: 'msg-9', origin: 'output',
     message: { role: 'assistant', content: 'I used the winning approach' } });
 
-  return present(latestAlternateTakeSet(sql, actor), 'the latest take set');
+  const set = present(latestAlternateTakeSet(sql, actor), 'the latest take set');
+
+  return { set, win: set.candidates[0].nodeId, alt: set.candidates[1].nodeId };
 }
 
 describe('recordTakePick — the preference signal', () => {
   test('picking the answered winner records an accepted take_pick row and moves nothing', async () => {
     const { sql, actor, history, transcript } = setup();
-    const set = await capturedSet(sql, actor, history);
-    const result = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'win', scaffoldVersion: 3 });
+    const { set, win } = await capturedSet(sql, actor, history);
+    const result = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: win, scaffoldVersion: 3 });
     expect(result).toMatchObject({ outcome: 'accepted', changedAnswer: false });
 
     const rows = listTurnOutcomes(sql, actor);
@@ -173,15 +58,13 @@ describe('recordTakePick — the preference signal', () => {
       userMessage: 'please solve it', assistantResponse: 'I used the winning approach',
       followup: null, scaffoldVersion: 3,
     });
-    const statuses = sql<{ id: string; status: string }>`SELECT id, status FROM search_nodes ORDER BY id`;
-    expect(statuses.map((r) => r.status)).toEqual(['open', 'open']);
-    expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: 'win', winnerNodeId: 'win' });
+    expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: win, winnerNodeId: win });
   });
 
-  test('picking a sibling records the correction AND re-points the convergence record', async () => {
+  test('picking the branch records the correction and re-points the set', async () => {
     const { sql, actor, history, transcript } = setup();
-    const set = await capturedSet(sql, actor, history);
-    const result = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt' });
+    const { set, alt } = await capturedSet(sql, actor, history);
+    const result = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
     expect(result).toMatchObject({ outcome: 'corrected', changedAnswer: true });
     expect(result.chosen.text).toBe('alternative approach');
 
@@ -189,47 +72,38 @@ describe('recordTakePick — the preference signal', () => {
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', confidence: 1 });
     // The chosen take is the correction follow-up GEPA optimizes toward.
     expect(row.followup).toBe('alternative approach');
-
-    const win = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0];
-    const alt = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0];
-    expect(win.status).toBe('pruned');
-    expect(alt.status).toBe('terminal');
-    expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: 'alt', winnerNodeId: 'alt' });
+    expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: alt, winnerNodeId: alt });
   });
 
   test('a re-pick replaces the previous ledger row (one outcome per turn)', async () => {
     const { sql, actor, history, transcript } = setup();
-    const set = await capturedSet(sql, actor, history);
-    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt' });
-    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt' });
+    const { set, alt } = await capturedSet(sql, actor, history);
+    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
+    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
     expect(listTurnOutcomes(sql, actor)).toHaveLength(1);
   });
 
-  test('switching the pick moves the terminal marker to the newly chosen take', async () => {
+  test('switching the pick re-points the set to the newly chosen take', async () => {
     const { sql, actor, history, transcript } = setup();
-    const set = await capturedSet(sql, actor, history);
-    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt' });
-    const switched = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'win' });
+    const { set, win, alt } = await capturedSet(sql, actor, history);
+    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
+    const switched = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: win });
     expect(switched).toMatchObject({ outcome: 'corrected', changedAnswer: true });
-    const win = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0];
-    const alt = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0];
-    expect(win.status).toBe('terminal');
-    expect(alt.status).toBe('pruned');
-    expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: 'win', winnerNodeId: 'win' });
+    expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: win, winnerNodeId: win });
     expect(listTurnOutcomes(sql, actor)).toHaveLength(1);
   });
 
   test('rejects unknown take sets and non-candidate nodes', async () => {
     const { sql, actor, history, transcript } = setup();
-    const set = await capturedSet(sql, actor, history);
-    await expect(recordTakePick(sql, actor, transcript, { takeId: 'take-nope', nodeId: 'win' })).rejects.toThrow('Unknown take set');
+    const { set, win } = await capturedSet(sql, actor, history);
+    await expect(recordTakePick(sql, actor, transcript, { takeId: 'take-nope', nodeId: win })).rejects.toThrow('Unknown take set');
     await expect(recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'stranger' })).rejects.toThrow('not a candidate');
   });
 
   test('the continuation prompt carries the task and the chosen take', async () => {
     const { sql, actor, history, transcript } = setup();
-    const set = await capturedSet(sql, actor, history);
-    const { chosen } = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt' });
+    const { set, alt } = await capturedSet(sql, actor, history);
+    const { chosen } = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt });
     const prompt = buildTakeContinuationPrompt(set, chosen);
     expect(prompt).toContain('the task');
     expect(prompt).toContain('alternative approach');
@@ -240,8 +114,8 @@ describe('recordTakePick — the preference signal', () => {
 describe('the take_pick signal feeds R3’s routes for free', () => {
   test('GEPA eval split and scaffold priors consume the pick row', async () => {
     const { sql, actor, history, transcript } = setup();
-    const set = await capturedSet(sql, actor, history);
-    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: 'alt', scaffoldVersion: 5 });
+    const { set, alt } = await capturedSet(sql, actor, history);
+    await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: alt, scaffoldVersion: 5 });
 
     const split = await buildOutcomeEvalSplit(sql, actor, transcript, 4);
     expect(split.train).toHaveLength(1);

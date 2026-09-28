@@ -220,15 +220,12 @@ describe('createCompactionStateStore', () => {
     expect(() => store.plans.load('s1')).toThrow(SyntaxError);
   });
 
-  test('an armed compaction is consumed exactly once, as the kind armed (never loops)', () => {
+  test('an armed compaction is consumed exactly once, in its own session (never loops)', () => {
     const { store } = stateRig();
     expect(store.takeArmedCompaction('s1')).toBeNull();
     store.armCompaction('s1', 'force');
-    expect(store.takeArmedCompaction('s1')).toBe('force');
-    expect(store.takeArmedCompaction('s1')).toBeNull();
-    store.armCompaction('s1', 'user');
     expect(store.takeArmedCompaction('s2')).toBeNull();
-    expect(store.takeArmedCompaction('s1')).toBe('user');
+    expect(store.takeArmedCompaction('s1')).toBe('force');
     expect(store.takeArmedCompaction('s1')).toBeNull();
   });
 

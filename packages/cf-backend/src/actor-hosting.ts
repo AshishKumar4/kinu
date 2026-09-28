@@ -93,11 +93,7 @@ export interface WorkspaceHostSeams {
   chosenWriteObserver(record: WorkspaceActor): WriteObserver | null;
 }
 
-/** A toolless run actor (an MCTS branch) has no home; a swarm node's home is in `head-`. */
-function hasHome(record: WorkspaceActor): boolean {
-  return record.kind !== 'main' && record.toolProfile === 'full';
-}
-
+/** A swarm node's home is in `head-`. */
 function hostedHomeName(record: WorkspaceActor): string {
   const id = parseActorKey(record.storageKey).id;
 
@@ -134,7 +130,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
   let host: ActorHost | null = null;
 
   const homeFor = (record: WorkspaceActor, reference: ActorReference): Promise<HostedNodeHome> | null => {
-    if (!hasHome(record)) return null;
+    if (record.kind === 'main') return null;
     const held = homes.get(record.actorId);
 
     if (held) return held;
@@ -290,7 +286,6 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         transaction: (body) => { seams.ctx.storage.transactionSync(body); },
         // Review model calls debit the mission the reviewed turn ran under.
         governor: budget,
-        reportModelCall: (report) => { seams.reportModelCall(report); },
       });
 
       const backendHost: BackendHost = {
@@ -334,7 +329,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
     /** Releases the home and state subtree on destroy only; an archived actor keeps its files. */
     discardBytes: async (record: WorkspaceActor): Promise<void> => {
-      if (hasHome(record)) await facetHomeReleaser(seams.homeHost())(hostedHomeName(record));
+      if (record.kind !== 'main') await facetHomeReleaser(seams.homeHost())(hostedHomeName(record));
 
       homes.delete(record.actorId);
       const box = seams.workspaceBox(hostedActorShellId(record));

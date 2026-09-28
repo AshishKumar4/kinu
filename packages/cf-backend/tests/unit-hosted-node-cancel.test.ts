@@ -16,15 +16,15 @@ function fromTheOwner(run: RecordedGatewayRun): boolean {
   return openingOf(run).includes(ASK);
 }
 
-/** The main actor starts a one-node search, then says so; `node` answers the node. */
-function searching(node: (run: RecordedGatewayRun) => Response | Promise<Response>) {
+/** The main actor starts a search of `branches` nodes, then says so; `node` answers every node. */
+function searching(node: (run: RecordedGatewayRun) => Response | Promise<Response>, branches = 1) {
   return stubAiBinding((run) => {
     if (!fromTheOwner(run)) return node(run);
 
     return requestOf(run).messages.some((message) => message.role === 'tool')
       ? chatCompletion(run, 'Searching.')
       : toolCallCompletion(run, {
-        tool: 'agents', args: { action: 'swarm', task: 'Name one way to tokenize faster.', preset: 'ideate', branches: 1, depth: 1 },
+        tool: 'agents', args: { action: 'swarm', task: 'Name one way to tokenize faster.', preset: 'ideate', branches, depth: 1 },
       }, 'swarm_0');
   });
 }
@@ -85,5 +85,46 @@ describe('cancelling a search reaches its hosted nodes', () => {
 
     expect(node?.status).toBe('aborted');
     expect(claims.map((claim) => claim.outcome)).toEqual(['aborted']);
+    // Cancelled with its search, not stopped by its owner: the panel keeps it a fault.
+    expect((await agent.listWorkspaceAgents()).find((listed) => listed.category === 'swarm')?.activity).toBe('failed');
+  });
+
+  test('the owner stopping one worker settles it aborted while its sibling completes', async () => {
+    const calls: Array<{ readonly run: RecordedGatewayRun; readonly answer: ReturnType<typeof Promise.withResolvers<Response>> }> = [];
+    const bothHeld = Promise.withResolvers<void>();
+
+    const gateway = searching((run) => {
+      const answer = Promise.withResolvers<Response>();
+
+      run.signal?.addEventListener('abort', () => { answer.reject(run.signal?.reason); });
+      calls.push({ run, answer });
+
+      if (calls.length === 2) bothHeld.resolve();
+
+      return answer.promise;
+    }, 2);
+
+    const { agent, db } = gatewayWorkspace(gateway);
+
+    await catalogTurn(agent, ASK);
+    await bothHeld.promise;
+    const [stopped, sibling] = db.query<{ id: string }, []>('SELECT id FROM head_journal ORDER BY id').all();
+
+    if (stopped === undefined || sibling === undefined) throw new Error('the search did not journal two workers');
+    await agent.stopSwarmWorker(stopped.id);
+    await agent.stopSwarmWorker('no-such-worker');
+
+    // A Stop that never reached its worker lets this answer land, and that worker completes.
+    for (const call of calls) call.answer.resolve(chatCompletion(call.run, 'Cache the token table.'));
+    await agent.harnessJoinDetachedFibers();
+
+    const job = db.query<{ status: string }, []>("SELECT status FROM background_jobs WHERE kind = 'agents'").get();
+    const workers = (await agent.listWorkspaceAgents()).filter((listed) => listed.category === 'swarm');
+    const activity = (id: string) => workers.find((listed) => listed.open.kind === 'node' && listed.open.nodeId === id)?.activity;
+
+    // Only the Stop reads as stopped: its reason is recorded, and the sibling it never reached completes.
+    expect(activity(stopped.id)).toBe('stopped');
+    expect(activity(sibling.id)).toBe('done');
+    expect(job?.status).not.toBe('cancelled');
   });
 });

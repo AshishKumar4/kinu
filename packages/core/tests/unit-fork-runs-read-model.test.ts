@@ -3,19 +3,14 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createMockSession, createTestRuntime, makeSql, makeExecRaw } from './helpers';
-import { createTestActors, present } from '@kinu.run/test-utils';
+import { makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
-import { backpropagate } from '../src/mcts/backpropagation';
-import { converge } from '../src/mcts/convergence';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initHeadsTables } from '../src/heads/schema';
 import { listForkRuns, readForkRun } from '../src/read-models/fork-runs';
 import { readExplorationCanvas } from '../src/read-models/exploration-canvas';
-import { explorationForkTree } from '../src/read-models/fork-tree-rows';
-import { readSearchTree } from '../src/read-models/search-tree';
-import { terminalForkNode } from '../src/read-models/swarm-tree-model';
 import { HeadJournal } from '../src/heads/journal';
 import { newBranchId } from '../src/steer-branch';
 import type { Page, SeekCursor } from '../src/session/page';
@@ -69,6 +64,12 @@ function seedJournalledRun(
   }
 }
 
+/** A node's own score, where a swarm writes it. */
+function scoreNode(db: Database, node: { actorId: string; rootId: string; nodeId: string; score: number }): void {
+  db.prepare(`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json) VALUES (?, ?, ?, ?)`)
+    .run(node.actorId, node.nodeId, node.rootId, JSON.stringify({ outcome: { score: node.score } }));
+}
+
 function seedSearchRun(
   db: Database,
   actorId: string,
@@ -77,30 +78,28 @@ function seedSearchRun(
     /** The root's own label, which is the run's name. */
     name?: string;
     winner?: number;
-    ledger?: 'running' | 'converged' | 'failed' | 'no_acceptable_candidate';
+    ledger?: 'running' | 'converged' | 'failed';
   },
 ): void {
   const node = db.prepare(
-    `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at, evaluation_json)
-     VALUES (?, ?, ?, ?, ?, ?, '', 1, ?, ?, ?, ?, ?)`,
+    `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, '', 1, ?, ?, ?, ?)`,
   );
 
-  node.run(actorId, run.rootId, null, run.rootId, run.task, run.name ?? '', 0, 0, 'open', run.at, null);
+  node.run(actorId, run.rootId, null, run.rootId, run.task, run.name ?? '', 0, 0, 'open', run.at);
 
   for (let i = 0; i < run.branches; i++) {
     const isWinner = run.winner !== undefined && i === 0;
     // A leaf's mean is its own score: one reward reached it.
     const score = isWinner ? run.winner ?? 0 : 0.2;
-    node.run(
-      actorId, `${run.rootId}-n${i}`, run.rootId, run.rootId, run.task, '',
-      score, 1, isWinner ? 'terminal' : 'pruned', run.at + i + 1, JSON.stringify({ score }),
-    );
+    node.run(actorId, `${run.rootId}-n${i}`, run.rootId, run.rootId, run.task, '', score, 1, isWinner ? 'terminal' : 'pruned', run.at + i + 1);
+    scoreNode(db, { actorId, rootId: run.rootId, nodeId: `${run.rootId}-n${i}`, score });
   }
 
   if (run.ledger) {
     db.prepare(
-      `INSERT INTO mcts_search_runs (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
-       VALUES (?, ?, ?, 'mcts', 'm1', '{}', 3, 9, ?, 0, ?, ?)`,
+      `INSERT INTO mcts_search_runs (actor_id, root_id, task, config_json, status, epoch, created_at, updated_at)
+       VALUES (?, ?, ?, '{}', ?, 0, ?, ?)`,
     ).run(actorId, run.rootId, run.task, run.ledger, run.at, run.at);
   }
 }
@@ -172,31 +171,6 @@ describe('listForkRuns', () => {
     });
   });
 
-  test("the run list and the explorer page show the winner score converge reported, not its subtree mean", async () => {
-    const { rt } = createTestRuntime();
-    const { sql } = rt.storage;
-    const actorId = rt.actor.actorId;
-
-    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
-      VALUES (${actorId}, 'R', NULL, 'R', 'pick a backfill', 'pick a backfill', 0)`;
-
-    // A strong proposal whose refinement scored low: its own score stays 0.9, its mean falls to 0.5.
-    for (const [id, parent, depth, score] of [['a', 'R', 1, 0.9], ['a1', 'a', 2, 0.1]] as const) {
-      void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth, evaluation_json)
-        VALUES (${actorId}, ${id}, ${parent}, 'R', 'pick a backfill', ${`answer ${id}`}, ${depth}, ${JSON.stringify({ score })})`;
-      backpropagate(sql, rt.actor, id, score);
-    }
-
-    const result = await converge(rt, createMockSession(), 'R', { mode: 'plan' });
-    const mean = sql<{ value: number }>`SELECT value FROM search_nodes WHERE actor_id = ${actorId} AND id = 'a'`[0]?.value;
-
-    expect(result).toMatchObject({ converged: true, winnerId: 'a', winnerValue: 0.9 });
-    expect(mean).toBeCloseTo(0.5, 12);
-    expect(readForkRun(sql, rt.actor, 'R')?.winnerScore).toBe(result.winnerValue);
-    // The explorer page folds `getSearchTree`'s rows and names the terminal vertex Winner.
-    const drawn = explorationForkTree({ tree: readSearchTree(sql, rt.actor, 'R'), head: null });
-    expect(terminalForkNode(present(drawn, 'the drawn tree'))?.value).toBe(result.winnerValue);
-  });
 
   test('a journalled run counts its nodes and has no winner — nothing there ranked', () => {
     const { db, sql, actor, actorId } = freshDb();
@@ -249,22 +223,6 @@ describe('listForkRuns', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSearchRun(db, actorId, { rootId: 'r1', task: 'doomed', at: 1000, branches: 1, ledger: 'failed' });
     expect(listForkRuns(sql, actor).items[0].status).toBe('failed');
-  });
-
-  test('a settled search with no acceptable candidate never reads completed', () => {
-    const { db, sql, actor, actorId } = freshDb();
-    seedSearchRun(db, actorId, {
-      rootId: 'r1',
-      task: 'nothing cleared the floor',
-      at: 1000,
-      branches: 2,
-      ledger: 'no_acceptable_candidate',
-    });
-    const [run] = listForkRuns(sql, actor).items;
-    expect(run).toMatchObject({
-      status: 'failed',
-      winnerScore: null,
-    });
   });
 
   test('Steer-as-Branch redirects are not exploration runs', () => {
@@ -405,20 +363,21 @@ describe('a stale running lease', () => {
     run: { rootId: string; root: string; branches: readonly string[]; ledger?: string },
   ): void {
     const node = db.prepare(
-      `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at, evaluation_json)
-       VALUES (?, ?, ?, ?, 'audit the coupon guard', '', '', 1, ?, ?, ?, ?, ?)`,
+      `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at)
+       VALUES (?, ?, ?, ?, 'audit the coupon guard', '', '', 1, ?, ?, ?, ?)`,
     );
 
-    node.run(actorId, run.rootId, null, run.rootId, 0, 0, run.root, 1000, null);
+    node.run(actorId, run.rootId, null, run.rootId, 0, 0, run.root, 1000);
 
     for (const [index, status] of run.branches.entries()) {
-      node.run(actorId, `${run.rootId}-n${index}`, run.rootId, run.rootId, 0.4, 1, status, 1001 + index, JSON.stringify({ score: 0.4 }));
+      node.run(actorId, `${run.rootId}-n${index}`, run.rootId, run.rootId, 0.4, 1, status, 1001 + index);
+      scoreNode(db, { actorId, rootId: run.rootId, nodeId: `${run.rootId}-n${index}`, score: 0.4 });
     }
 
     if (run.ledger) {
       db.prepare(
-        `INSERT INTO mcts_search_runs (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
-         VALUES (?, ?, 'audit the coupon guard', 'mcts', 'm1', '{}', 3, 0, ?, 0, 1000, 1000)`,
+        `INSERT INTO mcts_search_runs (actor_id, root_id, task, config_json, status, epoch, created_at, updated_at)
+         VALUES (?, ?, 'audit the coupon guard', '{}', ?, 0, 1000, 1000)`,
       ).run(actorId, run.rootId, run.ledger);
     }
   }

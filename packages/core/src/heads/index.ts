@@ -26,6 +26,8 @@ export {
   deriveChildBudget,
   HEAD_BUILTIN_TOOLS,
   headStatusUnsettled,
+  OWNER_STOPPED,
+  shownHeadStatus,
   storedHeadReportStatus,
 } from './types';
 
@@ -78,6 +80,8 @@ export {
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
   type HeadInferenceDeps, type HeadWorkspaceLayout,
 } from './head-inference';
+
+export { spawnSeatedHead, type HeadSeat, type SeatedHeadDeps } from './seated-head';
 
 export {
   buildHeadToolSet,

@@ -62,17 +62,6 @@ function buildComponents(components: WorkspaceComponents) {
     workspaceIsMachine: false,
     sql, execRaw, transactionSync, vfs, llm, executor, schedule, shell: workspace.shell,
     memory, craftStore,
-    // Birth-only runtime: a fake exploration result would be indistinguishable from a real one,
-    // so fail loudly; running surfaces use createCLIRuntime's real spawner.
-    spawnBranch: () => {
-      throw new Error(
-        'createWorkspace\'s birth runtime does not implement spawnBranch: it is for creating a '
-        + 'workspace, not for running one. Open the workspace with openWorkspaceCLI (which builds '
-        + 'createCLIRuntime) to get a real branch spawner. Returning a stub result here would be '
-        + 'indistinguishable from a real exploration to every consumer.',
-      );
-    },
-    abortBranch: async () => {},
   });
 }
 

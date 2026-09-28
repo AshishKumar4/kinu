@@ -1,11 +1,11 @@
 // The flake gate repeats the test files a commit changes and tells a flake from a failing test. Its red direction is a
 // planted flake, run through the gate's own runner.
 import { describe, expect, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { childEnv, scratchDir } from '@kinu.run/test-utils';
 import {
-  REPEATS, planFor, repeatAll, stagedTestFiles, sweepRun, sweepVerdict, verdictOf, type Plan, type RunOutcome,
+  REPEATS, movedUnchanged, planFor, repeatAll, stagedTestFiles, sweepRun, sweepVerdict, verdictOf, type Plan, type RunOutcome,
 } from './flake-gate';
 import { isFirstRunSuite, isPythonSuite, isRunnableSuite, trackedFiles } from './sources';
 import { writtenSkips } from './test-census';
@@ -49,17 +49,23 @@ test('passes on odd runs and fails on even ones', () => {
   });
 });
 
+/** A scratch repository with its own environment: a hook's GIT_DIR and GIT_INDEX_FILE name the commit it gates. */
+function scratchRepository(name: string) {
+  const cwd = scratchDir(name);
+  const env = childEnv({ GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@example.com' });
+
+  const git = (...args: string[]): void => {
+    const run = Bun.spawnSync(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], { cwd, env, stderr: 'pipe' });
+
+    if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${run.stderr.toString()}`);
+  };
+
+  return { cwd, env, git };
+}
+
 describe('the commit a hook gates', () => {
   test('a merge repeats the test files it changes itself, never one it takes whole from a side', () => {
-    const cwd = scratchDir('flake-gate-merge');
-    // Its own environment: a hook's GIT_DIR and GIT_INDEX_FILE name the commit the hook is gating.
-    const env = childEnv({ GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@example.com' });
-
-    const git = (...args: string[]): void => {
-      const run = Bun.spawnSync(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], { cwd, env, stderr: 'pipe' });
-
-      if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${run.stderr.toString()}`);
-    };
+    const { cwd, env, git } = scratchRepository('flake-gate-merge');
 
     const write = (file: string, text: string): void => { writeFileSync(join(cwd, file), text); };
 
@@ -91,7 +97,38 @@ describe('the commit a hook gates', () => {
   });
 });
 
-describe('the sweep', () => {
+describe('a moved test', () => {
+  test('is repeated unless its only edits are rewritten import specifiers', () => {
+    const { cwd, env, git } = scratchRepository('flake-gate-move');
+
+    const suite = (helper: string, expected: string): string => [
+      `import { expect, test } from 'bun:test';`,
+      `import { answer } from '${helper}';`,
+      '',
+      `test('answers', () => { expect(answer()).toBe(${expected}); });`,
+      '',
+    ].join('\n');
+
+    mkdirSync(join(cwd, 'scripts'));
+    mkdirSync(join(cwd, 'tests', 'browser'), { recursive: true });
+    writeFileSync(join(cwd, 'scripts', 'a.test.ts'), suite('./helper', '42'));
+    writeFileSync(join(cwd, 'scripts', 'b.test.ts'), suite('./helper', '42'));
+    git('init', '-q', '-b', 'main');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'base');
+
+    git('mv', 'scripts/a.test.ts', 'tests/browser/a.test.ts');
+    writeFileSync(join(cwd, 'tests', 'browser', 'a.test.ts'), suite('../../scripts/helper', '42'));
+    git('mv', 'scripts/b.test.ts', 'tests/browser/b.test.ts');
+    writeFileSync(join(cwd, 'tests', 'browser', 'b.test.ts'), suite('../../scripts/helper', '43'));
+    git('add', '-A');
+
+    expect([...movedUnchanged({ cwd, env })]).toEqual(['tests/browser/a.test.ts']);
+    expect(stagedTestFiles({ cwd, env })).toEqual(['tests/browser/b.test.ts']);
+  });
+});
+
+describe('the nightly sweep', () => {
   test('a planted flake comes out flaky under the seeds it was red with, a steady red red, a crash broken', async () => {
     const directory = scratchDir('flake-sweep-planted');
     const counter = join(directory, 'runs');

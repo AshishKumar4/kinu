@@ -57,7 +57,6 @@ import {
 import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from '../strategy/node-workspace';
 import type { HostedNodeSeat, NodeCodemode } from '../strategy/node-agent';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../types/turn';
 import { nanoid } from '../utils/nanoid';
 import {
@@ -195,9 +194,8 @@ export interface TeamToolDeps {
     ok: true; name: string; historyKept: boolean;
   }>;
   /**
-   * The `lifetime:'task'` half of `hire`: runs one child to completion inside the call and archives its
-   * row on answer. Required wherever a child substrate is wired; unwired, `hire` has no `lifetime` field
-   * and every hire is durable.
+   * The `lifetime:'task'` half of `hire`: starts one child and returns; the child retires once it answers.
+   * Required wherever a child substrate is wired; unwired, `hire` has no `lifetime` field and every hire is durable.
    */
   readonly temporary?: TemporaryAgentPort;
 }
@@ -261,8 +259,6 @@ export interface AgentsSwarmDeps {
   resolveModel?: (spec: string) => LanguageModel;
   /** Caller conversation at dispatch, frozen into the search ledger so `context:'inherit'` survives re-drive. */
   originContext?: () => readonly ModelMessage[];
-  /** Pricing for projected-spend gates; absent, the gate blends and says so. */
-  costModel?: () => CostModel;
   /** Host-owned async provisioner for one node's private home, resolved per swarm call.
    *  Absent: no credentialed home, and nodes report the shared plane. */
   provisionNodeHome?: () => NodeWorkspaceProvisioner;
@@ -274,6 +270,8 @@ export interface AgentsSwarmDeps {
   /** The *Inherited context* compaction ladder (`SwarmRunDeps.compactShared`); absent, an over-window
    *  parent inherits verbatim and the provider refuses. */
   compactShared?: SwarmRunDeps['compactShared'];
+  /** The workspace's running workers, so the owner can stop one. */
+  workers?: SwarmRunDeps['workers'];
 }
 
 /** Inputs for role/tier/preset precedence, wired under {@link AgentsToolDeps.profile}. */
@@ -1088,6 +1086,7 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
     runtimeForWorkspace,
     // The *Inherited context* barrier; absent stays absent (the seam's loud failure).
     compactShared: swarm.compactShared,
+    workers: swarm.workers,
     redrive,
   };
 
@@ -1255,7 +1254,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
 
     if (deps.team.temporary !== undefined) {
       Object.assign(properties, {
-        lifetime: { type: 'string', enum: [...SUBORDINATE_LIFETIMES], description: 'For hire with `role`: durable (default) stays in your roster; task answers one question and is archived.' },
+        lifetime: { type: 'string', enum: [...SUBORDINATE_LIFETIMES], description: 'For hire with `role`: durable (default) stays in your roster; task answers one question, as a later message, and is archived.' },
       });
     }
   }
@@ -1378,13 +1377,13 @@ async function hireWorkspace({ deps, input, mode, toolOptions, spawnDepthRefusal
   return await peers.spawnWorkspace(request);
 }
 
-interface CreateHireCall extends AgentsActionCall {
+interface CreateHireCall extends Omit<AgentsActionCall, 'toolOptions'> {
   team: TeamToolDeps;
   input: AgentsToolInput & { role: string; mission: string };
   lifetime: 'durable' | 'task';
 }
 
-async function hireCreate({ deps, team, input, mode, lifetime, toolOptions }: CreateHireCall): Promise<object> {
+async function hireCreate({ deps, team, input, mode, lifetime }: CreateHireCall): Promise<object> {
   const ctx = deps.profile?.();
 
   if (!ctx) {
@@ -1405,7 +1404,7 @@ async function hireCreate({ deps, team, input, mode, lifetime, toolOptions }: Cr
     const temporary = team.temporary;
 
     if (!temporary) {
-      throw new KinuError('denied', 'lifetime:"task" runs the agent to its single answer inside this call, which this actor has no substrate for: '
+      throw new KinuError('denied', 'lifetime:"task" needs a task-agent substrate, which this actor has none of: '
         + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (action:"list" shows the roster).');
     }
 
@@ -1422,9 +1421,7 @@ async function hireCreate({ deps, team, input, mode, lifetime, toolOptions }: Cr
 
     if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
 
-    if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-
-    return await temporary.run(request);
+    return await temporary.start(request);
   }
 
   const delegated = resolveDelegatedProfile(ctx, input.role, input.tier);
@@ -1550,7 +1547,7 @@ async function runHireAction(
   // `agent` is the name to create under; the role is validated, spawn-checked, and stored with its tier.
   if (!isHireCreateInput(input)) return badInput('hire requires role and mission');
 
-  return await hireCreate({ deps, team, input, mode, lifetime, toolOptions });
+  return await hireCreate({ deps, team, input, mode, lifetime });
 }
 
 export async function dispatchAgentsAction(

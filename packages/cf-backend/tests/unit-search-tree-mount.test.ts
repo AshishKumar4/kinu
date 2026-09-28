@@ -1,5 +1,5 @@
 // The hero mount (`mountLivingCanvas`) falls back to Canvas2D when the GPU device dies mid-run, keeping
-// its clock. scripts/public-pages.test.ts only proves this where WebGPU is live; this holds everywhere.
+// its clock. tests/browser/public-pages.test.ts only proves this where WebGPU is live; this holds everywhere.
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { VGPUError as CoreVGPUError } from '@vgpu/core';
 import { SearchTree } from '@kinu.run/core/web/hero-art';

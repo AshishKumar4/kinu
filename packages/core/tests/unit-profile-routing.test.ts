@@ -58,7 +58,7 @@ const FIXED_LANES = [
   ['compaction', 'fast'], ['fast', 'fast'], ['reflection', 'fast'],
 ] as const;
 
-const INVOCATION_LANES = ['agent', 'head', 'mcts', 'swarm'] as const;
+const INVOCATION_LANES = ['agent', 'head', 'swarm'] as const;
 
 /** Producers no turn profile routes: a binding-bound platform call, and a cache warm replaying a frozen spec. */
 const UNROUTED: readonly SpendSource[] = ['platform', 'warming', 'test'];

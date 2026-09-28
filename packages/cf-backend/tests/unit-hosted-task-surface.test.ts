@@ -4,7 +4,7 @@
  * Each delegated turn is admitted and run as production runs one; its model is served by the platform gateway.
  */
 import { expect, test } from 'bun:test';
-import { GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, runDelegatedTask } from './helpers/actor-harness';
+import { GATEWAY_CATALOG, actorOver, gatewayWorkspace, hostedSubordinateHarness, runDelegatedTask } from './helpers/actor-harness';
 import { requestOf, scriptedGateway, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 const NOTE = 'the streaming parser holds no whole file';
@@ -92,7 +92,8 @@ test('a hosted child advertises only its callable crafted surface and loses it w
   workspace.agent.harnessInstallCatalog({ ...GATEWAY_CATALOG, roles: {
     reader: { description: 'Files only', instructions: 'Inspect files.', tier: 'default', preset: 'ideate', allowedTools: ['file'] },
   } });
-  child.actor.stores.config.setRoleSelection('reader');
+  // An idle hire holds no hosted slot: its settings are its rows.
+  actorOver(workspace.db, child.actor.handle.actorId).config.setRoleSelection('reader');
   await runDelegatedTask(workspace, child.actor.handle.actorId, 'Inspect the remaining capabilities.');
   const last = gateway.runs.at(-1);
 

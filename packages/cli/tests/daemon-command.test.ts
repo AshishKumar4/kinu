@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { present, runToExit } from '@kinu.run/test-utils';
+import { killAndAwaitExit, present, recordedIn, runToExit } from '@kinu.run/test-utils';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -21,11 +21,11 @@ function newProjectDir(): string {
   return dir;
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const home of homes.splice(0)) {
-    const pid = readPid(home);
+    const daemon = recordedIn(join(home, 'daemon.pid'));
 
-    if (pid !== null) tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
+    if (daemon !== null) await killAndAwaitExit(daemon);
   }
 });
 

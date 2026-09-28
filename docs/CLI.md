@@ -63,17 +63,16 @@ kinu <command> [options]
 
 | Command | What it does |
 | --- | --- |
-| [`kinu evolve <name>`](#kinu-evolve-name) | Run an MCTS search for one improvement to a local workspace |
 | [`kinu jobs <name> [action] [id]`](#kinu-jobs-name-action-id) | List or cancel background jobs |
 | [`kinu actors <name> [actorId]`](#kinu-actors-name-actorid) | List every actor a workspace holds, or show one by id |
 | [`kinu state <name>`](#kinu-state-name) | Show the workspace state snapshot |
 | [`kinu spend <name>`](#kinu-spend-name) | Show what a workspace spent, by producer and by mission |
 | [`kinu memory <name> [query...]`](#kinu-memory-name-query) | Read or search a workspace's memory |
 | [`kinu events <name>`](#kinu-events-name) | List a workspace's recent events |
-| [`kinu timeline <name>`](#kinu-timeline-name) | List a workspace's runs, evolutions and MCTS searches in order |
-| [`kinu mcts <name> [nodeId]`](#kinu-mcts-name-nodeid) | Show a workspace's MCTS search history |
+| [`kinu timeline <name>`](#kinu-timeline-name) | List a workspace's runs, evolutions and swarm searches in order |
+| [`kinu swarm <name> [nodeId]`](#kinu-swarm-name-nodeid) | Show a workspace's swarm search history |
 | [`kinu heads <name>`](#kinu-heads-name) | Show parallel reasoning branch runs |
-| [`kinu debug <name>`](#kinu-debug-name) | Save everything about a workspace to one file: identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts |
+| [`kinu debug <name>`](#kinu-debug-name) | Save everything about a workspace to one file: identity, messages, runs and their events, heads, swarm searches, background jobs, evolution state, memory and facts |
 | [`kinu gepa <name> [runId]`](#kinu-gepa-name-runid) | Show GEPA optimisation runs, or run one pass with --run |
 | [`kinu alignment <name>`](#kinu-alignment-name) | Show K_align: corrections per 100 graded turns for each scaffold version, with 95% intervals |
 | [`kinu label [action] [name] [file]`](#kinu-label-action-name-file) | Label turn outcomes by hand to measure and correct the classifier (export, ingest, ensemble, report), or build a corpus from Claude Code transcripts (mine, score) |
@@ -468,23 +467,6 @@ Create a webhook trigger for a cloud workspace.
 kinu webhook jarvis github-push --auth-mode hmac --secret "$HOOK_SECRET"
 ```
 
-### kinu evolve <name>
-
-Run an MCTS search for one improvement to a local workspace.
-
-| Option | What it does |
-| --- | --- |
-| `--budget <n>` | MCTS iterations (default: the engine default) |
-| `--branches <n>` | Branches per expansion (default: the engine default) |
-| `--max-cost <usd>` | Cost limit in USD (default: the engine default) |
-| `--model <id>` | Model ID (env: KINU_MODEL) |
-| `--base-url <url>` | Base URL of your own model endpoint (env: KINU_BASE_URL) |
-| `--auth <header>` | Auth header value for that endpoint (env: KINU_AUTH) |
-
-```bash
-kinu evolve jarvis --budget 4
-```
-
 ### kinu jobs <name> [action] [id]
 
 List or cancel background jobs.
@@ -566,7 +548,7 @@ kinu events jarvis --since 2026-09-01 --limit 20
 
 ### kinu timeline <name>
 
-List a workspace's runs, evolutions and MCTS searches in order.
+List a workspace's runs, evolutions and swarm searches in order.
 
 | Option | What it does |
 | --- | --- |
@@ -577,16 +559,16 @@ List a workspace's runs, evolutions and MCTS searches in order.
 kinu timeline jarvis --limit 20
 ```
 
-### kinu mcts <name> [nodeId]
+### kinu swarm <name> [nodeId]
 
-Show a workspace's MCTS search history.
+Show a workspace's swarm search history.
 
 | Option | What it does |
 | --- | --- |
 | `--json` | Print raw JSON |
 
 ```bash
-kinu mcts jarvis
+kinu swarm jarvis
 ```
 
 ### kinu heads <name>
@@ -604,7 +586,7 @@ kinu heads jarvis --limit 5
 
 ### kinu debug <name>
 
-Save everything about a workspace to one file: identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts.
+Save everything about a workspace to one file: identity, messages, runs and their events, heads, swarm searches, background jobs, evolution state, memory and facts.
 
 | Option | What it does |
 | --- | --- |

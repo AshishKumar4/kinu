@@ -88,7 +88,7 @@ export const CHARS_PER_TOKEN = 4;
 
 /** Conservative blended fallback (~$3 / 1M tokens) for the character seam and unpriced models;
  *  `ModelInfo.cost` is the real rate. */
-export const BLENDED_USD_PER_1K_TOKENS = 0.003;
+const BLENDED_USD_PER_1K_TOKENS = 0.003;
 
 export function estimateTokens(chars: number): number {
   return Math.ceil(chars / CHARS_PER_TOKEN);

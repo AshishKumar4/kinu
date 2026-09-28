@@ -40,7 +40,7 @@ import {
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import type { AgentModelMenu, AgentRpcMethod } from '@kinu.run/core';
-import { hostedWindowCalls, pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
+import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
@@ -103,7 +103,7 @@ const CloudPlanReviewResultSchema: v.GenericSchema<unknown, PlanReviewResult> = 
   v.object({ ok: v.literal(false), error: v.string(), plan: CloudPlanReviewSchema }),
 ]);
 
-const CloudChatPageSchema = pageSchema(ChatHistoryEntrySchema);
+const CloudChatPageSchema = positionPageSchema(ChatHistoryEntrySchema);
 
 const BranchTurnResultSchema = v.nullable(v.object({
   accepted: v.optional(v.boolean()),
@@ -202,7 +202,6 @@ const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({
   turnId: v.nullable(v.string()),
   sessionId: v.nullable(v.string()),
   task: v.string(),
-  source: v.picklist(['mcts', 'branch', 'heads']),
   winnerNodeId: v.string(),
   chosenNodeId: v.nullable(v.string()),
   candidates: v.array(AlternateTakeCandidateSchema),
@@ -274,7 +273,7 @@ const BranchStatusEventSchema = v.variant('status', [
 const BroadcastFrameSchema = v.union([
   BranchStatusEventSchema,
   v.object({ type: v.literal('model_fallback'), message: v.string() }),
-  v.object({ type: v.literal('context_admitted'), requestTokens: v.number(), contextWindow: v.number() }),
+  v.object({ type: v.literal('context_fill'), contextTokens: v.number(), contextWindow: v.optional(v.number()) }),
 ]);
 
 interface CloudAgentClientOptions {
@@ -600,7 +599,7 @@ export class CloudAgentClient implements AgentClient {
 
     return readConversation((request) => this.callHttp(
       'getChatHistoryPage', CloudChatPageSchema,
-      [request.cursor === undefined ? {} : { cursor: { after: request.cursor.after } }],
+      [request.cursor === undefined ? {} : { cursor: { before: request.cursor.before } }],
     ));
   }
 
@@ -627,6 +626,7 @@ export class CloudAgentClient implements AgentClient {
       scaffoldVersion: status.scaffoldVersion,
       messageCount: status.messageCount,
       searchNodeCount: status.searchNodeCount,
+      context: status.context ?? null,
     };
   }
 

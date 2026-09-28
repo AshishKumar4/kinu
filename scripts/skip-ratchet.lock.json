@@ -1,126 +1,110 @@
 [
   {
-    "key": "packages/core/tests/e2e/mcts-e2e.test.ts › E2E MCTS with real LLM › full search cycle",
-    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: one real MCTS search over a live provider and judge, gated by describe.skipIf(!isE2EConfigured()). scripts/test-scratch-home.ts strips both variables at preload unless KINU_EVAL_LIVE=1, so this skips deterministically outside the live tier rather than depending on whose shell ran it. NO ARM RUNS IT LIVE TODAY: live-tier.sh runs ./tests/live/ and does not reach packages/, so this entry records a live suite with no live tier — which is the argument someone has to answer, not a fact the exit code should hide."
-  },
-  {
     "key": "packages/core/tests/e2e/scaffold-e2e.test.ts › E2E scaffold evolution › LLM generates valid scaffold code that passes 4-gate",
-    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: the model must emit scaffold code that survives the 4-gate, which is the measurement, so a mock cannot stand in. Same preload strip and the same missing live arm as the MCTS entry above."
+    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: the model must emit scaffold code that survives the 4-gate, which is the measurement, so a mock cannot stand in. scripts/test-scratch-home.ts strips both variables at preload unless KINU_EVAL_LIVE=1, and live-tier.sh runs ./tests/live-model/ and does not reach packages/, so no arm runs it live today."
   },
   {
     "key": "packages/core/tests/e2e/scaffold-e2e.test.ts › E2E scaffold evolution › full scaffold lifecycle: bootstrap -> modify -> rollback",
-    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: bootstrap, a model-authored modification, then rollback across real versions. Same preload strip and the same missing live arm as the MCTS entry above."
+    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: bootstrap, a model-authored modification, then rollback across real versions. scripts/test-scratch-home.ts strips both variables at preload unless KINU_EVAL_LIVE=1, and live-tier.sh runs ./tests/live-model/ and does not reach packages/, so no arm runs it live today."
   },
   {
-    "key": "tests/live/continuation.test.ts › a real fold keeps the task › the live continuation of a folded episode recalls every fact the full one does",
+    "key": "tests/live-model/continuation.test.ts › a real fold keeps the task › the live continuation of a folded episode recalls every fact the full one does",
     "reason": "needs a live model: GATE-6's continuation probe runs in the live tier (bun run test:live), which sets KINU_EVAL_LIVE=1 and fails at load without KINU_ORIGIN + KINU_TOKEN or an AI Gateway pair."
   },
   {
-    "key": "tests/live/continuation.test.ts › one same-provider conversation survives every transition › prune, edit, reset, model change and compaction each keep completed calls paired, and the provider answers",
+    "key": "tests/live-model/continuation.test.ts › one same-provider conversation survives every transition › prune, edit, reset, model change and compaction each keep completed calls paired, and the provider answers",
     "reason": "needs a live model: GATE-6's continuation probe runs in the live tier (bun run test:live), which sets KINU_EVAL_LIVE=1 and fails at load without KINU_ORIGIN + KINU_TOKEN or an AI Gateway pair."
   },
   {
-    "key": "tests/live/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › scorecard and evolution summary",
+    "key": "tests/live-model/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › scorecard and evolution summary",
     "reason": "needs a live model: reports the 8-problem scorecard the preceding test produces. Runs in the live tier with KINU_ORIGIN + KINU_TOKEN."
   },
   {
-    "key": "tests/live/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › solve 8 algorithmic problems with native tool calling",
+    "key": "tests/live-model/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › solve 8 algorithmic problems with native tool calling",
     "reason": "needs a live model: 8 problems with verifiable answers, the agent must write and execute code. The most expensive single test here. Runs in the live tier."
   },
   {
-    "key": "tests/live/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 3. chat turn 1: simple math question",
+    "key": "tests/live-model/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 3. chat turn 1: simple math question",
     "reason": "needs a live model: multi-turn tool calling, turn 1 of 3. Runs in the live tier."
   },
   {
-    "key": "tests/live/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 4. chat turn 2: code execution",
+    "key": "tests/live-model/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 4. chat turn 2: code execution",
     "reason": "needs a live model: proves the agent reaches execute_tools rather than answering from memory. Runs in the live tier."
   },
   {
-    "key": "tests/live/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 5. chat turn 3: save note to memory",
+    "key": "tests/live-model/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 5. chat turn 3: save note to memory",
     "reason": "needs a live model: writes the memory the reopen test then reads back. Runs in the live tier."
   },
   {
-    "key": "tests/live/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 6. close and reopen agent — verify persistence",
+    "key": "tests/live-model/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 6. close and reopen agent — verify persistence",
     "reason": "needs a live model: the ONLY memory-across-a-reopen evidence in the repo. Depends on the three turns above having really run. Runs in the live tier."
   },
   {
-    "key": "tests/live/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 7. full database state summary",
+    "key": "tests/live-model/e2e-full-lifecycle.test.ts › E2E Full Lifecycle › 7. full database state summary",
     "reason": "needs a live model: reports the end state of the lifecycle above. Runs in the live tier."
   },
   {
-    "key": "tests/live/e2e-lifecycle.test.ts › E2E Lifecycle › 5-turn conversation with native tool calling",
+    "key": "tests/live-model/e2e-lifecycle.test.ts › E2E Lifecycle › 5-turn conversation with native tool calling",
     "reason": "needs a live model: the multi-turn tool-calling evidence. Runs in the live tier."
   },
   {
-    "key": "tests/live/e2e-lifecycle.test.ts › E2E Lifecycle › MCTS evolution",
-    "reason": "needs a live model: drives runMCTS and asserts the winner is among the persisted nodes. Superseded in strength by tests/live/exploration.test.ts, which asserts branch count and a DURABLE ranked winner rather than an in-memory winnerId; kept because it exercises the lifetime-evolution entry point rather than the agents tool."
-  },
-  {
-    "key": "tests/live/e2e-lifecycle.test.ts › E2E Lifecycle › evolution events fired",
+    "key": "tests/live-model/e2e-lifecycle.test.ts › E2E Lifecycle › evolution events fired",
     "reason": "needs a live model: asserts the EvolutionEngine emitted events for the turns above."
   },
   {
-    "key": "tests/live/e2e-lifecycle.test.ts › E2E Lifecycle › memory has content",
+    "key": "tests/live-model/e2e-lifecycle.test.ts › E2E Lifecycle › memory has content",
     "reason": "needs a live model: asserts evolution wrote memory/MEMORY.md."
   },
   {
-    "key": "tests/live/e2e-lifecycle.test.ts › E2E Lifecycle › persistence",
+    "key": "tests/live-model/e2e-lifecycle.test.ts › E2E Lifecycle › persistence",
     "reason": "needs a live model: message count and SOUL.md survive a close/reopen. Vacuous without the turns above, which is why it is not worth un-gating on its own."
   },
   {
-    "key": "tests/live/exploration.test.ts › Exploration evals — MCTS reached, ranked, and readable › AUTONOMOUS: the model reaches for exploration on a task that warrants it",
-    "reason": "needs a live model by definition: it measures whether the model autonomously reaches for exploration. This is the eval whose number is the finding."
-  },
-  {
-    "key": "tests/live/exploration.test.ts › Exploration evals — MCTS reached, ranked, and readable › VISIBLE: every settle mode wrote where the Exploration reader reads",
-    "reason": "needs a live model transitively: its denominator is the search the DRIVEN test writes, and it must assert a non-zero rootsWritten. The reader/writer agreement is covered credential-free at packages/test-utils/tests/agent-evals.test.ts."
-  },
-  {
-    "key": "tests/live/exploration.test.ts › Exploration evals — MCTS reached, ranked, and readable › DRIVEN (instructed): a direct mcts search branches and ranks, durably",
-    "reason": "needs a live model: an MCTS search consists of branch rollouts and judge calls. The test drives the strategy directly, but it cannot replace the model work."
-  },
-  {
-    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › evolution artifacts exist after session 1",
+    "key": "tests/live-model/evolution-proof.test.ts › Evolution Proof › evolution artifacts exist after session 1",
     "reason": "needs a live model: asserts session 1 produced crafted tools / patterns."
   },
   {
-    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › evolution summary: compare session 1 vs session 2",
+    "key": "tests/live-model/evolution-proof.test.ts › Evolution Proof › evolution summary: compare session 1 vs session 2",
     "reason": "needs a live model: the cross-session transfer comparison, and the only such evidence in the repo."
   },
   {
-    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › session 1, turn 1: RSA challenge (learn the pattern)",
+    "key": "tests/live-model/evolution-proof.test.ts › Evolution Proof › session 1, turn 1: RSA challenge (learn the pattern)",
     "reason": "needs a live model: session 1 of the cross-session transfer proof. Runs in the live tier."
   },
   {
-    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › session 1, turn 2: Dijkstra challenge (learn algorithm pattern)",
+    "key": "tests/live-model/evolution-proof.test.ts › Evolution Proof › session 1, turn 2: Dijkstra challenge (learn algorithm pattern)",
     "reason": "needs a live model: session 1 of the cross-session transfer proof."
   },
   {
-    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › session 1, turn 3: cipher challenge + session reflection",
+    "key": "tests/live-model/evolution-proof.test.ts › Evolution Proof › session 1, turn 3: cipher challenge + session reflection",
     "reason": "needs a live model: closes session 1 and triggers session reflection."
   },
   {
-    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › session 2, turn 1: similar RSA challenge with inherited artifacts",
+    "key": "tests/live-model/evolution-proof.test.ts › Evolution Proof › session 2, turn 1: similar RSA challenge with inherited artifacts",
     "reason": "needs a live model: session 2 must solve the checked RSA task and the final comparison now requires reuse of a crafted tool from session 1."
   },
   {
-    "key": "tests/live/evolution-proof.test.ts › Evolution Proof › session 2, turn 2: similar graph challenge with inherited artifacts",
+    "key": "tests/live-model/evolution-proof.test.ts › Evolution Proof › session 2, turn 2: similar graph challenge with inherited artifacts",
     "reason": "needs a live model: session 2 must solve the checked graph task and contributes to the asserted crafted-tool reuse result."
   },
   {
-    "key": "tests/live/live-smoke.test.ts › Live Smoke — one real turn per backend › hosted backend: one real turn through the deployed worker",
+    "key": "tests/live-model/live-smoke.test.ts › Live Smoke — one real turn per backend › hosted backend: one real turn through the deployed worker",
     "reason": "needs the deployed Worker: creates a throwaway cloud workspace, drives one turn through the OrchestratorAgent over the ticket-authenticated WebSocket used by `kinu chat`, asserts a real tool call and durable chat rows, then deletes the workspace. Workerd tests cannot prove the deployed route and bindings. Runs in the live tier."
   },
   {
-    "key": "tests/live/live-smoke.test.ts › Live Smoke — one real turn per backend › signed-in web app: create, rename, run, inspect, and use mobile panels",
+    "key": "tests/live-model/live-smoke.test.ts › Live Smoke — one real turn per backend › signed-in web app: create, rename, run, inspect, and use mobile panels",
     "reason": "needs the deployed staging Worker and a live model: drives the signed-in React app through workspace creation, rename propagation, one tool turn, exact file inspection, a real sandbox command, mobile panel switching, and touch controls. Local gallery fixtures cannot prove any authenticated RPC or deployed binding."
   },
   {
-    "key": "tests/live/live-smoke.test.ts › Live Smoke — one real turn per backend › cli backend: one real turn through the local session spine",
+    "key": "tests/live-model/live-smoke.test.ts › Live Smoke — one real turn per backend › cli backend: one real turn through the local session spine",
     "reason": "needs a live model: drives ONE turn through the same LocalAgentSession spine as `kinu exec` and asserts a real tool call plus a durable messages row. A mock model chooses no tools, so both assertions would be vacuous against one — 'does the agent reach for a tool' IS the measurement. Measured at 15.3s. Runs in the live tier."
   },
   {
-    "key": "tests/live/live-smoke.test.ts › Live Smoke — one real turn per backend › deployed backend: the device registry answers the CLI bearer",
+    "key": "tests/live-model/live-smoke.test.ts › Live Smoke — one real turn per backend › deployed backend: the device registry answers the CLI bearer",
     "reason": "needs the deployed Worker and the tier's CLI bearer: reads GET /api/cli/devices on the deployed origin and parses the thirteen fields listDevices declares with v.strictObject. It exists because that route answered 500 in production for weeks (`no such column: unstopped_at`, 2026-09-01) while every local suite built a fresh schema — only a deployed read against a UserDO that predates the columns can see it. Runs in the live tier (evals:cloud) and after a staging deploy."
+  },
+  {
+    "key": "tests/live-model/exploration.test.ts › Exploration evals — the agent reaches for exploration › AUTONOMOUS: the model reaches for exploration on a task that warrants it",
+    "reason": "needs a live model by definition: it measures whether the model autonomously reaches for exploration. This is the eval whose number is the finding."
   }
 ]

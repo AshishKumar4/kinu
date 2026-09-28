@@ -14,6 +14,7 @@
  * search keys (scripted-tier.ts), and it reads a body only up to MAX_BODY_BYTES.
  */
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
+import { timingSafeEqual } from '../packages/core/src/utils/crypto';
 import { scriptedSearch } from './scripted-search';
 import { tierModel } from './tier-model';
 import { SCRIPTED_MODELS_BODY, pacedStream, readScriptedRequest, scriptedBody } from './scripted-protocol';
@@ -26,17 +27,6 @@ interface Env {
 export const MAX_BODY_BYTES = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / 16;
 
 const refused = (status: number, message: string): Response => Response.json({ error: { message } }, { status });
-
-/** Equal in time whatever the first differing byte, so the answer's timing does not spell the key. */
-function sameKey(offered: string, key: string): boolean {
-  const a = new TextEncoder().encode(offered);
-  const b = new TextEncoder().encode(key);
-  let differ = a.length ^ b.length;
-
-  for (let index = 0; index < b.length; index += 1) differ |= (a[index] ?? 0) ^ (b[index] ?? 0);
-
-  return differ === 0;
-}
 
 /** The body as text, or null past `limit` bytes; the declared length is not trusted, the bytes are counted. */
 async function boundedText(request: Request, limit: number): Promise<string | null> {
@@ -76,7 +66,7 @@ export default {
 
     if (key === '') return refused(503, 'this scripted model has no SCRIPTED_MODEL_KEY, so it answers nobody');
 
-    if (!sameKey(request.headers.get('authorization') ?? '', `Bearer ${key}`)) return refused(401, 'unauthorized');
+    if (!timingSafeEqual(request.headers.get('authorization') ?? '', `Bearer ${key}`)) return refused(401, 'unauthorized');
     const { pathname } = new URL(request.url);
 
     if (pathname === '/models' && request.method === 'GET') {

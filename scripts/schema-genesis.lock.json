@@ -134,7 +134,6 @@
     "turn_id TEXT",
     "session_id TEXT",
     "task TEXT NOT NULL",
-    "source TEXT NOT NULL DEFAULT 'mcts'",
     "winner_node_id TEXT NOT NULL",
     "chosen_node_id TEXT",
     "candidates TEXT NOT NULL",
@@ -290,7 +289,7 @@
     "actor_id TEXT NOT NULL",
     "session_id TEXT NOT NULL",
     "id TEXT NOT NULL",
-    "parent_id TEXT",
+    "position INTEGER NOT NULL CHECK(position >= 0)",
     "role TEXT NOT NULL CHECK(role IN ('user','assistant','system','tool'))",
     "turn_id TEXT",
     "run_id TEXT",
@@ -301,11 +300,10 @@
     "context_id TEXT",
     "context_revision INTEGER",
     "PRIMARY KEY(actor_id,session_id,id)",
+    "UNIQUE(actor_id,session_id,position)",
     "FOREIGN KEY(actor_id) REFERENCES workspace_actors(actor_id)",
-    "FOREIGN KEY(actor_id,session_id,parent_id) REFERENCES conversation_entries(actor_id,session_id,id)",
     "FOREIGN KEY(actor_id,context_id,context_revision) REFERENCES context_revisions(actor_id,context_id,revision)",
     "CHECK((context_id IS NULL) = (context_revision IS NULL))",
-    "CHECK(parent_id IS NULL OR parent_id != id)",
     "CHECK((metadata_json IS NULL AND metadata_path IS NULL AND metadata_digest IS NULL) OR (metadata_json IS NOT NULL AND metadata_path IS NULL AND metadata_digest IS NULL) OR (metadata_json IS NULL AND metadata_path IS NOT NULL AND metadata_digest IS NOT NULL))"
   ],
   "conversation_entry_parts@packages/core/src/session/transcript-schema.ts": [
@@ -330,13 +328,6 @@
     "synced_rev INTEGER NOT NULL DEFAULT -1",
     "synced_purges INTEGER NOT NULL DEFAULT -1",
     "synced_rowid INTEGER NOT NULL DEFAULT 0"
-  ],
-  "conversation_heads@packages/core/src/session/transcript-schema.ts": [
-    "actor_id TEXT NOT NULL",
-    "session_id TEXT NOT NULL",
-    "entry_id TEXT",
-    "PRIMARY KEY(actor_id,session_id)",
-    "FOREIGN KEY(actor_id,session_id,entry_id) REFERENCES conversation_entries(actor_id,session_id,id)"
   ],
   "cp_audit@packages/core/src/control-plane/store.ts": [
     "id TEXT PRIMARY KEY",
@@ -713,11 +704,7 @@
     "actor_id TEXT NOT NULL",
     "root_id TEXT NOT NULL",
     "task TEXT NOT NULL",
-    "engine TEXT NOT NULL DEFAULT 'mcts'",
-    "root_msg_id TEXT NOT NULL",
     "config_json TEXT NOT NULL",
-    "iteration INTEGER NOT NULL DEFAULT 0",
-    "budget INTEGER NOT NULL",
     "status TEXT NOT NULL DEFAULT 'running'",
     "epoch INTEGER NOT NULL DEFAULT 0",
     "judge_samples_realised INTEGER",
@@ -955,7 +942,7 @@
     "PRIMARY KEY (actor_id, version)"
   ],
   "search_node_scores@packages/core/src/mcts/schemas.ts": [
-    "SELECT n.*, CASE WHEN n.parent_id IS NULL THEN n.value WHEN r.record_json IS NOT NULL THEN json_extract(r.record_json, '$.outcome.score') ELSE COALESCE(json_extract(n.evaluation_json, '$.score'), 0) END AS own_score FROM search_nodes n LEFT JOIN swarm_node_records r ON r.actor_id = n.actor_id AND r.node_id = n.id"
+    "SELECT n.*, CASE WHEN n.parent_id IS NULL THEN n.value WHEN r.record_json IS NOT NULL THEN json_extract(r.record_json, '$.outcome.score') ELSE 0 END AS own_score FROM search_nodes n LEFT JOIN swarm_node_records r ON r.actor_id = n.actor_id AND r.node_id = n.id"
   ],
   "search_nodes@packages/core/src/mcts/schemas.ts": [
     "actor_id TEXT NOT NULL",
@@ -965,15 +952,10 @@
     "task TEXT NOT NULL",
     "action TEXT NOT NULL DEFAULT ''",
     "observation TEXT NOT NULL DEFAULT ''",
-    "code_used TEXT",
-    "code_language TEXT",
     "visits INTEGER NOT NULL DEFAULT 0",
     "value REAL NOT NULL DEFAULT 0",
     "depth INTEGER NOT NULL DEFAULT 0",
     "status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','terminal','failed','pruned'))",
-    "msg_id TEXT",
-    "branch_agent_key TEXT",
-    "evaluation_json TEXT",
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "PRIMARY KEY (actor_id, id)"
   ],
@@ -1113,16 +1095,6 @@
     "record_json TEXT NOT NULL",
     "merged_at INTEGER",
     "PRIMARY KEY (actor_id, node_id)"
-  ],
-  "task_history@packages/core/src/scaffold/schemas.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL DEFAULT (lower(hex(randomblob(9))))",
-    "task TEXT NOT NULL",
-    "scaffold_version INTEGER NOT NULL DEFAULT 0",
-    "outcome TEXT NOT NULL DEFAULT 'success' CHECK(outcome IN ('success','error','timeout'))",
-    "score REAL",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "PRIMARY KEY (actor_id, id)"
   ],
   "terminal_effects@packages/core/src/orchestrator/terminal-effects.ts": [
     "actor_id TEXT NOT NULL",
@@ -1377,7 +1349,6 @@
     "name TEXT NOT NULL",
     "storage_key TEXT NOT NULL",
     "kind TEXT NOT NULL CHECK (kind IN ('main','subordinate','run'))",
-    "tool_profile TEXT NOT NULL CHECK (tool_profile IN ('full','toolless'))",
     "lifetime TEXT NOT NULL CHECK (lifetime IN ('durable','task'))",
     "created_at INTEGER NOT NULL",
     "creation_id TEXT NOT NULL",
@@ -1385,8 +1356,7 @@
     "deleted_at INTEGER",
     "UNIQUE (parent_actor_id, creation_id)",
     "UNIQUE (parent_actor_id, storage_key)",
-    "CHECK ((kind = 'main' AND parent_actor_id IS NULL) OR (kind != 'main' AND parent_actor_id IS NOT NULL))",
-    "CHECK (kind = 'run' OR tool_profile = 'full')"
+    "CHECK ((kind = 'main' AND parent_actor_id IS NULL) OR (kind != 'main' AND parent_actor_id IS NOT NULL))"
   ],
   "workspace_capability_reconcile@packages/core/src/safety/workspace-capability.ts": [
     "workspace_name TEXT PRIMARY KEY",

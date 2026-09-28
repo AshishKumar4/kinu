@@ -1,6 +1,6 @@
 /**
  * Where a reopened conversation puts its reader, driven through `useGrowingScroll`'s callback ref under React's static
- * renderer. The anchor correction across a prepend is pixels, measured in Chrome by `scripts/chat-scroll.test.ts`.
+ * renderer. The anchor correction across a prepend is pixels, measured in Chrome by `tests/browser/chat-scroll.test.ts`.
  */
 import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';

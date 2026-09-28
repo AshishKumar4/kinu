@@ -133,8 +133,7 @@ const ENV_ALLOWLIST_FAMILY = /^LC_[A-Z_]+$/;
 /**
  * What never crosses into a command of either tier: the credentials Kinu's
  * CLI reads from its environment (cli-backend model-resolver.ts
- * PROVIDER_CREDENTIAL_ENV and SESSION_CREDENTIAL_ENV, branch-process.ts
- * BRANCH_CREDENTIAL_ENV; this file ships alone and cannot import them, so
+ * PROVIDER_CREDENTIAL_ENV and SESSION_CREDENTIAL_ENV; this file ships alone and cannot import them, so
  * cli-backend's cwd-plane test holds the lists together), and the two
  * settings this daemon itself reads: its update key and its predecessor.
  */
@@ -348,22 +347,25 @@ const OUTSIDE_THE_SANDBOX = 'outside what this device\'s sandbox exposes, which 
 
 const INSIDE_KINU = 'inside Kinu\'s own directory, which the tunnel never serves';
 
+
 /**
- * The policy, as one object.
+ * The policy, as one object, in one layout on Linux and macOS.
  *
  * `deviceHome` is Kinu's own directory. It is invisible in EVERY tier,
  * including raw, and inside a consented directory that holds it: it holds
- * device.json (this machine's long-lived token) and config.json (the owner's
- * CLI bearer), so serving it is a machine clone and an account takeover.
+ * device.json (this machine's long-lived token), config.json (the owner's CLI
+ * bearer) and every workspace's agent home, so serving it is a machine clone
+ * and an account takeover.
  *
- * `roots` are the directories the owner named, writable, and decided BEFORE
- * the home swap: a root inside the real home (~/work/thing, the common case)
- * is re-bound over the swapped home and is reachable inside. A root of `/`
- * never reaches here: the daemon runs that frame raw, as the owner consented.
+ * The agent home is its own path, and HOME names it. `roots` are the
+ * directories the owner named, writable at their own paths. The owner's home
+ * is one when `kinu connect` ran there: it grants the files in it, never
+ * Kinu's own directory inside it, of which the agent home alone is uncovered.
+ * A root of `/` never reaches here: the daemon runs that frame raw, as the
+ * owner consented.
  *
- * Every path is judged by where it LANDS on the host, after it is named the
- * way a command in the namespace names it: `~/x` is the agent's own `x`, and a
- * link the agent planted there pointing at the owner's real file is that file.
+ * Every path is judged by where it LANDS on the host, so a link the agent
+ * planted in its own home pointing at the owner's file is that file.
  */
 function viewFor(options) {
   const platform = options.platform ?? os.platform();
@@ -380,6 +382,9 @@ function viewFor(options) {
     .sort((left, right) => right.length - left.length);
 
   const linux = platform !== 'darwin';
+  const scope = { home, deviceHome, own: [agentHome, agentTmp], writable: roots };
+
+
   const readMounts = linux ? linuxReadMounts() : [];
   const readTrees = readMounts.map((mount) => mount.real);
   const bound = [...readTrees, ...roots];
@@ -393,12 +398,6 @@ function viewFor(options) {
     if (ownDirs.some((dir) => within(dir, lexical))) return lexical;
 
     if (roots.some((root) => within(root, lexical))) return lexical;
-
-    if (within(home, lexical)) {
-      const relative = path.relative(home, lexical);
-
-      return relative === '' ? agentHome : path.join(agentHome, relative);
-    }
 
     if (linux) {
       for (const temp of LINUX_TEMP_ROOTS) {
@@ -424,6 +423,7 @@ function viewFor(options) {
     }
 
     if (within(deviceHome, target)) return { access: VIEW_INVISIBLE, path: target, why: INSIDE_KINU };
+
 
     if (roots.some((root) => within(root, target))) return { access: VIEW_WRITABLE, path: target };
 
@@ -457,23 +457,14 @@ function viewFor(options) {
       .filter((file) => file !== null && roots.some((root) => within(root, file))),
     classify,
     /**
-     * The same directory, named as the COMMAND sees it. There are two
-     * coordinate systems and confusing them is a broken `--chdir`: the daemon's
-     * file methods run outside the namespace and address the agent home by its
-     * real path, while inside the namespace that directory is mounted over
-     * `home` and its own path does not exist. Identity on macOS, which has no
-     * mount namespace.
+     * The same directory, named as the COMMAND sees it: its own path, but for
+     * the agent's tmp, which a Linux command reaches as /tmp. Identity on
+     * macOS, which has no mount namespace.
      */
     insidePath(target) {
       const resolved = trimPath(target);
 
       if (!linux) return resolved;
-
-      if (within(agentHome, resolved)) {
-        const relative = path.relative(agentHome, resolved);
-
-        return relative === '' ? home : path.join(home, relative);
-      }
 
       if (within(agentTmp, resolved)) {
         const relative = path.relative(agentTmp, resolved);
@@ -523,29 +514,51 @@ function viewFor(options) {
 
       return decision.path;
     },
-    checkpointDirectory: (dir) => checkpointVerdict({ deviceHome, own: [agentHome, agentTmp], writable: roots }, dir),
+    checkpointDirectory: (dir) => checkpointVerdict(scope, dir),
+    workingTree: (dir) => workingTreeVerdict(scope, dir),
   };
 }
 
 const HOLDS_KINU = 'Kinu\'s own directory or holds it, and a checkpoint copies everything it covers';
 
+const HOME_ITSELF = 'the owner\'s home folder itself, too much to copy before every command';
+
 /**
  * Where a checkpoint of `dir` may be kept, as `{ path, why }`: `why` is null
  * when it may. A checkpoint names its directory by HOST path and copies all of
  * it into a store at rest, so it covers only a directory the frame may write,
- * never Kinu's own directory and never one holding it. `own` are the agent's
- * directories, which live inside Kinu's; `writable` is where else the frame may
- * write, or null for anywhere.
+ * never the owner's home folder itself, Kinu's own directory or one holding
+ * it. `own` are the agent's directories, which live inside Kinu's; `writable`
+ * is where else the frame may write, or null for anywhere.
  */
 function checkpointVerdict(scope, dir) {
   const target = realTarget(dir);
   const own = scope.own.some((ownDir) => within(ownDir, target));
+
+  if (target === realTarget(scope.home)) return { path: target, why: HOME_ITSELF };
 
   if (within(target, scope.deviceHome) || (!own && within(scope.deviceHome, target))) return { path: target, why: HOLDS_KINU };
 
   if (own || scope.writable === null || scope.writable.some((root) => within(root, target))) return { path: target, why: null };
 
   return { path: target, why: OUTSIDE_THE_SANDBOX };
+}
+
+/**
+ * What a command's pre-mutation checkpoint covers, as `checkpointVerdict`
+ * answers: its working tree, the nearest git root at or above `dir` that a
+ * checkpoint may cover, or else `dir` itself.
+ */
+function workingTreeVerdict(scope, dir) {
+  const start = checkpointVerdict(scope, dir);
+
+  for (let candidate = start.path; checkpointVerdict(scope, candidate).why === null; candidate = path.dirname(candidate)) {
+    if (fs.existsSync(path.join(candidate, '.git'))) return { path: candidate, why: null };
+
+    if (candidate === path.dirname(candidate)) break;
+  }
+
+  return start;
 }
 
 /**
@@ -556,6 +569,7 @@ function checkpointVerdict(scope, dir) {
  */
 function rawViewFor(options) {
   const deviceHome = realTarget(options.deviceHome);
+  const scope = { home: trimPath(options.home ?? os.homedir()), deviceHome, own: [], writable: null };
 
   return {
     platform: options.platform ?? os.platform(),
@@ -591,7 +605,8 @@ function rawViewFor(options) {
       // a missing path produces.
       return requested;
     },
-    checkpointDirectory: (dir) => checkpointVerdict({ deviceHome, own: [], writable: null }, dir),
+    checkpointDirectory: (dir) => checkpointVerdict(scope, dir),
+    workingTree: (dir) => workingTreeVerdict(scope, dir),
   };
 }
 
@@ -626,11 +641,22 @@ const MAC_PATH_TAIL = [
   '/usr/bin', '/bin', '/usr/sbin', '/sbin',
 ];
 
+/** The agent's own tool directories, then the owner's where the owner consented
+ *  them: a home shared as a root keeps its user-installed tools, after the
+ *  agent's own. */
+function toolDirs(view) {
+  const owner = LINUX_PATH_HEAD.map((tail) => realTarget(path.join(view.home, tail)))
+    .filter((dir) => view.roots.some((root) => within(root, dir)) && !within(view.deviceHome, dir));
+
+  return [...LINUX_PATH_HEAD.map((tail) => path.join(view.agentHome, tail)), ...owner];
+}
+
 /**
  * The bwrap argv. ORDER IS THE POLICY: a later mount shadows an earlier one.
  * The root is an empty tmpfs, the system trees go in read-only, the agent's
- * own directories and the consented roots go in writable, and Kinu's own
- * directory is masked last so no bind can uncover it.
+ * tmp and the consented roots go in writable, Kinu's own directory is masked
+ * after them so no root can uncover it, and the agent home goes in LAST, at its
+ * own path inside that mask, so no root can shadow it.
  */
 function buildLinuxArgv(view, options) {
   const argv = [
@@ -654,26 +680,25 @@ function buildLinuxArgv(view, options) {
   // (a driver reload) does not fail the command.
   for (const node of options.gpu) argv.push('--dev-bind-try', node, node);
 
-  // The agent tmp lands on the temp roots BEFORE the agent home lands on the
-  // real home path, because a home under /tmp is a home: bound the other way
-  // round, the `/tmp` bind shadowed it and every command started with
-  // `bwrap: Can't chdir to /tmp/<home>: No such file or directory` — the
-  // first-run tier's daemons, each given a scratch HOME under the runner's
-  // tmpdir, measured 2026-09-04.
+  // The agent tmp lands on the temp roots before anything under them, because
+  // a home under /tmp is a home: bound after it, the `/tmp` bind shadowed it
+  // and every command started with `bwrap: Can't chdir to /tmp/<home>: No such
+  // file or directory` (the first-run tier's daemons, each given a scratch
+  // HOME under the runner's tmpdir, measured 2026-09-04).
   for (const temp of LINUX_TEMP_ROOTS) argv.push('--bind', view.agentTmp, temp);
-  // The agent home lands ON the real home path, so `~` inside the sandbox is
-  // the agent's own directory and every tool's default (~/.local, ~/.cache,
-  // ~/.cargo, ~/.npm) lands there with no environment tricks.
-  argv.push('--bind', view.agentHome, view.home);
 
   // Shortest first here: a root nested inside another must be mounted after
   // its parent, or the parent's bind hides it. `-try`, because a directory the
   // owner shared and later deleted is no reason to refuse every command.
   for (const root of [...view.roots].reverse()) argv.push('--bind-try', root, root);
 
+
   for (const dir of view.hiddenDirs) argv.push('--tmpfs', dir);
 
   for (const file of view.hiddenFiles) argv.push('--ro-bind', '/dev/null', file);
+  // Last: a root holding it (the owner's home) would shadow it, and the mask on
+  // Kinu's own directory, which holds it, would hide it.
+  argv.push('--bind', view.agentHome, view.agentHome);
   argv.push('--chdir', view.insidePath(options.cwd));
   argv.push('--clearenv');
 
@@ -741,7 +766,7 @@ function plan(options) {
   const command = options.command;
 
   if (options.tier === 'raw') {
-    const view = rawViewFor({ platform, deviceHome: options.deviceHome });
+    const view = rawViewFor({ platform, deviceHome: options.deviceHome, home: options.home });
 
     return {
       view,
@@ -764,7 +789,7 @@ function plan(options) {
 
   // A cwd the command cannot write is a cwd that fails on its first redirect,
   // so an unwritable one falls back to the agent's own home.
-  const requestedCwd = options.cwd === undefined || options.cwd === null ? view.home : trimPath(options.cwd);
+  const requestedCwd = options.cwd === undefined || options.cwd === null ? view.agentHome : trimPath(options.cwd);
   const cwdDecision = view.classify(requestedCwd);
   const cwd = cwdDecision.access === VIEW_WRITABLE ? cwdDecision.path : view.agentHome;
 
@@ -772,7 +797,7 @@ function plan(options) {
     const env = sandboxEnvironment(options.source ?? process.env, {
       HOME: view.agentHome,
       TMPDIR: view.agentTmp,
-      PATH: [...LINUX_PATH_HEAD.map((tail) => path.join(view.agentHome, tail)), ...MAC_PATH_TAIL].join(':'),
+      PATH: [...toolDirs(view), ...MAC_PATH_TAIL].join(':'),
       KINU_SANDBOX: '1',
       XDG_RUNTIME_DIR: undefined,
     }, options.dotenv);
@@ -788,15 +813,15 @@ function plan(options) {
     };
   }
 
-  // Linux: HOME is the real path string, because the agent home is bind-mounted
-  // over it. Inside the sandbox the two are the same directory, so a path the
-  // model reads in the UI is the path the command sees.
+  // HOME is the agent home at its own path, as on macOS, so the path the model
+  // is told is the path the command sees, and every tool's default (~/.local,
+  // ~/.cache, ~/.cargo, ~/.npm) lands in the agent's own directory.
   const env = sandboxEnvironment(options.source ?? process.env, {
-    HOME: view.home,
+    HOME: view.agentHome,
     TMPDIR: '/tmp',
-    PATH: [...LINUX_PATH_HEAD.map((tail) => path.join(view.home, tail)), ...LINUX_PATH_TAIL].join(':'),
+    PATH: [...toolDirs(view), ...LINUX_PATH_TAIL].join(':'),
     XDG_RUNTIME_DIR: '/tmp/xdg',
-    NPM_CONFIG_PREFIX: path.join(view.home, '.local'),
+    NPM_CONFIG_PREFIX: path.join(view.agentHome, '.local'),
     KINU_SANDBOX: '1',
   }, options.dotenv);
 

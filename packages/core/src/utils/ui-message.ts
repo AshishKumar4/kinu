@@ -88,15 +88,3 @@ export function restoredRows(older: readonly ChatHistoryEntry[]): UIMessage[] {
   return restored;
 }
 
-/**
- * Merge stored older pages with the live SDK list; the two overlap by construction and the live copy wins.
- * Restored rows keep metadata, which carries authorship.
- */
-export function mergeTranscript(
-  older: readonly ChatHistoryEntry[],
-  live: readonly UIMessage[],
-): UIMessage[] {
-  const known = new Set(live.map((message) => message.id));
-
-  return [...restoredRows(older).filter((row) => !known.has(row.id)), ...live];
-}

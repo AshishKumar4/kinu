@@ -9,7 +9,7 @@ import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
 import { oneOf } from './tool-schema';
-import type { Memory, VFS, VfsRevision } from '../types/primitives';
+import type { Memory, VFS, VfsRevision, VfsWriteReport } from '../types/primitives';
 import type { TurnContextBudget } from '../context-budget';
 import { isVfsError, vfsAddressingHint, type VfsErrorCode } from '../vfs/errno';
 import { ensureDir, vfsDirname } from '../utils/vfs-helpers';
@@ -20,9 +20,10 @@ import { FileRefusalError } from '../types/file-edits';
 import { readFileHead, readFileText, scanFileWindow, type ScannedFile } from './file-scan';
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from '../vfs/file-ledger';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS, clampSerializedToolResult } from './clamp';
-import type { JsonValue } from '../utils/json';
+import type { JsonObject, JsonValue } from '../utils/json';
 import { KinuError, renderThrownChain } from '../obs/index';
 import { permitInPlan, requireBuild } from '../execution/work-mode';
+import { uncheckpointedSentence } from '../execution/exec-result';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
 
 /** Most names one `list` returns; matches `tools/db-codemode.ts` SELECT_LIMIT_MAX. */
@@ -169,13 +170,17 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
   /** The one write path. `observe` runs as soon as the bytes land, so a later failure
    *  cannot leave the ledger denying content already on disk. */
-  const persist = async (path: string, content: string, observe: (revision?: VfsRevision) => void, expected?: VfsRevision): Promise<void> => {
+  const persist = async (
+    path: string, content: string, observe: (revision?: VfsRevision) => void, expected?: VfsRevision,
+  ): Promise<VfsWriteReport | null> => {
     const dir = vfsDirname(path);
+    let report: VfsWriteReport | null = null;
 
     if (dir) await ensureDir(vfs, dir);
 
     if (expected === undefined) {
-      await vfs.writeFile(path, content);
+      if (vfs.writeFileWithReport) report = await vfs.writeFileWithReport(path, content);
+      else await vfs.writeFile(path, content);
       observe();
     } else {
       if (!vfs.writeFileIfRevision) throw new KinuError('unsupported', 'versioned edits require revision-checked writes');
@@ -188,6 +193,14 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     const indexed = memoryIndexPath(path);
 
     if (deps.memory && indexed) await deps.memory.index(indexed);
+
+    return report;
+  };
+
+  const answered = (written: JsonObject, report: VfsWriteReport | null): JsonObject => {
+    if (report) written.undo = uncheckpointedSentence(report.uncheckpointed, 'this write');
+
+    return written;
   };
 
   /** The read-before-write gate, shared by edit and overwriting write. `partial` classifies
@@ -298,16 +311,19 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         }
 
         const content = args.content;
+        let report: VfsWriteReport | null;
 
         try {
-          await persist(path, content, () => ledger.observeWhole(path, content));
+          report = await persist(path, content, () => ledger.observeWhole(path, content));
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
 
           return failure(vfsFail.reason, vfsFail.error);
         }
 
-        return { ok: true, path, reference: referenceOf(path), bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
+        return answered({
+          ok: true, path, reference: referenceOf(path), bytes: args.content.length, action: existing === null ? 'created' : 'replaced',
+        }, report);
       }
 
       case 'edit': {
@@ -353,9 +369,11 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           return failure(outcome.reason, outcome.message);
         }
 
+        let report: VfsWriteReport | null;
+
         try {
           // Coverage carries across the edit: only the named span changed.
-          await persist(path, outcome.content, writtenRevision => ledger.observeEdited(path, current, outcome.content, writtenRevision), revision);
+          report = await persist(path, outcome.content, writtenRevision => ledger.observeEdited(path, current, outcome.content, writtenRevision), revision);
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
           ledger.recordEdit(path, vfsFail.reason);
@@ -365,12 +383,12 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
         ledger.recordEdit(path, null);
 
-        return {
+        return answered({
           ok: true,
           path,
           reference: referenceOf(path),
           applied: outcome.applied.map((a) => ({ line: a.line, removed_lines: a.removedLines, added_lines: a.addedLines })),
-        };
+        }, report);
       }
     }
   };

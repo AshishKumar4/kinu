@@ -11,6 +11,9 @@ export const NEST_MISSION = 'HIRE-NEST-BRIEF';
 
 export const NEST_RELAY = 'RELAYED';
 
+/** How a hired agent's report reads in the drain turn it opens on its hirer. */
+export const REPORT_MARK = '[subordinate_report]';
+
 export const HIRE_ROOT_MODEL = 'hire-root';
 
 export const HIRE_DURABLE_MODEL = 'hire-root-durable';
@@ -62,5 +65,7 @@ export interface HireObservation {
   readonly actors: readonly ActorRow[];
   readonly turns: readonly TurnCount[];
   readonly toolResults: readonly string[];
+  /** Every report message a hirer's turn opened on (`[subordinate_report]` drain text). */
+  readonly reports: readonly string[];
   readonly transcript: readonly string[];
 }

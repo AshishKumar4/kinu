@@ -7,7 +7,7 @@ import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } fr
 import type { LocalProviderCredentials } from './model-resolver';
 import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
-import type { LocalActorConfig } from './actor-identity';
+import type { LocalActorConfig } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { requireSchemaGenesis } from './schema-genesis';
 
@@ -18,7 +18,6 @@ export interface WorkspaceInfo {
   soul: string;
   scaffoldVersion: number;
   searchNodeCount: number;
-  taskCount: number;
   memorySize: number;
   createdAt: number;
 }
@@ -64,7 +63,7 @@ export async function openWorkspaceCLI(
   }
 
   initWorkspaceBaselineTable((ddl) => db.exec(ddl));
-  const rt = createCLIRuntime(db, { ...config, dbPath, agentName: identity.name });
+  const rt = createCLIRuntime(db, { ...config, agentName: identity.name });
 
   // SOUL belongs to the agent, not to the shared physical project directory.
   const soul = await (rt.ownerSoul?.() ?? readSoul(rt.agentStateVfs ?? rt.storage.vfs));
@@ -78,9 +77,6 @@ export async function openWorkspaceCLI(
   const searchNodeCount = sql<{ c: number }>`
     SELECT COUNT(*) as c FROM search_nodes WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
 
-  const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history
-    WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
-
   const memorySize = await memoryBytes(rt.agentStateVfs ?? rt.storage.vfs);
 
   return {
@@ -92,7 +88,6 @@ export async function openWorkspaceCLI(
       soul,
       scaffoldVersion,
       searchNodeCount,
-      taskCount,
       memorySize,
       createdAt: identity.created_at,
     },

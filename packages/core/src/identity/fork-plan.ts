@@ -1,5 +1,5 @@
 /**
- * Workspace fork: which rows one cut selects (the cut entry's ancestry, since the chain is a tree),
+ * Workspace fork: which rows one cut selects (every entry up to the cut's position),
  * and the readers both the in-process snapshot and the wire use.
  */
 
@@ -43,7 +43,7 @@ export interface ForkConversationCounts {
 
 interface ForkChainEntryRow {
   id: string;
-  parent_id: string | null;
+  position: number;
   recorded_at: number;
   metadata_path: string | null;
   context_id: string | null;
@@ -99,44 +99,27 @@ export function planForkConversation(input: {
   readonly artifactDirectory: string;
 }): ForkConversationPlan {
   const { sql, actorId, untilMessageId } = input;
-  const chain: ForkChainEntryRow[] = [];
-  const walked = new Set<string>();
-  let at: string | null = untilMessageId;
 
-  while (at !== null) {
-    if (walked.has(at)) {
-      throw new Error(`fork chain for entry ${JSON.stringify(untilMessageId)} revisits ${JSON.stringify(at)}`);
-    }
+  const cut = sql<{ position: number }>`
+    SELECT position FROM conversation_entries WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${untilMessageId}
+  `[0];
 
-    if (chain.length >= FORK_CHAIN_MAX_DEPTH) {
-      throw new Error(`fork chain for entry ${JSON.stringify(untilMessageId)} is deeper than ${FORK_CHAIN_MAX_DEPTH} entries`);
-    }
-
-    walked.add(at);
-
-    // Keyed on the actor at every hop: entry ids are per actor, so an unkeyed hop could climb into a sibling's.
-    const row: ForkChainEntryRow | undefined = sql<ForkChainEntryRow>`
-      SELECT id, parent_id, recorded_at, metadata_path, context_id, context_revision
-      FROM conversation_entries
-      WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${at}
-    `[0];
-
-    if (row === undefined) {
-      if (chain.length === 0) {
-        throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
-      }
-
-      throw new Error(
-        `fork chain for entry ${JSON.stringify(untilMessageId)} names a parent `
-        + `${JSON.stringify(at)} the source does not have`,
-      );
-    }
-
-    chain.push(row);
-    at = row.parent_id;
+  if (cut === undefined) {
+    throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
   }
 
-  chain.reverse();
+  if (cut.position >= FORK_CHAIN_MAX_DEPTH) {
+    throw new Error(`fork chain for entry ${JSON.stringify(untilMessageId)} is deeper than ${FORK_CHAIN_MAX_DEPTH} entries`);
+  }
+
+  // Keyed on the actor: entry ids are per actor, so an unkeyed read could reach a sibling's chat.
+  const chain = sql<ForkChainEntryRow>`
+    SELECT id, position, recorded_at, metadata_path, context_id, context_revision
+    FROM conversation_entries
+    WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND position <= ${cut.position}
+    ORDER BY position
+  `;
+
   const cutEntry = chain[chain.length - 1];
 
   if (cutEntry === undefined) {
@@ -241,10 +224,10 @@ export function forkConversationEntryRow(
   sql: SqlExecutor, actorId: string, entryId: string, artifactDirectory: string,
 ): ForkConversationEntryRow {
   const row = sql<{
-    id: string; parent_id: string | null; role: string; turn_id: string | null; run_id: string | null;
+    id: string; position: number; role: string; turn_id: string | null; run_id: string | null;
     metadata_json: string | null; metadata_path: string | null; metadata_digest: string | null; recorded_at: number;
   }>`
-    SELECT id, parent_id, role, turn_id, run_id, metadata_json, metadata_path, metadata_digest, recorded_at
+    SELECT id, position, role, turn_id, run_id, metadata_json, metadata_path, metadata_digest, recorded_at
     FROM conversation_entries
     WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${entryId}
   `[0];

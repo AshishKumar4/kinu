@@ -18,6 +18,7 @@ export const SCROLL_EDGE_ATTRIBUTE = "data-scroll-edge";
 interface ScrollRow {
   getBoundingClientRect(): { readonly top: number; readonly bottom: number };
   hasAttribute(name: string): boolean;
+  getAttribute(name: string): string | null;
   readonly isConnected: boolean;
 }
 
@@ -43,6 +44,8 @@ export interface GrowingScrollOptions {
   loading?: boolean | undefined;
   /** Must tolerate repeat calls before the previous one settles. */
   onReachEdge?: ((urgent: boolean) => void) | undefined;
+  /** Replaces `onReachEdge` near a reserve. */
+  onReserve?: ((ask: ReserveAsk) => void) | undefined;
   /** The first content has arrived; a saved position waits for it. */
   settled?: boolean | undefined;
   /** A pixel offset applies only inside the loaded content, else the newest edge: never a fetch (2026-09-26). */
@@ -59,6 +62,52 @@ type Anchor =
   | { readonly row: null; readonly share: number };
 
 export const HISTORY_RESERVE_ATTRIBUTE = "data-history-reserve";
+
+export const RESERVE_START_ATTRIBUTE = "data-reserve-start";
+
+export const RESERVE_END_ATTRIBUTE = "data-reserve-end";
+
+/** Read up to `end` when `from` is null (the rows below are in view), else from `from`. */
+export interface ReserveAsk {
+  readonly start: number;
+  readonly end: number;
+  readonly from: number | null;
+  readonly urgent: boolean;
+}
+
+/** In view: read where the reader looks. Else the nearest within `ahead`. */
+function reserveAsk(node: GrowingScrollHost, ahead: number): ReserveAsk | null {
+  const top = node.getBoundingClientRect().top;
+  const bottom = top + node.clientHeight;
+  let near: ReserveAsk | null = null;
+
+  for (let index = 0; index < node.children.length; index++) {
+    const row = node.children[index];
+
+    if (row === undefined || !row.hasAttribute(HISTORY_RESERVE_ATTRIBUTE)) continue;
+    const start = Number(row.getAttribute(RESERVE_START_ATTRIBUTE));
+    const end = Number(row.getAttribute(RESERVE_END_ATTRIBUTE));
+
+    if (!(end > start)) continue;
+    const box = row.getBoundingClientRect();
+
+    if (box.bottom > top && box.top < bottom) {
+      if (box.bottom < bottom) return { start, end, from: null, urgent: true };
+
+      if (box.top > top) return { start, end, from: start, urgent: true };
+      const pitch = (box.bottom - box.top) / (end - start);
+
+      return { start, end, from: Math.min(end - 1, start + Math.floor((top - box.top) / pitch)), urgent: true };
+    }
+
+    if (near !== null) continue;
+
+    if (box.bottom <= top && box.bottom > top - ahead) near = { start, end, from: null, urgent: top - box.bottom < node.clientHeight };
+    else if (box.top >= bottom && box.top < bottom + ahead) near = { start, end, from: start, urgent: box.top - bottom < node.clientHeight };
+  }
+
+  return near;
+}
 
 function reservedAbove(node: GrowingScrollHost): number {
   let reserved = 0;
@@ -98,7 +147,7 @@ function findAnchor(node: GrowingScrollHost): Anchor | null {
     const offset = row.getBoundingClientRect().top - top;
     const reserved = reservedAbove(node);
 
-    if (reserved > 0 && offset >= node.clientHeight) return { row: null, share: node.scrollTop / reserved };
+    if (reserved > 0 && node.scrollTop < reserved && offset >= node.clientHeight) return { row: null, share: node.scrollTop / reserved };
 
     return { row, offset };
   }
@@ -108,13 +157,15 @@ function findAnchor(node: GrowingScrollHost): Anchor | null {
 
 export function useGrowingScroll({
   grows, content, fetched, loading = false, settled = true,
-  onReachEdge, initialScroll, onScrollPosition,
+  onReachEdge, onReserve, initialScroll, onScrollPosition,
 }: GrowingScrollOptions) {
   const el = useRef<GrowingScrollHost | null>(null);
   const pinned = useRef(grows === "up");
   const anchor = useRef<Anchor | null>(null);
   const reachEdge = useRef(onReachEdge);
   reachEdge.current = onReachEdge;
+  const reserve = useRef(onReserve);
+  reserve.current = onReserve;
   const reportPosition = useRef(onScrollPosition);
   reportPosition.current = onScrollPosition;
   const latestInitialScroll = useRef(initialScroll);
@@ -145,6 +196,15 @@ export function useGrowingScroll({
     const held = anchor.current;
 
     if (held !== null && held.row === null) {
+      const landed = findAnchor(node);
+
+      // Rows landed in view; the reserve above kept its height.
+      if (landed !== null && landed.row !== null) {
+        anchor.current = landed;
+
+        return;
+      }
+
       const top = Math.round(held.share * reservedAbove(node));
 
       if (top === Math.round(node.scrollTop)) return;
@@ -185,11 +245,18 @@ export function useGrowingScroll({
   }, [grows]);
 
   const maybeLoadMore = useCallback((node: GrowingScrollHost) => {
+    const ahead = node.clientHeight * AHEAD_SCREENS + motion.current.speed * fetchMs.current * AHEAD_MARGIN;
+    const ask = grows === "up" && reserve.current !== undefined ? reserveAsk(node, ahead) : null;
+
+    if (ask !== null) {
+      reserve.current?.(ask);
+
+      return;
+    }
+
     const distance = grows === "up"
       ? node.scrollTop - reservedAbove(node)
       : node.scrollHeight - node.scrollTop - node.clientHeight;
-
-    const ahead = node.clientHeight * AHEAD_SCREENS + motion.current.speed * fetchMs.current * AHEAD_MARGIN;
 
     if (distance <= ahead) reachEdge.current?.(distance < node.clientHeight);
   }, [grows]);
@@ -308,7 +375,7 @@ export function useGrowingScroll({
     const node = el.current;
 
     if (node && pendingRestore.current === null) maybeLoadMore(node);
-  }, [onReachEdge, maybeLoadMore]);
+  }, [onReachEdge, onReserve, maybeLoadMore]);
 
   return containerRef;
 }

@@ -1,47 +1,28 @@
-/** MCTS pruning (WP-A2) scans the full open population and honours `minVisitsForPrune`. */
+/** Search-tree pruning (WP-A2) scans the full open population and honours `minVisitsForPrune`. */
 
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { pruneLowValueBranches } from '../src/mcts/pruning';
 import { initSearchTables } from '../src/mcts/schemas';
-import type { AgentRuntime } from '../src/types/agent-runtime';
 
 function setup() {
-  const { rt: base, db } = createTestRuntime();
-  const sql = base.storage.sql;
-  initSearchTables(base.storage.execRaw);
-  const aborted: Array<{ key: string; reason?: string }> = [];
+  const { rt, db } = createTestRuntime();
+  initSearchTables(rt.storage.execRaw);
 
-  const rt: AgentRuntime = {
-    ...base,
-    abortBranch: async (key: string, reason?: string) => { aborted.push({ key, reason }); },
-  };
-
-  return { db, sql, rt, aborted };
+  return { db, sql: rt.storage.sql, rt };
 }
 
 describe('pruneLowValueBranches — population + config-honoring gate', () => {
-  test('a settled low-value node reaches status=pruned mid-search', async () => {
-    const { sql, rt, aborted } = setup();
-    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, branch_agent_key)
-        VALUES (${rt.actor.actorId}, 'r', 'doomed', 't', 0.1, 3, 'open', 'agent-doomed')`;
-    await pruneLowValueBranches(rt, 'r', 0.25, 2);
-
-    const row = sql<{ status: string; branch_agent_key: string | null }>`
-      SELECT status, branch_agent_key FROM search_nodes WHERE id = 'doomed'`[0];
-
-    expect(row.status).toBe('pruned');
-    expect(row.branch_agent_key).toBeNull();
-    expect(aborted).toEqual([{ key: 'agent-doomed', reason: 'pruned' }]);
-  });
-
-  test('a fresh single-visit node is protected by minVisitsForPrune', async () => {
-    const { sql, rt, aborted } = setup();
+  test.each([
+    { case: 'a settled low-value node reaches status=pruned mid-search', id: 'doomed', value: 0.1, visits: 3, status: 'pruned' },
+    { case: 'a fresh single-visit node is protected by minVisitsForPrune', id: 'fresh', value: 0.05, visits: 1, status: 'open' },
+  ])('$case', ({ id, value, visits, status }) => {
+    const { sql, rt } = setup();
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
-        VALUES (${rt.actor.actorId}, 'r', 'fresh', 't', 0.05, 1, 'open')`;
-    await pruneLowValueBranches(rt, 'r', 0.25, 2);
-    expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'fresh'`[0].status).toBe('open');
-    expect(aborted).toHaveLength(0);
+        VALUES (${rt.actor.actorId}, 'r', ${id}, 't', ${value}, ${visits}, 'open')`;
+    pruneLowValueBranches(rt, 'r', 0.25, 2);
+
+    expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = ${id}`[0].status).toBe(status);
   });
 
   const ONE_NODE = [
@@ -57,64 +38,25 @@ describe('pruneLowValueBranches — population + config-honoring gate', () => {
   ];
 
   for (const node of ONE_NODE) {
-    test(node.name, async () => {
+    test(node.name, () => {
       const { sql, rt } = setup();
       void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
           VALUES (${rt.actor.actorId}, 'r', ${node.id}, 't', ${node.value}, ${node.visits}, 'open')`;
-      await pruneLowValueBranches(rt, 'r', 0.25, node.minVisits);
+      pruneLowValueBranches(rt, 'r', 0.25, node.minVisits);
 
       expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = ${node.id}`[0].status)
         .toBe(node.status);
     });
   }
 
-  test('never touches already-pruned or failed nodes', async () => {
+  test('never touches already-pruned or failed nodes', () => {
     const { sql, rt } = setup();
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
         VALUES (${rt.actor.actorId}, 'r', 'already', 't', 0.01, 9, 'pruned')`;
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
         VALUES (${rt.actor.actorId}, 'r', 'failed', 't', 0.01, 9, 'failed')`;
-    await pruneLowValueBranches(rt, 'r', 0.25, 2);
+    pruneLowValueBranches(rt, 'r', 0.25, 2);
     expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'already'`[0].status).toBe('pruned');
     expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'failed'`[0].status).toBe('failed');
-  });
-});
-
-describe('pruneLowValueBranches — one abort failure never ends the sweep', () => {
-  test('a throwing abortBranch is recorded per node and the rest still prune', async () => {
-    const { sql, rt, aborted } = setup();
-    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, branch_agent_key)
-        VALUES (${rt.actor.actorId}, 'r', 'first', 't', 0.1, 3, 'open', 'agent-first')`;
-    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, branch_agent_key)
-        VALUES (${rt.actor.actorId}, 'r', 'second', 't', 0.1, 3, 'open', 'agent-second')`;
-
-    const failing: AgentRuntime = {
-      ...rt,
-      abortBranch: async (key: string, reason?: string) => {
-        if (key === 'agent-first') throw new Error('platform abort blew up');
-        aborted.push({ key, reason });
-      },
-    };
-
-    // The failure lands on console.error, the only sink this deep in core.
-    const original = console.error;
-    const lines: string[] = [];
-    console.error = (...args: unknown[]) => { lines.push(String(args[0])); };
-
-    try {
-      await pruneLowValueBranches(failing, 'r', 0.25, 2);
-    } finally {
-      console.error = original;
-    }
-
-    const rows = sql<{ id: string; status: string }>`
-      SELECT id, status FROM search_nodes ORDER BY id`;
-
-    expect(rows).toEqual([
-      { id: 'first', status: 'pruned' },
-      { id: 'second', status: 'pruned' },
-    ]);
-    expect(aborted).toEqual([{ key: 'agent-second', reason: 'pruned' }]);
-    expect(lines.some((line) => line.includes('mcts.prune_abort_failed'))).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The live tier: the end-to-end suites under tests/live that call a real model
+# The live tier: the end-to-end suites under tests/live-model that call a real model
 # on an in-process runtime. The eval suite (evals/, `bun run evals`) is a
 # separate thing: it measures the deployed product, one task at a time.
 #
@@ -13,7 +13,7 @@
 #   1. Names the target and the cost basis BEFORE spending anything, so a run
 #      that goes somewhere unexpected is visible at the top of the log rather
 #      than in a bill.
-#   2. Runs `bun test ./tests/live/` once, capturing a JUnit report and a spend
+#   2. Runs `bun test ./tests/live-model/` once, capturing a JUnit report and a spend
 #      file.
 #   3. Enforces the skip ratchet over that report — the same run, not a second
 #      one. A skipped test is a declared skip or a failure.
@@ -40,14 +40,14 @@
 # directly (AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH, or KINU_BASE_URL + KINU_AUTH);
 # it fronts a model and no deployment, so it creates nothing.
 #
-# With no credential anywhere this script fails at tests/live/continuation.test.ts,
+# With no credential anywhere this script fails at tests/live-model/continuation.test.ts,
 # the continuation guarantee (GATE-6), which refuses to go green without a model
 # and names the variables to set. Outside this script every live test skips, and
 # the ratchet proves the skips are the declared ones.
 #
 # --backend local|cloud names where the agent under test lives. `local` (the
 # default) is the in-process cli-backend runtime. `cloud` runs the one suite with
-# a hosted arm, tests/live/live-smoke.test.ts, against the deployment, and needs
+# a hosted arm, tests/live-model/live-smoke.test.ts, against the deployment, and needs
 # the eval-service credential; the rest drive a CLIRuntime, which no deployed
 # workspace hands out. --allow-stale lets a cloud run measure a deployment that is
 # not this checkout's revision on purpose.
@@ -88,10 +88,10 @@ export KINU_EVAL_BACKEND="$BACKEND"
 
 # The first assignment is the default backend's argv, and the ladder reads it
 # (`liveTierTargets` in scripts/ladder.ts) to credit this tier with its files.
-TARGETS=(./tests/live/)
+TARGETS=(./tests/live-model/)
 
 if [[ "$BACKEND" == cloud ]]; then
-  TARGETS=(./tests/live/live-smoke.test.ts)
+  TARGETS=(./tests/live-model/live-smoke.test.ts)
 fi
 
 REPORT_DIR="$(bun scripts/bench-retention.ts --family live --backend "$BACKEND")"

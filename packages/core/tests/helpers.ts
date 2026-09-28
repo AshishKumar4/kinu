@@ -16,7 +16,7 @@ import type {
   ResolvedProvider,
   VFS,
 } from '../src/types/primitives';
-import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-runtime';
+import type { AgentRuntime, CraftStore } from '../src/types/agent-runtime';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 
@@ -252,12 +252,6 @@ export function createTestRuntime(opts?: {
     scaffold: createScaffoldSurface({ vfs, sql, actor, path: 'scaffold/agent.js' }),
   };
 
-  const mockBranch: BranchHandle = {
-    explore: async () => ({ text: 'explored approach A' }),
-    generateReflection: async () => ({ text: 'reflection: approach was suboptimal' }),
-    release: async () => {},
-  };
-
   const rt: AgentRuntime = {
     workspaceIsMachine: false,
     actor,
@@ -270,8 +264,6 @@ export function createTestRuntime(opts?: {
     craftStore,
     judgeModel: llm,
     shell: workspace.shell,
-    spawnBranch: async () => mockBranch,
-    abortBranch: async () => {},
   };
 
   return { rt, db, workspace, stores: storesFor(rt) };
@@ -285,29 +277,6 @@ export function storesFor(rt: AgentRuntime): AgentStores {
     write => rt.storage.transactionSync(write),
     async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }),
   );
-}
-
-export function createMockSession(): import('../src/mcts/record-node').SessionWriter {
-  const messages: Array<{ id: string; parentId?: string | null; role: string; content: string }> = [];
-
-  return {
-    async appendMessage(msg, parentId) {
-      const content = msg.parts.map((part) => part.text).join('');
-      messages.push({ id: msg.id, parentId, role: msg.role, content });
-    },
-    async getHistory(leafId) {
-      const result: Array<{ role: string; content: string }> = [];
-      let current = messages.find(m => m.id === leafId);
-
-      while (current) {
-        result.unshift({ role: current.role, content: current.content });
-        const parentId = current.parentId;
-        current = parentId ? messages.find(m => m.id === parentId) : undefined;
-      }
-
-      return result;
-    },
-  };
 }
 
 /** Both console channels for one awaited call; stdout is the CLI's machine stream. */

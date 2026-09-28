@@ -41,6 +41,8 @@ class VfsError extends Error {
   }
 }
 
+export type { VfsError };
+
 export function makeVfsError(code: VfsErrorCode, message: string, path: string): VfsError {
   return new VfsError(code, message, path);
 }

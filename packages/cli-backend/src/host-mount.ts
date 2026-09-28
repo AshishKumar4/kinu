@@ -5,9 +5,11 @@
 
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { FileCheckpoints, VFS, VfsErrorCode } from '@kinu.run/core';
-import { ERRNO, LEGACY_WORKSPACE_ROOT, makeVfsError, SLATES_ROOT, WORKSPACE_ROOT } from '@kinu.run/core';
-import { tolerateAsync } from '@kinu.run/core/obs';
+import type { FileCheckpoints, ShellApprovalPolicy, VFS, VfsErrorCode } from '@kinu.run/core';
+import {
+  ERRNO, gateExec, LEGACY_WORKSPACE_ROOT, makeVfsError, reviewCommand, shellQuote, SLATES_ROOT, WORKSPACE_ROOT,
+} from '@kinu.run/core';
+import { type KinuError, tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const nodeErrorSchema = v.object({
@@ -29,13 +31,11 @@ function nodeError(input: { error: unknown }): v.InferOutput<typeof nodeErrorSch
 
 function throwVfsError(input: { error: unknown; syscall: string; path: string }): never {
   const error = nodeError(input);
+  const code = error?.code !== undefined && isVfsErrorCode(error.code) ? error.code : null;
 
-  if (error?.code && isVfsErrorCode(error.code)) {
-    const message = error.message ?? String(input.error);
-    throw makeVfsError(error.code, `${message}, ${input.syscall} '${input.path}'`, input.path);
-  }
-
-  throw input.error;
+  throw code === null
+    ? input.error
+    : makeVfsError(code, `${error?.message ?? String(input.error)}, ${input.syscall} '${input.path}'`, input.path);
 }
 
 function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefined): VFS {
@@ -92,36 +92,57 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
  * The working directory as the workspace file plane; agent state stays in
  * `agentStateVfs`. Accepts relative paths, plane-root aliases (`/workspace`,
  * `/home/main`, `/`, and `/slates` for its `slates/`) and real absolute paths inside
- * the tree; anything else is EACCES. A lexical guard against path confusion, not a sandbox.
+ * the tree; with `outside`, any absolute path without `..`, gated. Else EACCES. Not a sandbox.
  */
-export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
+export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined, outside?: ShellApprovalPolicy): VFS {
   const root = resolve(cwd);
   const host = createHostMountVFS(root, checkpoints);
 
-  const hostPath = (path: string): string => {
+  const hostPath = (path: string) => {
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
 
     // A real path inside the directory wins over every alias.
-    if (withinRoot(root, direct)) return direct;
+    if (withinRoot(root, direct)) return { at: direct, outside: false };
     const inner = isAbsolute(path) ? planeRootRelative(path) : null;
 
-    if (inner !== null) {
-      const mapped = resolve(root, inner || '.');
+    const mapped = inner === null ? null : resolve(root, inner || '.');
 
-      if (withinRoot(root, mapped)) return mapped;
+    if (mapped !== null && withinRoot(root, mapped)) return { at: mapped, outside: false };
+
+    if (mapped !== null || outside === undefined || !isAbsolute(path) || path.split('/').includes('..')) {
+      throw makeVfsError('EACCES', `path escapes the workspace directory ${root}: ${path}`, path);
     }
 
-    throw makeVfsError('EACCES', `path escapes the workspace directory ${root}: ${path}`, path);
+    return { at: direct, outside: true };
+  };
+
+  const gated = async <T>(path: string, command: (at: string) => string, op: (at: string) => Promise<T>): Promise<T> => {
+    const target = hostPath(path);
+
+    if (!target.outside || outside === undefined) return op(target.at);
+
+    const run = gateExec<{ readonly done: T } | { readonly refused: KinuError }>(
+      async () => ({ done: await op(target.at) }),
+      (refused) => ({ refused }),
+      { name: 'workspace', filesOwner: 'user' },
+      { policy: outside, review: async (cmd) => reviewCommand(cmd, 'user') },
+    );
+
+    const result = await run(command(shellQuote(target.at)));
+
+    if ('refused' in result) throw makeVfsError('EACCES', result.refused.message, path);
+
+    return result.done;
   };
 
   return {
-    readFile: (path, opts) => host.readFile(hostPath(path), opts),
-    writeFile: (path, data) => host.writeFile(hostPath(path), data),
-    readdir: (path) => host.readdir(hostPath(path)),
-    stat: (path) => host.stat(hostPath(path)),
-    unlink: (path) => host.unlink(hostPath(path)),
-    mkdir: (path, opts) => host.mkdir(hostPath(path), opts),
-    exists: (path) => host.exists(hostPath(path)),
+    readFile: (path, opts) => gated(path, (at) => `cat ${at}`, (at) => host.readFile(at, opts)),
+    writeFile: (path, data) => gated(path, (at) => `tee ${at}`, (at) => host.writeFile(at, data)),
+    readdir: (path) => gated(path, (at) => `ls ${at}`, (at) => host.readdir(at)),
+    stat: (path) => gated(path, (at) => `stat ${at}`, (at) => host.stat(at)),
+    unlink: (path) => gated(path, (at) => `rm -rf ${at}`, (at) => host.unlink(at)),
+    mkdir: (path, opts) => gated(path, (at) => `mkdir${opts?.recursive === true ? ' -p' : ''} ${at}`, (at) => host.mkdir(at, opts)),
+    exists: (path) => gated(path, (at) => `test -e ${at}`, (at) => host.exists(at)),
   };
 }
 

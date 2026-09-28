@@ -25,10 +25,6 @@ import {
   initGepaTables, startGepaRun, persistGepaCandidate, listGepaRuns, loadGepaCandidates,
 } from '../src/evolution/gepa/persistence';
 import { initActorTables } from '../src/state/workspace-schema';
-import { initSessionContextTables } from '../src/session/schema';
-import { initSessionTranscriptTables } from '../src/session/transcript-schema';
-import { SessionHistory } from '../src/session/history';
-import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../src/identity/effect-tombstones';
@@ -52,10 +48,8 @@ import {
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import {
   initAlternateTakesTable, recordBranchTakeSet, listAlternateTakeSets,
-  latestAlternateTakeSet, claimAlternateTakesForTurn, unclaimedAlternateTakeIds,
-  purgeUnclaimedAlternateTakes, recordTakePick,
+  latestAlternateTakeSet,
 } from '../src/mcts/takes';
-import { initSearchTables } from '../src/mcts/schemas';
 import {
   initExplorationRecordsTable, recordExploration, recordsFor, bestInCell, describeObjective,
   recordHandleOf, objectiveIdOf, verifierDigestOf,
@@ -148,12 +142,6 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
       create: () => {}, update: () => {}, list: () => [], get: () => undefined,
       delete: () => {}, search: () => [],
     },
-    spawnBranch: async () => ({
-      explore: async () => ({ text: '' }),
-      generateReflection: async () => ({ text: '' }),
-      release: async () => {},
-    }),
-    abortBranch: async () => {},
     executionRouter: {
       register: () => {}, unregister: () => {}, listExecutors: () => [],
       getProvider: () => undefined, getProviders: () => [],
@@ -434,6 +422,24 @@ describe('two actors, one database: fibers, evolution_events, executor_output, a
 });
 
 describe('two actors, one database: terminal_effects', () => {
+  // 2026-09-28: the claim became one statement, which cannot see its own inserts; the first of a repeat wins, as before.
+  test('a sequence that names one effect twice claims it once, with the first input', () => {
+    const w = world();
+    initTerminalEffectTable(w.execRaw);
+
+    const ledger = new TerminalEffectLedger({
+      sql: w.sql, actor: w.a, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
+    });
+
+    ledger.claim('turn-1', [
+      { name: 'turn_record', scope: '', input: 'first', lane: 'inline' },
+      { name: 'turn_record', scope: '', input: 'second', lane: 'inline' },
+    ]);
+
+    expect(w.sql<{ input_json: string; seq: number }>`SELECT input_json, seq FROM terminal_effects`).toEqual([{ input_json: '"first"', seq: 0 }]);
+    w.close();
+  });
+
   test('one sequence id is a separate suffix for each actor', async () => {
     const w = world();
     initTerminalEffectTable(w.execRaw);
@@ -658,87 +664,6 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
     w.close();
   });
 
-  test('an unclaimed purge and a claim each stop at the owner', () => {
-    const w = world();
-    initTurnOutcomeTables(w.execRaw);
-    initAlternateTakesTable(w.execRaw);
-
-    for (const [actor, mark] of [[w.a, 'a'], [w.b, 'b']] as const) {
-      void w.sql`INSERT INTO alternate_takes
-          (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
-           candidates, created_at)
-        VALUES (${actor.actorId}, ${'take-1'}, ${null}, ${null}, ${mark}, ${'mcts'},
-                ${'n-1'}, ${null}, ${'[]'}, 10)`;
-    }
-
-    expect(unclaimedAlternateTakeIds(w.sql, w.a)).toEqual(['take-1']);
-
-    expect(claimAlternateTakesForTurn(w.sql, w.a, {
-      turnId: 'turn-1', sessionId: 'default', startedAt: 5,
-    })).toBe(1);
-    expect(unclaimedAlternateTakeIds(w.sql, w.a)).toEqual([]);
-    expect(unclaimedAlternateTakeIds(w.sql, w.b)).toEqual(['take-1']);
-
-    purgeUnclaimedAlternateTakes(w.sql, w.b);
-    expect(w.count('alternate_takes')).toBe(1);
-    expect(listAlternateTakeSets(w.sql, w.a)).toHaveLength(1);
-    w.close();
-  });
-
-  test('a pick re-points the picker\'s search nodes and not the sibling\'s', async () => {
-    const w = world();
-    initTurnOutcomeTables(w.execRaw);
-    initAlternateTakesTable(w.execRaw);
-    initSearchTables(w.execRaw);
-    // `recordTakePick` quotes the conversation pair, so transcript tables must exist.
-    initActorTables(w.execRaw, w.sql);
-    initSessionContextTables(w.execRaw);
-    initSessionTranscriptTables(w.execRaw);
-
-    const transcript = new SessionHistory({
-      sql: w.sql, actor: w.a, transactionSync: write => w.db.transaction(write)(),
-      files: async () => ({ vfs: createMemoryVfs().vfs, artifactDirectory: '/actor/.kinu/context' }),
-    }).transcript(CHAT_SESSION_ID);
-
-    const candidates = JSON.stringify([
-      { nodeId: 'n-1', text: 'winner', score: 0.6, visits: 2, depth: 1 },
-      { nodeId: 'n-2', text: 'rival', score: 0.59, visits: 2, depth: 1 },
-    ]);
-
-    for (const actor of [w.a, w.b]) {
-      for (const nodeId of ['n-1', 'n-2']) {
-        void w.sql`INSERT INTO search_nodes
-            (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status)
-          VALUES (${actor.actorId}, ${nodeId}, ${null}, ${'root-1'}, ${'t'}, ${''}, ${''},
-                  2, 0.6, 1, ${'terminal'})`;
-      }
-
-      void w.sql`INSERT INTO alternate_takes
-          (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
-           candidates, created_at)
-        VALUES (${actor.actorId}, ${'take-1'}, ${'turn-1'}, ${'default'}, ${'t'}, ${'mcts'},
-                ${'n-1'}, ${null}, ${candidates}, 1)`;
-    }
-
-    expect(w.count('search_nodes')).toBe(4);
-
-    const record = await recordTakePick(w.sql, w.a, transcript, { takeId: 'take-1', nodeId: 'n-2', now: 2 });
-    expect(record.changedAnswer).toBe(true);
-
-    const status = (actor: ActorHandle, nodeId: string): string | undefined =>
-      w.sql<{ status: string }>`SELECT status FROM search_nodes
-        WHERE actor_id = ${actor.actorId} AND id = ${nodeId}`[0]?.status;
-
-    expect(status(w.a, 'n-1')).toBe('pruned');
-    expect(status(w.a, 'n-2')).toBe('terminal');
-    // B's identically-named nodes never moved.
-    expect(status(w.b, 'n-1')).toBe('terminal');
-    expect(status(w.b, 'n-2')).toBe('terminal');
-    // The pick's ledger row is A's alone.
-    expect(listTurnOutcomes(w.sql, w.a, { outcomes: ['corrected'] })).toHaveLength(1);
-    expect(listTurnOutcomes(w.sql, w.b, { outcomes: ['corrected'] })).toHaveLength(0);
-    w.close();
-  });
 });
 
 describe('two actors, one database: exploration_records', () => {

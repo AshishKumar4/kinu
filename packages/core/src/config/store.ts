@@ -59,13 +59,6 @@ export const AGENT_CONFIG_KEYS = {
   closedTurnWindows: 'closed_turn_windows',
   /** See DEFAULT_GEPA_EVAL_BUDGET. */
   gepaEvalBudget: 'gepa_eval_budget',
-  /** Unset = engine defaults (DEFAULT_CONFIG.mcts). */
-  mctsExplorationWeight: 'mcts_c',
-  mctsBudget: 'mcts_iterations',
-  mctsMaxDepth: 'mcts_depth',
-  mctsBranches: 'mcts_branches',
-  mctsJudgeSamples: 'mcts_judge_samples',
-  mctsMaxEvalLLMCalls: 'mcts_eval_llm_calls',
   /** 'false' silences owner emails; defaults on. */
   emailNotifications: 'email_notifications',
   /** Lazy Vectorize backfill of chunks indexed before embeddings existed; cursor pages across boots. */
@@ -157,22 +150,8 @@ export interface AgentConfigStore {
   getGepaEvalBudget(): number;
   /** Clamped, not rejected: the bounds are cost policy. */
   setGepaEvalBudget(n: number): void;
-  /** Only explicitly set, valid knobs, so unset ones keep engine defaults. */
-  getMctsOverrides(): MctsOverrides;
-  /** Undefined fields are left untouched. */
-  setMctsOverrides(overrides: MctsOverrides): void;
   getEmailNotificationsEnabled(): boolean;
   setEmailNotificationsEnabled(enabled: boolean): void;
-}
-
-export interface MctsOverrides {
-  explorationWeight?: number;
-  budget?: number;
-  maxDepth?: number;
-  branches?: number;
-  /** Median-aggregated. */
-  judgeSamples?: number;
-  maxEvalLLMCalls?: number;
 }
 
 /** Default auto-GEPA cadence: one pass per this many turns of new traces. */
@@ -454,60 +433,6 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     countIsolateGeneration() {
       return increment(AGENT_CONFIG_KEYS.isolateGen);
-    },
-    getMctsOverrides() {
-      const positive = (key: string): number | undefined => {
-        const raw = get(key);
-
-        if (raw == null) return undefined;
-        const n = Number(raw);
-
-        return Number.isFinite(n) && n > 0 ? n : undefined;
-      };
-
-      const out: MctsOverrides = {};
-      const w = positive(AGENT_CONFIG_KEYS.mctsExplorationWeight);
-      const budget = positive(AGENT_CONFIG_KEYS.mctsBudget);
-      const maxDepth = positive(AGENT_CONFIG_KEYS.mctsMaxDepth);
-      const branches = positive(AGENT_CONFIG_KEYS.mctsBranches);
-      const judgeSamples = positive(AGENT_CONFIG_KEYS.mctsJudgeSamples);
-      const maxEvalLLMCalls = positive(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls);
-
-      if (w !== undefined) out.explorationWeight = w;
-
-      if (budget !== undefined) out.budget = Math.floor(budget);
-
-      if (maxDepth !== undefined) out.maxDepth = Math.floor(maxDepth);
-
-      if (branches !== undefined) out.branches = Math.floor(branches);
-
-      if (judgeSamples !== undefined) out.judgeSamples = Math.floor(judgeSamples);
-
-      if (maxEvalLLMCalls !== undefined) out.maxEvalLLMCalls = Math.floor(maxEvalLLMCalls);
-
-      return out;
-    },
-    setMctsOverrides(overrides) {
-      // Validate all before writing, so a rejected call changes nothing.
-      const checked = (key: string, value: number | undefined, integer: boolean): Effect.Effect<Array<{ key: string; value: string }>> => {
-        if (value === undefined) return Effect.succeed([]);
-        const stored = integer ? Math.floor(value) : value;
-
-        return !Number.isFinite(value) || value <= 0 || stored <= 0
-          ? Effect.die(new Error(`invalid MCTS setting for ${key}: ${value}`))
-          : Effect.succeed([{ key, value: String(stored) }]);
-      };
-
-      return settleSync(Effect.map(Effect.all([
-        checked(AGENT_CONFIG_KEYS.mctsExplorationWeight, overrides.explorationWeight, false),
-        checked(AGENT_CONFIG_KEYS.mctsBudget, overrides.budget, true),
-        checked(AGENT_CONFIG_KEYS.mctsMaxDepth, overrides.maxDepth, true),
-        checked(AGENT_CONFIG_KEYS.mctsBranches, overrides.branches, true),
-        checked(AGENT_CONFIG_KEYS.mctsJudgeSamples, overrides.judgeSamples, true),
-        checked(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls, overrides.maxEvalLLMCalls, true),
-      ]), (pending) => {
-        for (const { key, value } of pending.flat()) set(key, value);
-      }));
     },
     getEmailNotificationsEnabled() {
       return get(AGENT_CONFIG_KEYS.emailNotifications) !== 'false';

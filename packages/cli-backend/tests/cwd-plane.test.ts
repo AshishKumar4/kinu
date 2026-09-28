@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import * as v from 'valibot';
 import type { AgentRuntime, LLMProviderConfig, WriteEvent, WriteObserver } from '@kinu.run/core';
 import {
-  buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, reviewCommand, SLATES_ROOT, WORKSPACE_ROOT, subordinateAgentName,
+  buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, reviewCommand, shellQuote, SLATES_ROOT, WORKSPACE_ROOT, subordinateAgentName,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { present, scratchDir, toolExecute } from '@kinu.run/test-utils';
@@ -17,14 +17,13 @@ import {
   type CLIRuntime,
 } from '../src/runtime';
 import { createHeadRuntime } from './actor-fixture';
-import { registerLocalActor } from '../src/actor-identity';
+import { registerLocalActor } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
-import { BRANCH_CREDENTIAL_ENV } from '../src/branch-process';
 import { PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV } from '../src/model-resolver';
 
 /** Every name the harness reads a credential from, as the declaring modules name them. */
 const HARNESS_CREDENTIAL_NAMES: readonly string[] = [
-  ...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV,
+  ...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV,
 ];
 
 const DevicePlanSchema = v.object({ env: v.record(v.string(), v.string()) });
@@ -50,7 +49,7 @@ function agentRuntime(state: string, name: string, cwd?: string): LocalAgent {
   mkdirSync(dirname(dbPath), { recursive: true });
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
-    dbPath, llm: DUMMY_LLM, agentName: name,
+    llm: DUMMY_LLM, agentName: name,
   };
 
   if (cwd !== undefined) config.cwd = cwd;
@@ -140,7 +139,7 @@ describe('peers over one directory', () => {
     const physicalName = subordinateAgentName(binding.storageKey);
 
     const child = await shareLocalWorkspacePlane(
-      createCLIRuntime(parent.db, { dbPath: parent.dbPath, llm: null, cwd: project, facet: physicalName, actorBinding: binding }),
+      createCLIRuntime(parent.db, { llm: null, cwd: project, facet: physicalName, actorBinding: binding }),
       parent, physicalName,
     );
 
@@ -228,7 +227,7 @@ describe('addressing the bound directory', () => {
     expect(existsSync(join(project, '..', 'outside.txt'))).toBe(false);
   });
 
-  test('a path that leaves the directory is refused, and writes nothing', async () => {
+  test('a relative or aliased path that climbs out of the directory is refused, and writes nothing', async () => {
     const { state, project } = roots('cwd-plane-escape');
     const outside = join(project, '..', 'outside.txt');
     const rt = agentRuntime(state, 'solo', project);
@@ -237,13 +236,11 @@ describe('addressing the bound directory', () => {
     expect(await refusalOf(() => rt.storage.vfs.writeFile('/workspace/../outside.txt', 'escaped'))).toBe('EACCES');
     expect(await refusalOf(() => rt.storage.vfs.writeFile('../outside.txt', 'escaped'))).toBe('EACCES');
     expect(await refusalOf(() => rt.storage.vfs.writeFile(`${WORKSPACE_ROOT}/../outside.txt`, 'escaped'))).toBe('EACCES');
-    expect(await refusalOf(() => rt.storage.vfs.readFile('/etc/hostname'))).toBe('EACCES');
     expect(await refusalOf(() => rt.storage.vfs.mkdir('/workspace/../sneaky', { recursive: true }))).toBe('EACCES');
+    expect(await refusalOf(() => rt.storage.vfs.writeFile(`${project}/../outside.txt`, 'escaped'))).toBe('EACCES');
 
     expect(existsSync(outside)).toBe(false);
     expect(existsSync(join(project, '..', 'sneaky'))).toBe(false);
-    expect(await refusalOf(() => rt.storage.vfs.exists('/etc/hostname'))).toBe('EACCES');
-    expect(await refusalOf(() => rt.storage.vfs.stat('/etc/hostname'))).toBe('EACCES');
   });
 
   test('a directory whose own name contains dots is not mistaken for an escape', async () => {
@@ -377,7 +374,6 @@ describe('the shell over the bound directory', () => {
   test('what a command may have changed is snapshotted, and the snapshot names that directory', async () => {
     const { state, project } = roots('cwd-plane-checkpoints');
     writeFileSync(join(project, 'before.txt'), 'the state to restore\n');
-    // Checkpoint storage is global per agent name; a stable name would read stores from prior runs.
     const rt = agentRuntime(state, `checkpointer-${basename(dirname(state))}`, project);
     rt.actor.config.setShellApprovalMode('allow_all');
     const checkpoints = rt.checkpoints;
@@ -436,6 +432,83 @@ describe('what an opened workspace puts where', () => {
     expect(await agentState.exists('SOUL.md')).toBe(true);
     expect(await agentState.exists('memory/MEMORY.md')).toBe(true);
     expect(await agentState.exists('scaffold/agent.js')).toBe(true);
+  });
+});
+
+describe('the agent\'s own state in a placed workspace', () => {
+  test('memory, SOUL.md and the scaffold read at /agent, and nothing writes through it', async () => {
+    const { state, project } = roots('cwd-plane-agent-view');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
+    await rt.identity.scaffold.write('// evolved\n');
+    const soul = String(await present(rt.agentStateVfs, 'the agent state plane').readFile('SOUL.md', { encoding: 'utf8' }));
+
+    expect([...await rt.storage.vfs.readdir('/agent')].sort()).toEqual(['SOUL.md', 'memory', 'scaffold']);
+    expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
+    expect(await readText(rt, '/agent/memory/MEMORY.md')).toContain('learned something');
+    expect(await readText(rt, '/agent/scaffold/agent.js')).toBe('// evolved\n');
+    expect(await rt.storage.vfs.exists('/agent/workspace.db')).toBe(false);
+
+    expect(await refusalOf(() => rt.storage.vfs.writeFile('/agent/memory/MEMORY.md', 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.writeFile('/agent/SOUL.md', 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.unlink('/agent/scaffold/agent.js'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.mkdir('/agent/memory/more', { recursive: true }))).toBe('EROFS');
+    expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
+    expect(readdirSync(project)).toEqual([]);
+  });
+});
+
+describe('an absolute path outside the bound directory', () => {
+  test('is reviewed as the shell command it amounts to, and runs only as the owner answers', async () => {
+    const { state, project } = roots('cwd-plane-outside');
+    const outside = join(dirname(project), 'elsewhere');
+    const notes = join(outside, 'notes.txt');
+    mkdirSync(outside);
+    writeFileSync(notes, 'the user\'s notes\n');
+    const rt = agentRuntime(state, `outside-${basename(dirname(state))}`, project);
+    const asked: string[] = [];
+    let answer: 'allow' | 'deny' = 'deny';
+
+    rt.setShellApprovalChannel?.(async (request) => {
+      asked.push(request.command);
+
+      return answer;
+    });
+
+    // `cat` and `tee` trip no rule on the user's files, in the shell or here.
+    expect(await readText(rt, notes)).toBe('the user\'s notes\n');
+    await rt.storage.vfs.writeFile(join(outside, 'new.txt'), 'from the file tool');
+    expect(readFileSync(join(outside, 'new.txt'), 'utf8')).toBe('from the file tool');
+    expect(asked).toEqual([]);
+
+    expect(await refusalOf(() => rt.storage.vfs.unlink(notes))).toBe('EACCES');
+    expect(asked).toEqual([`rm -rf ${shellQuote(notes)}`]);
+    expect(existsSync(notes)).toBe(true);
+
+    answer = 'allow';
+    await rt.storage.vfs.unlink(notes);
+    expect(existsSync(notes)).toBe(false);
+  });
+
+  test('a standing deny_all refuses what the rules gate, and nobody is asked', async () => {
+    const { state, project } = roots('cwd-plane-outside-deny');
+    const outside = join(dirname(project), 'elsewhere');
+    const notes = join(outside, 'notes.txt');
+    mkdirSync(outside);
+    writeFileSync(notes, 'kept\n');
+    const rt = agentRuntime(state, `outside-deny-${basename(dirname(state))}`, project);
+    rt.actor.config.setShellApprovalMode('deny_all');
+    const asked: string[] = [];
+
+    rt.setShellApprovalChannel?.(async (request) => {
+      asked.push(request.command);
+
+      return 'allow';
+    });
+
+    expect(await refusalOf(() => rt.storage.vfs.unlink(notes))).toBe('EACCES');
+    expect(asked).toEqual([]);
+    expect(existsSync(notes)).toBe(true);
   });
 });
 

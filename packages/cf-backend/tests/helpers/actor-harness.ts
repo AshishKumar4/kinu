@@ -78,17 +78,12 @@ const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
 
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** Work the object still owes: maintenance, untimed owed arms (turn claims, queued deliveries), a due timed ledger, a
-   *  detached task, or a hosted actor's reaction waiting to be drained (the object's wake folds only the root's). */
+   *  detached task, or a due timer wake (which folds every hired agent's pending reactions). */
   harnessWorkRemains(now = Date.now()): boolean {
     const due = this.nextOwedAt();
 
-    const host = this.actorHost();
-
-    const reactionOwed = host.list().some((reference) =>
-      (new EventLog(this.boundExec(), host.bindStores(reference).handle).nextPendingDrainAt(now) ?? Infinity) <= now);
-
     return this.maintenanceUnfinished || this.owedUntimedWork() || (due !== null && due <= now) || this._backgroundTasks.size > 0
-      || reactionOwed;
+      || this.harnessTimerDue(now);
   }
 
   /** Turns running now, the root's and every hosted actor's. */
@@ -276,6 +271,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     };
   }
   /** Install roles/tiers over the builtin catalog; hosted children resolve through it. */
+  /** Whether the object's timer wake is due now, as the alarm would fire it. */
+  harnessTimerDue(now = Date.now()): boolean {
+    const at = this.nextWakeAt(now);
+
+    return at !== null && at <= now;
+  }
+
+
   harnessInstallCatalog(overlay: {
     readonly roles?: RoleCatalog;
     /** Merged over the builtin tiers, so `default` may be left as it is. */
@@ -595,11 +598,14 @@ export async function driveUntil(
 ): Promise<void> {
   while (!holds()) {
     await workspace.agent.terminalRetryPass();
+
+    // The alarm the object armed for due work, fired as production fires it.
+    if (workspace.agent.harnessTimerDue()) await workspace.agent._kinuTimerTick();
     await nextTurn();
 
     if (holds()) return;
 
-    if (!workspace.agent.harnessWorkRemains() && !harnessFibersRunning()) throw new Error(failure);
+    if (!workspace.agent.harnessWorkRemains() && !workspace.agent.harnessTimerDue() && !harnessFibersRunning()) throw new Error(failure);
 
     const suiteHeld = [
       ...workspace.agent.harnessUnansweredModelCalls().map((run) => `model call ${JSON.stringify(openingOf(run).slice(0, 80))}`),
@@ -687,11 +693,7 @@ export async function runDelegatedTask(
 export async function wakeForDelegatedTask(
   workspace: ActorHarness<HarnessOrchestratorAgent>, actorId: string, task: string,
 ): Promise<void> {
-  const sql = sqlOver(workspace.db);
-  const [identity] = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
-
-  if (identity === undefined) throw new Error('the workspace has no identity row');
-  const child = new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id }).open(actorId);
+  const child = actorOver(workspace.db, actorId);
 
   admitSubordinateTask(new EventLog(makeSqlExec(workspace.db), child), {
     fromWorkspace: child.workspaceId, kind: 'task', body: task, mode: 'build', now: Date.now(),
@@ -792,6 +794,16 @@ export function seedMission(db: Database, mission: string): void {
 }
 
 /** The workspace's main actor as its durable identity rows name it, read through core's directory. */
+/** A hired actor's handle over the object's stored rows, whether or not it is hosted now. */
+export function actorOver(db: Database, actorId: string): ActorHandle {
+  const sql = sqlOver(db);
+  const [identity] = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
+
+  if (identity === undefined) throw new Error('the workspace has no identity row');
+
+  return new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id }).open(actorId);
+}
+
 export function workspaceMainActor(db: Database): ActorHandle {
   return openWorkspaceMainActor(sqlOver(db));
 }
@@ -1576,9 +1588,14 @@ function instantiate<T extends WorkspaceHostTarget>(
 
 /** Starts the activation as the SDK's first fetch would. Its synchronous part has run on return; the async
  *  boot's promise is dropped (a failed boot classifies inside `onStart`). */
-function startActivation(agent: InstanceType<typeof OrchestratorAgent>): void {
-  const started: unknown = agent.lifecycle.start();
-  void started;
+/** The SDK's own start, as a request would trigger it; a failed start is the caller's to read, never unhandled. */
+function startActivation(agent: InstanceType<typeof OrchestratorAgent>): Promise<void> {
+  const started = agent.lifecycle.start();
+  // Settling observes it, so a start nobody reads is not an unhandled rejection.
+  const observed: unknown = Promise.allSettled([started]);
+  void observed;
+
+  return started;
 }
 
 
@@ -1597,7 +1614,8 @@ export function orchestratorHarness(
   const harness = instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), userPlane, world, env });
   // Born as a first claim bears it, then started.
   harness.agent.harnessBear(world?.ownerUserId ?? 'harness-owner');
-  startActivation(harness.agent);
+  const started: unknown = startActivation(harness.agent);
+  void started;
   // Without the capability this root cannot reach its title registry, so every settle
   // would owe an auto title forever.
   harness.agent.harnessHoldsCapability('harness-capability');
@@ -1640,7 +1658,7 @@ export async function reactivateOrchestratorHarness(
     readonly env?: Env;
     readonly beforeStart?: (agent: HarnessOrchestratorAgent) => void;
   },
-): Promise<ActorHarness<HarnessOrchestratorAgent>> {
+): Promise<ActorHarness<HarnessOrchestratorAgent> & { readonly started: Promise<void> }> {
   // Durable state the prior activation left, written through the stores before `onStart` runs the recovery.
   const config = workspaceMainActor(db).config;
 
@@ -1656,7 +1674,7 @@ export async function reactivateOrchestratorHarness(
 
   const harness = instantiate(HarnessOrchestratorAgent, { db, userPlane, world: opts?.world, env: opts?.env });
   opts?.beforeStart?.(harness.agent);
-  startActivation(harness.agent);
+  const started = startActivation(harness.agent);
 
   if (opts?.world?.freshScaffold !== true) harness.agent.declareScaffoldPresent();
 
@@ -1664,7 +1682,7 @@ export async function reactivateOrchestratorHarness(
   // once no fiber body is left.
   for (let tick = 0; tick < 8; tick++) await joinHarnessFibers();
 
-  return harness;
+  return { ...harness, started };
 }
 
 
@@ -1700,11 +1718,10 @@ export async function hostedSubordinateHarness(
 
 export async function hostedExplorationHarness(
   workspace: ActorHarness<HarnessOrchestratorAgent>,
-  toolProfile: 'full' | 'toolless',
   id: string,
 ): Promise<HostedActorHarness> {
   const entry = await workspace.agent.actorDirectory({
-    action: 'register', creationId: id, name: `exp:${id}`, kind: 'run', toolProfile, lifetime: 'task',
+    action: 'register', creationId: id, name: `exp:${id}`, kind: 'run', lifetime: 'task',
   });
 
   const actor = await workspace.agent.observeActorHost().acquire(entry.reference);

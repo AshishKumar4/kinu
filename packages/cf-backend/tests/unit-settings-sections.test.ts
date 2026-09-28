@@ -1,6 +1,6 @@
 /**
  * Account settings sections: the URL hash decides the section and the rail marks it; an unknown hash
- * (a stale bookmark) opens the first section. Rendering alone is proved in `scripts/chat-and-files-ux.test.ts`.
+ * (a stale bookmark) opens the first section. Rendering alone is proved in `tests/browser/chat-and-files-ux.test.ts`.
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';

@@ -21,11 +21,11 @@ export class DelegatedTurnRunners {
 
   private lane: Promise<void> | null = null;
 
-  private readonly holders = new Set<string>();
-
   private readonly queued: (() => void)[] = [];
 
   private free: number;
+
+  private readonly stops = new Map<string, number>();
 
   constructor(private readonly deps: DelegatedTurnRunnerDeps) {
     this.free = deps.slots;
@@ -37,29 +37,29 @@ export class DelegatedTurnRunners {
     this.holdLane();
   }
 
-  async turn<T>(actorId: string, body: () => Promise<T>): Promise<T> {
-    await this.acquire(actorId);
+  async turn(actorId: string, body: () => Promise<void>): Promise<void> {
+    const queuedAt = this.stops.get(actorId) ?? 0;
+
+    await this.acquire();
 
     try {
-      return await body();
+      if ((this.stops.get(actorId) ?? 0) === queuedAt) await body();
     } finally {
-      this.release(actorId);
+      this.release();
     }
   }
 
-  /** Waiting on a delegate frees the slot. */
-  async whileWaiting<T>(actorId: string, waited: Promise<T>): Promise<T> {
-    if (!this.holders.has(actorId)) return await waited;
-    this.release(actorId);
-
-    try {
-      return await waited;
-    } finally {
-      await this.acquire(actorId);
-    }
+  /** Settles once no runner is left. */
+  async idle(): Promise<void> {
+    while (this.lane !== null) await this.lane;
   }
 
-  private async acquire(actorId: string): Promise<void> {
+  /** A Stop skips these actors' queued turns. */
+  cancelQueued(actorIds: readonly string[]): void {
+    for (const id of actorIds) this.stops.set(id, (this.stops.get(id) ?? 0) + 1);
+  }
+
+  private async acquire(): Promise<void> {
     if (this.free > 0) {
       this.free -= 1;
     } else {
@@ -67,12 +67,9 @@ export class DelegatedTurnRunners {
       this.queued.push(turn.resolve);
       await turn.promise;
     }
-
-    this.holders.add(actorId);
   }
 
-  private release(actorId: string): void {
-    this.holders.delete(actorId);
+  private release(): void {
     const next = this.queued.shift();
 
     if (next === undefined) this.free += 1;

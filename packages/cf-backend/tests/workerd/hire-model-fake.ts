@@ -7,7 +7,8 @@
 
 import * as v from 'valibot';
 import {
-  CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, NEST_MISSION, NEST_RELAY, type ChildScript,
+  CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, NEST_MISSION, NEST_RELAY, REPORT_MARK,
+  type ChildScript,
 } from './hire-shapes';
 
 export interface HireCall {
@@ -21,7 +22,7 @@ export interface HireCall {
 
 const log: HireCall[] = [];
 
-/** Resolved when a root request arrives carrying a tool result; one waiter per arm. */
+/** Resolved when the root's turn opens on its hire's settling report; one waiter per arm. */
 let rootSaw = Promise.withResolvers<void>();
 
 let childSpoke = Promise.withResolvers<void>();
@@ -107,6 +108,16 @@ function lastUser(body: OutboundBody): string {
   const users = (body.messages ?? []).filter((message) => message.role === 'user');
 
   return contentText(users.at(-1)?.content ?? '');
+}
+
+/** Every user turn the request carries, one string: an agent's brief stays in it across its later turns. */
+function allUsers(body: OutboundBody): string {
+  return (body.messages ?? []).filter((message) => message.role === 'user').map((message) => contentText(message.content ?? '')).join('\n');
+}
+
+/** A turn opened on a hired agent's report, as against a hire request or a brief. */
+function onReport(body: OutboundBody): boolean {
+  return lastUser(body).includes(REPORT_MARK);
 }
 
 interface AgentsToolArgs {
@@ -202,15 +213,18 @@ function mintedName(results: readonly string[]): string | null {
 }
 
 /** Keyed on the conversation, not a counter: an interrupted turn re-enters with the same history,
- *  and a counter would author a second hire where the product resumed one. */
+ *  and a counter would author a second hire where the product resumed one. A hire returns at once; the answer is
+ *  a later turn opened on its report. */
 function rootLane(body: OutboundBody, results: readonly string[]): Response {
   const model = body.model ?? HIRE_ROOT_MODEL;
 
-  if (results.length !== 0) {
+  if (onReport(body)) {
     rootSaw.resolve();
 
-    return textBody(model, `ROOT-SAW ${results.join(' ')}`.slice(0, 600));
+    return textBody(model, 'ROOT-GOT-ANSWER');
   }
+
+  if (results.length !== 0) return textBody(model, 'ROOT-WAITS');
 
   return toolCallBody(model, 'call_hire_1', 'agents', {
     action: 'hire',
@@ -224,6 +238,8 @@ function rootLane(body: OutboundBody, results: readonly string[]): Response {
 /** Hire a durable child, message it once, wait until it works on both; keyed on history like `rootLane`. */
 async function durableLane(body: OutboundBody, results: readonly string[]): Promise<Response> {
   const model = body.model ?? HIRE_DURABLE_MODEL;
+
+  if (onReport(body)) return textBody(model, 'ROOT-NOTED');
   const name = mintedName(results);
 
   if (name === null) {
@@ -255,13 +271,16 @@ async function durableLane(body: OutboundBody, results: readonly string[]): Prom
   return textBody(model, `ROOT-SAW-DURABLE ${name}`);
 }
 
-/** The child's closing prose is the report a task-lifetime child relays; under `nest` it first hires its own. */
+/** The child's closing prose is the report a task-lifetime child relays; under `nest` it first hires its own, and
+ *  relays that hire's answer from the turn the answer opens. */
 async function childLane(body: OutboundBody, results: readonly string[]): Promise<Response> {
   const model = body.model ?? HIRE_CHILD_MODEL;
 
   // `chain`: every helper hires one of its own, to the depth cap; the others nest one level.
-  if (childScript !== 'answer' && childScript !== 'throw' && childScript !== 'park' && lastUser(body).includes(NEST_MISSION)) {
-    if (results.length !== 0) return textBody(model, `${NEST_RELAY} ${results.join(' ')}`.slice(0, 600));
+  if (childScript !== 'answer' && childScript !== 'throw' && childScript !== 'park' && allUsers(body).includes(NEST_MISSION)) {
+    if (onReport(body)) return textBody(model, `${NEST_RELAY} ${lastUser(body)}`.slice(0, 600));
+
+    if (results.length !== 0) return textBody(model, 'HELPER-WAITS');
 
     return toolCallBody(model, 'call_nested_hire_1', 'agents', {
       action: 'hire',

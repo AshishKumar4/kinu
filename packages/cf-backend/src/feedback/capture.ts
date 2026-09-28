@@ -30,7 +30,7 @@ export interface Capture {
 
 /**
  * Blanks secret-bearing nodes and drops the feedback UI's own; returns the count. Password inputs are
- * included without annotation because a forgotten opt-in leaks silently. Covered by `scripts/feedback-ux.test.ts`.
+ * included without annotation because a forgotten opt-in leaks silently. Covered by `tests/browser/feedback-ux.test.ts`.
  */
 function redactClone(root: Element): number {
   for (const omit of root.querySelectorAll(`[${FEEDBACK_OMIT_ATTR}]`)) omit.remove();

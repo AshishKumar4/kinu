@@ -352,13 +352,13 @@ export function createTeamToolDeps(deps: {
     deps.broadcast({ type: 'subordinates_changed', subordinates: deps.roster.list() });
   };
 
-  /** A task-lifetime row belongs to the asking call's waiter; durable verbs refuse it as `bad_input`. */
+  /** A task agent answers one brief and retires; more work for it belongs to a durable hire. */
   const requireDurable = (entry: SubordinateRosterEntry): SubordinateRosterEntry => {
     if (entry.lifetime !== 'durable') {
       throw new KinuError(
         'bad_input',
         `subordinate "${entry.name}" is a temporary agent for one question (lifetime 'task'), `
-          + 'released by the call that asked it: assign, message and dismiss apply to durable subordinates only',
+          + 'retired once it answers: assign and message apply to durable subordinates only',
       );
     }
 
@@ -548,7 +548,7 @@ export function createTeamToolDeps(deps: {
     },
 
     dismiss: async (input) => {
-      const before = requireDurable(deps.roster.requireExisting(input.name));
+      const before = deps.roster.requireExisting(input.name);
 
       if (before.createdBy === 'user' && input.requestedBy !== 'user') {
         throw new Error(`subordinate "${input.name}" was created by the owner and only the owner can dismiss it`);

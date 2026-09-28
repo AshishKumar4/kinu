@@ -216,16 +216,15 @@ describe('an owed follow-up turn is a durable terminal effect', () => {
 describe('an interrupted terminal sequence replays its suffix and repeats nothing', () => {
   /** The whole sequence is claimed up front, so effects after a first-effect cut still have rows. */
   test('a cut at the first effect still leaves every later effect owed', async () => {
-    const harness = cutAt('takes', 'before');
+    const harness = cutAt('turn_end_extensions', 'before');
     turns(harness).open('u-head');
 
     await expect(turns(harness).settle({ messageId: 'a-head' }))
-      .rejects.toThrow('terminal effect takes:a-head interrupted before its side effect');
+      .rejects.toThrow('terminal effect turn_end_extensions:a-head interrupted before its side effect');
 
     const owed = effects(harness, 'u-head', 'a-head');
     expect(owed.map((row) => row.effect_key)).toEqual([
       // No `branches` row: branches are claimed per branch id and this turn launched none.
-      'v1:takes:a-head',
       'v1:turn_end_extensions:a-head', 'v1:turn_record:a-head',
       'v1:event_drain:a-head', 'v1:improvement_lanes:a-head',
       'v1:sleep_time:a-head', 'v1:auto_title:a-head', 'v1:auto_gepa:a-head',
@@ -299,16 +298,16 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
   /** A keyed effect cut after its side effect is re-run, because re-running cannot double. */
   test('a keyed effect cut after its side effect is replayed and the sequence closes', async () => {
-    const harness = cutAt('takes', 'after');
-    turns(harness).open('u-takes');
+    const harness = cutAt('turn_end_extensions', 'after');
+    turns(harness).open('u-ext');
 
-    await expect(turns(harness).settle({ messageId: 'a-takes' })).rejects.toThrow('terminal effect takes:a-takes interrupted after its side effect');
-    expect(effects(harness, 'u-takes', 'a-takes').find((row) => row.effect_key === 'v1:takes:a-takes')?.status).toBe('pending');
+    await expect(turns(harness).settle({ messageId: 'a-ext' })).rejects.toThrow('terminal effect turn_end_extensions:a-ext interrupted after its side effect');
+    expect(effects(harness, 'u-ext', 'a-ext').find((row) => row.effect_key === 'v1:turn_end_extensions:a-ext')?.status).toBe('pending');
 
     const restarted = await recover(harness);
 
-    expect(effects(restarted, 'u-takes', 'a-takes').filter((row) => row.status === 'pending')).toEqual([]);
-    expect(disposition(restarted, 'u-takes', 'a-takes')).toBe('done');
+    expect(effects(restarted, 'u-ext', 'a-ext').filter((row) => row.status === 'pending')).toEqual([]);
+    expect(disposition(restarted, 'u-ext', 'a-ext')).toBe('done');
   });
 
   /** One owed effect keeps the whole transition open. */
@@ -350,7 +349,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     // Heads still running: their reports arrive only after the claims are read.
     const reports: Array<ReturnType<typeof Promise.withResolvers<ScriptedHeadReport>>> = [];
 
-    const harness = cutAt('takes', 'before', {
+    const harness = cutAt('turn_end_extensions', 'before', {
       heads: () => {
         const report = Promise.withResolvers<ScriptedHeadReport>();
         reports.push(report);
@@ -362,7 +361,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const first = await branchDuring(harness, 'u-branch', 'a-branch', 'try the other library');
     const second = await harness.agent.branchTurn('try the other algorithm');
 
-    await expect(turns(harness).settle({ messageId: 'a-branch' })).rejects.toThrow('terminal effect takes:a-branch interrupted before its side effect');
+    await expect(turns(harness).settle({ messageId: 'a-branch' })).rejects.toThrow('terminal effect turn_end_extensions:a-branch interrupted before its side effect');
 
     expect(effects(harness, 'u-branch', 'a-branch').map((row) => row.effect_key).filter((key) => key.startsWith('v1:branches:')).sort())
       .toEqual([`v1:branches:${first}`, `v1:branches:${String(second.branchId)}`].sort());

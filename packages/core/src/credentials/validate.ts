@@ -31,7 +31,13 @@ const OpenAICompatCredentialSchema = v.object({
   extraHeaders: v.optional(v.record(v.string(), JsonValueSchema)),
 });
 
-export function validateCredential(input: { value: unknown }): Credential {
+/** Bearer keys whose reader honours `baseURL`; any other refuses one. */
+/** The web search credential: web/provider.ts reads it, and it alone may name an endpoint. */
+export const TAVILY_CRED_KEY = 'tavily';
+
+const ENDPOINT_BEARER_KEYS: ReadonlySet<string> = new Set([TAVILY_CRED_KEY]);
+
+export function validateCredential(input: { key: string; value: unknown }): Credential {
   return settleSync(credentialOf(input));
 }
 
@@ -46,14 +52,20 @@ function part<const TSchema extends v.GenericSchema>(schema: TSchema, input: { v
     .join('; ')}`));
 }
 
-function credentialOf(input: { value: unknown }): Effect.Effect<Credential, KinuError> {
+function credentialOf(input: { key: string; value: unknown }): Effect.Effect<Credential, KinuError> {
   return Effect.gen(function* () {
     const kind = (yield* part(CredentialKindSchema, input)).kind;
 
     if (kind === 'bearer') {
       const parsed = yield* part(BearerCredentialSchema, input);
 
-      return parsed.baseURL === undefined ? { kind: 'bearer', token: parsed.token } : parsed;
+      if (parsed.baseURL === undefined) return { kind: 'bearer', token: parsed.token };
+
+      if (!ENDPOINT_BEARER_KEYS.has(input.key)) {
+        return yield* Effect.fail(new KinuError('bad_input', `${input.key} takes no baseURL: only ${[...ENDPOINT_BEARER_KEYS].join(', ')} sends its token to one`));
+      }
+
+      return parsed;
     }
 
     if (kind === 'oauth') {

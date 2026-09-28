@@ -11,7 +11,6 @@ import type { ReasoningEffort } from '../src/providers/effort';
 describe('reasoning_effort plumbing', () => {
   test('REASONING_EFFORT_FOR_STAGE has all stages', () => {
     expect(REASONING_EFFORT_FOR_STAGE.chat).toBe('medium');
-    expect(REASONING_EFFORT_FOR_STAGE.mcts_rollout).toBe('low');
     expect(REASONING_EFFORT_FOR_STAGE.scaffold_mutation).toBe('high');
   });
 
@@ -86,22 +85,14 @@ describe('reasoning_effort plumbing', () => {
  * named by real call sites rather than stage by stage.
  */
 describe('the reasoning rung a stage gets is a policy, not a list of magnitudes', () => {
-  test('a scorer never reasons less than the sampling it is ranking', () => {
-    // In `cf-backend/src/runtime.ts` one runtime samples with `effortFor('mcts_rollout')` and scores the same
-    // branches with `effortFor('judge')`; a judge no stronger than the sampler cannot separate them.
+  test('the self-modifying turn reasons most', () => {
     const rung = (effort: ReasoningEffort) => REASONING_EFFORTS.indexOf(effort);
-
-    expect(rung(REASONING_EFFORT_FOR_STAGE.judge))
-      .toBeGreaterThan(rung(REASONING_EFFORT_FOR_STAGE.mcts_rollout));
-    expect(rung(REASONING_EFFORT_FOR_STAGE.mcts_judge))
-      .toBeGreaterThan(rung(REASONING_EFFORT_FOR_STAGE.mcts_rollout));
 
     // The self-modifying turn is the strict maximum; the ladder is walked, so a new stage is covered.
     for (const [stage, effort] of Object.entries(REASONING_EFFORT_FOR_STAGE)) {
       if (stage === 'scaffold_mutation') continue;
       expect(rung(REASONING_EFFORT_FOR_STAGE.scaffold_mutation)).toBeGreaterThan(rung(effort));
     }
-
   });
 
   test('inside one provider namespace the override beats the base it is layered over', () => {

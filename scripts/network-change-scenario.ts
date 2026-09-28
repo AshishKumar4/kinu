@@ -1,6 +1,6 @@
 /**
  * A network change failing a page's module graph, and the harness's wait going on past it. Run by
- * flow-waits-ux.test.ts inside a user and network namespace of its own (lo and dummy0 up), so the change touches
+ * tests/browser/flow-waits-ux.test.ts inside a user and network namespace of its own (lo and dummy0 up), so the change touches
  * nothing outside it.
  *
  * Chrome answers an address change by flushing its socket pools: a request already on a connection runs on, and one

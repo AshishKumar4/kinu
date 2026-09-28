@@ -29,6 +29,8 @@ import {
   type HostedAgentRef,
   type LLMProviderConfig,
   type SqlExecutor,
+  type TeamToolDeps,
+  type TemporaryRunRequest,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import type { Subprocess } from 'bun';
@@ -137,6 +139,92 @@ function gatedFirstModel(): GatedModel {
 }
 
 /** A subordinate that files a terminal `completed` report; the status must be the child's own word. */
+/**
+ * Starts a task hire, which returns at once; its answer is the settling report its hirer's rail announces, taken once
+ * the hirer's turn on it has ended.
+ */
+async function taskHire(
+  host: LocalAgentHost, team: TeamToolDeps, request: TemporaryRunRequest,
+): Promise<{ readonly agent: string; readonly report: { readonly status: string; readonly text: string } }> {
+  const reported = Promise.withResolvers<{ status: string; text: string }>();
+  const hirerTurnEnded = Promise.withResolvers<void>();
+
+  const off = host.subscribe((agent, event) => {
+    if (event.type === 'broadcast' && event.event.type === 'subordinate_event' && event.event.status !== 'progress') {
+      reported.resolve({ status: String(event.event.status), text: String(event.event.text) });
+    }
+
+    if (agent === 'root' && event.type === 'turn-end') hirerTurnEnded.resolve();
+  });
+
+  const outcome = await present(team.temporary, 'the temporary hire port').start(request);
+
+  expect(outcome).toMatchObject({ status: 'working', lifetime: 'task', transcript: 'kept' });
+  const report = await reported.promise;
+  await hirerTurnEnded.promise;
+  off();
+
+  return { agent: v.parse(v.object({ agent: v.string() }), outcome).agent, report };
+}
+
+/**
+ * A model keyed on the prompt: `park` briefs hold their call until the turn is aborted (as a stopped provider call
+ * ends), `hire` briefs make one durable hire of `hire` with mission `mission`, every other call answers `ok`.
+ */
+function treeModel(script: { readonly park: string; readonly hire?: { readonly brief: string; readonly mission: string } }) {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  const parked = Promise.withResolvers<void>();
+  const aborted = Promise.withResolvers<void>();
+  let hired = false;
+
+  const model = new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doGenerate: async () => textAnswer('acknowledged', usage),
+    doStream: async (options) => {
+      const prompt = JSON.stringify(options.prompt);
+
+      if (prompt.includes(script.park)) {
+        parked.resolve();
+
+        return {
+          stream: new ReadableStream<LanguageModelV2StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              options.abortSignal?.addEventListener('abort', () => {
+                aborted.resolve();
+                controller.error(options.abortSignal?.reason);
+              }, { once: true });
+            },
+          }),
+        };
+      }
+
+      if (script.hire !== undefined && prompt.includes(script.hire.brief) && !hired) {
+        hired = true;
+
+        return {
+          stream: new ReadableStream<LanguageModelV2StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({
+                type: 'tool-call', toolCallId: 'call_hire', toolName: 'agents',
+                input: JSON.stringify({ action: 'hire', role: 'task', mission: script.hire?.mission }),
+              });
+              controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              controller.close();
+            },
+          }),
+        };
+      }
+
+      return { stream: textStream('ok', usage) };
+    },
+  });
+
+  return { model, parked: parked.promise, aborted: aborted.promise };
+}
+
 function reportingChildModel(content: string, status: 'completed' | 'failed' = 'completed') {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let calls = 0;
@@ -584,7 +672,8 @@ describe('LocalAgentHost', () => {
 
     const assistantRows = checkSql<{ n: number }>`
       SELECT COUNT(*) AS n FROM conversation_entries
-      WHERE actor_id = ${checkActorId} AND parent_id = ${wakeId} AND role = 'assistant'`[0];
+      WHERE actor_id = ${checkActorId} AND role = 'assistant' AND position = (
+        SELECT position + 1 FROM conversation_entries WHERE actor_id = ${checkActorId} AND id = ${wakeId})`[0];
 
     const orphanRows = check.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM fibers WHERE id = 'orphan-fiber'",
@@ -927,23 +1016,15 @@ describe('LocalAgentHost', () => {
     ]);
 
     const team = await host.team('root');
-    const port = present(team.temporary, 'the temporary hire port');
 
-    const outcome = await port.run({
+    const { agent, report } = await taskHire(host, team, {
       role: 'researcher',
       roleLabel: 'researcher',
       task: 'Find the root cause and report it.',
       mode: 'build',
     });
 
-    expect(outcome).toMatchObject({
-      status: 'completed',
-      lifetime: 'task',
-      role: 'researcher',
-      answer: ANSWER,
-      transcript: 'kept',
-    });
-    const agent = v.parse(v.object({ agent: v.string() }), outcome).agent;
+    expect(report).toEqual({ status: 'completed', text: ANSWER });
     expect(agent).toStartWith('ask-researcher-');
 
     // Lifecycle says the name was released; `actorRowCount` (which excludes `workspace_actors`) says the transcript survived.
@@ -964,7 +1045,7 @@ describe('LocalAgentHost', () => {
     ]);
 
     await host.close();
-    // The waiting call consumed the answer, so no `subordinate_report` bills a parent turn.
+    // The answer is one `subordinate_report` on the hirer's rail, which opened its next turn.
     const view = new Database(dbPath, { readonly: true });
 
     const reports = view.query<{ n: number }, []>(
@@ -972,7 +1053,7 @@ describe('LocalAgentHost', () => {
     ).get()?.n ?? 0;
 
     view.close();
-    expect(reports).toBe(0);
+    expect(reports).toBe(1);
   });
 
   test('a hire in the same roster keeps lifetime durable and still reports onto the rail', async () => {
@@ -1030,18 +1111,16 @@ describe('LocalAgentHost', () => {
       ]);
 
       const team = await host.team('root');
-      const temporary = present(team.temporary, 'the temporary hire port');
 
-      const outcome = await temporary.run({
+      const answer = await taskHire(host, team, {
         role: 'researcher',
         roleLabel: 'researcher',
         task: 'Find the root cause.',
         mode: 'build',
       });
 
-      expect(outcome).toMatchObject({ status: 'failed', lifetime: 'task', transcript: 'kept' });
-      const answer = v.parse(v.object({ answer: v.string(), agent: v.string() }), outcome);
-      expect(answer.answer.length).toBeGreaterThan(0);
+      expect(answer.report.status).toBe('blocked');
+      expect(answer.report.text.length).toBeGreaterThan(0);
 
       expect(await team.list()).toEqual([]);
       await host.close();
@@ -1057,7 +1136,7 @@ describe('LocalAgentHost', () => {
 
       view.close();
       expect(rows).toEqual([{ name: answer.agent, status: 'dismissed', lifetime: 'task' }]);
-      expect(reports).toBe(0);
+      expect(reports).toBe(1);
     });
   }
 
@@ -1071,11 +1150,10 @@ describe('LocalAgentHost', () => {
     ]);
 
     const team = await host.team('root');
-    const temporary = present(team.temporary, 'the temporary hire port');
-    const outcome = await temporary.run({ role: 'researcher', roleLabel: 'researcher', task: 'Audit the ledger.', mode: 'build' });
+    const { report } = await taskHire(host, team, { role: 'researcher', roleLabel: 'researcher', task: 'Audit the ledger.', mode: 'build' });
 
-    expect(outcome).toMatchObject({ status: 'failed', lifetime: 'task' });
-    expect(v.parse(v.object({ answer: v.string() }), outcome).answer).toStartWith(`${narration.join('\n\n')}\n\n`);
+    expect(report.status).toBe('blocked');
+    expect(report.text).toStartWith(`${narration.join('\n\n')}\n\n`);
     await host.close();
   });
 
@@ -1136,14 +1214,12 @@ describe('LocalAgentHost', () => {
     ]);
 
     const askTeam = await asking.host.team('root');
-    const temporary = present(askTeam.temporary, 'the temporary hire port');
 
-    const outcome = await temporary.run({
+    const { agent: asked } = await taskHire(asking.host, askTeam, {
       role: 'researcher', roleLabel: 'researcher', task: 'Find the root cause.', mode: 'build',
     });
 
     await asking.host.close();
-    const asked = v.parse(v.object({ agent: v.string() }), outcome).agent;
     const askActorId = childActorId(askDb, asked);
     expect(actorLifecycle(askDb, askActorId)).toBe('retained');
     expect(evolutionRows(askDb, askActorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
@@ -1211,7 +1287,7 @@ describe('LocalAgentHost', () => {
   /** A progress note sets the durable relay's "spoke this turn" bit, which must not suppress the terminal answer. */
   for (const [then, expected] of [
     ['answer', 'completed'],
-    ['throw', 'failed'],
+    ['throw', 'blocked'],
   ] as const) {
     test(`a temporary child that reports progress and then ${then}s still answers its caller`, async () => {
       const { state, project } = makeRoots();
@@ -1222,17 +1298,15 @@ describe('LocalAgentHost', () => {
       ]);
 
       const team = await host.team('root');
-      const temporary = present(team.temporary, 'the temporary hire port');
 
-      const outcome = await temporary.run({
+      const { report } = await taskHire(host, team, {
         role: 'researcher',
         roleLabel: 'researcher',
         task: 'Audit the ledger.',
         mode: 'build',
       });
 
-      const settled = v.parse(v.object({ status: v.string(), agent: v.string() }), outcome);
-      expect(settled.status).toBe(expected);
+      expect(report.status).toBe(expected);
       expect(await team.list()).toEqual([]);
       await host.close();
       const view = new Database(dbPath, { readonly: true });
@@ -1241,14 +1315,14 @@ describe('LocalAgentHost', () => {
         'SELECT status, lifetime FROM actor_subordinates',
       ).all();
 
-      // The progress note is not the answer, so it reaches the rail like any mid-work note.
+      // The progress note is not the answer, so it reaches the rail like any mid-work note, and the answer after it.
       const reports = view.query<{ n: number }, []>(
         "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
       ).get()?.n ?? 0;
 
       view.close();
       expect(rows).toEqual([{ status: 'dismissed', lifetime: 'task' }]);
-      expect(reports).toBe(1);
+      expect(reports).toBe(2);
     });
   }
 
@@ -1337,8 +1411,40 @@ describe('LocalAgentHost', () => {
     }
   });
 
-  /** Once the run settles the row is released, so a further report is refused rather than delivered as a second result. */
-  test('a settled temporary run refuses a second report for the same child', async () => {
+  /** Once the task agent settles its row is released: its one failure is the only message, and it takes no further work. */
+  // Review P1 (integration/0963): with the in-call waiter gone, a Stop on the root reached nothing it had hired.
+  test('a Stop on the root interrupts the task agent it hired, and the stopped agent wakes no one', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const tree = treeModel({ park: 'Find the root cause.' });
+    const { host } = makeHost(state, tree.model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const team = await host.team('root');
+
+    await present(team.temporary, 'the temporary hire port').start({ role: 'researcher', roleLabel: 'researcher', task: 'Find the root cause.', mode: 'build' });
+    await tree.parked;
+    (await host.acquire('root')).interrupt();
+    await tree.aborted;
+    await host.close();
+
+    expect(eventCount(dbPath, 'pending')).toBe(0);
+  });
+
+  // Review P1 (integration/0963): removing a middle agent ended only its own session; its hires kept streaming.
+  test('deleting a middle agent ends the agent it hired too', async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const tree = treeModel({ park: 'Grandchild brief.', hire: { brief: 'Middle brief.', mission: 'Grandchild brief.' } });
+    const { host } = makeHost(state, tree.model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const team = await host.team('root');
+
+    const middle = await team.spawn({ role: 'task', mission: 'Middle brief.', mode: 'build' });
+    await tree.parked;
+    await team.dismiss({ name: middle.name, keepHistory: false, requestedBy: 'user' });
+    await tree.aborted;
+    await host.close();
+  });
+
+  test('a settled task agent delivers its failure once and refuses further work', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
 
@@ -1347,17 +1453,15 @@ describe('LocalAgentHost', () => {
     ]);
 
     const team = await host.team('root');
-    const temporary = present(team.temporary, 'the temporary hire port');
 
-    const outcome = await temporary.run({
+    const agent = await taskHire(host, team, {
       role: 'researcher',
       roleLabel: 'researcher',
       task: 'Find the root cause.',
       mode: 'build',
     });
 
-    const agent = v.parse(v.object({ agent: v.string(), status: v.string() }), outcome);
-    expect(agent.status).toBe('failed');
+    expect(agent.report.status).toBe('blocked');
 
     expect(await team.list()).toEqual([]);
     await expect(team.assign({ name: agent.agent, task: 'again', mode: 'build' }))
@@ -1371,7 +1475,7 @@ describe('LocalAgentHost', () => {
     ).get()?.n ?? 0;
 
     view.close();
-    expect(reports).toBe(0);
+    expect(reports).toBe(1);
   });
 
   /** Waiter-absent late report takes the ordinary rail, and the roster releases the row. */

@@ -11,8 +11,7 @@ export interface MctsRow {
   visits: number; value: number; own_score: number | null; status: ForkNode["status"]; action: string;
   /** Which search this row belongs to. */
   root_id?: string | null;
-  task?: string; observation?: string; code_used?: string | null;
-  branch_agent_key?: string | null; msg_id?: string | null; created_at?: number;
+  task?: string; observation?: string; created_at?: number;
 }
 
 /** Tree for a payload linking into no root. No `action`: the band then labels the root from the run name. */
@@ -56,7 +55,7 @@ export function buildTree(nodes: MctsRow[]): ForkNode {
       visits: unevaluated ? null : n.visits,
       value: unevaluated ? null : n.own_score,
       status: n.status, action: n.action,
-      task: n.task, observation: n.observation, codeUsed: n.code_used, createdAt: n.created_at,
+      task: n.task, observation: n.observation, createdAt: n.created_at,
       children: [],
     };
   });

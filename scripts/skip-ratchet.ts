@@ -54,16 +54,17 @@ import { INFRA_FAILURE_MARKER } from '../packages/test-utils/src/live-model';
 const root = new URL('..', import.meta.url).pathname;
 
 /**
- * The bun suites this gate covers, as `bun test` argv. Note `./tests/` — the
- * leading `./` is load bearing, and `assertMeasured` below is what keeps it
- * honest.
+ * The bun suites this gate covers, as `bun test` argv. The leading `./` is
+ * load bearing, and `assertMeasured` below is what keeps it honest.
+ * `./tests/browser/` is not here: its suites skip nothing and their rows run
+ * them, and walking into them held this gate to its deadline (2026-09-28).
  *
- * THREE ENTRIES, EACH A SET NOTHING ELSE CAN ANSWER FOR.
+ * FOUR ENTRIES, EACH A SET NOTHING ELSE CAN ANSWER FOR.
  *
- * `./packages/core/tests/e2e/` holds three live tests — one MCTS search cycle
- * and two scaffold lifecycles, all behind `describe.skipIf(!isE2EConfigured())`
- * over `AI_GATEWAY_BASE_URL` + `AI_GATEWAY_AUTH` — and no ratchet target reached
- * `packages/`, so all three skipped at every push inside `bun run test` with
+ * `./packages/core/tests/e2e/` holds two live tests, both scaffold lifecycles,
+ * behind `describe.skipIf(!isE2EConfigured())` over `AI_GATEWAY_BASE_URL` +
+ * `AI_GATEWAY_AUTH`, and no ratchet target reached `packages/`, so both
+ * skipped at every push inside `bun run test` with
  * nothing declaring them and no report anyone read. The same false green this
  * file exists for, one directory over.
  *
@@ -73,7 +74,7 @@ const root = new URL('..', import.meta.url).pathname;
  * in the reports so an accidental skip or missing sampler check remains visible.
  */
 export const SKIP_RATCHET_TARGETS: readonly string[] = [
-  './tests/', './packages/core/tests/e2e/', './scripts/bench-external.test.ts',
+  './tests/live-model/', './tests/first-run/', './packages/core/tests/e2e/', './scripts/bench-external.test.ts',
 ];
 
 export const SKIP_LOCK_PATH = resolve(root, 'scripts/skip-ratchet.lock.json');
@@ -361,7 +362,7 @@ function junitPaths(argv: readonly string[]): readonly string[] | null {
  * {@link SKIP_RATCHET_TARGETS}, which is what a standalone run proves.
  *
  * IT EXISTS BECAUSE THE TARGET SET IS A PROPERTY OF THE RUN, not of this file.
- * The live tier runs `./tests/live/` (one file of it under `--backend cloud`),
+ * The live tier runs `./tests/live-model/` (one file of it under `--backend cloud`),
  * so the default list would demand reports from targets that run never starts.
  * The caller names what it RAN and this gate proves exactly that non-empty.
  */

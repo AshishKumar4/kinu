@@ -22,7 +22,7 @@ import {
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
-import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT } from "@kinu.run/core";
+import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema } from "@kinu.run/core";
 import type { ReasoningEffort } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
@@ -59,7 +59,7 @@ import { primePageDeployedBuildSha } from "@kinu.run/core";
 import { ChatLiveTail, DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
-import { usePagedScroll } from "@/hooks/use-paged-scroll";
+import { useChatThread } from "@/hooks/use-chat-thread";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
 import { useTheme } from "@/hooks/use-theme";
@@ -81,7 +81,7 @@ import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
   BUILTIN_PROFILE_CATALOG,
-  CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema, mergeTranscript,
+  CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type AdvisorSeverity, type JsonValue, type PlanReview, type ReviewAnnotation,
@@ -107,7 +107,7 @@ import { galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGallery
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
-// Declared before the shell mounts so the app background attaches its stepping controls here only (scripts/app-background-ux.test.ts).
+// Declared before the shell mounts so the app background attaches its stepping controls here only (tests/browser/app-background-ux.test.ts).
 window.__kinuGalleryStepping = true;
 
 const squareButtonVariant = "square";
@@ -901,7 +901,7 @@ window.WebSocket = new Proxy(window.WebSocket, {
 });
 
 
-/** A real MCTS tree at the size the view must survive; rows, not a tree, so it enters through `buildTree` like the socket payload. */
+/** A real swarm tree at the size the view must survive; rows, not a tree, so it enters through `buildTree` like the socket payload. */
 const MCTS_ACTIONS = [
   "Backfill coupon.kind from the discount table",
   "Add a NOT NULL default and re-run the migration",
@@ -989,7 +989,6 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
         observation: status === "failed"
           ? "Branch errored: the staging DB refused the ALTER while checkout held the lock."
           : `Scored ${score.toFixed(2)} — ${status === "pruned" ? "below the prune floor, dropped" : "kept for the next round"}.`,
-        code_used: onWinningLine ? "await db.exec(`UPDATE coupons SET kind = ...`)" : null,
         created_at: NOW - 36e5 + rows.length * 9e3,
       });
 
@@ -1040,7 +1039,6 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
   },
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
-  getMctsConfig: { explorationConstant: 1.41, maxIterations: 12, branchBudget: 3 },
   getEvolutionChangelog: { entries: [], unseen: 0 },
 });
 
@@ -1385,7 +1383,8 @@ packages/
 The same request either applies one valid coupon atomically or returns \`coupon_ineligible\` without changing the cart.`;
 
 /* `?plan=late-heading` (mid-document h1) and `?plan=annotated-heading` (anchor on the leading h1): the header must promote
-   neither. `?plan=read-only` is a settled plan. */
+   neither. `?plan=read-only` is a settled plan. `?plan=code-path` names a file and line inline, the text Plannotator's own
+   inline renderer turns into a hover preview that fetches `/api/doc`. */
 const GALLERY_PLAN_VARIANT = new URLSearchParams(location.search).get("plan");
 
 const GALLERY_PLAN_LATE_HEADING = `The guard runs after the discount lands, so an archived coupon still applies.
@@ -1410,9 +1409,29 @@ const GALLERY_PLAN_TITLE_NOTE: ReviewAnnotation = {
   author: "Owner",
 };
 
-const GALLERY_PLAN_CONTENT = GALLERY_PLAN_VARIANT === "late-heading"
-  ? GALLERY_PLAN_LATE_HEADING
-  : GALLERY_PLAN_MARKDOWN;
+const GALLERY_PLAN_CODE_PATH = `# Repair the \`applyCoupon\` eligibility guard
+
+Move the eligibility check in \`packages/core/src/checkout/apply-coupon.ts:42\` ahead of the cart update.
+
+[Reference](https://example.test/reference) [Jump](#details) [Local](/readme.md) [Unsafe](javascript:alert(1))
+
+4. First operation
+5. Second operation
+
+| Name | Value |
+| --- | --- |
+| Separator | alpha\\|beta |
+
+\`\`\`mermaid
+graph TD; A-->B
+\`\`\``;
+
+const GALLERY_PLAN_CONTENTS = new Map([
+  ["late-heading", GALLERY_PLAN_LATE_HEADING],
+  ["code-path", GALLERY_PLAN_CODE_PATH],
+]);
+
+const GALLERY_PLAN_CONTENT = GALLERY_PLAN_CONTENTS.get(GALLERY_PLAN_VARIANT ?? "") ?? GALLERY_PLAN_MARKDOWN;
 
 const GALLERY_PLAN_ANNOTATIONS: readonly ReviewAnnotation[] =
   GALLERY_PLAN_VARIANT === "annotated-heading" ? [GALLERY_PLAN_TITLE_NOTE] : [];
@@ -1551,6 +1570,19 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   listWorkspaceAgents: () => (AGENTS_PANEL ? GALLERY_AGENTS : []),
+  // As the server does: the stopped worker settles aborted, which the panel reads as stopped, and the roster read moves.
+  stopSwarmWorker: (args?: unknown[]) => {
+    const [headId] = v.parse(v.tuple([v.string()]), args);
+    const at = GALLERY_AGENTS.findIndex((agent) => agent.open.kind === "node" && agent.open.nodeId === headId && agent.activity === "working");
+    const agent = GALLERY_AGENTS[at];
+
+    if (agent !== undefined) {
+      GALLERY_AGENTS[at] = { ...agent, activity: "stopped" };
+      queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents"] })); });
+    }
+
+    return null;
+  },
   // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
   // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture.
@@ -1699,7 +1731,7 @@ function historyRow(index: number): ChatHistoryEntry {
   const id = `hist-${String(index).padStart(5, "0")}`;
   const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
 
-  if (index % 2 === 0) return { id, role: "user", content: `Question ${index}: what changed in the pricing guard this time?`, createdAt };
+  if (index % 2 === 0) return { id, position: index, role: "user", content: `Question ${index}: what changed in the pricing guard this time?`, createdAt };
 
   const kind = index % 10;
   let content = `Answer ${index}. The guard now reads the campaign before it writes the cart.`;
@@ -1709,13 +1741,17 @@ function historyRow(index: number): ChatHistoryEntry {
   else if (kind === 5) content += `\n\n![chart ${index}](${HISTORY_PICTURE})`;
   else if (kind === 7) content += "\n\nslate://board";
 
-  return { id, role: "assistant", content, createdAt };
+  return { id, position: index, role: "assistant", content, createdAt };
 }
 
 async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
-  const request = v.parse(v.tuple([v.object({ cursor: v.optional(v.object({ after: v.string() })), limit: v.number() })]), args);
+  const request = v.parse(v.tuple([v.object({ cursor: v.optional(PositionCursorSchema), limit: v.number() })]), args);
   const { cursor, limit } = request[0];
-  const held = cursor?.after.startsWith("hist-") ? Number(cursor.after.slice(5)) : HISTORY_ROWS;
+  const asks = document.documentElement.dataset;
+
+  asks.historyAsks = String(Number(asks.historyAsks ?? 0) + 1);
+  asks.historyReads = `${asks.historyReads ?? ""} ${cursor === undefined ? "newest" : `${String(cursor.before - limit)}-${String(cursor.before)}`}`;
+  const held = Math.min(cursor?.before ?? HISTORY_ROWS, HISTORY_ROWS);
   const from = Math.max(0, held - limit);
   const items = Array.from({ length: held - from }, (_, offset) => historyRow(from + offset));
   const settled = Promise.withResolvers<void>();
@@ -1723,13 +1759,8 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
   if (HISTORY_HELD) window.addEventListener("gallery:release-page", () => { settled.resolve(); }, { once: true });
   else setTimeout(settled.resolve, HISTORY_LATENCY_MS);
   await settled.promise;
-  const first = items[0];
 
-  const walked = items.length;
-
-  return from === 0 || first === undefined
-    ? { status: "end", items, walked }
-    : { status: "more", items, next: { after: first.id }, walked };
+  return from === 0 ? { status: "end", items } : { status: "more", items, next: { before: from } };
 }
 
 const GALLERY_AGENTS: PanelAgent[] = [
@@ -1740,6 +1771,8 @@ const GALLERY_AGENTS: PanelAgent[] = [
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false },
   { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "Main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false },
+  { key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "Main",
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h3", owner: null }, tab: false, input: false },
   { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "Main", open: { kind: "chat", path: "refiner" }, tab: false, input: false },
 ];
 
@@ -1857,7 +1890,6 @@ const PROVE_ROWS: MctsRow[] = [
     id: "pv005", parent_id: "pv003", depth: 3, visits: 5, value: 0.94, own_score: 0.94, status: "terminal",
     action: "Discharge the null case from the guard",
     observation: "Checker accepted 3 of 3 goals. No sorries remain.",
-    code_used: "theorem applyCoupon_terminates : ∀ c, Terminates (applyCoupon c) := by",
     created_at: NOW - 75e5,
   },
 ];
@@ -1906,7 +1938,6 @@ const SWARM_ROWS: MctsRow[] = [
     id: "sw007", parent_id: "sw004", depth: 3, visits: 6, value: 0.93, own_score: 0.93, status: "terminal",
     action: "Drop the redundant second lookup",
     observation: "p95 = 188ms. The guard's fixture still passes.",
-    code_used: "const kind = cached ?? inferKind(coupon);",
     created_at: NOW - 19e5,
   },
   {
@@ -2114,7 +2145,7 @@ const FORK_RUNS: ForkRunSummary[] = [
     // Derived: `forkbig` generates 520 rows for this same run.
     id: "n000", name: "SAVE20 500s",
     task: "Find why the SAVE20 coupon 500s", startedAt: NOW - 36e5,
-    // From the same stores as each row's halves: an MCTS search has the tree only, a swarm has both.
+    // From the same stores as each row's halves: a swarm writes both.
     status: "completed", hasSearchTree: true, hasNodeTranscripts: false,
     branches: MCTS_ROWS.length - 1, winnerScore: 0.91,
   },
@@ -2321,7 +2352,6 @@ const TRANSCRIPTS = {
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
       { id: "root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", depth: 1, status: "completed" },
     ],
-    codeUsed: null,
   },
   "root-merge-1-h1": {
     origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h1",
@@ -2341,7 +2371,6 @@ const TRANSCRIPTS = {
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "running" },
       { id: "root-merge-1-h1", label: "packages/cart/src/serializer.ts", depth: 1, status: "running" },
     ],
-    codeUsed: null,
   },
   "root-merge-1-h2": {
     origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h2",
@@ -2355,7 +2384,6 @@ const TRANSCRIPTS = {
       { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
       { id: "root-merge-1-h2", label: "packages/admin/src/coupon-report.ts", depth: 1, status: "errored" },
     ],
-    codeUsed: null,
   },
   // A competed branch: no tool loop, its `observation` is the whole output.
   n003: {
@@ -2371,7 +2399,6 @@ const TRANSCRIPTS = {
       { id: "n001", label: "Look at the coupon rules table", depth: 1, status: "open" },
       { id: "n003", label: "Guard the kind lookup at the reader", depth: 2, status: "terminal" },
     ],
-    codeUsed: "const rule = rules[coupon.kind ?? inferKind(coupon)];\nif (!rule) throw new BadCoupon(coupon.code);\nreturn rule.apply(cart, coupon);",
   },
   // A Steer-as-Branch run: one head, its id derived from the run id.
   "steer-b7f21-head": {
@@ -2401,7 +2428,6 @@ const TRANSCRIPTS = {
     path: [
       { id: "steer-b7f21-head", label: "Check the staging snapshot first", depth: 0, status: "completed" },
     ],
-    codeUsed: null,
   },
   // Two nodes of the live run, reachable from the run pane's node list.
   lv001: {
@@ -2446,7 +2472,6 @@ const TRANSCRIPTS = {
       { id: "lv000", label: "Audit every reader of coupon.kind", depth: 0, status: "running" },
       { id: "lv001", label: "Walk the cart serializer's null path", depth: 1, status: "completed" },
     ],
-    codeUsed: null,
   },
   lv003: {
     origin: "head", runId: "lv000", nodeId: "lv003",
@@ -2483,7 +2508,6 @@ const TRANSCRIPTS = {
       { id: "lv000", label: "Audit every reader of coupon.kind", depth: 0, status: "running" },
       { id: "lv003", label: "Trace the pricing refactor's readers", depth: 1, status: "running" },
     ],
-    codeUsed: null,
   },
 } satisfies Record<string, NodeTranscriptView>;
 
@@ -2611,17 +2635,12 @@ function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
     task: row.task ?? "",
     action: row.action,
     observation: row.observation ?? "",
-    code_used: row.code_used ?? null,
-    code_language: row.code_used ? "typescript" : null,
     visits: row.visits,
     value: row.value,
     own_score: row.own_score,
     depth: row.depth,
     // `running` is a merged-head status the search_nodes CHECK constraint cannot hold.
     status: row.status === "running" ? "open" : row.status,
-    msg_id: row.msg_id ?? null,
-    branch_agent_key: row.branch_agent_key ?? null,
-    evaluation_json: null,
     created_at: row.created_at ?? NOW,
   };
 }
@@ -2850,10 +2869,10 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
 }
 
 /* Shared so the wide and narrow frames photograph the same affordance. */
-const MCTS_NOTICE: readonly ComposerNotice[] = [{
-  id: "mcts",
+const REFRESH_NOTICE: readonly ComposerNotice[] = [{
+  id: "jobs",
   tone: "danger",
-  text: "Could not refresh MCTS.",
+  text: "Could not refresh background jobs.",
   action: { label: "Retry", onClick: () => {} },
 }];
 
@@ -3023,7 +3042,7 @@ function ChatFrame() {
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
         <GalleryChatTabs />
         <ChatMessages />
-        <GalleryComposer notices={MCTS_NOTICE} />
+        <GalleryComposer notices={REFRESH_NOTICE} />
       </div>
     </div>
   );
@@ -3218,7 +3237,7 @@ function ComposerFrame() {
         </div>
         <div className="space-y-1">
           <div className="p-eyebrow px-4">With a status row</div>
-          <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={MCTS_NOTICE} />
+          <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={REFRESH_NOTICE} />
         </div>
         <ModelPickerStates />
       </div>
@@ -3277,7 +3296,7 @@ function ModelPickerStates() {
   );
 }
 
-/* Chat infinite scroll: the real hooks, merge rule and HistoryBoundary over a stub page source. Params: ?latency=ms ?fail=1 (first fetch fails) ?depth=N (pages before exhaustion). */
+/* The real chat thread and scroll over a stub page source. ?latency=ms ?fail=1 (first fetch fails) ?depth=N (pages). */
 const HISTORY_PAGE = 12;
 
 const historyParams = new URLSearchParams(location.search);
@@ -3290,6 +3309,7 @@ const STORED_HISTORY: ChatHistoryEntry[] = Array.from(
   { length: HISTORY_PAGE * HISTORY_DEPTH },
   (_, i) => ({
     id: `h${i + 1}`,
+    position: i,
     role: i % 2 === 0 ? "user" as const : "assistant" as const,
     content: `Archived message ${i + 1} of ${HISTORY_PAGE * HISTORY_DEPTH}. `
       + "Long enough to occupy real vertical space, so the scroll anchoring is "
@@ -3304,37 +3324,30 @@ function ChatHistoryFrame() {
   const requests = useRef(0);
   const [calls, setCalls] = useState<string[]>([]);
 
-  const history = usePagedScroll<ChatHistoryEntry>({
-    grows: "up",
-    fetchPage: useCallback(async (cursor) => {
-      const request = ++requests.current;
-      setCalls((prev) => [...prev, cursor?.after ?? "newest"]);
-      const settled = Promise.withResolvers<void>();
-      setTimeout(settled.resolve, HISTORY_LATENCY);
-      await settled.promise;
+  const rpc: Rpc = useCallback(async <T,>(_method: string, args?: unknown[]): Promise<T> => {
+    const [{ cursor }] = v.parse(v.tuple([v.object({ cursor: v.optional(PositionCursorSchema) })]), args);
+    const request = ++requests.current;
+    setCalls((prev) => [...prev, cursor === undefined ? "newest" : String(cursor.before)]);
+    const settled = Promise.withResolvers<void>();
+    setTimeout(settled.resolve, HISTORY_LATENCY);
+    await settled.promise;
 
-      if (request === requests.current && failed.current) {
-        failed.current = false;
-        throw new Error("stub failure");
-      }
+    if (request === requests.current && failed.current) {
+      failed.current = false;
+      throw new Error("stub failure");
+    }
 
-      const end = cursor === undefined
-        ? STORED_HISTORY.length
-        : STORED_HISTORY.findIndex((row) => row.id === cursor.after);
+    const end = Math.min(cursor?.before ?? STORED_HISTORY.length, STORED_HISTORY.length);
+    const start = Math.max(0, end - HISTORY_PAGE);
+    const items = STORED_HISTORY.slice(start, end);
 
-      const from = end < 0 ? STORED_HISTORY.length : end;
-      const start = Math.max(0, from - HISTORY_PAGE);
-      const items = STORED_HISTORY.slice(start, from);
+    return rpcResult(start === 0 ? { status: "end", items } : { status: "more", items, next: { before: start } }).json<T>();
+  }, []);
 
-      return start === 0 ? { status: "end", items } : { status: "more", items, next: { after: items[0].id } };
-    }, []),
-    startFrom: useCallback(() => live[0] ? { after: live[0].id } : null, [live]),
-  });
-
-  const transcript = useMemo(() => mergeTranscript(history.fetched, live), [history.fetched, live]);
+  const { history, transcript } = useChatThread({ rpc, live, seeded: true });
 
   const messagesRef = useGrowingScroll({
-    grows: "up", content: transcript, fetched: history.fetched, loading: history.loading,
+    grows: "up", content: transcript, fetched: history.entries, loading: history.loading,
     onReachEdge: history.loadMore,
   });
 
@@ -3361,7 +3374,7 @@ function ChatHistoryFrame() {
           className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
           <HistoryBoundary
             loading={history.loading} error={history.error}
-            exhausted={history.exhausted} onRetry={history.loadMore} />
+            exhausted={history.exhausted} onRetry={history.retry} />
           {transcript.map((m) => (
             <div key={m.id} data-msg={m.id}>
               <MessageView message={m} />
@@ -3378,28 +3391,28 @@ function ChatHistoryFrame() {
   );
 }
 
+const NO_HISTORY_LIVE: readonly UIMessage[] = [];
+
 /** The first request is held until the browser releases it, then fails once; Retry answers the authoritative empty page. */
 function HistoryAuthorityFrame() {
   const [hold] = useState(() => Promise.withResolvers<void>());
   const failFirst = useRef(true);
   const requests = useRef(0);
 
-  const history = usePagedScroll<ChatHistoryEntry>({
-    grows: "up",
-    fetchPage: useCallback(async () => {
-      const request = ++requests.current;
-      await hold.promise;
+  const rpc: Rpc = useCallback(async <T,>(): Promise<T> => {
+    const request = ++requests.current;
+    await hold.promise;
 
-      // StrictMode can retire a held walk: only the latest request consumes the planned failure.
-      if (request === requests.current && failFirst.current) {
-        failFirst.current = false;
-        throw new Error("fixture could not read the first history page");
-      }
+    // StrictMode can retire a held walk: only the latest request consumes the planned failure.
+    if (request === requests.current && failFirst.current) {
+      failFirst.current = false;
+      throw new Error("fixture could not read the first history page");
+    }
 
-      return { status: "end" as const, items: [] };
-    }, [hold]),
-    startFrom: useCallback(() => "newest" as const, []),
-  });
+    return rpcResult({ status: "end", items: [] }).json<T>();
+  }, [hold]);
+
+  const { history } = useChatThread({ rpc, live: NO_HISTORY_LIVE, seeded: true });
 
   const loadMore = history.loadMore;
   useEffect(() => { loadMore(); }, [loadMore]);
@@ -3423,7 +3436,7 @@ function HistoryAuthorityFrame() {
 
             error={history.error}
             exhausted={history.exhausted}
-            onRetry={history.loadMore}
+            onRetry={history.retry}
             pending={<ConversationSkeleton />}
             empty={<EmptyConversation mission="Audit checkout history" />}
           />
@@ -4866,7 +4879,7 @@ const SUPERVISE_JOBS: BackgroundJob[] = [
     workMode: "build", result: null, error: null, createdAt: NOW - 4 * 60e3, settledAt: null,
   },
   {
-    id: "bgjob-70bd19f7", kind: "mcts", label: "Pick a migration-backfill approach",
+    id: "bgjob-70bd19f7", kind: "agents", label: "Pick a migration-backfill approach",
     workMode: "build", status: "completed", result: "Settled on the backfill-on-read approach", error: null,
     createdAt: NOW - 50 * 60e3, settledAt: NOW - 41 * 60e3,
   },
@@ -5021,7 +5034,7 @@ const ACTIVITY_PRODUCERS: ProducerSpend[] = [
     usage: { input: 288_004, output: 31_902 }, usd: 0.86, unpricedCalls: 0,
   },
   {
-    source: "mcts", calls: 28, callsWithoutUsage: 0,
+    source: "swarm", calls: 28, callsWithoutUsage: 0,
     usage: { input: 96_210, output: 12_004, neurons: 12_986 },
     unpricedCalls: 28,
   },
@@ -5156,6 +5169,7 @@ const ACTIVITY_ACCOUNTS: readonly AccountSpend[] = [
 const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
   latest: ACTIVITY_LATEST,
   contextWindow: 200_000,
+  fill: { tokens: ACTIVITY_LATEST.usage.input, window: 200_000, source: "provider", at: new Date(ACTIVITY_LATEST.at).toISOString() },
   telemetry: {
     steps: 344, windowLimit: 2000, tokens: AGENT_TOKENS_METERED, cacheHit: ACTIVITY_CACHE_HIT,
     usd: 11.98, pricedSteps: 344, unpricedSteps: 0, stepsWithoutUsage: 0,
@@ -5208,6 +5222,7 @@ const ACTIVITY_CLEAN: ActivitySnapshot = {
 const ACTIVITY_FRESH: ActivitySnapshot = {
   latest: null,
   contextWindow: null,
+  fill: null,
   telemetry: {
     steps: 0, windowLimit: 2000, tokens: {}, usd: 0, pricedSteps: 0, unpricedSteps: 0,
     stepsWithoutUsage: 0,
@@ -5825,7 +5840,7 @@ function fixtureFailure(): Error {
   return new URLSearchParams(location.search).get("failure") === "app"
     ? new TypeError("Cannot read properties of undefined (reading 'kind')")
     : new TypeError(
-      `Failed to fetch dynamically imported module: ${location.origin}/assets/MCTSExplorer-a1b2c3.js`,
+      `Failed to fetch dynamically imported module: ${location.origin}/assets/SwarmExplorer-a1b2c3.js`,
     );
 }
 
@@ -5854,7 +5869,7 @@ function LazyRouteScene() {
           and reloading is the whole fix — once, and only when the origin really has moved.
         </p>
         <div className="p-group max-w-2xl" style={{ height: 260 }}>
-          <ErrorBoundary label="mcts-explorer">
+          <ErrorBoundary label="swarm-explorer">
             <Suspense fallback={<p data-lazy-pending className="p-6 text-sm p-text-3">Loading…</p>}>
               <StaleChunkRoute />
             </Suspense>
@@ -6055,10 +6070,10 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
 
 /** The only dynamic import in this dispatch: the page pulls d3 and the tree renderer. It reads through `useKinu`, resolved to `gallery-agent-stub` here. */
 async function mctsExplorerFrame(run: string): Promise<MountedFrame> {
-  const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
+  const { default: SwarmExplorer } = await import("@/pages/SwarmExplorer");
   serveGalleryRpc(focusRun(run));
 
-  return routedPage(`/mcts/checkout-fixes?run=${run}`, "/mcts/:agentId", <MCTSExplorer />);
+  return routedPage(`/swarm/checkout-fixes?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
 }
 
 function routedPage(entry: string, path: string, page: React.ReactNode, height = "h-screen"): MountedFrame {

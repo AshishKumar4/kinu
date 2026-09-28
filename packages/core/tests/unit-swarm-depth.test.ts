@@ -238,8 +238,8 @@ function tree(): Tree {
   const rootId = 'root';
   let minted = 0;
   insertSearchNode(sql, actor, {
-    nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
-    task: 't', action: '', observation: 'as found', codeUsed: null, depth: 0, msgId: null,
+    nodeId: rootId, parentNodeId: null, rootId,
+    task: 't', action: '', observation: 'as found', depth: 0,
   });
 
   const depthOf = (nodeId: string): number =>
@@ -255,9 +255,8 @@ function tree(): Tree {
       minted += 1;
       const id = `n${String(minted)}`;
       insertSearchNode(sql, actor, {
-        nodeId: id, parentNodeId: parentId, parentMsgId: null, rootId,
-        task: 't', action: '', observation: `answer ${id}`, codeUsed: null,
-        depth: depthOf(parentId) + 1, msgId: null,
+        nodeId: id, parentNodeId: parentId, rootId,
+        task: 't', action: '', observation: `answer ${id}`, depth: depthOf(parentId) + 1,
       });
 
       if (reward !== null) backpropagate(sql, actor, id, reward);

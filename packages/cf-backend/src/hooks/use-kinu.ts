@@ -206,9 +206,6 @@ const MctsRowSchema = v.object({
   action: v.string(),
   task: v.string(),
   observation: v.string(),
-  code_used: v.optional(v.nullable(v.string())),
-  branch_agent_key: v.optional(v.nullable(v.string())),
-  msg_id: v.optional(v.nullable(v.string())),
   created_at: v.optional(v.number()),
 });
 
@@ -437,7 +434,6 @@ export type LiveRefreshSource =
   | "jobs"
   | "pendingActions"
   | "presence"
-  | "mcts"
   | "memoryContent"
   | "executors"
   | "agents"
@@ -458,7 +454,6 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "roster", label: "the agent roster" },
   { source: "jobs", label: "background jobs" },
   { source: "pendingActions", label: "pending actions" },
-  { source: "mcts", label: "MCTS" },
   { source: "memoryContent", label: "memory content" },
   { source: "presence", label: "tab presence" },
   { source: "executors", label: "executors" },

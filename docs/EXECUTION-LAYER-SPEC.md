@@ -388,9 +388,8 @@ added by `buildBuiltinTools`) and `release` is codemode-only (`TOOL_REACH`).
 A job's wake carries `kinuMode: job.workMode` (`core/src/jobs/runner.ts`), and
 `workModeForTurnMetadata` (`core/src/prompting/surface.ts`) reads it, so a
 wake cannot weaken Plan to build. Plan heads and subordinates report research
-to their parent. Both engines set `executionPolicy` to `judge-only` in Plan
-mode, spending no executor call (`core/src/mcts/engine.ts`,
-`core/src/strategy/swarm-scoring.ts`).
+to their parent. Swarm sets `executionPolicy` to `judge-only` in Plan
+mode, spending no executor call (`core/src/strategy/swarm-scoring.ts`).
 
 To add a provider: implement one `ExecutorProvider` at the external boundary.
 Declare only measured capabilities and use `unmeasuredCapabilities` for the

@@ -1,5 +1,5 @@
 /**
- * MCTS SQL schemas: the one definition of search_nodes. Reference: docs/MCTS.md "search_nodes Table".
+ * The one definition of search_nodes.
  * `value` defaults to 0, not 0.5.
  * Formal spec: MCTS/Backpropagation.lean:initial_in_range (a fresh node starts in range).
  * Selection, pruning and convergence scope by `root_id`; `actor_id` is in the primary key
@@ -18,16 +18,11 @@ export function initSearchTables(execRaw: RawSqlExec): void {
       task             TEXT NOT NULL,
       action           TEXT NOT NULL DEFAULT '',
       observation      TEXT NOT NULL DEFAULT '',
-      code_used        TEXT,
-      code_language    TEXT,
       visits           INTEGER NOT NULL DEFAULT 0,
       value            REAL NOT NULL DEFAULT 0,
       depth            INTEGER NOT NULL DEFAULT 0,
       status           TEXT NOT NULL DEFAULT 'open'
                        CHECK(status IN ('open','terminal','failed','pruned')),
-      msg_id           TEXT,
-      branch_agent_key TEXT,
-      evaluation_json  TEXT,
       created_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       PRIMARY KEY (actor_id, id)
     )
@@ -36,12 +31,11 @@ export function initSearchTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_status_value ON search_nodes(actor_id, status, value DESC)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_sn_root_status ON search_nodes(actor_id, root_id, status)`);
   // A node's own score; every reader of a score reads it here.
-  // `MCTS/Convergence.lean — the_winner_carries_the_best_reward`.
   execRaw(`CREATE VIEW IF NOT EXISTS search_node_scores AS
     SELECT n.*, CASE
       WHEN n.parent_id IS NULL THEN n.value
       WHEN r.record_json IS NOT NULL THEN json_extract(r.record_json, '$.outcome.score')
-      ELSE COALESCE(json_extract(n.evaluation_json, '$.score'), 0) END AS own_score
+      ELSE 0 END AS own_score
     FROM search_nodes n
     LEFT JOIN swarm_node_records r ON r.actor_id = n.actor_id AND r.node_id = n.id`);
 }

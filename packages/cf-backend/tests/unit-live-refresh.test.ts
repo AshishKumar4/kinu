@@ -353,7 +353,6 @@ describe('workspace live refresh failures', () => {
     expect(formatWorkspaceError({
       jobs: 'offline',
       pendingActions: 'offline',
-      mcts: 'offline',
       memoryContent: 'offline',
       executors: 'offline',
       slates: 'offline',
@@ -361,7 +360,7 @@ describe('workspace live refresh failures', () => {
       plan: 'offline',
     }, true)).toEqual({
       severity: 'partial',
-      title: 'Background jobs, pending actions, MCTS, memory content, executors, slates, device consents, and active plan could not be refreshed.',
+      title: 'Background jobs, pending actions, memory content, executors, slates, device consents, and active plan could not be refreshed.',
       scope: 'The conversation is available. Showing last known data.',
       detail: 'offline',
       retry: 'Retry',

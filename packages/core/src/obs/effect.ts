@@ -1,4 +1,5 @@
 import { Cause, Effect, Exit, Fiber, Scheduler } from 'effect';
+import type { VfsError } from '../vfs/errno';
 import { KinuError, toKinuError, type ErrorCode, type Refusal } from './error';
 
 const WITHIN_ONE_EVENT = new Scheduler.MixedScheduler('sync');
@@ -19,7 +20,7 @@ interface SettleOptions {
   readonly interrupted?: string;
 }
 
-function fail(cause: Cause.Cause<KinuError>, options?: SettleOptions): never {
+function fail(cause: Cause.Cause<KinuError | VfsError>, options?: SettleOptions): never {
   if (!Cause.hasInterruptsOnly(cause)) throw Cause.squash(cause);
 
   const signal = options?.signal;
@@ -31,7 +32,7 @@ function fail(cause: Cause.Cause<KinuError>, options?: SettleOptions): never {
   );
 }
 
-export async function settle<A>(effect: Effect.Effect<A, KinuError>, options?: SettleOptions): Promise<A> {
+export async function settle<A>(effect: Effect.Effect<A, KinuError | VfsError>, options?: SettleOptions): Promise<A> {
   const exit = await Effect.runPromiseExit(effect, { scheduler: WITHIN_ONE_EVENT, signal: options?.signal });
 
   if (Exit.isSuccess(exit)) return exit.value;
@@ -39,7 +40,7 @@ export async function settle<A>(effect: Effect.Effect<A, KinuError>, options?: S
   return fail(exit.cause, options);
 }
 
-export function settleSync<A>(effect: Effect.Effect<A, KinuError>, options?: Pick<SettleOptions, 'interrupted'>): A {
+export function settleSync<A>(effect: Effect.Effect<A, KinuError | VfsError>, options?: Pick<SettleOptions, 'interrupted'>): A {
   const exit = Effect.runSyncExit(effect);
 
   if (Exit.isSuccess(exit)) return exit.value;

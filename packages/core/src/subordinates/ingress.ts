@@ -13,7 +13,7 @@ import {
   type SubordinateReportOrigin,
 } from './support';
 import type { SubordinateRosterStore } from './roster';
-import { temporaryRunSettles } from './temporary';
+import { TEMPORARY_LIFETIME, temporaryRunSettles } from './temporary';
 import type { TemporaryAgentPort } from '../types/subordinates';
 
 export interface SubordinateEventInput {
@@ -27,6 +27,8 @@ export interface SubordinateEventInput {
   mode: WorkMode;
   /** Absent on the automatic turn-end relay. */
   handoff?: SubordinateReportHandoff;
+  /** A Stop: wakes no one. */
+  quiet?: true;
 }
 
 /** `already_held`: replay, nothing re-published. `not_awaited`: no open assignment, `id` empty. */
@@ -72,19 +74,10 @@ export async function receiveSubordinateEvent(
     return { id: '', disposition: 'not_awaited' };
   }
 
-  // Before the dismissal check: a blocked waiter still wants the answer, handoff as trailing text.
   const answer = normalizeReportContent(input.content)
     + (input.handoff ? renderSubordinateHandoff(input.handoff) : '');
 
-  if (deps.temporary?.settle({
-    name: input.fromSubordinate,
-    taskEventId: subordinate.taskEventId,
-    status: input.status,
-    content: answer,
-    origin: input.origin,
-  })) {
-    return { id: '', disposition: 'admitted' };
-  }
+  const settlesTask = subordinate.lifetime === TEMPORARY_LIFETIME && temporaryRunSettles(input);
 
   // A rail row would wake the parent in the helper's mode, with the lane's proposal in its context.
   if (subordinate.createdBy === 'evolution') {
@@ -97,12 +90,21 @@ export async function receiveSubordinateEvent(
       deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now);
     });
     deps.onEvolutionAnswer();
+    deps.temporary?.release(input.fromSubordinate);
 
     return { id: '', disposition: 'admitted' };
   }
 
   if (subordinate.status === 'dismissed') {
     return { id: '', disposition: 'not_awaited' };
+  }
+
+  if (input.quiet === true) {
+    deps.transaction(() => { deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now); });
+
+    if (settlesTask) deps.temporary?.release(input.fromSubordinate);
+
+    return { id: '', disposition: 'admitted' };
   }
 
   // Before the spill, so a relay this workspace does not admit leaves no file behind.
@@ -144,6 +146,8 @@ export async function receiveSubordinateEvent(
     timestamp: now,
   });
   deps.onAdmitted();
+
+  if (settlesTask) deps.temporary?.release(input.fromSubordinate);
 
   return { id: published.id, disposition: 'admitted' };
 }

@@ -9,7 +9,6 @@ import { MOVIE_CUES, MOVIE_END } from '@kinu.run/core';
 import { PLAN_FIXTURE, SLATE_PREVIEW_URL, SLATE_SUMMARY } from './landing-fixtures';
 import { SLATE_PREFIX, type SlateSurfaceKind } from '@kinu.run/core';
 
-/** The two surfaces the walkthrough shows. */
 export type MovieSurface = 'Work' | SlateSurfaceKind;
 
 export type MovieTarget = 'cursor-origin' | 'composer' | 'approve' | 'slate-tab';

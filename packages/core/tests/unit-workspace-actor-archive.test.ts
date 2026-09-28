@@ -69,7 +69,7 @@ async function seedActorState({ ws, actor, text, runId, version }: SeededActorSt
   });
 
   await history.record(CHAT_SESSION_ID, {
-    id: `m-${actor.actorId}`, parentId: null, origin: 'input', message: { role: 'user', content: text },
+    id: `m-${actor.actorId}`, origin: 'input', message: { role: 'user', content: text },
   });
   void ws.sql`INSERT INTO actor_turn_claims (
       actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version,

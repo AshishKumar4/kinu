@@ -13,12 +13,12 @@ import {
 } from './turn-lifecycle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
+import { writeActivityLog } from '../identity/activity-log';
 import type { AgentOrchestrator, TurnContinuity } from './agent-orchestrator';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { HeadJournal } from '../heads/journal';
 import { CompletedTurnSchema } from '../evolution/session-window';
 import { WorkModeSchema } from '../types/turn';
-import { claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes } from '../mcts/takes';
 import {
   branchHeadId, branchOutcomeFromJournal, settleBranchIntoTakes, settlePendingBranch,
   type BranchStatusEvent, type PendingBranch,
@@ -54,6 +54,35 @@ export const TERMINAL_EFFECT_RETRY_BASE_MS = 5_000;
 
 export const TERMINAL_EFFECT_RETRY_CEILING_MS = 600_000;
 
+const ErrorLinkSchema = v.looseObject({ statusCode: v.optional(v.number()), cause: v.optional(v.unknown()), lastError: v.optional(v.unknown()) });
+
+/** One link of a thrown value's cause chain, as far as a status code goes. */
+function errorLink(thrown: { readonly cause: unknown }): v.InferOutput<typeof ErrorLinkSchema> | null {
+  const read = v.safeParse(ErrorLinkSchema, thrown.cause);
+
+  return read.success ? read.output : null;
+}
+
+/** An HTTP status in the cause chain that no retry changes: a 4xx other than 408 and 429. */
+function permanentRefusal(error: v.InferOutput<typeof ErrorLinkSchema> | null): number | null {
+  let link = error;
+
+  for (let depth = 0; depth < 8 && link !== null; depth += 1) {
+    const status = link.statusCode;
+
+    if (status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429) return status;
+    link = errorLink({ cause: link.lastError ?? link.cause });
+  }
+
+  return null;
+}
+
+/** The owner reads an abandoned effect in the Activity log, by what it was doing. */
+const EFFECT_ACTIVITY: Partial<Record<TerminalEffectName, string>> = {
+  sleep_time: 'memory compression', auto_title: 'naming the chat', auto_gepa: 'prompt tuning',
+  shadow_trial: 'the shadow trial', improvement_lanes: 'self-improvement', turn_record: 'recording the turn',
+};
+
 /** Doubling from the base delay to the ceiling. */
 function terminalEffectBackoffMs(attempts: number): number {
   const grown = TERMINAL_EFFECT_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1);
@@ -63,7 +92,7 @@ function terminalEffectBackoffMs(attempts: number): number {
 
 /** A row naming anything else is blocked; each actor's {@link TerminalEffectTable} picks its subset. */
 const TERMINAL_EFFECT_NAMES = [
-  'takes', 'craft_usage', 'event_reply', 'branches',
+  'craft_usage', 'event_reply', 'branches',
   // Its armed state lives in RAM, so this row alone records whether the confirming turn was enqueued.
   'completion_gate',
   // Five separately claimed boundaries, each idempotent and keyed on the turn. `overflow_retry` and
@@ -82,7 +111,7 @@ const TerminalEffectNameSchema = v.picklist(TERMINAL_EFFECT_NAMES);
 
 
 /** `blocked` (unknown key version or effect) is still owed and reported: a deploy-shape problem a human resolves. */
-export type TerminalEffectStatus = 'pending' | 'completed' | 'blocked';
+export type TerminalEffectStatus = 'pending' | 'completed' | 'blocked' | 'failed';
 
 /** `owed`: the effect ran, reported unfinished, and stays owed. */
 export type TerminalEffectOutcome =
@@ -162,31 +191,6 @@ export function taskReminderTerminalEffect(queue: () => OwedTurnQueue): Terminal
   return owedTurnTerminalEffect(queue, {
     input: v.object({ text: v.string() }), event: TASK_REMINDER_EVENT, text: ({ text }) => text,
     key: taskReminderIdempotencyKey,
-  });
-}
-
-/** Claim or purge captures so the next turn never inherits them. */
-export function takesTerminalEffect(deps: {
-  readonly sql: SqlExecutor;
-  readonly actor: ActorHandle;
-  readonly sessionId: string;
-}): TerminalEffect {
-  return terminalEffect({
-    input: v.object({
-      credited: v.nullable(v.string()), startedAt: v.number(),
-      takeIds: v.array(v.string()),
-    }),
-    run: ({ credited, startedAt, takeIds }) => {
-      if (credited === null) {
-        purgeUnclaimedAlternateTakes(deps.sql, deps.actor, takeIds);
-      } else {
-        claimAlternateTakesForTurn(deps.sql, deps.actor, {
-          turnId: credited, sessionId: deps.sessionId, startedAt, takeIds,
-        });
-      }
-
-      return { status: 'completed' };
-    },
   });
 }
 
@@ -463,27 +467,36 @@ export class TerminalEffectLedger {
   /** Separate from {@link drive} so the caller can commit the outer claim in the same unit; no transaction of its own. */
   claim(sequenceId: string, owed: readonly OwedEffect[]): void {
     this.deps.actor.assertCurrent();
-    const now = this.deps.now();
+
+    if (owed.length === 0) return;
+
+    // The first of a repeated name and scope wins, as the per-effect lookup it replaces did: the statement
+    // cannot see its own inserts.
+    const firsts = new Map<string, { key: string; name: string; scope: string; seq: number; input: string; lane: string }>();
 
     for (const [index, effect] of owed.entries()) {
-      const key = terminalEffectKey(effect.name, effect.scope);
+      const identity = JSON.stringify([effect.name, effect.scope]);
 
-      // Looked up by name and scope, not by the computed key, so an older-version row is not duplicated and
-      // routed two ways.
-      const existing = this.deps.sql<{ effect_key: string }>`
-        SELECT effect_key FROM terminal_effects
-        WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
-          AND effect_name = ${effect.name} AND scope = ${effect.scope}
-        LIMIT 1`[0];
-
-      if (existing !== undefined) continue;
-
-      const encoded = JSON.stringify(effect.input);
-      void this.deps.sql`INSERT INTO terminal_effects
-        (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts, next_attempt_at)
-        VALUES (${this.actorId}, ${sequenceId}, ${key}, ${effect.name}, ${effect.scope}, ${index},
-                ${encoded}, ${effect.lane}, 'pending', 0, ${now})`;
+      if (!firsts.has(identity)) {
+        firsts.set(identity, {
+          key: terminalEffectKey(effect.name, effect.scope), name: effect.name, scope: effect.scope, seq: index,
+          input: JSON.stringify(effect.input), lane: effect.lane,
+        });
+      }
     }
+
+    const rows = JSON.stringify([...firsts.values()]);
+
+    // One statement for the sequence. Matched by name and scope, not by the computed key, so an
+    // older-version row is not duplicated and routed two ways.
+    void this.deps.sql`INSERT INTO terminal_effects
+      (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts, next_attempt_at)
+      SELECT ${this.actorId}, ${sequenceId}, e.value ->> '$.key', e.value ->> '$.name', e.value ->> '$.scope', e.value ->> '$.seq',
+        e.value ->> '$.input', e.value ->> '$.lane', 'pending', 0, ${this.deps.now()}
+      FROM json_each(${rows}) AS e
+      WHERE NOT EXISTS (SELECT 1 FROM terminal_effects t WHERE t.actor_id = ${this.actorId} AND t.sequence_id = ${sequenceId}
+        AND t.effect_name = e.value ->> '$.name' AND t.scope = e.value ->> '$.scope')
+      ORDER BY e.key`;
   }
 
   async drive(sequenceId: string): Promise<TerminalSequenceRun> {
@@ -534,7 +547,7 @@ export class TerminalEffectLedger {
 
     return this.deps.sql<{ sequence_id: string }>`
       SELECT sequence_id FROM terminal_effects
-      WHERE actor_id = ${this.actorId} AND status != 'completed'
+      WHERE actor_id = ${this.actorId} AND status IN ('pending', 'blocked')
       GROUP BY sequence_id ORDER BY MIN(next_attempt_at), sequence_id`
       .map((row) => row.sequence_id);
   }
@@ -548,7 +561,7 @@ export class TerminalEffectLedger {
 
     const rows = this.deps.sql<{ sequence_id: string; at: number | null }>`
       SELECT sequence_id, MIN(next_attempt_at) AS at FROM terminal_effects
-      WHERE actor_id = ${this.actorId} AND status != 'completed' GROUP BY sequence_id`;
+      WHERE actor_id = ${this.actorId} AND status IN ('pending', 'blocked') GROUP BY sequence_id`;
 
     const deferred = this.deps.now() + TERMINAL_EFFECT_RETRY_CEILING_MS;
     let earliest: number | null = null;
@@ -567,7 +580,7 @@ export class TerminalEffectLedger {
   prune(sequenceId: string): void {
     this.deps.actor.assertCurrent();
     void this.deps.sql`DELETE FROM terminal_effects
-      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND status = 'completed'`;
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND status IN ('completed', 'failed')`;
   }
 
   private pending(sequenceId: string): PendingRow[] {
@@ -576,7 +589,7 @@ export class TerminalEffectLedger {
     return this.deps.sql<OwedEffectRow>`
       SELECT effect_key, effect_name, scope, seq, input_json, lane, status, attempts, next_attempt_at
       FROM terminal_effects
-      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND status != 'completed'
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND status IN ('pending', 'blocked')
       ORDER BY seq, effect_key`
       .map((row) => ({
         key: row.effect_key,
@@ -635,7 +648,7 @@ export class TerminalEffectLedger {
     void this.deps.sql`UPDATE terminal_effects
       SET attempts = ${attempts}, next_attempt_at = ${this.deps.now() + terminalEffectBackoffMs(attempts)}
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
-        AND effect_key = ${row.key} AND status != 'completed'`;
+        AND effect_key = ${row.key} AND status IN ('pending', 'blocked')`;
 
     if (row.target.kind === 'blocked') {
       this.record(sequenceId, row.key, 'blocked');
@@ -662,7 +675,21 @@ export class TerminalEffectLedger {
         cause: err,
         otherwise: 'unavailable',
       }), { sequence: sequenceId, effect: row.key, attempts });
-      // Owed, never abandoned.
+      const refused = permanentRefusal(errorLink({ cause: err }));
+
+      // A refusal that will answer the same way again ends the effect; anything else stays owed.
+      if (refused !== null) {
+        diagnostics.event('turn.terminal_effect_abandoned', { sequence: sequenceId, effect: row.key, attempts, status: refused });
+        writeActivityLog(() => ({ sql: this.deps.sql, actor: this.deps.actor }), {
+          event: 'terminal_effect_abandoned',
+          detail: `${EFFECT_ACTIVITY[name] ?? name} failed: the model provider answered HTTP ${String(refused)}, so it is not retried`,
+          elapsedMs: 0, createdAt: this.deps.now(),
+        });
+        this.settle(sequenceId, row.key, 'failed');
+
+        return;
+      }
+
       this.record(sequenceId, row.key, 'pending');
 
       return;
@@ -675,7 +702,7 @@ export class TerminalEffectLedger {
         void this.deps.sql`UPDATE terminal_effects
           SET attempts = ${row.attempts}, next_attempt_at = ${this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS}
           WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
-            AND effect_key = ${row.key} AND status != 'completed'`;
+            AND effect_key = ${row.key} AND status IN ('pending', 'blocked')`;
       }
 
       this.record(sequenceId, row.key, 'pending');
@@ -683,10 +710,14 @@ export class TerminalEffectLedger {
       return;
     }
 
+    this.settle(sequenceId, row.key, 'completed');
+  }
+
+  private settle(sequenceId: string, key: string, status: 'completed' | 'failed'): void {
     void this.deps.sql`UPDATE terminal_effects
-      SET status = 'completed'
+      SET status = ${status}
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
-        AND effect_key = ${row.key} AND status != 'completed'`;
+        AND effect_key = ${key} AND status IN ('pending', 'blocked')`;
   }
 
   /** `completed` is irreversible; `pending` and `blocked` may replace each other. */
@@ -697,7 +728,7 @@ export class TerminalEffectLedger {
     void this.deps.sql`UPDATE terminal_effects
       SET status = ${status}
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
-        AND effect_key = ${key} AND status != 'completed'`;
+        AND effect_key = ${key} AND status IN ('pending', 'blocked')`;
   }
 
   private async armWake(): Promise<void> {

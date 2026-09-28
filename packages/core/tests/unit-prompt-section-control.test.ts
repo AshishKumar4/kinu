@@ -148,13 +148,13 @@ function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number
  */
 async function seedAdvisorNotes(rt: AgentRuntime, count: number): Promise<void> {
   const history = storesFor(rt).history;
-  const engine = new EvolutionEngine(rt, history, { reportModelCall: unobservedSpend });
+  const engine = new EvolutionEngine(rt, history);
 
   for (let i = 0; i < count; i++) {
     const turnId = `adv-${String(i)}`;
-    await history.record(CHAT_SESSION_ID, { id: `ask-${String(i)}`, parentId: null, origin: 'input',
+    await history.record(CHAT_SESSION_ID, { id: `ask-${String(i)}`, origin: 'input',
       message: { role: 'user', content: failureTask(i) } });
-    await history.record(CHAT_SESSION_ID, { id: turnId, parentId: `ask-${String(i)}`, origin: 'output',
+    await history.record(CHAT_SESSION_ID, { id: turnId, origin: 'output',
       message: { role: 'assistant', content: '{"files":["a.txt"]}' } });
     engine.recordAdvisorNote({
       note: `you answered this alone; agents was reachable and the work had ${String(i + 2)} angles`,

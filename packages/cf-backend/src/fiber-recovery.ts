@@ -8,13 +8,12 @@ import * as v from 'valibot';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 
 import {
-  BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME, BackgroundJobRunner, recoveryBackoffMs,
-  AdvisorRecoverySnapshotSchema, ADVISOR_LANE_FIBER, nanoid, projectJsonValue,
+  BACKGROUND_FIBER_PREFIX, BackgroundJobRunner, recoveryBackoffMs,
+  AdvisorRecoverySnapshotSchema, ADVISOR_LANE_FIBER, projectJsonValue,
   type AdvisorDisposition, type AdvisorRecoverySnapshot, type JsonValue,
   type SqlExecutor,
   JsonObjectSchema, type AgentSignal, type SendOutcome,
 } from '@kinu.run/core';
-import type { ActorHandle } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 
 /** Kinu's value for the SDK's `fiberRecoveryMaxAgeMs` (the SDK default); the one place it lives. */
@@ -138,10 +137,6 @@ export interface FiberLaneTransports {
   readonly reviewAdvisorSnapshot: (
     snapshot: AdvisorRecoverySnapshot,
   ) => Promise<AdvisorDisposition | null>;
-  readonly sql: SqlExecutor;
-  /** Stamp for the notice row: one database holds every actor's evolution stream. */
-  readonly actor: ActorHandle;
-  readonly appendMemory: (path: string, text: string) => Promise<void>;
   /** Arm the terminal ledger's durable wake and replay nothing here (a replay may await SMTP). */
   readonly armOwedTerminalRecovery: () => Promise<void>;
   /** Fork-notice replay body. `undelivered` means the notice is still owed. */
@@ -174,8 +169,6 @@ export function classifyRecoveredFiber(
     }
 
     if (ctx.name === ADVISOR_LANE_FIBER) return redriveAdvisorLane(transports, ctx);
-
-    if (ctx.name === SEARCH_FIBER_NAME) return recordInterruptedSearch(transports, ctx);
 
     if (ctx.name === MCP_WARM_LANE_FIBER) return recoverMcpWarmLane();
 
@@ -352,34 +345,6 @@ export type RecoveredNotice = v.InferOutput<typeof RecoveredSignalSchema>;
  */
 function recoverMcpWarmLane(): FiberRecoveryResult {
   return { status: 'completed', snapshot: { lane: MCP_WARM_LANE_FIBER, reentered: false } };
-}
-
-/**
- * Search trees are durable and detached jobs re-drive themselves; this only tells the agent.
- * The audit row is local sync SQLite; the MEMORY.md write may cross to another DO, so it rides the carrier.
- */
-function recordInterruptedSearch(
-  transports: FiberLaneTransports,
-  ctx: FiberRecoveryContext,
-): FiberRecoveryResult {
-  const snapshot = fiberSnapshot(ctx);
-  // Stamped with the recovering actor: the column is NOT NULL and the stream is shared.
-  void transports.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
-    VALUES (${transports.actor.actorId}, ${nanoid()}, 'fiber_recovered',
-            ${`Fiber "${ctx.name}" recovered after interruption`},
-            ${JSON.stringify({ name: ctx.name, fiberId: ctx.id, snapshot, createdAt: ctx.createdAt })},
-            ${Date.now()})`;
-  transports.redrive(SEARCH_FIBER_NAME, snapshot, () => transports.appendMemory(
-    'memory/MEMORY.md',
-    `\n### Fiber recovery (${new Date().toISOString().split('T')[0]})\n`
-    + `Fiber "${ctx.name}" was interrupted (likely DO eviction) and recovered. `
-    + `Snapshot at interruption: ${JSON.stringify(snapshot).slice(0, 400)}\n`,
-  ));
-
-  return {
-    status: 'completed',
-    snapshot: { lane: SEARCH_FIBER_NAME, recorded: true, redrive: 'memory-note' },
-  };
 }
 
 /** Unknown lane: classified error, logged once, row released; never a MEMORY.md line. */
