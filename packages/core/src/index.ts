@@ -2140,7 +2140,7 @@ export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
   type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
-  type TabPresence, type ToolInfo, ownerFacingSubordinate,
+  type TabPresence, ownerFacingSubordinate,
 } from './protocol';
 
 export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';

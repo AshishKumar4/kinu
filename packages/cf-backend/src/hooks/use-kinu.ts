@@ -10,7 +10,6 @@ import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
 import { explorationForkTree } from "@kinu.run/core";
 import type {
-  ToolInfo,
   MemoryEntry,
   ForkNode,
   ExecutorCommandResult,
@@ -147,7 +146,6 @@ export interface AgentStatus {
   createdAt: number;
   scaffoldVersion: number;
   searchNodeCount: number;
-  craftedToolCount: number;
   messageCount: number;
   model: string;
   /** The tier source the turn profile resolved. Set on agent panes, where the picker is read-only. */
@@ -177,7 +175,6 @@ export interface SubordinateSnapshot {
 
 export interface WorkspaceSnapshot {
   status: AgentStatus;
-  tools: ToolDescResult;
   memoryContent: string;
   slates: SlateSummary[];
   executors: ExecutorInfo[];
@@ -442,7 +439,6 @@ export type LiveRefreshSource =
   | "presence"
   | "mcts"
   | "memoryContent"
-  | "tools"
   | "executors"
   | "slates"
   | "consents"
@@ -463,7 +459,6 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "pendingActions", label: "pending actions" },
   { source: "mcts", label: "MCTS" },
   { source: "memoryContent", label: "memory content" },
-  { source: "tools", label: "tools" },
   { source: "presence", label: "tab presence" },
   { source: "executors", label: "executors" },
   { source: "slates", label: "slates" },
@@ -475,7 +470,6 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
 /** A landed snapshot is a fresh read of each of these, so it clears their failures. */
 const SNAPSHOT_SEEDED_SOURCES: readonly LiveRefreshSource[] = [
   "memoryContent",
-  "tools",
   "executors",
   "presence",
   "plan",
@@ -765,7 +759,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   const isSubordinate = subordinate !== undefined;
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
-  const [tools, setTools] = useState<ToolInfo[]>([]);
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
   const [mctsTrees, setMctsTrees] = useState<ReadonlyMap<string, ForkNode>>(new Map());
   const [memoryContent, setMemoryContent] = useState<string>("");
@@ -1528,11 +1521,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   const liveReads = useMemo((): Partial<Record<LiveRead, () => Promise<void>>> => ({
     getExposedPorts: refreshExposedPorts,
     getMemoryContent: () => refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
-    getToolDescriptions: () => refreshCurrentLiveResource(
-      "tools",
-      () => rpc<ToolDescResult>("getToolDescriptions", []),
-      (result) => setTools(mapToolDescriptions(result)),
-    ),
     getExecutors: () => refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
     listBackgroundJobs: refreshBackgroundJobs,
     listPendingActions: refreshPendingActions,
@@ -1641,7 +1629,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (!isCurrent()) return;
     setAgentStatus(snap.status);
 
-    if (isSourceCurrent("tools")) setTools(mapToolDescriptions(snap.tools));
 
     if (isSourceCurrent("memoryContent")) {
       setMemoryContent(snap.memoryContent);
@@ -1709,7 +1696,6 @@ export function useKinu(target?: string | KinuActorAddress) {
       modelSource: actorSnapshot.model.source,
       reasoningEffort: actorSnapshot.reasoningEffort,
       searchNodeCount: 0,
-      craftedToolCount: 0,
       messageCount: actorSnapshot.messageCount,
       forkLineage: null,
     });
@@ -1733,7 +1719,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     setErrors({});
     setConsentResolutionErrors(new Map());
     setAgentStatus(null);
-    setTools([]);
     setMemory([]);
     setMemoryContent("");
     mctsProgressState.current =
@@ -2004,7 +1989,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     /** A pane may only report "none" for a read that came back; `agentStatus` alone cannot tell
      *  loading from failed. */
     snapshot,
-    tools,
     memory,
     memoryContent,
     mctsTrees,
@@ -2144,19 +2128,6 @@ function parseSubordinateActivityEvent({ value }: { value: unknown }): Subordina
   const parsed = v.safeParse(SubordinateActivityEventSchema, value);
 
   return parsed.success ? parsed.output : null;
-}
-
-interface ToolDescResult {
-  builtIn: Array<{
-    name: string; summary: string; description: string;
-    exposure: ToolInfo["exposure"]; wired: boolean;
-  }>;
-}
-
-/** `exposure` and `wired` come from the orchestrator; neither is recomputed here. */
-function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
-  // Crafted tools are the evolution loop's concern and are not listed to the user.
-  return r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 }));
 }
 
 /** The heading format belongs to `memory/note.ts`; a note is not a search hit, so every note scores 1. */

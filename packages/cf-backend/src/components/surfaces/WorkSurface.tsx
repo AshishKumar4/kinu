@@ -12,7 +12,7 @@ import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { Loader } from "@cloudflare/kumo";
-import type { ToolInfo, MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
+import type { MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
@@ -65,7 +65,6 @@ export interface WorkSurfaceProps {
   plan: PlanReview | null;
   planRpc?: Rpc;
   snapshot: AsyncResource<AgentStatus>;
-  tools: ToolInfo[];
   memory: MemoryEntry[];
   memoryContent: string;
   onRetryLoad: () => void;
@@ -311,7 +310,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           )}
           {surface === "Agent" && (
             <AgentSurface
-              snapshot={props.snapshot} tools={props.tools}
+              snapshot={props.snapshot}
               memory={props.memory} memoryContent={props.memoryContent}
               onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
               rpc={props.rpc}

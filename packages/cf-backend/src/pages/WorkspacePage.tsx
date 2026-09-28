@@ -1104,7 +1104,6 @@ export default function WorkspacePage() {
             plan={visiblePlan}
             snapshot={state.snapshot}
             onRetryLoad={state.retryLoad}
-            tools={state.tools}
             memory={state.memory}
             memoryContent={state.memoryContent}
             onSearchMemory={state.searchMemory}
