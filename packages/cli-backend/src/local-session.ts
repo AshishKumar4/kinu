@@ -1831,9 +1831,6 @@ export class LocalAgentSession {
 
     const scoped = this.actorSession.orchestrator.scopedTurn(input.turn);
 
-    // Recorded, not re-read on replay: the tool surface, dedupe window and severity floor can change.
-    const advisor = this.actorSession.advisorSnapshot(scoped, input.reachableTools);
-
     const relay = this.parentRelay;
 
     const facts: TerminalTurnFacts = {
@@ -1860,15 +1857,19 @@ export class LocalAgentSession {
     if (input.overflowRetry) parts.overflowRetry = true;
 
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
+
     // Every review input is recorded, matching the Durable Object's snapshot; the gate's armed state
-    // is RAM and a fresh process reads it closed.
-    parts.advisor = projectJsonValue({
-      value: {
-        ...advisor,
-        // Whether the gate will be waiting when the advisor speaks: `gated` for this turn, `open` for an earlier one.
-        gateOpen: gated || this.chat.completionGate.open,
-      },
-    });
+    // is RAM and a fresh process reads it closed. Owed only when the actor reviews turns.
+    if (this.actorSession.reviewsTurns) {
+      parts.advisor = projectJsonValue({
+        value: {
+          // Recorded, not re-read on replay: the tool surface, dedupe window and severity floor can change.
+          ...this.actorSession.advisorSnapshot(scoped, input.reachableTools),
+          // Whether the gate will be waiting when the advisor speaks: `gated` for this turn, `open` for an earlier one.
+          gateOpen: gated || this.chat.completionGate.open,
+        },
+      });
+    }
 
     // Decided once: the plan re-reads the pending version, so a replay would score against the wrong candidate.
     const sampled = owesShadowTrial(facts) ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;

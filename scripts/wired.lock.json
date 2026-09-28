@@ -250,7 +250,6 @@
   "packages/core/src/safety/egress-gate.ts#findEgressPlaceholders (unreached-export)",
   "packages/core/src/scaffold/auto-judge.ts#RunAutoShadowEvalOpts.random (unsupplied-field)",
   "packages/core/src/scaffold/shadow.ts#SHADOW_TRIAL_CONTEXT_CHARS (unreached-export)",
-  "packages/core/src/skills/discover.ts#DiscoverOpts.onParseError (unsupplied-field)",
   "packages/core/src/steer-branch.ts#BRANCH_HEAD_BUDGET (unreached-export)",
   "packages/core/src/steer-branch.ts#BRANCH_RATIONALE (unreached-export)",
   "packages/core/src/steer-branch.ts#BranchStartInput.model (unsupplied-field)",

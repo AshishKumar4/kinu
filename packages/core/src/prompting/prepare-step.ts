@@ -4,6 +4,8 @@
  * placed before a rewrite would bust one backend's prefix.
  */
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { ModelMessage, SystemModelMessage } from 'ai';
 import type { TurnContextMeter } from '../context-meter';
 import type { ExtensionHost } from '../extension';
@@ -72,7 +74,7 @@ export interface StepPrepareContext {
 export function composePrepareStep(pipeline: StepPipeline, ctx: StepPrepareContext): StepPrepareResult | Promise<StepPrepareResult> {
   const refusal = pipeline.budget?.guard('model_call');
 
-  if (refusal) throw new MissionBudgetExhausted(refusal);
+  if (refusal) return settleSync(Effect.die(new MissionBudgetExhausted(refusal)));
 
   if (pipeline.context !== undefined) return pipeline.context.base().then(base => {
     if (base.changed) pipeline.dynamic?.ledger.reset();
