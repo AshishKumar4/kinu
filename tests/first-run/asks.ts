@@ -125,6 +125,32 @@ export const MOUNT_ASK = `This turn is identified by ${MOUNT_MARK}. Do all of th
   + `4. With eval, run: ${MOUNT_LISTING_PROGRAM}\n`
   + 'Then answer with one line naming the file you wrote.';
 
+/** sandbox-exec-output: how many commands, and how many at once. At 16 at once the SDK's process lane lost 1 to 12
+ *  in 100 final lines (2026-09-28), so 200 of them surviving that lane is a chance under one in a thousand. */
+export const EXEC_OUTPUT_COMMANDS = 600;
+
+export const EXEC_OUTPUT_AT_ONCE = 32;
+
+/** sandbox-exec-output: every command prints only its own mark after a second, and the program answers with the
+ *  count that came back and the first few that did not. */
+export const EXEC_OUTPUT_PROGRAM = [
+  '// Run the commands in parallel and count the marks that came back',
+  `const marks = Array.from({ length: ${EXEC_OUTPUT_COMMANDS} }, (_, i) => \`KINU_EXEC_OUT_\${i}\`);`,
+  'const lost = [];',
+  'let next = 0;',
+  `await Promise.all(Array.from({ length: ${EXEC_OUTPUT_AT_ONCE} }, async () => {`,
+  '  while (next < marks.length) {',
+  '    const mark = marks[next++];',
+  '    const ran = await sandbox.exec(`sleep 0.3 && echo ${mark}`);',
+  '    if (!String(ran?.stdout ?? ran).includes(mark)) lost.push(mark);',
+  '  }',
+  '}));',
+  'return `EXEC ${marks.length - lost.length}/${marks.length} LOST ${lost.slice(0, 5).join(",") || "none"}`;',
+].join('\n');
+
+export const EXEC_OUTPUT_ASK = 'With eval, run this program exactly and reply with the line it returns:\n'
+  + EXEC_OUTPUT_PROGRAM;
+
 /**
  * two-machines: the two machines, by the names a person would type.
  *
