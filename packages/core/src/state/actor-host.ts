@@ -202,7 +202,8 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     let built = false;
 
     try {
-      // Children need handle identity for release.
+      // Children need handle identity so release revokes every statement. The root's runtime
+      // belongs to its opener and is never released individually, so same actor id suffices.
       const rootBinding = reference.parentActorId === null;
 
       if (runtime.actor !== bound.handle
@@ -246,7 +247,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
       return { actor: { ...bound, runtime, session }, fence };
     } finally {
-      // A failed build frees its runtime.
+      // A failed build still lets its runtime go.
       if (!built) runtime.release?.();
     }
   };

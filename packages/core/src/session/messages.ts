@@ -123,6 +123,16 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   /** Sealed rows never change, so each is read once per reader. */
   private sealed = new Map<string, SealedMessage>();
 
+  /** For a row proven to encode as `source`: its text is the streamed string, one copy, not two. */
+  protected shareText(reference: MessageReference, source: ModelMessage): void {
+    const cached = this.sealed.get(reference.messageId);
+    const shared = cached === undefined ? undefined : decodeModelMessageValues([encodeModelMessage(source)])[0];
+
+    if (cached === undefined || shared === undefined) return;
+    freezeTree({ value: shared });
+    this.sealed.set(reference.messageId, { message: shared, origin: cached.origin });
+  }
+
   constructor(protected readonly sql: SqlExecutor, protected readonly actor: A, readonly payloads: P) {}
 
   protected row(messageId: string): MessageRow {
@@ -267,6 +277,12 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
 
     if (!carries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
     this.sources.set(message, reference);
+
+    if (JSON.stringify(encodeModelMessage(recorded)) === JSON.stringify(encodeModelMessage(message))) {
+      this.shareText(reference, message);
+      const shared = await super.materialize(reference);
+      this.sources.set(shared, reference);
+    }
   }
 
   /** Frozen, so it cannot drift from the committed row it names. */
