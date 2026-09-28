@@ -4609,6 +4609,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const signal = workspaceGenesisSignal(readMission(this.boundSql));
 
     if (!signal) return { started: false };
+    // Held behind the start measure, genesis would yield to the owner's first prompt.
+    await this.chatLoop.revised;
     // The send admits the turn before its first await; only the wait is detached.
     const sent = this.orch.inbox.send(signal);
     this.detachOwned(async () => {

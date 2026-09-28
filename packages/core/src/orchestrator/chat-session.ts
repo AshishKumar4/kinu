@@ -290,8 +290,6 @@ export class ChatSession {
   private readonly landings = new Map<string, SendLandingWaiter>();
   private readonly eventLog: EventLog;
   private revision: Promise<void> | null = null;
-  private folding: Promise<void> | null = null;
-  private turnsBegun = 0;
   private readonly unobserveMeasures: () => void;
   private readonly eventRecorder: RunEventRecorder;
   private readonly compactionState: CompactionTriggerState;
@@ -361,6 +359,8 @@ export class ChatSession {
   }
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
+  /** Settles once no measure or fold is pending. */
+  get revised(): Promise<void> { return this.revision ?? Promise.resolve(); }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
   /** Open on purpose, so the wake reconcile must not seal them. */
@@ -620,12 +620,7 @@ export class ChatSession {
     const folded = (this.revision ?? Promise.resolve()).then(() => settleEffect(toWire(this.fold(), (failure) => failure)));
     const revision = folded.then(() => undefined);
     this.revision = revision;
-    this.folding = revision;
-    this.actorSession.orchestrator.track(revision.then(() => {
-      if (this.revision === revision) this.revision = null;
-
-      if (this.folding === revision) this.folding = null;
-    }), 'folding the conversation');
+    this.actorSession.orchestrator.track(revision.then(() => { if (this.revision === revision) this.revision = null; }), 'folding the conversation');
 
     return folded.then((outcome) => settleEffect(outcome.ok ? Effect.void : Effect.fail(outcome.error)));
   }
@@ -635,7 +630,7 @@ export class ChatSession {
       ? Effect.fail(new KinuError('denied', COMPACT_NEEDS_IDLE))
       : attempt(
         { doing: 'folding the conversation into a summary', otherwise: 'unavailable' },
-        async () => { this.recordMeasure(await this.measureNextRequest({ counted: true, trigger: 'user' })); },
+        () => this.measureNextRequest({ counted: true, trigger: 'user' }),
       );
   }
 
@@ -649,26 +644,16 @@ export class ChatSession {
   measureContextRevision(options: { readonly counted: boolean }): Promise<void> {
     return settleEffect(this.pumpActive || this.queue.length > 0 ? Effect.void : attempt(
       { doing: 'measuring the next request after the context changed', otherwise: 'unavailable' },
-      async () => {
-        const begun = this.turnsBegun;
-        const measured = await this.measureNextRequest({ ...options, trigger: 'auto' });
-
-        if (this.turnsBegun === begun && !this.pumpActive && this.queue.length === 0) this.recordMeasure(measured);
-      },
+      () => this.measureNextRequest({ ...options, trigger: 'auto' }),
     ).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('context.revision_measure_failed', failure); }))));
   }
 
-  private async measureNextRequest(
-    options: { readonly counted: boolean; readonly trigger: CompactionTrigger },
-  ): Promise<{ readonly tokens: number; readonly contextWindow: number } | null> {
+  private async measureNextRequest(options: { readonly counted: boolean; readonly trigger: CompactionTrigger }): Promise<void> {
     const { execution, profile } = await this.ports.composeRequest();
     const { countInputTokens, ...uncounted } = execution.chat;
     const counted = options.counted && countInputTokens !== undefined ? { ...uncounted, countInputTokens } : uncounted;
+    const measured = await this.actorSession.measureNextRequest({ ...execution, chat: { ...counted, transformTrigger: options.trigger } }, profile);
 
-    return this.actorSession.measureNextRequest({ ...execution, chat: { ...counted, transformTrigger: options.trigger } }, profile);
-  }
-
-  private recordMeasure(measured: { readonly tokens: number; readonly contextWindow: number } | null): void {
     if (measured !== null) this.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'context_admitted', ...measured });
   }
 
@@ -749,8 +734,8 @@ export class ChatSession {
       let item: QueueItem | undefined;
 
       while ((item = this.queue.shift())) {
-        // Only a fold holds a turn: a held genesis yields to the prompt that lands meanwhile.
-        await this.folding;
+        // So the turn's own measure is the newer.
+        await this.revision;
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
         // compensates.
         const refusal = this.ports.driverGate();
@@ -782,7 +767,6 @@ export class ChatSession {
         }
 
         this.runningAnnouncement = item.idempotencyKey ?? null;
-        this.turnsBegun += 1;
 
         try {
           await this.processTurn(item);
