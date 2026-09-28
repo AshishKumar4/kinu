@@ -75,8 +75,7 @@ export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelP
   };
 }
 
-/** The endpoint's `/models` list; fetch or parse failure throws rather than
- *  reporting a wrong base URL as a provider with no models. */
+/** The endpoint's `/models` list; a refused or unreadable list reads as no models, a failed fetch throws. */
 export async function discoverOpenAICompatibleModels(
   auth: AuthResolution | null,
   fetchImpl: typeof fetch = fetch,

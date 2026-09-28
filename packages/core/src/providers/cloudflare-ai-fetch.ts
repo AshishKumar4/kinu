@@ -1,6 +1,6 @@
 // Shared wire path to the user's Cloudflare AI endpoint (workers-ai, my-gateway, /api/user/ai/v1 proxy).
 import type { AuthResolution, AuthResolver, ProviderWaitInfo } from './types';
-import { asFetchFunction } from './fetch-shim';
+import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { diagnostics, tolerate, toKinuError } from '../obs/index';
 import { repairSseCachedUsage } from './stream-usage-repair';
@@ -60,16 +60,7 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
     const originalUrl = input instanceof Request ? input.url : input.toString();
 
     const send = async (resolved: AuthResolution) => {
-      // Copied by shape, not `new Headers(init?.headers)`: some lib combinations reject the iterable HeadersInit arm.
-      const headers = new Headers();
-      const incoming = init?.headers;
-
-      if (incoming !== undefined) {
-        if (incoming instanceof Headers) for (const [key, value] of incoming) headers.set(key, value);
-        else if (Symbol.iterator in incoming) {
-          for (const [key, value] of incoming) headers.set(key, value);
-        } else for (const [key, value] of Object.entries(incoming)) headers.set(key, value);
-      }
+      const headers = copyHeaders(init?.headers);
 
       for (const [key, value] of Object.entries(resolved.headers)) headers.set(key, value);
 
