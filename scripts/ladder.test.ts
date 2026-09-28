@@ -93,11 +93,11 @@ const AFTER_CI_SUITES = {
   'evals/tasks/order-book.eval.ts': 'bun run evals',
   'evals/tasks/request-logs.eval.ts': 'bun run evals',
   'scripts/deadline-capability.test.ts': 'bun test --timeout=0 scripts/deadline-capability.test.ts',
-  'scripts/live-app-layout.test.ts': 'bun test --timeout=0 scripts/live-app-layout.test.ts',
-  'scripts/live-app-plans.test.ts': 'bun test --timeout=0 scripts/live-app-plans.test.ts',
-  'scripts/live-app-sleep.test.ts': 'bun test --timeout=0 scripts/live-app-sleep.test.ts',
-  'scripts/live-app-turns.test.ts': 'bun test --timeout=0 scripts/live-app-turns.test.ts',
-  'scripts/product-flows.test.ts': 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
+  'tests/browser/live-app-layout.test.ts': 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
+  'tests/browser/live-app-plans.test.ts': 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
+  'tests/browser/live-app-sleep.test.ts': 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
+  'tests/browser/live-app-turns.test.ts': 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
+  'tests/browser/product-flows.test.ts': 'bun scripts/with-dev-server.ts bun test --timeout=0 tests/browser/product-flows.test.ts',
 } satisfies Record<string, string>;
 
 /**
@@ -291,7 +291,7 @@ describe('the ladder measures something', () => {
     expect(reaching.size).toBeGreaterThan(30);
     expect(corpus.has(censusFile)).toBeTrue();
 
-    for (const file of ['scripts/computed-style.test.ts', 'scripts/provider-wait-ux.test.ts', 'tests/live/live-smoke.test.ts']) {
+    for (const file of ['tests/browser/computed-style.test.ts', 'tests/browser/provider-wait-ux.test.ts', 'tests/live/live-smoke.test.ts']) {
       expect(reaching.has(file), `${file} drives a browser and the closure does not reach it`).toBeTrue();
     }
 
@@ -453,11 +453,11 @@ describe('the ladder measures something', () => {
     // five files. Cross-checked rather than tautological: `claims()` resolves
     // COMMAND TEXT, while `isBunDiscoverableSuite` is a FILENAME rule.
     const bunSuitesUnderTests = tracked
-      .filter((file) => file.startsWith('tests/') && isBunDiscoverableSuite(file))
+      .filter((file) => file.startsWith('tests/') && !file.startsWith('tests/browser/') && isBunDiscoverableSuite(file))
       .sort();
 
     expect(bunSuitesUnderTests.length).toBeGreaterThan(0);
-    expect(claims('bun test ./tests/', tracked).sort()).toEqual(bunSuitesUnderTests);
+    expect(claims('bun test ./tests/live/ ./tests/first-run/', tracked).sort()).toEqual(bunSuitesUnderTests);
 
     // The other half of the partition: every runnable suite no `bun test` can
     // select is an eval task, and `bun run evals` claims exactly those.
@@ -505,7 +505,7 @@ describe('the ladder measures something', () => {
     expect(uiRows.every((files) => files.length > 0)).toBe(true);
     expect(new Set(uiRows.flat()).size).toBe(uiRows.flat().length);
     expect(uiRows.flat().sort()).toEqual(
-      [...claims('bun test scripts/*-ux.test.ts', tracked), 'scripts/computed-style.test.ts'].sort(),
+      [...claims('bun test tests/browser/*-ux.test.ts', tracked), 'tests/browser/computed-style.test.ts'].sort(),
     );
     // `--cwd` silently loads a different bunfig, so it claims nothing on
     // purpose — a gate spelled that way fails as an orphan instead of passing.

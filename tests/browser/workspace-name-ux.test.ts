@@ -23,8 +23,8 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
-import { withGallery } from './gallery-harness';
-import { TEST_REQUIREMENTS } from './test-requirements';
+import { withGallery } from '../../scripts/gallery-harness';
+import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
 /** The owner's own workspace slug, spelled here so a failure quotes the string
  *  he was shown rather than a placeholder. */

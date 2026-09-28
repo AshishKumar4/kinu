@@ -8,8 +8,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 
-import { contrast, over, rgba, type Rgba, unruledClasses, withGallery } from './gallery-harness';
-import { TEST_REQUIREMENTS } from './test-requirements';
+import { contrast, over, rgba, type Rgba, unruledClasses, withGallery } from '../../scripts/gallery-harness';
+import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
 const MODES = ['dark', 'light'] as const;
 

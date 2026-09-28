@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { withGallery } from './gallery-harness';
+import { withGallery } from '../../scripts/gallery-harness';
 
 /**
  * The `providerwait` frame pins a turn mid-wait: a model call is sleeping out

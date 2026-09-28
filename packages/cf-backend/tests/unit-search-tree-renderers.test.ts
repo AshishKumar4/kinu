@@ -1,5 +1,5 @@
 // Both renderers read the simulation's frame and need nothing the other lacks; the GPU mount returns an outcome,
-// never a throw. The mount itself is covered in the real browser (scripts/public-pages.test.ts).
+// never a throw. The mount itself is covered in the real browser (tests/browser/public-pages.test.ts).
 import { VGPUError as CoreVGPUError } from '@vgpu/core';
 import * as v from 'valibot';
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';

@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
-import { contrast, rgba, withGallery, type Gallery } from './gallery-harness';
-import { TEST_REQUIREMENTS } from './test-requirements';
-import { THEMES, type Theme } from './computed-style';
+import { contrast, rgba, withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
+import { THEMES, type Theme } from '../../scripts/computed-style';
 
 // The shared contract is dependency-free: this gate reads the handle shape
 // and its `declare global` without typechecking the timeline's

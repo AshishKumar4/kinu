@@ -26,7 +26,7 @@ import { describe, expect, test } from 'bun:test';
 import type { HTTPRequest, Page } from 'puppeteer';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
-import { diagnosticsSettled, recordDiagnostics, withGallery } from './gallery-harness';
+import { diagnosticsSettled, recordDiagnostics, withGallery } from '../../scripts/gallery-harness';
 
 /** One canned answer for an intercepted read. `JsonValue` because a fixture IS
  *  the bytes the route would have serialized. */

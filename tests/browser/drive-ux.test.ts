@@ -28,10 +28,10 @@ import { packZip } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
 import type { Page } from 'puppeteer';
 
-import { contrast, rgba, withGallery, type Gallery } from './gallery-harness';
-import { TEST_REQUIREMENTS } from './test-requirements';
+import { contrast, rgba, withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
-const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'drive-ux');
+const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'drive-ux');
 
 mkdirSync(SHOTS, { recursive: true });
 

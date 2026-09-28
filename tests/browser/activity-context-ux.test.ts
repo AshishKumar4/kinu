@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { INSPECTOR_MIN_PX } from '@kinu.run/core/web/inspector-layout';
-import { withGallery } from './gallery-harness';
+import { withGallery } from '../../scripts/gallery-harness';
 
 /**
  * The Activity tab's context map: every area of the prompt with its characters and its share. The inspector opens

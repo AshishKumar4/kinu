@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import type { Page, Viewport } from 'puppeteer';
 import type { JsonValue } from '@kinu.run/core';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 declare global {
   interface Window {
@@ -31,7 +31,7 @@ declare global {
   }
 }
 
-const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'home-status');
+const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'home-status');
 
 mkdirSync(SHOTS, { recursive: true });
 

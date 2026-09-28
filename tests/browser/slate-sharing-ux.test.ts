@@ -19,11 +19,11 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
-const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'blueprints');
+const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'blueprints');
 
-const LIVE_SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'live-shares');
+const LIVE_SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'live-shares');
 
 mkdirSync(SHOTS, { recursive: true });
 

@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
-import { INSPECTOR_SHUT_PX } from './product-flows';
-import { SLATE_TITLE } from './scripted-model';
-import { liveRows } from './live-app-rows';
+import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
+import { INSPECTOR_SHUT_PX } from '../../scripts/product-flows';
+import { SLATE_TITLE } from '../../scripts/scripted-model';
+import { liveRows } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-plans', ['plan-tabs', 'walkthrough', 'kept-tab', 'chat-scroll', 'state']);
 

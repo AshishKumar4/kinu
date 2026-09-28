@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
-import { withGallery } from './gallery-harness';
+import { withGallery } from '../../scripts/gallery-harness';
 
 const frames = '/tmp/workspace-planes-2026-09-06';
 

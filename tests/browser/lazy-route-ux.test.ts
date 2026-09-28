@@ -22,8 +22,8 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import type { HTTPRequest, Page } from 'puppeteer';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-import { withGallery, type Gallery } from './gallery-harness';
-import { CHUNK_FIXED_KEY, CHUNK_RELOAD_KEY } from '../packages/cf-backend/src/lazy-route';
+import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { CHUNK_FIXED_KEY, CHUNK_RELOAD_KEY } from '../../packages/cf-backend/src/lazy-route';
 
 const LOADED_SHA = 'abc1234';
 

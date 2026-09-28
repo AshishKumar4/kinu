@@ -107,7 +107,7 @@ import { galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGallery
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
-// Declared before the shell mounts so the app background attaches its stepping controls here only (scripts/app-background-ux.test.ts).
+// Declared before the shell mounts so the app background attaches its stepping controls here only (tests/browser/app-background-ux.test.ts).
 window.__kinuGalleryStepping = true;
 
 const squareButtonVariant = "square";

@@ -1499,7 +1499,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 ./tests/',
+    run: 'bun test --timeout=0 ./tests/live/ ./tests/first-run/',
     label: 'Live and first-run suites, credential-free',
     tier: 'ci',
     seconds: 1.3,
@@ -1514,7 +1514,8 @@ export const LADDER: readonly Gate[] = [
       + 'this entry came to advertise 27 tests and 23 skips against a measured 28 and '
       + '25. Note the path form: `bun test tests` silently matches NOTHING, and '
       + '`bun test tests/` also matches nothing — only `./tests/` selects them, which '
-      + 'is exactly the kind of silent zero this ladder asserts against.',
+      + 'is exactly the kind of silent zero this ladder asserts against. The two '
+      + 'directories are named, because `./tests/browser/` is the browser rows\' own.',
     blind: 'everything it skips, which is most of it — declared, not hidden. It also '
       + 'cannot see a suite whose code no longer compiles, because bun strips types; '
       + 'that is `gate:typecheck-coverage` plus `tsc -p tests`, and the absence of both '
@@ -1635,7 +1636,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/chat-and-files-ux.test.ts',
+    run: 'bun test --timeout=0 tests/browser/chat-and-files-ux.test.ts',
     label: 'UI gate self-tests: chat and files',
     tier: 'ci',
     // Measured 2026-09-18 alone on the 24-thread workstation under the wave's
@@ -1679,7 +1680,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 scripts/account-ux.test.ts scripts/drive-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts',
+    run: 'bun test --timeout=0 tests/browser/account-ux.test.ts tests/browser/drive-ux.test.ts tests/browser/slate-preview-ux.test.ts tests/browser/slate-sharing-ux.test.ts',
     label: 'UI gate self-tests: account, drive and slates',
     tier: 'ci',
     // Measured alone 2026-09-27: 144.69 s wall, 51.17 s CPU, 2525 MiB peak Pss, start load 1.98.
@@ -1691,10 +1692,10 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts '
-      + '--path-ignore-patterns=scripts/account-ux.test.ts --path-ignore-patterns=scripts/drive-ux.test.ts '
-      + '--path-ignore-patterns=scripts/slate-preview-ux.test.ts --path-ignore-patterns=scripts/slate-sharing-ux.test.ts '
-      + 'scripts/*-ux.test.ts scripts/computed-style.test.ts',
+    run: 'bun test --timeout=0 --path-ignore-patterns=tests/browser/chat-and-files-ux.test.ts '
+      + '--path-ignore-patterns=tests/browser/account-ux.test.ts --path-ignore-patterns=tests/browser/drive-ux.test.ts '
+      + '--path-ignore-patterns=tests/browser/slate-preview-ux.test.ts --path-ignore-patterns=tests/browser/slate-sharing-ux.test.ts '
+      + 'tests/browser/*-ux.test.ts tests/browser/computed-style.test.ts',
     label: 'UI gate self-tests',
     tier: 'ci',
     // Measured alone 2026-09-27: 131.47 s wall, 47.64 s CPU, 2836 MiB peak Pss, start load 1.88.
@@ -1720,7 +1721,7 @@ export const LADDER: readonly Gate[] = [
       + 'complaint, all the same one", and in any of them an unmapped role token renders '
       + 'as Kumo\'s uncustomised brand colour instead of throwing. And the plan '
       + 'document AS A BROWSER LAYS IT OUT, which was authored and then run by '
-      + 'nothing: `scripts/plan-review-ux.test.ts` was untracked and claimed by no row '
+      + 'nothing: `tests/browser/plan-review-ux.test.ts` was untracked and claimed by no row '
       + 'while this same table was edited for three other new suites, so the headline '
       + 'UI change of its slice shipped with its acceptance evidence never executed. It '
       + 'measures the two refusals the header owes the document — a later h1 stays '
@@ -1757,7 +1758,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 scripts/public-pages.test.ts scripts/plan-demo-film.test.ts',
+    run: 'bun test --timeout=0 tests/browser/public-pages.test.ts scripts/plan-demo-film.test.ts',
     label: 'Public pages render',
     tier: 'ci',
     // Measured 2026-08-24 after the bug-fix drive and six-width clipping sweep: 51.28s.
@@ -1782,7 +1783,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 scripts/react-runtime-identity.test.ts',
+    run: 'bun test --timeout=0 tests/browser/react-runtime-identity.test.ts',
     label: 'React runtime identity',
     tier: 'ci',
     // Runs the real client build twice, then drives three routes in Chromium.
@@ -1818,7 +1819,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/swarm-tree-geometry.test.ts',
+    run: 'bun test --timeout=0 tests/browser/swarm-tree-geometry.test.ts',
     label: 'Swarm-tree geometry',
     tier: 'ci',
     seconds: 29,
@@ -1845,7 +1846,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 scripts/chat-scroll.test.ts',
+    run: 'bun test --timeout=0 tests/browser/chat-scroll.test.ts',
     label: 'Chat infinite scroll',
     tier: 'ci',
     seconds: 34,
@@ -2295,7 +2296,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'runs the elan/lake toolchain over the Lean tree, a compiler the key does not version and a shell entry the resolver does not read.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/live-app-turns.test.ts',
+    run: 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
     label: 'Live app in a browser: a running turn',
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 133.0 s at load 2.9, its five scenarios 11-34 s each beside the dev server's boot.
@@ -2322,7 +2323,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/live-app-sleep.test.ts',
+    run: 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
     label: 'Live app in a browser: a page that loses the turn',
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 133.1 s at load 3.7, its four scenarios 20-33 s each beside the dev server's boot.
@@ -2347,7 +2348,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/live-app-plans.test.ts',
+    run: 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
     label: 'Live app in a browser: a long chat and its plans',
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 167.9 s at load 2.7, its four scenarios 10-104 s each, chat-scroll the long one beside the dev server's boot.
@@ -2372,7 +2373,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/live-app-layout.test.ts',
+    run: 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
     label: 'Live app in a browser: the inspector column\'s layout',
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 120.3 s at load 3.1, its three scenarios 14-38 s each beside the dev server's boot.
@@ -2398,7 +2399,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
-    run: 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
+    run: 'bun scripts/with-dev-server.ts bun test --timeout=0 tests/browser/product-flows.test.ts',
     label: 'Product flows in a browser, on the local dev server',
     deadline: {
       seconds: 500,
@@ -2860,16 +2861,16 @@ export const CI_EXEMPT = {
     + 'build, and pointing it at the previous one would report the last deploy\'s product under '
     + "this pull request's name. It also creates workspaces, links real machines and spends "
     + 'model calls on a shared account, none of which belongs on a pull request.',
-  'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts':
+  'bun scripts/with-dev-server.ts bun test --timeout=0 tests/browser/product-flows.test.ts':
     'boots the same dev server the live-app row does, on the same `.dev.vars` credentials a '
     + 'pull request must not hold, and spends real model turns on the account through it.',
   'bash scripts/product-flows-tier.sh':
     'has nothing to run against at CI: its subject is the deployment that just went up, as the '
     + 'eval identity, whose secret no pull request holds.',
-  'bun test --timeout=0 scripts/live-app-turns.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 scripts/live-app-sleep.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 scripts/live-app-plans.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 scripts/live-app-layout.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 tests/browser/live-app-turns.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 tests/browser/live-app-sleep.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 tests/browser/live-app-plans.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 tests/browser/live-app-layout.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 scripts/deadline-capability.test.ts':
     'needs a user systemd manager that grants a unit an ambient capability. The GitHub runner\'s starts the unit '
     + 'and loses it at once (run 36216870343, 2026-09-26: ActiveState inactive), so there the suite fails for '

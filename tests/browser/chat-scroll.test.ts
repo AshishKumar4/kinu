@@ -35,7 +35,7 @@ import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 /**
  * The frame's hidden `[data-testid="probe"]` blob — the hooks' own state, which

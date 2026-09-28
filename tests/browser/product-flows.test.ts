@@ -8,17 +8,17 @@
  * the tests below read only what the page showed.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { resolveWebIdentity } from '../evals/src/session';
-import { withBrowser } from './live-app-harness';
+import { resolveWebIdentity } from '../../evals/src/session';
+import { withBrowser } from '../../scripts/live-app-harness';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, driveKeepsWhatIsDone, driveOpens, reachesHome, slateOpensFromMyStuff, slateSharesWithNoBindings,
   slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges,
   type AgentReturnVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict, type WrittenFileVerdict,
-} from './product-flows';
-import { FLOW_PROBE, FLOW_SLATE } from './flows-script';
-import { rowVerdicts } from './row-verdicts';
+} from '../../scripts/product-flows';
+import { FLOW_PROBE, FLOW_SLATE } from '../../scripts/flows-script';
+import { rowVerdicts } from '../../scripts/row-verdicts';
 
 interface FlowVerdicts {
   welcome: WelcomeVerdict | null;

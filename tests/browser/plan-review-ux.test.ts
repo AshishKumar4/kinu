@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
-import { unruledClasses, withGallery, type Gallery } from './gallery-harness';
+import { unruledClasses, withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 type Mode = 'dark' | 'light';
 

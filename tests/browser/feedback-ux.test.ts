@@ -20,7 +20,7 @@
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { HTTPRequest, Page } from 'puppeteer';
-import { diagnosticsSettled, recordDiagnostics, withGallery, type DiagnosticLine } from './gallery-harness';
+import { diagnosticsSettled, recordDiagnostics, withGallery, type DiagnosticLine } from '../../scripts/gallery-harness';
 
 const FEEDBACK = '/api/feedback';
 

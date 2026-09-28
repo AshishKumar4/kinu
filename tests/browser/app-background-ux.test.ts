@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 import type { JsonValue } from '@kinu.run/core';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 const SHOTS = '/home/mrwhite0racle/kinu-logs/app-background/ux';
 

@@ -27,7 +27,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 /** One label, and the room the column it sits in actually leaves it. */
 interface LabelFit {

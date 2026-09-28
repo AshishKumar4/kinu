@@ -9,7 +9,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 
-import { withGallery } from './gallery-harness';
+import { withGallery } from '../../scripts/gallery-harness';
 
 const MODES = ['dark', 'light'] as const;
 

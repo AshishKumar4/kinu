@@ -17,11 +17,11 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 import { ONBOARDING_STEPS } from '@kinu.run/core';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 const ONBOARDING_STEP_IDS = ONBOARDING_STEPS.map((step) => step.id);
 
-const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'account-ux');
+const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'account-ux');
 
 mkdirSync(SHOTS, { recursive: true });
 

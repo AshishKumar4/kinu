@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { withGallery } from './gallery-harness';
+import { withGallery } from '../../scripts/gallery-harness';
 import type { Page } from 'puppeteer';
 
 async function serveSlate(page: Page): Promise<void> {

@@ -29,8 +29,8 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
-import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from './gallery-harness';
-import { until } from './product-flows';
+import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { until } from '../../scripts/product-flows';
 import { codenameFor, parseJsonArray, parseJsonValue, redactPayload, type JsonValue } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
@@ -2951,7 +2951,7 @@ test('workspace tabs past the edge stay reachable by scrolling the strip sideway
 });
 
 /** Where the agent tab strip's photographs land, outside the worktree. */
-const TAB_SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'chat-and-files-ux');
+const TAB_SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'chat-and-files-ux');
 
 mkdirSync(TAB_SHOTS, { recursive: true });
 

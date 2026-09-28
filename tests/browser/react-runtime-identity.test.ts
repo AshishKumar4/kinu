@@ -59,10 +59,10 @@ import {
 
 // The build under test, from the config the deploy path uses, resolved as
 // `vite build` resolves it. Imported rather than named by path: see `buildClient`.
-import clientConfigFor from '../packages/cf-backend/vite.config';
-import { withTestChrome } from './test-chrome';
+import clientConfigFor from '../../packages/cf-backend/vite.config';
+import { withTestChrome } from '../../scripts/test-chrome';
 
-const REPO = join(import.meta.dir, '..');
+const REPO = join(import.meta.dir, '..', '..');
 
 const clientConfig = clientConfigFor({ command: 'build', mode: 'production' });
 

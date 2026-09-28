@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 
 import { present } from '@kinu.run/test-utils';
-import { type PageAudit, auditPage } from './computed-style';
-import { withGallery } from './gallery-harness';
+import { type PageAudit, auditPage } from '../../scripts/computed-style';
+import { withGallery } from '../../scripts/gallery-harness';
 
 interface Scenarios {
   /** The tree as it ships. */

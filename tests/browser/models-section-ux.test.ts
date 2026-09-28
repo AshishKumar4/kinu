@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 const THINKING = '[aria-label="Thinking level"]';
 

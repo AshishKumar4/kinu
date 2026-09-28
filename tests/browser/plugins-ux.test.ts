@@ -20,9 +20,9 @@ import * as v from 'valibot';
 import type { Page } from 'puppeteer';
 import type { JsonValue } from '@kinu.run/core';
 
-import { withGallery, type Gallery } from './gallery-harness';
+import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
-const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'mcp-presets');
+const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'mcp-presets');
 
 mkdirSync(SHOTS, { recursive: true });
 
