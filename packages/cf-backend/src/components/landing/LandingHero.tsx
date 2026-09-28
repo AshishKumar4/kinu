@@ -12,7 +12,7 @@ import { useWideHero } from './search-tree/stage';
 const PHRASES = ['get better with use.', 'build their own tools.', 'run in the cloud or on your machine.', 'connect to multiple devices.', 'work while your device is closed.'] as const;
 
 /** A failure asks for the click again; the command is on screen either way. */
-const COPY_LABEL: Record<CopyStatus, string> = { idle: 'Copy', copied: 'Copied', failed: 'Retry copy' };
+export const COPY_LABEL: Record<CopyStatus, string> = { idle: 'Copy', copied: 'Copied', failed: 'Retry copy' };
 
 /** Derived from the animated phrases so the accessible name cannot drift from them. */
 const HERO_LABEL = `Agents that ${PHRASES

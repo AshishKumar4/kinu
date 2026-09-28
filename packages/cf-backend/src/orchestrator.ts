@@ -25,7 +25,7 @@ import {
   type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
-import { isWorkspaceTerminal, publicText, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
+import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
 import { CHAT_SESSION_ID, conversationCount, turnInputMessage, type HeadReport, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
@@ -380,12 +380,12 @@ function clampLimit(requested: number | undefined, max: number): number {
 /** agents 0.22 reads this key back at start when `ctx.id` has no name. */
 const PERSISTED_NAME_KEY = '__ps_name';
 
-/** A terminal that cannot open: the chain goes to diagnostics, the pane reads the refusal. */
+/** A terminal that cannot open: the owner's pane reads the whole chain. */
 function terminalRefusal(failure: { doing: string; cause: unknown }): string {
   const error = authoredRefusal({ ...failure });
   diagnostics.failure('terminal.prepare_failed', error);
 
-  return publicText(error);
+  return renderThrownChain({ cause: error });
 }
 
 interface HostedTarget {
