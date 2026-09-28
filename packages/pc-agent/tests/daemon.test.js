@@ -8,7 +8,7 @@
 
 const { scratchDir } = require('../../test-utils/src/scratch');
 
-const { runToExit } = require('../../test-utils/src/spawn');
+const { killAndAwaitExit, recordedIn, runToExit } = require('../../test-utils/src/spawn');
 
 const { afterAll, afterEach, describe, expect, spyOn, test } = require('bun:test');
 
@@ -1237,21 +1237,18 @@ describe('daemon process under Bun against a local hub', () => {
   }
 
   /** Any supervisor the body left un-acked: each in-flight record names its
-   *  process group, and ESRCH is that group already being gone, which is the
-   *  teardown's goal. Killing by the daemon child's group is not possible —
-   *  `Bun.spawn` above is not detached. */
-  function killInflightSupervisors(root) {
+   *  process group, which writes into the request's directory until it exits.
+   *  Killing by the daemon child's group is not possible — `Bun.spawn` above
+   *  is not detached. */
+  async function killInflightSupervisors(root) {
     const inflight = path.join(root, 'inflight');
 
     if (!fs.existsSync(inflight)) return;
 
     for (const entry of fs.readdirSync(inflight)) {
-      const state = path.join(inflight, entry, 'state');
+      const supervisor = recordedIn(path.join(inflight, entry, 'state'), /^pid=(\d+)$/m);
 
-      if (!fs.existsSync(state)) continue;
-      const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
-
-      if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
+      if (supervisor !== null) await killAndAwaitExit(supervisor, { group: true });
     }
   }
 
@@ -1343,7 +1340,7 @@ describe('daemon process under Bun against a local hub', () => {
         // and the hub.
         child.kill('SIGTERM');
         await child.exited;
-        killInflightSupervisors(root);
+        await killInflightSupervisors(root);
       }
     } finally {
       await hub.close();
@@ -1375,7 +1372,7 @@ describe('daemon process under Bun against a local hub', () => {
       } finally {
         child.kill('SIGTERM');
         await child.exited;
-        killInflightSupervisors(root);
+        await killInflightSupervisors(root);
       }
     } finally {
       await hub.close();
@@ -1723,7 +1720,7 @@ describe('daemon process under Bun against a local hub', () => {
     const root = scratchDir('daemon-orphan');
     const requestId = 'rpc-orphanwait-1';
     const requestDir = path.join(root, 'inflight', requestId);
-    let supervisorPid = 0;
+    let supervisor = null;
 
     try {
       const hub = startFakeHub();
@@ -1740,7 +1737,10 @@ describe('daemon process under Bun against a local hub', () => {
         expect(done.result.stdout).toContain('orphan-check');
 
         // Terminal, un-acknowledged: the supervisor is on its ack FIFO now.
-        supervisorPid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(path.join(requestDir, 'state'), 'utf-8'))[1]);
+        supervisor = recordedIn(path.join(requestDir, 'state'), /^pid=(\d+)$/m);
+
+        if (supervisor === null) throw new Error(`no supervisor state under ${requestDir}: log says ${firstLog()}`);
+        const supervisorPid = supervisor.pid;
         expect(processAlive(supervisorPid)).toBe(true);
         expect(fs.existsSync(path.join(requestDir, 'result'))).toBe(true);
 
@@ -1770,7 +1770,7 @@ describe('daemon process under Bun against a local hub', () => {
         await hub.close();
       }
     } finally {
-      if (supervisorPid > 0) tolerate(() => process.kill(-supervisorPid, 'SIGKILL'), 'esrch');
+      if (supervisor !== null) await killAndAwaitExit(supervisor, { group: true });
     }
   // Two daemon spawns, one exec, and the supervisor's 1 s orphan poll, each
   // with its own named wait inside.
