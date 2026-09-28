@@ -10,7 +10,6 @@ import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
 import { explorationForkTree } from "@kinu.run/core";
 import type {
-  ToolInfo,
   MemoryEntry,
   ForkNode,
   ExecutorCommandResult,
@@ -21,7 +20,7 @@ import type {
   SendLanding,
 } from "@kinu.run/core";
 import type { BackgroundJob, SubordinateRosterEntry } from "@kinu.run/core/protocol";
-import type { ExecutorInfo } from "@kinu.run/core";
+import type { ExecutorInfo, PanelAgent } from "@kinu.run/core";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "@kinu.run/core";
 import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
@@ -147,7 +146,6 @@ export interface AgentStatus {
   createdAt: number;
   scaffoldVersion: number;
   searchNodeCount: number;
-  craftedToolCount: number;
   messageCount: number;
   model: string;
   /** The tier source the turn profile resolved. Set on agent panes, where the picker is read-only. */
@@ -177,7 +175,6 @@ export interface SubordinateSnapshot {
 
 export interface WorkspaceSnapshot {
   status: AgentStatus;
-  tools: ToolDescResult;
   memoryContent: string;
   slates: SlateSummary[];
   executors: ExecutorInfo[];
@@ -442,8 +439,8 @@ export type LiveRefreshSource =
   | "presence"
   | "mcts"
   | "memoryContent"
-  | "tools"
   | "executors"
+  | "agents"
   | "slates"
   | "consents"
   | "consentResolution"
@@ -463,9 +460,9 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "pendingActions", label: "pending actions" },
   { source: "mcts", label: "MCTS" },
   { source: "memoryContent", label: "memory content" },
-  { source: "tools", label: "tools" },
   { source: "presence", label: "tab presence" },
   { source: "executors", label: "executors" },
+  { source: "agents", label: "the agents panel" },
   { source: "slates", label: "slates" },
   { source: "consents", label: "device consents" },
   { source: "consentResolution", label: "device consents" },
@@ -475,7 +472,6 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
 /** A landed snapshot is a fresh read of each of these, so it clears their failures. */
 const SNAPSHOT_SEEDED_SOURCES: readonly LiveRefreshSource[] = [
   "memoryContent",
-  "tools",
   "executors",
   "presence",
   "plan",
@@ -765,7 +761,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   const isSubordinate = subordinate !== undefined;
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
-  const [tools, setTools] = useState<ToolInfo[]>([]);
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
   const [mctsTrees, setMctsTrees] = useState<ReadonlyMap<string, ForkNode>>(new Map());
   const [memoryContent, setMemoryContent] = useState<string>("");
@@ -836,6 +831,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const error = formatWorkspaceError(liveErrors, agentStatus !== null);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
+  const [workspaceAgents, setWorkspaceAgents] = useState<PanelAgent[]>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
   // Listing ports never provisions a sandbox: getExposedPorts returns [] unless the executor is already active.
@@ -1528,12 +1524,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   const liveReads = useMemo((): Partial<Record<LiveRead, () => Promise<void>>> => ({
     getExposedPorts: refreshExposedPorts,
     getMemoryContent: () => refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
-    getToolDescriptions: () => refreshCurrentLiveResource(
-      "tools",
-      () => rpc<ToolDescResult>("getToolDescriptions", []),
-      (result) => setTools(mapToolDescriptions(result)),
-    ),
     getExecutors: () => refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
+    listWorkspaceAgents: () => refreshCurrentLiveResource("agents", () => rpc<PanelAgent[]>("listWorkspaceAgents", []), setWorkspaceAgents),
     listBackgroundJobs: refreshBackgroundJobs,
     listPendingActions: refreshPendingActions,
     getWorkspaceTabPresence: refreshTabPresence,
@@ -1641,7 +1633,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (!isCurrent()) return;
     setAgentStatus(snap.status);
 
-    if (isSourceCurrent("tools")) setTools(mapToolDescriptions(snap.tools));
 
     if (isSourceCurrent("memoryContent")) {
       setMemoryContent(snap.memoryContent);
@@ -1679,6 +1670,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     try {
       await Promise.all([
         refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshPendingConsents(),
+        ...(isSubordinate ? [] : [liveReads.listWorkspaceAgents?.()]),
       ]);
     } catch (cause) {
       diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
@@ -1709,7 +1701,6 @@ export function useKinu(target?: string | KinuActorAddress) {
       modelSource: actorSnapshot.model.source,
       reasoningEffort: actorSnapshot.reasoningEffort,
       searchNodeCount: 0,
-      craftedToolCount: 0,
       messageCount: actorSnapshot.messageCount,
       forkLineage: null,
     });
@@ -1733,7 +1724,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     setErrors({});
     setConsentResolutionErrors(new Map());
     setAgentStatus(null);
-    setTools([]);
     setMemory([]);
     setMemoryContent("");
     mctsProgressState.current =
@@ -2004,7 +1994,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     /** A pane may only report "none" for a read that came back; `agentStatus` alone cannot tell
      *  loading from failed. */
     snapshot,
-    tools,
     memory,
     memoryContent,
     mctsTrees,
@@ -2017,6 +2006,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setReasoningEffort,
     setDisplayName,
     executors,
+    workspaceAgents,
     executorOutputs,
     lastActiveExecutor,
     executeInExecutor,
@@ -2144,19 +2134,6 @@ function parseSubordinateActivityEvent({ value }: { value: unknown }): Subordina
   const parsed = v.safeParse(SubordinateActivityEventSchema, value);
 
   return parsed.success ? parsed.output : null;
-}
-
-interface ToolDescResult {
-  builtIn: Array<{
-    name: string; summary: string; description: string;
-    exposure: ToolInfo["exposure"]; wired: boolean;
-  }>;
-}
-
-/** `exposure` and `wired` come from the orchestrator; neither is recomputed here. */
-function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
-  // Crafted tools are the evolution loop's concern and are not listed to the user.
-  return r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 }));
 }
 
 /** The heading format belongs to `memory/note.ts`; a note is not a search hit, so every note scores 1. */

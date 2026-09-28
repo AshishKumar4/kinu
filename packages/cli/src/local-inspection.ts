@@ -148,7 +148,6 @@ export interface LocalAgentInfoSnapshot {
   purpose: string;
   soul: string;
   scaffoldVersion: number;
-  craftedToolCount: number;
   searchNodeCount: number;
   taskCount: number;
   memorySize: number;
@@ -165,7 +164,6 @@ interface LocalStatus {
   createdAt: number | null;
   scaffoldVersion: number;
   searchNodeCount: number;
-  craftedToolCount: number;
   messageCount: number;
   model: string | null;
   reasoningEffort: ReasoningEffort | null;
@@ -225,7 +223,6 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       purpose: status.purpose,
       soul: status.soul,
       scaffoldVersion: status.scaffoldVersion,
-      craftedToolCount: status.craftedToolCount,
       searchNodeCount: status.searchNodeCount,
       taskCount: actor && tableExists(db, 'task_history')
         ? countOf(db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actor.actorId)
@@ -990,10 +987,6 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       scaffoldVersion: tableExists(db, 'scaffold_versions')
         ? currentScaffoldVersion(db, actorId)
         : 0,
-      // `crafted_tools` is one catalog per workspace (identity/schema.ts); `search_nodes` is actor-scoped.
-      craftedToolCount: tableExists(db, 'crafted_tools')
-        ? countOf(db, `SELECT COUNT(*) AS c FROM crafted_tools`)
-        : 0,
       searchNodeCount: tableExists(db, 'search_nodes')
         ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actorId)
         : 0,
@@ -1039,9 +1032,6 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
       : 0,
     searchNodeCount: actor && tableExists(db, 'search_nodes')
       ? countOf(db, `SELECT COUNT(*) AS c FROM search_nodes WHERE actor_id = ?`, actor.actorId)
-      : 0,
-    craftedToolCount: tableExists(db, 'crafted_tools')
-      ? countOf(db, `SELECT COUNT(*) AS c FROM crafted_tools`)
       : 0,
     messageCount: actor && tableExists(db, 'conversation_entries')
       ? countOf(db, `SELECT COUNT(*) AS c FROM conversation_entries WHERE actor_id = ?`, actor.actorId)

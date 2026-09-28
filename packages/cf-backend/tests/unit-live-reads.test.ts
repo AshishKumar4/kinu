@@ -51,6 +51,7 @@ async function liveRead(agent: HarnessOrchestratorAgent, read: LiveRead): Promis
     getWorkspaceTabPresence: () => agent.getWorkspaceTabPresence(),
     getActivePlanReview: () => agent.getActivePlanReview(),
     listWorkspaceWork: () => agent.listWorkspaceWork(),
+    listWorkspaceAgents: () => agent.listWorkspaceAgents(),
   };
 
   await reads[read]();

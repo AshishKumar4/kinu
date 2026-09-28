@@ -125,6 +125,7 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
+  readWorkspaceAgents, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
@@ -2677,6 +2678,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async clearBackgroundJobs(): Promise<{ ok: boolean }> {
     return this.countJobOperation('clear', await clearBackgroundJobs(this.jobs));
+  }
+
+  @callable()
+  async listWorkspaceAgents(): Promise<PanelAgent[]> {
+    return readWorkspaceAgents({
+      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main',
+      actors: this.workspaceActors().list({ retired: true }),
+    });
   }
 
   /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */

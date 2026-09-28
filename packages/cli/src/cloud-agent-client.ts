@@ -627,7 +627,6 @@ export class CloudAgentClient implements AgentClient {
       scaffoldVersion: status.scaffoldVersion,
       messageCount: status.messageCount,
       searchNodeCount: status.searchNodeCount,
-      craftedToolCount: status.craftedToolCount,
     };
   }
 

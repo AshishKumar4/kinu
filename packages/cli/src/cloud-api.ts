@@ -87,7 +87,6 @@ export interface CloudAgentStatus {
   createdAt: number;
   scaffoldVersion: number;
   searchNodeCount: number;
-  craftedToolCount: number;
   messageCount: number;
   model?: string | null;
   reasoningEffort?: ReasoningEffort | null;
@@ -188,7 +187,7 @@ const CloudAgentConnectTicketSchema: v.GenericSchema<CloudAgentConnectTicket> = 
 
 export const CloudAgentStatusSchema: v.GenericSchema<CloudAgentStatus> = v.object({
   name: v.string(), displayName: v.optional(v.string()), purpose: v.string(), soul: v.string(),
-  createdAt: v.number(), scaffoldVersion: v.number(), searchNodeCount: v.number(), craftedToolCount: v.number(),
+  createdAt: v.number(), scaffoldVersion: v.number(), searchNodeCount: v.number(),
   messageCount: v.number(), model: v.optional(v.nullable(v.string())), reasoningEffort: v.optional(v.nullable(ReasoningEffortSchema)),
   roleId: v.optional(v.string()), tierId: v.optional(v.string()),
 });

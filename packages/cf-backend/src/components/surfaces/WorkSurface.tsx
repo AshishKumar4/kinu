@@ -12,7 +12,7 @@ import type { AgentStatus, ExecutorOutput, ReadMoves } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { Loader } from "@cloudflare/kumo";
-import type { ToolInfo, MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
+import type { MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
@@ -24,12 +24,13 @@ import { WorkTab } from "./WorkTab";
 import { EnvironmentSurface } from "./EnvironmentSurface";
 import { FilesSurface } from "./FilesSurface";
 import { ActivitySurface } from "./ActivitySurface";
+import { AgentsSurface } from "./AgentsSurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
 import {
-  ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, surfaceHasContent,
-  type SlateSurfaceKind, type SurfaceKind,
+  ACTIVITY_SURFACE, AGENTS_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, surfaceHasContent,
+  type PanelAgent, type SlateSurfaceKind, type SurfaceKind,
 } from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { useWheelScrollsSideways } from "@/hooks/use-wheel-scrolls-sideways";
@@ -58,6 +59,7 @@ export interface WorkSurfaceProps {
   workspacePlanArrival?: WorkspacePlanArrival | null;
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   onSurface: (s: SurfaceKind) => void;
+  agents?: { readonly list: readonly PanelAgent[]; readonly shown: string | null; readonly open: (agent: PanelAgent) => void };
   pinnedPorts: PinnedPort[];
   previewError: string | null;
   previewStarting?: readonly string[];
@@ -65,7 +67,6 @@ export interface WorkSurfaceProps {
   plan: PlanReview | null;
   planRpc?: Rpc;
   snapshot: AsyncResource<AgentStatus>;
-  tools: ToolInfo[];
   memory: MemoryEntry[];
   memoryContent: string;
   onRetryLoad: () => void;
@@ -311,7 +312,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           )}
           {surface === "Agent" && (
             <AgentSurface
-              snapshot={props.snapshot} tools={props.tools}
+              snapshot={props.snapshot}
               memory={props.memory} memoryContent={props.memoryContent}
               onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
               rpc={props.rpc}
@@ -329,7 +330,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             />
           )}
           {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
-          {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}
+          <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} agents={props.agents} />
           {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
         </ErrorBoundary>
       </div>
@@ -342,4 +343,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
       {connecting && <ConnectDeviceDialog onClose={closeConnect} />}
     </div>
   );
+}
+
+/** The two surfaces opened by an icon rather than a strip tab. */
+function SideSurface({ shown, rpc, isStreaming, agents }: Pick<WorkSurfaceProps, "rpc" | "isStreaming" | "agents"> & { shown: SurfaceKind | null }) {
+  if (shown === ACTIVITY_SURFACE) return <ActivitySurface rpc={rpc} isStreaming={isStreaming} />;
+
+  return shown === AGENTS_SURFACE ? <AgentsSurface panel={agents} /> : null;
 }

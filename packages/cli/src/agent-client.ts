@@ -90,7 +90,6 @@ export interface AgentClientStatus {
   scaffoldVersion?: number;
   messageCount?: number;
   searchNodeCount?: number;
-  craftedToolCount?: number;
   taskCount?: number;
   memorySize?: number;
   dbSize?: number;

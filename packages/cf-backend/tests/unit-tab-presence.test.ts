@@ -42,7 +42,6 @@ const renderStrip = (tabPresence: TabPresence | undefined, presencePending = fal
     onRefreshPorts: () => {},
     plan: null,
     snapshot: { status: 'loading' },
-    tools: [],
     memory: [],
     memoryContent: '',
     onSearchMemory: () => {},
