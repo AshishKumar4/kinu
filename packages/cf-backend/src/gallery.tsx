@@ -1551,14 +1551,14 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   listWorkspaceAgents: () => (AGENTS_PANEL ? GALLERY_AGENTS : []),
-  // As the server does: the stopped worker settles aborted (the panel reads it as failed) and the roster read moves.
+  // As the server does: the stopped worker settles aborted, which the panel reads as stopped, and the roster read moves.
   stopSwarmWorker: (args?: unknown[]) => {
     const [headId] = v.parse(v.tuple([v.string()]), args);
     const at = GALLERY_AGENTS.findIndex((agent) => agent.open.kind === "node" && agent.open.nodeId === headId && agent.activity === "working");
     const agent = GALLERY_AGENTS[at];
 
     if (agent === undefined) return { stopped: false };
-    GALLERY_AGENTS[at] = { ...agent, activity: "failed" };
+    GALLERY_AGENTS[at] = { ...agent, activity: "stopped" };
     queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents"] })); });
 
     return { stopped: true };

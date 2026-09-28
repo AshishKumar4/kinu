@@ -91,6 +91,22 @@ describe('the Agents panel lists every agent in the workspace', () => {
     expect(read().filter(agentActive).map((agent) => agent.label)).toEqual(['Try the PEG parser']);
   });
 
+  test('a worker the owner stopped reads stopped, not failed; one that errored still reads failed', () => {
+    const { db, main, read } = workspace();
+    db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)').run(main.actorId, 'run-1', 'compare two parsers', 10);
+
+    const head = db.query(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+      VALUES (?, ?, NULL, 'run-1', 0, ?, 'r', ?, ?, 'synthesize')`);
+
+    head.run(main.actorId, 'h-a', 'Try the PEG parser', 'aborted', 11);
+    head.run(main.actorId, 'h-b', 'Try the Pratt parser', 'errored', 12);
+
+    expect(read().filter((agent) => agent.category === 'swarm').map((agent) => [agent.label, agent.activity])).toEqual([
+      ['Try the PEG parser', 'stopped'],
+      ['Try the Pratt parser', 'failed'],
+    ]);
+  });
+
   test('an agent is working while it holds an open turn, whatever its roster row last said', () => {
     const { db, main, hire, read, openTurn } = workspace();
     const chatting = hire(main, 'chatting', { createdBy: 'user', status: 'idle' });

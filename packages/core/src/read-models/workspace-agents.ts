@@ -13,7 +13,7 @@ import { actorReadHandle } from './workspace-work';
 
 export type AgentCategory = 'main' | 'user' | 'hired' | 'swarm' | 'background';
 
-export type AgentActivity = 'working' | 'waiting' | 'idle' | 'done' | 'failed' | 'dismissed';
+export type AgentActivity = 'working' | 'waiting' | 'idle' | 'done' | 'stopped' | 'failed' | 'dismissed';
 
 /** `owner`: its swarm's agent's path; null is main. */
 export type AgentOpening =
@@ -55,7 +55,10 @@ function subordinateActivity(entry: SubordinateRosterEntry, inTurn: boolean): Ag
 function headActivity(status: string, runRunning: boolean): AgentActivity {
   if (headStatusUnsettled(status)) return runRunning ? 'working' : 'failed';
 
-  return status === 'completed' ? 'done' : 'failed';
+  if (status === 'completed') return 'done';
+
+  // Stopped by the owner or with its search, not failed.
+  return status === 'aborted' ? 'stopped' : 'failed';
 }
 
 /** Parents first: creation times tie. */
