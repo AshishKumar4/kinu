@@ -70,7 +70,7 @@ export function durableStorage(durable: DurableState): TestDurableStorage {
 export type ProgrammaticHost = Pick<HostedRuntime,
   'ready' | 'exec' | 'execStream' | 'startProcess' | 'runCode' | 'listProcesses' | 'killProcess' | 'processLogs'
   | 'listPorts' | 'exposeApp' | 'removeApp' | 'listApps' | 'routeCapabilityPort' | 'ensureRuntimes'
-  | 'installRuntime' | 'listRuntimes' | 'spawnWorker' | 'supervisorOp' | 'files' | 'facets'
+  | 'installRuntime' | 'listRuntimes' | 'spawnWorker' | 'files' | 'facets'
 >;
 
 export interface TestProgrammaticHost {
@@ -381,7 +381,6 @@ export function programmaticHostOver(workspace: NimbusWorkspace, seams: Programm
     installRuntime: async (spec, options) => (await runtime()).installRuntime(spec, options),
     listRuntimes: async () => (await runtime()).listRuntimes(),
     spawnWorker: async (code, command, cwd, options) => (await runtime()).spawnWorker(code, command, cwd, options),
-    supervisorOp: async (envelope) => (await runtime()).supervisorOp(envelope),
     get files(): never { throw new Error('files are read through the composed runtime: await host.ready() and use runtime().files'); },
     facets: (): never => { throw new Error('the facet manager is read through facetManager(), which awaits the composition'); },
   };

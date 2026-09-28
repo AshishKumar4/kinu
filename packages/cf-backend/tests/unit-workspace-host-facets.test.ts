@@ -77,8 +77,11 @@ interface Actor {
   readonly dispatched: DispatchedOp[];
 }
 
-/** The host namespace is the deployment's `OrchestratorAgent` binding, never `NIMBUS_SESSION`. */
-function hostActor(): Actor {
+/**
+ * The host namespace is the deployment's `OrchestratorAgent` binding, never `NIMBUS_SESSION`. `duringFacet` runs as the
+ * facet's own code would, with its `SUPERVISOR` binding, while the facet's process is live.
+ */
+function hostActor(duringFacet?: (supervisor: SupervisorRPC) => Promise<void>): Actor {
   const facetLoads: { supervisorBound: boolean }[] = [];
   const dispatched: DispatchedOp[] = [];
 
@@ -98,6 +101,8 @@ function hostActor(): Actor {
           fetch: async (request: Request) => {
             loaded ??= import(moduleUrl);
             const facet = v.parse(v.object({ default: v.object({ fetch: v.function() }) }), await loaded);
+
+            if (duringFacet !== undefined && facetEnv.SUPERVISOR !== undefined) await duringFacet(facetEnv.SUPERVISOR);
 
             return v.parse(v.instance(Response), await facet.default.fetch(request, facetEnv));
           },
@@ -215,15 +220,51 @@ describe('hosted workspace facets', () => {
     const writeOp = actor.dispatched.find((call) => call.op === 'writeBatchStream');
     expect(writeOp?.mutationOwner).toBeString();
 
-    // Every `SUPERVISOR_OPS` name is served, so only wire data outside the type can reach this refusal.
-    const unserved = actor.hosted.supervisorOp({ op: 'somethingElse', args: [] });
-    await expect(unserved).rejects.toThrow("supervisor op: 'somethingElse' names no operation this host serves");
-    await expect(unserved).rejects.toMatchObject({ code: 'bad_input' });
-
     const session = await actor.hosted.bundle.session();
     const vfs = session.vfs.as(CRED_SESSION_USER);
     expect(vfs.readFile('home/main/hello/.git/HEAD')).toEqual(new TextEncoder().encode('ref: refs/heads/main\n'));
     expect(vfs.readFile('home/main/hello/README.md')).toEqual(new TextEncoder().encode('# hello from the facet\n'));
+  });
+});
+
+/**
+ * What a facet's own code can put on the wire: over RPC every method on an entrypoint's prototype is callable (only
+ * instance properties are private), so `_fsOp` sends any op name, stamped with the binding's own pid.
+ */
+async function fsOp(supervisor: SupervisorRPC, op: string, args: readonly string[]): Promise<boolean> {
+  return v.parse(v.boolean(), await supervisor['_fsOp'](op, args));
+}
+
+describe('a hosted process is untrusted code: the host serves only what Nimbus serves', () => {
+  test.each(['somethingElse', 'constructor', 'toString'])('an op named %p is refused at the host, which writes nothing', async (op) => {
+    let known: boolean | undefined;
+
+    const actor = hostActor(async (supervisor) => {
+      known = await fsOp(supervisor, 'exists', ['/home/main']);
+      await expect(fsOp(supervisor, op, ['/home/main/untrusted.txt', 'written'])).rejects.toThrow();
+    });
+
+    const clone = await actor.hosted.box('untrusted').exec('git clone https://example.invalid/hello.git /home/main/hello');
+
+    expect(clone.exitCode).toBe(0);
+    // The same wire path serves an op Nimbus knows, so the refusal is about the name.
+    expect(known).toBe(true);
+    // It crossed to the host: the refusal is the host's, not the facet's own.
+    expect(actor.dispatched.map((call) => call.op)).toContain(op);
+    const vfs = (await actor.hosted.bundle.session()).vfs.as(CRED_SESSION_USER);
+    expect(vfs.exists('home/main/untrusted.txt')).toBe(false);
+  });
+
+  test("a hosted process's file mutation, delivered once, lands in the workspace", async () => {
+    const actor = hostActor(async (supervisor) => { await supervisor.mkdir('/home/main/delivered'); });
+
+    const clone = await actor.hosted.box('delivered').exec('git clone https://example.invalid/hello.git /home/main/hello');
+
+    expect(clone.exitCode).toBe(0);
+    // Worker 0.11 sends a mutation as `deliverOnce` wherever the host keeps receipts, which the hosted runtime does.
+    expect(actor.dispatched.map((call) => call.op)).toContain('deliverOnce');
+    const vfs = (await actor.hosted.bundle.session()).vfs.as(CRED_SESSION_USER);
+    expect(vfs.isDirectory('home/main/delivered')).toBe(true);
   });
 });
 
