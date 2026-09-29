@@ -1116,10 +1116,6 @@ export {
   workspaceArchiveFiles, workspaceArchiveTarget, archiveFileTree,
 } from './vfs/workspace-planes';
 
-export {
-  makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
-  type VfsErrorCode,
-} from './vfs/errno';
 
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
 
