@@ -142,10 +142,10 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * approvals, shares, pictures, consents, plan review, scaffold settings) were held until their stores wrote (-80),
  * the opened history was reused for the request (-24), a request resolved its model spec once (-17), a step sealed
  * from the parts it held (-11), a synchronous terminal effect wrote its attempt with its outcome (-2), and no
- * terminal-retry wake was armed into a sequence this process runs (-5). Nimbus core 0.13.1 adds seven vfs_inodes path
- * lookups because its tree lives in SQL instead of an in-memory inode map: 402.
+ * terminal-retry wake was armed into a sequence this process runs (-5). Nimbus core 0.13.1 adds three vfs_inodes path
+ * lookups because its tree lives in SQL instead of an in-memory inode map: 398.
  */
-const TURN_STATEMENTS = 402;
+const TURN_STATEMENTS = 398;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {
