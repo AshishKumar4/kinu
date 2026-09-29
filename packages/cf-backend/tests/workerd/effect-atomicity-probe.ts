@@ -12,17 +12,25 @@ export class EffectAtomicityProbeDO extends DurableObject<Cloudflare.Env> {
     return this.delivered;
   }
 
-  /** Events admitted while `steps` synchronous steps ran, under `settle` or Effect's default runner. */
-  async interleaved(runner: 'settle' | 'default', steps: number): Promise<number> {
+  /**
+   * Pings originate inside the event. The default runner must yield until all arrive; a fixed step
+   * budget would race RPC delivery. The settle run is finite because it must admit none.
+   */
+  async interleaved(runner: 'settle' | 'default', steps: number, pings: number): Promise<number> {
+    const self = this.env.EFFECT_ATOMICITY_PROBE.get(this.ctx.id);
     const before = this.delivered;
+    const sent = Array.from({ length: pings }, () => self.ping());
+    const pending = () => this.delivered - before < pings;
 
     const program = Effect.gen(function* () {
-      for (let step = 0; step < steps; step += 1) yield* Effect.sync(() => step);
+      for (let step = 0; pending() && (runner === 'default' || step < steps); step += 1) yield* Effect.sync(() => step);
     });
 
     if (runner === 'settle') await settle(program);
     else await Effect.runPromise(program);
+    const admitted = this.delivered - before;
+    await Promise.all(sent);
 
-    return this.delivered - before;
+    return admitted;
   }
 }
